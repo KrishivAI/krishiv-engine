@@ -8,8 +8,11 @@ description: Use before adding, upgrading or removing any Rust (or Python/JS) de
 Read by path: `../krishiv-internal/adr/0028-dependency-policy-and-arrow-skew.md` (versions, bans, checklist),
 `0026-crate-layering-public-surfaces-formats.md`; `deny.toml`; `budgets.json`; root `Cargo.toml` `[workspace.dependencies]`.
 
-## Banned (deny.toml enforces): `datafusion*`, `deltalake`, `iceberg-datafusion`, `rocksdb`, `openssl` (use rustls),
-`anyhow` in libraries, `async-std`, `actix`, `figment`, `chrono-tz`, `pyo3-arrow`, `arrow-pyarrow`, `divan`.
+## Banned (deny.toml enforces): the enumerated `datafusion*` crates, `deltalake`, `iceberg-datafusion`, `rocksdb` (+ `librocksdb-sys`),
+`openssl` (+ `openssl-sys`; use rustls), `async-std`, `actix`, `actix-web`, `actix-rt`, `figment`, `chrono-tz`, `pyo3-arrow`,
+`arrow-pyarrow`, `divan`, and `anyhow` (banned everywhere; use `thiserror`).
+A crate not listed (e.g. a new `datafusion-*` name) is not caught: review `Cargo.lock`. If a third-party dependency
+pulls a banned crate, add `wrappers = ["<parent>"]` with a reason; do not remove the ban.
 
 ## Checklist (copy into the PR description, answered)
 1. **Why not own code or an existing dependency?** ADR 0028 prefers writing small things ourselves (Murmur3, sketches,
