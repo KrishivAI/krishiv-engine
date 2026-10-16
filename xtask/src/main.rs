@@ -5,13 +5,22 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+use xtask::docs::{self, Doc};
 use xtask::layering;
 
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH]>";
+
 fn main() -> ExitCode {
-    let cmd = std::env::args().nth(1);
-    let result = match cmd.as_deref() {
-        Some("layering") => run_layering(),
-        _ => Err("usage: cargo xtask layering".to_owned()),
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["layering"] => run_layering(),
+        [cmd] | [cmd, _] if Doc::from_command(cmd).is_some() => run_docs(&args),
+        _ => Err(USAGE.to_owned()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -26,6 +35,15 @@ fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+}
+
+fn run_docs(args: &[String]) -> Result<(), String> {
+    let doc = args
+        .first()
+        .and_then(|cmd| Doc::from_command(cmd))
+        .ok_or_else(|| USAGE.to_owned())?;
+    let path = args.get(1).map(Path::new);
+    docs::emit(&doc.markdown(), path, &mut std::io::stdout().lock())
 }
 
 fn run_layering() -> Result<(), String> {

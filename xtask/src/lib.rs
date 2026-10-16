@@ -2,4 +2,5 @@
 
 #![forbid(unsafe_code)]
 
+pub mod docs;
 pub mod layering;
