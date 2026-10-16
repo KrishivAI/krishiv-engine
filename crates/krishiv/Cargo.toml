@@ -1,0 +1,28 @@
+[package]
+name = "krishiv"
+description = "Krishiv facade crate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Strictly additive (ADR 0027). Forwarded to crates as they gain code.
+kafka = []
+iceberg = []
+delta = []
+cdc = []
+connect = []
+flight-sql = []
+mcp = []
+python = []
+wasm-udf = []
+ui = []
+celeborn = []
+mimalloc = []
+full = ["kafka", "iceberg", "delta", "cdc", "connect", "flight-sql", "mcp", "python", "wasm-udf", "ui", "celeborn", "mimalloc"]
