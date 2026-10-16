@@ -15,6 +15,7 @@ def main(argv=None) -> None:
     r.add_argument("--engine", required=True, choices=ENGINES)
     r.add_argument("--suite", default="tpch", choices=["tpch", "tpcds"])
     r.add_argument("--sf", type=float, default=1)
+    r.add_argument("--dataset", help="dataset dir name under $KRISHIV_DATA (default per suite; tpch-dbgen = official-answer data)")
     r.add_argument("--iterations", type=int, default=5)
     r.add_argument("--warmup", type=int, default=2)
     r.add_argument("--queries", help="comma list, e.g. q01,q05")
@@ -25,6 +26,7 @@ def main(argv=None) -> None:
     rp = sub.add_parser("report", help="Markdown comparison of the newest result per engine")
     rp.add_argument("--suite", default="tpch")
     rp.add_argument("--sf", type=float, default=1)
+    rp.add_argument("--dataset")
     rp.add_argument("--baseline", default="duckdb")
     rp.add_argument("files", nargs="*", type=Path, help="explicit result JSONs (default: newest per engine)")
     a = ap.parse_args(argv)
@@ -37,10 +39,10 @@ def main(argv=None) -> None:
             if a.duckdb_threads:
                 kw["threads"] = a.duckdb_threads
         f = run_suite(a.engine, a.suite, a.sf, a.iterations, a.warmup,
-                      a.queries.split(",") if a.queries else None, kw, a.timeout or None)
+                      a.queries.split(",") if a.queries else None, kw, a.timeout or None, a.dataset)
         print(f"result: {f}")
     else:
-        print(f"report: {write_report(a.suite, a.sf, a.baseline, a.files or None)}")
+        print(f"report: {write_report(a.suite, a.sf, a.baseline, a.files or None, a.dataset)}")
 
 
 if __name__ == "__main__":
