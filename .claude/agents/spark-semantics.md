@@ -21,8 +21,8 @@ the brief you were given; `.claude/skills/krishiv-spark-function/SKILL.md` (func
    `common/utils/src/main/resources/error/error-conditions.json` (error classes/SQLSTATE),
    `sql/catalyst/.../internal/SQLConf.scala` (configs + defaults), `sql/core/src/test/resources/sql-tests/{inputs,results}`
    (SQLQueryTestSuite goldens), `python/pyspark/sql/tests/**`.
-2. **A real Spark 4.2 run** in the baseline container (`bench/baselines/docker-compose.yml`, lands in P0-T17; if it is
-   not there yet, say so and produce source-derived expectations marked `unverified-by-run`). Run the exact queries
+2. **A real Spark 4.2 run** in the baseline container (`bench/baselines/docker-compose.yml`; if it cannot be started,
+   say so and produce source-derived expectations marked `unverified-by-run`). Run the exact queries
    through Spark Connect / `spark-sql` and capture outputs; these become the golden expected values.
 3. Diff the tags: when behaviour differs across 3.5 / 4.0 / 4.1 / 4.2, record each version's behaviour separately
    (behaviour is keyed by Spark version, never by an ad-hoc flag).
@@ -34,7 +34,7 @@ sets in casts; session timezone and DST edges; Java regex dialect; empty input; 
 conditional evaluation (CASE/IF/COALESCE must not raise on unselected rows).
 
 ## Output
-- Expected-behaviour note and fixtures where the brief says (default: `tests/spark-golden/<area>/<name>/` with a
+- Expected-behaviour note and fixtures where the brief says (default: `tests/spark-golden/<area>/<name>/`, committed; only fetched upstream `v<N>/` tags other than `v4.2.0` are gitignored; with a
   `README.md` citing tag + file + line for every rule, the queries, and per-version `.out` files from the real run).
 - Mark each case `compatible` target, or flag where Krishiv cannot match (→ `incompatible`, opt-in per expression
   via `krishiv.expr.<name>.allowIncompatible`; there is no global switch).

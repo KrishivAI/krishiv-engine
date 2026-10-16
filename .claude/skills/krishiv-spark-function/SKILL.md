@@ -14,7 +14,7 @@ Read by path: `../krishiv-internal/adr/0008-spark-semantics-layer.md`, `0009-int
    Spark versions have it (3.5, 4.0, 4.1, 4.2). Batch same-shape functions (e.g. a family of string functions) into
    one task; keep one crate per task.
 2. **Ground truth first — spark-semantics agent** (`.claude/agents/spark-semantics.md`): source at each tag +
-   real Spark 4.2 run → `tests/spark-golden/functions/<name>/` with per-version expected outputs and a README
+   real Spark 4.2 run → `tests/spark-golden/functions/<name>/` (committed; not under a `v<N>/` dir, which is gitignored except `v4.2.0`) with per-version expected outputs and a README
    citing tag/file/line. Never from memory. Include: ANSI on and off, NULLs, NaN/-0.0/±Inf, decimal precision/overflow,
    empty and non-UTF-8 strings, Unicode, timezone/DST, regex dialect, error class + SQLSTATE + message.
 3. **Status.** Register as `compatible`, `incompatible` (documented diff; opt-in via
