@@ -29,8 +29,13 @@ cargo xtask layering                             # L0–L7 layer rule (xtask/lay
 cargo xtask docs-config | docs-errors            # regenerate config / error-class docs
 cargo xtask budgets [--build-time]               # crate-count / build-time / size budgets (budgets.json)
 ```
-Pre-commit hook (fmt, clippy, deny; skips clippy/deny for docs-only commits or with `SKIP_CLIPPY=1`) — enable once
-per clone: `git config core.hooksPath .githooks`.
+Pre-commit hook (fmt, clippy, deny; skips clippy/deny for docs-only commits or with `SKIP_CLIPPY=1`). Git config is
+not versioned, so enable it once per fresh clone (repo-local, never `--global`): `git config core.hooksPath .githooks`.
+
+`.claude/settings.json` permission rules use mid-pattern `*` globs (e.g. `Bash(git push * --force*)`): a **recent
+Claude Code is required** (older versions only honour a trailing `:*`, which would leave those denies inert).
+After upgrading Claude Code or editing the rules, verify with a fresh session. The denies are a backstop; the hard
+stops below apply regardless.
 
 ## Layout
 - `crates/` — the workspace (layers below). `xtask/` — repo tooling. `.github/workflows/` — ci, nightly-bench, compat.
