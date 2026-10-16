@@ -9,13 +9,15 @@ Read by path: `../krishiv-internal/adr/0032-experiment-driven-decisions.md`, `00
 `../krishiv-internal/spec/10-performance-risks.md`; `budgets.json`; `.github/workflows/nightly-bench.yml`.
 
 ## What exists (update this list as P0 lands)
-- **Pending P0-T17:** `bench/baselines/docker-compose.yml` — Spark 4.2 + Spark Connect, MinIO, Kafka.
-  Never reuse or modify the unrelated `bench-minio` container.
-- **Pending P0-T18:** dataset generators (TPC-H/TPC-DS SF1/10/100 → Parquet, ClickBench, Nexmark, Zipf α 0.8–1.5);
-  data lives outside the repo under `$KRISHIV_DATA`, checksummed.
-- **Pending P0-T19:** `bench/` runner with engine adapters (DuckDB, Spark Connect, Sail, later Krishiv); JSON +
-  Markdown report. Until it lands, only criterion micro-benches (`cargo bench -p <crate>`) are available.
-If a needed piece is missing, say which task is pending; do not build an ad-hoc harness.
+- **P0-T17 (done):** `bench/baselines/docker-compose.yml` (project `krishiv-bench`) — Spark 4.2.0 Connect (host :15002),
+  MinIO (:19100), Kafka (profile `kafka`, :19092). Never reuse or modify the unrelated `bench-minio` container.
+- **P0-T18 (done):** `bench/datasets/gen.sh` / `uv run krishiv-datasets` — TPC-H (tpchgen-cli) and TPC-DS (duckdb) SF1/10/100 → Parquet,
+  ClickBench download (14 GB, `--yes`), simplified Nexmark, Zipf α 0.8–1.5. Data under `$KRISHIV_DATA` (default `~/krishiv-data`),
+  sha256 manifests in `$KRISHIV_DATA/manifests/`. Only TPC-H/TPC-DS SF1 generated so far.
+- **P0-T19 (done):** `bench/` uv project: `uv run krishiv-bench run --engine {duckdb,spark-connect,krishiv} --suite tpch --sf 1`
+  then `uv run krishiv-bench report`; JSON in `$KRISHIV_DATA/results/`. The `krishiv` adapter is a stub until P2 (Sail/Polars adapters
+  not written yet). See `bench/README.md` for metrics, normalisation and caveats (p99 == max below 100 iterations; spill = null).
+If a needed piece is missing (Sail/Polars/Flink adapter, Krishiv adapter), say so; extend `bench/` rather than building an ad-hoc harness.
 
 ## Checklist — a measurement
 1. Define the question and the comparison (baseline commit/engine vs candidate) and, for experiments, confirm the
