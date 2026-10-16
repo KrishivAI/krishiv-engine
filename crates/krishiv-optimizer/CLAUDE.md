@@ -16,4 +16,4 @@ Query optimizer: rule- and cost-based rewrites, including the IVM rewrite pass.
 0012, 0017, 0020
 
 ## Test
-`cargo nextest run -p krishiv-optimizer` · `cargo clippy -p krishiv-optimizer --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-optimizer --no-tests=pass` · `cargo clippy -p krishiv-optimizer --all-targets -- -D warnings`

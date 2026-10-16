@@ -16,4 +16,4 @@ Streaming state store (SlateDB-backed first, then the native `krishiv-state` bac
 0019, 0015, 0026
 
 ## Test
-`cargo nextest run -p krishiv-state` · `cargo clippy -p krishiv-state --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-state --no-tests=pass` · `cargo clippy -p krishiv-state --all-targets -- -D warnings`

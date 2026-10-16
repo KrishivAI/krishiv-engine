@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use axum::Router;
 use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{any, get};
 use tokio::net::TcpListener;
 
 /// Crate (and workspace) version reported by `/api/v1/version`.
@@ -21,6 +21,15 @@ async fn version() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/json")],
         format!("{{\"version\":\"{VERSION}\"}}"),
+    )
+}
+
+/// Unknown `/api/*` paths are a JSON 404, never the SPA shell.
+async fn api_not_found() -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        [(header::CONTENT_TYPE, "application/json")],
+        "{\"error\":\"not_found\"}",
     )
 }
 
@@ -47,6 +56,9 @@ async fn assets(uri: Uri) -> Response {
 pub fn router() -> Router {
     Router::new()
         .route("/api/v1/version", get(version))
+        .route("/api", any(api_not_found))
+        .route("/api/", any(api_not_found))
+        .route("/api/{*rest}", any(api_not_found))
         .fallback(assets)
 }
 

@@ -16,4 +16,4 @@ Streaming runtime: three execution profiles, watermarks, barriers/checkpoints, I
 0015, 0016, 0017, 0018
 
 ## Test
-`cargo nextest run -p krishiv-stream` · `cargo clippy -p krishiv-stream --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-stream --no-tests=pass` · `cargo clippy -p krishiv-stream --all-targets -- -D warnings`

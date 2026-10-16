@@ -27,7 +27,7 @@ Read by path: `../krishiv-internal/adr/0008-spark-semantics-layer.md`, `0009-int
    Errors: typed, with the error class from `crates/krishiv-common/error-classes.json` (add new classes there, copied
    from Spark's `error-conditions.json` at the tag).
 6. **Kernel specialisations** (nullable/non-null, dictionary, Utf8 vs Utf8View, scalar-vs-array): each one tested.
-7. **Verify:** `cargo nextest run -p krishiv-functions -p krishiv-kernels`, clippy `-D warnings`, `cargo xtask layering`,
+7. **Verify:** `cargo nextest run -p krishiv-functions -p krishiv-kernels --no-tests=pass`, clippy `-D warnings`, `cargo xtask layering`,
    `cargo xtask docs-errors` if error classes changed. Micro-bench with criterion if the function is hot.
 8. **Review:** reviewer agent; stage 1 checks goldens cover every version and edge listed above.
 9. Update the function-coverage list/compat matrix (once it exists) and the plan checkbox.

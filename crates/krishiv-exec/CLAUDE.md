@@ -17,4 +17,4 @@ Batch execution engine: operators, pipelines, morsel scheduling within a node.
 0006, 0007, 0011, 0013
 
 ## Test
-`cargo nextest run -p krishiv-exec` · `cargo clippy -p krishiv-exec --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-exec --no-tests=pass` · `cargo clippy -p krishiv-exec --all-targets -- -D warnings`

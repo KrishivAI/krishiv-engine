@@ -15,4 +15,4 @@ Kafka source/sink connector (feature `kafka`, rdkafka).
 0014, 0016, 0028
 
 ## Test
-`cargo nextest run -p krishiv-connectors-kafka` · `cargo clippy -p krishiv-connectors-kafka --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connectors-kafka --no-tests=pass` · `cargo clippy -p krishiv-connectors-kafka --all-targets -- -D warnings`

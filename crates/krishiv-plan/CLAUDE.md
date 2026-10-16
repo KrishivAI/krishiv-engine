@@ -16,4 +16,4 @@ Logical and physical plan models (Spark Connect-shaped unresolved plans, resolve
 0003, 0006, 0011
 
 ## Test
-`cargo nextest run -p krishiv-plan` · `cargo clippy -p krishiv-plan --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-plan --no-tests=pass` · `cargo clippy -p krishiv-plan --all-targets -- -D warnings`

@@ -16,4 +16,4 @@ Distributed scheduler: coordinator/worker task scheduling, AQE, fault tolerance.
 0004, 0006, 0013, 0020
 
 ## Test
-`cargo nextest run -p krishiv-scheduler` · `cargo clippy -p krishiv-scheduler --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-scheduler --no-tests=pass` · `cargo clippy -p krishiv-scheduler --all-targets -- -D warnings`

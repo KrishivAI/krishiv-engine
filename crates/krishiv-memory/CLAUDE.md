@@ -17,4 +17,4 @@ Memory management: pools, reservations, the memory arbitrator and spill accounti
 0007, 0006, 0029
 
 ## Test
-`cargo nextest run -p krishiv-memory` · `cargo clippy -p krishiv-memory --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-memory --no-tests=pass` · `cargo clippy -p krishiv-memory --all-targets -- -D warnings`

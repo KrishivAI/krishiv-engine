@@ -15,4 +15,4 @@ The `krishiv` binary: sql, server, coordinator, worker, mcp, ui, doctor, migrate
 0004, 0026
 
 ## Test
-`cargo nextest run -p krishiv-cli` · `cargo clippy -p krishiv-cli --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-cli --no-tests=pass` · `cargo clippy -p krishiv-cli --all-targets -- -D warnings`

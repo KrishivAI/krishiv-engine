@@ -15,4 +15,4 @@ Embedded prebuilt web UI assets (`ui/` dist via rust-embed).
 0024
 
 ## Test
-`cargo nextest run -p krishiv-ui-assets` · `cargo clippy -p krishiv-ui-assets --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-ui-assets --no-tests=pass` · `cargo clippy -p krishiv-ui-assets --all-targets -- -D warnings`

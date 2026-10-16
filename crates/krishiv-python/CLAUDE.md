@@ -16,4 +16,4 @@ Python bindings (PyO3) and the PyCapsule Arrow bridge; Python UDF runtime.
 0005, 0022, 0028
 
 ## Test
-`cargo nextest run -p krishiv-python` · `cargo clippy -p krishiv-python --all-targets -- -D warnings`
+`krishiv-python` sets `test = false` (no Rust unit tests; Python tests are under `python/`), so nextest has nothing to run; `--no-tests=pass` keeps the command green. `cargo nextest run -p krishiv-python --no-tests=pass` · `cargo clippy -p krishiv-python --all-targets -- -D warnings`

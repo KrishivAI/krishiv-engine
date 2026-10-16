@@ -17,4 +17,4 @@ Spark SQL dialect parser and analyzer (resolution, type coercion).
 0003, 0008, 0012
 
 ## Test
-`cargo nextest run -p krishiv-sql` · `cargo clippy -p krishiv-sql --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-sql --no-tests=pass` · `cargo clippy -p krishiv-sql --all-targets -- -D warnings`

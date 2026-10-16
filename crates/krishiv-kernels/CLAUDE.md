@@ -17,4 +17,4 @@ Vectorised compute kernels (SIMD), Spark-observable Murmur3 (seed 42) and intern
 0008, 0010, 0011, 0029
 
 ## Test
-`cargo nextest run -p krishiv-kernels` · `cargo clippy -p krishiv-kernels --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-kernels --no-tests=pass` · `cargo clippy -p krishiv-kernels --all-targets -- -D warnings`

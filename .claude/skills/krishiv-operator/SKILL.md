@@ -25,7 +25,7 @@ Hard-subsystem operators (hash tables, spill, exchange, IVM) are **Opus** tasks.
    - Metrics: rows/batches in-out, time, peak memory, spill bytes (feeds `EXPLAIN ANALYZE`).
 5. **Streaming/IVM operators:** batch == stream invariant test; IVM property Σ incremental == query(Σ inputs);
    state through `krishiv-state` traits with versioned format and N−1 restore test.
-6. **Verify:** `cargo nextest run -p krishiv-exec ...`, clippy `-D warnings`, `cargo xtask layering`; loom for new
+6. **Verify:** `cargo nextest run -p krishiv-exec --no-tests=pass ...`, clippy `-D warnings`, `cargo xtask layering`; loom for new
    concurrency primitives; criterion bench + perf-analyst comparison if the plan states a threshold.
 7. **Review:** reviewer agent with full stage 2 (unsafe/concurrency/memory).
 

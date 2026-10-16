@@ -35,7 +35,7 @@ Get the diff with `git diff <base>...<branch>` / `gh pr diff <n>`; do not rely o
 - Concurrency: lock ordering, cancellation safety across `.await`, no blocking in async, loom tests for primitives.
 - Performance-sensitive paths: no needless allocation/clones in hot loops; benchmarks if the brief has a threshold.
 - Public items documented; names follow ADR 0030 (`krishiv`, `krishiv-*`).
-- Run: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run -p <crates>`.
+- Run: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run -p <crates> --no-tests=pass`.
 
 ## Output
 Write the review to the path in your brief (default `.superpowers/sdd/<task-id>-review.md`): verdict

@@ -2,7 +2,7 @@
 #   export KRISHIV_DATA=${KRISHIV_DATA:-$HOME/krishiv-data}
 #   docker compose -f bench/baselines/docker-compose.yml up -d              # spark + minio
 #   docker compose -f bench/baselines/docker-compose.yml --profile kafka up -d   # + kafka
-#   docker compose -f bench/baselines/docker-compose.yml down                # stop
+#   docker compose -f bench/baselines/docker-compose.yml stop                # stop (agents: never `down`)
 # Host ports (chosen to avoid existing containers): spark-connect 15002, spark UI 14040,
 # minio 19100 (S3) / 19101 (console), kafka 19092.
 name: krishiv-bench

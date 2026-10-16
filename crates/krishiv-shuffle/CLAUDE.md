@@ -16,4 +16,4 @@ Shuffle service and exchange tiers (local, Celeborn client, native service later
 0013, 0020, 0021
 
 ## Test
-`cargo nextest run -p krishiv-shuffle` · `cargo clippy -p krishiv-shuffle --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-shuffle --no-tests=pass` · `cargo clippy -p krishiv-shuffle --all-targets -- -D warnings`

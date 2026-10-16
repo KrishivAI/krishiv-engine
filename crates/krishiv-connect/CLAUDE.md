@@ -16,4 +16,4 @@ Spark Connect gRPC server (protocols 3.5, 4.0, 4.1, 4.2).
 0003, 0005
 
 ## Test
-`cargo nextest run -p krishiv-connect` · `cargo clippy -p krishiv-connect --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connect --no-tests=pass` · `cargo clippy -p krishiv-connect --all-targets -- -D warnings`

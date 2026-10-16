@@ -20,7 +20,7 @@ uv run krishiv-bench run --engine duckdb --suite tpch --sf 1 --dataset tpch-dbge
 uv run krishiv-bench run --engine spark-connect --suite tpch --sf 1 --dataset tpch-dbgen
 uv run krishiv-bench report --suite tpch --sf 1 --dataset tpch-dbgen   # -> $KRISHIV_DATA/results/report_tpch-dbgen_sf1.md
 uv run pytest                                            # harness + Zipf generator tests
-docker compose -f baselines/docker-compose.yml down      # stop (volumes kept; add -v to drop)
+docker compose -f baselines/docker-compose.yml stop      # stop (containers and volumes kept; `down` is denied in agent settings)
 ```
 Useful flags: `--iterations 5 --warmup 2 --queries q01,q05 --timeout 600 --duckdb-threads N --duckdb-memory-limit 12GB --spark-remote sc://host:port`.
 For publishable numbers run from a clean committed tree (the result JSON records commit + `dirty`).

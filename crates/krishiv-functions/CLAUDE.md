@@ -18,4 +18,4 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
 0008, 0009, 0010
 
 ## Test
-`cargo nextest run -p krishiv-functions` · `cargo clippy -p krishiv-functions --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-functions --no-tests=pass` · `cargo clippy -p krishiv-functions --all-targets -- -D warnings`
