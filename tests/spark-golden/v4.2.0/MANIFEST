@@ -1,0 +1,7 @@
+tag: v4.2.0
+commit: 32f7299601108917fb01920a54e084595b7b3bf8
+source: https://github.com/apache/spark.git (sql/core/src/test/resources/sql-tests/{inputs,results})
+file_count: 706
+sql_files: 350
+out_files: 349
+imported: 2026-10-16
