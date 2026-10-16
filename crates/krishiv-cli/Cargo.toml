@@ -1,0 +1,41 @@
+[package]
+name = "krishiv-cli"
+description = "Krishiv command line binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "krishiv"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
+krishiv = { path = "../krishiv" }
+krishiv-server = { path = "../krishiv-server", optional = true }
+
+[lints]
+workspace = true
+
+[features]
+# Strictly additive (ADR 0027); each forwards to the facade crate.
+kafka = ["krishiv/kafka"]
+iceberg = ["krishiv/iceberg"]
+delta = ["krishiv/delta"]
+cdc = ["krishiv/cdc"]
+connect = ["krishiv/connect"]
+flight-sql = ["krishiv/flight-sql"]
+mcp = ["krishiv/mcp"]
+python = ["krishiv/python"]
+wasm-udf = ["krishiv/wasm-udf"]
+ui = ["krishiv/ui", "dep:krishiv-server"]
+celeborn = ["krishiv/celeborn"]
+mimalloc = ["krishiv/mimalloc"]
+full = ["krishiv/full"]
+
+[package.metadata.cargo-machete]
+# The facade is linked for feature forwarding until the CLI calls into it.
+ignored = ["krishiv"]

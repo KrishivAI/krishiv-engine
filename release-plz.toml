@@ -1,0 +1,18 @@
+# release-plz configuration: DRY RUN ONLY (P0-T27, ADR 0031 hard stop).
+#
+# Nothing here may publish, tag or create a release. Every switch is off, and
+# every crate also carries `publish = false` in its Cargo.toml. Enabling real
+# releases is a deliberate, user-approved change to this file (see RELEASING.md).
+# Allowed command: `release-plz release --dry-run` (and `release-plz update`
+# on a scratch copy to preview changelogs/versions).
+
+[workspace]
+release = false            # no package is released
+publish = false            # never `cargo publish`
+git_release_enable = false # no GitHub/Gitea release
+git_tag_enable = false     # no tags
+changelog_update = false   # no CHANGELOG edits yet
+semver_check = false
+dependencies_update = false
+pr_draft = true
+allow_dirty = false

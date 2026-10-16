@@ -1,0 +1,30 @@
+[package]
+name = "krishiv-python"
+description = "Python bindings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+# An extension module has unresolved libpython symbols; it cannot be linked
+# into a Rust test binary. Python-side tests live in python/tests.
+test = false
+doctest = false
+
+[features]
+# Default wheel: one abi3 wheel for CPython >= 3.10. The free-threaded (cp314t)
+# build cannot use abi3, so it builds with `--no-default-features`.
+default = ["abi3-py310"]
+abi3-py310 = ["pyo3/abi3-py310"]
+
+[dependencies]
+# `extension-module` is deprecated: maturin sets PYO3_BUILD_EXTENSION_MODULE.
+pyo3 = { workspace = true, features = ["macros"] }

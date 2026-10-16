@@ -1,0 +1,18 @@
+[package]
+name = "krishiv-common"
+description = "Errors, config registry and tracing setup"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[build-dependencies]
+serde_json = { workspace = true, features = ["std"] }

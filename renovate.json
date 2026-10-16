@@ -1,0 +1,69 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "timezone": "UTC",
+  "rangeStrategy": "bump",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 6am on monday"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Arrow family moves in lockstep (ADR 0028)",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "/^arrow(-.*)?$/",
+        "parquet"
+      ],
+      "groupName": "arrow family"
+    },
+    {
+      "description": "tonic and prost share a prost major",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "/^tonic(-.*)?$/",
+        "/^prost(-.*)?$/"
+      ],
+      "groupName": "tonic and prost"
+    },
+    {
+      "description": "OpenTelemetry crates release together",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "/^opentelemetry(-.*)?$/",
+        "/^tracing-opentelemetry$/"
+      ],
+      "groupName": "opentelemetry"
+    },
+    {
+      "description": "Baseline engine versions move only by deliberate decision (bench provenance, Spark golden fixtures)",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "apache/spark"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "pyspark is pinned to the baseline Spark version",
+      "matchPackageNames": [
+        "pyspark"
+      ],
+      "enabled": false
+    }
+  ]
+}

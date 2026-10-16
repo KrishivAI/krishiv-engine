@@ -1,0 +1,31 @@
+name: Compatibility suites
+
+# Manual trigger for now. Enable the nightly schedule once P2 un-ignores the SQL suites.
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      # Spark golden loaders, Murmur3 hash fixtures (93 cases), batch==stream harness and
+      # sqllogictest parsing. Tests that need SQL execution are #[ignore]d until P2/P4.
+      - name: Run testkit conformance tests
+        run: cargo nextest run -p krishiv-testkit --all-features --locked

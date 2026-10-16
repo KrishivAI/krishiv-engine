@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+# Krishiv pre-commit (ADR 0029): fmt, clippy, cargo-deny.
+# Enable once per clone:  git config core.hooksPath .githooks
+# Docs-only commits (no staged *.rs / Cargo.* / deny.toml / rust-toolchain.toml)
+# skip clippy and deny automatically; SKIP_CLIPPY=1 forces the skip.
+set -eu
+
+staged=$(git diff --cached --name-only --diff-filter=ACMRD)
+rust_changed=$(printf '%s\n' "$staged" | command grep -E '(\.rs$|(^|/)Cargo\.(toml|lock)$|^deny\.toml$|^rust-toolchain\.toml$|^\.cargo/)' || true)
+
+echo "pre-commit: cargo fmt --check"
+cargo fmt --all -- --check
+
+if [ -z "$rust_changed" ] || [ "${SKIP_CLIPPY:-0}" = "1" ]; then
+  echo "pre-commit: no Rust/Cargo changes staged (or SKIP_CLIPPY=1); skipping clippy and deny"
+  exit 0
+fi
+
+echo "pre-commit: cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets --locked -- -D warnings
+
+if command -v cargo-deny >/dev/null 2>&1; then
+  echo "pre-commit: cargo deny check"
+  cargo deny check
+else
+  echo "pre-commit: cargo-deny not installed; skipping (CI still runs it)" >&2
+fi
