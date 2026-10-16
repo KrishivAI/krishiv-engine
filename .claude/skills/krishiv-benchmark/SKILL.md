@@ -14,7 +14,7 @@ Read by path: `../krishiv-internal/adr/0032-experiment-driven-decisions.md`, `00
 - **P0-T18 (done):** `bench/datasets/gen.sh` / `uv run krishiv-datasets` — TPC-H (tpchgen-cli) and TPC-DS (duckdb) SF1/10/100 → Parquet,
   ClickBench download (14 GB, `--yes`), simplified Nexmark, Zipf α 0.8–1.5. Data under `$KRISHIV_DATA` (default `~/krishiv-data`),
   sha256 manifests in `$KRISHIV_DATA/manifests/`. Only TPC-H/TPC-DS SF1 generated so far.
-- **P0-T19 (done):** `bench/` uv project: `uv run krishiv-bench run --engine {duckdb,spark-connect,krishiv} --suite tpch --sf 1`
+- **P0-T19 (done):** `bench/` uv project: `uv run krishiv-bench run --engine {duckdb,spark-connect,krishiv} --suite tpch --sf 1 --dataset tpch-dbgen` (dbgen data reproduces the official answers; tpchgen-cli data does not for text columns)
   then `uv run krishiv-bench report`; JSON in `$KRISHIV_DATA/results/`. The `krishiv` adapter is a stub until P2 (Sail/Polars adapters
   not written yet). See `bench/README.md` for metrics, normalisation and caveats (p99 == max below 100 iterations; spill = null).
 If a needed piece is missing (Sail/Polars/Flink adapter, Krishiv adapter), say so; extend `bench/` rather than building an ad-hoc harness.
