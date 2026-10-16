@@ -14,8 +14,14 @@ pub const MAX_GROWTH_PERCENT: u64 = 5;
 /// One measurement (or baseline) set. `None` means "not measured".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Budgets {
-    /// Transitive third-party crates in the resolved graph.
+    /// Unique third-party crates in the shipped binary's graph: normal
+    /// (non-dev, non-build-only) dependencies of `krishiv-cli` with default
+    /// features (`cargo tree -p krishiv-cli -e normal`). Gated.
     pub transitive_crates: u64,
+    /// Third-party crates in the all-features workspace graph (including
+    /// dev/test crates). Informational, never gated.
+    #[serde(default)]
+    pub transitive_crates_all_features: Option<u64>,
     /// Size in bytes of the release `krishiv` binary.
     pub binary_bytes: Option<u64>,
     /// Clean release build wall time in seconds (CI only).
@@ -36,6 +42,19 @@ struct Resolve {
 #[derive(Debug, Deserialize)]
 struct Node {
     id: String,
+}
+
+/// Counts unique non-workspace packages in `cargo tree --prefix none` output
+/// (lines like `name vX.Y.Z`, `name vX.Y.Z (/path)` for path crates,
+/// `(*)` and `[build-dependencies]` headers ignored).
+#[must_use]
+pub fn count_tree_crates(tree: &str) -> u64 {
+    let set: BTreeSet<&str> = tree
+        .lines()
+        .map(|l| l.trim_end_matches(" (*)").trim_end_matches(" (proc-macro)"))
+        .filter(|l| !l.is_empty() && !l.starts_with('[') && !l.contains(" (/"))
+        .collect();
+    u64::try_from(set.len()).unwrap_or(u64::MAX)
 }
 
 /// Counts resolved packages that are not workspace members.
@@ -135,6 +154,7 @@ mod tests {
     fn b(c: u64, bytes: Option<u64>) -> Budgets {
         Budgets {
             transitive_crates: c,
+            transitive_crates_all_features: None,
             binary_bytes: bytes,
             clean_build_secs: None,
         }
@@ -159,6 +179,12 @@ mod tests {
     fn counts_non_members() {
         let json = r#"{"workspace_members":["a 1"],"resolve":{"nodes":[{"id":"a 1"},{"id":"b 1"},{"id":"c 1"}]}}"#;
         assert_eq!(count_transitive(json), Ok(2));
+    }
+
+    #[test]
+    fn counts_tree_crates_unique_and_skips_members() {
+        let t = "krishiv-cli v0.1.0 (/x/cli)\nclap v4.6.7\nclap_builder v4.6.7\nclap v4.6.7 (*)\nsyn v2.0.1 (proc-macro)\nsyn v2.0.1\nkrishiv v0.1.0 (/x/k)\n";
+        assert_eq!(count_tree_crates(t), 3);
     }
 
     #[test]

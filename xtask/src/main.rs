@@ -107,7 +107,28 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
         ));
     }
     let meta_json = String::from_utf8_lossy(&out.stdout);
-    let transitive_crates = budgets::count_transitive(&meta_json)?;
+    let transitive_crates_all_features = budgets::count_transitive(&meta_json)?;
+    let tree = cargo_cmd()
+        .args([
+            "tree",
+            "-p",
+            "krishiv-cli",
+            "-e",
+            "normal",
+            "--prefix",
+            "none",
+            "--locked",
+        ])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("failed to run cargo tree: {e}"))?;
+    if !tree.status.success() {
+        return Err(format!(
+            "cargo tree failed: {}",
+            String::from_utf8_lossy(&tree.stderr)
+        ));
+    }
+    let transitive_crates = budgets::count_tree_crates(&String::from_utf8_lossy(&tree.stdout));
     let meta: serde_json::Value =
         serde_json::from_str(&meta_json).map_err(|e| format!("bad cargo metadata: {e}"))?;
     let target_dir = meta
@@ -152,6 +173,7 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
 
     let now = Budgets {
         transitive_crates,
+        transitive_crates_all_features: Some(transitive_crates_all_features),
         binary_bytes: Some(binary_bytes),
         clean_build_secs,
     };

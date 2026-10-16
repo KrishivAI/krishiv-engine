@@ -8,7 +8,10 @@ async fn get(addr: std::net::SocketAddr, path: &str) -> String {
     let req = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     s.write_all(req.as_bytes()).await.unwrap();
     let mut out = Vec::new();
-    s.read_to_end(&mut out).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), s.read_to_end(&mut out))
+        .await
+        .expect("read timed out")
+        .unwrap();
     String::from_utf8(out).unwrap()
 }
 
