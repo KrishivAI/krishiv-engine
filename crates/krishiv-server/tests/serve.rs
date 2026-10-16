@@ -1,4 +1,5 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+//! Integration test: serves the embedded UI and API fallbacks over a real socket.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // integration-test helpers are outside #[test] fns
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};

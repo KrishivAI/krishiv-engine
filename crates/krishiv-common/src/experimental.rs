@@ -28,7 +28,6 @@ pub fn is_enabled(config: &Config, key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
 
     use super::*;
     use crate::error::ErrorClass;
