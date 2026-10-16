@@ -10,3 +10,9 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[build-dependencies]
+serde_json = { workspace = true, features = ["std"] }
