@@ -1,0 +1,121 @@
+# cargo-deny policy (ADR 0028). Run: `cargo deny check`.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Global default is a warning; the crates that matter for ABI/FFI and Arrow
+# interchange are denied per-crate below (ADR 0028).
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true # workspace path dependencies
+
+deny = [
+    # Banned engines/stores/TLS stacks (ADR 0028).
+    # cargo-deny crate specs have no globs, so the datafusion-* family is
+    # enumerated. A new datafusion-* crate arriving transitively would be
+    # caught by review of Cargo.lock (and its parent, already banned).
+    { crate = "datafusion", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-common", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-common-runtime", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-catalog", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-catalog-listing", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-datasource", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-datasource-parquet", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-datasource-csv", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-datasource-json", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-datasource-arrow", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-doc", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-execution", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-expr", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-expr-common", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-functions", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-functions-aggregate", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-functions-aggregate-common", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-functions-nested", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-functions-table", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-functions-window", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-functions-window-common", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-macros", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-optimizer", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-physical-expr", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-physical-expr-common", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-physical-expr-adapter", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-physical-optimizer", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-physical-plan", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-proto", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-proto-common", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-pruning", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-session", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-sql", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-substrait", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-spark", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-ffi", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "datafusion-cli", reason = "DataFusion family is banned (ADR 0028)" },
+    { crate = "deltalake", reason = "use delta_kernel directly" },
+    { crate = "iceberg-datafusion", reason = "pulls in DataFusion" },
+    { crate = "rocksdb", reason = "state backend is SlateDB" },
+    { crate = "librocksdb-sys", reason = "state backend is SlateDB" },
+    { crate = "openssl", reason = "rustls only" },
+    { crate = "openssl-sys", reason = "rustls only" },
+    # Single-version crates (deny duplicates).
+    { crate = "tokio", deny-multiple-versions = true },
+    { crate = "prost", deny-multiple-versions = true },
+    { crate = "pyo3", deny-multiple-versions = true },
+    { crate = "parquet", deny-multiple-versions = true },
+    { crate = "arrow-array", deny-multiple-versions = true },
+    { crate = "arrow-buffer", deny-multiple-versions = true },
+    { crate = "arrow-schema", deny-multiple-versions = true },
+    { crate = "arrow-data", deny-multiple-versions = true },
+    { crate = "arrow-ipc", deny-multiple-versions = true },
+    { crate = "arrow-flight", deny-multiple-versions = true },
+    { crate = "arrow-select", deny-multiple-versions = true },
+    { crate = "arrow-cast", deny-multiple-versions = true },
+    { crate = "arrow-arith", deny-multiple-versions = true },
+    { crate = "arrow-ord", deny-multiple-versions = true },
+    { crate = "arrow-row", deny-multiple-versions = true },
+    { crate = "arrow-string", deny-multiple-versions = true },
+    { crate = "arrow-csv", deny-multiple-versions = true },
+    { crate = "arrow-json", deny-multiple-versions = true },
+    { crate = "arrow", deny-multiple-versions = true },
+]
+
+# EXCEPTION (not yet active): the iceberg connector depends on Arrow 58 while
+# the workspace is on Arrow 60. When krishiv-connectors-iceberg gains the real
+# `iceberg` dependency, enable the skip below, scoped to that one chain, and
+# link the ADR 0028 exception note. No workspace member depends on iceberg yet.
+# skip = [
+#     { crate = "arrow-array@58", reason = "iceberg 0.10 pins Arrow 58 (ADR 0028 exception)" },
+#     { crate = "arrow-buffer@58", reason = "iceberg Arrow 58" },
+#     { crate = "arrow-schema@58", reason = "iceberg Arrow 58" },
+#     { crate = "arrow-data@58", reason = "iceberg Arrow 58" },
+#     { crate = "arrow-ipc@58", reason = "iceberg Arrow 58" },
+#     { crate = "arrow-select@58", reason = "iceberg Arrow 58" },
+#     { crate = "arrow-cast@58", reason = "iceberg Arrow 58" },
+#     { crate = "parquet@58", reason = "iceberg Arrow 58" },
+# ]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
