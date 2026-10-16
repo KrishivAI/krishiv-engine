@@ -1,0 +1,83 @@
+# Krishiv baselines (P0-T17). Project name: krishiv-bench. Never touches bench-minio / other stacks.
+#   export KRISHIV_DATA=${KRISHIV_DATA:-$HOME/krishiv-data}
+#   docker compose -f bench/baselines/docker-compose.yml up -d              # spark + minio
+#   docker compose -f bench/baselines/docker-compose.yml --profile kafka up -d   # + kafka
+#   docker compose -f bench/baselines/docker-compose.yml stop                # stop (agents: never `down`)
+# Host ports (chosen to avoid existing containers): spark-connect 15002, spark UI 14040,
+# minio 19100 (S3) / 19101 (console), kafka 19092.
+name: krishiv-bench
+
+services:
+  spark:
+    image: apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89   # newest published 4.2.x on Docker Hub as of 2026-10 (4.2.1 not published)
+    container_name: krishiv-bench-spark
+    user: root
+    entrypoint: []
+    command:
+      - /opt/spark/sbin/start-connect-server.sh
+      - --wait
+      - --master
+      - local[*]
+      - --driver-memory
+      - 8g
+      - --conf
+      - spark.sql.shuffle.partitions=24
+      - --conf
+      - spark.local.dir=/tmp/spark
+      - --conf
+      - spark.connect.grpc.binding.port=15002
+      - --conf
+      - spark.connect.grpc.maxInboundMessageSize=268435456
+    ports:
+      - "127.0.0.1:${SPARK_CONNECT_PORT:-15002}:15002"
+      - "127.0.0.1:${SPARK_UI_PORT:-14040}:4040"
+    volumes:
+      - ${KRISHIV_DATA:-${HOME}/krishiv-data}:/data:ro
+      - spark-tmp:/tmp/spark
+    mem_limit: 12g
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/15002'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  minio:
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e   # RELEASE.2025-09-07 (Docker Hub no longer lists RELEASE tags)
+    container_name: krishiv-bench-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: krishiv
+      MINIO_ROOT_PASSWORD: krishiv-bench-secret
+    ports:
+      - "127.0.0.1:${MINIO_S3_PORT:-19100}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-19101}:9001"
+    mem_limit: 2g
+    volumes:
+      - minio-data:/data
+
+  kafka:
+    profiles: ["kafka"]
+    image: apache/kafka:4.0.0   # KRaft, single node
+    container_name: krishiv-bench-kafka
+    ports:
+      - "127.0.0.1:${KAFKA_PORT:-19092}:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:${KAFKA_PORT:-19092}
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    mem_limit: 2g
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+volumes:
+  spark-tmp:
+  minio-data:
+  kafka-data:

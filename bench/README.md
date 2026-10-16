@@ -1,0 +1,86 @@
+# bench/ — Krishiv benchmark harness (P0-T17/18/19)
+
+Python (uv) harness that runs query suites against engine adapters and records JSON + a Markdown comparison.
+Datasets and results live **outside the repo** in `$KRISHIV_DATA` (default `~/krishiv-data`):
+
+```
+$KRISHIV_DATA/tpch/sf1/*.parquet   tpcds/sf1/   clickbench/   nexmark/   zipf/
+$KRISHIV_DATA/manifests/*.sha256   (sha256sum -c compatible, relative paths)
+$KRISHIV_DATA/results/*.json       report_<suite>_sf<N>.md
+```
+
+## Quick start
+```bash
+cd bench && uv sync
+export KRISHIV_DATA=$HOME/krishiv-data
+datasets/gen.sh tpch --sf 1                    # tpchgen-cli (cargo install tpchgen-cli) -> Parquet + manifest
+docker compose -f baselines/docker-compose.yml up -d     # Spark 4.2 Connect + MinIO (project krishiv-bench)
+datasets/gen.sh tpch-dbgen --sf 1              # official-answer reference data
+uv run krishiv-bench run --engine duckdb --suite tpch --sf 1 --dataset tpch-dbgen
+uv run krishiv-bench run --engine spark-connect --suite tpch --sf 1 --dataset tpch-dbgen
+uv run krishiv-bench report --suite tpch --sf 1 --dataset tpch-dbgen   # -> $KRISHIV_DATA/results/report_tpch-dbgen_sf1.md
+uv run pytest                                            # harness + Zipf generator tests
+docker compose -f baselines/docker-compose.yml stop      # stop (containers and volumes kept; `down` is denied in agent settings)
+```
+Useful flags: `--iterations 5 --warmup 2 --queries q01,q05 --timeout 600 --duckdb-threads N --duckdb-memory-limit 12GB --spark-remote sc://host:port`.
+For publishable numbers run from a clean committed tree (the result JSON records commit + `dirty`).
+
+## Baselines (`baselines/docker-compose.yml`, project `krishiv-bench`)
+| Service | Image | Host port | Notes |
+|---|---|---|---|
+| spark | `apache/spark:4.2.0` | 15002 (Connect), 14040 (UI) | `local[*]`, driver 8g, container cap 12g, `$KRISHIV_DATA` mounted **read-only** at `/data` |
+| minio | `minio/minio` (digest-pinned, RELEASE.2025-09-07) | 19100 (S3), 19101 (console) | own instance, creds `krishiv` / `krishiv-bench-secret`; unrelated to `bench-minio` |
+| kafka | `apache/kafka:4.0.0` (KRaft, 1 node) | 19092 | profile `kafka`: `docker compose ... --profile kafka up -d` |
+
+Ports are env-overridable (`SPARK_CONNECT_PORT`, `MINIO_S3_PORT`, `KAFKA_PORT`, ...). Spark 4.2.0 is the newest 4.2.x
+published on Docker Hub (verified 2026-10-16 via `docker manifest inspect`); the client is pinned to
+`pyspark[connect]==4.2.0` to match. Smoke test: `SparkSession.builder.remote("sc://127.0.0.1:15002").getOrCreate().sql("SELECT 1").collect()`.
+
+## Adapters (`src/krishiv_bench/adapters/`)
+Interface (`base.Engine`): `setup(dataset)` registers Parquet tables as views (no pre-loading, for parity), `run(query)`
+returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket each timed run for peak RSS / CPU / spill.
+- `duckdb` (in-process, `memory_limit` 12GB to match Spark's container cap): peak RSS = `/proc/self` VmHWM reset with `clear_refs` before each run
+  (whole harness process; its pre-run RSS is recorded as `baseline_rss_bytes`); spill = null.
+- `spark-connect`: same VmHWM/`clear_refs` method on the server JVM (`pgrep -x java` + `docker exec`, failures raise); CPU-s from `/proc/<pid>/stat`;
+  spill = null (Spark spill is available via the REST API :14040 but not collected yet). Host data path is rewritten to `/data`.
+  Spark runs with Spark 4 defaults (ANSI mode on) and `spark.sql.shuffle.partitions=24`. The JVM retains its heap, so Spark peaks are cumulative/order-dependent.
+  Probes run outside the timed region (a few ms; no sampler thread).
+- `krishiv`: **stub** raising `NotImplementedError` (implemented in P2; the docstring lists the planned shape).
+- Adding Sail/Polars/Flink: subclass `Engine`, register in `adapters/__init__.py`.
+Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (none needed so far).
+
+## Result JSON (`$KRISHIV_DATA/results/<ts>_<engine>_<suite>_sf<N>.json`)
+`machine` (CPU model, cores, RAM, OS, governor), `git` (krishiv-engine commit/branch/dirty), `engine` (name, version, config),
+`dataset` (name, SF, path, tables, generator version, manifest sha256), and per query: `iterations`, `times_s`, `p50_s`, `p99_s`, `min_s`, `max_s`, `mean_s`,
+`throughput_qps`, `rows_returned`, `has_order_by`, `answer_check`, `rows_stored`, `peak_rss_bytes`, `baseline_rss_bytes`,
+`cpu_seconds_median`, `spill_bytes` (null when not measurable), or `error`. Percentiles are nearest-rank, so with the default
+5 iterations p99 equals max; use `--iterations 100` for a meaningful p99. Wall time is client-observed (includes result
+transfer; results here are tiny). Two warm-up runs per query are discarded (`--warmup`); a per-query `--timeout` cancels hung queries (recorded as error). Absolute numbers on this shared laptop are for relative A/B only.
+
+## Correctness
+Two independent checks, both type-aware (`compare.py`, unit-tested):
+1. **Official answers**: at run time each engine's rows are validated against DuckDB's bundled official TPC-H answer sets (`tpch_answers()`, SF-specific).
+2. **Cross-engine**: the report compares the full stored result rows (`<run>.rows.json.gz` next to the JSON; up to 1M rows/query, anything not stored is listed as skipped).
+Rules: ints/strings/dates exact (strings right-trimmed); DECIMAL vs DECIMAL at the smaller scale (so Spark's `AVG(DECIMAL)` -> scale 6 matches an
+exact value, while equal-scale sums must match to the cent); DECIMAL vs double within half a unit of the decimal scale; double vs double rel 1e-6.
+Row order is verified when the query has a top-level `ORDER BY` (ordered comparison; a pure order difference is reported as such), else rows compare as multisets.
+The report never prints "all agree" if any check was skipped: skipped checks are listed explicitly.
+
+## Datasets (`datasets/gen.sh` -> `krishiv-datasets`)
+- **TPC-H** SF1/10/100 via `tpchgen-cli` (deterministic: regeneration reproduces identical sha256). Only SF1 generated so far.
+- **TPC-H dbgen** (`gen.sh tpch-dbgen --sf 1`, dir `tpch-dbgen/sf1`): DuckDB's reference dbgen. tpchgen-cli's random *text* columns differ from dbgen, so
+  q02/q10/q13/q15/q20 do not reproduce the official answers on `tpch` data (aggregates over numeric columns do). Official-answer validation therefore runs only on
+  `tpch-dbgen` (`--dataset tpch-dbgen`); runs on `tpch` list the answer check as not performed (cross-engine comparison still runs).
+- **TPC-DS** SF via DuckDB `tpcds` extension (`dsdgen`) -> Parquet (SF1 took ~1 min). Harness query files for all 99 are vendored,
+  but only TPC-H has been run end-to-end / verified; no TPC-DS expected-row files yet.
+- **ClickBench**: `gen.sh clickbench --yes` downloads `hits.parquet` (~14 GB) or `--partitioned` (100 files). Not downloaded.
+- **Nexmark**: simplified Python generator (person/auction/bid, default 2/6/92% mix, hot-key skew) producing batch Parquet. E05/E08 may need
+  the reference generator or a Rust port (planned in P2); this one is for smoke/relative use.
+- **Zipf**: `gen.sh zipf --rows R --keys K --alpha A` (alpha 0.8–1.5 supported; any alpha > 0); bounded Zipf by inverse CDF, key 0 hottest; tested in `tests/test_zipf.py`.
+
+## Query provenance / license
+TPC-H and TPC-DS query texts in `queries/` were exported (by `queries/export_queries.py`) from DuckDB 1.5.x's `tpch`/`tpcds`
+extensions (`tpch_queries()`, `tpcds_queries()`), which embed the standard qgen query set with default substitution
+parameters, and expected row counts from DuckDB's `tpch_answers()`. DuckDB is MIT-licensed; the benchmark specifications and
+query templates are © Transaction Processing Performance Council. Results from this harness are *TPC-derived* and not
+audited TPC results; they must not be published as official TPC-H/TPC-DS numbers.

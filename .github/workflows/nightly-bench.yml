@@ -1,0 +1,51 @@
+name: Nightly benchmarks
+
+# Manual trigger for now. Enable the nightly schedule once the baseline numbers are stable (P1).
+on:
+  workflow_dispatch:
+    inputs:
+      with_spark:
+        description: "Also run the Spark 4.2 Connect baseline (needs Docker)"
+        type: boolean
+        default: false
+  # schedule:
+  #   - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+env:
+  KRISHIV_DATA: ${{ github.workspace }}/krishiv-data
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install harness
+        working-directory: bench
+        run: uv sync --frozen
+      - name: Generate TPC-H SF1 (DuckDB dbgen, official-answer reference data)
+        working-directory: bench
+        run: uv run krishiv-datasets tpch-dbgen --sf 1
+      - name: Run DuckDB TPC-H SF1
+        working-directory: bench
+        run: uv run krishiv-bench run --engine duckdb --suite tpch --dataset tpch-dbgen --sf 1
+      - name: Run Spark Connect TPC-H SF1 (optional)
+        if: ${{ inputs.with_spark }}
+        working-directory: bench
+        run: |
+          docker compose -f baselines/docker-compose.yml up -d spark
+          uv run krishiv-bench run --engine spark-connect --suite tpch --dataset tpch-dbgen --sf 1
+          docker compose -f baselines/docker-compose.yml stop
+      - name: Report
+        working-directory: bench
+        run: |
+          uv run krishiv-bench report --suite tpch --sf 1 --dataset tpch-dbgen
+          cat "$KRISHIV_DATA"/results/report_tpch-dbgen_sf1.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: krishiv-data/results/
