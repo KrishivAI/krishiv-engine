@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+//! Tests for the docs emitter.
 
 use xtask::docs::{Doc, emit};
 

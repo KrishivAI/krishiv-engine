@@ -243,6 +243,7 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
     for (doc, fname, ty, body) in accessors {
         writeln!(o)?;
         writeln!(o, "    /// {doc}")?;
+        writeln!(o, "    #[allow(clippy::match_same_arms)]")?;
         writeln!(o, "    pub const fn {fname}(self) -> {ty} {{")?;
         writeln!(o, "        match self {{")?;
         for l in leaves {

@@ -12,11 +12,25 @@ repository = "https://github.com/krishiv/krishiv-engine"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "deny"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+# Curated pedantic subset (ADR 0029); CI runs clippy with -D warnings.
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+checked_conversions = "warn"
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+manual_let_else = "warn"
+match_same_arms = "warn"
+needless_pass_by_value = "warn"
+redundant_closure_for_method_calls = "warn"
+semicolon_if_nothing_returned = "warn"
+unnested_or_patterns = "warn"
 
 # Single source of dependency versions (ADR 0028). Declared with
 # `default-features = false`; members opt in to features explicitly.
