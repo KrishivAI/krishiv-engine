@@ -78,6 +78,20 @@ deny = [
     { crate = "librocksdb-sys", reason = "state backend is SlateDB" },
     { crate = "openssl", reason = "rustls only" },
     { crate = "openssl-sys", reason = "rustls only" },
+    { crate = "async-std", reason = "tokio only (ADR 0028)" },
+    { crate = "actix", reason = "axum/tokio only (ADR 0028)" },
+    { crate = "actix-web", reason = "axum/tokio only (ADR 0028)" },
+    { crate = "actix-rt", reason = "axum/tokio only (ADR 0028)" },
+    { crate = "figment", reason = "typed config registry is our own (ADR 0028)" },
+    { crate = "chrono-tz", reason = "jiff only (ADR 0028)" },
+    { crate = "pyo3-arrow", reason = "own PyCapsule bridge (ADR 0028)" },
+    { crate = "arrow-pyarrow", reason = "own PyCapsule bridge (ADR 0028)" },
+    { crate = "divan", reason = "criterion only (ADR 0028)" },
+    # anyhow is banned workspace-wide (libraries use thiserror; ADR 0028).
+    # Banned crates here are not currently in the dependency graph. If a
+    # third-party dependency ever pulls one in, add `wrappers = ["<parent>"]`
+    # to that entry with a justification rather than removing the ban.
+    { crate = "anyhow", reason = "libraries use thiserror (ADR 0028)" },
     # Single-version crates (deny duplicates).
     { crate = "tokio", deny-multiple-versions = true },
     { crate = "prost", deny-multiple-versions = true },
@@ -97,7 +111,6 @@ deny = [
     { crate = "arrow-string", deny-multiple-versions = true },
     { crate = "arrow-csv", deny-multiple-versions = true },
     { crate = "arrow-json", deny-multiple-versions = true },
-    { crate = "arrow-pyarrow", deny-multiple-versions = true },
     { crate = "arrow", deny-multiple-versions = true },
 ]
 
