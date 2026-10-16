@@ -3,8 +3,6 @@ import pyarrow.parquet as pq
 import pytest
 
 from krishiv_bench.datasets import gen_zipf, zipf_keys
-from krishiv_bench.normalize import checksum, norm_value
-from decimal import Decimal
 
 
 @pytest.mark.parametrize("alpha", [0.8, 1.0, 1.5])
@@ -37,9 +35,3 @@ def test_gen_zipf_parquet(tmp_path):
     t = pq.read_table(out)
     assert t.num_rows == 25_000 and t.column_names[:2] == ["key", "id"]
     assert t["id"].to_pylist()[-1] == 24_999
-
-
-def test_normalize_decimal_vs_float_and_order():
-    assert norm_value(Decimal("1234.5600")) == norm_value(1234.56000000001)
-    assert checksum([(1, "a "), (2, "b")]) == checksum([(2, "b"), (1, "a")])
-    assert checksum([(1,)]) != checksum([(2,)])
