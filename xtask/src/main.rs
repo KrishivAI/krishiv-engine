@@ -96,7 +96,7 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
     let root = workspace_root();
 
     let out = cargo_cmd()
-        .args(["metadata", "--format-version", "1"])
+        .args(["metadata", "--format-version", "1", "--color", "never"])
         .current_dir(&root)
         .output()
         .map_err(|e| format!("failed to run cargo metadata: {e}"))?;
@@ -118,6 +118,8 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
             "--prefix",
             "none",
             "--locked",
+            "--color",
+            "never",
         ])
         .current_dir(&root)
         .output()

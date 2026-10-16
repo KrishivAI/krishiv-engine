@@ -49,12 +49,36 @@ struct Node {
 /// `(*)` and `[build-dependencies]` headers ignored).
 #[must_use]
 pub fn count_tree_crates(tree: &str) -> u64 {
-    let set: BTreeSet<&str> = tree
+    let set: BTreeSet<String> = tree
         .lines()
-        .map(|l| l.trim_end_matches(" (*)").trim_end_matches(" (proc-macro)"))
-        .filter(|l| !l.is_empty() && !l.starts_with('[') && !l.contains(" (/"))
+        .map(strip_ansi)
+        .filter_map(|l| {
+            let name = l.trim_end_matches(" (*)").trim_end_matches(" (proc-macro)");
+            (!name.is_empty() && !name.starts_with('[') && !name.contains(" (/"))
+                .then(|| name.to_owned())
+        })
         .collect();
     u64::try_from(set.len()).unwrap_or(u64::MAX)
+}
+
+/// Removes ANSI escape sequences (`ESC [` ... final byte in `@`..=`~`), which
+/// cargo emits when `CARGO_TERM_COLOR=always`.
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.clone().next() == Some('[') {
+            chars.next();
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Counts resolved packages that are not workspace members.
@@ -185,6 +209,16 @@ mod tests {
     fn counts_tree_crates_unique_and_skips_members() {
         let t = "krishiv-cli v0.1.0 (/x/cli)\nclap v4.6.7\nclap_builder v4.6.7\nclap v4.6.7 (*)\nsyn v2.0.1 (proc-macro)\nsyn v2.0.1\nkrishiv v0.1.0 (/x/k)\n";
         assert_eq!(count_tree_crates(t), 3);
+    }
+
+    #[test]
+    fn colored_tree_output_counts_like_plain() {
+        // `CARGO_TERM_COLOR=always` wraps the `(*)` and `(proc-macro)` markers
+        // and headers in ANSI escapes; they must not change the count.
+        let plain = "krishiv-cli v0.1.0 (/x/cli)\nclap v4.6.7\nclap_builder v4.6.7\nclap v4.6.7 (*)\nsyn v2.0.1 (proc-macro)\nsyn v2.0.1\nproc-macro2 v1.0.107 (*)\n[build-dependencies]\nquote v1.0.40\n";
+        let colored = "krishiv-cli v0.1.0 (/x/cli)\nclap v4.6.7\nclap_builder v4.6.7\nclap v4.6.7 \x1b[33m\x1b[2m(*)\x1b[39m\x1b[22m\nsyn v2.0.1 \x1b[33m(proc-macro)\x1b[39m\nsyn v2.0.1\nproc-macro2 v1.0.107 \x1b[33m\x1b[2m(*)\x1b[39m\x1b[22m\n\x1b[1m[build-dependencies]\x1b[0m\nquote v1.0.40\n";
+        assert_eq!(count_tree_crates(colored), count_tree_crates(plain));
+        assert_eq!(count_tree_crates(colored), 5);
     }
 
     #[test]
