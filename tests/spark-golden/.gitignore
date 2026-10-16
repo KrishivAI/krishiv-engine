@@ -1,0 +1,4 @@
+# Only v4.2.0 is committed; other tags are fetched locally by tests/scripts/import_spark_golden.sh.
+/*
+!/.gitignore
+!/v4.2.0/

@@ -1,0 +1,6 @@
+These files are copied unmodified from the Apache Spark project
+(https://github.com/apache/spark, sql/core/src/test/resources/sql-tests), which is
+licensed under the Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
+Copyright The Apache Software Foundation. See MANIFEST for the exact tag and commit.
+They are used only as conformance test data for Krishiv; Apache Spark, Spark and
+the Spark logo are trademarks of the Apache Software Foundation.
