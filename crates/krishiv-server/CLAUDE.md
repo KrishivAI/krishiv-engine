@@ -1,10 +1,10 @@
 # krishiv-server
 
 **Layer:** L6 (may depend only on crates in L6 or lower; `cargo xtask layering`).  
-**Real code arrives:** P3.
+**Status:** P0-T26 skeleton exists (`router()`, `serve`, `run_blocking`); the real admin API arrives in P3.
 
 ## Purpose
-Admin and UI API server (REST, OpenAPI), serves the web UI.
+Admin and UI API server (REST, OpenAPI), serves the web UI. Today: `/api/v1/version`, JSON 404 for unknown `/api/*` paths, and the embedded SPA (from `krishiv-ui-assets`) with an extension-less-path fallback to `index.html`. Binds loopback by default. Reached via `krishiv server`, which exists only with the `ui` feature of `krishiv`/`krishiv-cli`.
 
 ## Invariants
 - Admin REST is a versioned surface (OpenAPI via utoipa).
@@ -15,4 +15,4 @@ Admin and UI API server (REST, OpenAPI), serves the web UI.
 0024, 0004, 0026
 
 ## Test
-`cargo nextest run -p krishiv-server` · `cargo clippy -p krishiv-server --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-server --no-tests=pass` · `cargo clippy -p krishiv-server --all-targets -- -D warnings`

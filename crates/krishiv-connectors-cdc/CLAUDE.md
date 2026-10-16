@@ -15,4 +15,4 @@ Change data capture source connectors.
 0014, 0015, 0016
 
 ## Test
-`cargo nextest run -p krishiv-connectors-cdc` · `cargo clippy -p krishiv-connectors-cdc --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connectors-cdc --no-tests=pass` · `cargo clippy -p krishiv-connectors-cdc --all-targets -- -D warnings`

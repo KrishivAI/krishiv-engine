@@ -17,17 +17,20 @@ From a worktree, the docs repo is `$(git rev-parse --path-format=absolute --git-
 
 ## Commands
 ```
-cargo build --workspace                          # toolchain pinned: rust-toolchain.toml (1.99.1)
-cargo nextest run --workspace                    # tests (CI: --all-features --locked)
-cargo test --workspace --doc                     # doctests
+cargo build --workspace                          # toolchain pinned: rust-toolchain.toml (1.99.1); MSRV 1.97
+cargo nextest run --workspace --all-features --locked --no-tests=pass   # CI form (empty crates have no tests yet)
+cargo nextest run -p <crate> --no-tests=pass     # one crate (krishiv-python is test=false)
+cargo test --workspace --doc --locked            # doctests
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings   # incl. missing_docs + pedantic subset
 cargo deny check                                 # licenses, bans, advisories, duplicate versions
 cargo machete                                    # unused deps
-cargo hack check --each-feature --workspace      # features stay additive
+cargo hack check --each-feature --workspace --locked   # features stay additive
 cargo xtask layering                             # L0–L7 layer rule (xtask/layers.toml)
 cargo xtask docs-config | docs-errors            # regenerate config / error-class docs
-cargo xtask budgets [--build-time]               # crate-count / build-time / size budgets (budgets.json)
+cargo xtask budgets [--build-time] [--write-baseline]   # crate-count / build-time / size budgets (budgets.json)
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace   # docs gate
+(cd bench && uv run pytest)                      # bench harness tests
 ```
 Pre-commit hook (fmt, clippy, deny; skips clippy/deny for docs-only commits or with `SKIP_CLIPPY=1`). Git config is
 not versioned, so enable it once per fresh clone (repo-local, never `--global`): `git config core.hooksPath .githooks`.
@@ -35,13 +38,15 @@ not versioned, so enable it once per fresh clone (repo-local, never `--global`):
 `.claude/settings.json` permission rules use mid-pattern `*` globs (e.g. `Bash(git push * --force*)`): a **recent
 Claude Code is required** (older versions only honour a trailing `:*`, which would leave those denies inert).
 After upgrading Claude Code or editing the rules, verify with a fresh session. The denies are a backstop; the hard
-stops below apply regardless.
+stops below apply regardless. Refspec pushes (`git push origin HEAD:p0/x`) are not covered by the narrow allow, so
+they need user approval; pushes use `git push -u origin p<n>/<branch>`.
 
 ## Layout
 - `crates/` — the workspace (layers below). `xtask/` — repo tooling. `.github/workflows/` — ci, nightly-bench, compat.
 - `deny.toml`, `budgets.json`, `renovate.json` — dependency and size gates.
-- Arriving in P0: `bench/` (baselines P0-T17, datasets P0-T18, harness P0-T19), `tests/spark-golden/` (P0-T20/T22),
-  `python/` (P0-T25), `ui/` (P0-T26), `sim/` (P0-T24).
+- `bench/` (uv harness; baselines in `bench/baselines/`, see `bench/README.md`), `tests/` (`spark-golden/` vendored
+  Spark goldens + Krishiv-authored goldens, `fixtures/spark-<ver>/` hash fixtures, `sqllogictest/`, `scripts/`),
+  `python/` (maturin package), `ui/` (Svelte source; built assets are committed in `crates/krishiv-ui-assets`).
 - `.claude/agents/` (implementer, spark-semantics, reviewer, perf-analyst), `.claude/skills/krishiv-*`,
   `.claude/settings.json` + `.claude/hooks/` (SessionStart/Stop), `.githooks/pre-commit`.
 
@@ -54,7 +59,8 @@ A crate depends only on crates in the same or a lower layer.
 - L4 exec, state, stream
 - L5 shuffle, scheduler, connectors-{kafka,iceberg,delta,cdc}
 - L6 connect, flight-sql, mcp, server, python, ui-assets
-- L7 krishiv (facade), krishiv-cli (binary `krishiv`)
+- L7 krishiv (facade), krishiv-cli (binary `krishiv`); test infrastructure krishiv-testkit (conformance harness) and
+  krishiv-sim (deterministic simulation), both `publish = false` and never depended on by product crates
 
 New crate → add it to `xtask/layers.toml` and root `Cargo.toml`, and write its `CLAUDE.md`.
 

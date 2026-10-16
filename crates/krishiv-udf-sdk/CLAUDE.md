@@ -16,4 +16,4 @@ Stable UDF SDK (Rust/WASM/Python UDF boundary types).
 0022, 0026, 0005
 
 ## Test
-`cargo nextest run -p krishiv-udf-sdk` · `cargo clippy -p krishiv-udf-sdk --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-udf-sdk --no-tests=pass` · `cargo clippy -p krishiv-udf-sdk --all-targets -- -D warnings`

@@ -15,4 +15,4 @@ Delta Lake connector on `delta_kernel` (no default features) with our own Engine
 0014, 0028
 
 ## Test
-`cargo nextest run -p krishiv-connectors-delta` · `cargo clippy -p krishiv-connectors-delta --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connectors-delta --no-tests=pass` · `cargo clippy -p krishiv-connectors-delta --all-targets -- -D warnings`

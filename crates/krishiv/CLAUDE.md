@@ -15,4 +15,4 @@ Facade crate: the public Rust API re-exporting the engine.
 0005, 0026
 
 ## Test
-`cargo nextest run -p krishiv` · `cargo clippy -p krishiv --all-targets -- -D warnings`
+`cargo nextest run -p krishiv --no-tests=pass` · `cargo clippy -p krishiv --all-targets -- -D warnings`

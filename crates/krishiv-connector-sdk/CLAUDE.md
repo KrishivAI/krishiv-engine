@@ -16,4 +16,4 @@ Stable connector SDK for third-party sources and sinks.
 0014, 0026, 0005
 
 ## Test
-`cargo nextest run -p krishiv-connector-sdk` · `cargo clippy -p krishiv-connector-sdk --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connector-sdk --no-tests=pass` · `cargo clippy -p krishiv-connector-sdk --all-targets -- -D warnings`

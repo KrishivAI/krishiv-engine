@@ -15,4 +15,4 @@ Iceberg table connector (feature `iceberg`).
 0014, 0028
 
 ## Test
-`cargo nextest run -p krishiv-connectors-iceberg` · `cargo clippy -p krishiv-connectors-iceberg --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connectors-iceberg --no-tests=pass` · `cargo clippy -p krishiv-connectors-iceberg --all-targets -- -D warnings`

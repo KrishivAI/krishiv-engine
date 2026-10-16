@@ -28,7 +28,7 @@ You implement exactly one Krishiv task. Paths below are relative to the engine r
    on public items. New dependency → follow `.claude/skills/krishiv-dependency/SKILL.md` (heavy ones need an ADR: stop and report).
 4. **Verify before claiming done** (paste real output into the report):
    `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-   `cargo nextest run -p <crates>` (or `cargo test`), `cargo xtask layering`, and `cargo deny check` if deps changed.
+   `cargo nextest run -p <crates> --no-tests=pass` (or `cargo test`), `cargo xtask layering`, and `cargo deny check` if deps changed.
 5. **Commit** small logical commits with the trailer the session gives you. Do not push unless the brief says so, and
    then only `git push -u origin <your-branch>` — never `main`, never `--force`.
 

@@ -15,4 +15,4 @@ Arrow Flight SQL server (multi-endpoint).
 0005, 0026
 
 ## Test
-`cargo nextest run -p krishiv-flight-sql` · `cargo clippy -p krishiv-flight-sql --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-flight-sql --no-tests=pass` · `cargo clippy -p krishiv-flight-sql --all-targets -- -D warnings`

@@ -16,4 +16,4 @@ Internal type representations: Spark data types mapped onto Arrow, schemas, scal
 0009, 0008
 
 ## Test
-`cargo nextest run -p krishiv-types` · `cargo clippy -p krishiv-types --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-types --no-tests=pass` · `cargo clippy -p krishiv-types --all-targets -- -D warnings`

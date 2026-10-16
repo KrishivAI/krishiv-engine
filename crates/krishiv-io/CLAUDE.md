@@ -16,4 +16,4 @@ Object store and file format I/O: Parquet, CSV, JSON scans/writes on object_stor
 0014, 0028
 
 ## Test
-`cargo nextest run -p krishiv-io` · `cargo clippy -p krishiv-io --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-io --no-tests=pass` · `cargo clippy -p krishiv-io --all-targets -- -D warnings`

@@ -15,4 +15,4 @@ MCP adapter (stdio read-only first, HTTP + auth later).
 0025, 0005
 
 ## Test
-`cargo nextest run -p krishiv-mcp` · `cargo clippy -p krishiv-mcp --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-mcp --no-tests=pass` · `cargo clippy -p krishiv-mcp --all-targets -- -D warnings`

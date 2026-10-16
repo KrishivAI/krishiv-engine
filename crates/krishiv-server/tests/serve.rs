@@ -34,4 +34,13 @@ async fn serves_index_and_version() {
 
     let missing = get(addr, "/assets/nope.js").await;
     assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+
+    let api_missing = get(addr, "/api/v1/nope").await;
+    assert!(api_missing.starts_with("HTTP/1.1 404"), "{api_missing}");
+    assert!(
+        api_missing
+            .to_lowercase()
+            .contains("content-type: application/json")
+    );
+    assert!(!api_missing.contains("<div id=\"app\">"));
 }

@@ -18,4 +18,4 @@ Shared foundation: Spark error classes + SQLSTATE registry (generated from `erro
 0026, 0027, 0029, 0008
 
 ## Test
-`cargo nextest run -p krishiv-common` · `cargo clippy -p krishiv-common --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-common --no-tests=pass` · `cargo clippy -p krishiv-common --all-targets -- -D warnings`
