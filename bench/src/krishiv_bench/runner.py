@@ -18,7 +18,8 @@ from .adapters import Dataset, Engine, Query, make_engine
 from . import compare
 from .paths import bench_root, data_root, dataset_dir, fmt_sf, queries_dir, results_dir
 
-SUITE_DATASET = {"tpch": "tpch", "tpcds": "tpcds"}
+SUITE_DATASET = {"tpch": "tpch", "tpcds": "tpcds"}  # default dataset per suite
+ANSWER_DATASETS = {"tpch-dbgen"}  # datasets whose data reproduces the official TPC-H answers
 
 
 def machine_info() -> dict:
@@ -65,7 +66,7 @@ def dataset_provenance(ds_name: str, sf: float) -> dict:
         prov["generator"] = r.stdout.strip() or "tpchgen-cli (unknown version)"
     else:
         import duckdb
-        prov["generator"] = f"duckdb {duckdb.__version__} tpcds extension (dsdgen)"
+        prov["generator"] = f"duckdb {duckdb.__version__} " + ("tpch extension (dbgen)" if ds_name == "tpch-dbgen" else "tpcds extension (dsdgen)")
     return prov
 
 
@@ -95,8 +96,8 @@ def load_expected_rows(suite: str, sf: float) -> dict[str, int]:
 
 def run_suite(engine_name: str, suite: str, sf: float, iterations: int = 5, warmup: int = 2,
               only: list[str] | None = None, engine_kwargs: dict | None = None,
-              timeout_s: float | None = 600) -> Path:
-    ds_name = SUITE_DATASET[suite]
+              timeout_s: float | None = 600, dataset: str | None = None) -> Path:
+    ds_name = dataset or SUITE_DATASET[suite]
     root = dataset_dir(ds_name, sf)
     tables = sorted(p.stem for p in root.glob("*.parquet"))
     if not tables:
@@ -104,7 +105,7 @@ def run_suite(engine_name: str, suite: str, sf: float, iterations: int = 5, warm
     eng: Engine = make_engine(engine_name, **(engine_kwargs or {}))
     expected = load_expected_rows(suite, sf)
     answers = {}
-    if suite == "tpch":
+    if suite == "tpch" and ds_name in ANSWER_DATASETS:
         try:
             answers = compare.load_tpch_answers(sf)
         except Exception as e:  # e.g. extension not installable offline
@@ -114,7 +115,7 @@ def run_suite(engine_name: str, suite: str, sf: float, iterations: int = 5, warm
 
     started = dt.datetime.now(dt.timezone.utc)
     sf_s = fmt_sf(sf)
-    stem = f"{started.strftime('%Y%m%dT%H%M%SZ')}_{engine_name}_{suite}_sf{sf_s}"
+    stem = f"{started.strftime('%Y%m%dT%H%M%SZ')}_{engine_name}_{ds_name}_sf{sf_s}"
     record = {
         "schema": 2, "started_utc": started.isoformat(), "machine": machine_info(),
         "git": {"repo": "krishiv-engine (harness lives in bench/)", **git_info()},
@@ -178,7 +179,7 @@ def run_suite(engine_name: str, suite: str, sf: float, iterations: int = 5, warm
                 ok, msg = compare.answer_check(rows, answers[q.id], ordered)
                 entry["answer_check"] = {"status": "pass" if ok else "fail", "detail": msg}
             else:
-                entry["answer_check"] = {"status": "not_checked", "detail": "no official answer available"}
+                entry["answer_check"] = {"status": "not_checked", "detail": f"dataset {ds_name!r} does not reproduce the official answers (use tpch-dbgen)" if suite == "tpch" else "no official answer set"}
             if len(rows) <= MAX_STORED_ROWS:
                 rows_store[q.id] = rows
                 entry["rows_stored"] = True

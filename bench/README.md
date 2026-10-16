@@ -15,9 +15,10 @@ cd bench && uv sync
 export KRISHIV_DATA=$HOME/krishiv-data
 datasets/gen.sh tpch --sf 1                    # tpchgen-cli (cargo install tpchgen-cli) -> Parquet + manifest
 docker compose -f baselines/docker-compose.yml up -d     # Spark 4.2 Connect + MinIO (project krishiv-bench)
-uv run krishiv-bench run --engine duckdb --suite tpch --sf 1
-uv run krishiv-bench run --engine spark-connect --suite tpch --sf 1
-uv run krishiv-bench report --suite tpch --sf 1          # -> $KRISHIV_DATA/results/report_tpch_sf1.md
+datasets/gen.sh tpch-dbgen --sf 1              # official-answer reference data
+uv run krishiv-bench run --engine duckdb --suite tpch --sf 1 --dataset tpch-dbgen
+uv run krishiv-bench run --engine spark-connect --suite tpch --sf 1 --dataset tpch-dbgen
+uv run krishiv-bench report --suite tpch --sf 1 --dataset tpch-dbgen   # -> $KRISHIV_DATA/results/report_tpch-dbgen_sf1.md
 uv run pytest                                            # harness + Zipf generator tests
 docker compose -f baselines/docker-compose.yml down      # stop (volumes kept; add -v to drop)
 ```
@@ -67,6 +68,9 @@ The report never prints "all agree" if any check was skipped: skipped checks are
 
 ## Datasets (`datasets/gen.sh` -> `krishiv-datasets`)
 - **TPC-H** SF1/10/100 via `tpchgen-cli` (deterministic: regeneration reproduces identical sha256). Only SF1 generated so far.
+- **TPC-H dbgen** (`gen.sh tpch-dbgen --sf 1`, dir `tpch-dbgen/sf1`): DuckDB's reference dbgen. tpchgen-cli's random *text* columns differ from dbgen, so
+  q02/q10/q13/q15/q20 do not reproduce the official answers on `tpch` data (aggregates over numeric columns do). Official-answer validation therefore runs only on
+  `tpch-dbgen` (`--dataset tpch-dbgen`); runs on `tpch` list the answer check as not performed (cross-engine comparison still runs).
 - **TPC-DS** SF via DuckDB `tpcds` extension (`dsdgen`) -> Parquet (SF1 took ~1 min). Harness query files for all 99 are vendored,
   but only TPC-H has been run end-to-end / verified; no TPC-DS expected-row files yet.
 - **ClickBench**: `gen.sh clickbench --yes` downloads `hits.parquet` (~14 GB) or `--partitioned` (100 files). Not downloaded.

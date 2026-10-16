@@ -61,6 +61,28 @@ def gen_tpch(sf: float, force: bool = False) -> Path:
     return out
 
 
+def gen_tpch_dbgen(sf: float, force: bool = False) -> Path:
+    """TPC-H via DuckDB's tpch extension (the reference dbgen). Output dir `tpch-dbgen/sf<N>`.
+
+    Why both generators: tpchgen-cli is fast and scales well, but its random text columns (addresses, comments)
+    differ from dbgen, so queries touching them (q02/q10/q13/q15/q20) do not reproduce the *official* answer sets.
+    The dbgen data reproduces all 22 official answers at SF1 and is the correctness reference dataset.
+    """
+    import duckdb
+
+    out = dataset_dir("tpch-dbgen", sf)
+    if out.exists() and any(out.iterdir()) and not force:
+        print(f"[tpch-dbgen] {out} exists, skipping (use --force)")
+        return out
+    out.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect()
+    con.execute("INSTALL tpch; LOAD tpch")
+    con.execute(f"CALL dbgen(sf={float(sf)})")
+    for t in TPCH_TABLES:
+        con.execute(f"COPY {t} TO '{out / (t + '.parquet')}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+    return out
+
+
 # ---------------------------------------------------------------- TPC-DS
 def gen_tpcds(sf: float, force: bool = False) -> Path:
     """TPC-DS via DuckDB's tpcds extension (dsdgen), exported table-by-table to Parquet."""
@@ -198,7 +220,7 @@ def gen_nexmark(events: int, seed: int = 0, out_dir: Path | None = None,
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="krishiv-datasets")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("tpch", "tpcds"):
+    for name in ("tpch", "tpch-dbgen", "tpcds"):
         p = sub.add_parser(name)
         p.add_argument("--sf", type=float, default=1)
         p.add_argument("--force", action="store_true")
@@ -215,13 +237,13 @@ def main(argv=None) -> None:
     p.add_argument("--alpha", type=float, default=1.1)
     p.add_argument("--seed", type=int, default=0)
     p = sub.add_parser("manifest", help="(re)write sha256 manifest for a dataset dir")
-    p.add_argument("name", choices=["tpch", "tpcds"])
+    p.add_argument("name", choices=["tpch", "tpch-dbgen", "tpcds"])
     p.add_argument("--sf", type=float, default=1)
     a = ap.parse_args(argv)
 
     t0 = time.time()
-    if a.cmd in ("tpch", "tpcds"):
-        d = (gen_tpch if a.cmd == "tpch" else gen_tpcds)(a.sf, a.force)
+    if a.cmd in ("tpch", "tpch-dbgen", "tpcds"):
+        d = {"tpch": gen_tpch, "tpch-dbgen": gen_tpch_dbgen, "tpcds": gen_tpcds}[a.cmd](a.sf, a.force)
         if not a.no_manifest:
             print("manifest:", write_manifest(d, f"{a.cmd}-sf{fmt_sf(a.sf)}"))
     elif a.cmd == "manifest":

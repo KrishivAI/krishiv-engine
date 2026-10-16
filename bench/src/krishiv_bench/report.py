@@ -9,12 +9,14 @@ from . import compare
 from .paths import fmt_sf, results_dir
 
 
-def latest_results(suite: str, sf: float, directory: Path | None = None) -> dict[str, dict]:
+def latest_results(suite: str, sf: float, dataset: str | None = None, directory: Path | None = None) -> dict[str, dict]:
     """Newest result JSON per engine for (suite, sf)."""
     best: dict[str, tuple[str, dict]] = {}
     for f in sorted((directory or results_dir()).glob("*.json")):
         r = json.loads(f.read_text())
         if r.get("suite") != suite or float(r["dataset"]["scale_factor"]) != float(sf):
+            continue
+        if dataset and r["dataset"]["name"] != dataset:
             continue
         best[r["engine"]["name"]] = (f.name, r)
     return {k: v[1] | {"_file": v[0]} for k, v in best.items()}
@@ -35,7 +37,7 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
     baseline = baseline if baseline in results else engines[0]
     first = results[baseline]
     qids = sorted({q for r in results.values() for q in r["queries"]})
-    L = [f"# Krishiv benchmark report: {first['suite']} SF{fmt_sf(first['dataset']['scale_factor'])}", ""]
+    L = [f"# Krishiv benchmark report: {first['dataset']['name']} SF{fmt_sf(first['dataset']['scale_factor'])}", ""]
     L += ["## Environment", ""]
     m = first["machine"]
     L += [f"- Machine: {m['cpu_model']}, {m['cores_logical']} logical cores, {m['ram_bytes']/2**30:.0f} GiB RAM, {m['os']}",
@@ -140,14 +142,15 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
     return "\n".join(L) + "\n"
 
 
-def write_report(suite: str, sf: float, baseline: str | None = None, files: list[Path] | None = None) -> Path:
+def write_report(suite: str, sf: float, baseline: str | None = None, files: list[Path] | None = None,
+                 dataset: str | None = None) -> Path:
     if files:
         res = {}
         for f in files:
             r = json.loads(Path(f).read_text()); res[r["engine"]["name"]] = r | {"_file": Path(f).name}
     else:
-        res = latest_results(suite, sf)
+        res = latest_results(suite, sf, dataset)
     md = render(res, baseline)
-    out = results_dir() / f"report_{suite}_sf{fmt_sf(sf)}.md"
+    out = results_dir() / f"report_{dataset or suite}_sf{fmt_sf(sf)}.md"
     out.write_text(md)
     return out
