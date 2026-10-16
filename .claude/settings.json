@@ -1,0 +1,122 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo nextest:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo doc:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo xtask:*)",
+      "Bash(cargo deny:*)",
+      "Bash(cargo machete:*)",
+      "Bash(cargo hack:*)",
+      "Bash(cargo msrv:*)",
+      "Bash(cargo hakari:*)",
+      "Bash(cargo metadata:*)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo update -p:*)",
+      "Bash(cargo bench:*)",
+      "Bash(cargo udeps:*)",
+      "Bash(cargo semver-checks:*)",
+      "Bash(cargo --version)",
+      "Bash(rustc --version)",
+      "Bash(rustup show:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git commit:*)",
+      "Bash(git worktree:*)",
+      "Bash(git add:*)",
+      "Bash(git switch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git stash:*)",
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git blame:*)",
+      "Bash(git remote -v:*)",
+      "Bash(git config --get:*)",
+      "Bash(git tag --list:*)",
+      "Bash(git push origin p*/*)",
+      "Bash(git push -u origin p*/*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr status:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run watch:*)",
+      "Bash(uv:*)",
+      "Bash(maturin develop:*)",
+      "Bash(maturin build:*)",
+      "Bash(pnpm:*)",
+      "Bash(just:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker logs:*)",
+      "Bash(.claude/hooks/session-start.sh)",
+      "Bash(.claude/hooks/stop.sh)"
+    ],
+    "deny": [
+      "Bash(git push origin main:*)",
+      "Bash(git push * main)",
+      "Bash(git push * HEAD:main)",
+      "Bash(git push *:main)",
+      "Bash(git push * +*)",
+      "Bash(git push origin --delete:*)",
+      "Bash(git push origin HEAD:main:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push origin --force:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push --delete:*)",
+      "Bash(cargo publish:*)",
+      "Bash(cargo release:*)",
+      "Bash(uv publish:*)",
+      "Bash(maturin publish:*)",
+      "Bash(maturin upload:*)",
+      "Bash(twine:*)",
+      "Bash(npm publish:*)",
+      "Bash(pnpm publish:*)",
+      "Bash(docker compose down -v:*)",
+      "Bash(docker volume rm:*)",
+      "Bash(docker system prune:*)",
+      "Bash(docker rm:*)",
+      "Bash(docker push:*)",
+      "Bash(gh release create:*)",
+      "Bash(release-plz release:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-start.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/stop.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
