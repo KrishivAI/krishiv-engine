@@ -1,0 +1,3 @@
+# sqllogictest smoke file (P0-T23). Executed against Krishiv from P2 on.
+statement ok
+SELECT 1

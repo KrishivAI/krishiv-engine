@@ -1,0 +1,858 @@
+{
+  "spark_version": "4.2.0",
+  "generated_at": "2026-10-16T14:59:56+00:00",
+  "generator": "tests/scripts/gen_hash_goldens.py",
+  "notes": "hash() = Murmur3 x86_32 seed 42; xxhash64() seed 42. Values are signed ints as Spark returns them.",
+  "cases": [
+    {
+      "id": "boolean_0",
+      "category": "boolean",
+      "expr": "true",
+      "spark_type": "struct<col1:boolean>",
+      "hash": -559580957,
+      "xxhash64": -6698625589789238999,
+      "conf": {}
+    },
+    {
+      "id": "boolean_1",
+      "category": "boolean",
+      "expr": "false",
+      "spark_type": "struct<col1:boolean>",
+      "hash": 933211791,
+      "xxhash64": 3614696996920510707,
+      "conf": {}
+    },
+    {
+      "id": "tinyint_0",
+      "category": "tinyint",
+      "expr": "CAST(0 AS TINYINT)",
+      "spark_type": "struct<col1:tinyint>",
+      "hash": 933211791,
+      "xxhash64": 3614696996920510707,
+      "conf": {}
+    },
+    {
+      "id": "tinyint_1",
+      "category": "tinyint",
+      "expr": "CAST(1 AS TINYINT)",
+      "spark_type": "struct<col1:tinyint>",
+      "hash": -559580957,
+      "xxhash64": -6698625589789238999,
+      "conf": {}
+    },
+    {
+      "id": "tinyint_2",
+      "category": "tinyint",
+      "expr": "CAST(-128 AS TINYINT)",
+      "spark_type": "struct<col1:tinyint>",
+      "hash": 1110053733,
+      "xxhash64": 4160238337661960656,
+      "conf": {}
+    },
+    {
+      "id": "tinyint_3",
+      "category": "tinyint",
+      "expr": "CAST(127 AS TINYINT)",
+      "spark_type": "struct<col1:tinyint>",
+      "hash": 1135925485,
+      "xxhash64": 8632298611707923906,
+      "conf": {}
+    },
+    {
+      "id": "smallint_0",
+      "category": "smallint",
+      "expr": "CAST(0 AS SMALLINT)",
+      "spark_type": "struct<col1:smallint>",
+      "hash": 933211791,
+      "xxhash64": 3614696996920510707,
+      "conf": {}
+    },
+    {
+      "id": "smallint_1",
+      "category": "smallint",
+      "expr": "CAST(-32768 AS SMALLINT)",
+      "spark_type": "struct<col1:smallint>",
+      "hash": -1871935946,
+      "xxhash64": -904511417458573795,
+      "conf": {}
+    },
+    {
+      "id": "smallint_2",
+      "category": "smallint",
+      "expr": "CAST(32767 AS SMALLINT)",
+      "spark_type": "struct<col1:smallint>",
+      "hash": 1249274084,
+      "xxhash64": 8952525448871805501,
+      "conf": {}
+    },
+    {
+      "id": "int_0",
+      "category": "int",
+      "expr": "0",
+      "spark_type": "struct<col1:int>",
+      "hash": 933211791,
+      "xxhash64": 3614696996920510707,
+      "conf": {}
+    },
+    {
+      "id": "int_1",
+      "category": "int",
+      "expr": "1",
+      "spark_type": "struct<col1:int>",
+      "hash": -559580957,
+      "xxhash64": -6698625589789238999,
+      "conf": {}
+    },
+    {
+      "id": "int_2",
+      "category": "int",
+      "expr": "-1",
+      "spark_type": "struct<col1:int>",
+      "hash": -1604776387,
+      "xxhash64": 2017008487422258757,
+      "conf": {}
+    },
+    {
+      "id": "int_3",
+      "category": "int",
+      "expr": "42",
+      "spark_type": "struct<col1:int>",
+      "hash": 29417773,
+      "xxhash64": -387659249110444264,
+      "conf": {}
+    },
+    {
+      "id": "int_4",
+      "category": "int",
+      "expr": "-2147483648",
+      "spark_type": "struct<col1:int>",
+      "hash": 723455942,
+      "xxhash64": 2073849959933241805,
+      "conf": {}
+    },
+    {
+      "id": "int_5",
+      "category": "int",
+      "expr": "2147483647",
+      "spark_type": "struct<col1:int>",
+      "hash": 133916647,
+      "xxhash64": 1508894993788531228,
+      "conf": {}
+    },
+    {
+      "id": "bigint_0",
+      "category": "bigint",
+      "expr": "0L",
+      "spark_type": "struct<col1:bigint>",
+      "hash": -1670924195,
+      "xxhash64": -5252525462095825812,
+      "conf": {}
+    },
+    {
+      "id": "bigint_1",
+      "category": "bigint",
+      "expr": "1L",
+      "spark_type": "struct<col1:bigint>",
+      "hash": -1712319331,
+      "xxhash64": -7001672635703045582,
+      "conf": {}
+    },
+    {
+      "id": "bigint_2",
+      "category": "bigint",
+      "expr": "-1L",
+      "spark_type": "struct<col1:bigint>",
+      "hash": -939490007,
+      "xxhash64": 3858142552250413010,
+      "conf": {}
+    },
+    {
+      "id": "bigint_3",
+      "category": "bigint",
+      "expr": "-9223372036854775808L",
+      "spark_type": "struct<col1:bigint>",
+      "hash": -853646085,
+      "xxhash64": -8619748838626508300,
+      "conf": {}
+    },
+    {
+      "id": "bigint_4",
+      "category": "bigint",
+      "expr": "9223372036854775807L",
+      "spark_type": "struct<col1:bigint>",
+      "hash": -1604625029,
+      "xxhash64": -3246596055638297850,
+      "conf": {}
+    },
+    {
+      "id": "bigint_5",
+      "category": "bigint",
+      "expr": "4294967296L",
+      "spark_type": "struct<col1:bigint>",
+      "hash": -1307033787,
+      "xxhash64": 2573143779600619579,
+      "conf": {}
+    },
+    {
+      "id": "float_0",
+      "category": "float",
+      "expr": "CAST(0.0 AS FLOAT)",
+      "spark_type": "struct<col1:float>",
+      "hash": 933211791,
+      "xxhash64": 3614696996920510707,
+      "conf": {}
+    },
+    {
+      "id": "float_1",
+      "category": "float",
+      "expr": "-CAST(0.0 AS FLOAT)",
+      "spark_type": "struct<col1:float>",
+      "hash": 933211791,
+      "xxhash64": 3614696996920510707,
+      "conf": {}
+    },
+    {
+      "id": "float_2",
+      "category": "float",
+      "expr": "CAST(1.5 AS FLOAT)",
+      "spark_type": "struct<col1:float>",
+      "hash": -221251528,
+      "xxhash64": 6163473420726370430,
+      "conf": {}
+    },
+    {
+      "id": "float_3",
+      "category": "float",
+      "expr": "CAST('NaN' AS FLOAT)",
+      "spark_type": "struct<col1:float>",
+      "hash": -349261430,
+      "xxhash64": 2692338816207849720,
+      "conf": {}
+    },
+    {
+      "id": "float_4",
+      "category": "float",
+      "expr": "CAST('Infinity' AS FLOAT)",
+      "spark_type": "struct<col1:float>",
+      "hash": 2026854605,
+      "xxhash64": -5940311692336719973,
+      "conf": {}
+    },
+    {
+      "id": "float_5",
+      "category": "float",
+      "expr": "CAST('-Infinity' AS FLOAT)",
+      "spark_type": "struct<col1:float>",
+      "hash": 427440766,
+      "xxhash64": -7580553461823983095,
+      "conf": {}
+    },
+    {
+      "id": "float_6",
+      "category": "float",
+      "expr": "CAST(-1.25 AS FLOAT)",
+      "spark_type": "struct<col1:float>",
+      "hash": 1043611126,
+      "xxhash64": -6062432153614466525,
+      "conf": {}
+    },
+    {
+      "id": "double_0",
+      "category": "double",
+      "expr": "0.0D",
+      "spark_type": "struct<col1:double>",
+      "hash": -1670924195,
+      "xxhash64": -5252525462095825812,
+      "conf": {}
+    },
+    {
+      "id": "double_1",
+      "category": "double",
+      "expr": "-0.0D",
+      "spark_type": "struct<col1:double>",
+      "hash": -1670924195,
+      "xxhash64": -5252525462095825812,
+      "conf": {}
+    },
+    {
+      "id": "double_2",
+      "category": "double",
+      "expr": "1.5D",
+      "spark_type": "struct<col1:double>",
+      "hash": 1290763749,
+      "xxhash64": 7738255526519901366,
+      "conf": {}
+    },
+    {
+      "id": "double_3",
+      "category": "double",
+      "expr": "CAST('NaN' AS DOUBLE)",
+      "spark_type": "struct<col1:double>",
+      "hash": -1281358385,
+      "xxhash64": -3127944061524951246,
+      "conf": {}
+    },
+    {
+      "id": "double_4",
+      "category": "double",
+      "expr": "CAST('Infinity' AS DOUBLE)",
+      "spark_type": "struct<col1:double>",
+      "hash": 833680482,
+      "xxhash64": 5810986238603807492,
+      "conf": {}
+    },
+    {
+      "id": "double_5",
+      "category": "double",
+      "expr": "CAST('-Infinity' AS DOUBLE)",
+      "spark_type": "struct<col1:double>",
+      "hash": 461104036,
+      "xxhash64": 5326262080505358431,
+      "conf": {}
+    },
+    {
+      "id": "double_6",
+      "category": "double",
+      "expr": "-1.25D",
+      "spark_type": "struct<col1:double>",
+      "hash": 747866589,
+      "xxhash64": 2268701931973275108,
+      "conf": {}
+    },
+    {
+      "id": "double_7",
+      "category": "double",
+      "expr": "1.7976931348623157E308D",
+      "spark_type": "struct<col1:double>",
+      "hash": -508695674,
+      "xxhash64": -4222314252576420879,
+      "conf": {}
+    },
+    {
+      "id": "double_8",
+      "category": "double",
+      "expr": "4.9E-324D",
+      "spark_type": "struct<col1:double>",
+      "hash": -1712319331,
+      "xxhash64": -7001672635703045582,
+      "conf": {}
+    },
+    {
+      "id": "decimal_le18_0",
+      "category": "decimal_le18",
+      "expr": "CAST(0 AS DECIMAL(10,2))",
+      "spark_type": "struct<col1:decimal(10,2)>",
+      "hash": -1670924195,
+      "xxhash64": -5252525462095825812,
+      "conf": {}
+    },
+    {
+      "id": "decimal_le18_1",
+      "category": "decimal_le18",
+      "expr": "CAST(123.45 AS DECIMAL(10,2))",
+      "spark_type": "struct<col1:decimal(10,2)>",
+      "hash": 1416086240,
+      "xxhash64": 8791244235932249694,
+      "conf": {}
+    },
+    {
+      "id": "decimal_le18_2",
+      "category": "decimal_le18",
+      "expr": "CAST(-123.45 AS DECIMAL(10,2))",
+      "spark_type": "struct<col1:decimal(10,2)>",
+      "hash": -1959512858,
+      "xxhash64": -4814648695243699264,
+      "conf": {}
+    },
+    {
+      "id": "decimal_le18_3",
+      "category": "decimal_le18",
+      "expr": "CAST(999999999999999999 AS DECIMAL(18,0))",
+      "spark_type": "struct<col1:decimal(18,0)>",
+      "hash": -1795328666,
+      "xxhash64": 2162198894918931945,
+      "conf": {}
+    },
+    {
+      "id": "decimal_le18_4",
+      "category": "decimal_le18",
+      "expr": "CAST(0.000001 AS DECIMAL(18,6))",
+      "spark_type": "struct<col1:decimal(18,6)>",
+      "hash": -1712319331,
+      "xxhash64": -7001672635703045582,
+      "conf": {}
+    },
+    {
+      "id": "decimal_gt18_0",
+      "category": "decimal_gt18",
+      "expr": "CAST(0 AS DECIMAL(38,10))",
+      "spark_type": "struct<col1:decimal(38,10)>",
+      "hash": -783713497,
+      "xxhash64": -8959994473701255385,
+      "conf": {}
+    },
+    {
+      "id": "decimal_gt18_1",
+      "category": "decimal_gt18",
+      "expr": "CAST(123456789012345678901.1234567890 AS DECIMAL(38,10))",
+      "spark_type": "struct<col1:decimal(38,10)>",
+      "hash": -249128377,
+      "xxhash64": -5510914995065858051,
+      "conf": {}
+    },
+    {
+      "id": "decimal_gt18_2",
+      "category": "decimal_gt18",
+      "expr": "CAST(-123456789012345678901.1234567890 AS DECIMAL(38,10))",
+      "spark_type": "struct<col1:decimal(38,10)>",
+      "hash": -857273161,
+      "xxhash64": -4492689921742796148,
+      "conf": {}
+    },
+    {
+      "id": "decimal_gt18_3",
+      "category": "decimal_gt18",
+      "expr": "CAST(12345678901234567890 AS DECIMAL(20,0))",
+      "spark_type": "struct<col1:decimal(20,0)>",
+      "hash": -493604283,
+      "xxhash64": 2312222103909072541,
+      "conf": {}
+    },
+    {
+      "id": "string_0",
+      "category": "string",
+      "expr": "''",
+      "spark_type": "struct<col1:string>",
+      "hash": 142593372,
+      "xxhash64": -7444071767201028348,
+      "conf": {}
+    },
+    {
+      "id": "string_1",
+      "category": "string",
+      "expr": "'a'",
+      "spark_type": "struct<col1:string>",
+      "hash": 1485273170,
+      "xxhash64": -8582455328737087284,
+      "conf": {}
+    },
+    {
+      "id": "string_2",
+      "category": "string",
+      "expr": "'hello world'",
+      "spark_type": "struct<col1:string>",
+      "hash": -1528836094,
+      "xxhash64": 7620854247404556961,
+      "conf": {}
+    },
+    {
+      "id": "string_3",
+      "category": "string",
+      "expr": "'Spark SQL'",
+      "spark_type": "struct<col1:string>",
+      "hash": 1516360745,
+      "xxhash64": -8514049625603843977,
+      "conf": {}
+    },
+    {
+      "id": "string_4",
+      "category": "string",
+      "expr": "'héllo'",
+      "spark_type": "struct<col1:string>",
+      "hash": 1212979866,
+      "xxhash64": 501425390238239234,
+      "conf": {}
+    },
+    {
+      "id": "string_5",
+      "category": "string",
+      "expr": "'日本語'",
+      "spark_type": "struct<col1:string>",
+      "hash": -1143049834,
+      "xxhash64": -619341062884681239,
+      "conf": {}
+    },
+    {
+      "id": "string_6",
+      "category": "string",
+      "expr": "'😀'",
+      "spark_type": "struct<col1:string>",
+      "hash": 1877935379,
+      "xxhash64": -5869505314936196641,
+      "conf": {}
+    },
+    {
+      "id": "string_7",
+      "category": "string",
+      "expr": "'a\u0000b'",
+      "spark_type": "struct<col1:string>",
+      "hash": -1008589700,
+      "xxhash64": -7028150433230623758,
+      "conf": {}
+    },
+    {
+      "id": "binary_0",
+      "category": "binary",
+      "expr": "X''",
+      "spark_type": "struct<col1:binary>",
+      "hash": 142593372,
+      "xxhash64": -7444071767201028348,
+      "conf": {}
+    },
+    {
+      "id": "binary_1",
+      "category": "binary",
+      "expr": "X'00'",
+      "spark_type": "struct<col1:binary>",
+      "hash": -783713497,
+      "xxhash64": -8959994473701255385,
+      "conf": {}
+    },
+    {
+      "id": "binary_2",
+      "category": "binary",
+      "expr": "X'DEADBEEF'",
+      "spark_type": "struct<col1:binary>",
+      "hash": 268093499,
+      "xxhash64": -8662771787172471895,
+      "conf": {}
+    },
+    {
+      "id": "binary_3",
+      "category": "binary",
+      "expr": "CAST('abc' AS BINARY)",
+      "spark_type": "struct<col1:binary>",
+      "hash": 1322437556,
+      "xxhash64": 1423657621850124518,
+      "conf": {}
+    },
+    {
+      "id": "binary_4",
+      "category": "binary",
+      "expr": "X'0001020304050607'",
+      "spark_type": "struct<col1:binary>",
+      "hash": 138667132,
+      "xxhash64": -7143238906056518746,
+      "conf": {}
+    },
+    {
+      "id": "date_0",
+      "category": "date",
+      "expr": "DATE'1970-01-01'",
+      "spark_type": "struct<col1:date>",
+      "hash": 933211791,
+      "xxhash64": 3614696996920510707,
+      "conf": {}
+    },
+    {
+      "id": "date_1",
+      "category": "date",
+      "expr": "DATE'2024-02-29'",
+      "spark_type": "struct<col1:date>",
+      "hash": 653915859,
+      "xxhash64": 4183429117450946631,
+      "conf": {}
+    },
+    {
+      "id": "date_2",
+      "category": "date",
+      "expr": "DATE'1969-12-31'",
+      "spark_type": "struct<col1:date>",
+      "hash": -1604776387,
+      "xxhash64": 2017008487422258757,
+      "conf": {}
+    },
+    {
+      "id": "date_3",
+      "category": "date",
+      "expr": "DATE'0001-01-01'",
+      "spark_type": "struct<col1:date>",
+      "hash": -1147107224,
+      "xxhash64": 6773727150484150602,
+      "conf": {}
+    },
+    {
+      "id": "date_4",
+      "category": "date",
+      "expr": "DATE'9999-12-31'",
+      "spark_type": "struct<col1:date>",
+      "hash": 1135886659,
+      "xxhash64": 7061898801283288394,
+      "conf": {}
+    },
+    {
+      "id": "timestamp_0",
+      "category": "timestamp",
+      "expr": "TIMESTAMP'1970-01-01 00:00:00+00:00'",
+      "spark_type": "struct<col1:timestamp>",
+      "hash": -1670924195,
+      "xxhash64": -5252525462095825812,
+      "conf": {}
+    },
+    {
+      "id": "timestamp_1",
+      "category": "timestamp",
+      "expr": "TIMESTAMP'2024-02-29 12:34:56.789012+00:00'",
+      "spark_type": "struct<col1:timestamp>",
+      "hash": -1367554535,
+      "xxhash64": -2021281541725647388,
+      "conf": {}
+    },
+    {
+      "id": "timestamp_2",
+      "category": "timestamp",
+      "expr": "TIMESTAMP'1969-12-31 23:59:59.999999+00:00'",
+      "spark_type": "struct<col1:timestamp>",
+      "hash": -939490007,
+      "xxhash64": 3858142552250413010,
+      "conf": {}
+    },
+    {
+      "id": "timestamp_ntz_0",
+      "category": "timestamp_ntz",
+      "expr": "TIMESTAMP_NTZ'1970-01-01 00:00:00'",
+      "spark_type": "struct<col1:timestamp_ntz>",
+      "hash": -1670924195,
+      "xxhash64": -5252525462095825812,
+      "conf": {}
+    },
+    {
+      "id": "timestamp_ntz_1",
+      "category": "timestamp_ntz",
+      "expr": "TIMESTAMP_NTZ'2024-02-29 12:34:56.789012'",
+      "spark_type": "struct<col1:timestamp_ntz>",
+      "hash": -1367554535,
+      "xxhash64": -2021281541725647388,
+      "conf": {}
+    },
+    {
+      "id": "timestamp_ntz_2",
+      "category": "timestamp_ntz",
+      "expr": "TIMESTAMP_NTZ'1969-12-31 23:59:59.999999'",
+      "spark_type": "struct<col1:timestamp_ntz>",
+      "hash": -939490007,
+      "xxhash64": 3858142552250413010,
+      "conf": {}
+    },
+    {
+      "id": "null_0",
+      "category": "null",
+      "expr": "CAST(NULL AS INT)",
+      "spark_type": "struct<col1:int>",
+      "hash": 42,
+      "xxhash64": 42,
+      "conf": {}
+    },
+    {
+      "id": "null_1",
+      "category": "null",
+      "expr": "CAST(NULL AS STRING)",
+      "spark_type": "struct<col1:string>",
+      "hash": 42,
+      "xxhash64": 42,
+      "conf": {}
+    },
+    {
+      "id": "null_2",
+      "category": "null",
+      "expr": "CAST(NULL AS DOUBLE)",
+      "spark_type": "struct<col1:double>",
+      "hash": 42,
+      "xxhash64": 42,
+      "conf": {}
+    },
+    {
+      "id": "null_3",
+      "category": "null",
+      "expr": "NULL",
+      "spark_type": "struct<col1:void>",
+      "hash": 42,
+      "xxhash64": 42,
+      "conf": {}
+    },
+    {
+      "id": "array_0",
+      "category": "array",
+      "expr": "array(1, 2, 3)",
+      "spark_type": "struct<col1:array<int>>",
+      "hash": -912918097,
+      "xxhash64": 8592097078962733837,
+      "conf": {}
+    },
+    {
+      "id": "array_1",
+      "category": "array",
+      "expr": "CAST(array() AS ARRAY<INT>)",
+      "spark_type": "struct<col1:array<int>>",
+      "hash": 42,
+      "xxhash64": 42,
+      "conf": {}
+    },
+    {
+      "id": "array_2",
+      "category": "array",
+      "expr": "array(1, NULL, 3)",
+      "spark_type": "struct<col1:array<int>>",
+      "hash": 1066699649,
+      "xxhash64": -3383274367486667931,
+      "conf": {}
+    },
+    {
+      "id": "array_3",
+      "category": "array",
+      "expr": "CAST(NULL AS ARRAY<INT>)",
+      "spark_type": "struct<col1:array<int>>",
+      "hash": 42,
+      "xxhash64": 42,
+      "conf": {}
+    },
+    {
+      "id": "map_0",
+      "category": "map",
+      "expr": "map('a', 1, 'b', 2)",
+      "spark_type": "struct<col1:map<string,int>>",
+      "hash": -793797513,
+      "xxhash64": 7428138486932782616,
+      "conf": {
+        "spark.sql.legacy.allowHashOnMapType": "true"
+      }
+    },
+    {
+      "id": "map_1",
+      "category": "map",
+      "expr": "CAST(map() AS MAP<STRING,INT>)",
+      "spark_type": "struct<col1:map<string,int>>",
+      "hash": 42,
+      "xxhash64": 42,
+      "conf": {
+        "spark.sql.legacy.allowHashOnMapType": "true"
+      }
+    },
+    {
+      "id": "map_2",
+      "category": "map",
+      "expr": "map('a', CAST(NULL AS INT))",
+      "spark_type": "struct<col1:map<string,int>>",
+      "hash": 1485273170,
+      "xxhash64": -8582455328737087284,
+      "conf": {
+        "spark.sql.legacy.allowHashOnMapType": "true"
+      }
+    },
+    {
+      "id": "struct_0",
+      "category": "struct",
+      "expr": "named_struct('a', 1, 'b', 'x')",
+      "spark_type": "struct<col1:struct<a:int,b:string>>",
+      "hash": -1305545736,
+      "xxhash64": 8510603489595372987,
+      "conf": {}
+    },
+    {
+      "id": "struct_1",
+      "category": "struct",
+      "expr": "named_struct('a', CAST(NULL AS INT), 'b', 'x')",
+      "spark_type": "struct<col1:struct<a:int,b:string>>",
+      "hash": -80340190,
+      "xxhash64": -5636050478767222463,
+      "conf": {}
+    },
+    {
+      "id": "struct_2",
+      "category": "struct",
+      "expr": "named_struct('a', 1, 'b', CAST(NULL AS STRING))",
+      "spark_type": "struct<col1:struct<a:int,b:string>>",
+      "hash": -559580957,
+      "xxhash64": -6698625589789238999,
+      "conf": {}
+    },
+    {
+      "id": "nested_array_struct_0",
+      "category": "nested_array_struct",
+      "expr": "array(named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y'))",
+      "spark_type": "struct<col1:array<struct<a:int,b:string>>>",
+      "hash": 262891156,
+      "xxhash64": 5306553143112299159,
+      "conf": {}
+    },
+    {
+      "id": "nested_array_struct_1",
+      "category": "nested_array_struct",
+      "expr": "array(named_struct('a', 1, 'b', CAST(NULL AS STRING)), CAST(NULL AS STRUCT<a:INT,b:STRING>))",
+      "spark_type": "struct<col1:array<struct<a:int,b:string>>>",
+      "hash": -559580957,
+      "xxhash64": -6698625589789238999,
+      "conf": {}
+    },
+    {
+      "id": "multi_arg_0",
+      "category": "multi_arg",
+      "expr": "1, 'a'",
+      "spark_type": "struct<col1:int,col2:string>",
+      "hash": -936062819,
+      "xxhash64": 8205864924878002737,
+      "conf": {}
+    },
+    {
+      "id": "multi_arg_1",
+      "category": "multi_arg",
+      "expr": "1, 'a', 2.5D",
+      "spark_type": "struct<col1:int,col2:string,col3:double>",
+      "hash": 389417474,
+      "xxhash64": -198860653963387819,
+      "conf": {}
+    },
+    {
+      "id": "multi_arg_2",
+      "category": "multi_arg",
+      "expr": "'a', 1",
+      "spark_type": "struct<col1:string,col2:int>",
+      "hash": 532252686,
+      "xxhash64": -4810547614043336770,
+      "conf": {}
+    },
+    {
+      "id": "multi_arg_3",
+      "category": "multi_arg",
+      "expr": "CAST(NULL AS INT), 'a'",
+      "spark_type": "struct<col1:int,col2:string>",
+      "hash": 1485273170,
+      "xxhash64": -8582455328737087284,
+      "conf": {}
+    },
+    {
+      "id": "multi_arg_4",
+      "category": "multi_arg",
+      "expr": "1, CAST(NULL AS STRING)",
+      "spark_type": "struct<col1:int,col2:string>",
+      "hash": -559580957,
+      "xxhash64": -6698625589789238999,
+      "conf": {}
+    },
+    {
+      "id": "multi_arg_5",
+      "category": "multi_arg",
+      "expr": "1, 2, 3, 4",
+      "spark_type": "struct<col1:int,col2:int,col3:int,col4:int>",
+      "hash": -140676325,
+      "xxhash64": -3713373359664387575,
+      "conf": {}
+    },
+    {
+      "id": "multi_arg_6",
+      "category": "multi_arg",
+      "expr": "true, 1L, 'x', X'FF', DATE'2024-01-01'",
+      "spark_type": "struct<col1:boolean,col2:bigint,col3:string,col4:binary,col5:date>",
+      "hash": 1493237897,
+      "xxhash64": 2127850131539592237,
+      "conf": {}
+    }
+  ],
+  "default_conf_errors": [
+    {
+      "expr": "map('a', 1, 'b', 2)",
+      "category": "map",
+      "error_class": "DATATYPE_MISMATCH.HASH_MAP_TYPE"
+    }
+  ]
+}
