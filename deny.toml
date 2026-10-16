@@ -96,6 +96,7 @@ deny = [
     { crate = "arrow-string", deny-multiple-versions = true },
     { crate = "arrow-csv", deny-multiple-versions = true },
     { crate = "arrow-json", deny-multiple-versions = true },
+    { crate = "arrow-pyarrow", deny-multiple-versions = true },
     { crate = "arrow", deny-multiple-versions = true },
 ]
 

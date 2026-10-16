@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -124,7 +125,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --no-deps --all-features --locked
 
+  # Pull requests only: the baseline (budgets.json) is updated by the PR that
+  # changes it, so main never needs to re-run this. If a PR exceeds the budget,
+  # a maintainer adds the `budget-approved` label (re-runs on `labeled`); the
+  # job then passes and the PR author must refresh the baseline with
+  #   cargo xtask budgets --write-baseline
+  # and commit budgets.json (see the job summary).
   budgets:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

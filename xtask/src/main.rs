@@ -192,6 +192,20 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
         eprintln!("{}: {v}", if approved { "approved" } else { "error" });
     }
     if approved {
+        let note = "Budget exceeded but approved. Refresh the baseline: `cargo xtask budgets --write-baseline` and commit budgets.json.";
+        println!("{note}");
+        if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(path)
+            {
+                let _ = writeln!(f, "{note}");
+            }
+        }
+    }
+    if approved {
         Ok(())
     } else {
         Err("budget exceeded; add the `budget-approved` label or set BUDGET_APPROVED=1".to_owned())
