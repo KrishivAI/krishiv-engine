@@ -1,0 +1,36 @@
+# Layer map for `cargo xtask layering` (ADR 0026).
+# A crate may depend only on workspace crates in the same or a lower layer.
+# SDK crates sit at layer 1, so they may depend only on L0-L1 crates.
+
+# Workspace members that are not part of the product layering.
+ignore = ["xtask"]
+
+[layers]
+krishiv-common = 0
+krishiv-types = 1
+krishiv-memory = 1
+krishiv-udf-sdk = 1
+krishiv-connector-sdk = 1
+krishiv-kernels = 2
+krishiv-functions = 2
+krishiv-io = 2
+krishiv-sql = 3
+krishiv-plan = 3
+krishiv-optimizer = 3
+krishiv-exec = 4
+krishiv-state = 4
+krishiv-stream = 4
+krishiv-shuffle = 5
+krishiv-scheduler = 5
+krishiv-connectors-kafka = 5
+krishiv-connectors-iceberg = 5
+krishiv-connectors-delta = 5
+krishiv-connectors-cdc = 5
+krishiv-connect = 6
+krishiv-flight-sql = 6
+krishiv-mcp = 6
+krishiv-server = 6
+krishiv-python = 6
+krishiv-ui-assets = 6
+krishiv = 7
+krishiv-cli = 7
