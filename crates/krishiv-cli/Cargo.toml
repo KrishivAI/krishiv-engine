@@ -34,3 +34,7 @@ ui = ["krishiv/ui"]
 celeborn = ["krishiv/celeborn"]
 mimalloc = ["krishiv/mimalloc"]
 full = ["krishiv/full"]
+
+[package.metadata.cargo-machete]
+# The facade is linked for feature forwarding until the CLI calls into it.
+ignored = ["krishiv"]

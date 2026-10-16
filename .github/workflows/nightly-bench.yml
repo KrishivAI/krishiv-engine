@@ -1,0 +1,30 @@
+name: Nightly benchmarks
+
+# Manual trigger for now. Enable the nightly schedule once the harness lands.
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace --release --locked
+      - name: Run harness (placeholder)
+        run: |
+          # TODO(P0-T19): replace with the real invocation.
+          echo "placeholder: Nightly benchmarks harness not implemented yet (P0-T19)"

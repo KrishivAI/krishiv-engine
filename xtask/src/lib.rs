@@ -2,5 +2,6 @@
 
 #![forbid(unsafe_code)]
 
+pub mod budgets;
 pub mod docs;
 pub mod layering;
