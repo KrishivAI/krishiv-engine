@@ -16,10 +16,12 @@ def main(argv=None) -> None:
     r.add_argument("--suite", default="tpch", choices=["tpch", "tpcds"])
     r.add_argument("--sf", type=float, default=1)
     r.add_argument("--iterations", type=int, default=5)
-    r.add_argument("--warmup", type=int, default=1)
+    r.add_argument("--warmup", type=int, default=2)
     r.add_argument("--queries", help="comma list, e.g. q01,q05")
     r.add_argument("--spark-remote", default="sc://127.0.0.1:15002")
     r.add_argument("--duckdb-threads", type=int)
+    r.add_argument("--duckdb-memory-limit", default="12GB")
+    r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
     rp = sub.add_parser("report", help="Markdown comparison of the newest result per engine")
     rp.add_argument("--suite", default="tpch")
     rp.add_argument("--sf", type=float, default=1)
@@ -30,10 +32,12 @@ def main(argv=None) -> None:
         kw = {}
         if a.engine == "spark-connect":
             kw["remote"] = a.spark_remote
-        if a.engine == "duckdb" and a.duckdb_threads:
-            kw["threads"] = a.duckdb_threads
+        if a.engine == "duckdb":
+            kw["memory_limit"] = a.duckdb_memory_limit
+            if a.duckdb_threads:
+                kw["threads"] = a.duckdb_threads
         f = run_suite(a.engine, a.suite, a.sf, a.iterations, a.warmup,
-                      a.queries.split(",") if a.queries else None, kw)
+                      a.queries.split(",") if a.queries else None, kw, a.timeout or None)
         print(f"result: {f}")
     else:
         print(f"report: {write_report(a.suite, a.sf, a.baseline, a.files or None)}")

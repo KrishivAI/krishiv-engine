@@ -1,14 +1,7 @@
 from __future__ import annotations
 
-import subprocess
-
 from .base import Dataset, Engine, Measure, Query
-
-
-def _docker(container: str, script: str) -> str:
-    r = subprocess.run(["docker", "exec", container, "bash", "-c", script],
-                       capture_output=True, text=True, timeout=30)
-    return r.stdout.strip()
+from .proc_mem import DockerProc
 
 
 class SparkConnectEngine(Engine):
@@ -16,9 +9,9 @@ class SparkConnectEngine(Engine):
 
     Host data dir is mounted read-only at /data in the container, so Parquet paths are
     rewritten host_root -> container_root. Server-side metrics are read through `docker exec`
-    on the JVM (pid of SparkSubmit): VmHWM (peak RSS; reset before each query via
-    /proc/<pid>/clear_refs=5) and utime+stime (CPU s). Spill: Spark's spill metrics live in the
-    UI/event log, not collected yet -> null.
+    on the JVM (`pgrep -x java`): VmHWM reset before each run via /proc/<pid>/clear_refs=5 (same method
+    as DuckDB). A JVM keeps its committed heap, so peaks are cumulative/order-dependent. Failures of the
+    probe raise (never silently record a lifetime HWM). Spill: not collected -> null.
     """
     name = "spark-connect"
 
@@ -29,7 +22,7 @@ class SparkConnectEngine(Engine):
         self.cdata = container_data_root.rstrip("/")
         self.host_data_root = host_data_root
         self.spark = None
-        self._pid = None
+        self._p = None
 
     def _spark_version_server(self) -> str:
         return self.spark.version if self.spark else "?"
@@ -57,36 +50,28 @@ class SparkConnectEngine(Engine):
             p = str(dataset.root / f"{t}.parquet").replace(host_root, self.cdata, 1)
             self.spark.read.parquet(p).createOrReplaceTempView(t)
         if self.container:
-            self._pid = _docker(self.container, "pgrep -f org.apache.spark.deploy.SparkSubmit | head -1") or None
+            self._p = DockerProc(self.container)
+            self._p.check()
 
     def run(self, query: Query) -> list[tuple]:
         return [tuple(r) for r in self.spark.sql(query.sql).collect()]
 
-    def _cpu_ticks(self) -> int | None:
-        if not self._pid:
-            return None
-        s = _docker(self.container, f"cut -d' ' -f14,15 /proc/{self._pid}/stat")
+    def cancel(self) -> None:
         try:
-            a, b = s.split()
-            return int(a) + int(b)
-        except ValueError:
-            return None
+            self.spark.interruptAll()
+        except Exception:
+            pass
 
     def begin_measure(self) -> None:
-        if self._pid:
-            _docker(self.container, f"echo 5 > /proc/{self._pid}/clear_refs")
-            self._ticks0 = self._cpu_ticks()
+        if self.container:
+            self._p.reset()
+            self._rss0, _, self._cpu0 = self._p.read()
 
     def end_measure(self) -> Measure:
-        if not self._pid:
+        if not self.container:
             return Measure()
-        hwm = _docker(self.container, f"awk '/VmHWM/{{print $2}}' /proc/{self._pid}/status")
-        t1 = self._cpu_ticks()
-        return Measure(
-            peak_rss_bytes=int(hwm) * 1024 if hwm.isdigit() else None,
-            cpu_seconds=((t1 - self._ticks0) / 100.0) if t1 is not None and self._ticks0 is not None else None,
-            spill_bytes=None,
-        )
+        _, hwm, cpu = self._p.read()
+        return Measure(peak_rss_bytes=hwm, baseline_rss_bytes=self._rss0, cpu_seconds=cpu - self._cpu0)
 
     def teardown(self) -> None:
         if self.spark:

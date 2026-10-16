@@ -21,14 +21,15 @@ uv run krishiv-bench report --suite tpch --sf 1          # -> $KRISHIV_DATA/resu
 uv run pytest                                            # harness + Zipf generator tests
 docker compose -f baselines/docker-compose.yml down      # stop (volumes kept; add -v to drop)
 ```
-Useful flags: `--iterations 5 --warmup 1 --queries q01,q05 --duckdb-threads N --spark-remote sc://host:port`.
+Useful flags: `--iterations 5 --warmup 2 --queries q01,q05 --timeout 600 --duckdb-threads N --duckdb-memory-limit 12GB --spark-remote sc://host:port`.
+For publishable numbers run from a clean committed tree (the result JSON records commit + `dirty`).
 
 ## Baselines (`baselines/docker-compose.yml`, project `krishiv-bench`)
 | Service | Image | Host port | Notes |
 |---|---|---|---|
 | spark | `apache/spark:4.2.0` | 15002 (Connect), 14040 (UI) | `local[*]`, driver 8g, container cap 12g, `$KRISHIV_DATA` mounted **read-only** at `/data` |
-| minio | `minio/minio` | 19100 (S3), 19101 (console) | own instance, creds `krishiv` / `krishiv-bench-secret`; unrelated to `bench-minio` |
-| kafka | `apache/kafka` (KRaft, 1 node) | 19092 | profile `kafka`: `docker compose ... --profile kafka up -d` |
+| minio | `minio/minio` (digest-pinned, RELEASE.2025-09-07) | 19100 (S3), 19101 (console) | own instance, creds `krishiv` / `krishiv-bench-secret`; unrelated to `bench-minio` |
+| kafka | `apache/kafka:4.0.0` (KRaft, 1 node) | 19092 | profile `kafka`: `docker compose ... --profile kafka up -d` |
 
 Ports are env-overridable (`SPARK_CONNECT_PORT`, `MINIO_S3_PORT`, `KAFKA_PORT`, ...). Spark 4.2.0 is the newest 4.2.x
 published on Docker Hub (verified 2026-10-16 via `docker manifest inspect`); the client is pinned to
@@ -37,26 +38,32 @@ published on Docker Hub (verified 2026-10-16 via `docker manifest inspect`); the
 ## Adapters (`src/krishiv_bench/adapters/`)
 Interface (`base.Engine`): `setup(dataset)` registers Parquet tables as views (no pre-loading, for parity), `run(query)`
 returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket each timed run for peak RSS / CPU / spill.
-- `duckdb` (in-process): RSS = harness process RSS sampled @5 ms (includes ~100 MB Python baseline); spill = null.
-- `spark-connect`: server-side JVM peak RSS via `docker exec` (`VmHWM`, reset before each run with `clear_refs`) and CPU-s from
-  `/proc/<pid>/stat`; spill = null (Spark spill metrics are not collected yet). Host data path is rewritten to `/data`.
+- `duckdb` (in-process, `memory_limit` 12GB to match Spark's container cap): peak RSS = `/proc/self` VmHWM reset with `clear_refs` before each run
+  (whole harness process; its pre-run RSS is recorded as `baseline_rss_bytes`); spill = null.
+- `spark-connect`: same VmHWM/`clear_refs` method on the server JVM (`pgrep -x java` + `docker exec`, failures raise); CPU-s from `/proc/<pid>/stat`;
+  spill = null (Spark spill is available via the REST API :14040 but not collected yet). Host data path is rewritten to `/data`.
+  Spark runs with Spark 4 defaults (ANSI mode on) and `spark.sql.shuffle.partitions=24`. The JVM retains its heap, so Spark peaks are cumulative/order-dependent.
+  Probes run outside the timed region (a few ms; no sampler thread).
 - `krishiv`: **stub** raising `NotImplementedError` (implemented in P2; the docstring lists the planned shape).
 - Adding Sail/Polars/Flink: subclass `Engine`, register in `adapters/__init__.py`.
 Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (none needed so far).
 
 ## Result JSON (`$KRISHIV_DATA/results/<ts>_<engine>_<suite>_sf<N>.json`)
 `machine` (CPU model, cores, RAM, OS, governor), `git` (krishiv-engine commit/branch/dirty), `engine` (name, version, config),
-`dataset` (name, SF, path, tables), and per query: `iterations`, `times_s`, `p50_s`, `p99_s`, `min_s`, `max_s`, `mean_s`,
-`throughput_qps`, `rows_returned`, `expected_rows`, `rows_match_expected`, `result_checksum`, `peak_rss_bytes`,
+`dataset` (name, SF, path, tables, generator version, manifest sha256), and per query: `iterations`, `times_s`, `p50_s`, `p99_s`, `min_s`, `max_s`, `mean_s`,
+`throughput_qps`, `rows_returned`, `has_order_by`, `answer_check`, `rows_stored`, `peak_rss_bytes`, `baseline_rss_bytes`,
 `cpu_seconds_median`, `spill_bytes` (null when not measurable), or `error`. Percentiles are nearest-rank, so with the default
 5 iterations p99 equals max; use `--iterations 100` for a meaningful p99. Wall time is client-observed (includes result
-transfer; results here are tiny). One warm-up run is discarded. Absolute numbers on this shared laptop are for relative A/B only.
+transfer; results here are tiny). Two warm-up runs per query are discarded (`--warmup`); a per-query `--timeout` cancels hung queries (recorded as error). Absolute numbers on this shared laptop are for relative A/B only.
 
 ## Correctness
-Each query's row count is checked against the official SF1 answer sets (`queries/tpch/expected_rows_sf1.json`) and, across
-engines, the report compares row counts and a checksum of the sorted normalised rows (<= 10 000 rows). Normalisation
-(`normalize.py`): Decimal/float -> 5 significant digits (DECIMAL vs DOUBLE and summation-order differences vanish), ints exact,
-dates ISO, strings right-trimmed, rows sorted (tie order under LIMIT is not guaranteed; a mismatch there is flagged, then judged by hand).
+Two independent checks, both type-aware (`compare.py`, unit-tested):
+1. **Official answers**: at run time each engine's rows are validated against DuckDB's bundled official TPC-H answer sets (`tpch_answers()`, SF-specific).
+2. **Cross-engine**: the report compares the full stored result rows (`<run>.rows.json.gz` next to the JSON; up to 1M rows/query, anything not stored is listed as skipped).
+Rules: ints/strings/dates exact (strings right-trimmed); DECIMAL vs DECIMAL at the smaller scale (so Spark's `AVG(DECIMAL)` -> scale 6 matches an
+exact value, while equal-scale sums must match to the cent); DECIMAL vs double within half a unit of the decimal scale; double vs double rel 1e-6.
+Row order is verified when the query has a top-level `ORDER BY` (ordered comparison; a pure order difference is reported as such), else rows compare as multisets.
+The report never prints "all agree" if any check was skipped: skipped checks are listed explicitly.
 
 ## Datasets (`datasets/gen.sh` -> `krishiv-datasets`)
 - **TPC-H** SF1/10/100 via `tpchgen-cli` (deterministic: regeneration reproduces identical sha256). Only SF1 generated so far.

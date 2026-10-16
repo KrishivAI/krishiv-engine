@@ -9,7 +9,7 @@ name: krishiv-bench
 
 services:
   spark:
-    image: apache/spark:4.2.0   # newest published 4.2.x on Docker Hub as of 2026-10 (4.2.1 not published)
+    image: apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89   # newest published 4.2.x on Docker Hub as of 2026-10 (4.2.1 not published)
     container_name: krishiv-bench-spark
     user: root
     entrypoint: []
@@ -24,8 +24,6 @@ services:
       - spark.sql.shuffle.partitions=24
       - --conf
       - spark.local.dir=/tmp/spark
-      - --conf
-      - spark.sql.ansi.enabled=false
       - --conf
       - spark.connect.grpc.binding.port=15002
       - --conf
@@ -45,7 +43,7 @@ services:
       start_period: 10s
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e   # RELEASE.2025-09-07 (Docker Hub no longer lists RELEASE tags)
     container_name: krishiv-bench-minio
     command: server /data --console-address ":9001"
     environment:
@@ -54,12 +52,13 @@ services:
     ports:
       - "127.0.0.1:${MINIO_S3_PORT:-19100}:9000"
       - "127.0.0.1:${MINIO_CONSOLE_PORT:-19101}:9001"
+    mem_limit: 2g
     volumes:
       - minio-data:/data
 
   kafka:
     profiles: ["kafka"]
-    image: apache/kafka:latest   # KRaft, single node
+    image: apache/kafka:4.0.0   # KRaft, single node
     container_name: krishiv-bench-kafka
     ports:
       - "127.0.0.1:${KAFKA_PORT:-19092}:9092"
@@ -74,6 +73,7 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    mem_limit: 2g
     volumes:
       - kafka-data:/var/lib/kafka/data
 

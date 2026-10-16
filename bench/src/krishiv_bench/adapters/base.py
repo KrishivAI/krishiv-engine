@@ -29,7 +29,8 @@ class Query:
 
 @dataclass
 class Measure:
-    peak_rss_bytes: int | None = None
+    peak_rss_bytes: int | None = None      # process RSS high-water during the run (VmHWM after clear_refs reset)
+    baseline_rss_bytes: int | None = None  # process RSS just before the run
     cpu_seconds: float | None = None
     spill_bytes: int | None = None
 
@@ -50,6 +51,9 @@ class Engine(ABC):
 
     def teardown(self) -> None:  # pragma: no cover - default no-op
         pass
+
+    def cancel(self) -> None:
+        """Best-effort abort of the in-flight query (called from another thread on timeout)."""
 
     def begin_measure(self) -> None:
         pass
