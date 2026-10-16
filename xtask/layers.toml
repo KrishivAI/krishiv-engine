@@ -34,3 +34,6 @@ krishiv-python = 6
 krishiv-ui-assets = 6
 krishiv = 7
 krishiv-cli = 7
+# Test infrastructure: publish = false, may depend on anything.
+krishiv-testkit = 7
+krishiv-sim = 7

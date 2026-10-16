@@ -1,0 +1,17 @@
+[package]
+name = "krishiv-testkit"
+description = "Conformance test harness: Spark goldens, batch==stream invariant, sqllogictest runner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true, features = ["std"] }
+sqllogictest.workspace = true
+thiserror.workspace = true
