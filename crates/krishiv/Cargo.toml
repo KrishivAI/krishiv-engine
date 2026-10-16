@@ -11,6 +11,9 @@ publish = false
 [lints]
 workspace = true
 
+[dependencies]
+krishiv-server = { path = "../krishiv-server", optional = true }
+
 [features]
 # Strictly additive (ADR 0027). Forwarded to crates as they gain code.
 kafka = []
@@ -22,7 +25,7 @@ flight-sql = []
 mcp = []
 python = []
 wasm-udf = []
-ui = []
+ui = ["dep:krishiv-server"]
 celeborn = []
 mimalloc = []
 full = ["kafka", "iceberg", "delta", "cdc", "connect", "flight-sql", "mcp", "python", "wasm-udf", "ui", "celeborn", "mimalloc"]

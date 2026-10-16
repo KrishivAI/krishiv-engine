@@ -8,5 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[dependencies]
+# `debug-embed` embeds in debug builds too, so tests and dev binaries behave
+# like release ones and never read from the filesystem at run time.
+rust-embed = { workspace = true, features = ["debug-embed"] }
+
 [lints]
 workspace = true

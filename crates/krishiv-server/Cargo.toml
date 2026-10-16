@@ -8,5 +8,13 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[dependencies]
+axum = { workspace = true, features = ["http1", "tokio"] }
+krishiv-ui-assets = { path = "../krishiv-ui-assets" }
+tokio = { workspace = true, features = ["rt-multi-thread", "net"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros"] }
+
 [lints]
 workspace = true

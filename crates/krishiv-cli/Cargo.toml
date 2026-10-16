@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
 krishiv = { path = "../krishiv" }
+krishiv-server = { path = "../krishiv-server", optional = true }
 
 [lints]
 workspace = true
@@ -30,7 +31,7 @@ flight-sql = ["krishiv/flight-sql"]
 mcp = ["krishiv/mcp"]
 python = ["krishiv/python"]
 wasm-udf = ["krishiv/wasm-udf"]
-ui = ["krishiv/ui"]
+ui = ["krishiv/ui", "dep:krishiv-server"]
 celeborn = ["krishiv/celeborn"]
 mimalloc = ["krishiv/mimalloc"]
 full = ["krishiv/full"]
