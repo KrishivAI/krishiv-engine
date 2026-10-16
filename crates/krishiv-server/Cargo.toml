@@ -14,7 +14,7 @@ krishiv-ui-assets = { path = "../krishiv-ui-assets" }
 tokio = { workspace = true, features = ["rt-multi-thread", "net"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros", "time"] }
 
 [lints]
 workspace = true

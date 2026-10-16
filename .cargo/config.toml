@@ -7,3 +7,6 @@ xtask = "run --package xtask --"
 # headers/libs. maturin sets the same variable (replaces the deprecated
 # `extension-module` pyo3 feature).
 PYO3_BUILD_EXTENSION_MODULE = "1"
+# NOTE: with this set, no crate in the workspace may link a test binary that
+# embeds Python (e.g. pyo3 `auto-initialize` tests); put such tests in a
+# separate crate or Cargo profile with the variable unset.
