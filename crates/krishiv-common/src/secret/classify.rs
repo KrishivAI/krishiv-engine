@@ -94,8 +94,7 @@ pub(crate) fn url_secret_ranges(url: &str) -> Vec<Range<usize>> {
         // secret keys may hold `/`. A path holding `@` is then over-redacted,
         // never leaked. SQL Server URLs (`jdbc:sqlserver://h:1433;...`, jTDS)
         // carry credentials only as `;` parameters, so `;` ends it too.
-        let scheme = url[..i].to_ascii_lowercase();
-        let semicolon_params = scheme.ends_with("sqlserver") || scheme.contains("jtds");
+        let semicolon_params = semicolon_authority(&url[..i]);
         let auth_end = url[start..]
             .find(|c: char| matches!(c, '?' | '#') || (semicolon_params && c == ';'))
             .map_or(url.len(), |e| start + e);
@@ -138,6 +137,14 @@ pub(crate) fn url_secret_ranges(url: &str) -> Vec<Range<usize>> {
     };
     params(url, params_from, &mut out);
     merged(out)
+}
+
+/// Whether URLs of `scheme` end their authority at `;` too: SQL Server and
+/// jTDS URLs carry credentials only as `;` parameters, never as userinfo.
+/// Shared with the free-text URL splitter so both agree on the boundary.
+pub(crate) fn semicolon_authority(scheme: &str) -> bool {
+    let scheme = scheme.to_ascii_lowercase();
+    scheme.ends_with("sqlserver") || scheme.contains("jtds")
 }
 
 /// `ranges` sorted, with overlapping or touching ranges joined.

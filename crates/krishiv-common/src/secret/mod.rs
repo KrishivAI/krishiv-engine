@@ -81,7 +81,7 @@ pub use classify::is_sensitive_key;
 /// What every secret prints as: Spark's redaction marker, so EXPLAIN and
 /// error text read as Spark's where users see them.
 pub const REDACTED: &str = "*********(redacted)";
-pub(crate) use classify::url_secret_ranges;
+pub(crate) use classify::{semicolon_authority, url_secret_ranges};
 
 /// A secret string: no `Display`, `Debug` prints `*********(redacted)`, zeroed on drop,
 /// compared in constant time (for equal lengths).

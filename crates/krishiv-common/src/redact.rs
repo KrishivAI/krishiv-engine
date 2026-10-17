@@ -20,7 +20,7 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use crate::secret::{is_sensitive_key, url_secret_ranges};
+use crate::secret::{is_sensitive_key, semicolon_authority, url_secret_ranges};
 
 pub use crate::secret::REDACTED;
 
@@ -118,16 +118,25 @@ fn url_segments(run: &str) -> Vec<Range<usize>> {
         floor = i + 3;
     }
     starts.extend(run.match_indices("jdbc:").map(|(i, _)| (i, i + 5)));
-    starts.sort_unstable();
+    // At one start keep the `scheme://` entry (the larger `after`): it is
+    // the one `url_secret_ranges` parses.
+    starts.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
     starts.dedup_by_key(|s| s.0);
-    // next_qf[p]: the first `?` or `#` at or after p; last_at[p]: one past
-    // the last `@` before p.
+    // next_qf[p] / next_qfs[p]: the first `?` or `#` (and `;`) at or after
+    // p; last_at[p]: the last `@` before p. The userinfo boundary matches
+    // `url_secret_ranges`, including `;` for SQL Server and jTDS URLs.
     let mut next_qf = vec![run.len(); run.len() + 1];
+    let mut next_qfs = vec![run.len(); run.len() + 1];
     for p in (0..run.len()).rev() {
         next_qf[p] = if matches!(bytes[p], b'?' | b'#') {
             p
         } else {
             next_qf[p + 1]
+        };
+        next_qfs[p] = if matches!(bytes[p], b'?' | b'#' | b';') {
+            p
+        } else {
+            next_qfs[p + 1]
         };
     }
     let mut last_at = vec![None; run.len() + 1];
@@ -148,7 +157,15 @@ fn url_segments(run: &str) -> Vec<Range<usize>> {
             prev.end = start;
         }
         segments.push(start..run.len());
-        if let Some(at) = last_at[next_qf[after]].filter(|&at| at >= after) {
+        let semicolon = after >= start + 3
+            && run[start..after].ends_with("://")
+            && semicolon_authority(&run[start..after - 3]);
+        let boundary = if semicolon {
+            next_qfs[after]
+        } else {
+            next_qf[after]
+        };
+        if let Some(at) = last_at[boundary].filter(|&at| at >= after) {
             skip_until = at + 1;
         }
     }
@@ -317,6 +334,12 @@ mod tests {
             (
                 "https://Canary-7f3a9c@github.com/o/r",
                 "https://*********(redacted)@github.com/o/r",
+            ),
+            // A SQL Server URL ends its userinfo at `;`, so a later URL in
+            // the same run is still found.
+            (
+                "jdbc:sqlserver://h:1433;user=a,https://u:Canary-7f3a9c@h2/",
+                "jdbc:sqlserver://h:1433;user=a,https://u:*********(redacted)@h2/",
             ),
             // A password holding `://` is not split into two URLs.
             (
