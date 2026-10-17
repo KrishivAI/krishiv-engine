@@ -20,9 +20,12 @@ impl Clock for TokioClock {
         tokio::time::Instant::now().into_std()
     }
 
-    fn sleep_until(&self, deadline: std::time::Instant) -> BoxFuture<'static, ()> {
-        Box::pin(tokio::time::sleep_until(tokio::time::Instant::from_std(
-            deadline,
+    fn sleep_until(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<BoxFuture<'static, ()>, MemoryError> {
+        Ok(Box::pin(tokio::time::sleep_until(
+            tokio::time::Instant::from_std(deadline),
         )))
     }
 }
@@ -694,4 +697,57 @@ async fn root_level_consumers_are_counted_but_never_aborted() {
         "the query, not the cache, was aborted"
     );
     assert_eq!(root.stats().aborts, 1);
+}
+
+static SPAWNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Fails the first attempt to start the timer thread, then starts it.
+fn spawn_fails_once(run: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    if SPAWNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+        return Err(std::io::Error::other("thread limit reached"));
+    }
+    std::thread::Builder::new().spawn(run).map(drop)
+}
+
+/// If the clock cannot time waits, the request fails with a typed error
+/// before anyone is asked to spill or aborted, and the next request retries
+/// starting the timer.
+#[test]
+fn an_unavailable_timer_fails_the_request_without_hurting_anyone() {
+    let clock = crate::clock::SystemClock::with_spawn(spawn_fails_once);
+    let root = TreePool::with_clock(
+        &MemoryConfig {
+            limit: Some(8 * Q),
+            quantum: Q,
+            spill_wait_timeout: Duration::from_millis(20),
+            abort_release_timeout: Duration::from_millis(20),
+        },
+        Arc::new(clock),
+    );
+    let qa = root.child_pool("a", None);
+    let signal = Arc::new(SpillSignal::new());
+    let a = qa.register("sort", Some(Arc::clone(&signal) as Arc<dyn Spillable>));
+    qa.try_reserve(a, 6 * Q).unwrap();
+    signal.set_spillable_bytes(6 * Q);
+    let qb = root.child_pool("b", None);
+    let b = qb.register("agg", None);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+
+    let e = rt.block_on(qb.reserve(b, 4 * Q)).unwrap_err();
+    assert!(matches!(e, MemoryError::TimerUnavailable { .. }));
+    assert_eq!(e.error_class(), ErrorClass::InternalErrorMemory);
+    assert!(e.to_string().contains("arbitration timer unavailable"));
+    assert_eq!(signal.spill_requested(), None, "nobody was asked to spill");
+    assert!(qa.check_aborted().is_ok(), "nobody was aborted");
+    assert_eq!(root.stats(), ArbitrationStats::default());
+
+    // The next request starts the timer and arbitrates normally: A is
+    // asked to spill, never answers, and is aborted at the deadline.
+    let e = rt.block_on(qb.reserve(b, 4 * Q)).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert_eq!(signal.spill_requested(), Some(2 * Q));
+    assert!(qa.check_aborted().is_err());
+    assert!(SPAWNS.load(std::sync::atomic::Ordering::SeqCst) >= 2);
 }

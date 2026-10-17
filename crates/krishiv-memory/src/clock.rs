@@ -2,45 +2,153 @@
 //! The arbitrator's clock: an explicit dependency of the pool tree, so
 //! arbitration never needs a particular async runtime or its time driver.
 //!
-//! [`SystemClock`] (the default) is a small built-in timer: one lazily
-//! started thread keeps a deadline heap and wakes the wakers of due sleeps.
-//! It works with any executor, on a runtime without timers, or under a
-//! plain `block_on`. Tests inject a clock driven by a paused Tokio clock.
+//! [`SystemClock`] (the default) is a small built-in timer: a thread,
+//! started on first use, keeps a deadline heap and wakes due sleeps. It
+//! works with any executor, on a runtime without timers, or under a plain
+//! `block_on`. If the thread cannot be started the clock says so
+//! ([`MemoryError::TimerUnavailable`]) and the next use tries again; it
+//! never lets deadlines expire early. Tests inject a paused-Tokio clock.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
-use crate::BoxFuture;
+use crate::{BoxFuture, MemoryError};
 
 /// Time source and sleeps for arbitration deadlines.
 pub trait Clock: Send + Sync + fmt::Debug {
     /// The current time.
     fn now(&self) -> Instant;
+    /// Makes sure sleeps can be served. Arbitration calls this before it
+    /// spills or aborts anything, and fails the request if it errs.
+    ///
+    /// # Errors
+    /// [`MemoryError::TimerUnavailable`] if the clock cannot time sleeps.
+    fn prepare(&self) -> Result<(), MemoryError> {
+        Ok(())
+    }
     /// A future that completes at or after `deadline`. Dropping it cancels
     /// the sleep.
-    fn sleep_until(&self, deadline: Instant) -> BoxFuture<'static, ()>;
+    ///
+    /// # Errors
+    /// [`MemoryError::TimerUnavailable`] if the clock cannot time sleeps.
+    fn sleep_until(&self, deadline: Instant) -> Result<BoxFuture<'static, ()>, MemoryError>;
 }
 
-/// The default [`Clock`]: wall time and the built-in timer thread.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SystemClock;
+/// Starts the timer thread running the given closure.
+type Spawn = fn(Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
+
+fn spawn_thread(run: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("krishiv-memory-timer".to_owned())
+        .spawn(run)
+        .map(drop)
+}
+
+/// The default [`Clock`]: wall time and a built-in timer thread, started
+/// on first use and stopped once the clock and all its sleeps are dropped.
+#[derive(Clone)]
+pub struct SystemClock {
+    inner: Arc<ClockInner>,
+}
+
+struct ClockInner {
+    timer: Mutex<Option<Arc<Timer>>>,
+    spawn: Spawn,
+}
+
+impl Drop for ClockInner {
+    fn drop(&mut self) {
+        let timer = self
+            .timer
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(t) = timer {
+            t.release();
+        }
+    }
+}
+
+impl fmt::Debug for SystemClock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SystemClock").finish_non_exhaustive()
+    }
+}
+
+impl Default for SystemClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SystemClock {
+    /// A clock whose timer thread starts on first use.
+    pub fn new() -> Self {
+        Self::with_spawn(spawn_thread)
+    }
+
+    /// A clock that starts its timer thread with `spawn` (tests inject
+    /// failures).
+    pub(crate) fn with_spawn(spawn: Spawn) -> Self {
+        Self {
+            inner: Arc::new(ClockInner {
+                timer: Mutex::new(None),
+                spawn,
+            }),
+        }
+    }
+
+    /// The running timer, starting it if needed (again after a failure).
+    fn timer(&self) -> Result<Arc<Timer>, MemoryError> {
+        let mut slot = self
+            .inner
+            .timer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(t) = slot.as_ref() {
+            return Ok(Arc::clone(t));
+        }
+        let timer = Arc::new(Timer {
+            heap: Mutex::new(Heap {
+                users: 1, // this clock
+                ..Heap::default()
+            }),
+            changed: Condvar::new(),
+        });
+        let run = Arc::clone(&timer);
+        (self.inner.spawn)(Box::new(move || Timer::run(&run))).map_err(|e| {
+            MemoryError::TimerUnavailable {
+                reason: format!("cannot start the timer thread: {e}"),
+            }
+        })?;
+        *slot = Some(Arc::clone(&timer));
+        Ok(timer)
+    }
+}
 
 impl Clock for SystemClock {
     fn now(&self) -> Instant {
         Instant::now()
     }
 
-    fn sleep_until(&self, deadline: Instant) -> BoxFuture<'static, ()> {
-        Box::pin(Sleep {
+    fn prepare(&self) -> Result<(), MemoryError> {
+        self.timer().map(drop)
+    }
+
+    fn sleep_until(&self, deadline: Instant) -> Result<BoxFuture<'static, ()>, MemoryError> {
+        let timer = self.timer()?;
+        timer.acquire();
+        Ok(Box::pin(Sleep {
             deadline,
+            timer,
             state: None,
-        })
+        }))
     }
 }
 
@@ -60,6 +168,8 @@ struct Heap {
     /// Earliest deadline first; `next` breaks ties in registration order.
     due: BinaryHeap<Reverse<(Instant, u64)>>,
     entries: Vec<(u64, Weak<Mutex<SleepState>>)>,
+    /// Clocks and sleeps using the timer; the thread exits at zero.
+    users: usize,
 }
 
 struct Timer {
@@ -67,25 +177,24 @@ struct Timer {
     changed: Condvar,
 }
 
-/// The process-wide timer, its thread started on first use. `None` if the
-/// thread could not be started: sleeps then complete at once, so deadlines
-/// expire early (arbitration escalates sooner) instead of hanging.
-fn timer() -> Option<&'static Timer> {
-    static TIMER: OnceLock<Option<&'static Timer>> = OnceLock::new();
-    *TIMER.get_or_init(|| {
-        let timer: &'static Timer = Box::leak(Box::new(Timer {
-            heap: Mutex::new(Heap::default()),
-            changed: Condvar::new(),
-        }));
-        std::thread::Builder::new()
-            .name("krishiv-memory-timer".to_owned())
-            .spawn(move || timer.run())
-            .ok()
-            .map(|_| timer)
-    })
-}
-
 impl Timer {
+    fn acquire(&self) {
+        self.heap
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .users += 1;
+    }
+
+    /// One clock or sleep stopped using the timer; with none left the thread
+    /// exits.
+    fn release(&self) {
+        self.heap
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .users -= 1;
+        self.changed.notify_one();
+    }
+
     fn register(&self, deadline: Instant, entry: &Entry) {
         let mut heap = self.heap.lock().unwrap_or_else(PoisonError::into_inner);
         let id = heap.next;
@@ -96,9 +205,10 @@ impl Timer {
         self.changed.notify_one();
     }
 
-    fn run(&self) {
-        let mut heap = self.heap.lock().unwrap_or_else(PoisonError::into_inner);
-        loop {
+    /// Serves sleeps until no clock or sleep uses this timer any more.
+    fn run(this: &Arc<Self>) {
+        let mut heap = this.heap.lock().unwrap_or_else(PoisonError::into_inner);
+        while heap.users > 0 {
             let now = Instant::now();
             let mut due = Vec::new();
             while let Some(&Reverse((deadline, id))) = heap.due.peek() {
@@ -122,18 +232,18 @@ impl Timer {
                         w.wake();
                     }
                 }
-                heap = self.heap.lock().unwrap_or_else(PoisonError::into_inner);
+                heap = this.heap.lock().unwrap_or_else(PoisonError::into_inner);
                 continue;
             }
             heap = match heap.due.peek() {
                 Some(&Reverse((deadline, _))) => {
                     let wait = deadline.saturating_duration_since(now);
-                    self.changed
+                    this.changed
                         .wait_timeout(heap, wait)
                         .unwrap_or_else(PoisonError::into_inner)
                         .0
                 }
-                None => self
+                None => this
                     .changed
                     .wait(heap)
                     .unwrap_or_else(PoisonError::into_inner),
@@ -142,9 +252,10 @@ impl Timer {
     }
 }
 
-/// [`SystemClock::sleep_until`]'s future.
+/// [`SystemClock::sleep_until`]'s future; it keeps the timer alive.
 struct Sleep {
     deadline: Instant,
+    timer: Arc<Timer>,
     /// Registered with the timer on the first pending poll.
     state: Option<Entry>,
 }
@@ -156,13 +267,10 @@ impl Future for Sleep {
         if Instant::now() >= self.deadline {
             return Poll::Ready(());
         }
-        let Some(timer) = timer() else {
-            return Poll::Ready(());
-        };
-        let deadline = self.deadline;
-        let entry = self.state.get_or_insert_with(|| {
+        let this = &mut *self;
+        let entry = this.state.get_or_insert_with(|| {
             let entry = Entry::default();
-            timer.register(deadline, &entry);
+            this.timer.register(this.deadline, &entry);
             entry
         });
         let mut s = entry.lock().unwrap_or_else(PoisonError::into_inner);
@@ -171,6 +279,12 @@ impl Future for Sleep {
         }
         s.waker = Some(cx.waker().clone());
         Poll::Pending
+    }
+}
+
+impl Drop for Sleep {
+    fn drop(&mut self) {
+        self.timer.release();
     }
 }
 
@@ -203,20 +317,23 @@ mod tests {
 
     #[test]
     fn sleeps_complete_in_deadline_order_and_not_early() {
-        let start = Instant::now();
+        let clock = SystemClock::new();
+        let start = clock.now();
         let (tx, rx) = mpsc::channel();
         let threads: Vec<_> = [60u64, 10, 30]
             .into_iter()
             .map(|ms| {
+                let deadline = start + Duration::from_millis(ms);
+                let sleep = clock.sleep_until(deadline).unwrap();
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let deadline = start + Duration::from_millis(ms);
-                    block_on(SystemClock.sleep_until(deadline));
-                    assert!(SystemClock.now() >= deadline);
+                    block_on(sleep);
+                    assert!(Instant::now() >= deadline);
                     tx.send(ms).unwrap();
                 })
             })
             .collect();
+        drop(clock); // pending sleeps keep the timer running
         for t in threads {
             t.join().unwrap();
         }
@@ -227,7 +344,9 @@ mod tests {
     #[test]
     fn a_dropped_sleep_is_cancelled_and_others_still_fire() {
         let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
-        let mut cancelled = SystemClock.sleep_until(Instant::now() + Duration::from_millis(5));
+        let mut cancelled = SystemClock::new()
+            .sleep_until(Instant::now() + Duration::from_millis(5))
+            .unwrap();
         assert!(
             cancelled
                 .as_mut()
@@ -236,19 +355,36 @@ mod tests {
         );
         drop(cancelled);
         let start = Instant::now();
-        block_on(SystemClock.sleep_until(start + Duration::from_millis(20)));
+        block_on(
+            SystemClock::new()
+                .sleep_until(start + Duration::from_millis(20))
+                .unwrap(),
+        );
         assert!(start.elapsed() >= Duration::from_millis(20));
     }
 
     #[test]
     fn a_past_deadline_is_ready_at_once() {
-        let mut past = SystemClock.sleep_until(Instant::now());
+        let mut past = SystemClock::new().sleep_until(Instant::now()).unwrap();
         let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
         assert!(
             past.as_mut()
                 .poll(&mut Context::from_waker(&waker))
                 .is_ready()
         );
-        assert!(format!("{SystemClock:?}").contains("SystemClock"));
+        assert!(format!("{:?}", SystemClock::default()).contains("SystemClock"));
+    }
+
+    fn failing_spawn(_: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+        Err(std::io::Error::other("no threads left"))
+    }
+
+    #[test]
+    fn a_timer_that_cannot_start_is_reported_never_expires_early() {
+        let clock = SystemClock::with_spawn(failing_spawn);
+        let e = clock.prepare().unwrap_err();
+        assert!(matches!(e, MemoryError::TimerUnavailable { .. }));
+        assert!(e.to_string().contains("arbitration timer unavailable"));
+        assert!(clock.sleep_until(Instant::now()).is_err());
     }
 }

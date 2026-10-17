@@ -597,7 +597,7 @@ pub struct TreePool {
 impl TreePool {
     /// A new process root, timing arbitration with [`SystemClock`].
     pub fn new(config: &MemoryConfig) -> Arc<Self> {
-        Self::with_clock(config, Arc::new(SystemClock))
+        Self::with_clock(config, Arc::new(SystemClock::new()))
     }
 
     /// A new process root whose arbitration deadlines use `clock`.

@@ -29,8 +29,13 @@ impl Clock for TokioClock {
         Instant::now().into_std()
     }
 
-    fn sleep_until(&self, deadline: std::time::Instant) -> BoxFuture<'static, ()> {
-        Box::pin(tokio::time::sleep_until(Instant::from_std(deadline)))
+    fn sleep_until(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<BoxFuture<'static, ()>, MemoryError> {
+        Ok(Box::pin(tokio::time::sleep_until(Instant::from_std(
+            deadline,
+        ))))
     }
 }
 
@@ -628,7 +633,7 @@ fn timeout_scenario(
             spill_wait_timeout: Duration::from_millis(50),
             abort_release_timeout: Duration::from_millis(100),
         },
-        Arc::new(SystemClock),
+        Arc::new(SystemClock::new()),
     );
     let qa = root.child("query-a", None);
     let qb = root.child("query-b", None);

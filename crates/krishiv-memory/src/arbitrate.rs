@@ -60,6 +60,8 @@ pub(crate) async fn reserve(
         return Err(round.exhausted(&binding));
     }
     let shared = Arc::clone(&round.node.shared);
+    // Before anything is spilled or aborted: a round must be able to time out.
+    shared.clock.prepare()?;
     loop {
         let _slot = race_abort(round.group(), shared.rounds.enter(Arc::clone(&binding))).await?;
         shared.stats.rounds.fetch_add(1, Ordering::Relaxed);
@@ -335,7 +337,7 @@ impl Round {
     ) -> Result<Waited, MemoryError> {
         let shared = &self.node.shared;
         let waiter = shared.release.wait();
-        let mut sleep = shared.clock.sleep_until(deadline);
+        let mut sleep = shared.clock.sleep_until(deadline)?;
         loop {
             let mut released = waiter.listen();
             let mut aborted = self.group().map(|g| g.abort_event.listen());

@@ -31,8 +31,11 @@ impl Clock for NeverClock {
         std::time::Instant::now()
     }
 
-    fn sleep_until(&self, _deadline: std::time::Instant) -> BoxFuture<'static, ()> {
-        Box::pin(std::future::pending())
+    fn sleep_until(
+        &self,
+        _deadline: std::time::Instant,
+    ) -> Result<BoxFuture<'static, ()>, MemoryError> {
+        Ok(Box::pin(std::future::pending()))
     }
 }
 

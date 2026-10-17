@@ -41,6 +41,15 @@ pub enum MemoryError {
         /// The unknown id.
         id: ConsumerId,
     },
+    /// The arbitrator's clock cannot time its waits (for example the
+    /// built-in timer thread could not be started), so the request failed
+    /// before anything was spilled or aborted; a later request tries again
+    /// (`INTERNAL_ERROR_MEMORY`, SQLSTATE XX000).
+    #[error("{}", KrishivError::from(self))]
+    TimerUnavailable {
+        /// Why the clock is unavailable.
+        reason: String,
+    },
 }
 
 impl MemoryError {
@@ -49,7 +58,9 @@ impl MemoryError {
         match self {
             MemoryError::Exhausted { .. } => ErrorClass::UnableToAcquireMemory,
             MemoryError::Aborted { .. } => ErrorClass::KrishivQueryAbortedOutOfMemory,
-            MemoryError::UnknownConsumer { .. } => ErrorClass::InternalErrorMemory,
+            MemoryError::UnknownConsumer { .. } | MemoryError::TimerUnavailable { .. } => {
+                ErrorClass::InternalErrorMemory
+            }
         }
     }
 }
@@ -68,6 +79,10 @@ impl From<&MemoryError> for KrishivError {
             .into(),
             MemoryError::UnknownConsumer { id } => InternalErrorMemory {
                 message: format!("memory consumer {} is not registered with this pool", id.0),
+            }
+            .into(),
+            MemoryError::TimerUnavailable { reason } => InternalErrorMemory {
+                message: format!("arbitration timer unavailable: {reason}"),
             }
             .into(),
         }
