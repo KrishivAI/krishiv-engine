@@ -2,7 +2,8 @@
 //! Tests for the registry coverage check.
 
 use xtask::registry_coverage::{
-    ClassEntry, collect_tests, parse_error_classes, references, run, test_text, uncovered,
+    ClassEntry, collect_engine, collect_tests, engine_text, parse_error_classes, raised,
+    references, run, test_text, uncovered,
 };
 
 const JSON: &str = r#"{
@@ -95,4 +96,51 @@ fn current_registries_are_covered() {
 #[test]
 fn method_call_on_rust_identifier_counts() {
     assert!(references("ErrorClass::Alpha.sql_state()", "Alpha"));
+}
+
+#[test]
+fn engine_text_skips_tests_comments_and_other_trees() {
+    let src = "use a::Alpha;\n// Beta in a comment\n/// Gamma in docs\nfn f() {}\n#[cfg(test)]\nmod t { Delta }";
+    let got = engine_text("crates/x/src/lib.rs", src).unwrap();
+    assert!(got.contains("Alpha") && got.contains("fn f"));
+    assert!(!got.contains("Beta") && !got.contains("Gamma") && !got.contains("Delta"));
+    assert!(engine_text("crates/x/src/tests.rs", "Alpha").is_none());
+    assert!(engine_text("crates/x/tests/t.rs", "Alpha").is_none());
+    assert!(engine_text("crates/x/build.rs", "Alpha").is_none());
+    assert!(engine_text("xtask/src/lib.rs", "Alpha").is_none());
+}
+
+/// A catalog class the engine does not raise needs no test; one it raises does.
+#[test]
+fn only_engine_raised_classes_need_tests() {
+    let catalog = parse_error_classes(JSON).unwrap();
+    let engine = vec!["return Err(ErrorClass::Alpha.into());".to_owned()];
+    let in_use = raised(&catalog, &engine);
+    assert_eq!(in_use.len(), 1);
+    assert_eq!(in_use[0].name, "ALPHA");
+    // Catalog entries nothing raises are not demanded...
+    assert!(uncovered(&in_use, &[], &[]).len() == 1);
+    assert!(uncovered(&in_use, &[], &["ALPHA".to_owned()]).is_empty());
+    // ...so the rest of the catalog passes without any test text.
+    let none = raised(&catalog, &[]);
+    assert!(uncovered(&none, &[], &[]).is_empty());
+    // Raising it by Spark name counts too.
+    let by_name = raised(&catalog, &["throw(\"PARENT.CHILD\")".to_owned()]);
+    assert_eq!(by_name.len(), 1);
+    assert_eq!(by_name[0].ident, "ParentChild");
+}
+
+#[test]
+fn engine_raised_set_of_this_repo_is_a_small_subset_of_the_catalog() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let json = std::fs::read_to_string(
+        root.join("crates/krishiv-common/vendored/spark-error-conditions.json"),
+    )
+    .unwrap();
+    let catalog = parse_error_classes(&json).unwrap();
+    assert!(catalog.len() > 1_900, "full Spark 4.2.0 catalog is loaded");
+    let in_use = raised(&catalog, &collect_engine(root));
+    assert!(in_use.len() < catalog.len() / 10, "{}", in_use.len());
 }

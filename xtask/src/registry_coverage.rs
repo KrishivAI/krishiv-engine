@@ -1,6 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `cargo xtask registry-coverage` (P2-T109): every error class and every
-//! config key in the registries must be referenced by at least one test.
+//! `cargo xtask registry-coverage` (P2-T109): every error class the engine can
+//! raise and every config key in the registries must be referenced by at least
+//! one test.
+//!
+//! # What is checked
+//!
+//! The error registry holds the **full Spark catalog** (about 1,900 classes,
+//! generated from Spark's `error-conditions.json`, P2-T003) plus the
+//! `KRISHIV_` classes. The catalog is data: its integrity is verified by
+//! `krishiv-common`'s class-count test and its sampled byte-identical render
+//! test, not by this check. This check covers the **engine-raised set**: the
+//! catalog classes that engine code refers to, by Spark name (`"DIVIDE_BY_ZERO"`)
+//! or Rust identifier (`ErrorClass::DivideByZero`, `DivideByZero { .. }`).
+//! Engine code is every `.rs` file under `crates/*/src/` outside test code
+//! (see [`engine_text`]). A class nothing raises needs no test; the moment
+//! engine code starts raising one, a test must reference it too. Config keys
+//! are all checked.
 //!
 //! A registry entry is *referenced* when one of its identifiers appears as a
 //! whole token in test text:
@@ -41,14 +56,14 @@ fn ident_of(name: &str) -> String {
         .collect()
 }
 
-/// Lists the leaf classes of an `error-classes.json` document (a class with
+/// Lists the leaf classes of an error-class JSON document (a class with
 /// sub-classes contributes one leaf per sub-class, as in the generator).
 ///
 /// # Errors
 /// Returns a message when the JSON is malformed.
 pub fn parse_error_classes(json: &str) -> Result<Vec<ClassEntry>, String> {
     let root: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(json).map_err(|e| format!("invalid error-classes.json: {e}"))?;
+        serde_json::from_str(json).map_err(|e| format!("invalid error-class JSON: {e}"))?;
     let mut out = Vec::new();
     for (name, info) in &root {
         match info.get("subClass").and_then(serde_json::Value::as_object) {
@@ -110,6 +125,42 @@ pub fn test_text<'a>(rel_path: &str, text: &'a str) -> Option<&'a str> {
     text.find("#[cfg(test)]").map(|i| &text[i..])
 }
 
+/// The engine (non-test, non-comment) part of a source file, or `None` for
+/// files that are not engine code: anything outside `crates/*/src/`, test
+/// files, and `build.rs`. Comment lines (including doc comments and their
+/// examples) are dropped, so documentation never makes a class "raised".
+#[must_use]
+pub fn engine_text(rel_path: &str, text: &str) -> Option<String> {
+    let p = rel_path.replace('\\', "/");
+    let parts: Vec<&str> = p.split('/').collect();
+    let in_src = parts.first() == Some(&"crates") && parts.get(2) == Some(&"src");
+    let file = parts.last().copied().unwrap_or_default();
+    if !in_src || parts.contains(&"tests") || file == "tests.rs" {
+        return None;
+    }
+    let code = text.find("#[cfg(test)]").map_or(text, |i| &text[..i]);
+    Some(
+        code.lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// The classes that engine code refers to (the engine-raised set).
+#[must_use]
+pub fn raised(catalog: &[ClassEntry], engine: &[String]) -> Vec<ClassEntry> {
+    catalog
+        .iter()
+        .filter(|c| {
+            engine
+                .iter()
+                .any(|t| references(t, &c.name) || references(t, &c.ident))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Entries with no referencing test, as messages. Empty means success.
 #[must_use]
 pub fn uncovered(classes: &[ClassEntry], keys: &[&str], tests: &[String]) -> Vec<String> {
@@ -169,16 +220,38 @@ pub fn collect_tests(root: &Path) -> Vec<String> {
         .collect()
 }
 
-/// `xtask registry-coverage`: checks the real registries against the tests
-/// under `root`.
+/// Collects the engine text of every `.rs` file under `root`.
+#[must_use]
+pub fn collect_engine(root: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    walk(root, &mut files);
+    files
+        .iter()
+        .filter_map(|f| {
+            let rel = f.strip_prefix(root).unwrap_or(f).to_string_lossy();
+            let text = std::fs::read_to_string(f).ok()?;
+            engine_text(&rel, &text)
+        })
+        .collect()
+}
+
+/// `xtask registry-coverage`: checks the engine-raised error classes and all
+/// config keys against the tests under `root`.
 ///
 /// # Errors
 /// Returns every uncovered entry.
 pub fn run(root: &Path) -> Result<(), String> {
-    let path = root.join("crates/krishiv-common/error-classes.json");
-    let json = std::fs::read_to_string(&path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let classes = parse_error_classes(&json)?;
+    let mut catalog = Vec::new();
+    for file in [
+        "vendored/spark-error-conditions.json",
+        "krishiv-error-classes.json",
+    ] {
+        let path = root.join("crates/krishiv-common").join(file);
+        let json = std::fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        catalog.extend(parse_error_classes(&json)?);
+    }
+    let classes = raised(&catalog, &collect_engine(root));
     let keys: Vec<&str> = krishiv_common::config::REGISTRY
         .iter()
         .map(|e| e.key)

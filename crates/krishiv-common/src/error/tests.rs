@@ -7,12 +7,12 @@ use super::*;
 #[test]
 fn sqlstate_and_name_lookup() {
     assert_eq!(ErrorClass::DivideByZero.name(), "DIVIDE_BY_ZERO");
-    assert_eq!(ErrorClass::DivideByZero.sql_state(), "22012");
-    assert_eq!(ErrorClass::ArithmeticOverflow.sql_state(), "22003");
-    assert_eq!(ErrorClass::CastInvalidInput.sql_state(), "22018");
-    assert_eq!(ErrorClass::TableOrViewNotFound.sql_state(), "42P01");
-    assert_eq!(ErrorClass::ParseSyntaxError.sql_state(), "42601");
-    assert_eq!(ErrorClass::InternalError.sql_state(), "XX000");
+    assert_eq!(ErrorClass::DivideByZero.sql_state(), Some("22012"));
+    assert_eq!(ErrorClass::ArithmeticOverflow.sql_state(), Some("22003"));
+    assert_eq!(ErrorClass::CastInvalidInput.sql_state(), Some("22018"));
+    assert_eq!(ErrorClass::TableOrViewNotFound.sql_state(), Some("42P01"));
+    assert_eq!(ErrorClass::ParseSyntaxError.sql_state(), Some("42601"));
+    assert_eq!(ErrorClass::InternalError.sql_state(), Some("XX000"));
     assert_eq!(
         ErrorClass::from_name("DIVIDE_BY_ZERO"),
         Some(ErrorClass::DivideByZero)
@@ -24,7 +24,7 @@ fn sqlstate_and_name_lookup() {
 fn sub_classes_inherit_sqlstate_and_use_dotted_names() {
     let c = ErrorClass::UnresolvedColumnWithSuggestion;
     assert_eq!(c.name(), "UNRESOLVED_COLUMN.WITH_SUGGESTION");
-    assert_eq!(c.sql_state(), "42703");
+    assert_eq!(c.sql_state(), Some("42703"));
     assert_eq!(
         ErrorClass::from_name("UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"),
         Some(ErrorClass::UnresolvedColumnWithoutSuggestion)
@@ -39,7 +39,7 @@ fn renders_message_and_spark_display_format() {
         config: "\"spark.sql.ansi.enabled\"".to_owned(),
     });
     assert_eq!(e.error_class(), ErrorClass::DivideByZero);
-    assert_eq!(e.sql_state(), "22012");
+    assert_eq!(e.sql_state(), Some("22012"));
     assert_eq!(
         e.message(),
         "Division by zero. Use `try_divide` to tolerate divisor being 0 and return NULL \
@@ -72,7 +72,7 @@ fn sub_class_template_is_main_plus_space_plus_sub() {
 #[test]
 fn multi_line_messages_join_with_newline() {
     let t = ErrorClass::TableOrViewNotFound.message_template();
-    assert_eq!(t.lines().count(), 3);
+    assert_eq!(t.lines().count(), 4);
     assert!(t.starts_with("The table or view <relationName> cannot be found."));
 }
 
@@ -106,7 +106,7 @@ fn krishiv_specific_classes_are_prefixed() {
         feature: "RDD API".to_owned(),
     });
     assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
-    assert_eq!(e.sql_state(), "0A000");
+    assert_eq!(e.sql_state(), Some("0A000"));
 }
 
 /// Test-time guard on the registry: declared parameters are exactly the
@@ -117,14 +117,21 @@ fn registry_is_consistent() {
     for &c in ErrorClass::ALL {
         assert!(names.insert(c.name()), "duplicate class {}", c.name());
         assert_eq!(ErrorClass::from_name(c.name()), Some(c));
-        let s = c.sql_state();
-        assert!(
-            s.len() == 5
-                && s.bytes()
-                    .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase()),
-            "bad SQLSTATE {s} for {}",
-            c.name()
-        );
+        if let Some(s) = c.sql_state() {
+            assert!(
+                s.len() == 5
+                    && s.bytes()
+                        .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase()),
+                "bad SQLSTATE {s} for {}",
+                c.name()
+            );
+        } else {
+            assert!(
+                !c.name().starts_with("KRISHIV_"),
+                "Krishiv class {} needs a SQLSTATE",
+                c.name()
+            );
+        }
         assert_eq!(
             c.parameters(),
             template::placeholders(c.message_template()).as_slice(),
@@ -165,10 +172,109 @@ fn docs_markdown_lists_every_class_with_escaped_templates() {
     let md = docs_markdown();
     assert!(md.starts_with("# Krishiv error classes\n"));
     for &c in ErrorClass::ALL {
-        assert!(md.contains(&format!("| `{}` | `{}` |", c.name(), c.sql_state())));
+        assert!(md.contains(&format!(
+            "| `{}` | `{}` |",
+            c.name(),
+            c.sql_state().unwrap_or("-")
+        )));
     }
     // `<param>` must not be read as an HTML tag.
     assert!(md.contains("&lt;config&gt;"));
     assert!(!md.contains("<config>"));
     assert_eq!(md, docs_markdown());
+}
+
+const SPARK_JSON: &str = include_str!("../../vendored/spark-error-conditions.json");
+const RENDER_FIXTURE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/fixtures/spark-4.2.0/error-classes/render.json"
+));
+
+fn json(text: &str) -> serde_json::Value {
+    serde_json::from_str(text).expect("valid JSON")
+}
+
+/// P2-T003: the registry has exactly the classes of Spark 4.2.0's JSON.
+#[test]
+fn class_count_equals_spark_4_2_0() {
+    let doc = json(SPARK_JSON);
+    let doc = doc.as_object().expect("object");
+    let leaves: usize = doc
+        .values()
+        .map(|v| {
+            v.get("subClass")
+                .and_then(|s| s.as_object())
+                .map_or(1, serde_json::Map::len)
+        })
+        .sum();
+    let spark: Vec<&ErrorClass> = ErrorClass::ALL
+        .iter()
+        .filter(|c| !c.name().starts_with("KRISHIV_"))
+        .collect();
+    assert_eq!(spark.len(), leaves);
+    let top: BTreeSet<&str> = spark
+        .iter()
+        .map(|c| c.name().split('.').next().unwrap_or_default())
+        .collect();
+    assert_eq!(top.len(), doc.len());
+    // The count recorded by the generator from the live container agrees.
+    let fixture = json(RENDER_FIXTURE);
+    assert_eq!(fixture["top_level_classes"], doc.len());
+    assert_eq!(fixture["leaf_classes"], leaves);
+    // Every class has the SQLSTATE the JSON declares (or none).
+    for (name, info) in doc {
+        let want = info.get("sqlState").and_then(|v| v.as_str());
+        let subs = info.get("subClass").and_then(|s| s.as_object());
+        let leaf_names: Vec<String> = subs.map_or_else(
+            || vec![name.clone()],
+            |s| s.keys().map(|k| format!("{name}.{k}")).collect(),
+        );
+        for leaf in leaf_names {
+            let c = ErrorClass::from_name(&leaf).expect("registered");
+            assert_eq!(c.sql_state(), want, "{leaf}");
+        }
+    }
+}
+
+/// P2-T003: 20 classes raised in a real Spark 4.2.0 render byte-identically.
+#[test]
+fn messages_are_byte_identical_to_spark_4_2_0() {
+    let fixture = json(RENDER_FIXTURE);
+    let cases = fixture["cases"].as_array().expect("cases");
+    assert_eq!(cases.len(), 20);
+    assert!(
+        cases
+            .iter()
+            .any(|c| c["class"].as_str().is_some_and(|n| n.contains('.')))
+    );
+    assert!(
+        cases
+            .iter()
+            .any(|c| c["parameters"].as_object().is_some_and(|p| p.len() >= 3))
+    );
+    for case in cases {
+        let name = case["class"].as_str().expect("class");
+        let class = ErrorClass::from_name(name).expect("registered class");
+        let values = case["parameters"].as_object().expect("parameters");
+        assert_eq!(class.parameters().len(), values.len(), "{name}");
+        let params = class
+            .parameters()
+            .iter()
+            .map(|p| (*p, values[*p].as_str().expect("string").to_owned()))
+            .collect();
+        let e = KrishivError::from_parts(class, params);
+        assert_eq!(
+            e.to_string(),
+            case["message"].as_str().expect("message"),
+            "{name}"
+        );
+        assert_eq!(e.sql_state(), case["sql_state"].as_str(), "{name}");
+    }
+}
+
+#[test]
+fn class_without_sqlstate_has_no_suffix() {
+    let e = KrishivError::from(LegacyErrorTemp3092 {});
+    assert_eq!(e.sql_state(), None);
+    assert!(!e.to_string().contains("SQLSTATE"));
 }

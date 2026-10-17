@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Generates the error-class registry from `error-classes.json`.
-//!
-//! The JSON file mirrors the shape of Spark's `error-conditions.json` and is
-//! the single source of truth. Output is deterministic: `serde_json` without
-//! `preserve_order` keeps objects sorted by key.
+//! Generates the error-class registry from two JSON files of the same shape:
+//! `spark-error-conditions.json` (Spark 4.2.0's `error-conditions.json`,
+//! vendored verbatim by `tests/scripts/gen_error_classes.py`) and
+//! `krishiv-error-classes.json` (`KRISHIV_`-prefixed classes only). Output is
+//! deterministic: `serde_json` without `preserve_order` keeps objects sorted
+//! by key, and the merged list is sorted by class name.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -26,39 +27,55 @@ struct Leaf {
     name: String,
     /// Rust identifier, e.g. `UnresolvedColumnWithSuggestion`.
     ident: String,
-    sql_state: String,
+    /// `None` for Spark classes without a SQLSTATE (e.g. `_LEGACY_ERROR_TEMP_*`).
+    sql_state: Option<String>,
     template: String,
     /// Spark parameter names in order of first appearance.
     params: Vec<String>,
 }
 
 fn main() -> Result<(), BoxError> {
-    println!("cargo::rerun-if-changed=error-classes.json");
+    println!("cargo::rerun-if-changed=vendored/spark-error-conditions.json");
+    println!("cargo::rerun-if-changed=krishiv-error-classes.json");
     println!("cargo::rerun-if-changed=src/error/template.rs");
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
-    let json = std::fs::read_to_string(manifest.join("error-classes.json"))?;
-    let leaves = parse(&json)?;
+    let spark = std::fs::read_to_string(manifest.join("vendored/spark-error-conditions.json"))?;
+    let krishiv = std::fs::read_to_string(manifest.join("krishiv-error-classes.json"))?;
+    let mut leaves = parse(&spark, false)?;
+    leaves.extend(parse(&krishiv, true)?);
+    leaves.sort_by(|a, b| a.name.cmp(&b.name));
+    check_unique(&leaves)?;
     let out = PathBuf::from(std::env::var("OUT_DIR")?).join("error_classes.rs");
     std::fs::write(out, generate(&leaves)?)?;
     Ok(())
 }
 
-fn parse(json: &str) -> Result<Vec<Leaf>, BoxError> {
+/// Parses one registry file. Krishiv classes must be `KRISHIV_`-prefixed and
+/// carry a SQLSTATE; Spark classes may omit it, as in Spark.
+fn parse(json: &str, krishiv: bool) -> Result<Vec<Leaf>, BoxError> {
     let root: Map<String, Value> = serde_json::from_str(json)?;
     let mut leaves = Vec::new();
     for (name, info) in &root {
         check_name(name)?;
-        let sql_state = info
-            .get("sqlState")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("{name}: missing sqlState"))?;
-        let valid_state = sql_state.len() == 5
-            && sql_state
-                .bytes()
-                .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase());
-        if !valid_state {
-            return Err(format!("{name}: invalid SQLSTATE {sql_state:?}").into());
+        if name.starts_with("KRISHIV_") != krishiv {
+            return Err(format!("{name}: KRISHIV_ prefix must match the file it is in").into());
         }
+        let sql_state = match info.get("sqlState") {
+            None if !krishiv => None,
+            None => return Err(format!("{name}: missing sqlState").into()),
+            Some(v) => {
+                let s = v
+                    .as_str()
+                    .ok_or_else(|| format!("{name}: sqlState must be a string"))?;
+                let valid = s.len() == 5
+                    && s.bytes()
+                        .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase());
+                if !valid {
+                    return Err(format!("{name}: invalid SQLSTATE {s:?}").into());
+                }
+                Some(s)
+            }
+        };
         let main = message(name, info)?;
         match info.get("subClass") {
             None => leaves.push(leaf(name.clone(), sql_state, main)?),
@@ -79,6 +96,10 @@ fn parse(json: &str) -> Result<Vec<Leaf>, BoxError> {
             }
         }
     }
+    Ok(leaves)
+}
+
+fn check_unique(leaves: &[Leaf]) -> Result<(), BoxError> {
     let mut idents: Vec<&str> = leaves.iter().map(|l| l.ident.as_str()).collect();
     idents.sort_unstable();
     if let Some(w) = idents.windows(2).find(|w| w[0] == w[1]) {
@@ -87,11 +108,11 @@ fn parse(json: &str) -> Result<Vec<Leaf>, BoxError> {
     if idents.contains(&"KrishivError") || idents.contains(&"ErrorClass") {
         return Err("class name collides with KrishivError/ErrorClass".into());
     }
-    Ok(leaves)
+    Ok(())
 }
 
 fn check_name(name: &str) -> Result<(), BoxError> {
-    let ok = name.starts_with(|c: char| c.is_ascii_uppercase())
+    let ok = name.starts_with(|c: char| c.is_ascii_uppercase() || c == '_')
         && name
             .bytes()
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
@@ -118,7 +139,7 @@ fn message(name: &str, info: &Value) -> Result<String, BoxError> {
     Ok(lines.join("\n"))
 }
 
-fn leaf(name: String, sql_state: &str, template: String) -> Result<Leaf, BoxError> {
+fn leaf(name: String, sql_state: Option<&str>, template: String) -> Result<Leaf, BoxError> {
     let params: Vec<String> = template::placeholders(&template)
         .into_iter()
         .map(str::to_owned)
@@ -139,7 +160,7 @@ fn leaf(name: String, sql_state: &str, template: String) -> Result<Leaf, BoxErro
             })
             .collect(),
         name,
-        sql_state: sql_state.to_owned(),
+        sql_state: sql_state.map(str::to_owned),
         template,
         params,
     })
@@ -176,6 +197,12 @@ fn field_name(param: &str) -> String {
     }
 }
 
+fn state_doc(l: &Leaf) -> String {
+    l.sql_state
+        .as_ref()
+        .map_or_else(String::new, |s| format!(" (SQLSTATE `{s}`)"))
+}
+
 /// (doc, method name, return type, per-leaf match arm body).
 type Accessor = (
     &'static str,
@@ -188,7 +215,7 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
     let mut o = String::new();
     writeln!(
         o,
-        "// @generated by build.rs from error-classes.json. Do not edit."
+        "// @generated by build.rs from the error-class JSON files. Do not edit."
     )?;
     writeln!(o)?;
     writeln!(
@@ -207,7 +234,7 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
     writeln!(o, "#[non_exhaustive]")?;
     writeln!(o, "pub enum ErrorClass {{")?;
     for l in leaves {
-        writeln!(o, "    /// `{}` (SQLSTATE `{}`).", l.name, l.sql_state)?;
+        writeln!(o, "    /// `{}`{}.", l.name, state_doc(l))?;
         writeln!(o, "    {},", l.ident)?;
     }
     writeln!(o, "}}")?;
@@ -227,9 +254,9 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
             |l| format!("{:?}", l.name),
         ),
         (
-            "Five-character SQLSTATE.",
+            "Five-character SQLSTATE; `None` for Spark classes that have none.",
             "sql_state",
-            "&'static str",
+            "Option<&'static str>",
             |l| format!("{:?}", l.sql_state),
         ),
         (
@@ -285,11 +312,7 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
     writeln!(o, "}}")?;
     for l in leaves {
         writeln!(o)?;
-        writeln!(
-            o,
-            "/// Parameters of `{}` (SQLSTATE `{}`).",
-            l.name, l.sql_state
-        )?;
+        writeln!(o, "/// Parameters of `{}`{}.", l.name, state_doc(l))?;
         writeln!(o, "///")?;
         writeln!(o, "/// ```text")?;
         for line in l.template.lines() {
