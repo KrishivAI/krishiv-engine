@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360" role="img" aria-labelledby="title desc">
+  <title id="title">Krishiv banner</title>
+  <desc id="desc">Krishiv — a Rust-native, Spark-compatible compute engine for batch SQL, streaming and incremental materialized views, from embedded to distributed.</desc>
+
+  <defs>
+    <linearGradient id="bn-frame" x1="20" y1="20" x2="280" y2="280" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFB52A"/>
+      <stop offset="0.55" stop-color="#F59E0B"/>
+      <stop offset="1" stop-color="#B86A00"/>
+    </linearGradient>
+    <linearGradient id="bn-stroke" x1="40" y1="24" x2="120" y2="124" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFB52A"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <linearGradient id="bn-spine" x1="50" y1="24" x2="62" y2="136" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFCB47"/>
+      <stop offset="1" stop-color="#D07A00"/>
+    </linearGradient>
+    <linearGradient id="bn-word" x1="320" y1="100" x2="780" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F5F5F5"/>
+      <stop offset="1" stop-color="#FFD18A"/>
+    </linearGradient>
+    <radialGradient id="bn-glow" cx="180" cy="180" r="280" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F59E0B" stop-opacity="0.10"/>
+      <stop offset="0.55" stop-color="#F59E0B" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#F59E0B" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bn-surface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#101010"/>
+      <stop offset="1" stop-color="#050505"/>
+    </linearGradient>
+    <linearGradient id="bn-card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#151515"/>
+      <stop offset="1" stop-color="#0c0c0c"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="360" rx="24" fill="url(#bn-surface)"/>
+  <rect width="1280" height="360" rx="24" fill="url(#bn-glow)"/>
+  <rect x="0.75" y="0.75" width="1278.5" height="358.5" rx="23.25" fill="none" stroke="#2A2A2A" stroke-width="1.5"/>
+
+  <!-- Subtle dot grid -->
+  <g opacity="0.05" fill="#F5F5F5">
+    <circle cx="30" cy="30" r="0.7"/><circle cx="82" cy="30" r="0.7"/><circle cx="134" cy="30" r="0.7"/><circle cx="186" cy="30" r="0.7"/><circle cx="238" cy="30" r="0.7"/><circle cx="290" cy="30" r="0.7"/><circle cx="342" cy="30" r="0.7"/><circle cx="394" cy="30" r="0.7"/><circle cx="446" cy="30" r="0.7"/><circle cx="498" cy="30" r="0.7"/><circle cx="550" cy="30" r="0.7"/><circle cx="602" cy="30" r="0.7"/><circle cx="654" cy="30" r="0.7"/><circle cx="706" cy="30" r="0.7"/><circle cx="758" cy="30" r="0.7"/><circle cx="810" cy="30" r="0.7"/><circle cx="862" cy="30" r="0.7"/><circle cx="914" cy="30" r="0.7"/><circle cx="966" cy="30" r="0.7"/><circle cx="1018" cy="30" r="0.7"/><circle cx="1070" cy="30" r="0.7"/><circle cx="1122" cy="30" r="0.7"/><circle cx="1174" cy="30" r="0.7"/><circle cx="1226" cy="30" r="0.7"/>
+    <circle cx="30" cy="80" r="0.7"/><circle cx="82" cy="80" r="0.7"/><circle cx="134" cy="80" r="0.7"/><circle cx="186" cy="80" r="0.7"/><circle cx="238" cy="80" r="0.7"/><circle cx="290" cy="80" r="0.7"/><circle cx="342" cy="80" r="0.7"/><circle cx="394" cy="80" r="0.7"/><circle cx="446" cy="80" r="0.7"/><circle cx="498" cy="80" r="0.7"/><circle cx="550" cy="80" r="0.7"/><circle cx="602" cy="80" r="0.7"/><circle cx="654" cy="80" r="0.7"/><circle cx="706" cy="80" r="0.7"/><circle cx="758" cy="80" r="0.7"/><circle cx="810" cy="80" r="0.7"/><circle cx="862" cy="80" r="0.7"/><circle cx="914" cy="80" r="0.7"/><circle cx="966" cy="80" r="0.7"/><circle cx="1018" cy="80" r="0.7"/><circle cx="1070" cy="80" r="0.7"/><circle cx="1122" cy="80" r="0.7"/><circle cx="1174" cy="80" r="0.7"/><circle cx="1226" cy="80" r="0.7"/>
+    <circle cx="30" cy="130" r="0.7"/><circle cx="82" cy="130" r="0.7"/><circle cx="134" cy="130" r="0.7"/><circle cx="186" cy="130" r="0.7"/><circle cx="238" cy="130" r="0.7"/><circle cx="290" cy="130" r="0.7"/><circle cx="342" cy="130" r="0.7"/><circle cx="394" cy="130" r="0.7"/><circle cx="446" cy="130" r="0.7"/><circle cx="498" cy="130" r="0.7"/><circle cx="550" cy="130" r="0.7"/><circle cx="602" cy="130" r="0.7"/><circle cx="654" cy="130" r="0.7"/><circle cx="706" cy="130" r="0.7"/><circle cx="758" cy="130" r="0.7"/><circle cx="810" cy="130" r="0.7"/><circle cx="862" cy="130" r="0.7"/><circle cx="914" cy="130" r="0.7"/><circle cx="966" cy="130" r="0.7"/><circle cx="1018" cy="130" r="0.7"/><circle cx="1070" cy="130" r="0.7"/><circle cx="1122" cy="130" r="0.7"/><circle cx="1174" cy="130" r="0.7"/><circle cx="1226" cy="130" r="0.7"/>
+    <circle cx="30" cy="180" r="0.7"/><circle cx="82" cy="180" r="0.7"/><circle cx="134" cy="180" r="0.7"/><circle cx="186" cy="180" r="0.7"/><circle cx="238" cy="180" r="0.7"/><circle cx="290" cy="180" r="0.7"/><circle cx="342" cy="180" r="0.7"/><circle cx="394" cy="180" r="0.7"/><circle cx="446" cy="180" r="0.7"/><circle cx="498" cy="180" r="0.7"/><circle cx="550" cy="180" r="0.7"/><circle cx="602" cy="180" r="0.7"/><circle cx="654" cy="180" r="0.7"/><circle cx="706" cy="180" r="0.7"/><circle cx="758" cy="180" r="0.7"/><circle cx="810" cy="180" r="0.7"/><circle cx="862" cy="180" r="0.7"/><circle cx="914" cy="180" r="0.7"/><circle cx="966" cy="180" r="0.7"/><circle cx="1018" cy="180" r="0.7"/><circle cx="1070" cy="180" r="0.7"/><circle cx="1122" cy="180" r="0.7"/><circle cx="1174" cy="180" r="0.7"/><circle cx="1226" cy="180" r="0.7"/>
+    <circle cx="30" cy="230" r="0.7"/><circle cx="82" cy="230" r="0.7"/><circle cx="134" cy="230" r="0.7"/><circle cx="186" cy="230" r="0.7"/><circle cx="238" cy="230" r="0.7"/><circle cx="290" cy="230" r="0.7"/><circle cx="342" cy="230" r="0.7"/><circle cx="394" cy="230" r="0.7"/><circle cx="446" cy="230" r="0.7"/><circle cx="498" cy="230" r="0.7"/><circle cx="550" cy="230" r="0.7"/><circle cx="602" cy="230" r="0.7"/><circle cx="654" cy="230" r="0.7"/><circle cx="706" cy="230" r="0.7"/><circle cx="758" cy="230" r="0.7"/><circle cx="810" cy="230" r="0.7"/><circle cx="862" cy="230" r="0.7"/><circle cx="914" cy="230" r="0.7"/><circle cx="966" cy="230" r="0.7"/><circle cx="1018" cy="230" r="0.7"/><circle cx="1070" cy="230" r="0.7"/><circle cx="1122" cy="230" r="0.7"/><circle cx="1174" cy="230" r="0.7"/><circle cx="1226" cy="230" r="0.7"/>
+    <circle cx="30" cy="280" r="0.7"/><circle cx="82" cy="280" r="0.7"/><circle cx="134" cy="280" r="0.7"/><circle cx="186" cy="280" r="0.7"/><circle cx="238" cy="280" r="0.7"/><circle cx="290" cy="280" r="0.7"/><circle cx="342" cy="280" r="0.7"/><circle cx="394" cy="280" r="0.7"/><circle cx="446" cy="280" r="0.7"/><circle cx="498" cy="280" r="0.7"/><circle cx="550" cy="280" r="0.7"/><circle cx="602" cy="280" r="0.7"/><circle cx="654" cy="280" r="0.7"/><circle cx="706" cy="280" r="0.7"/><circle cx="758" cy="280" r="0.7"/><circle cx="810" cy="280" r="0.7"/><circle cx="862" cy="280" r="0.7"/><circle cx="914" cy="280" r="0.7"/><circle cx="966" cy="280" r="0.7"/><circle cx="1018" cy="280" r="0.7"/><circle cx="1070" cy="280" r="0.7"/><circle cx="1122" cy="280" r="0.7"/><circle cx="1174" cy="280" r="0.7"/><circle cx="1226" cy="280" r="0.7"/>
+    <circle cx="30" cy="330" r="0.7"/><circle cx="82" cy="330" r="0.7"/><circle cx="134" cy="330" r="0.7"/><circle cx="186" cy="330" r="0.7"/><circle cx="238" cy="330" r="0.7"/><circle cx="290" cy="330" r="0.7"/><circle cx="342" cy="330" r="0.7"/><circle cx="394" cy="330" r="0.7"/><circle cx="446" cy="330" r="0.7"/><circle cx="498" cy="330" r="0.7"/><circle cx="550" cy="330" r="0.7"/><circle cx="602" cy="330" r="0.7"/><circle cx="654" cy="330" r="0.7"/><circle cx="706" cy="330" r="0.7"/><circle cx="758" cy="330" r="0.7"/><circle cx="810" cy="330" r="0.7"/><circle cx="862" cy="330" r="0.7"/><circle cx="914" cy="330" r="0.7"/><circle cx="966" cy="330" r="0.7"/><circle cx="1018" cy="330" r="0.7"/><circle cx="1070" cy="330" r="0.7"/><circle cx="1122" cy="330" r="0.7"/><circle cx="1174" cy="330" r="0.7"/><circle cx="1226" cy="330" r="0.7"/>
+  </g>
+
+  <!-- ===== Left: the K mark (200x200 tile centered in 280 column) ===== -->
+  <g transform="translate(40 80)">
+    <rect x="6" y="6" width="188" height="188" rx="42" fill="#101010"/>
+    <rect x="6.5" y="6.5" width="187" height="187" rx="41.5" fill="none" stroke="url(#bn-frame)" stroke-width="2" stroke-opacity="0.7"/>
+
+    <rect x="64" y="32" width="30" height="136" rx="6" fill="url(#bn-spine)"/>
+    <rect x="68" y="42" width="22" height="28" rx="4" fill="#101010" fill-opacity="0.7"/>
+    <rect x="68" y="86" width="22" height="28" rx="4" fill="#101010" fill-opacity="0.7"/>
+    <rect x="68" y="130" width="22" height="28" rx="4" fill="#101010" fill-opacity="0.7"/>
+
+    <path d="M94 100L158 36" fill="none" stroke="url(#bn-stroke)" stroke-width="22" stroke-linecap="round"/>
+    <path d="M94 100L164 164" fill="none" stroke="url(#bn-stroke)" stroke-width="22" stroke-linecap="round"/>
+
+    <circle cx="158" cy="36" r="10" fill="#FFB52A"/>
+    <circle cx="164" cy="164" r="10" fill="#F59E0B"/>
+    <circle cx="79" cy="100" r="8" fill="#FFCB47"/>
+
+    <path d="M22 56h22M22 100h22M22 144h22" fill="none" stroke="#F59E0B" stroke-width="4" stroke-linecap="round" stroke-opacity="0.55"/>
+  </g>
+
+  <!-- ===== Middle: wordmark + tagline + mode chips (column 280..880) ===== -->
+  <g>
+    <text x="280" y="120" fill="url(#bn-word)" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="76" font-weight="800" letter-spacing="-2.5">Krishiv</text>
+    <text x="284" y="158" fill="#D4D4D4" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="20" font-weight="600" letter-spacing="-0.2">Spark-compatible batch, streaming &amp; incremental views</text>
+
+    <g transform="translate(284 188)">
+      <!-- Batch SQL chip -->
+      <g>
+        <rect x="0" y="0" width="190" height="58" rx="16" fill="url(#bn-card)" stroke="#2A2A2A"/>
+        <circle cx="22" cy="29" r="5" fill="#F59E0B"/>
+        <text x="38" y="26" fill="#F5F5F5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600">Batch SQL</text>
+        <text x="38" y="44" fill="#A3A3A3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="500">Spark-compatible</text>
+      </g>
+      <!-- Streaming chip -->
+      <g transform="translate(202 0)">
+        <rect x="0" y="0" width="190" height="58" rx="16" fill="url(#bn-card)" stroke="#2A2A2A"/>
+        <circle cx="22" cy="29" r="5" fill="#FFB52A"/>
+        <text x="38" y="26" fill="#F5F5F5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600">Streaming</text>
+        <text x="38" y="44" fill="#A3A3A3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="500">Arrow-native</text>
+      </g>
+      <!-- Incremental views chip -->
+      <g transform="translate(404 0)">
+        <rect x="0" y="0" width="190" height="58" rx="16" fill="url(#bn-card)" stroke="#2A2A2A"/>
+        <circle cx="22" cy="29" r="5" fill="#FFCB47"/>
+        <text x="38" y="26" fill="#F5F5F5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600">Incremental views</text>
+        <text x="38" y="44" fill="#A3A3A3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="500">always fresh</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- ===== Right: deployment topology preview (column 900..1240) ===== -->
+  <g transform="translate(910 80)">
+    <text x="0" y="0" fill="#A3A3A3" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="700" letter-spacing="1.2">DEPLOYMENT</text>
+
+    <!-- Embedded -->
+    <g transform="translate(0 16)">
+      <rect x="0" y="0" width="330" height="60" rx="10" fill="url(#bn-card)" stroke="#2A2A2A"/>
+      <rect x="10" y="11" width="38" height="38" rx="8" fill="#101010" stroke="#3A3A3A"/>
+      <text x="29" y="35" text-anchor="middle" fill="#F59E0B" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="800">K</text>
+      <text x="60" y="28" fill="#F5F5F5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700">Embedded</text>
+      <text x="60" y="46" fill="#A3A3A3" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="500">in-process · pip / cargo</text>
+      <circle cx="310" cy="30" r="4" fill="#F59E0B"/>
+    </g>
+
+    <!-- Single-node -->
+    <g transform="translate(0 88)">
+      <rect x="0" y="0" width="330" height="60" rx="10" fill="url(#bn-card)" stroke="#2A2A2A"/>
+      <rect x="10" y="11" width="38" height="38" rx="8" fill="#101010" stroke="#3A3A3A"/>
+      <text x="29" y="35" text-anchor="middle" fill="#F59E0B" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="800">K</text>
+      <text x="60" y="28" fill="#F5F5F5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700">Single-node</text>
+      <text x="60" y="46" fill="#A3A3A3" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="500">one server · durable state</text>
+      <circle cx="310" cy="30" r="4" fill="#FFB52A"/>
+    </g>
+
+    <!-- Distributed -->
+    <g transform="translate(0 160)">
+      <rect x="0" y="0" width="330" height="60" rx="10" fill="url(#bn-card)" stroke="#F59E0B" stroke-opacity="0.6"/>
+      <rect x="10" y="11" width="38" height="38" rx="8" fill="#101010" stroke="#F59E0B" stroke-opacity="0.6"/>
+      <text x="29" y="35" text-anchor="middle" fill="#FFB52A" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="800">K</text>
+      <rect x="58" y="20" width="12" height="22" rx="2" fill="#1A1A1A" stroke="#3A3A3A"/>
+      <rect x="74" y="20" width="12" height="22" rx="2" fill="#1A1A1A" stroke="#3A3A3A"/>
+      <rect x="90" y="20" width="12" height="22" rx="2" fill="#1A1A1A" stroke="#3A3A3A"/>
+      <text x="116" y="28" fill="#F5F5F5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700">Distributed</text>
+      <text x="116" y="46" fill="#A3A3A3" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="500">scale out · same code</text>
+    </g>
+  </g>
+
+  <!-- ===== Bottom: layer bar (full width, single row) ===== -->
+  <g transform="translate(280 320)" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">
+    <line x1="0" y1="0" x2="950" y2="0" stroke="#2A2A2A" stroke-width="1"/>
+    <g transform="translate(0 18)">
+      <g>
+        <circle cx="6" cy="6" r="3.5" fill="#F59E0B"/>
+        <text x="18" y="10" fill="#D4D4D4">Apache Arrow</text>
+      </g>
+      <g transform="translate(130 0)">
+        <circle cx="6" cy="6" r="3.5" fill="#F59E0B"/>
+        <text x="18" y="10" fill="#D4D4D4">Spark Connect</text>
+      </g>
+      <g transform="translate(262 0)">
+        <circle cx="6" cy="6" r="3.5" fill="#F59E0B"/>
+        <text x="18" y="10" fill="#D4D4D4">Parquet · Iceberg · Delta</text>
+      </g>
+      <g transform="translate(452 0)">
+        <circle cx="6" cy="6" r="3.5" fill="#F59E0B"/>
+        <text x="18" y="10" fill="#D4D4D4">Python · SQL · Rust · MCP</text>
+      </g>
+      <g transform="translate(646 0)">
+        <circle cx="6" cy="6" r="3.5" fill="#F59E0B"/>
+        <text x="18" y="10" fill="#D4D4D4">no JVM</text>
+      </g>
+    </g>
+  </g>
+</svg>
