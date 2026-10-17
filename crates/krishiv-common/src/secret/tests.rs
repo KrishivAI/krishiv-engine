@@ -111,6 +111,38 @@ const URLS: &[(&str, &str)] = &[
         "mongodb://u:p@ss:Canary-7f3a9c@h1,h2/db",
         "mongodb://u:*********(redacted)@h1,h2/db",
     ),
+    // An `@` inside a `;` parameter is not a userinfo end.
+    (
+        "jdbc:sqlserver://h:1433;user=u;password=p@ssCanary-7f3a9c",
+        "jdbc:sqlserver://h:1433;user=u;password=*********(redacted)",
+    ),
+    (
+        "jdbc:derby:db;user=u@corp;password=p@s:sCanary-7f3a9c",
+        "jdbc:derby:db;user=u@corp;password=*********(redacted)",
+    ),
+    (
+        "jdbc:sqlserver://h;accessToken=Canary-7f3a9c;encrypt=true",
+        "jdbc:sqlserver://h;accessToken=*********(redacted);encrypt=true",
+    ),
+    // SQL Server quotes `;` and `}` in values with braces (`}}` is `}`).
+    (
+        "jdbc:sqlserver://h;password={p;w}}Canary-7f3a9c=;x};user=u",
+        "jdbc:sqlserver://h;password=*********(redacted);user=u",
+    ),
+    (
+        "jdbc:sqlserver://h;password={unterminated;Canary-7f3a9c",
+        "jdbc:sqlserver://h;password=*********(redacted)",
+    ),
+    // A base64 key holds `/` and `:`; the last `@` before parameters ends
+    // the userinfo.
+    (
+        "s3a://AKIA:ab/c:d@Canary-7f3a9c@bucket/k?versionId=1",
+        "s3a://AKIA:*********(redacted)@bucket/k?versionId=1",
+    ),
+    (
+        "jdbc:oracle:thin:scott/ti:g@rCanary-7f3a9c@//h:1521/svc;x=1",
+        "jdbc:oracle:thin:scott/*********(redacted)@//h:1521/svc;x=1",
+    ),
 ];
 
 #[test]
@@ -118,9 +150,10 @@ fn url_credentials_are_lifted_out() {
     for &(input, printed) in URLS {
         let v = OptionValue::from_user("url", input);
         assert_eq!(v.to_string(), printed);
-        assert!(!shown(&v).contains(CANARY), "{v:?}");
+        // Messages name the expected text only, never the value.
+        assert!(!shown(&v).contains(CANARY), "{printed}");
         let OptionValue::Url(url) = &v else {
-            panic!("{v:?} is not a URL");
+            panic!("{printed}: not a URL");
         };
         assert_eq!(url.expose_secret().expose_secret(), input);
         assert!(url.parts().iter().any(|p| matches!(p, UrlPart::Secret(_))));

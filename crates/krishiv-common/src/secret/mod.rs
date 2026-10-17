@@ -36,8 +36,16 @@
 //! hidden whole. Secret parts are:
 //!
 //! - the password of the userinfo (`user:password@host`; Oracle's opaque
-//!   `jdbc:oracle:thin:user/password@host`); the user name stays visible;
-//! - the value of every parameter (after `?`, `&`, `;` or `#`) whose name,
+//!   `jdbc:oracle:thin:user/password@host`); the user name stays visible.
+//!   The userinfo is looked for only before the first parameter separator
+//!   (`?`, `&`, `;`, `#`), and the last `@` there ends it, so a password may
+//!   hold `@`, `:` or `/` but an `@` in a parameter value
+//!   (`jdbc:sqlserver://h;password=p@ss`) is never taken for one. A path
+//!   holding `@` after a `:` (`https://h:8080/a@b`) is hidden by mistake,
+//!   the fail-safe direction;
+//! - the value of every parameter (after `?`, `&`, `;` or `#`; a value in
+//!   braces, as SQL Server's `password={a;b}}c}`, runs to its closing
+//!   brace, `}}` escaping one) whose name,
 //!   percent-decoded and lowercased, is a sensitive key (above) or one of
 //!   `pwd`, `passwd`, `access_token`, `refresh_token`, `id_token`,
 //!   `client_secret`, `api_key`, `apikey`, `key`, `sig`, `signature`,

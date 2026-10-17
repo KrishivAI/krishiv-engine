@@ -68,16 +68,25 @@ pub fn is_sensitive_key(key: &str) -> bool {
     hit || WORDS.contains(&word.as_str()) || STEMS.iter().any(|s| joined.contains(s))
 }
 
+/// Characters that start a parameter.
+const SEPARATORS: [char; 4] = ['?', '&', ';', '#'];
+
 /// The byte ranges of the credentials in `url`, in order and disjoint;
-/// empty when `url` is not a URL or holds none.
+/// empty when `url` is not a URL or holds none. Linear in `url.len()`.
+///
+/// The userinfo is searched for only before the first parameter separator
+/// (`?`, `&`, `;`, `#`), so an `@` inside a parameter value is never taken
+/// for the end of a userinfo. Within that head the last `@` ends it, so a
+/// password may hold `@`, `:` or `/` (base64 keys do) unescaped.
 pub(crate) fn url_secret_ranges(url: &str) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     let params_from = if let Some(i) = url.find("://").filter(|&i| is_scheme(&url[..i])) {
+        // `scheme://user:password@host...`
         let start = i + 3;
-        let end = url[start..]
-            .find(['/', '?', '#'])
+        let head = url[start..]
+            .find(SEPARATORS)
             .map_or(url.len(), |e| start + e);
-        match url[start..end].rfind('@') {
+        match url[start..head].rfind('@') {
             Some(at) => {
                 if let Some(colon) = url[start..start + at].find(':') {
                     push(&mut out, start + colon + 1..start + at);
@@ -90,10 +99,24 @@ pub(crate) fn url_secret_ranges(url: &str) -> Vec<Range<usize>> {
         .get(..5)
         .is_some_and(|p| p.eq_ignore_ascii_case("jdbc:"))
     {
-        // Opaque, e.g. `jdbc:oracle:thin:user/password@host:1521:sid`.
-        match url.find('@') {
+        // Opaque: `jdbc:<subprotocol>:...:user/password@host`, e.g.
+        // `jdbc:oracle:thin:scott/tiger@//h:1521/svc`. The user starts after
+        // the subprotocol names (`oracle:`, `thin:`).
+        let head = url.find(SEPARATORS).unwrap_or(url.len());
+        match url[..head].rfind('@') {
             Some(at) => {
-                let user = url[..at].rfind(':').map_or(0, |c| c + 1);
+                let mut user = 5;
+                while let Some(colon) = url[user..at].find(':') {
+                    let name = &url[user..user + colon];
+                    if name.is_empty()
+                        || !name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                    {
+                        break;
+                    }
+                    user += colon + 1;
+                }
                 if let Some(slash) = url[user..at].find('/') {
                     push(&mut out, user + slash + 1..at);
                 }
@@ -104,21 +127,54 @@ pub(crate) fn url_secret_ranges(url: &str) -> Vec<Range<usize>> {
     } else {
         return out;
     };
-    const SEPARATORS: [char; 4] = ['?', '&', ';', '#'];
-    let mut at = params_from;
+    params(url, params_from, &mut out);
+    out
+}
+
+/// The secret parameter values after `from`. A value ends at the next
+/// separator, except that a value starting with `{` runs to its closing `}`
+/// (`}}` escapes one), as SQL Server JDBC URLs quote `;` in values.
+fn params(url: &str, from: usize, out: &mut Vec<Range<usize>>) {
+    let mut at = from;
     while let Some(off) = url[at..].find(SEPARATORS) {
         let start = at + off + 1;
-        let end = url[start..]
-            .find(SEPARATORS)
-            .map_or(url.len(), |e| start + e);
-        if let Some(eq) = url[start..end].find('=')
-            && is_secret_param(&url[start..start + eq])
-        {
-            push(&mut out, start + eq + 1..end);
+        let next = url[start..].find(SEPARATORS).map(|e| start + e);
+        let eq = url[start..next.unwrap_or(url.len())]
+            .find('=')
+            .map(|e| start + e);
+        let Some(eq) = eq else {
+            at = next.unwrap_or(url.len());
+            continue;
+        };
+        let value = eq + 1;
+        let end = if url[value..].starts_with('{') {
+            braced_end(url, value + 1)
+        } else {
+            next.unwrap_or(url.len())
+        };
+        if is_secret_param(&url[start..eq]) {
+            push(out, value..end);
         }
         at = end;
     }
-    out
+}
+
+/// The end of a `{...}` value whose content starts at `from`: just past the
+/// `}` that is not doubled, or the end of `url`.
+fn braced_end(url: &str, from: usize) -> usize {
+    let bytes = url.as_bytes();
+    let mut i = from;
+    while let Some(&b) = bytes.get(i) {
+        if b == b'}' {
+            if bytes.get(i + 1) == Some(&b'}') {
+                i += 2;
+                continue;
+            }
+            return i + 1;
+        }
+        i += 1;
+    }
+    url.len()
 }
 
 fn push(out: &mut Vec<Range<usize>>, r: Range<usize>) {
