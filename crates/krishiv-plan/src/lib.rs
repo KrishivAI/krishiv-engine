@@ -48,8 +48,9 @@
 //!
 //! # Node inventory
 //!
-//! Which nodes the 22 TPC-H queries (`bench/queries/tpch`) and the
-//! DataFrame slice need.
+//! Which nodes the TPC-H queries and the DataFrame slice need. Tests build
+//! the 22 TPC-H plans by hand and each DataFrame-slice operation, and check
+//! both columns against the nodes they use.
 //!
 //! | Node | Form | TPC-H | DataFrame slice |
 //! |---|---|---|---|

@@ -1,0 +1,26 @@
+---
+source: crates/krishiv-plan/src/tests/tpch.rs
+expression: plan.to_string()
+---
+Limit 100
++- Sort [s_acctbal DESC NULLS LAST, n_name ASC NULLS FIRST, s_name ASC NULLS FIRST, p_partkey ASC NULLS FIRST], true
+   +- Project [s_acctbal, s_name, n_name, p_partkey, p_mfgr, s_address, s_phone, s_comment]
+      +- Filter ((((p_partkey == ps_partkey) and (s_suppkey == ps_suppkey)) and ((p_size == 15) and (p_type like '%BRASS'))) and (((s_nationkey == n_nationkey) and (n_regionkey == r_regionkey)) and ((r_name == 'EUROPE') and (ps_supplycost == scalar-subquery))))
+         :  +- Project [min(ps_supplycost)]
+         :     +- Filter ((((p_partkey == ps_partkey) and (s_suppkey == ps_suppkey)) and (s_nationkey == n_nationkey)) and ((n_regionkey == r_regionkey) and (r_name == 'EUROPE')))
+         :        +- Join Inner
+         :           :- Join Inner
+         :           :  :- Join Inner
+         :           :  :  :- Read partsupp
+         :           :  :  +- Read supplier
+         :           :  +- Read nation
+         :           +- Read region
+         +- Join Inner
+            :- Join Inner
+            :  :- Join Inner
+            :  :  :- Join Inner
+            :  :  :  :- Read part
+            :  :  :  +- Read supplier
+            :  :  +- Read partsupp
+            :  +- Read nation
+            +- Read region

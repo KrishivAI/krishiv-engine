@@ -1104,6 +1104,7 @@ name = "krishiv-plan"
 version = "0.1.0-dev"
 dependencies = [
  "codspeed-criterion-compat",
+ "insta",
  "krishiv-common",
  "krishiv-types",
  "proptest",

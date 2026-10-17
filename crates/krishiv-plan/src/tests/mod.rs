@@ -5,6 +5,9 @@
 
 mod depth;
 mod display;
+mod dsl;
 mod encode;
+mod inventory;
 mod nodes;
 mod props;
+mod tpch;

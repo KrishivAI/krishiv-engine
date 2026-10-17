@@ -1,0 +1,11 @@
+---
+source: crates/krishiv-plan/src/tests/tpch.rs
+expression: plan.to_string()
+---
+Sort [custdist DESC NULLS LAST, c_count DESC NULLS LAST], true
++- Aggregate [c_count], [c_count, count(*) AS custdist]
+   +- SubqueryAlias c_orders (c_custkey, c_count)
+      +- Aggregate [c_custkey], [c_custkey, count(o_orderkey)]
+         +- Join LeftOuter, ((c_custkey == o_custkey) and (NOT (o_comment like '%special%requests%')))
+            :- Read customer
+            +- Read orders
