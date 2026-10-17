@@ -1,0 +1,16 @@
+---
+source: crates/krishiv-plan/src/tests/tpch.rs
+expression: plan.to_string()
+---
+Limit 100
++- Sort [o_totalprice DESC NULLS LAST, o_orderdate ASC NULLS FIRST], true
+   +- Aggregate [c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice], [c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice, sum(l_quantity)]
+      +- Filter ((((o_orderkey) IN (list-query)) and (c_custkey == o_custkey)) and (o_orderkey == l_orderkey))
+         :  +- Filter (sum(l_quantity) > 300)
+         :     +- Aggregate [l_orderkey], [l_orderkey]
+         :        +- Read lineitem
+         +- Join Inner
+            :- Join Inner
+            :  :- Read customer
+            :  +- Read orders
+            +- Read lineitem

@@ -1,0 +1,18 @@
+---
+source: crates/krishiv-plan/src/tests/tpch.rs
+expression: plan.to_string()
+---
+Sort [revenue DESC NULLS LAST], true
++- Aggregate [n_name], [n_name, sum((l_extendedprice * (1 - l_discount))) AS revenue]
+   +- Filter (((((c_custkey == o_custkey) and (l_orderkey == o_orderkey)) and (l_suppkey == s_suppkey)) and ((c_nationkey == s_nationkey) and (s_nationkey == n_nationkey))) and (((n_regionkey == r_regionkey) and (r_name == 'ASIA')) and ((o_orderdate >= CAST('1994-01-01' AS DATE)) and (o_orderdate < CAST('1995-01-01' AS DATE)))))
+      +- Join Inner
+         :- Join Inner
+         :  :- Join Inner
+         :  :  :- Join Inner
+         :  :  :  :- Join Inner
+         :  :  :  :  :- Read customer
+         :  :  :  :  +- Read orders
+         :  :  :  +- Read lineitem
+         :  :  +- Read supplier
+         :  +- Read nation
+         +- Read region

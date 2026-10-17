@@ -1,0 +1,20 @@
+---
+source: crates/krishiv-plan/src/tests/tpch.rs
+expression: plan.to_string()
+---
+Sort [value DESC NULLS LAST], true
++- Filter (sum((ps_supplycost * ps_availqty)) > scalar-subquery)
+   :  +- Project [(sum((ps_supplycost * ps_availqty)) * 0.0001000000)]
+   :     +- Filter (((ps_suppkey == s_suppkey) and (s_nationkey == n_nationkey)) and (n_name == 'GERMANY'))
+   :        +- Join Inner
+   :           :- Join Inner
+   :           :  :- Read partsupp
+   :           :  +- Read supplier
+   :           +- Read nation
+   +- Aggregate [ps_partkey], [ps_partkey, sum((ps_supplycost * ps_availqty)) AS value]
+      +- Filter (((ps_suppkey == s_suppkey) and (s_nationkey == n_nationkey)) and (n_name == 'GERMANY'))
+         +- Join Inner
+            :- Join Inner
+            :  :- Read partsupp
+            :  +- Read supplier
+            +- Read nation

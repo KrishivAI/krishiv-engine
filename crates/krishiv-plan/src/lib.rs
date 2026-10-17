@@ -21,10 +21,32 @@
 //!   names ([`function`]); resolved calls carry a typed [`FunctionId`] and
 //!   [`FunctionKind`].
 //! - Data types are [`krishiv_types::DataType`].
-//! - `PartialEq` compares everything, origins included. The canonical
+//! - `PartialEq` compares everything, origins included, and like `Debug`
+//!   and `transform_*` takes time linear in the distinct nodes when
+//!   subtrees are shared. The canonical
 //!   encoding ([`Plan::canonical_encoding`]) leaves origins out and is the
 //!   structural equality ([`Plan::structurally_eq`]); [`StructuralHash`] is
-//!   its 128-bit Merkle hash, stable across processes and platforms.
+//!   its 128-bit Merkle hash, stable across processes and platforms
+//!   (within one process for plans holding inline secrets, ADR 0038).
+//! - Read options are [`krishiv_common::secret::OptionValue`]s: secrets are
+//!   typed, so no `Display`, `Debug` or encoding of a plan holds their
+//!   plaintext.
+//! - `Display` prints a plan as a tree in the style of Spark's `treeString`.
+//!
+//! ```
+//! use krishiv_plan::{Builtin, Expr, Literal, LogicalPlan, Origin, Plan, SourceId, Span};
+//!
+//! // SELECT a FROM t WHERE 1 < a
+//! let lt = Expr::builtin(Builtin::Lt, vec![Literal::Integer(1).into(), Expr::column(["a"])]);
+//! let plan = LogicalPlan::table(["t"]).filter(lt).project(vec![Expr::column(["a"])]);
+//! assert_eq!(plan.to_string(), "Project [a]\n+- Filter (1 < a)\n   +- Read t\n");
+//! // Origins change neither the encoding nor the hash.
+//! let spanned = plan.clone().with_origin(Origin::sql(SourceId(0), Span::new(0, 28)));
+//! let (a, b) = (Plan::try_new(plan)?, Plan::try_new(spanned)?);
+//! assert!(a.structurally_eq(&b));
+//! assert_eq!(a.structural_hash(), b.structural_hash());
+//! # Ok::<(), krishiv_common::error::KrishivError>(())
+//! ```
 //!
 //! Unresolved and resolved nodes share one tree. The analyzer replaces the
 //! unresolved-only nodes (marked U below) by resolved ones (R);
@@ -32,8 +54,9 @@
 //!
 //! # Node inventory
 //!
-//! Which nodes the 22 TPC-H queries (`bench/queries/tpch`) and the
-//! DataFrame slice need.
+//! Which nodes the TPC-H queries and the DataFrame slice need. Tests build
+//! the 22 TPC-H plans by hand and each DataFrame-slice operation, and check
+//! both columns against the nodes they use.
 //!
 //! | Node | Form | TPC-H | DataFrame slice |
 //! |---|---|---|---|
@@ -68,6 +91,8 @@
 
 #![forbid(unsafe_code)]
 
+mod dag;
+mod display;
 mod encode;
 mod expr;
 pub mod function;

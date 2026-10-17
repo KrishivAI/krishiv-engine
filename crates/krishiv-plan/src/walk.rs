@@ -48,7 +48,7 @@ pub(crate) enum Node<'a> {
 
 impl Node<'_> {
     /// The node's address: shared (`Arc`) subtrees have one address.
-    fn key(self) -> *const () {
+    pub(crate) fn key(self) -> *const () {
         match self {
             Node::Plan(p) => std::ptr::from_ref(p).cast(),
             Node::Expr(e) => std::ptr::from_ref(e).cast(),
@@ -58,7 +58,7 @@ impl Node<'_> {
 
 /// Appends `node`'s children: a relation's expressions then its child
 /// relations; an expression's subquery plan then its child expressions.
-fn children<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
+pub(crate) fn children<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
     match node {
         Node::Plan(p) => {
             p.for_each_expr(&mut |e| out.push(Node::Expr(e)));

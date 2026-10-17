@@ -6,13 +6,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use krishiv_common::secret::OptionValue;
 use krishiv_types::DataType;
 
 use super::depth::self_joins;
 use crate::{
     Builtin, ColumnRef, Expr, ExprNode, FunctionId, FunctionKind, JoinCondition, JoinKind, Literal,
-    LogicalPlan, Origin, Plan, PlanId, ResolvedExpr, ResolvedFunction, StructuralHash,
-    SubqueryKind, YearMonthField,
+    LogicalPlan, Origin, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr, ResolvedFunction,
+    StructuralHash, SubqueryKind, YearMonthField,
 };
 
 // ---- plan_id references ---------------------------------------------------
@@ -288,7 +289,19 @@ fn keys_are_stable() {
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
     assert_eq!(encoding.len(), 461, "{encoding:?}");
-    assert_eq!(hash.to_string(), "fb0a8e57e37e19929ea5250e11e49638");
+    assert_eq!(hash.to_string(), "a0f1c94cd334999ee3fc7ec79e6c2f99");
+    // Options other than inline secrets, whose keys are per process.
+    let options = [
+        ("header", OptionValue::Plain("true".to_owned())),
+        ("password", OptionValue::reference("prod", "pg")),
+    ];
+    let read = LogicalPlan::new(PlanNode::Read(ReadSource::Table {
+        name: vec!["t".to_owned()],
+        options: options.map(|(k, v)| (k.to_owned(), v)).into(),
+    }));
+    let (hash, encoding) = key(read);
+    assert_eq!(encoding.len(), 124, "{encoding:?}");
+    assert_eq!(hash.to_string(), "727324778fa3e5d3419d9046cb2c1ff0");
 }
 
 /// A plan whose subtrees are shared (`p = p.join(p)` 30 times) is keyed in

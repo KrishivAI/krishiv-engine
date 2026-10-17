@@ -1,0 +1,11 @@
+---
+source: crates/krishiv-plan/src/tests/tpch.rs
+expression: plan.to_string()
+---
+Sort [o_orderpriority ASC NULLS FIRST], true
++- Aggregate [o_orderpriority], [o_orderpriority, count(*) AS order_count]
+   +- Filter (((o_orderdate >= CAST('1993-07-01' AS DATE)) and (o_orderdate < CAST('1993-10-01' AS DATE))) and exists)
+      :  +- Project [*]
+      :     +- Filter ((l_orderkey == o_orderkey) and (l_commitdate < l_receiptdate))
+      :        +- Read lineitem
+      +- Read orders

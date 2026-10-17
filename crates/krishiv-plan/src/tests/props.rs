@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use krishiv_common::secret::{OptionValue, SecretString, SecretValue};
 use krishiv_types::{DataType, DecimalType};
 use proptest::prelude::*;
 use proptest::sample::Index;
@@ -253,7 +254,7 @@ impl Gen<'_> {
 
     fn source(&mut self) -> ReadSource {
         let options = self
-            .many(0, 1, |g| (g.name(), g.name()))
+            .many(0, 1, |g| (g.name(), g.option()))
             .into_iter()
             .collect();
         if self.flag() {
@@ -264,9 +265,19 @@ impl Gen<'_> {
         } else {
             ReadSource::Files {
                 format: self.name(),
-                paths: self.many(1, 2, Gen::name),
+                paths: self.many(1, 2, Gen::option),
                 options,
             }
+        }
+    }
+
+    fn option(&mut self) -> OptionValue {
+        let v = self.name();
+        match self.pick(4) {
+            0 => OptionValue::Plain(v),
+            1 => OptionValue::Secret(SecretValue::Inline(SecretString::new(v))),
+            2 => OptionValue::reference(self.name(), v),
+            _ => OptionValue::from_user("url", format!("https://u:{v}@h/?sig={}", self.name())),
         }
     }
 
@@ -438,13 +449,59 @@ fn m_strings(v: &mut Vec<String>, w: &mut Walk) -> bool {
     v.iter_mut().any(|s| m_string(s, w))
 }
 
-fn m_options(m: &mut BTreeMap<String, String>, w: &mut Walk) -> bool {
-    site!(w, m.insert("new".to_owned(), "x".to_owned()));
+/// The same kind of option value with different contents.
+fn other_value(v: &OptionValue) -> OptionValue {
+    match v {
+        OptionValue::Plain(s) => OptionValue::Plain(format!("{s}x")),
+        OptionValue::Secret(SecretValue::Inline(s)) => OptionValue::Secret(SecretValue::Inline(
+            SecretString::new(format!("{}x", s.expose_secret())),
+        )),
+        OptionValue::Secret(SecretValue::Reference { scope, key }) => {
+            OptionValue::reference(scope.clone(), format!("{key}x"))
+        }
+        OptionValue::Url(u) => {
+            OptionValue::from_user("url", format!("{}x", u.expose_secret().expose_secret()))
+        }
+    }
+}
+
+/// The value as another kind: plain becomes secret, anything else plain.
+fn other_kind(v: &OptionValue) -> OptionValue {
+    match v {
+        OptionValue::Plain(s) => {
+            OptionValue::Secret(SecretValue::Inline(SecretString::new(s.clone())))
+        }
+        OptionValue::Secret(SecretValue::Inline(s)) => {
+            OptionValue::Plain(s.expose_secret().to_owned())
+        }
+        OptionValue::Secret(SecretValue::Reference { key, .. }) => OptionValue::Plain(key.clone()),
+        OptionValue::Url(u) => OptionValue::Plain(u.expose_secret().expose_secret().to_owned()),
+    }
+}
+
+/// Rewrites one value (contents or kind), or pushes one.
+fn m_values(v: &mut Vec<OptionValue>, w: &mut Walk) -> bool {
+    site!(w, v.push(OptionValue::Plain("x".to_owned())));
+    for value in v.iter_mut() {
+        site!(w, *value = other_value(value));
+        site!(w, *value = other_kind(value));
+    }
+    false
+}
+
+fn m_options(m: &mut BTreeMap<String, OptionValue>, w: &mut Walk) -> bool {
+    site!(
+        w,
+        m.insert("new".to_owned(), OptionValue::Plain("x".to_owned()))
+    );
     let keys: Vec<String> = m.keys().cloned().collect();
     for k in keys {
-        site!(w, m.entry(k.clone()).or_default().push('x'));
+        if let Some(v) = m.get_mut(&k) {
+            site!(w, *v = other_value(v));
+            site!(w, *v = other_kind(v));
+        }
         site!(w, {
-            let v = m.remove(&k).unwrap_or_default();
+            let v = m.remove(&k).unwrap_or(OptionValue::Plain(String::new()));
             m.insert(format!("{k}x"), v);
         });
     }
@@ -587,11 +644,11 @@ fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
     let other = match s {
         ReadSource::Table { name, options } => ReadSource::Files {
             format: "parquet".to_owned(),
-            paths: name.clone(),
+            paths: name.iter().cloned().map(OptionValue::Plain).collect(),
             options: options.clone(),
         },
         ReadSource::Files { paths, options, .. } => ReadSource::Table {
-            name: paths.clone(),
+            name: paths.iter().map(ToString::to_string).collect(),
             options: options.clone(),
         },
     };
@@ -602,7 +659,7 @@ fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
             format,
             paths,
             options,
-        } => m_string(format, w) || m_strings(paths, w) || m_options(options, w),
+        } => m_string(format, w) || m_values(paths, w) || m_options(options, w),
     }
 }
 

@@ -38,12 +38,17 @@ fn nested_expr(n: usize) -> LogicalPlan {
     LogicalPlan::table(["t"]).filter(e)
 }
 
-fn exercise(plan: LogicalPlan) {
-    let plan = Plan::try_new(plan).unwrap();
+fn exercise(build: fn() -> LogicalPlan) {
+    let plan = Plan::try_new(build()).unwrap();
     let copy = plan.clone();
     assert_eq!(copy, plan);
+    // Built apart: `PartialEq` and `Debug` walk every level.
+    let apart = Plan::try_new(build()).unwrap();
+    assert_eq!(apart, plan);
+    assert!(format!("{apart:?}").len() > MAX_DEPTH);
     assert!(copy.structurally_eq(&plan));
     assert_eq!(plan.subtree_hashes()[0].1, plan.structural_hash());
+    assert!(!plan.to_string().is_empty());
     assert!(!plan.root().is_resolved());
     let root = Arc::clone(plan.root());
     let same = Arc::clone(&root)
@@ -56,8 +61,8 @@ fn exercise(plan: LogicalPlan) {
 
 #[test]
 fn plans_at_the_cap_survive_every_traversal() {
-    on_small_stack(|| exercise(filters(MAX_DEPTH - 1)));
-    on_small_stack(|| exercise(nested_expr(MAX_DEPTH - 1)));
+    on_small_stack(|| exercise(|| filters(MAX_DEPTH - 1)));
+    on_small_stack(|| exercise(|| nested_expr(MAX_DEPTH - 1)));
 }
 
 #[test]
@@ -67,6 +72,7 @@ fn deeper_plans_are_rejected_and_dropped() {
         assert_eq!(err.error_class(), ErrorClass::FailedToParseTooComplex);
         assert_eq!(err.sql_state(), Some("54001"));
         assert!(Plan::try_new(plan.clone()).is_err());
+        assert_eq!(plan.to_string(), "<nested deeper than the maximum depth>\n");
     }
     on_small_stack(|| {
         let deep = filters(200_000);

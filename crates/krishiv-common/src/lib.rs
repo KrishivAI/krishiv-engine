@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Errors, config registry and tracing setup (layer L0).
+//! Errors, config registry, typed secrets and redaction (layer L0).
 
 #![forbid(unsafe_code)]
 
 pub mod config;
 pub mod error;
 pub mod experimental;
+pub mod redact;
+pub mod secret;
