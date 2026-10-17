@@ -44,6 +44,7 @@ fn exercise(plan: LogicalPlan) {
     assert_eq!(copy, plan);
     assert!(copy.structurally_eq(&plan));
     assert_eq!(plan.subtree_hashes()[0].1, plan.structural_hash());
+    assert!(!plan.to_string().is_empty());
     assert!(!plan.root().is_resolved());
     let root = Arc::clone(plan.root());
     let same = Arc::clone(&root)
@@ -67,6 +68,7 @@ fn deeper_plans_are_rejected_and_dropped() {
         assert_eq!(err.error_class(), ErrorClass::FailedToParseTooComplex);
         assert_eq!(err.sql_state(), Some("54001"));
         assert!(Plan::try_new(plan.clone()).is_err());
+        assert_eq!(plan.to_string(), "<nested deeper than the maximum depth>\n");
     }
     on_small_stack(|| {
         let deep = filters(200_000);

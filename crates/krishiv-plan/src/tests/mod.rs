@@ -4,6 +4,7 @@
 //! by the inventory, the generator and the mutation sites.
 
 mod depth;
+mod display;
 mod encode;
 mod nodes;
 mod props;
