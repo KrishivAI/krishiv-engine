@@ -398,7 +398,7 @@ jobs:
   # under an unexpanded name, so the legs themselves cannot be required. This job
   # always reports and passes when the wheels passed or were skipped (no Rust change).
   wheels-ok:
-    needs: wheels
+    needs: [changes, wheels]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -406,9 +406,12 @@ jobs:
     steps:
       - name: Check the wheel builds
         env:
+          CHANGES: ${{ needs.changes.result }}
           RESULT: ${{ needs.wheels.result }}
         run: |
-          echo "wheels: $RESULT"
+          echo "changes: $CHANGES, wheels: $RESULT"
+          # A skip only counts when `changes` itself succeeded.
+          [ "$CHANGES" = success ] || exit 1
           case "$RESULT" in
             success | skipped) ;;
             *) exit 1 ;;
