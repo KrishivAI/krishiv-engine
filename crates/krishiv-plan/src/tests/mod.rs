@@ -8,4 +8,5 @@ mod depth;
 mod encode;
 mod nodes;
 mod props;
+mod rewrite;
 mod secrets;

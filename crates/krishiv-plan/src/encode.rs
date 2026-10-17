@@ -213,11 +213,9 @@ impl Keys {
         let mut children = Vec::new();
         p.for_each_child(&mut |c| children.push(Arc::clone(c)));
         let marks: Vec<Option<Key>> = children.iter().map(|c| self.carriers(c, id)).collect();
+        // `carried_below` holds, so `p` carries `id` or some mark is set:
+        // the record always marks at least one carrier.
         let carries = p.origin.plan_id == Some(id);
-        if !carries && marks.iter().all(Option::is_none) {
-            self.carriers.insert(key, None);
-            return None;
-        }
         let mut rec = vec![b'C', u8::from(carries)];
         put_len(&mut rec, marks.len());
         let mut dig = rec.clone();
