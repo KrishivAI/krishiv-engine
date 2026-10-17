@@ -1,0 +1,144 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Literal values.
+
+use krishiv_types::{DataType, DecimalType};
+
+/// A literal value, in Spark's physical representation for its type.
+///
+/// Equality compares floating-point values by their bits, so `NaN` equals
+/// itself and `0.0` differs from `-0.0`: two literals are equal exactly
+/// when they are the same literal.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum Literal {
+    /// `NULL`: of the given type, or untyped (Spark's `void`) when `None`.
+    Null(Option<DataType>),
+    /// `BOOLEAN`.
+    Boolean(bool),
+    /// `TINYINT`.
+    Byte(i8),
+    /// `SMALLINT`.
+    Short(i16),
+    /// `INT`.
+    Integer(i32),
+    /// `BIGINT`.
+    Long(i64),
+    /// `FLOAT`.
+    Float(f32),
+    /// `DOUBLE`.
+    Double(f64),
+    /// `DECIMAL(p, s)`: the value is `unscaled * 10^-s`.
+    Decimal {
+        /// The unscaled value.
+        unscaled: i128,
+        /// Precision and scale.
+        data_type: DecimalType,
+    },
+    /// `STRING`.
+    String(String),
+    /// `BINARY`.
+    Binary(Vec<u8>),
+    /// `DATE`: days since 1970-01-01.
+    Date(i32),
+    /// `TIMESTAMP`: microseconds since the epoch (UTC).
+    Timestamp(i64),
+    /// `TIMESTAMP_NTZ`: microseconds since the epoch, no time zone.
+    TimestampNtz(i64),
+    /// `INTERVAL ... start [TO end]` of type `INTERVAL YEAR [TO MONTH]` or
+    /// `INTERVAL MONTH`.
+    YearMonthInterval {
+        /// The value, in months.
+        months: i32,
+        /// The leading field.
+        start: YearMonthField,
+        /// The trailing field; equal to `start` for a single-field type.
+        end: YearMonthField,
+    },
+    /// `INTERVAL ... start [TO end]` of a day-time interval type, e.g.
+    /// `INTERVAL DAY` or `INTERVAL HOUR TO SECOND`.
+    DayTimeInterval {
+        /// The value, in microseconds.
+        micros: i64,
+        /// The leading field.
+        start: DayTimeField,
+        /// The trailing field; equal to `start` for a single-field type.
+        end: DayTimeField,
+    },
+}
+
+/// A field of a year-month interval type (Spark's `YearMonthIntervalType`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum YearMonthField {
+    /// `YEAR`.
+    Year,
+    /// `MONTH`.
+    Month,
+}
+
+/// A field of a day-time interval type (Spark's `DayTimeIntervalType`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DayTimeField {
+    /// `DAY`.
+    Day,
+    /// `HOUR`.
+    Hour,
+    /// `MINUTE`.
+    Minute,
+    /// `SECOND`.
+    Second,
+}
+
+/// The value of a [`Literal`] with floats as bits, so it derives `Eq`.
+#[derive(PartialEq, Eq)]
+enum Key<'a> {
+    Null(Option<&'a DataType>),
+    Boolean(bool),
+    Byte(i8),
+    Short(i16),
+    Integer(i32),
+    Long(i64),
+    Float(u32),
+    Double(u64),
+    Decimal(i128, DecimalType),
+    String(&'a str),
+    Binary(&'a [u8]),
+    Date(i32),
+    Timestamp(i64),
+    TimestampNtz(i64),
+    YearMonth(i32, YearMonthField, YearMonthField),
+    DayTime(i64, DayTimeField, DayTimeField),
+}
+
+impl Literal {
+    fn key(&self) -> Key<'_> {
+        match self {
+            Self::Null(t) => Key::Null(t.as_ref()),
+            Self::Boolean(v) => Key::Boolean(*v),
+            Self::Byte(v) => Key::Byte(*v),
+            Self::Short(v) => Key::Short(*v),
+            Self::Integer(v) => Key::Integer(*v),
+            Self::Long(v) => Key::Long(*v),
+            Self::Float(v) => Key::Float(v.to_bits()),
+            Self::Double(v) => Key::Double(v.to_bits()),
+            Self::Decimal {
+                unscaled,
+                data_type,
+            } => Key::Decimal(*unscaled, *data_type),
+            Self::String(v) => Key::String(v),
+            Self::Binary(v) => Key::Binary(v),
+            Self::Date(v) => Key::Date(*v),
+            Self::Timestamp(v) => Key::Timestamp(*v),
+            Self::TimestampNtz(v) => Key::TimestampNtz(*v),
+            Self::YearMonthInterval { months, start, end } => Key::YearMonth(*months, *start, *end),
+            Self::DayTimeInterval { micros, start, end } => Key::DayTime(*micros, *start, *end),
+        }
+    }
+}
+
+impl PartialEq for Literal {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for Literal {}

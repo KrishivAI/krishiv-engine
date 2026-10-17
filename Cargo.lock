@@ -1058,6 +1058,9 @@ version = "0.1.0-dev"
 [[package]]
 name = "krishiv-plan"
 version = "0.1.0-dev"
+dependencies = [
+ "krishiv-types",
+]
 
 [[package]]
 name = "krishiv-python"
