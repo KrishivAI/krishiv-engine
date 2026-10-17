@@ -68,7 +68,7 @@ jobs:
           persist-credentials: false
       - name: Nightly toolchain with llvm-tools (branch coverage)
         run: rustup toolchain install nightly --profile minimal --component llvm-tools-preview
-      - uses: taiki-e/install-action@899b013517f9e7774591216672bf75a46bb9a481 # v2.9.4
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-llvm-cov,cargo-nextest
       - run: cargo xtask coverage --all-features --html
