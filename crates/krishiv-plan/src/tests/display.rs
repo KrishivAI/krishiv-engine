@@ -130,7 +130,7 @@ fn options_print_as_typed_values() {
     .collect();
     let plan = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
         format: "csv".to_owned(),
-        paths: vec!["/d".to_owned()],
+        paths: vec![OptionValue::from_user("path", "/d")],
         options,
     }));
     assert_eq!(

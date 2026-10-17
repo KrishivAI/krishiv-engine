@@ -3,7 +3,7 @@
 //!
 //! Origins are not printed. Subquery plans are printed under the node that
 //! uses them, behind a `:` rail, before the node's children. Read options
-//! print as their typed values (ADR 0038): a secret as `*********(redacted)`, a reference
+//! and file paths print as their typed values (ADR 0038): a secret as `*********(redacted)`, a reference
 //! as `secret('scope', 'key')`, a URL with `*********(redacted)` for its credentials; no
 //! pattern is applied to options. SQL text, which cannot be typed, goes
 //! through [`krishiv_common::redact`]. A plan or expression deeper than
@@ -267,7 +267,11 @@ impl Display for SourceText<'_> {
                 paths,
                 options,
             } => {
-                write!(f, "{format} [{}]", paths.join(", "))?;
+                write!(f, "{format} [")?;
+                for (i, p) in paths.iter().enumerate() {
+                    write!(f, "{}{p}", sep(i))?;
+                }
+                f.write_str("]")?;
                 options
             }
         };

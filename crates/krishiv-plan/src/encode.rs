@@ -449,40 +449,44 @@ impl<'k, 'a> Encoder<'k, 'a> {
         v.iter().for_each(|s| self.str(s));
     }
 
-    /// Options: a plain value as itself, a reference as its (scope, key),
-    /// an inline secret (alone or inside a URL) as its keyed fingerprint,
-    /// never its plaintext (ADR 0038).
     fn options(&mut self, m: &BTreeMap<String, OptionValue>) {
         self.len(m.len());
         for (k, v) in m {
             self.str(k);
-            match v {
-                OptionValue::Plain(s) => {
-                    self.u8(1);
-                    self.str(s);
-                }
-                OptionValue::Secret(SecretValue::Reference { scope, key }) => {
-                    self.u8(2);
-                    self.str(scope);
-                    self.str(key);
-                }
-                OptionValue::Secret(SecretValue::Inline(s)) => {
-                    self.u8(3);
-                    self.put(&s.fingerprint());
-                }
-                OptionValue::Url(url) => {
-                    self.u8(4);
-                    self.len(url.parts().len());
-                    for part in url.parts() {
-                        match part {
-                            UrlPart::Text(s) => {
-                                self.u8(1);
-                                self.str(s);
-                            }
-                            UrlPart::Secret(s) => {
-                                self.u8(2);
-                                self.put(&s.fingerprint());
-                            }
+            self.option_value(v);
+        }
+    }
+
+    /// An option value or path: a plain value as itself, a reference as its
+    /// (scope, key), an inline secret (alone or inside a URL) as its keyed
+    /// fingerprint, never its plaintext (ADR 0038).
+    fn option_value(&mut self, v: &OptionValue) {
+        match v {
+            OptionValue::Plain(s) => {
+                self.u8(1);
+                self.str(s);
+            }
+            OptionValue::Secret(SecretValue::Reference { scope, key }) => {
+                self.u8(2);
+                self.str(scope);
+                self.str(key);
+            }
+            OptionValue::Secret(SecretValue::Inline(s)) => {
+                self.u8(3);
+                self.put(&s.fingerprint());
+            }
+            OptionValue::Url(url) => {
+                self.u8(4);
+                self.len(url.parts().len());
+                for part in url.parts() {
+                    match part {
+                        UrlPart::Text(s) => {
+                            self.u8(1);
+                            self.str(s);
+                        }
+                        UrlPart::Secret(s) => {
+                            self.u8(2);
+                            self.put(&s.fingerprint());
                         }
                     }
                 }
@@ -657,7 +661,8 @@ impl<'k, 'a> Encoder<'k, 'a> {
             } => {
                 self.u8(2);
                 self.str(format);
-                self.strs(paths);
+                self.len(paths.len());
+                paths.iter().for_each(|p| self.option_value(p));
                 self.options(options);
             }
         }

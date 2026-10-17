@@ -130,7 +130,9 @@ fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
     }));
     let parquet = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
         format: "parquet".to_owned(),
-        paths: vec!["/data".to_owned()],
+        paths: vec![krishiv_common::secret::OptionValue::from_user(
+            "path", "/data",
+        )],
         options: BTreeMap::new(),
     }));
     let sql = LogicalPlan::new(PlanNode::Sql {

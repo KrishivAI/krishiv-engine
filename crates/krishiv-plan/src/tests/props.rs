@@ -265,7 +265,7 @@ impl Gen<'_> {
         } else {
             ReadSource::Files {
                 format: self.name(),
-                paths: self.many(1, 2, Gen::name),
+                paths: self.many(1, 2, Gen::option),
                 options,
             }
         }
@@ -479,6 +479,16 @@ fn other_kind(v: &OptionValue) -> OptionValue {
     }
 }
 
+/// Rewrites one value (contents or kind), or pushes one.
+fn m_values(v: &mut Vec<OptionValue>, w: &mut Walk) -> bool {
+    site!(w, v.push(OptionValue::Plain("x".to_owned())));
+    for value in v.iter_mut() {
+        site!(w, *value = other_value(value));
+        site!(w, *value = other_kind(value));
+    }
+    false
+}
+
 fn m_options(m: &mut BTreeMap<String, OptionValue>, w: &mut Walk) -> bool {
     site!(
         w,
@@ -634,11 +644,11 @@ fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
     let other = match s {
         ReadSource::Table { name, options } => ReadSource::Files {
             format: "parquet".to_owned(),
-            paths: name.clone(),
+            paths: name.iter().cloned().map(OptionValue::Plain).collect(),
             options: options.clone(),
         },
         ReadSource::Files { paths, options, .. } => ReadSource::Table {
-            name: paths.clone(),
+            name: paths.iter().map(ToString::to_string).collect(),
             options: options.clone(),
         },
     };
@@ -649,7 +659,7 @@ fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
             format,
             paths,
             options,
-        } => m_string(format, w) || m_strings(paths, w) || m_options(options, w),
+        } => m_string(format, w) || m_values(paths, w) || m_options(options, w),
     }
 }
 

@@ -175,8 +175,11 @@ pub enum ReadSource {
     Files {
         /// Format name, e.g. `parquet`.
         format: String,
-        /// Paths or globs.
-        paths: Vec<String>,
+        /// Paths or globs, typed like options (built with
+        /// [`OptionValue::from_user`] under the key `path`, as Spark keeps
+        /// them as the `path` option): a signed URL's credentials are secret
+        /// parts.
+        paths: Vec<OptionValue>,
         /// Data source options.
         options: BTreeMap<String, OptionValue>,
     },

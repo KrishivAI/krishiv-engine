@@ -38,8 +38,12 @@ fn options(secret: &str) -> BTreeMap<String, OptionValue> {
 
 fn read(secret: &str) -> LogicalPlan {
     LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-        format: "jdbc".to_owned(),
-        paths: Vec::new(),
+        format: "parquet".to_owned(),
+        // A presigned URL as a path: paths are typed like options.
+        paths: vec![OptionValue::from_user(
+            "path",
+            format!("https://b.s3.amazonaws.com/k?X-Amz-Signature={secret}&X-Amz-Expires=60"),
+        )],
         options: options(secret),
     }))
 }
@@ -71,6 +75,9 @@ fn the_canary_never_leaks() {
     .unwrap();
     let explain = plan.root().to_string();
     assert!(!explain.contains(CANARY), "{explain}");
+    assert!(explain.contains(
+        "Read parquet [https://b.s3.amazonaws.com/k?X-Amz-Signature=*********(redacted)&X-Amz-Expires=60]"
+    ));
     assert!(explain.contains(
         "url=jdbc:postgresql://user:*********(redacted)@h/db?password=*********(redacted)&ssl=true"
     ));
