@@ -2,12 +2,15 @@
 //! Enumeration of vendored Spark `SQLQueryTestSuite` golden files (`tests/spark-golden/<tag>/`).
 //!
 //! `inputs/<name>.sql` pairs with `results/<name>.sql.out`. Variant outputs such as
-//! `*.sql.out.java21` are not paired (they are JDK-specific alternates).
+//! `*.sql.out.java21` are JDK-specific alternates, not separate files: [`Jdk`] chooses whether a pair
+//! uses the base result or its alternate where one exists.
 //!
 //! The runner ([`run`]) parses the `.sql.out` files ([`parse`]), drives an [`run::Engine`] and reports
 //! three separate numbers ([`report`]); [`manifest`] holds the exclusion manifest.
 
+pub mod cell;
 pub mod manifest;
+pub mod normalise;
 pub mod parse;
 pub mod report;
 pub mod run;
@@ -20,6 +23,30 @@ use std::path::{Path, PathBuf};
 /// Default tag vendored in the repo.
 pub const DEFAULT_TAG: &str = "v4.2.0";
 
+/// Which JDK's recorded results to compare against. Spark records a `.sql.out.java21` alternate
+/// for the few files whose output differs by JDK (mainly `Double.toString` and some date
+/// patterns). The default is [`Jdk::Java21`]: Rust's shortest round-trip float formatting matches
+/// the JDK 19+ behaviour those alternates record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Jdk {
+    /// The base results (recorded on JDK 17).
+    Java17,
+    /// The `.sql.out.java21` alternate where it exists, else the base result.
+    #[default]
+    Java21,
+}
+
+impl Jdk {
+    /// The JDK feature version, as written in the report.
+    #[must_use]
+    pub const fn version(self) -> &'static str {
+        match self {
+            Self::Java17 => "17",
+            Self::Java21 => "21",
+        }
+    }
+}
+
 /// An `.sql` input with its `.sql.out` expected result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoldenPair {
@@ -27,13 +54,17 @@ pub struct GoldenPair {
     pub name: String,
     /// Path of the `.sql` input.
     pub sql: PathBuf,
-    /// Path of the `.sql.out` result.
+    /// Path of the result file (the `.java21` alternate when [`GoldenPair::variant`]).
     pub out: PathBuf,
+    /// The result is the JDK-specific alternate.
+    pub variant: bool,
 }
 
 /// All files of one golden directory.
 #[derive(Debug, Clone, Default)]
 pub struct GoldenSet {
+    /// JDK the results were chosen for.
+    pub jdk: Jdk,
     /// Paired inputs/results.
     pub pairs: Vec<GoldenPair>,
     /// Names with an `.sql` input but no `.sql.out`.
@@ -49,17 +80,29 @@ impl GoldenSet {
         crate::tests_dir().join("spark-golden").join(tag)
     }
 
-    /// Scan `<dir>/inputs` and `<dir>/results`.
+    /// Scan `<dir>/inputs` and `<dir>/results` for the default [`Jdk`].
     pub fn scan(dir: &Path) -> io::Result<Self> {
+        Self::scan_for(dir, Jdk::default())
+    }
+
+    /// Scan `<dir>/inputs` and `<dir>/results`, choosing results for `jdk`.
+    pub fn scan_for(dir: &Path, jdk: Jdk) -> io::Result<Self> {
         let inputs = collect(&dir.join("inputs"), ".sql")?;
         let outputs = collect(&dir.join("results"), ".sql.out")?;
-        let mut set = Self::default();
+        let mut set = Self {
+            jdk,
+            ..Self::default()
+        };
         for name in &inputs {
             if outputs.contains(name) {
+                let base = dir.join("results").join(format!("{name}.sql.out"));
+                let alt = dir.join("results").join(format!("{name}.sql.out.java21"));
+                let variant = jdk == Jdk::Java21 && alt.is_file();
                 set.pairs.push(GoldenPair {
                     name: name.clone(),
                     sql: dir.join("inputs").join(format!("{name}.sql")),
-                    out: dir.join("results").join(format!("{name}.sql.out")),
+                    out: if variant { alt } else { base },
+                    variant,
                 });
             } else {
                 set.unpaired_inputs.push(name.clone());
@@ -142,6 +185,21 @@ mod tests {
             statements += run::load_statements(pair)?.len();
         }
         assert!(statements > 10_000, "too few statements: {statements}");
+        Ok(())
+    }
+
+    #[test]
+    fn jdk_choice_selects_the_alternate_results() -> R {
+        let dir = GoldenSet::tag_dir(DEFAULT_TAG);
+        let variants = |jdk| -> Result<usize, std::io::Error> {
+            Ok(GoldenSet::scan_for(&dir, jdk)?
+                .pairs
+                .iter()
+                .filter(|p| p.variant)
+                .count())
+        };
+        assert_eq!(variants(Jdk::Java17)?, 0);
+        assert!(variants(Jdk::Java21)? > 0);
         Ok(())
     }
 

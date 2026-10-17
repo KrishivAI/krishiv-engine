@@ -51,6 +51,10 @@ expression: "to_json_string(&to_json(&run, \"v4.2.0\", &manifest))?"
     }
   ],
   "format_version": 1,
+  "jdk": "21",
+  "jdk_variant_files": [
+    "v"
+  ],
   "spark_tag": "v4.2.0",
   "totals": {
     "files_excluded": 1,
