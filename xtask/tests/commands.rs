@@ -84,6 +84,19 @@ fn spdx_fails_on_a_file_without_header() {
 }
 
 #[test]
+fn spdx_fails_when_the_tag_is_only_in_a_string_literal() {
+    let dir = tmp("spdx-literal");
+    write(
+        &dir,
+        "crates/a/src/lib.rs",
+        "//! doc\npub const TAG: &str = \"SPDX-License-Identifier: Apache-2.0\";\n",
+    );
+    let out = xtask(&["spdx", dir.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("crates/a/src/lib.rs"));
+}
+
+#[test]
 fn repo_sources_all_have_spdx_headers() {
     assert!(xtask(&["spdx"]).status.success());
 }

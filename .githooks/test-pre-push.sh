@@ -20,7 +20,12 @@ git remote add origin "$tmp/remote.git"
 echo 1 > f && git add f && git commit -q -m one
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
-expect_refused() { desc=$1; shift; if "$@" >/dev/null 2>&1; then fail "$desc was allowed"; fi; echo "ok: $desc refused"; }
+expect_refused() {
+  desc=$1; shift
+  if out=$("$@" 2>&1); then fail "$desc was allowed"; fi
+  case "$out" in *"pre-push: refusing"*) ;; *) fail "$desc was not refused by the hook: $out" ;; esac
+  echo "ok: $desc refused by the hook"
+}
 expect_ok() { desc=$1; shift; "$@" >/dev/null 2>&1 || fail "$desc was refused"; echo "ok: $desc allowed"; }
 
 expect_refused "push to main" git push origin main
@@ -34,7 +39,8 @@ expect_ok "feature fast-forward push" git push origin feature/x
 # Rewrite history locally, then force.
 git reset -q --hard HEAD~1
 echo 3 >> f && git commit -q -am three
-expect_refused "non-ff push" git push origin feature/x
+if git push origin feature/x >/dev/null 2>&1; then fail "plain non-ff push was allowed"; fi
+echo "ok: plain non-ff push rejected (by git itself)"
 expect_refused "--force push" git push --force origin feature/x
 expect_refused "--force-with-lease push" git push --force-with-lease origin feature/x
 expect_ok "feature delete" git push origin --delete feature/x

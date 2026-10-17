@@ -77,16 +77,31 @@ fn docs_bench_and_plan_only_changes_skip_rust_jobs() {
     assert!(rust_relevant([".claude/agents/reviewer.md"]));
 }
 
-const GOOD: &str = "aaa\u{1f}dev@example.com\u{1f}feat: x\n\nSigned-off-by: Dev One <dev@example.com>\nCo-Authored-By: X <x@y>\n\u{1e}\n";
-const BAD: &str = "bbb\u{1f}dev@example.com\u{1f}fix: y\n\nno trailer here\n\u{1e}\n";
-const BOT: &str =
-    "ccc\u{1f}1+renovate[bot]@users.noreply.github.com\u{1f}chore(deps): bump\n\u{1e}\n";
+const GOOD: &str = "aaa\u{1f}dev@example.com\u{1f}dev@example.com\u{1f}feat: x\n\nSigned-off-by: Dev One <dev@example.com>\nCo-Authored-By: X <x@y>\n\u{1e}\n";
+const BAD: &str =
+    "bbb\u{1f}dev@example.com\u{1f}dev@example.com\u{1f}fix: y\n\nno trailer here\n\u{1e}\n";
+const BOT: &str = "ccc\u{1f}1+renovate[bot]@users.noreply.github.com\u{1f}noreply@github.com\u{1f}chore(deps): bump\n\u{1e}\n";
+const FAKE_BOT: &str = "eee\u{1f}evil[bot]@example.com\u{1f}evil[bot]@example.com\u{1f}x\n\u{1e}\n";
+const BOT_AUTHOR_HUMAN_COMMITTER: &str =
+    "fff\u{1f}renovate[bot]@users.noreply.github.com\u{1f}dev@example.com\u{1f}x\n\u{1e}\n";
 
 #[test]
 fn dco_flags_unsigned_commits_only() {
     assert!(commits_missing_signoff(GOOD).is_empty());
     assert_eq!(commits_missing_signoff(&format!("{GOOD}{BAD}")), ["bbb"]);
     assert!(commits_missing_signoff(BOT).is_empty());
-    let malformed = "ddd\u{1f}a@b.c\u{1f}x\n\nSigned-off-by: nobody\n\u{1e}\n";
+    let malformed = "ddd\u{1f}a@b.c\u{1f}a@b.c\u{1f}x\n\nSigned-off-by: nobody\n\u{1e}\n";
     assert_eq!(commits_missing_signoff(malformed), ["ddd"]);
+}
+
+#[test]
+fn dco_bot_exemption_is_an_explicit_allowlist_and_checks_committer() {
+    assert_eq!(commits_missing_signoff(FAKE_BOT), ["eee"]);
+    assert_eq!(commits_missing_signoff(BOT_AUTHOR_HUMAN_COMMITTER), ["fff"]);
+}
+
+#[test]
+fn license_is_not_counted_towards_the_size_cap() {
+    assert!(is_size_excluded("LICENSE"));
+    assert!(!is_size_excluded("NOTICE"));
 }
