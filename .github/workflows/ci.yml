@@ -197,7 +197,11 @@ jobs:
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest
+      # Every GitHub-hosted x64 runner has x86-64-v3, so the kernel tests must
+      # run that clone, not skip it (AVX-512 varies by runner: not required).
       - run: cargo nextest run --workspace --locked --no-tests=pass
+        env:
+          KRISHIV_REQUIRE_TARGETS: baseline,x86_64v3
       - run: cargo test --workspace --doc --locked
 
   deny:
@@ -280,8 +284,10 @@ jobs:
 
   # P2-T020: Miri on krishiv-kernels (ADR 0029; the crate holds unsafe and
   # SIMD dispatch). The job always runs and reports, so it can be a required
-  # check; the path gate is inside: it only does work when the PR touches the
-  # kernels crate, this workflow, or the lockfile (and always on main).
+  # check; the path gate is inside: it only does work when the PR touches what
+  # Miri compiles: the kernels crate, its path dependency krishiv-common, the
+  # root Cargo.toml/Cargo.lock, rust-toolchain.toml or this workflow (and
+  # always on main).
   miri-kernels:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -300,7 +306,7 @@ jobs:
           run=true
           if [ "$EVENT" = "pull_request" ]; then
             if ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
-              | grep -qE '^(crates/krishiv-kernels/|\.github/workflows/ci\.yml$|Cargo\.lock$)'; then
+              | grep -qE '^(crates/krishiv-kernels/|crates/krishiv-common/|\.github/workflows/ci\.yml$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
               run=false
             fi
           fi
@@ -359,6 +365,16 @@ jobs:
           HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'budget-approved') }}
           APPROVER: ${{ vars.SIZE_APPROVER }}
         run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
+      # New unsafe sites need their own review label (same approval rule).
+      - name: Resolve unsafe-reviewed label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'unsafe-reviewed') }}
+          APPROVER: ${{ vars.SIZE_APPROVER }}
+        run: echo "UNSAFE_APPROVED=$(.github/scripts/approval-label.sh unsafe-reviewed)" >> "$GITHUB_ENV"
       - run: cargo xtask budgets --build-time
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

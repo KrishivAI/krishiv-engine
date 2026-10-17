@@ -153,9 +153,14 @@ pub fn banned_idents_in(text: &str) -> Vec<(usize, &'static str)> {
 }
 
 /// Lines (1-based) holding an `unsafe` keyword in code: the whole word
-/// `unsafe` outside `//` comments and string literals (`unsafe_code`,
-/// `unsafe_op_in_unsafe_fn` and `undocumented_unsafe_blocks` do not count).
-/// One site per line (`unsafe { .. }`, `unsafe fn`, `unsafe impl`).
+/// `unsafe` outside `//` comments, string literals and `'"'` char literals
+/// (`unsafe_code`, `unsafe_op_in_unsafe_fn` and `undocumented_unsafe_blocks`
+/// do not count). One site per line (`unsafe { .. }`, `unsafe fn`,
+/// `unsafe impl`).
+///
+/// A line-based heuristic for the budget and the source guard, not a Rust
+/// lexer: `/* */` block comments and raw strings are read as code, so an
+/// `unsafe` inside them is over-counted (never hidden).
 #[must_use]
 pub fn unsafe_lines(text: &str) -> Vec<usize> {
     let mut out = Vec::new();
@@ -167,6 +172,17 @@ pub fn unsafe_lines(text: &str) -> Vec<usize> {
         while let Some(c) = chars.next() {
             if !in_str && c == '/' && chars.peek() == Some(&'/') {
                 break;
+            }
+            // A `'"'` char literal does not open a string.
+            if !in_str && c == '\'' && chars.peek() == Some(&'"') {
+                let mut ahead = chars.clone();
+                ahead.next();
+                if ahead.next() == Some('\'') {
+                    chars = ahead;
+                    code.push_str("' '");
+                    prev = '\'';
+                    continue;
+                }
             }
             if c == '"' && prev != '\\' {
                 in_str = !in_str;

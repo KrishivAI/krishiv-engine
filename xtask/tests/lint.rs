@@ -151,6 +151,12 @@ fn unsafe_keyword_lines_only() {
         unsafe_lines("let s = \"a\\\" unsafe\";"),
         Vec::<usize>::new()
     );
+    // A '"' char literal does not hide a later unsafe.
+    assert_eq!(unsafe_lines("let q = '\"'; unsafe { f() }"), vec![1]);
+    // Block comments and raw strings over-count, never hide (documented).
+    assert_eq!(unsafe_lines("/* unsafe */"), vec![1]);
+    // A quote after `'` that is not a char literal is an ordinary string.
+    assert_eq!(unsafe_lines("x('\"abc\" unsafe"), vec![1]);
 }
 
 #[test]
@@ -170,6 +176,7 @@ fn unsafe_sites_are_counted_per_crate() {
     let src = root.join("crates/k/src/inner");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::create_dir_all(root.join("crates/clean/src")).unwrap();
+    std::fs::create_dir_all(root.join("crates/no-src")).unwrap();
     std::fs::write(src.join("a.rs"), "unsafe { f() }\nunsafe fn g() {}\n").unwrap();
     std::fs::write(
         root.join("crates/k/src/b.rs"),

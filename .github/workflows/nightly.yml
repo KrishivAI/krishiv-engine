@@ -205,8 +205,8 @@ jobs:
     env:
       RUSTC_WRAPPER: "" # sanitizer builds are not cacheable
       RUSTFLAGS: -Zsanitizer=address
-      RUSTDOCFLAGS: -Zsanitizer=address
       PROPTEST_CASES: "1024"
+      KRISHIV_REQUIRE_TARGETS: baseline,x86_64v3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -234,7 +234,14 @@ jobs:
         run: rustup toolchain install nightly-2026-08-12 --profile minimal
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          tool: cargo-fuzz
+          tool: cargo-fuzz@0.13.2
+      # The corpus carries over between nights: restore the latest, save anew.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: crates/krishiv-kernels/fuzz/corpus
+          key: fuzz-kernels-corpus-${{ github.run_id }}
+          restore-keys: fuzz-kernels-corpus-
+      # cargo-fuzz has no --locked; the committed fuzz/Cargo.lock pins the graph.
       - name: differential (10 minutes)
         working-directory: crates/krishiv-kernels/fuzz
         run: cargo +nightly-2026-08-12 fuzz run differential -- -max_total_time=600
