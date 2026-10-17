@@ -285,8 +285,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --no-deps --locked
 
-  # Pull requests only: the baseline (budgets.json) is updated by the PR that
-  # changes it, so main never needs to re-run this. If a PR exceeds the budget,
+  # Pull requests only: measured against the base branch's budgets.json, so
+  # growth always needs the label, even when the PR refreshes the baseline.
+  # The baseline is updated by the PR that changes it, so main never needs to
+  # re-run this. If a PR exceeds the budget,
   # a maintainer adds the `budget-approved` label (re-runs on `labeled`); the
   # job then passes and the PR author must refresh the baseline with
   #   cargo xtask budgets --write-baseline
@@ -301,6 +303,14 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@v2
+      # Compare with the base branch's baseline, not the PR's: a PR that
+      # refreshes budgets.json must not approve its own growth.
+      - name: Use the base branch baseline
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          git show FETCH_HEAD:budgets.json > budgets.json
       # --build-time wipes its own target dir, so it measures a clean build.
       # The summary table is appended to the job summary by xtask itself.
       - run: cargo xtask budgets --build-time
