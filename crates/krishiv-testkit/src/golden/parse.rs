@@ -70,7 +70,9 @@ impl Statement {
     /// report [`super::run::QueryOutput::sorted`]. Spark decides on the analyzed plan
     /// (`isSemanticallySorted`); this approximation says "sorted" for a leading `DESC`/`DESCRIBE`
     /// and for an `ORDER BY` at parenthesis depth 0, after dropping comments, string literals and
-    /// quoted identifiers. An `ORDER BY` inside `OVER (...)` or a subquery does not count.
+    /// quoted identifiers. An `ORDER BY` inside `OVER (...)` does not count, as in Spark. Known
+    /// divergence: Spark also finds a sort in a subquery unless a join, aggregate, distinct,
+    /// generate or sample sits above it; this approximation ignores every subquery.
     #[must_use]
     pub fn text_sorted(&self) -> bool {
         text_sorted(&self.query)

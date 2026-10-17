@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use krishiv_common::error::ErrorClass;
 
 use super::manifest::{ExclusionManifest, ManifestError};
-use super::normalise::replace_not_included;
+use super::normalise::Masker;
 use super::parse::{Expected, ExpectedError, ParseError, Statement, parse_results};
 use super::setup::{FileSetup, SessionSetup};
 use super::{GoldenPair, GoldenSet, Jdk};
@@ -354,20 +354,18 @@ pub fn run_file(
 }
 
 fn failed(s: &Statement) -> Outcome {
-    outcome(s, false, None, "")
+    outcome(s, false, None, None)
 }
 
 fn run_session(engine: &mut dyn Engine, statements: &[Statement]) -> Vec<Outcome> {
+    let Ok(masker) = Masker::new(engine.warehouse_dir()) else {
+        return statements.iter().map(failed).collect();
+    };
     statements
         .iter()
         .map(|s| {
             let parsed = engine.parse(&s.query).is_ok();
-            outcome(
-                s,
-                parsed,
-                Some(engine.execute(&s.query)),
-                engine.warehouse_dir(),
-            )
+            outcome(s, parsed, Some(engine.execute(&s.query)), Some(&masker))
         })
         .collect()
 }
@@ -376,7 +374,7 @@ fn outcome(
     s: &Statement,
     parsed: bool,
     executed: Option<Result<QueryOutput, EngineError>>,
-    warehouse: &str,
+    masker: Option<&Masker>,
 ) -> Outcome {
     match &s.expected {
         Expected::Rows(output) => Outcome {
@@ -384,7 +382,8 @@ fn outcome(
             result: Some(
                 executed
                     .and_then(Result::ok)
-                    .is_some_and(|got| result_matches(s, output, &got, warehouse)),
+                    .zip(masker)
+                    .is_some_and(|(got, m)| result_matches(s, output, &got, m)),
             ),
             ..Outcome::default()
         },
@@ -413,19 +412,22 @@ fn result_matches(
     s: &Statement,
     expected_output: &str,
     got: &QueryOutput,
-    warehouse: &str,
+    masker: &Masker,
 ) -> bool {
     if got.schema != s.schema {
         return false;
     }
-    let mut rows: Vec<String> = got.rows.iter().map(|r| r.join("\t")).collect();
+    // `getNormalizedQueryExecutionResult`: mask each row, then sort unless the plan is sorted.
+    let mut rows: Vec<String> = got
+        .rows
+        .iter()
+        .map(|r| masker.mask(&r.join("\t")))
+        .collect();
     if !got.sorted.unwrap_or_else(|| s.text_sorted()) {
-        // Spark sorts the raw row strings (Scala `String` order is UTF-16 code-unit order) and
-        // then masks the whole output; the recorded golden went through the same steps.
+        // Scala `String` order is UTF-16 code-unit order.
         rows.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
     }
-    let masked = replace_not_included(&rows.join("\n"), warehouse);
-    masked.trim_end() == expected_output.trim_end()
+    rows.join("\n").trim_end() == expected_output.trim_end()
 }
 
 #[cfg(test)]
