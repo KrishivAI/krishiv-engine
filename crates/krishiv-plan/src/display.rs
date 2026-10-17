@@ -249,12 +249,14 @@ impl Display for NodeLine<'_> {
     }
 }
 
-/// Whether an option's value is redacted. Like Spark's `Utils.redact`, the
-/// value is hidden when either its key or its value matches the default
-/// `spark.redaction.regex`, `(?i)secret|password|token|access[.]?key`, so a
-/// credential inside a URL value is hidden too.
+/// Whether an option's value is redacted, as Spark's SQL explain does: the
+/// value is hidden when its key or its value matches the default
+/// `spark.redaction.regex`, `(?i)secret|password|token|access[.]?key`, or
+/// its key matches the default `spark.sql.redaction.options.regex`,
+/// `(?i)url`. So any `url` option, and a credential inside any value, is
+/// hidden.
 fn is_secret(key: &str, value: &str) -> bool {
-    matches_redaction(key) || matches_redaction(value)
+    matches_redaction(key) || matches_redaction(value) || key.to_ascii_lowercase().contains("url")
 }
 
 fn matches_redaction(s: &str) -> bool {

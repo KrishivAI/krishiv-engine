@@ -148,3 +148,20 @@ fn huge_literals_are_cut_at_the_expression_cap() {
     assert!(bytes.ends_with("...(truncated)"));
     assert!(bytes.len() <= 64 * 1024 + "...(truncated)".len());
 }
+
+#[test]
+fn url_options_are_redacted_like_spark_sql_explain() {
+    let options: BTreeMap<String, String> = [
+        ("url".to_owned(), "https://user:pw@host/db".to_owned()),
+        ("path".to_owned(), "/data".to_owned()),
+    ]
+    .into_iter()
+    .collect();
+    let plan = LogicalPlan::new(PlanNode::Read(ReadSource::Table {
+        name: vec!["t".to_owned()],
+        options,
+    }));
+    let shown = plan.to_string();
+    assert!(!shown.contains("user:pw"), "{shown}");
+    assert!(shown.contains("path=/data"), "{shown}");
+}
