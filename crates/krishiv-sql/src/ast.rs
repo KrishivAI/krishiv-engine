@@ -19,7 +19,9 @@ use std::ops::Range;
 /// A byte range of the source text.
 ///
 /// `==` is always true and `Hash` writes nothing, so that the derived
-/// equality and hashing of AST nodes ignore positions.
+/// equality and hashing of AST nodes ignore positions. Types outside the
+/// tree whose position matters ([`crate::ParseError`],
+/// [`crate::lexer::Token`]) compare [`Span::range`] instead.
 #[derive(Clone, Copy, Default, Eq)]
 pub struct Span {
     /// First byte.
@@ -152,6 +154,7 @@ pub struct Cte {
 
 /// `DISTINCT` or `ALL`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SetQuantifier {
     /// `ALL`.
     All,
@@ -161,6 +164,7 @@ pub enum SetQuantifier {
 
 /// A set operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SetOperator {
     /// `UNION`.
     Union,
@@ -182,9 +186,12 @@ pub struct SetExpr {
 
 /// The kinds of [`SetExpr`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SetExprKind {
-    /// `SELECT ...` (also `FROM ... SELECT ...`).
+    /// `SELECT ...`.
     Select(Box<Select>),
+    /// `FROM ... SELECT ...`.
+    FromStatement(Box<FromStatement>),
     /// `(query)`.
     Query(Box<Query>),
     /// `left op [quantifier] right`.
@@ -218,22 +225,16 @@ pub struct Values {
 /// A `SELECT` query specification.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Select {
-    /// Written `FROM ... SELECT ...`.
-    pub from_first: bool,
     /// `/*+ ... */` hints.
     pub hints: Vec<Hint>,
     /// `DISTINCT` or `ALL`.
     pub quantifier: Option<SetQuantifier>,
     /// The select list.
     pub projection: Vec<SelectItem>,
-    /// `FROM` relations.
-    pub from: Vec<Relation>,
-    /// `LATERAL VIEW`s.
+    /// The `FROM` clause (none in a body of a `FROM ... SELECT` statement).
+    pub from: Option<FromClause>,
+    /// `LATERAL VIEW`s after the `FROM` clause's.
     pub lateral_views: Vec<LateralView>,
-    /// `PIVOT` at the end of the `FROM` clause.
-    pub pivot: Option<Pivot>,
-    /// `UNPIVOT` at the end of the `FROM` clause.
-    pub unpivot: Option<Unpivot>,
     /// `WHERE`.
     pub selection: Option<Expr>,
     /// `GROUP BY`.
@@ -244,6 +245,34 @@ pub struct Select {
     pub windows: Vec<NamedWindow>,
     /// `QUALIFY`.
     pub qualify: Option<Expr>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `FROM relation, ... [LATERAL VIEW ...] [PIVOT ...] [UNPIVOT ...]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FromClause {
+    /// The relations.
+    pub relations: Vec<Relation>,
+    /// `LATERAL VIEW`s.
+    pub lateral_views: Vec<LateralView>,
+    /// `PIVOT` at the end of the clause.
+    pub pivot: Option<Pivot>,
+    /// `UNPIVOT` at the end of the clause.
+    pub unpivot: Option<Unpivot>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `FROM ... SELECT ... [SELECT ...]`: every body reads the one `FROM`
+/// clause (several bodies are a `UNION ALL`, no body selects every column),
+/// so it is stored once.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FromStatement {
+    /// The shared `FROM` clause.
+    pub from: FromClause,
+    /// The bodies, each a `SELECT` without `FROM` and its organization.
+    pub bodies: Vec<Query>,
     /// Source text.
     pub span: Span,
 }
@@ -272,6 +301,7 @@ pub struct SelectItem {
 
 /// An output alias.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Alias {
     /// `AS name`.
     Name(Ident),
@@ -292,6 +322,7 @@ pub struct GroupBy {
 
 /// Trailing grouping analytics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum GroupWith {
     /// `WITH ROLLUP`.
     Rollup,
@@ -312,6 +343,7 @@ pub struct GroupItem {
 
 /// The kinds of [`GroupItem`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum GroupItemKind {
     /// An expression (`ALL` is a column named `ALL`).
     Expr(Expr),
@@ -347,6 +379,7 @@ pub struct NamedWindow {
 
 /// A window after `OVER` or `AS`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum WindowRef {
     /// A named window, `w` or `(w)`.
     Named(Ident),
@@ -354,10 +387,24 @@ pub enum WindowRef {
     Spec(Box<WindowSpec>),
 }
 
+/// The keyword of a window's partitioning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Partitioning {
+    /// `PARTITION BY`.
+    Partition,
+    /// `DISTRIBUTE BY`.
+    Distribute,
+    /// `CLUSTER BY` (no `ORDER BY` may follow).
+    Cluster,
+}
+
 /// `([PARTITION BY ...] [ORDER BY ...] [frame])`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WindowSpec {
-    /// `PARTITION BY`, `DISTRIBUTE BY` or `CLUSTER BY`.
+    /// The partitioning keyword, when there is a partitioning.
+    pub partitioning: Option<Partitioning>,
+    /// The partitioning expressions.
     pub partition_by: Vec<Expr>,
     /// `ORDER BY` or `SORT BY`.
     pub order_by: Vec<SortItem>,
@@ -369,6 +416,7 @@ pub struct WindowSpec {
 
 /// `ROWS` or `RANGE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FrameUnits {
     /// `ROWS`.
     Rows,
@@ -400,6 +448,7 @@ pub struct FrameBound {
 
 /// The kinds of [`FrameBound`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FrameBoundKind {
     /// `UNBOUNDED PRECEDING`.
     UnboundedPreceding,
@@ -441,6 +490,7 @@ pub struct Relation {
 
 /// What follows a relation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum RelationExt {
     /// A join.
     Join(Join),
@@ -474,9 +524,17 @@ pub struct TableFactor {
 
 /// The kinds of [`TableFactor`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TableFactorKind {
-    /// A table or view name.
-    Table(ObjectName),
+    /// A table or view, with time travel and options.
+    Table {
+        /// The name.
+        name: ObjectName,
+        /// `VERSION AS OF` / `TIMESTAMP AS OF`.
+        temporal: Option<TemporalClause>,
+        /// `WITH (key = value, ...)`.
+        options: Vec<TableOption>,
+    },
     /// `(query)`.
     Subquery(Box<Query>),
     /// `(relation)`.
@@ -484,7 +542,7 @@ pub enum TableFactorKind {
     /// `VALUES ...` (its alias is the factor's alias).
     Values(Vec<Expr>),
     /// A table-valued function call.
-    Function {
+    TableFunction {
         /// The function name.
         name: ObjectName,
         /// The arguments.
@@ -492,8 +550,53 @@ pub enum TableFactorKind {
     },
 }
 
+/// What a time-travel clause selects by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TemporalKind {
+    /// `[FOR] VERSION | SYSTEM_VERSION AS OF version`.
+    Version,
+    /// `[FOR] TIMESTAMP | SYSTEM_TIME AS OF expression`.
+    Timestamp,
+}
+
+/// Time travel: `VERSION AS OF 1`, `TIMESTAMP AS OF '2020-01-01'`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TemporalClause {
+    /// Version or timestamp.
+    pub kind: TemporalKind,
+    /// The version (an integer or string literal) or timestamp.
+    pub value: Expr,
+    /// Source text.
+    pub span: Span,
+}
+
+/// A table option, `key [=] value`. Keys and values keep their spans, so
+/// secrets in options can be masked from the source text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableOption {
+    /// The key.
+    pub key: OptionKey,
+    /// The value (an integer, decimal, boolean or string literal).
+    pub value: Option<Expr>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// An option key: a dotted name or a string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OptionKey {
+    /// The name parts; one part holding the text for a string key.
+    pub parts: Vec<Ident>,
+    /// Written as a string literal.
+    pub is_string: bool,
+    /// Source text.
+    pub span: Span,
+}
+
 /// A join type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum JoinKind {
     /// `[INNER] JOIN`.
     Inner,
@@ -513,6 +616,7 @@ pub enum JoinKind {
 
 /// The join condition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum JoinConstraint {
     /// None written.
     None,
@@ -601,6 +705,7 @@ pub struct LateralView {
 
 /// The type suffix of a numeric literal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum NumKind {
     /// Digits only.
     Int,
@@ -624,6 +729,7 @@ pub enum NumKind {
 
 /// A literal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Literal {
     /// `NULL`.
     Null,
@@ -640,10 +746,11 @@ pub enum Literal {
         kind: NumKind,
     },
     /// `type 'value'`, e.g. `DATE '2020-01-01'` or `X'1F'`; the type name is
-    /// lower-case.
+    /// an identifier as written (quoted names too: Spark rejects those when
+    /// building the plan).
     Typed {
         /// The type name.
-        type_name: String,
+        type_name: Ident,
         /// The string value.
         value: String,
     },
@@ -658,6 +765,9 @@ pub struct Interval {
     pub units: Vec<(IntervalValue, String)>,
     /// `value from TO to`.
     pub range: Option<(IntervalValue, String, String)>,
+    /// A second interval written after this one (`INTERVAL 1 DAY '1-2' YEAR
+    /// TO MONTH`): Spark parses it and then rejects the literal.
+    pub trailing: Option<Box<Interval>>,
     /// Source text.
     pub span: Span,
 }
@@ -677,6 +787,7 @@ pub struct IntervalValue {
 
 /// A unary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum UnaryOp {
     /// `+`.
     Plus,
@@ -689,6 +800,7 @@ pub enum UnaryOp {
 /// A binary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[expect(missing_docs, reason = "each variant is the operator named")]
+#[non_exhaustive]
 pub enum BinaryOp {
     Or,
     And,
@@ -717,6 +829,7 @@ pub enum BinaryOp {
 /// The right side of `IS [NOT] TRUE | FALSE | UNKNOWN`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[expect(missing_docs, reason = "each variant is the keyword named")]
+#[non_exhaustive]
 pub enum Truth {
     True,
     False,
@@ -726,6 +839,7 @@ pub enum Truth {
 /// The quantifier of `LIKE ANY | SOME | ALL (...)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[expect(missing_docs, reason = "each variant is the keyword named")]
+#[non_exhaustive]
 pub enum LikeQuantifier {
     Any,
     Some,
@@ -743,6 +857,7 @@ pub struct DataTypeSpec {
 
 /// The kinds of [`DataTypeSpec`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DataTypeKind {
     /// A named type with integer arguments: `name` is lower-case and holds
     /// every keyword (`timestamp with local time zone`, `interval day to
@@ -779,6 +894,7 @@ pub struct StructField {
 /// `IGNORE NULLS` or `RESPECT NULLS`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[expect(missing_docs, reason = "each variant is the keyword named")]
+#[non_exhaustive]
 pub enum NullTreatment {
     Ignore,
     Respect,
@@ -840,11 +956,17 @@ pub struct Expr {
 
 /// The kinds of [`Expr`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ExprKind {
     /// A literal.
     Literal(Literal),
-    /// The positional parameter marker `?`.
-    Parameter,
+    /// The positional parameter marker `?`, with its 0-based ordinal in
+    /// the statement.
+    Parameter(usize),
+    /// A keyword argument of a special form: the unit of `TIMESTAMPADD(DAY,
+    /// ...)` or the field of `EXTRACT(YEAR FROM ...)` (unlike a string
+    /// literal, which Spark rejects there).
+    Keyword(Ident),
     /// A column, possibly qualified: `a`, `t.a`.
     Column(Vec<Ident>),
     /// `*` or `qualifier.*`, with `EXCEPT (columns)`.

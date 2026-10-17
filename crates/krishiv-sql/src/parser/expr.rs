@@ -10,8 +10,8 @@ use super::{Fail, PR, Parser};
 use crate::ast::{
     BinaryOp, DataTypeKind, DataTypeSpec, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits,
     Function, FunctionArg, Ident, Interval, IntervalValue, LikeQuantifier, Literal, NullTreatment,
-    NumKind, ObjectName, SelectItem, Span, StructField, Truth, UnaryOp, WhenClause, WindowFrame,
-    WindowRef, WindowSpec,
+    NumKind, ObjectName, Partitioning, SelectItem, Span, StructField, Truth, UnaryOp, WhenClause,
+    WindowFrame, WindowRef, WindowSpec,
 };
 use crate::keywords::{NOT_FUNCTION_WORD, PRIMARY_WORD, RESERVED_WORD};
 use crate::lexer::{Sym, TokenKind, unescape_string};
@@ -80,6 +80,9 @@ const TIMESTAMP_UNIT_FUNCTIONS: &[&str] = &[
     "DATE_DIFF",
     "TIMEDIFF",
 ];
+
+/// Spark's `unitInUnitToUnit`.
+const UNIT_TO_UNIT: &[&str] = &["SECOND", "MINUTE", "HOUR", "DAY", "MONTH", "YEAR"];
 
 const INTERVAL_UNITS: &[&str] = &[
     "NANOSECOND",
@@ -152,7 +155,7 @@ impl Parser<'_> {
         r.map(|e| (e, height))
     }
 
-    fn value(&mut self) -> PR<Expr> {
+    pub(super) fn value(&mut self) -> PR<Expr> {
         self.value_expr().map(|(e, _)| e)
     }
 
@@ -168,14 +171,21 @@ impl Parser<'_> {
         let mut operands: Vec<(Expr, usize)> = vec![];
         let mut ops: Vec<Op> = vec![];
         loop {
+            let mut predicated = false;
             if let Some(operand) = first.take() {
                 operands.push(operand);
             } else {
                 self.prefixes(min_bp, &mut ops);
-                operands.push(self.operand()?);
+                if Self::boolean_context(min_bp, &ops) && self.exists_follows() {
+                    // `EXISTS (query)` is a `booleanExpression`: only `AND`
+                    // and `OR` may follow it.
+                    operands.push(self.exists()?);
+                    predicated = true;
+                } else {
+                    operands.push(self.operand()?);
+                }
             }
-            let mut predicated = false;
-            if min_bp <= PREDICATE && self.predicate_follows() {
+            if !predicated && min_bp <= PREDICATE && self.predicate_follows() {
                 self.reduce(&mut operands, &mut ops, VALUE)?;
                 let (e, height) = operands.pop().ok_or(Fail::Syntax)?;
                 operands.push(self.predicate(e, height)?);
@@ -200,12 +210,20 @@ impl Parser<'_> {
         operands.pop().map(|(e, _)| e).ok_or(Fail::Syntax)
     }
 
-    /// Pushes the prefix operators at the current token: `NOT` / `!` (in a
-    /// boolean context) and unary `-` (unless a number follows), `+`, `~`.
+    /// Whether a `booleanExpression` may start here: in a boolean context
+    /// with no value operator pending (`1 + NOT a` is no expression).
+    fn boolean_context(min_bp: u8, ops: &[Op]) -> bool {
+        min_bp <= NOT && ops.last().is_none_or(|op| op.bp() <= NOT)
+    }
+
+    /// Pushes the prefix operators at the current token: `NOT` / `!` (where
+    /// a boolean expression may start) and unary `-` (unless a number
+    /// follows), `+`, `~`.
     fn prefixes(&mut self, min_bp: u8, ops: &mut Vec<Op>) {
         loop {
             let start = self.start();
-            let op = if min_bp <= NOT && (self.kw_at(0, "NOT") || self.sym_at(0, Sym::Bang)) {
+            let not = self.kw_at(0, "NOT") || self.sym_at(0, Sym::Bang);
+            let op = if not && Self::boolean_context(min_bp, ops) {
                 Op::Not(start)
             } else if self.sym_at(0, Sym::Minus)
                 && !matches!(self.kind(1), Some(TokenKind::Number(_)))
@@ -221,6 +239,21 @@ impl Parser<'_> {
             self.bump();
             ops.push(op);
         }
+    }
+
+    fn exists_follows(&self) -> bool {
+        self.kw_at(0, "EXISTS") && self.sym_at(1, Sym::LParen) && self.query_follows(2)
+    }
+
+    /// `EXISTS (query)`, with its height below the current depth.
+    #[inline(never)]
+    fn exists(&mut self) -> PR<(Expr, usize)> {
+        let start = self.start();
+        self.pos += 2;
+        let (q, height) = self.measured(Self::query)?;
+        self.expect_sym(Sym::RParen)?;
+        self.grow(height + 1)?;
+        Ok((self.mk(ExprKind::Exists(Box::new(q)), start), height + 1))
     }
 
     /// A call argument that may be followed by one of `keywords` (Spark's
@@ -324,17 +357,13 @@ impl Parser<'_> {
     fn predicate(&mut self, expr: Expr, mut height: usize) -> PR<(Expr, usize)> {
         let start = expr.span.start;
         let negated = !self.kw_at(0, "IS") && (self.kw_at(0, "NOT") || self.sym_at(0, Sym::Bang));
+        self.block_bang(0);
         self.pos += usize::from(negated);
         let expr = boxed(expr);
-        let mut value = |p: &mut Self| -> PR<Box<Expr>> {
-            let (e, h) = p.value_expr()?;
-            height = height.max(h);
-            Ok(boxed(e))
-        };
         let kind = if self.eat_kw("BETWEEN") {
-            let low = value(self)?;
+            let low = self.pred_value(&mut height)?;
             self.expect_kw("AND")?;
-            let high = value(self)?;
+            let high = self.pred_value(&mut height)?;
             ExprKind::Between {
                 expr,
                 low,
@@ -343,25 +372,33 @@ impl Parser<'_> {
             }
         } else if self.eat_kw("IN") {
             self.expect_sym(Sym::LParen)?;
-            let kind = if self.query_follows(0) {
-                let query = Box::new(self.query()?);
-                ExprKind::InSubquery {
-                    expr,
-                    query,
-                    negated,
+            // `IN ((SELECT 1), 2)` is a list: a query that does not end at
+            // `)` is retried as a list (failed queries are memoized).
+            let save = self.pos;
+            let mut query = None;
+            if self.query_follows(0) {
+                match self.query() {
+                    Ok(q) if self.sym_at(0, Sym::RParen) => query = Some(q),
+                    Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                    _ => self.pos = save,
                 }
-            } else {
-                let list = self.opt_expr_list()?;
-                ExprKind::InList {
+            }
+            let kind = match query {
+                Some(q) => ExprKind::InSubquery {
                     expr,
-                    list,
+                    query: Box::new(q),
                     negated,
-                }
+                },
+                None => ExprKind::InList {
+                    expr,
+                    list: self.opt_expr_list()?,
+                    negated,
+                },
             };
             self.expect_sym(Sym::RParen)?;
             kind
         } else if self.eat_kw("RLIKE") || self.eat_kw("REGEXP") {
-            let pattern = value(self)?;
+            let pattern = self.pred_value(&mut height)?;
             ExprKind::RLike {
                 expr,
                 pattern,
@@ -377,20 +414,47 @@ impl Parser<'_> {
             ]
             .into_iter()
             .find_map(|(kw, q)| self.kw_at(0, kw).then_some(q));
-            if let Some(quantifier) = quantifier {
+            let quantified = quantifier.filter(|_| self.sym_at(1, Sym::LParen));
+            let mut call = None;
+            if let Some(quantifier) = quantified {
+                let call_start = self.start();
+                let name = self.keyword_ident();
                 self.bump();
-                self.expect_sym(Sym::LParen)?;
                 let patterns = self.opt_expr_list()?;
                 self.expect_sym(Sym::RParen)?;
-                ExprKind::LikeQuantified {
-                    expr,
-                    quantifier,
-                    patterns,
-                    negated,
-                    case_insensitive,
+                // `LIKE ANY ('a') ESCAPE 'x'`: Spark reads `ANY('a')` as a
+                // call, the pattern of a plain `LIKE`.
+                let continues =
+                    self.kw_at(0, "ESCAPE") || self.infix_op().is_some_and(|(_, bp)| bp >= VALUE);
+                if !continues || self.opts.enforce_reserved_keywords {
+                    return self.finish_predicate(
+                        ExprKind::LikeQuantified {
+                            expr,
+                            quantifier,
+                            patterns,
+                            negated,
+                            case_insensitive,
+                        },
+                        start,
+                        height,
+                    );
                 }
-            } else {
-                let pattern = value(self)?;
+                let name = ObjectName {
+                    span: name.span,
+                    parts: vec![name],
+                };
+                let f = Self::call(name, patterns, self.span_from(call_start));
+                call = Some(self.mk(ExprKind::Function(Box::new(f)), call_start));
+            }
+            {
+                let pattern = match call {
+                    Some(f) => {
+                        let (e, h) = self.value_from(f)?;
+                        height = height.max(h);
+                        boxed(e)
+                    }
+                    None => self.pred_value(&mut height)?,
+                };
                 let escape = if self.eat_kw("ESCAPE") {
                     Some(self.string_lit().ok_or(Fail::Syntax)?)
                 } else {
@@ -406,6 +470,7 @@ impl Parser<'_> {
             }
         } else {
             self.expect_kw("IS")?;
+            self.block_bang(0);
             let negated = self.eat_kw("NOT") || self.eat_sym(Sym::Bang);
             let truth = [
                 ("TRUE", Truth::True),
@@ -426,7 +491,7 @@ impl Parser<'_> {
             } else {
                 self.expect_kw("DISTINCT")?;
                 self.expect_kw("FROM")?;
-                let right = value(self)?;
+                let right = self.pred_value(&mut height)?;
                 ExprKind::IsDistinctFrom {
                     left: expr,
                     right,
@@ -434,9 +499,52 @@ impl Parser<'_> {
                 }
             }
         };
-        height += 1;
-        self.grow(height)?;
-        Ok((self.mk(kind, start), height))
+        self.finish_predicate(kind, start, height)
+    }
+
+    /// A predicate operand (`valueExpression`), raising `height` to its.
+    fn pred_value(&mut self, height: &mut usize) -> PR<Box<Expr>> {
+        let (e, h) = self.value_expr()?;
+        *height = (*height).max(h);
+        Ok(boxed(e))
+    }
+
+    fn finish_predicate(
+        &mut self,
+        kind: ExprKind,
+        start: usize,
+        height: usize,
+    ) -> PR<(Expr, usize)> {
+        self.grow(height + 1)?;
+        Ok((self.mk(kind, start), height + 1))
+    }
+
+    /// Spark's `blockBang`: `!` in place of `NOT` inside a predicate (`a !
+    /// IN (1)`, `a IS ! NULL`) is an error unless
+    /// `spark.sql.legacy.bangEqualsNot`.
+    fn block_bang(&mut self, n: usize) {
+        if let Some(t) = self.tok(n).filter(|t| t.kind == TokenKind::Sym(Sym::Bang))
+            && !self.opts.legacy_bang_equals_not
+        {
+            self.defer(crate::error::bang_equals_not(t.span));
+        }
+    }
+
+    /// The value expression that starts with the parsed operand `first`,
+    /// one level deeper, with its height below the current depth.
+    fn value_from(&mut self, first: Expr) -> PR<(Expr, usize)> {
+        self.enter()?;
+        let outer = self.peak;
+        self.peak = self.depth + 1;
+        let start = first.span.start;
+        let r = self.postfix(first, start).and_then(|e| {
+            let height = self.peak - self.depth;
+            self.climb_from(VALUE, Some((e, height)))
+        });
+        let height = self.peak + 1 - self.depth;
+        self.peak = self.peak.max(outer);
+        self.depth -= 1;
+        r.map(|e| (e, height))
     }
 
     /// `[expr, ...]` before a `)`.
@@ -545,8 +653,9 @@ impl Parser<'_> {
                 Literal::String(self.string_lit().unwrap_or_default())
             }
             Some(TokenKind::Sym(Sym::Question)) => {
+                let ordinal = self.markers.partition_point(|&i| i < self.pos);
                 self.bump();
-                return Ok(self.mk(ExprKind::Parameter, start));
+                return Ok(self.mk(ExprKind::Parameter(ordinal), start));
             }
             Some(TokenKind::Sym(Sym::Star)) => {
                 self.bump();
@@ -591,7 +700,7 @@ impl Parser<'_> {
 
     /// Adjacent string literals, concatenated (`stringLit`).
     #[inline(never)]
-    fn string_lit(&mut self) -> Option<String> {
+    pub(super) fn string_lit(&mut self) -> Option<String> {
         let mut out: Option<String> = None;
         while let Some(k @ (TokenKind::String | TokenKind::DoubleQuoted)) = self.kind(0) {
             if k == TokenKind::DoubleQuoted && self.opts.double_quoted_identifiers {
@@ -684,6 +793,15 @@ impl Parser<'_> {
 
     fn word_primary(&mut self) -> PR<Expr> {
         let start = self.start();
+        // `typeName 'value'`, the type quoted or not (Spark rejects an
+        // unknown or quoted type name when building the plan).
+        let quoted_type = matches!(self.kind(0), Some(TokenKind::QuotedIdent))
+            || (self.kind(0) == Some(TokenKind::DoubleQuoted)
+                && self.opts.double_quoted_identifiers);
+        if quoted_type && self.single_string_at(1) {
+            let type_name = self.any_ident()?;
+            return Ok(self.typed_literal(type_name, start));
+        }
         let special = self.class(0) & PRIMARY_WORD != 0 || self.single_string_at(1);
         if self.kind(0) == Some(TokenKind::Word)
             && special
@@ -699,10 +817,23 @@ impl Parser<'_> {
             return Ok(self.mk(ExprKind::Lambda { params, body }, start));
         }
         let mut parts = vec![];
+        // `functionName`: any word but structural ones, or only `LEFT`,
+        // `RIGHT` and `FILTER` among the reserved words when keywords are
+        // enforced (`any(x)` is then an error, as in Spark).
         let reserved_call = self.kind(0) == Some(TokenKind::Word)
             && self.sym_at(1, Sym::LParen)
-            && self.class(0) & NOT_FUNCTION_WORD == 0;
-        if (reserved_call || self.reserved_as_column()) && !self.is_ident_at(0, false) {
+            && if self.opts.enforce_reserved_keywords {
+                self.any_kw_at(0, &["LEFT", "RIGHT", "FILTER"])
+            } else {
+                self.class(0) & NOT_FUNCTION_WORD == 0
+            };
+        // `NOT` here, where no boolean expression may start, and a lone
+        // `CASE` are columns, as ANTLR reads them (`1 + NOT a`).
+        let keyword_column = !self.opts.enforce_reserved_keywords
+            && (self.kw_at(0, "NOT") || (self.kw_at(0, "CASE") && self.case_is_column()));
+        if (reserved_call || keyword_column || self.reserved_as_column())
+            && !self.is_ident_at(0, false)
+        {
             parts.push(self.keyword_ident());
         } else {
             parts.push(self.ident()?);
@@ -731,6 +862,25 @@ impl Parser<'_> {
             return self.function_call(name, start);
         }
         Ok(self.mk(ExprKind::Column(parts), start))
+    }
+
+    /// `type_name` (consumed) followed by one string literal.
+    fn typed_literal(&mut self, type_name: Ident, start: usize) -> Expr {
+        let value = unescape_string(self.text(0), !self.opts.escaped_string_literals);
+        self.bump();
+        self.mk(
+            ExprKind::Literal(Literal::Typed { type_name, value }),
+            start,
+        )
+    }
+
+    /// Whether `CASE` here is a column, as Spark reads `SELECT CASE` and
+    /// `SELECT CASE END` (a column `CASE` aliased `END`) unless keywords are
+    /// enforced: no `WHEN` or operand can follow it.
+    fn case_is_column(&self) -> bool {
+        let alias_then_end =
+            self.kind(1) == Some(TokenKind::Word) && !self.kw_at(1, "WHEN") && self.item_end_at(2);
+        !self.opts.enforce_reserved_keywords && (self.reserved_as_column() || alias_then_end)
     }
 
     /// Whether the reserved word here is a column, because no keyword
@@ -782,7 +932,7 @@ impl Parser<'_> {
         } else if is("TRUE") || is("FALSE") {
             self.bump();
             ExprKind::Literal(Literal::Boolean(is("TRUE")))
-        } else if is("CASE") {
+        } else if is("CASE") && !self.case_is_column() {
             self.case_expr()?
         } else if (is("CAST") || is("TRY_CAST")) && call {
             self.pos += 2;
@@ -795,21 +945,11 @@ impl Parser<'_> {
                 data_type,
                 try_cast: is("TRY_CAST"),
             }
-        } else if is("EXISTS") && call && self.query_follows(2) {
-            self.pos += 2;
-            let q = self.query()?;
-            self.expect_sym(Sym::RParen)?;
-            ExprKind::Exists(Box::new(q))
         } else if is("INTERVAL") && self.interval_follows() {
             ExprKind::Literal(self.interval()?)
         } else if self.single_string_at(1) && (self.class(0) & RESERVED_WORD == 0 || is("TIME")) {
-            self.bump();
-            let raw = self.text(0);
-            self.bump();
-            ExprKind::Literal(Literal::Typed {
-                type_name: word.to_ascii_lowercase(),
-                value: unescape_string(raw, !self.opts.escaped_string_literals),
-            })
+            let type_name = self.keyword_ident();
+            return Ok(Some(self.typed_literal(type_name, start)));
         } else if is("STRUCT") && call {
             self.pos += 2;
             let items = if self.sym_at(0, Sym::RParen) {
@@ -900,7 +1040,7 @@ impl Parser<'_> {
             let field = self.any_ident()?;
             args.push(Expr {
                 span: field.span,
-                kind: ExprKind::Literal(Literal::String(field.value)),
+                kind: ExprKind::Keyword(field),
             });
             self.bump();
             args.push(self.value()?);
@@ -1087,14 +1227,22 @@ impl Parser<'_> {
         if let [unit, _, _] = args.as_mut_slice()
             && unit_call
             && unit.name.is_none()
-            && let ExprKind::Column(parts) = &unit.expr.kind
-            && let [id] = parts.as_slice()
+            && let ExprKind::Column(parts) = &mut unit.expr.kind
+            && let [id] = parts.as_mut_slice()
             && !id.quoted
             && DATETIME_UNITS
                 .iter()
                 .any(|u| crate::keywords::is_kw(&id.value, u))
         {
-            unit.expr.kind = ExprKind::Literal(Literal::String(id.value.to_ascii_uppercase()));
+            let id = std::mem::replace(
+                id,
+                Ident {
+                    value: String::new(),
+                    quoted: false,
+                    span: Span::default(),
+                },
+            );
+            unit.expr.kind = ExprKind::Keyword(id);
         }
         Ok(Function {
             name,
@@ -1129,29 +1277,44 @@ impl Parser<'_> {
     #[inline(never)]
     pub(super) fn window_ref(&mut self) -> PR<WindowRef> {
         if !self.sym_at(0, Sym::LParen) {
-            return self.name_part(false).map(WindowRef::Named);
+            return self.name_part(true).map(WindowRef::Named);
         }
-        if self.is_ident_at(1, false) && self.sym_at(2, Sym::RParen) {
+        if self.is_ident_at(1, true)
+            && self.sym_at(2, Sym::RParen)
+            && !self.any_kw_at(1, &["PARTITION", "DISTRIBUTE", "CLUSTER", "ORDER", "SORT"])
+        {
             self.bump();
-            let name = self.name_part(false)?;
+            let name = self.name_part(true)?;
             self.bump();
             return Ok(WindowRef::Named(name));
         }
         let start = self.start();
         self.bump();
         let mut partition_by = vec![];
-        if self.any_kw_at(0, &["PARTITION", "DISTRIBUTE", "CLUSTER"]) && self.kw_at(1, "BY") {
+        let partitioning = [
+            ("PARTITION", Partitioning::Partition),
+            ("DISTRIBUTE", Partitioning::Distribute),
+            ("CLUSTER", Partitioning::Cluster),
+        ]
+        .into_iter()
+        .find_map(|(kw, p)| (self.kw_at(0, kw) && self.kw_at(1, "BY")).then_some(p));
+        if partitioning.is_some() {
             self.pos += 2;
             partition_by = self.comma_sep(Self::expr)?;
         }
         let mut order_by = vec![];
-        if self.any_kw_at(0, &["ORDER", "SORT"]) && self.kw_at(1, "BY") {
+        // `CLUSTER BY` is an alternative to `PARTITION BY ... ORDER BY`.
+        if partitioning != Some(Partitioning::Cluster)
+            && self.any_kw_at(0, &["ORDER", "SORT"])
+            && self.kw_at(1, "BY")
+        {
             self.pos += 2;
             order_by = self.comma_sep(|p| p.sort_item(false))?;
         }
         let frame = self.window_frame()?;
         self.expect_sym(Sym::RParen)?;
         Ok(WindowRef::Spec(Box::new(WindowSpec {
+            partitioning,
             partition_by,
             order_by,
             frame,
@@ -1403,40 +1566,75 @@ impl Parser<'_> {
     }
 
     /// `INTERVAL value unit [value unit ...]`, `INTERVAL value unit TO
-    /// unit`, or the typed literal `INTERVAL 'text'`.
+    /// unit`, or the typed literal `INTERVAL 'text'`. A second interval
+    /// after the first (Spark's `errorCapturing...Interval`) is kept as
+    /// `trailing`.
     #[inline(never)]
     fn interval(&mut self) -> PR<Literal> {
         let start = self.start();
-        self.bump();
+        let keyword = self.keyword_ident();
         let single = self.interval_value_len(0) == Some(1) && self.single_string_at(0);
         if single && !self.any_kw_at(1, INTERVAL_UNITS) {
             let value = unescape_string(self.text(0), !self.opts.escaped_string_literals);
             self.bump();
             return Ok(Literal::Typed {
-                type_name: "interval".to_owned(),
+                type_name: keyword,
                 value,
             });
         }
+        let ranged = self.interval_range_at(0);
+        let mut interval = self.interval_part(start)?;
+        let trailing = if ranged {
+            self.interval_range_at(0) || self.interval_group_at(0)
+        } else {
+            self.interval_range_at(0)
+        };
+        if trailing {
+            let at = self.start();
+            interval.trailing = Some(Box::new(self.interval_part(at)?));
+        }
+        interval.span = self.span_from(start);
+        Ok(Literal::Interval(Box::new(interval)))
+    }
+
+    /// `value from TO to` at offset `n`.
+    fn interval_range_at(&self, n: usize) -> bool {
+        self.interval_value_len(n).is_some_and(|k| {
+            self.any_kw_at(n + k, UNIT_TO_UNIT)
+                && self.kw_at(n + k + 1, "TO")
+                && self.any_kw_at(n + k + 2, UNIT_TO_UNIT)
+        })
+    }
+
+    /// `value unit` at offset `n`.
+    fn interval_group_at(&self, n: usize) -> bool {
+        self.interval_value_len(n)
+            .is_some_and(|k| self.any_kw_at(n + k, INTERVAL_UNITS))
+    }
+
+    /// One `value from TO to`, or `value unit` groups up to a range.
+    fn interval_part(&mut self, start: usize) -> PR<Interval> {
         let mut units = vec![];
         let mut range = None;
-        loop {
+        if self.interval_range_at(0) {
             let value = self.interval_value()?;
-            let unit = self.interval_unit()?;
-            if self.kw_at(0, "TO") && self.any_kw_at(1, INTERVAL_UNITS) {
-                self.bump();
-                range = Some((value, unit, self.interval_unit()?));
-                break;
-            }
-            units.push((value, unit));
-            match self.interval_value_len(0) {
-                Some(n) if self.any_kw_at(n, INTERVAL_UNITS) => {}
-                _ => break,
+            let from = self.interval_unit()?;
+            self.bump();
+            range = Some((value, from, self.interval_unit()?));
+        } else {
+            loop {
+                let value = self.interval_value()?;
+                units.push((value, self.interval_unit()?));
+                if !self.interval_group_at(0) || self.interval_range_at(0) {
+                    break;
+                }
             }
         }
-        Ok(Literal::Interval(Box::new(Interval {
+        Ok(Interval {
             units,
             range,
+            trailing: None,
             span: self.span_from(start),
-        })))
+        })
     }
 }

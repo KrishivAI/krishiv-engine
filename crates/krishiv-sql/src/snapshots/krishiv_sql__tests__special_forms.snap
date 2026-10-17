@@ -8,7 +8,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -31,10 +30,12 @@ Query {
                                         FunctionArg {
                                             name: None,
                                             expr: Expr {
-                                                kind: Literal(
-                                                    String(
-                                                        "YEAR",
-                                                    ),
+                                                kind: Keyword(
+                                                    Ident {
+                                                        value: "YEAR",
+                                                        quoted: false,
+                                                        span: 15..19,
+                                                    },
                                                 ),
                                                 span: 15..19,
                                             },
@@ -327,10 +328,8 @@ Query {
                         span: 90..108,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -356,7 +355,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -622,10 +620,8 @@ Query {
                         span: 88..100,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -651,7 +647,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -923,10 +918,8 @@ Query {
                         span: 82..111,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -952,7 +945,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -975,10 +967,12 @@ Query {
                                         FunctionArg {
                                             name: None,
                                             expr: Expr {
-                                                kind: Literal(
-                                                    String(
-                                                        "DAY",
-                                                    ),
+                                                kind: Keyword(
+                                                    Ident {
+                                                        value: "DAY",
+                                                        quoted: false,
+                                                        span: 20..23,
+                                                    },
                                                 ),
                                                 span: 20..23,
                                             },
@@ -1045,10 +1039,12 @@ Query {
                                         FunctionArg {
                                             name: None,
                                             expr: Expr {
-                                                kind: Literal(
-                                                    String(
-                                                        "HOUR",
-                                                    ),
+                                                kind: Keyword(
+                                                    Ident {
+                                                        value: "HOUR",
+                                                        quoted: false,
+                                                        span: 40..44,
+                                                    },
                                                 ),
                                                 span: 40..44,
                                             },
@@ -1173,10 +1169,12 @@ Query {
                                         FunctionArg {
                                             name: None,
                                             expr: Expr {
-                                                kind: Literal(
-                                                    String(
-                                                        "MONTH",
-                                                    ),
+                                                kind: Keyword(
+                                                    Ident {
+                                                        value: "MONTH",
+                                                        quoted: false,
+                                                        span: 83..88,
+                                                    },
                                                 ),
                                                 span: 83..88,
                                             },
@@ -1286,10 +1284,8 @@ Query {
                         span: 97..114,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,

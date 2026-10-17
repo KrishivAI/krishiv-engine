@@ -49,7 +49,7 @@ const KEYWORDS: &[(&str, u8)] = &[
     ("DISTINCT", R),
     ("DISTRIBUTE", C),
     ("ELSE", R | N),
-    ("END", N),
+    ("END", R | N),
     ("ESCAPE", R),
     ("EXCEPT", R | N | S),
     ("EXECUTE", R),
@@ -196,6 +196,34 @@ mod tests {
     #[test]
     fn tables_are_sorted_for_binary_search() {
         assert!(KEYWORDS.windows(2).all(|w| w[0].0 < w[1].0));
+    }
+
+    /// The reserved and strict-non-reserved classes are Spark's grammar's
+    /// (fixture generated from `SqlBaseLexer.g4` / `SqlBaseParser.g4`).
+    #[test]
+    fn classes_match_spark_grammar() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/spark-4.2.0/sql-keywords.json"
+        );
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let keywords = doc["keywords"].as_array().unwrap();
+        assert!(keywords.len() > 400);
+        for k in keywords {
+            let text = k["text"].as_str().unwrap();
+            let bits = classify(text);
+            assert_eq!(
+                bits & R != 0,
+                k["ansi_reserved"].as_bool().unwrap(),
+                "{text}"
+            );
+            assert_eq!(
+                bits & S != 0,
+                k["strict_non_reserved"].as_bool().unwrap(),
+                "{text}"
+            );
+        }
     }
 
     #[test]

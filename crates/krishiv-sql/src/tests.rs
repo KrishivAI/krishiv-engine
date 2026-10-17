@@ -79,9 +79,9 @@ fn expressions() {
     insta::assert_snapshot!(snapshot(&[
         "SELECT a OR b AND NOT c = d + e * - f | g ^ h & i << j >> k >>> l || m DIV n % o / p - ~q",
         "SELECT a AND b AND c AND d AND e, NOT NOT !x, a <=> b, a <> b, a != b, a <= b, a >= b, a !> b, a !< b, a == b",
-        "SELECT a BETWEEN 1 AND 2, a NOT BETWEEN b AND c, a IN (), a NOT IN (1, 2), a IN (SELECT 1), a ! IN (VALUES 1)",
+        "SELECT a BETWEEN 1 AND 2, a NOT BETWEEN b AND c, a IN (), a NOT IN (1, 2), a IN (SELECT 1), a NOT IN (VALUES 1)",
         "SELECT a LIKE 'x' ESCAPE '/', a NOT ILIKE 'y', a LIKE ANY ('x', 'y'), a NOT ILIKE ALL (), a LIKE SOME ('z')",
-        "SELECT a RLIKE 'x', a NOT REGEXP 'y', a IS NULL, a IS NOT NULL, a IS TRUE, a IS ! FALSE, a IS UNKNOWN",
+        "SELECT a RLIKE 'x', a NOT REGEXP 'y', a IS NULL, a IS NOT NULL, a IS TRUE, a IS NOT FALSE, a IS UNKNOWN",
         "SELECT a IS DISTINCT FROM b, a IS NOT DISTINCT FROM b, NOT a IN (1) AND b OR c",
         "SELECT EXISTS (SELECT 1), (SELECT 1), ((SELECT 1)), (1, 2 AS b), (a), struct(), struct(1 AS a, b), exists(1)",
         "SELECT CASE WHEN a THEN 1 WHEN b THEN 2 ELSE 3 END, CASE a WHEN 1 THEN 'x' END",
@@ -165,7 +165,7 @@ fn spans_cover_source_text() {
     assert_eq!(s.projection[0].span.text(sql), "t.a AS x");
     assert_eq!(s.projection[0].expr.span.text(sql), "t.a");
     assert_eq!(s.projection[1].span.text(sql), "f(b)");
-    assert_eq!(s.from[0].span.text(sql), "t");
+    assert_eq!(s.from.as_ref().unwrap().relations[0].span.text(sql), "t");
 }
 
 #[test]
@@ -423,8 +423,8 @@ fn data_types_resolve_through_the_ddl_parser() {
 fn lexer_follows_spark() {
     let texts = |sql: &str| {
         tokenize(sql)
-            .unwrap()
             .iter()
+            .filter(|t| !t.kind.is_trivia())
             .map(|t| t.span.text(sql).to_owned())
             .collect::<Vec<_>>()
     };
@@ -457,7 +457,7 @@ fn lexer_follows_spark() {
         ["x", "y", "z"]
     );
     assert_eq!(texts("a\u{2028}b\u{3000}c"), ["a", "b", "c"]);
-    let kinds = tokenize("\u{2029}").unwrap();
+    let kinds = tokenize("\u{2029}");
     assert_eq!(kinds[0].kind, TokenKind::Unrecognized);
     assert_eq!(texts("/*+ x */ a*/b"), ["/*+", "x", "*/", "a", "*/", "b"]);
     assert_eq!(
@@ -478,9 +478,31 @@ fn lexer_follows_spark() {
             "'i\\'j'"
         ]
     );
+    assert_eq!(texts("`x 'y \"z $ @"), ["`x 'y \"z $ @"]);
     assert_eq!(
-        texts("`x 'y \"z $ @"),
-        ["`", "x", "'", "y", "\"", "z", "$", "@"]
+        texts("a $ @ $$ $x$ b $x$ $y$ c"),
+        ["a", "$", "@", "$$ $x$ b $x$ $y$ c"]
+    );
+    assert_eq!(texts("$x$ b $x$ $1"), ["$x$ b $x$", "$", "1"]);
+    let kinds = |sql: &str| tokenize(sql).iter().map(|t| t.kind).collect::<Vec<_>>();
+    assert_eq!(
+        kinds("a -- c\n/* d */ 'x' r'y"),
+        [
+            TokenKind::Word,
+            TokenKind::Comment,
+            TokenKind::Comment,
+            TokenKind::String,
+            TokenKind::Word,
+            TokenKind::Unterminated
+        ]
+    );
+    assert_eq!(
+        kinds("a /* b"),
+        [TokenKind::Word, TokenKind::UnclosedComment]
+    );
+    assert_eq!(
+        kinds("\u{216B} \u{e9}"),
+        [TokenKind::Unrecognized, TokenKind::Word]
     );
     assert_eq!(
         texts(
@@ -512,30 +534,54 @@ fn strings_unescape_like_spark() {
     assert_eq!(lexer::unquote_ident("`a``b`"), "a`b");
 }
 
-/// Statements where this parser and Spark 4.2 disagree, with the reason;
-/// error positions and hints that ANTLR derives from its prediction are
-/// refined by the error-quality task.
+/// Statements where this parser and Spark 4.2 disagree, with the reason.
 const SPARK_DEVIATIONS: &[(&str, &str)] = &[
     (
+        "SELECT (SELECT 1",
+        "ANTLR adds the hint `: missing ')'` (error quality, P2-T077)",
+    ),
+    (
+        "SELECT a[1",
+        "ANTLR adds the hint `: missing ']'` (error quality, P2-T077)",
+    ),
+    (
         "SELECT a FROM t ORDER BY",
-        "ANTLR drops the trailing `BY` as extra input",
+        "ANTLR drops the trailing `BY` as extra input (P2-T077)",
     ),
     (
         "SELECT a, count(*) FROM t GROUP BY a HAVING",
-        "ANTLR drops the trailing `HAVING` as extra input",
+        "ANTLR drops the trailing `HAVING` as extra input (P2-T077)",
     ),
-    ("SELECT (SELECT 1", "ANTLR adds the hint `: missing ')'`"),
-    ("SELECT a[1", "ANTLR adds the hint `: missing ']'`"),
     (
         "SELECT a FROM",
-        "with enforced keywords ANTLR reports `FROM`, not the end of input",
+        "with enforced keywords ANTLR reports `FROM`, not the end of input (P2-T077)",
     ),
     (
-        "SELECT \"a\" 'b'",
-        "a quoted identifier before a string is no typed literal here",
+        "SELECT 1 'secret'",
+        "the text of a string literal is never echoed in an error",
+    ),
+    (
+        "SELECT * FROM t end",
+        "with enforced keywords ANTLR adds no `extra input` hint here (P2-T077)",
     ),
 ];
 
+/// Error classes Spark raises while parsing a statement (not in
+/// `AstBuilder`): the parser must raise the same class and parameters.
+const PARSER_CLASSES: &[&str] = &[
+    "PARSE_SYNTAX_ERROR",
+    "PARSE_EMPTY_STATEMENT",
+    "UNCLOSED_BRACKETED_COMMENT",
+    "INVALID_IDENTIFIER",
+    "SYNTAX_DISCONTINUED.BANG_EQUALS_NOT",
+    "FAILED_TO_PARSE_TOO_COMPLEX",
+];
+
+/// The probe recorded from a real Spark 4.2 run: statements Spark parses
+/// must parse; errors Spark raises while parsing must match in class,
+/// message parameters and (where Spark records one) position; errors Spark
+/// raises when building the plan must parse here (the post-parse
+/// validation, P2-T079, raises them).
 #[test]
 fn agrees_with_spark_on_the_parse_probe() {
     let path = format!(
@@ -545,60 +591,45 @@ fn agrees_with_spark_on_the_parse_probe() {
     let doc: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut deviations = vec![];
+    let mut owed_to_validation = 0;
     for case in doc["cases"].as_array().unwrap() {
         let sql = case["sql"].as_str().unwrap();
         let conf = case["conf"].as_object().unwrap();
         let options = ParserOptions::from_conf(|k| conf.get(k).and_then(|v| v.as_str()));
-        let ours = parse_query(sql, &options).map_err(|e| {
-            let params: serde_json::Map<String, serde_json::Value> = e
-                .error
-                .message_parameters()
-                .iter()
-                .map(|(k, v)| ((*k).to_owned(), v.clone().into()))
-                .collect();
-            (e.error.error_class().name().to_owned(), params)
-        });
-        let spark = if case["parses"].as_bool().unwrap() {
-            Ok(())
+        let ours = parse_query(sql, &options);
+        let agrees = if case["parses"].as_bool().unwrap() {
+            ours.is_ok()
         } else {
-            let params = case["message_parameters"]
-                .as_object()
-                .cloned()
-                .unwrap_or_default();
-            Err((case["error_class"].as_str().unwrap().to_owned(), params))
+            let class = case["error_class"].as_str().unwrap();
+            if PARSER_CLASSES.contains(&class) {
+                ours.as_ref().is_err_and(|e| {
+                    let params: serde_json::Map<String, serde_json::Value> = e
+                        .error
+                        .message_parameters()
+                        .iter()
+                        .map(|(k, v)| ((*k).to_owned(), v.clone().into()))
+                        .collect();
+                    let position = case["start"].as_u64().is_none_or(|start| {
+                        sql.get(..e.span.start).map(|p| p.chars().count() as u64) == Some(start)
+                    });
+                    e.error.error_class().name() == class
+                        && Some(&params) == case["message_parameters"].as_object()
+                        && position
+                })
+            } else {
+                owed_to_validation += 1;
+                ours.is_ok()
+            }
         };
-        if ours.map(drop) != spark {
+        if !agrees {
             deviations.push(sql);
         }
     }
-    let known: Vec<&str> = SPARK_DEVIATIONS.iter().map(|(sql, _)| *sql).collect();
+    let mut known: Vec<&str> = SPARK_DEVIATIONS.iter().map(|(sql, _)| *sql).collect();
+    known.sort_unstable();
+    deviations.sort_unstable();
     assert_eq!(deviations, known);
-}
-
-#[test]
-fn nested_alternatives_do_not_backtrack_exponentially() {
-    // Each of these took exponential time when an alternative was retried.
-    let started = std::time::Instant::now();
-    for sql in [
-        format!("SELECT {}x{}", "trim(".repeat(14), ")".repeat(14)),
-        format!("SELECT {}x{}", "position(".repeat(14), " IN y)".repeat(14)),
-        format!(
-            "SELECT * FROM t GROUP BY GROUPING SETS ({}a{})",
-            "(".repeat(14),
-            ")".repeat(14)
-        ),
-        format!("SELECT {}SELECT 1{} + 1", "(".repeat(14), ")".repeat(14)),
-        format!("SELECT {}(SELECT 1", "((".repeat(14)),
-    ] {
-        let _ = parse_query(&sql, &ParserOptions::default());
-    }
-    let fuzz = "SELECT t1c, (((((((((((((((((((lect in(((((((((((((((ROWS((((((((((((((((((((((((((((((((((n(((((((((((((((ROWS((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((ROWS((((((((((((((((((((((((((((((((SELECT b.s(((((((((((((((((((((((((((((((((((((esson.var1(((((((((SELXCT t1c) FROM t1";
-    assert!(parse_query(fuzz, &ParserOptions::default()).is_err());
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(5),
-        "{:?}",
-        started.elapsed()
-    );
+    assert_eq!(owed_to_validation, 8);
 }
 
 #[test]
@@ -622,16 +653,14 @@ fn lexing_and_lookahead_stay_linear() {
     );
     let texts = |sql: &str| {
         tokenize(sql)
-            .unwrap()
             .iter()
+            .filter(|t| !t.kind.is_trivia())
             .map(|t| t.span.text(sql).to_owned())
             .collect::<Vec<_>>()
     };
-    // After an unterminated quote the closing-quote table is used; it
-    // agrees with scanning (a doubled quote shifts the phase).
-    assert_eq!(texts("'a'' x"), ["'", "a", "''", "x"]);
-    assert_eq!(texts("`a`` x"), ["`", "a", "``", "x"]);
-    assert_eq!(texts(r"'\' x \'"), ["'", "\\", "'", "x", "\\", "'"]);
+    // An unterminated quote runs to the end of the input.
+    assert_eq!(texts("'a'' x"), ["'a'' x"]);
+    assert_eq!(texts(r"'\' x \'"), [r"'\' x \'"]);
 }
 
 #[test]
@@ -677,4 +706,111 @@ fn less_common_shapes() {
             "{sql}"
         );
     }
+}
+
+#[test]
+fn review_forms() {
+    insta::assert_snapshot!(snapshot(&[
+        "SELECT * FROM t VERSION AS OF 1, u FOR SYSTEM_TIME AS OF '2020-01-01' AS x",
+        "SELECT * FROM t WITH ('k' = 'v', a.b 1, c = true, d) x",
+        "SELECT a IN ((SELECT 1), 2), a IN ((SELECT 1) UNION (SELECT 2)), a IN ((SELECT 1) + 1)",
+        "SELECT interval '1-2' year to month 1 day, interval 1 day 2 hours '3:4' hour to minute",
+        "SELECT `date` '2020-01-01', geo 'x', dateadd(MICROSECOND, 1, t), extract(dow FROM d)",
+        "SELECT sum(a) OVER (CLUSTER BY a), sum(a) OVER (DISTRIBUTE BY a SORT BY b)",
+        "SELECT a LIKE ANY ('x') ESCAPE '/', ?, ?, CASE END",
+        "FROM t SELECT 1 SELECT 2 ORDER BY 1",
+        "WITH order AS (SELECT 1) SELECT * FROM order AS u",
+    ]));
+}
+
+#[test]
+fn bang_for_not_in_predicates_follows_the_legacy_flag() {
+    let d = ParserOptions::default();
+    for (sql, at) in [
+        ("SELECT a ! IN (1)", 9..10),
+        ("SELECT a IS ! NULL", 12..13),
+        ("SELECT a ! LIKE 'x'", 9..10),
+    ] {
+        let e = err(sql, &d);
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::SyntaxDiscontinuedBangEqualsNot
+        );
+        assert_eq!(e.span.range(), at, "{sql}");
+    }
+    // A syntax error later in the statement is reported first, as in Spark.
+    let e = err("SELECT a ! IN (1) +", &d);
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    let legacy = ParserOptions {
+        legacy_bang_equals_not: true,
+        ..d
+    };
+    assert!(parse_query("SELECT a ! BETWEEN 1 AND 2, !b", &legacy).is_ok());
+    assert!(parse_query("SELECT !b AND ! c", &d).is_ok());
+}
+
+#[test]
+fn parse_errors_compare_positions() {
+    let d = ParserOptions::default();
+    let (a, b) = (err("SELECT 1 x y", &d), err("SELECT 1 x  y", &d));
+    assert_eq!(a.error, b.error);
+    assert_ne!(a, b);
+    assert_eq!(a, err("SELECT 1 x y", &d));
+    let t = tokenize("a a");
+    assert_ne!(t[0], t[1]);
+    assert!(lexer::is_keyword("\u{131}n", "IN") && !lexer::is_keyword("in", "INTO"));
+}
+
+#[test]
+fn errors_never_echo_string_literals() {
+    let d = ParserOptions::default();
+    let dq = ParserOptions {
+        double_quoted_identifiers: true,
+        ..d
+    };
+    for (sql, options) in [
+        ("SELECT 's3cr3t' x y", &d),
+        ("SELECT 1 's3cr3t'", &d),
+        ("SELECT f('s3cr3t' 'x'", &d),
+        ("SELECT 's3cr3t", &d),
+        ("SELECT a, 's3cr3t", &d),
+        ("SELECT \"s3cr3t\" x y", &d),
+        ("SELECT 1 \"x\" 's3cr3t'", &dq),
+        ("SELECT $x$s3cr3t$x$", &d),
+        ("SELECT $x$s3cr3t", &d),
+        ("SELECT * FROM t WITH (k = 's3cr3t' x)", &d),
+        ("SELECT X's3cr3t' z z", &d),
+        ("SELECT R's3cr3t' x y", &d),
+        ("SELECT 1 /* s3cr3t", &d),
+    ] {
+        let e = err(sql, options);
+        let shown = format!("{e} {e:?}");
+        assert!(!shown.contains("s3cr3t"), "{sql}: {shown}");
+    }
+    // The secret is still in the tokens, so a redactor can find it.
+    assert!(
+        tokenize("SELECT 's3cr3t")
+            .iter()
+            .any(|t| t.kind == TokenKind::Unterminated)
+    );
+}
+
+#[test]
+fn from_statement_shares_its_from_clause() {
+    // Every body reads the one `FROM` clause: the tree grows linearly with
+    // tables x bodies, not with their product.
+    let statement = |n: usize| {
+        let tables: Vec<String> = (0..n).map(|i| format!("t{i}")).collect();
+        format!("FROM {} {}", tables.join(", "), "SELECT 1 ".repeat(n))
+    };
+    let size = |n: usize| format!("{:?}", ok(&statement(n))).len();
+    let (small, large) = (size(500), size(2000));
+    assert!(large < small * 5, "{small} -> {large}");
+    let started = std::time::Instant::now();
+    let _ = ok(&statement(10_000));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
 }

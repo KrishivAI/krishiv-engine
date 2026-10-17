@@ -8,7 +8,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -208,10 +207,8 @@ Query {
                         span: 73..76,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -237,7 +234,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -269,7 +265,11 @@ Query {
                         expr: Expr {
                             kind: Literal(
                                 Typed {
-                                    type_name: "date",
+                                    type_name: Ident {
+                                        value: "DATE",
+                                        quoted: false,
+                                        span: 27..31,
+                                    },
                                     value: "2020-01-01",
                                 },
                             ),
@@ -282,7 +282,11 @@ Query {
                         expr: Expr {
                             kind: Literal(
                                 Typed {
-                                    type_name: "timestamp_ntz",
+                                    type_name: Ident {
+                                        value: "TIMESTAMP_NTZ",
+                                        quoted: false,
+                                        span: 46..59,
+                                    },
                                     value: "2020-01-01",
                                 },
                             ),
@@ -295,7 +299,11 @@ Query {
                         expr: Expr {
                             kind: Literal(
                                 Typed {
-                                    type_name: "x",
+                                    type_name: Ident {
+                                        value: "X",
+                                        quoted: false,
+                                        span: 74..75,
+                                    },
                                     value: "1F",
                                 },
                             ),
@@ -308,7 +316,11 @@ Query {
                         expr: Expr {
                             kind: Literal(
                                 Typed {
-                                    type_name: "time",
+                                    type_name: Ident {
+                                        value: "TIME",
+                                        quoted: false,
+                                        span: 81..85,
+                                    },
                                     value: "10:00",
                                 },
                             ),
@@ -321,7 +333,11 @@ Query {
                         expr: Expr {
                             kind: Literal(
                                 Typed {
-                                    type_name: "geometry",
+                                    type_name: Ident {
+                                        value: "geometry",
+                                        quoted: false,
+                                        span: 95..103,
+                                    },
                                     value: "POINT",
                                 },
                             ),
@@ -331,10 +347,8 @@ Query {
                         span: 95..111,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -360,7 +374,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -402,7 +415,11 @@ Query {
                         expr: Expr {
                             kind: Literal(
                                 Typed {
-                                    type_name: "interval",
+                                    type_name: Ident {
+                                        value: "INTERVAL",
+                                        quoted: false,
+                                        span: 26..34,
+                                    },
                                     value: "1 day",
                                 },
                             ),
@@ -437,6 +454,7 @@ Query {
                                             ),
                                         ],
                                         range: None,
+                                        trailing: None,
                                         span: 44..66,
                                     },
                                 ),
@@ -464,6 +482,7 @@ Query {
                                                 "month",
                                             ),
                                         ),
+                                        trailing: None,
                                         span: 68..97,
                                     },
                                 ),
@@ -490,6 +509,7 @@ Query {
                                             ),
                                         ],
                                         range: None,
+                                        trailing: None,
                                         span: 99..122,
                                     },
                                 ),
@@ -500,10 +520,8 @@ Query {
                         span: 99..122,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -529,7 +547,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -559,6 +576,7 @@ Query {
                                             ),
                                         ],
                                         range: None,
+                                        trailing: None,
                                         span: 7..40,
                                     },
                                 ),
@@ -622,6 +640,7 @@ Query {
                                             ),
                                         ],
                                         range: None,
+                                        trailing: None,
                                         span: 64..78,
                                     },
                                 ),
@@ -640,10 +659,8 @@ Query {
                         span: 64..81,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -669,7 +686,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -861,10 +877,8 @@ Query {
                         span: 137..145,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -890,7 +904,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -984,10 +997,8 @@ Query {
                         span: 90..126,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -1013,7 +1024,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -1221,10 +1231,8 @@ Query {
                         span: 166..183,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,

@@ -114,14 +114,81 @@ DEFAULT = [
     "SELECT café FROM t",
     "SELECT 1 /* x",
     "   ",
+    # keywords where only an identifier fits
+    "WITH order AS (SELECT 1) SELECT * FROM order",
+    "WITH select AS (SELECT 1) SELECT 1",
+    "SELECT * FROM order",
+    "SELECT * FROM t PIVOT (sum(a) FOR order IN (1))",
+    "SELECT * FROM t UNPIVOT (order FOR n IN (a))",
+    "SELECT a FROM t WINDOW order AS ()",
+    "SELECT CASE END",
+    "SELECT CASE",
+    "SELECT * FROM t AS union",
+    "SELECT * FROM t AS join",
+    "SELECT 1 AS union",
+    # time travel and table options
+    "SELECT * FROM t VERSION AS OF 1",
+    "SELECT * FROM t TIMESTAMP AS OF '2020-01-01'",
+    "SELECT * FROM t FOR SYSTEM_TIME AS OF '2020-01-01'",
+    "SELECT * FROM t FOR SYSTEM_VERSION AS OF 'v1' x",
+    "SELECT * FROM t WITH ('k' = 'v', a.b 1, c = true)",
+    "SELECT * FROM t WITH (k)",
+    "SELECT * FROM t WITH (k = x)",
+    # IN lists and subqueries
+    "SELECT a IN ((SELECT 1), 2)",
+    "SELECT a IN ((SELECT 1) + 1)",
+    "SELECT a IN ((SELECT 1) UNION (SELECT 2))",
+    # facts post-parse validation needs
+    "SELECT a ! IN (1)",
+    "SELECT a IS ! NULL",
+    "SELECT a ! BETWEEN 1 AND 2",
+    "SELECT a ! LIKE 'x'",
+    "SELECT dateadd(MICROSECOND, 1, t)",
+    "SELECT dateadd('MICROSECOND', 1, t)",
+    "SELECT interval '10-9' year to month '2-1' year to month",
+    "SELECT interval 1 day '2-1' year to month",
+    "SELECT interval '1' day to hour 2 hours",
+    "SELECT `date` '2020-01-01'",
+    "SELECT GEO 'x'",
+    # minor grammar points
+    "SELECT /*+ BROADCAST(t), */ * FROM t",
+    "SELECT EXISTS (SELECT 1) = true",
+    "SELECT NOT EXISTS (SELECT 1) AND true",
+    "SELECT 1 + NOT a = b",
+    "SELECT a * ! b",
+    "SELECT a LIKE ANY ('a') ESCAPE 'x'",
+    "SELECT sum(a) OVER (CLUSTER BY a ORDER BY b)",
+    "SELECT sum(a) OVER (CLUSTER BY a)",
+    "SELECT \u216b",
+    "SELECT r'abc",
+    "SELECT $$x$$",
+    "SELECT 1 'secret'",
+    "FROM t SELECT 1 SELECT 2",
 ]
 CASES = (
     [(sql, {}) for sql in DEFAULT]
     + [
         (sql, ANSI_KEYWORDS)
-        for sql in ["SELECT 1 AS select", "SELECT all FROM t", "SELECT a FROM", "SELECT current_date", "SELECT x -> 1"]
+        for sql in [
+            "SELECT 1 AS select",
+            "SELECT all FROM t",
+            "SELECT a FROM",
+            "SELECT current_date",
+            "SELECT x -> 1",
+            "SELECT end FROM t",
+            "SELECT 1 AS end",
+            "SELECT * FROM t end",
+            "WITH end AS (SELECT 1) SELECT 1",
+            "SELECT any(true)",
+            "SELECT some(true)",
+            "SELECT left('a', 1)",
+            "SELECT a FROM t ORDER BY all",
+            "SELECT a FROM t GROUP BY all",
+            "SELECT * FROM order",
+        ]
     ]
-    + [(sql, DOUBLE_QUOTED) for sql in ['SELECT "a""b" FROM t', "SELECT \"a\" 'b'"]]
+    + [(sql, {"spark.sql.legacy.bangEqualsNot": "true"}) for sql in ["SELECT a ! IN (1)", "SELECT a IS ! NULL"]]
+    + [(sql, DOUBLE_QUOTED) for sql in ['SELECT "a""b" FROM t', "SELECT \"a\" 'b'", 'SELECT 1 "x y" z']]
     + [(sql, LEGACY_SETOPS) for sql in ["SELECT 1 UNION SELECT 2 INTERSECT SELECT 3"]]
 )
 

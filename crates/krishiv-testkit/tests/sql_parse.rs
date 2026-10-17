@@ -3,124 +3,80 @@
 //! `SQLQueryTestSuite` goldens:
 //!
 //! * acceptance against Spark: statements Spark parsed must parse (≥ 99.9%,
-//!   every failure listed), and the syntax errors Spark raised are counted;
+//!   every failure listed); every statement Spark rejects while parsing must
+//!   be rejected with Spark's error class; a statement Spark rejects only
+//!   when building the plan (`AstBuilder`) parses here when its class is one
+//!   the post-parse validation (P2-T079) owes, and is otherwise rejected
+//!   with Spark's class;
 //! * the differential `==` check: each statement re-lexed with comments
 //!   between all tokens parses to an `==` tree (equality ignores spans);
-//! * spans: every node's span lies on token boundaries and inside its
-//!   parent's span, and every struct node has one.
+//! * spans (`sql_spans::check_spans`): every node's span lies on token
+//!   boundaries, inside its parent's span, and every expression's text
+//!   parses to that expression.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use krishiv_sql::ast::Query;
-use krishiv_sql::lexer::{Token, tokenize};
 use krishiv_sql::parse_query;
 use krishiv_testkit::golden::parse::Expected;
 use krishiv_testkit::golden::run::{Engine as _, load_statements};
 use krishiv_testkit::golden::setup::FileSetup;
 use krishiv_testkit::golden::sql_parse::{ParseOnlyEngine, in_dql_scope};
+use krishiv_testkit::golden::sql_spans::{check_spans, respaced};
 use krishiv_testkit::golden::{DEFAULT_TAG, GoldenSet};
 
 type R = Result<(), Box<dyn std::error::Error>>;
 
-/// Enum struct variants: written `Name { .. }` in `Debug`, but not nodes.
-const SPANLESS: &[&str] = &[
-    "SetOp",
-    "Wildcard",
-    "IsNull",
-    "IsTruth",
-    "IsDistinctFrom",
-    "Between",
-    "InList",
-    "InSubquery",
-    "Like",
-    "LikeQuantified",
-    "RLike",
-    "Cast",
-    "Case",
-    "Lambda",
-    "Number",
-    "Typed",
-    "Primitive",
-    "Function",
+/// Error classes Spark raises while parsing (the parser must raise them).
+const PARSER_CLASSES: &[&str] = &[
+    "PARSE_SYNTAX_ERROR",
+    "PARSE_EMPTY_STATEMENT",
+    "UNCLOSED_BRACKETED_COMMENT",
+    "INVALID_IDENTIFIER",
+    "SYNTAX_DISCONTINUED.BANG_EQUALS_NOT",
 ];
 
-struct Frame {
-    name: String,
-    span: Option<(usize, usize)>,
-    children: Vec<(usize, usize)>,
-}
-
-/// Checks the spans of `q` parsed from `sql` (see the module docs).
-fn check_spans(sql: &str, q: &Query) -> Result<(), String> {
-    let tokens: Vec<Token> = tokenize(sql).map_err(|e| e.to_string())?;
-    let starts: Vec<usize> = tokens.iter().map(|t| t.span.start).collect();
-    let ends: Vec<usize> = tokens.iter().map(|t| t.span.end).collect();
-    let debug = format!("{q:#?}");
-    let mut stack = vec![Frame {
-        name: "root".into(),
-        span: None,
-        children: vec![],
-    }];
-    for line in debug.lines().map(str::trim) {
-        if let Some(range) = line.strip_prefix("span: ").map(|r| r.trim_end_matches(',')) {
-            let (a, b) = range.split_once("..").ok_or("bad span")?;
-            let span = (a.parse().map_err(|_| "bad")?, b.parse().map_err(|_| "bad")?);
-            if let Some(top) = stack.last_mut() {
-                top.span = Some(span);
-            }
-        } else if line.ends_with('{') || line.ends_with('(') || line.ends_with('[') {
-            let name = line.trim_end_matches(['{', '(', '[']).trim();
-            let name = name.rsplit(": ").next().unwrap_or(name).to_owned();
-            let struct_like = line.ends_with('{');
-            stack.push(Frame {
-                name: if struct_like { name } else { String::new() },
-                span: None,
-                children: vec![],
-            });
-        } else if line.starts_with(['}', ')', ']']) {
-            let f = stack.pop().ok_or("unbalanced")?;
-            let parent = stack.last_mut().ok_or("unbalanced")?;
-            match f.span {
-                Some((a, b)) => {
-                    if !(a < b && starts.contains(&a) && ends.contains(&b)) {
-                        return Err(format!("{} span {a}..{b} not on tokens", f.name));
-                    }
-                    if let Some(c) = f.children.iter().find(|(ca, cb)| *ca < a || *cb > b) {
-                        return Err(format!(
-                            "{} span {a}..{b} does not cover child {c:?}",
-                            f.name
-                        ));
-                    }
-                    parent.children.push((a, b));
-                }
-                None if !f.name.is_empty() && !SPANLESS.contains(&f.name.as_str()) => {
-                    return Err(format!("struct {} has no span", f.name));
-                }
-                None => parent.children.extend(f.children),
-            }
-        }
-    }
-    let (a, b) = (q.span.start, q.span.end);
-    if a != starts.first().copied().unwrap_or(0) || !ends.contains(&b) {
-        return Err(format!(
-            "query span {a}..{b} does not start at the first token"
-        ));
-    }
-    Ok(())
-}
-
-/// `sql` with a comment between every two tokens.
-fn respaced(sql: &str) -> Option<String> {
-    let tokens = tokenize(sql).ok()?;
-    let parts: Vec<&str> = tokens.iter().map(|t| t.span.text(sql)).collect();
-    Some(parts.join(" /* x */\n"))
-}
+/// Error classes Spark raises in `AstBuilder` that the tree keeps enough
+/// facts for, with the number of corpus statements (per session run): the
+/// post-parse validation (P2-T079) raises them.
+const OWED_TO_VALIDATION: &[(&str, u64)] = &[
+    ("DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION", 2),
+    ("DUPLICATED_CTE_NAMES", 2),
+    ("INCOMPATIBLE_JOIN_TYPES", 1),
+    ("INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION", 3),
+    ("INVALID_INLINE_TABLE.NUM_COLUMNS_MISMATCH", 4),
+    ("INVALID_INTERVAL_FORMAT.INTERVAL_PARSING", 2),
+    ("INVALID_INTERVAL_FORMAT.UNMATCHED_FORMAT_STRING", 2),
+    (
+        "INVALID_INTERVAL_FORMAT.UNMATCHED_FORMAT_STRING_WITH_NOTICE",
+        24,
+    ),
+    ("INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION", 2),
+    ("INVALID_NUMERIC_LITERAL_RANGE", 10),
+    ("INVALID_PARAMETER_VALUE.DATETIME_UNIT", 42),
+    ("INVALID_SQL_SYNTAX.EMPTY_IN_PREDICATE", 2),
+    ("INVALID_SQL_SYNTAX.REPETITIVE_WINDOW_DEFINITION", 6),
+    ("INVALID_TYPED_LITERAL", 76),
+    ("UNSUPPORTED_DATATYPE", 4),
+    ("UNSUPPORTED_FEATURE.LATERAL_JOIN_USING", 1),
+    ("UNSUPPORTED_TYPED_LITERAL", 2),
+    ("_LEGACY_ERROR_TEMP_0024", 14),
+    ("_LEGACY_ERROR_TEMP_0026", 4),
+    ("_LEGACY_ERROR_TEMP_0027", 2),
+    ("_LEGACY_ERROR_TEMP_0029", 16),
+    ("_LEGACY_ERROR_TEMP_0035", 1),
+    ("_LEGACY_ERROR_TEMP_0051", 4),
+    ("_LEGACY_ERROR_TEMP_0063", 12),
+    ("_LEGACY_ERROR_TEMP_0064", 11),
+];
 
 #[test]
 fn dql_corpus_parses_with_spans_and_differential_equality() -> R {
     let set = GoldenSet::scan(&GoldenSet::tag_dir(DEFAULT_TAG))?;
     let mut engine = ParseOnlyEngine::default();
-    let (mut total, mut parsed, mut negatives, mut rejected) = (0_u64, 0_u64, 0_u64, 0_u64);
+    let (mut total, mut parsed) = (0_u64, 0_u64);
+    let mut rejected: BTreeMap<String, u64> = BTreeMap::new();
+    let mut accepted: BTreeMap<String, u64> = BTreeMap::new();
     let mut failures = String::new();
     for pair in &set.pairs {
         let statements = load_statements(pair)?;
@@ -136,8 +92,28 @@ fn dql_corpus_parses_with_spans_and_differential_equality() -> R {
                 if let Expected::Error(e) = &s.expected
                     && e.is_parse_error()
                 {
-                    negatives += 1;
-                    rejected += u64::from(result.is_err());
+                    let class = e.error_class.clone().unwrap_or_default();
+                    match &result {
+                        Err(ours) => {
+                            assert_eq!(
+                                ours.error.error_class().name(),
+                                class,
+                                "{}: {}",
+                                pair.name,
+                                s.query
+                            );
+                            *rejected.entry(class).or_default() += 1;
+                        }
+                        Ok(_) => {
+                            assert!(
+                                !PARSER_CLASSES.contains(&class.as_str()),
+                                "{}: Spark raises {class} while parsing\n{}",
+                                pair.name,
+                                s.query
+                            );
+                            *accepted.entry(class).or_default() += 1;
+                        }
+                    }
                     continue;
                 }
                 total += 1;
@@ -155,11 +131,11 @@ fn dql_corpus_parses_with_spans_and_differential_equality() -> R {
                     }
                 };
                 parsed += 1;
-                check_spans(&s.query, &q)
+                check_spans(&s.query, &q, &options)
                     .map_err(|e| format!("{}: {e}\n{}", pair.name, s.query))?;
-                let again = respaced(&s.query).map(|r| parse_query(&r, &options));
+                let again = parse_query(&respaced(&s.query), &options);
                 assert!(
-                    matches!(&again, Some(Ok(r)) if *r == q),
+                    matches!(&again, Ok(r) if *r == q),
                     "{}: differential mismatch\n{}",
                     pair.name,
                     s.query
@@ -168,7 +144,8 @@ fn dql_corpus_parses_with_spans_and_differential_equality() -> R {
         }
     }
     println!(
-        "DQL corpus: {parsed} / {total} parse ({:.3}%); Spark parse errors rejected: {rejected} / {negatives}\n{failures}",
+        "DQL corpus: {parsed} / {total} parse ({:.3}%); Spark parse-time errors rejected: \
+         {rejected:?}; accepted (owed to post-parse validation): {accepted:?}\n{failures}",
         100.0 * parsed as f64 / total as f64
     );
     assert!(total > 13_000, "too few statements: {total}");
@@ -176,16 +153,12 @@ fn dql_corpus_parses_with_spans_and_differential_equality() -> R {
         parsed * 1000 >= total * 999,
         "parse rate below 99.9%:\n{failures}"
     );
-    Ok(())
-}
-
-#[test]
-fn span_checker_rejects_bad_spans() -> R {
-    let sql = "SELECT a + 1 AS x FROM t";
-    let mut q = parse_query(sql, &Default::default())?;
-    check_spans(sql, &q)?;
-    q.span.end = 3;
-    assert!(check_spans(sql, &q).is_err());
-    assert_eq!(respaced("SELECT 1").as_deref(), Some("SELECT /* x */\n1"));
+    let owed: BTreeMap<String, u64> = OWED_TO_VALIDATION
+        .iter()
+        .map(|(c, n)| ((*c).to_owned(), *n))
+        .collect();
+    assert_eq!(accepted, owed);
+    assert_eq!(rejected.get("PARSE_SYNTAX_ERROR").copied(), Some(45));
+    assert_eq!(rejected.get("UNCLOSED_BRACKETED_COMMENT").copied(), Some(2));
     Ok(())
 }

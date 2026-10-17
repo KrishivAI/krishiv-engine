@@ -1,6 +1,6 @@
 ---
 source: crates/krishiv-sql/src/tests.rs
-expression: "snapshot(&[\"SELECT a OR b AND NOT c = d + e * - f | g ^ h & i << j >> k >>> l || m DIV n % o / p - ~q\",\n\"SELECT a AND b AND c AND d AND e, NOT NOT !x, a <=> b, a <> b, a != b, a <= b, a >= b, a !> b, a !< b, a == b\",\n\"SELECT a BETWEEN 1 AND 2, a NOT BETWEEN b AND c, a IN (), a NOT IN (1, 2), a IN (SELECT 1), a ! IN (VALUES 1)\",\n\"SELECT a LIKE 'x' ESCAPE '/', a NOT ILIKE 'y', a LIKE ANY ('x', 'y'), a NOT ILIKE ALL (), a LIKE SOME ('z')\",\n\"SELECT a RLIKE 'x', a NOT REGEXP 'y', a IS NULL, a IS NOT NULL, a IS TRUE, a IS ! FALSE, a IS UNKNOWN\",\n\"SELECT a IS DISTINCT FROM b, a IS NOT DISTINCT FROM b, NOT a IN (1) AND b OR c\",\n\"SELECT EXISTS (SELECT 1), (SELECT 1), ((SELECT 1)), (1, 2 AS b), (a), struct(), struct(1 AS a, b), exists(1)\",\n\"SELECT CASE WHEN a THEN 1 WHEN b THEN 2 ELSE 3 END, CASE a WHEN 1 THEN 'x' END\",\n\"SELECT a[1][b].c.d, f(x).y, t.*, t.* EXCEPT (a, b.c), * EXCEPT (d), ?\",\n\"SELECT x -> x + 1, (x, y) -> x * y, transform(a, all -> all * all)\",\n\"SELECT count(DISTINCT a), count(ALL b), count(*), count(ALL), sum(c) FILTER (WHERE d), first(e IGNORE NULLS), last(f) RESPECT NULLS\",\n\"SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a DESC), rank() OVER (PARTITION BY a ORDER BY b ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)\",\n\"SELECT sum(a) OVER w, sum(a) OVER (w), sum(a) OVER (DISTRIBUTE BY a SORT BY b RANGE 1 PRECEDING), sum(a) OVER (CLUSTER BY a ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING)\",\n\"SELECT left(a, 1), right(b, 2), db.f(1), a.left(1), if(a, 1, 2), all, all + 1\",\n\"SELECT current_date, current_timestamp, user, session_user, current_path, current_date()\",])"
+expression: "snapshot(&[\"SELECT a OR b AND NOT c = d + e * - f | g ^ h & i << j >> k >>> l || m DIV n % o / p - ~q\",\n\"SELECT a AND b AND c AND d AND e, NOT NOT !x, a <=> b, a <> b, a != b, a <= b, a >= b, a !> b, a !< b, a == b\",\n\"SELECT a BETWEEN 1 AND 2, a NOT BETWEEN b AND c, a IN (), a NOT IN (1, 2), a IN (SELECT 1), a NOT IN (VALUES 1)\",\n\"SELECT a LIKE 'x' ESCAPE '/', a NOT ILIKE 'y', a LIKE ANY ('x', 'y'), a NOT ILIKE ALL (), a LIKE SOME ('z')\",\n\"SELECT a RLIKE 'x', a NOT REGEXP 'y', a IS NULL, a IS NOT NULL, a IS TRUE, a IS NOT FALSE, a IS UNKNOWN\",\n\"SELECT a IS DISTINCT FROM b, a IS NOT DISTINCT FROM b, NOT a IN (1) AND b OR c\",\n\"SELECT EXISTS (SELECT 1), (SELECT 1), ((SELECT 1)), (1, 2 AS b), (a), struct(), struct(1 AS a, b), exists(1)\",\n\"SELECT CASE WHEN a THEN 1 WHEN b THEN 2 ELSE 3 END, CASE a WHEN 1 THEN 'x' END\",\n\"SELECT a[1][b].c.d, f(x).y, t.*, t.* EXCEPT (a, b.c), * EXCEPT (d), ?\",\n\"SELECT x -> x + 1, (x, y) -> x * y, transform(a, all -> all * all)\",\n\"SELECT count(DISTINCT a), count(ALL b), count(*), count(ALL), sum(c) FILTER (WHERE d), first(e IGNORE NULLS), last(f) RESPECT NULLS\",\n\"SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a DESC), rank() OVER (PARTITION BY a ORDER BY b ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)\",\n\"SELECT sum(a) OVER w, sum(a) OVER (w), sum(a) OVER (DISTRIBUTE BY a SORT BY b RANGE 1 PRECEDING), sum(a) OVER (CLUSTER BY a ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING)\",\n\"SELECT left(a, 1), right(b, 2), db.f(1), a.left(1), if(a, 1, 2), all, all + 1\",\n\"SELECT current_date, current_timestamp, user, session_user, current_path, current_date()\",])"
 ---
 -- SELECT a OR b AND NOT c = d + e * - f | g ^ h & i << j >> k >>> l || m DIV n % o / p - ~q
 Query {
@@ -8,7 +8,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -334,10 +333,8 @@ Query {
                         span: 7..89,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -363,7 +360,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -759,10 +755,8 @@ Query {
                         span: 103..109,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -782,13 +776,12 @@ Query {
     offset: None,
     span: 0..109,
 }
--- SELECT a BETWEEN 1 AND 2, a NOT BETWEEN b AND c, a IN (), a NOT IN (1, 2), a IN (SELECT 1), a ! IN (VALUES 1)
+-- SELECT a BETWEEN 1 AND 2, a NOT BETWEEN b AND c, a IN (), a NOT IN (1, 2), a IN (SELECT 1), a NOT IN (VALUES 1)
 Query {
     with: None,
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -963,7 +956,6 @@ Query {
                                     body: SetExpr {
                                         kind: Select(
                                             Select {
-                                                from_first: false,
                                                 hints: [],
                                                 quantifier: None,
                                                 projection: [
@@ -981,10 +973,8 @@ Query {
                                                         span: 88..89,
                                                     },
                                                 ],
-                                                from: [],
+                                                from: None,
                                                 lateral_views: [],
-                                                pivot: None,
-                                                unpivot: None,
                                                 selection: None,
                                                 group_by: None,
                                                 having: None,
@@ -1039,14 +1029,14 @@ Query {
                                                                 kind: Int,
                                                             },
                                                         ),
-                                                        span: 107..108,
+                                                        span: 109..110,
                                                     },
                                                 ],
                                                 alias: None,
-                                                span: 100..108,
+                                                span: 102..110,
                                             },
                                         ),
-                                        span: 100..108,
+                                        span: 102..110,
                                     },
                                     order_by: [],
                                     cluster_by: [],
@@ -1055,29 +1045,27 @@ Query {
                                     windows: [],
                                     limit: None,
                                     offset: None,
-                                    span: 100..108,
+                                    span: 102..110,
                                 },
                                 negated: true,
                             },
-                            span: 92..109,
+                            span: 92..111,
                         },
                         alias: None,
-                        span: 92..109,
+                        span: 92..111,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
                 windows: [],
                 qualify: None,
-                span: 0..109,
+                span: 0..111,
             },
         ),
-        span: 0..109,
+        span: 0..111,
     },
     order_by: [],
     cluster_by: [],
@@ -1086,7 +1074,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
-    span: 0..109,
+    span: 0..111,
 }
 -- SELECT a LIKE 'x' ESCAPE '/', a NOT ILIKE 'y', a LIKE ANY ('x', 'y'), a NOT ILIKE ALL (), a LIKE SOME ('z')
 Query {
@@ -1094,7 +1082,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -1266,10 +1253,8 @@ Query {
                         span: 90..107,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -1289,13 +1274,12 @@ Query {
     offset: None,
     span: 0..107,
 }
--- SELECT a RLIKE 'x', a NOT REGEXP 'y', a IS NULL, a IS NOT NULL, a IS TRUE, a IS ! FALSE, a IS UNKNOWN
+-- SELECT a RLIKE 'x', a NOT REGEXP 'y', a IS NULL, a IS NOT NULL, a IS TRUE, a IS NOT FALSE, a IS UNKNOWN
 Query {
     with: None,
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -1444,10 +1428,10 @@ Query {
                                 truth: False,
                                 negated: true,
                             },
-                            span: 75..87,
+                            span: 75..89,
                         },
                         alias: None,
-                        span: 75..87,
+                        span: 75..89,
                     },
                     SelectItem {
                         expr: Expr {
@@ -1458,34 +1442,32 @@ Query {
                                             Ident {
                                                 value: "a",
                                                 quoted: false,
-                                                span: 89..90,
+                                                span: 91..92,
                                             },
                                         ],
                                     ),
-                                    span: 89..90,
+                                    span: 91..92,
                                 },
                                 truth: Unknown,
                                 negated: false,
                             },
-                            span: 89..101,
+                            span: 91..103,
                         },
                         alias: None,
-                        span: 89..101,
+                        span: 91..103,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
                 windows: [],
                 qualify: None,
-                span: 0..101,
+                span: 0..103,
             },
         ),
-        span: 0..101,
+        span: 0..103,
     },
     order_by: [],
     cluster_by: [],
@@ -1494,7 +1476,7 @@ Query {
     windows: [],
     limit: None,
     offset: None,
-    span: 0..101,
+    span: 0..103,
 }
 -- SELECT a IS DISTINCT FROM b, a IS NOT DISTINCT FROM b, NOT a IN (1) AND b OR c
 Query {
@@ -1502,7 +1484,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -1649,10 +1630,8 @@ Query {
                         span: 55..78,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -1678,7 +1657,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -1690,7 +1668,6 @@ Query {
                                     body: SetExpr {
                                         kind: Select(
                                             Select {
-                                                from_first: false,
                                                 hints: [],
                                                 quantifier: None,
                                                 projection: [
@@ -1708,10 +1685,8 @@ Query {
                                                         span: 22..23,
                                                     },
                                                 ],
-                                                from: [],
+                                                from: None,
                                                 lateral_views: [],
-                                                pivot: None,
-                                                unpivot: None,
                                                 selection: None,
                                                 group_by: None,
                                                 having: None,
@@ -1745,7 +1720,6 @@ Query {
                                     body: SetExpr {
                                         kind: Select(
                                             Select {
-                                                from_first: false,
                                                 hints: [],
                                                 quantifier: None,
                                                 projection: [
@@ -1763,10 +1737,8 @@ Query {
                                                         span: 34..35,
                                                     },
                                                 ],
-                                                from: [],
+                                                from: None,
                                                 lateral_views: [],
-                                                pivot: None,
-                                                unpivot: None,
                                                 selection: None,
                                                 group_by: None,
                                                 having: None,
@@ -1804,7 +1776,6 @@ Query {
                                                 body: SetExpr {
                                                     kind: Select(
                                                         Select {
-                                                            from_first: false,
                                                             hints: [],
                                                             quantifier: None,
                                                             projection: [
@@ -1822,10 +1793,8 @@ Query {
                                                                     span: 47..48,
                                                                 },
                                                             ],
-                                                            from: [],
+                                                            from: None,
                                                             lateral_views: [],
-                                                            pivot: None,
-                                                            unpivot: None,
                                                             selection: None,
                                                             group_by: None,
                                                             having: None,
@@ -2030,10 +1999,8 @@ Query {
                         span: 99..108,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -2059,7 +2026,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -2181,10 +2147,8 @@ Query {
                         span: 52..78,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -2210,7 +2174,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -2420,17 +2383,17 @@ Query {
                     },
                     SelectItem {
                         expr: Expr {
-                            kind: Parameter,
+                            kind: Parameter(
+                                0,
+                            ),
                             span: 68..69,
                         },
                         alias: None,
                         span: 68..69,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -2456,7 +2419,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -2646,10 +2608,8 @@ Query {
                         span: 36..66,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -2675,7 +2635,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -3011,10 +2970,8 @@ Query {
                         span: 110..131,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -3040,7 +2997,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -3128,6 +3084,9 @@ Query {
                                     over: Some(
                                         Spec(
                                             WindowSpec {
+                                                partitioning: Some(
+                                                    Partition,
+                                                ),
                                                 partition_by: [
                                                     Expr {
                                                         kind: Column(
@@ -3190,10 +3149,8 @@ Query {
                         span: 60..148,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -3219,7 +3176,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -3368,6 +3324,9 @@ Query {
                                     over: Some(
                                         Spec(
                                             WindowSpec {
+                                                partitioning: Some(
+                                                    Distribute,
+                                                ),
                                                 partition_by: [
                                                     Expr {
                                                         kind: Column(
@@ -3473,6 +3432,9 @@ Query {
                                     over: Some(
                                         Spec(
                                             WindowSpec {
+                                                partitioning: Some(
+                                                    Cluster,
+                                                ),
                                                 partition_by: [
                                                     Expr {
                                                         kind: Column(
@@ -3527,10 +3489,8 @@ Query {
                         span: 98..173,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -3556,7 +3516,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -3889,10 +3848,8 @@ Query {
                         span: 70..77,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -3918,7 +3875,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -4043,10 +3999,8 @@ Query {
                         span: 74..88,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,

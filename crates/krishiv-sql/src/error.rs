@@ -9,22 +9,33 @@
 //! | `/*` without `*/` | `UNCLOSED_BRACKETED_COMMENT` |
 //! | unquoted identifier with non-ASCII characters, or `a-b` as a name | `INVALID_IDENTIFIER` |
 //! | nesting deeper than [`crate::MAX_DEPTH`] | `FAILED_TO_PARSE_TOO_COMPLEX` |
+//! | `!` for `NOT` in `a ! IN (...)` and similar | `SYNTAX_DISCONTINUED.BANG_EQUALS_NOT` |
+//!
+//! A syntax error never echoes the text of a string literal (it may be a
+//! secret): the token is described instead.
 
 use krishiv_common::error::{
     FailedToParseTooComplex, InvalidIdentifier, KrishivError, ParseEmptyStatement,
-    ParseSyntaxError, UnclosedBracketedComment,
+    ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
 };
 
 use crate::ast::Span;
 
 /// A statement Spark's parser would reject.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Eq, thiserror::Error)]
 #[error("{error}")]
 pub struct ParseError {
     /// The error, with Spark's class, SQLSTATE and message parameters.
     pub error: KrishivError,
     /// The source text the error refers to (empty at the end of input).
     pub span: Span,
+}
+
+impl PartialEq for ParseError {
+    /// The error and its position (unlike [`Span`] equality alone).
+    fn eq(&self, other: &Self) -> bool {
+        self.error == other.error && self.span.range() == other.span.range()
+    }
 }
 
 impl From<ParseError> for KrishivError {
@@ -65,4 +76,13 @@ pub(crate) fn invalid_identifier(ident: &str, span: Span) -> ParseError {
 
 pub(crate) fn too_complex(span: Span) -> ParseError {
     at(FailedToParseTooComplex {}, span)
+}
+
+pub(crate) fn bang_equals_not(span: Span) -> ParseError {
+    at(
+        SyntaxDiscontinuedBangEqualsNot {
+            clause: "!".to_owned(),
+        },
+        span,
+    )
 }

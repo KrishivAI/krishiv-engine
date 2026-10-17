@@ -94,12 +94,8 @@ impl Engine for ParseOnlyEngine {
 /// docs).
 #[must_use]
 pub fn in_dql_scope(sql: &str) -> bool {
-    let Ok(tokens) = tokenize(sql) else {
-        let first = sql.split_whitespace().next().unwrap_or_default();
-        return ["SELECT", "WITH", "VALUES", "TABLE", "FROM"]
-            .iter()
-            .any(|k| first.eq_ignore_ascii_case(k));
-    };
+    let mut tokens = tokenize(sql);
+    tokens.retain(|t| !t.kind.is_trivia());
     let word = |i: usize, kw: &str| {
         tokens
             .get(i)

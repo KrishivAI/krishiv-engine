@@ -1,0 +1,2997 @@
+{
+ "format_version": 1,
+ "spark_tag": "v4.2.0",
+ "generator": "tests/scripts/gen_sql_keywords.py",
+ "notes": "Keyword tokens of SqlBaseLexer.g4 and the keyword rules of SqlBaseParser.g4; a keyword is reserved under spark.sql.ansi.enforceReservedKeywords when it is not in ansiNonReserved.",
+ "keywords": [
+  {
+   "text": "ADD",
+   "token": "ADD",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "AFTER",
+   "token": "AFTER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "AGGREGATE",
+   "token": "AGGREGATE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ALL",
+   "token": "ALL",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ALTER",
+   "token": "ALTER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ALWAYS",
+   "token": "ALWAYS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ANALYZE",
+   "token": "ANALYZE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "AND",
+   "token": "AND",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ANTI",
+   "token": "ANTI",
+   "ansi_reserved": false,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "ANY",
+   "token": "ANY",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ANY_VALUE",
+   "token": "ANY_VALUE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "APPROX",
+   "token": "APPROX",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ARCHIVE",
+   "token": "ARCHIVE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ARRAY",
+   "token": "ARRAY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "AS",
+   "token": "AS",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ASC",
+   "token": "ASC",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ASENSITIVE",
+   "token": "ASENSITIVE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "AT",
+   "token": "AT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ATOMIC",
+   "token": "ATOMIC",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "AUTHORIZATION",
+   "token": "AUTHORIZATION",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BEGIN",
+   "token": "BEGIN",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BERNOULLI",
+   "token": "BERNOULLI",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BETWEEN",
+   "token": "BETWEEN",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BIGINT",
+   "token": "BIGINT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BINARY",
+   "token": "BINARY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "X",
+   "token": "BINARY_HEX",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BINDING",
+   "token": "BINDING",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BOOLEAN",
+   "token": "BOOLEAN",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BOTH",
+   "token": "BOTH",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BUCKET",
+   "token": "BUCKET",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BUCKETS",
+   "token": "BUCKETS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BY",
+   "token": "BY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "BYTE",
+   "token": "BYTE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CACHE",
+   "token": "CACHE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CALL",
+   "token": "CALL",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CALLED",
+   "token": "CALLED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CASCADE",
+   "token": "CASCADE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CASE",
+   "token": "CASE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CAST",
+   "token": "CAST",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CATALOG",
+   "token": "CATALOG",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CATALOGS",
+   "token": "CATALOGS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CHANGE",
+   "token": "CHANGE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CHANGES",
+   "token": "CHANGES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CHAR",
+   "token": "CHAR",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CHARACTER",
+   "token": "CHARACTER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CHECK",
+   "token": "CHECK",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CLEAR",
+   "token": "CLEAR",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CLOSE",
+   "token": "CLOSE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CLUSTER",
+   "token": "CLUSTER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CLUSTERED",
+   "token": "CLUSTERED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CODEGEN",
+   "token": "CODEGEN",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COLLATE",
+   "token": "COLLATE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COLLATION",
+   "token": "COLLATION",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COLLATIONS",
+   "token": "COLLATIONS",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COLLECTION",
+   "token": "COLLECTION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COLUMN",
+   "token": "COLUMN",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COLUMNS",
+   "token": "COLUMNS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COMMENT",
+   "token": "COMMENT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COMMIT",
+   "token": "COMMIT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COMPACT",
+   "token": "COMPACT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COMPACTIONS",
+   "token": "COMPACTIONS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COMPENSATION",
+   "token": "COMPENSATION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COMPUTE",
+   "token": "COMPUTE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CONCATENATE",
+   "token": "CONCATENATE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CONDITION",
+   "token": "CONDITION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CONSTRAINT",
+   "token": "CONSTRAINT",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CONTAINS",
+   "token": "CONTAINS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CONTINUE",
+   "token": "CONTINUE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "COST",
+   "token": "COST",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CREATE",
+   "token": "CREATE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CROSS",
+   "token": "CROSS",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "CUBE",
+   "token": "CUBE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CURRENT",
+   "token": "CURRENT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CURRENT_DATABASE",
+   "token": "CURRENT_DATABASE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CURRENT_DATE",
+   "token": "CURRENT_DATE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CURRENT_PATH",
+   "token": "CURRENT_PATH",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CURRENT_SCHEMA",
+   "token": "CURRENT_SCHEMA",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CURRENT_TIME",
+   "token": "CURRENT_TIME",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CURRENT_TIMESTAMP",
+   "token": "CURRENT_TIMESTAMP",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CURRENT_USER",
+   "token": "CURRENT_USER",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "CURSOR",
+   "token": "CURSOR",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DATA",
+   "token": "DATA",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DATABASE",
+   "token": "DATABASE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DATABASES",
+   "token": "DATABASES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DATE",
+   "token": "DATE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DATEADD",
+   "token": "DATEADD",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DATEDIFF",
+   "token": "DATEDIFF",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DATE_ADD",
+   "token": "DATE_ADD",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DATE_DIFF",
+   "token": "DATE_DIFF",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DAY",
+   "token": "DAY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DAYOFYEAR",
+   "token": "DAYOFYEAR",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DAYS",
+   "token": "DAYS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DBPROPERTIES",
+   "token": "DBPROPERTIES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DEC",
+   "token": "DEC",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DECIMAL",
+   "token": "DECIMAL",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DECLARE",
+   "token": "DECLARE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DEFAULT",
+   "token": "DEFAULT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DEFAULT_PATH",
+   "token": "DEFAULT_PATH",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DEFINED",
+   "token": "DEFINED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DEFINER",
+   "token": "DEFINER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DELAY",
+   "token": "DELAY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DELETE",
+   "token": "DELETE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DELIMITED",
+   "token": "DELIMITED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DESC",
+   "token": "DESC",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DESCRIBE",
+   "token": "DESCRIBE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DETERMINISTIC",
+   "token": "DETERMINISTIC",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DFS",
+   "token": "DFS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DIRECTORIES",
+   "token": "DIRECTORIES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DIRECTORY",
+   "token": "DIRECTORY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DISTANCE",
+   "token": "DISTANCE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DISTINCT",
+   "token": "DISTINCT",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DISTRIBUTE",
+   "token": "DISTRIBUTE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DIV",
+   "token": "DIV",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DO",
+   "token": "DO",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DOUBLE",
+   "token": "DOUBLE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "DROP",
+   "token": "DROP",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ELSE",
+   "token": "ELSE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ELSEIF",
+   "token": "ELSEIF",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "END",
+   "token": "END",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ENFORCED",
+   "token": "ENFORCED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ESCAPE",
+   "token": "ESCAPE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ESCAPED",
+   "token": "ESCAPED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EVOLUTION",
+   "token": "EVOLUTION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXACT",
+   "token": "EXACT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXCEPT",
+   "token": "EXCEPT",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "EXCHANGE",
+   "token": "EXCHANGE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXCLUDE",
+   "token": "EXCLUDE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXCLUSIVE",
+   "token": "EXCLUSIVE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXECUTE",
+   "token": "EXECUTE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXISTS",
+   "token": "EXISTS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXIT",
+   "token": "EXIT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXPLAIN",
+   "token": "EXPLAIN",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXPORT",
+   "token": "EXPORT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXTEND",
+   "token": "EXTEND",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXTENDED",
+   "token": "EXTENDED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXTERNAL",
+   "token": "EXTERNAL",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "EXTRACT",
+   "token": "EXTRACT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FALSE",
+   "token": "FALSE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FETCH",
+   "token": "FETCH",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FIELDS",
+   "token": "FIELDS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FILEFORMAT",
+   "token": "FILEFORMAT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FILTER",
+   "token": "FILTER",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FIRST",
+   "token": "FIRST",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FLOAT",
+   "token": "FLOAT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FLOW",
+   "token": "FLOW",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FOLLOWING",
+   "token": "FOLLOWING",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FOR",
+   "token": "FOR",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FOREIGN",
+   "token": "FOREIGN",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FORMAT",
+   "token": "FORMAT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FORMATTED",
+   "token": "FORMATTED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FOUND",
+   "token": "FOUND",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FROM",
+   "token": "FROM",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FULL",
+   "token": "FULL",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "FUNCTION",
+   "token": "FUNCTION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "FUNCTIONS",
+   "token": "FUNCTIONS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "GENERATED",
+   "token": "GENERATED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "GEOGRAPHY",
+   "token": "GEOGRAPHY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "GEOMETRY",
+   "token": "GEOMETRY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "GLOBAL",
+   "token": "GLOBAL",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "GRANT",
+   "token": "GRANT",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "GROUP",
+   "token": "GROUP",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "GROUPING",
+   "token": "GROUPING",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "HANDLER",
+   "token": "HANDLER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "HAVING",
+   "token": "HAVING",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "HOUR",
+   "token": "HOUR",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "HOURS",
+   "token": "HOURS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "IDENTIFIED",
+   "token": "IDENTIFIED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "IDENTIFIER",
+   "token": "IDENTIFIER_KW",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "IDENTITY",
+   "token": "IDENTITY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "IF",
+   "token": "IF",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "IGNORE",
+   "token": "IGNORE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ILIKE",
+   "token": "ILIKE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "IMMEDIATE",
+   "token": "IMMEDIATE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "IMPORT",
+   "token": "IMPORT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "IN",
+   "token": "IN",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INCLUDE",
+   "token": "INCLUDE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INCLUSIVE",
+   "token": "INCLUSIVE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INCREMENT",
+   "token": "INCREMENT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INDEX",
+   "token": "INDEX",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INDEXES",
+   "token": "INDEXES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INNER",
+   "token": "INNER",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "INPATH",
+   "token": "INPATH",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INPUT",
+   "token": "INPUT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INPUTFORMAT",
+   "token": "INPUTFORMAT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INSENSITIVE",
+   "token": "INSENSITIVE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INSERT",
+   "token": "INSERT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INT",
+   "token": "INT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INTEGER",
+   "token": "INTEGER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INTERSECT",
+   "token": "INTERSECT",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "INTERVAL",
+   "token": "INTERVAL",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INTO",
+   "token": "INTO",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "INVOKER",
+   "token": "INVOKER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "IS",
+   "token": "IS",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ITEMS",
+   "token": "ITEMS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ITERATE",
+   "token": "ITERATE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "JOIN",
+   "token": "JOIN",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "JSON",
+   "token": "JSON",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "KEY",
+   "token": "KEY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "KEYS",
+   "token": "KEYS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LANGUAGE",
+   "token": "LANGUAGE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LAST",
+   "token": "LAST",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LATERAL",
+   "token": "LATERAL",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "LAZY",
+   "token": "LAZY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LEADING",
+   "token": "LEADING",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LEAVE",
+   "token": "LEAVE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LEFT",
+   "token": "LEFT",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "LEVEL",
+   "token": "LEVEL",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LIKE",
+   "token": "LIKE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LIMIT",
+   "token": "LIMIT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LINES",
+   "token": "LINES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LIST",
+   "token": "LIST",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LOAD",
+   "token": "LOAD",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LOCAL",
+   "token": "LOCAL",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LOCATION",
+   "token": "LOCATION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LOCK",
+   "token": "LOCK",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LOCKS",
+   "token": "LOCKS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LOGICAL",
+   "token": "LOGICAL",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LONG",
+   "token": "LONG",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "LOOP",
+   "token": "LOOP",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MACRO",
+   "token": "MACRO",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MAP",
+   "token": "MAP",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MATCHED",
+   "token": "MATCHED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MATERIALIZED",
+   "token": "MATERIALIZED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MAX",
+   "token": "MAX",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MEASURE",
+   "token": "MEASURE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MERGE",
+   "token": "MERGE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "METRICS",
+   "token": "METRICS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MICROSECOND",
+   "token": "MICROSECOND",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MICROSECONDS",
+   "token": "MICROSECONDS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MILLISECOND",
+   "token": "MILLISECOND",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MILLISECONDS",
+   "token": "MILLISECONDS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MINUTE",
+   "token": "MINUTE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MINUTES",
+   "token": "MINUTES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MODIFIES",
+   "token": "MODIFIES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MONTH",
+   "token": "MONTH",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MONTHS",
+   "token": "MONTHS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MSCK",
+   "token": "MSCK",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NAME",
+   "token": "NAME",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NAMESPACE",
+   "token": "NAMESPACE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NAMESPACES",
+   "token": "NAMESPACES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NANOSECOND",
+   "token": "NANOSECOND",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NANOSECONDS",
+   "token": "NANOSECONDS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NATURAL",
+   "token": "NATURAL",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "NEAREST",
+   "token": "NEAREST",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NEXT",
+   "token": "NEXT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NO",
+   "token": "NO",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NONE",
+   "token": "NONE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NORELY",
+   "token": "NORELY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NOT",
+   "token": "NOT",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NULL",
+   "token": "NULL",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NULLS",
+   "token": "NULLS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "NUMERIC",
+   "token": "NUMERIC",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OF",
+   "token": "OF",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OFFSET",
+   "token": "OFFSET",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ON",
+   "token": "ON",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "ONLY",
+   "token": "ONLY",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OPEN",
+   "token": "OPEN",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OPTION",
+   "token": "OPTION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OPTIONS",
+   "token": "OPTIONS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OR",
+   "token": "OR",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ORDER",
+   "token": "ORDER",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OUT",
+   "token": "OUT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OUTER",
+   "token": "OUTER",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OUTPUTFORMAT",
+   "token": "OUTPUTFORMAT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OVER",
+   "token": "OVER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OVERLAPS",
+   "token": "OVERLAPS",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OVERLAY",
+   "token": "OVERLAY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "OVERWRITE",
+   "token": "OVERWRITE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PARTITION",
+   "token": "PARTITION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PARTITIONED",
+   "token": "PARTITIONED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PARTITIONS",
+   "token": "PARTITIONS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PATH",
+   "token": "PATH",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PERCENT",
+   "token": "PERCENTLIT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PIVOT",
+   "token": "PIVOT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PLACING",
+   "token": "PLACING",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "POSITION",
+   "token": "POSITION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PRECEDING",
+   "token": "PRECEDING",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PRIMARY",
+   "token": "PRIMARY",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PRINCIPALS",
+   "token": "PRINCIPALS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PROCEDURE",
+   "token": "PROCEDURE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PROCEDURES",
+   "token": "PROCEDURES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PROPERTIES",
+   "token": "PROPERTIES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "PURGE",
+   "token": "PURGE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "QUALIFY",
+   "token": "QUALIFY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "QUARTER",
+   "token": "QUARTER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "QUERY",
+   "token": "QUERY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RANGE",
+   "token": "RANGE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "READ",
+   "token": "READ",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "READS",
+   "token": "READS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "REAL",
+   "token": "REAL",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RECORDREADER",
+   "token": "RECORDREADER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RECORDWRITER",
+   "token": "RECORDWRITER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RECOVER",
+   "token": "RECOVER",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RECURSION",
+   "token": "RECURSION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RECURSIVE",
+   "token": "RECURSIVE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "REDUCE",
+   "token": "REDUCE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "REFERENCES",
+   "token": "REFERENCES",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "REFRESH",
+   "token": "REFRESH",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RELY",
+   "token": "RELY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RENAME",
+   "token": "RENAME",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "REPAIR",
+   "token": "REPAIR",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "REPEAT",
+   "token": "REPEAT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "REPEATABLE",
+   "token": "REPEATABLE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "REPLACE",
+   "token": "REPLACE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RESET",
+   "token": "RESET",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RESPECT",
+   "token": "RESPECT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RESTRICT",
+   "token": "RESTRICT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RETURN",
+   "token": "RETURN",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RETURNS",
+   "token": "RETURNS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "REVOKE",
+   "token": "REVOKE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "RIGHT",
+   "token": "RIGHT",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "RLIKE",
+   "token": "RLIKE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "REGEXP",
+   "token": "RLIKE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ROLE",
+   "token": "ROLE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ROLES",
+   "token": "ROLES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ROLLBACK",
+   "token": "ROLLBACK",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ROLLUP",
+   "token": "ROLLUP",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ROW",
+   "token": "ROW",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ROWS",
+   "token": "ROWS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SCHEMA",
+   "token": "SCHEMA",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SCHEMAS",
+   "token": "SCHEMAS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SECOND",
+   "token": "SECOND",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SECONDS",
+   "token": "SECONDS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SECURITY",
+   "token": "SECURITY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SELECT",
+   "token": "SELECT",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SEMI",
+   "token": "SEMI",
+   "ansi_reserved": false,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "SEPARATED",
+   "token": "SEPARATED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SERDE",
+   "token": "SERDE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SERDEPROPERTIES",
+   "token": "SERDEPROPERTIES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SESSION_USER",
+   "token": "SESSION_USER",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SET",
+   "token": "SET",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "MINUS",
+   "token": "SETMINUS",
+   "ansi_reserved": false,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "SETS",
+   "token": "SETS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SHORT",
+   "token": "SHORT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SHOW",
+   "token": "SHOW",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SIMILARITY",
+   "token": "SIMILARITY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SINGLE",
+   "token": "SINGLE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SKEWED",
+   "token": "SKEWED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SMALLINT",
+   "token": "SMALLINT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SOME",
+   "token": "SOME",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SORT",
+   "token": "SORT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SORTED",
+   "token": "SORTED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SOURCE",
+   "token": "SOURCE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SPECIFIC",
+   "token": "SPECIFIC",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SQL",
+   "token": "SQL",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SQLEXCEPTION",
+   "token": "SQLEXCEPTION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SQLSTATE",
+   "token": "SQLSTATE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "START",
+   "token": "START",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "STATISTICS",
+   "token": "STATISTICS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "STORED",
+   "token": "STORED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "STRATIFY",
+   "token": "STRATIFY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "STREAM",
+   "token": "STREAM",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "STREAMING",
+   "token": "STREAMING",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "STRING",
+   "token": "STRING",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "STRUCT",
+   "token": "STRUCT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SUBSTR",
+   "token": "SUBSTR",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SUBSTRING",
+   "token": "SUBSTRING",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SYNC",
+   "token": "SYNC",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SYSTEM",
+   "token": "SYSTEM",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SYSTEM_PATH",
+   "token": "SYSTEM_PATH",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SYSTEM_TIME",
+   "token": "SYSTEM_TIME",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "SYSTEM_VERSION",
+   "token": "SYSTEM_VERSION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TABLE",
+   "token": "TABLE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TABLES",
+   "token": "TABLES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TABLESAMPLE",
+   "token": "TABLESAMPLE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TARGET",
+   "token": "TARGET",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TBLPROPERTIES",
+   "token": "TBLPROPERTIES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TEMPORARY",
+   "token": "TEMPORARY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TEMP",
+   "token": "TEMPORARY",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TERMINATED",
+   "token": "TERMINATED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "THEN",
+   "token": "THEN",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TIME",
+   "token": "TIME",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TIMEDIFF",
+   "token": "TIMEDIFF",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TIMESTAMP",
+   "token": "TIMESTAMP",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TIMESTAMPADD",
+   "token": "TIMESTAMPADD",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TIMESTAMPDIFF",
+   "token": "TIMESTAMPDIFF",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TIMESTAMP_LTZ",
+   "token": "TIMESTAMP_LTZ",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TIMESTAMP_NTZ",
+   "token": "TIMESTAMP_NTZ",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TINYINT",
+   "token": "TINYINT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TO",
+   "token": "TO",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TOUCH",
+   "token": "TOUCH",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TRAILING",
+   "token": "TRAILING",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TRANSACTION",
+   "token": "TRANSACTION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TRANSACTIONS",
+   "token": "TRANSACTIONS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TRANSFORM",
+   "token": "TRANSFORM",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TRIM",
+   "token": "TRIM",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TRUE",
+   "token": "TRUE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TRUNCATE",
+   "token": "TRUNCATE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TRY_CAST",
+   "token": "TRY_CAST",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "TYPE",
+   "token": "TYPE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "UNARCHIVE",
+   "token": "UNARCHIVE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "UNBOUNDED",
+   "token": "UNBOUNDED",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "UNCACHE",
+   "token": "UNCACHE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "UNION",
+   "token": "UNION",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "UNIQUE",
+   "token": "UNIQUE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "UNKNOWN",
+   "token": "UNKNOWN",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "UNLOCK",
+   "token": "UNLOCK",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "UNPIVOT",
+   "token": "UNPIVOT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "UNSET",
+   "token": "UNSET",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "UNTIL",
+   "token": "UNTIL",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "UPDATE",
+   "token": "UPDATE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "USE",
+   "token": "USE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "USER",
+   "token": "USER",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "USING",
+   "token": "USING",
+   "ansi_reserved": true,
+   "strict_non_reserved": true,
+   "non_reserved": false
+  },
+  {
+   "text": "VALUE",
+   "token": "VALUE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "VALUES",
+   "token": "VALUES",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "VAR",
+   "token": "VAR",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "VARCHAR",
+   "token": "VARCHAR",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "VARIABLE",
+   "token": "VARIABLE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "VARIANT",
+   "token": "VARIANT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "VERSION",
+   "token": "VERSION",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "VIEW",
+   "token": "VIEW",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "VIEWS",
+   "token": "VIEWS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "VOID",
+   "token": "VOID",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "WATERMARK",
+   "token": "WATERMARK",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "WEEK",
+   "token": "WEEK",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "WEEKS",
+   "token": "WEEKS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "WHEN",
+   "token": "WHEN",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "WHERE",
+   "token": "WHERE",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "WHILE",
+   "token": "WHILE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "WINDOW",
+   "token": "WINDOW",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "WITH",
+   "token": "WITH",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "WITHIN",
+   "token": "WITHIN",
+   "ansi_reserved": true,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "WITHOUT",
+   "token": "WITHOUT",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "YEAR",
+   "token": "YEAR",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "YEARS",
+   "token": "YEARS",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  },
+  {
+   "text": "ZONE",
+   "token": "ZONE",
+   "ansi_reserved": false,
+   "strict_non_reserved": false,
+   "non_reserved": true
+  }
+ ]
+}

@@ -35,7 +35,6 @@ Query {
                                 left: SetExpr {
                                     kind: Select(
                                         Select {
-                                            from_first: false,
                                             hints: [],
                                             quantifier: None,
                                             projection: [
@@ -53,10 +52,8 @@ Query {
                                                     span: 55..56,
                                                 },
                                             ],
-                                            from: [],
+                                            from: None,
                                             lateral_views: [],
-                                            pivot: None,
-                                            unpivot: None,
                                             selection: None,
                                             group_by: None,
                                             having: None,
@@ -70,7 +67,6 @@ Query {
                                 right: SetExpr {
                                     kind: Select(
                                         Select {
-                                            from_first: false,
                                             hints: [],
                                             quantifier: None,
                                             projection: [
@@ -106,32 +102,40 @@ Query {
                                                     span: 74..79,
                                                 },
                                             ],
-                                            from: [
-                                                Relation {
-                                                    lateral: false,
-                                                    primary: TableFactor {
-                                                        kind: Table(
-                                                            ObjectName {
-                                                                parts: [
-                                                                    Ident {
-                                                                        value: "r",
-                                                                        quoted: false,
+                                            from: Some(
+                                                FromClause {
+                                                    relations: [
+                                                        Relation {
+                                                            lateral: false,
+                                                            primary: TableFactor {
+                                                                kind: Table {
+                                                                    name: ObjectName {
+                                                                        parts: [
+                                                                            Ident {
+                                                                                value: "r",
+                                                                                quoted: false,
+                                                                                span: 85..86,
+                                                                            },
+                                                                        ],
                                                                         span: 85..86,
                                                                     },
-                                                                ],
+                                                                    temporal: None,
+                                                                    options: [],
+                                                                },
+                                                                alias: None,
                                                                 span: 85..86,
                                                             },
-                                                        ),
-                                                        alias: None,
-                                                        span: 85..86,
-                                                    },
-                                                    extensions: [],
-                                                    span: 85..86,
+                                                            extensions: [],
+                                                            span: 85..86,
+                                                        },
+                                                    ],
+                                                    lateral_views: [],
+                                                    pivot: None,
+                                                    unpivot: None,
+                                                    span: 80..86,
                                                 },
-                                            ],
+                                            ),
                                             lateral_views: [],
-                                            pivot: None,
-                                            unpivot: None,
                                             selection: None,
                                             group_by: None,
                                             having: None,
@@ -163,7 +167,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -179,32 +182,40 @@ Query {
                         span: 95..96,
                     },
                 ],
-                from: [
-                    Relation {
-                        lateral: false,
-                        primary: TableFactor {
-                            kind: Table(
-                                ObjectName {
-                                    parts: [
-                                        Ident {
-                                            value: "r",
-                                            quoted: false,
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "r",
+                                                    quoted: false,
+                                                    span: 102..103,
+                                                },
+                                            ],
                                             span: 102..103,
                                         },
-                                    ],
+                                        temporal: None,
+                                        options: [],
+                                    },
+                                    alias: None,
                                     span: 102..103,
                                 },
-                            ),
-                            alias: None,
-                            span: 102..103,
-                        },
-                        extensions: [],
-                        span: 102..103,
+                                extensions: [],
+                                span: 102..103,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 97..103,
                     },
-                ],
+                ),
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -242,7 +253,6 @@ Query {
                             left: SetExpr {
                                 kind: Select(
                                     Select {
-                                        from_first: false,
                                         hints: [],
                                         quantifier: None,
                                         projection: [
@@ -260,10 +270,8 @@ Query {
                                                 span: 7..8,
                                             },
                                         ],
-                                        from: [],
+                                        from: None,
                                         lateral_views: [],
-                                        pivot: None,
-                                        unpivot: None,
                                         selection: None,
                                         group_by: None,
                                         having: None,
@@ -283,7 +291,6 @@ Query {
                                     left: SetExpr {
                                         kind: Select(
                                             Select {
-                                                from_first: false,
                                                 hints: [],
                                                 quantifier: None,
                                                 projection: [
@@ -301,10 +308,8 @@ Query {
                                                         span: 22..23,
                                                     },
                                                 ],
-                                                from: [],
+                                                from: None,
                                                 lateral_views: [],
-                                                pivot: None,
-                                                unpivot: None,
                                                 selection: None,
                                                 group_by: None,
                                                 having: None,
@@ -318,7 +323,6 @@ Query {
                                     right: SetExpr {
                                         kind: Select(
                                             Select {
-                                                from_first: false,
                                                 hints: [],
                                                 quantifier: None,
                                                 projection: [
@@ -336,10 +340,8 @@ Query {
                                                         span: 50..51,
                                                     },
                                                 ],
-                                                from: [],
+                                                from: None,
                                                 lateral_views: [],
-                                                pivot: None,
-                                                unpivot: None,
                                                 selection: None,
                                                 group_by: None,
                                                 having: None,
@@ -359,7 +361,6 @@ Query {
                     right: SetExpr {
                         kind: Select(
                             Select {
-                                from_first: false,
                                 hints: [],
                                 quantifier: None,
                                 projection: [
@@ -377,10 +378,8 @@ Query {
                                         span: 66..67,
                                     },
                                 ],
-                                from: [],
+                                from: None,
                                 lateral_views: [],
-                                pivot: None,
-                                unpivot: None,
                                 selection: None,
                                 group_by: None,
                                 having: None,
@@ -397,7 +396,6 @@ Query {
             right: SetExpr {
                 kind: Select(
                     Select {
-                        from_first: false,
                         hints: [],
                         quantifier: None,
                         projection: [
@@ -415,10 +413,8 @@ Query {
                                 span: 81..82,
                             },
                         ],
-                        from: [],
+                        from: None,
                         lateral_views: [],
-                        pivot: None,
-                        unpivot: None,
                         selection: None,
                         group_by: None,
                         having: None,
@@ -591,7 +587,6 @@ Query {
                 body: SetExpr {
                     kind: Select(
                         Select {
-                            from_first: false,
                             hints: [],
                             quantifier: None,
                             projection: [
@@ -609,10 +604,8 @@ Query {
                                     span: 8..9,
                                 },
                             ],
-                            from: [],
+                            from: None,
                             lateral_views: [],
-                            pivot: None,
-                            unpivot: None,
                             selection: None,
                             group_by: None,
                             having: None,
@@ -702,7 +695,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -723,32 +715,40 @@ Query {
                         span: 7..8,
                     },
                 ],
-                from: [
-                    Relation {
-                        lateral: false,
-                        primary: TableFactor {
-                            kind: Table(
-                                ObjectName {
-                                    parts: [
-                                        Ident {
-                                            value: "t",
-                                            quoted: false,
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 14..15,
+                                                },
+                                            ],
                                             span: 14..15,
                                         },
-                                    ],
+                                        temporal: None,
+                                        options: [],
+                                    },
+                                    alias: None,
                                     span: 14..15,
                                 },
-                            ),
-                            alias: None,
-                            span: 14..15,
-                        },
-                        extensions: [],
-                        span: 14..15,
+                                extensions: [],
+                                span: 14..15,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 9..15,
                     },
-                ],
+                ),
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -816,6 +816,7 @@ Query {
             },
             window: Spec(
                 WindowSpec {
+                    partitioning: None,
                     partition_by: [],
                     order_by: [
                         SortItem {
@@ -866,107 +867,119 @@ Query {
 Query {
     with: None,
     body: SetExpr {
-        kind: SetOp {
-            op: Union,
-            quantifier: Some(
-                All,
-            ),
-            left: SetExpr {
-                kind: Select(
-                    Select {
-                        from_first: true,
-                        hints: [],
-                        quantifier: None,
-                        projection: [
-                            SelectItem {
-                                expr: Expr {
-                                    kind: Column(
-                                        [
+        kind: FromStatement(
+            FromStatement {
+                from: FromClause {
+                    relations: [
+                        Relation {
+                            lateral: false,
+                            primary: TableFactor {
+                                kind: Table {
+                                    name: ObjectName {
+                                        parts: [
                                             Ident {
-                                                value: "a",
+                                                value: "t",
                                                 quoted: false,
-                                                span: 14..15,
+                                                span: 5..6,
                                             },
                                         ],
-                                    ),
-                                    span: 14..15,
+                                        span: 5..6,
+                                    },
+                                    temporal: None,
+                                    options: [],
                                 },
                                 alias: None,
-                                span: 14..15,
-                            },
-                        ],
-                        from: [
-                            Relation {
-                                lateral: false,
-                                primary: TableFactor {
-                                    kind: Table(
-                                        ObjectName {
-                                            parts: [
-                                                Ident {
-                                                    value: "t",
-                                                    quoted: false,
-                                                    span: 5..6,
-                                                },
-                                            ],
-                                            span: 5..6,
-                                        },
-                                    ),
-                                    alias: None,
-                                    span: 5..6,
-                                },
-                                extensions: [],
                                 span: 5..6,
                             },
-                        ],
-                        lateral_views: [],
-                        pivot: None,
-                        unpivot: None,
-                        selection: Some(
-                            Expr {
-                                kind: Binary(
-                                    Expr {
-                                        kind: Column(
-                                            [
-                                                Ident {
-                                                    value: "a",
-                                                    quoted: false,
-                                                    span: 22..23,
-                                                },
-                                            ],
-                                        ),
-                                        span: 22..23,
-                                    },
-                                    Gt,
-                                    Expr {
-                                        kind: Literal(
-                                            Number {
-                                                text: "1",
-                                                kind: Int,
-                                            },
-                                        ),
-                                        span: 26..27,
-                                    },
-                                ),
-                                span: 22..27,
-                            },
-                        ),
-                        group_by: None,
-                        having: None,
-                        windows: [],
-                        qualify: None,
-                        span: 0..27,
-                    },
-                ),
-                span: 0..27,
-            },
-            right: SetExpr {
-                kind: Query(
+                            extensions: [],
+                            span: 5..6,
+                        },
+                    ],
+                    lateral_views: [],
+                    pivot: None,
+                    unpivot: None,
+                    span: 0..6,
+                },
+                bodies: [
                     Query {
                         with: None,
                         body: SetExpr {
                             kind: Select(
                                 Select {
-                                    from_first: true,
+                                    hints: [],
+                                    quantifier: None,
+                                    projection: [
+                                        SelectItem {
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "a",
+                                                            quoted: false,
+                                                            span: 14..15,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 14..15,
+                                            },
+                                            alias: None,
+                                            span: 14..15,
+                                        },
+                                    ],
+                                    from: None,
+                                    lateral_views: [],
+                                    selection: Some(
+                                        Expr {
+                                            kind: Binary(
+                                                Expr {
+                                                    kind: Column(
+                                                        [
+                                                            Ident {
+                                                                value: "a",
+                                                                quoted: false,
+                                                                span: 22..23,
+                                                            },
+                                                        ],
+                                                    ),
+                                                    span: 22..23,
+                                                },
+                                                Gt,
+                                                Expr {
+                                                    kind: Literal(
+                                                        Number {
+                                                            text: "1",
+                                                            kind: Int,
+                                                        },
+                                                    ),
+                                                    span: 26..27,
+                                                },
+                                            ),
+                                            span: 22..27,
+                                        },
+                                    ),
+                                    group_by: None,
+                                    having: None,
+                                    windows: [],
+                                    qualify: None,
+                                    span: 7..27,
+                                },
+                            ),
+                            span: 7..27,
+                        },
+                        order_by: [],
+                        cluster_by: [],
+                        distribute_by: [],
+                        sort_by: [],
+                        windows: [],
+                        limit: None,
+                        offset: None,
+                        span: 7..27,
+                    },
+                    Query {
+                        with: None,
+                        body: SetExpr {
+                            kind: Select(
+                                Select {
                                     hints: [],
                                     quantifier: None,
                                     projection: [
@@ -987,41 +1000,17 @@ Query {
                                             span: 35..36,
                                         },
                                     ],
-                                    from: [
-                                        Relation {
-                                            lateral: false,
-                                            primary: TableFactor {
-                                                kind: Table(
-                                                    ObjectName {
-                                                        parts: [
-                                                            Ident {
-                                                                value: "t",
-                                                                quoted: false,
-                                                                span: 5..6,
-                                                            },
-                                                        ],
-                                                        span: 5..6,
-                                                    },
-                                                ),
-                                                alias: None,
-                                                span: 5..6,
-                                            },
-                                            extensions: [],
-                                            span: 5..6,
-                                        },
-                                    ],
+                                    from: None,
                                     lateral_views: [],
-                                    pivot: None,
-                                    unpivot: None,
                                     selection: None,
                                     group_by: None,
                                     having: None,
                                     windows: [],
                                     qualify: None,
-                                    span: 0..36,
+                                    span: 28..36,
                                 },
                             ),
-                            span: 0..36,
+                            span: 28..36,
                         },
                         order_by: [
                             SortItem {
@@ -1048,12 +1037,12 @@ Query {
                         windows: [],
                         limit: None,
                         offset: None,
-                        span: 0..47,
+                        span: 28..47,
                     },
-                ),
+                ],
                 span: 0..47,
             },
-        },
+        ),
         span: 0..47,
     },
     order_by: [],
@@ -1069,84 +1058,81 @@ Query {
 Query {
     with: None,
     body: SetExpr {
-        kind: Select(
-            Select {
-                from_first: true,
-                hints: [],
-                quantifier: None,
-                projection: [],
-                from: [
-                    Relation {
-                        lateral: false,
-                        primary: TableFactor {
-                            kind: Table(
-                                ObjectName {
-                                    parts: [
-                                        Ident {
-                                            value: "t",
-                                            quoted: false,
-                                            span: 5..6,
-                                        },
-                                    ],
-                                    span: 5..6,
+        kind: FromStatement(
+            FromStatement {
+                from: FromClause {
+                    relations: [
+                        Relation {
+                            lateral: false,
+                            primary: TableFactor {
+                                kind: Table {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "t",
+                                                quoted: false,
+                                                span: 5..6,
+                                            },
+                                        ],
+                                        span: 5..6,
+                                    },
+                                    temporal: None,
+                                    options: [],
                                 },
-                            ),
-                            alias: None,
+                                alias: None,
+                                span: 5..6,
+                            },
+                            extensions: [],
                             span: 5..6,
                         },
-                        extensions: [],
-                        span: 5..6,
-                    },
-                ],
-                lateral_views: [
-                    LateralView {
-                        outer: false,
-                        function: ObjectName {
-                            parts: [
-                                Ident {
-                                    value: "explode",
-                                    quoted: false,
-                                    span: 20..27,
+                    ],
+                    lateral_views: [
+                        LateralView {
+                            outer: false,
+                            function: ObjectName {
+                                parts: [
+                                    Ident {
+                                        value: "explode",
+                                        quoted: false,
+                                        span: 20..27,
+                                    },
+                                ],
+                                span: 20..27,
+                            },
+                            args: [
+                                Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "x",
+                                                quoted: false,
+                                                span: 28..29,
+                                            },
+                                        ],
+                                    ),
+                                    span: 28..29,
                                 },
                             ],
-                            span: 20..27,
-                        },
-                        args: [
-                            Expr {
-                                kind: Column(
-                                    [
-                                        Ident {
-                                            value: "x",
-                                            quoted: false,
-                                            span: 28..29,
-                                        },
-                                    ],
-                                ),
-                                span: 28..29,
-                            },
-                        ],
-                        table: Ident {
-                            value: "e",
-                            quoted: false,
-                            span: 31..32,
-                        },
-                        columns: [
-                            Ident {
-                                value: "c",
+                            table: Ident {
+                                value: "e",
                                 quoted: false,
-                                span: 36..37,
+                                span: 31..32,
                             },
-                        ],
-                        span: 7..37,
-                    },
-                ],
-                pivot: None,
-                unpivot: None,
-                selection: None,
-                group_by: None,
-                having: None,
-                windows: [],
-                qualify: None,
+                            columns: [
+                                Ident {
+                                    value: "c",
+                                    quoted: false,
+                                    span: 36..37,
+                                },
+                            ],
+                            span: 7..37,
+                        },
+                    ],
+                    pivot: None,
+                    unpivot: None,
+                    span: 0..37,
+                },
+                bodies: [],
                 span: 0..37,
             },
         ),
@@ -1167,7 +1153,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [
                     Hint {
                         name: Ident {
@@ -1371,32 +1356,40 @@ Query {
                         span: 100..105,
                     },
                 ],
-                from: [
-                    Relation {
-                        lateral: false,
-                        primary: TableFactor {
-                            kind: Table(
-                                ObjectName {
-                                    parts: [
-                                        Ident {
-                                            value: "t",
-                                            quoted: false,
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 111..112,
+                                                },
+                                            ],
                                             span: 111..112,
                                         },
-                                    ],
+                                        temporal: None,
+                                        options: [],
+                                    },
+                                    alias: None,
                                     span: 111..112,
                                 },
-                            ),
-                            alias: None,
-                            span: 111..112,
-                        },
-                        extensions: [],
-                        span: 111..112,
+                                extensions: [],
+                                span: 111..112,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 106..112,
                     },
-                ],
+                ),
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -1422,7 +1415,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -1459,32 +1451,40 @@ Query {
                         span: 12..20,
                     },
                 ],
-                from: [
-                    Relation {
-                        lateral: false,
-                        primary: TableFactor {
-                            kind: Table(
-                                ObjectName {
-                                    parts: [
-                                        Ident {
-                                            value: "t",
-                                            quoted: false,
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 26..27,
+                                                },
+                                            ],
                                             span: 26..27,
                                         },
-                                    ],
+                                        temporal: None,
+                                        options: [],
+                                    },
+                                    alias: None,
                                     span: 26..27,
                                 },
-                            ),
-                            alias: None,
-                            span: 26..27,
-                        },
-                        extensions: [],
-                        span: 26..27,
+                                extensions: [],
+                                span: 26..27,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 21..27,
                     },
-                ],
+                ),
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -1510,7 +1510,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -1531,32 +1530,40 @@ Query {
                         span: 7..8,
                     },
                 ],
-                from: [
-                    Relation {
-                        lateral: false,
-                        primary: TableFactor {
-                            kind: Table(
-                                ObjectName {
-                                    parts: [
-                                        Ident {
-                                            value: "t",
-                                            quoted: false,
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 14..15,
+                                                },
+                                            ],
                                             span: 14..15,
                                         },
-                                    ],
+                                        temporal: None,
+                                        options: [],
+                                    },
+                                    alias: None,
                                     span: 14..15,
                                 },
-                            ),
-                            alias: None,
-                            span: 14..15,
-                        },
-                        extensions: [],
-                        span: 14..15,
+                                extensions: [],
+                                span: 14..15,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 9..15,
                     },
-                ],
+                ),
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: Some(
                     GroupBy {
@@ -1704,6 +1711,9 @@ Query {
             },
             window: Spec(
                 WindowSpec {
+                    partitioning: Some(
+                        Partition,
+                    ),
                     partition_by: [
                         Expr {
                             kind: Column(
@@ -1736,7 +1746,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -1757,32 +1766,40 @@ Query {
                         span: 7..8,
                     },
                 ],
-                from: [
-                    Relation {
-                        lateral: false,
-                        primary: TableFactor {
-                            kind: Table(
-                                ObjectName {
-                                    parts: [
-                                        Ident {
-                                            value: "t",
-                                            quoted: false,
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 14..15,
+                                                },
+                                            ],
                                             span: 14..15,
                                         },
-                                    ],
+                                        temporal: None,
+                                        options: [],
+                                    },
+                                    alias: None,
                                     span: 14..15,
                                 },
-                            ),
-                            alias: None,
-                            span: 14..15,
-                        },
-                        extensions: [],
-                        span: 14..15,
+                                extensions: [],
+                                span: 14..15,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 9..15,
                     },
-                ],
+                ),
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: Some(
                     GroupBy {
@@ -2000,7 +2017,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -2021,32 +2037,40 @@ Query {
                         span: 7..8,
                     },
                 ],
-                from: [
-                    Relation {
-                        lateral: false,
-                        primary: TableFactor {
-                            kind: Table(
-                                ObjectName {
-                                    parts: [
-                                        Ident {
-                                            value: "t",
-                                            quoted: false,
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 14..15,
+                                                },
+                                            ],
                                             span: 14..15,
                                         },
-                                    ],
+                                        temporal: None,
+                                        options: [],
+                                    },
+                                    alias: None,
                                     span: 14..15,
                                 },
-                            ),
-                            alias: None,
-                            span: 14..15,
-                        },
-                        extensions: [],
-                        span: 14..15,
+                                extensions: [],
+                                span: 14..15,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 9..15,
                     },
-                ],
+                ),
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: Some(
                     GroupBy {
@@ -2115,7 +2139,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -2136,32 +2159,40 @@ Query {
                         span: 7..8,
                     },
                 ],
-                from: [
-                    Relation {
-                        lateral: false,
-                        primary: TableFactor {
-                            kind: Table(
-                                ObjectName {
-                                    parts: [
-                                        Ident {
-                                            value: "t",
-                                            quoted: false,
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 14..15,
+                                                },
+                                            ],
                                             span: 14..15,
                                         },
-                                    ],
+                                        temporal: None,
+                                        options: [],
+                                    },
+                                    alias: None,
                                     span: 14..15,
                                 },
-                            ),
-                            alias: None,
-                            span: 14..15,
-                        },
-                        extensions: [],
-                        span: 14..15,
+                                extensions: [],
+                                span: 14..15,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 9..15,
                     },
-                ],
+                ),
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: Some(
                     GroupBy {
@@ -2213,7 +2244,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -2234,32 +2264,40 @@ Query {
                         span: 7..8,
                     },
                 ],
-                from: [
-                    Relation {
-                        lateral: false,
-                        primary: TableFactor {
-                            kind: Table(
-                                ObjectName {
-                                    parts: [
-                                        Ident {
-                                            value: "t",
-                                            quoted: false,
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 14..15,
+                                                },
+                                            ],
                                             span: 14..15,
                                         },
-                                    ],
+                                        temporal: None,
+                                        options: [],
+                                    },
+                                    alias: None,
                                     span: 14..15,
                                 },
-                            ),
-                            alias: None,
-                            span: 14..15,
-                        },
-                        extensions: [],
-                        span: 14..15,
+                                extensions: [],
+                                span: 14..15,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 9..15,
                     },
-                ],
+                ),
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: Some(
                     GroupBy {
@@ -2403,7 +2441,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -2424,32 +2461,40 @@ Query {
                         span: 7..8,
                     },
                 ],
-                from: [
-                    Relation {
-                        lateral: false,
-                        primary: TableFactor {
-                            kind: Table(
-                                ObjectName {
-                                    parts: [
-                                        Ident {
-                                            value: "t",
-                                            quoted: false,
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 14..15,
+                                                },
+                                            ],
                                             span: 14..15,
                                         },
-                                    ],
+                                        temporal: None,
+                                        options: [],
+                                    },
+                                    alias: None,
                                     span: 14..15,
                                 },
-                            ),
-                            alias: None,
-                            span: 14..15,
-                        },
-                        extensions: [],
-                        span: 14..15,
+                                extensions: [],
+                                span: 14..15,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 9..15,
                     },
-                ],
+                ),
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,
@@ -2493,7 +2538,6 @@ Query {
     body: SetExpr {
         kind: Select(
             Select {
-                from_first: false,
                 hints: [],
                 quantifier: None,
                 projection: [
@@ -2570,10 +2614,8 @@ Query {
                         span: 21..26,
                     },
                 ],
-                from: [],
+                from: None,
                 lateral_views: [],
-                pivot: None,
-                unpivot: None,
                 selection: None,
                 group_by: None,
                 having: None,

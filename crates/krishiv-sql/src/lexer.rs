@@ -1,24 +1,32 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The Spark SQL lexer (`SqlBaseLexer.g4`, Spark 4.2).
 //!
-//! Tokens borrow nothing: each is a kind plus the [`Span`] of its source
-//! text, and the parser decodes string and identifier values on demand.
-//! Keywords are lexed as [`TokenKind::Word`]; whether a word is a keyword
-//! depends on where it appears and is decided by the parser.
+//! [`tokenize`] never fails and loses nothing but whitespace: every
+//! character of the input is in exactly one token, comments included
+//! ([`TokenKind::Comment`]), and malformed input becomes typed tokens
+//! ([`TokenKind::Unterminated`] for a quote without its closing quote,
+//! [`TokenKind::UnclosedComment`] for `/*` without `*/`), each running to the
+//! end of the input. So a redactor can mask every literal, even in a broken
+//! statement, from the tokens alone. Tokens borrow nothing: each is a kind
+//! plus the [`Span`] of its source text. Keywords are lexed as
+//! [`TokenKind::Word`]; whether a word is a keyword depends on where it
+//! appears ([`is_keyword`] compares one the way Spark does).
 //!
 //! Spark's lexing rules that are reproduced here: case-insensitive numeric
 //! suffixes and longest-match against identifiers (`10L` is a literal, `10Lx`
 //! and `1a` are identifiers), the `isValidDecimal` check (a decimal must not
-//! be followed by a letter, digit or `_`), `--` comments continued by a
-//! backslash-newline, nested `/* */` comments, `/*+` hint starts and `*/`
-//! hint ends, URI-path identifiers (`s3://b/k`), raw strings `R'...'`, and the
-//! complex-type counter that makes `>>` two `>` tokens after `ARRAY`, `MAP`
-//! or `STRUCT`. A character Spark cannot lex, including an unterminated
-//! quote, becomes [`TokenKind::Unrecognized`], so the parser reports
-//! `PARSE_SYNTAX_ERROR` at it, as Spark does.
+//! be followed by a letter, digit or `_`), identifiers of `\p{L}` letters,
+//! ASCII digits and `_`, `--` comments continued by a backslash-newline,
+//! nested `/* */` comments, `/*+` hint starts and `*/` hint ends, URI-path
+//! identifiers (`file://b/k`; a digit in the scheme, as in `s3`, disables
+//! them), raw strings `R'...'`, dollar-quoted strings `$tag$...$tag$`, and
+//! the complex-type counter that makes `>>` two `>` tokens after `ARRAY`,
+//! `MAP` or `STRUCT`. Spark lexes an unterminated quote as one unrecognized
+//! character; the parser reports `PARSE_SYNTAX_ERROR` at that character for
+//! an [`TokenKind::Unterminated`] token, so errors are the same.
 
 use crate::ast::{NumKind, Span};
-use crate::error::{ParseError, unclosed_comment};
+use crate::generated::letters::LETTERS;
 
 /// A punctuation token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +70,7 @@ pub enum Sym {
 
 /// What a token is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TokenKind {
     /// An unquoted identifier or keyword.
     Word,
@@ -72,6 +81,11 @@ pub enum TokenKind {
     /// A double-quoted string: a string literal, or an identifier when
     /// `spark.sql.ansi.doubleQuotedIdentifiers` is on.
     DoubleQuoted,
+    /// A dollar-quoted string, `$tag$...$tag$`.
+    DollarString,
+    /// A quote (`'`, `"`, `` ` ``, `$tag$`) without its closing quote,
+    /// running to the end of the input.
+    Unterminated,
     /// A numeric literal.
     Number(NumKind),
     /// `/*+`, the start of a hint.
@@ -80,17 +94,54 @@ pub enum TokenKind {
     HintEnd,
     /// Punctuation.
     Sym(Sym),
+    /// A `--` or `/* */` comment.
+    Comment,
+    /// A `/*` comment without its `*/`, running to the end of the input.
+    UnclosedComment,
     /// A character no Spark token starts with.
     Unrecognized,
 }
 
+impl TokenKind {
+    /// Whether the token is a comment, which the grammar ignores.
+    #[must_use]
+    pub const fn is_trivia(self) -> bool {
+        matches!(self, Self::Comment)
+    }
+
+    /// Whether the token holds a string literal's text (complete or not),
+    /// which error messages and logs must not echo.
+    #[must_use]
+    pub const fn is_string_like(self) -> bool {
+        matches!(
+            self,
+            Self::String | Self::DoubleQuoted | Self::DollarString | Self::Unterminated
+        )
+    }
+}
+
 /// A token and its source text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Eq)]
 pub struct Token {
     /// The kind.
     pub kind: TokenKind,
     /// Where it is.
     pub span: Span,
+}
+
+impl PartialEq for Token {
+    /// Kind and position ([`Span`] equality alone ignores positions).
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.span.range() == other.span.range()
+    }
+}
+
+/// Whether `word` is the keyword `kw` (upper-case), folding case per
+/// character the way Spark's case-insensitive stream does (Java
+/// `Character.toUpperCase`, so `ı` is `I`).
+#[must_use]
+pub fn is_keyword(word: &str, kw: &str) -> bool {
+    crate::keywords::is_kw(word, kw)
 }
 
 /// Spark's `WS` rule.
@@ -102,9 +153,28 @@ fn is_space(c: char) -> bool {
     )
 }
 
+/// `UNICODE_LETTER` (`\p{L}`).
+fn is_letter(c: char) -> bool {
+    if c.is_ascii() {
+        return c.is_ascii_alphabetic();
+    }
+    let c = u32::from(c);
+    LETTERS
+        .binary_search_by(|&(lo, hi)| {
+            if hi < c {
+                std::cmp::Ordering::Less
+            } else if lo > c {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
 /// `UNICODE_LETTER | DIGIT | '_'` (digits are ASCII only).
 fn is_ident_char(c: char) -> bool {
-    c.is_alphabetic() || c.is_ascii_digit() || c == '_'
+    is_letter(c) || c.is_ascii_digit() || c == '_'
 }
 
 /// Characters of the URI part of an `IDENTIFIER` (`scheme://...`).
@@ -112,25 +182,18 @@ fn is_uri_char(c: char) -> bool {
     is_ident_char(c) || "/-.?=&#%".contains(c)
 }
 
-/// Lexes `src`; whitespace and comments are dropped.
-///
-/// # Errors
-/// `UNCLOSED_BRACKETED_COMMENT` for a `/*` comment without its `*/`.
-pub fn tokenize(src: &str) -> Result<Vec<Token>, ParseError> {
+/// Lexes `src` into tokens; only whitespace is dropped.
+#[must_use]
+pub fn tokenize(src: &str) -> Vec<Token> {
     let mut lexer = Lexer {
         src,
         pos: 0,
         tokens: Vec::with_capacity(src.len() / 4 + 1),
         complex_level: 0,
-        closes: vec![],
     };
-    lexer.run()?;
-    Ok(lexer.tokens)
+    lexer.run();
+    lexer.tokens
 }
-
-/// For a (quote, escapes) kind, the closing quote of a body starting at
-/// each position.
-type CloseTable = ((u8, bool), Vec<Option<usize>>);
 
 struct Lexer<'a> {
     src: &'a str,
@@ -138,9 +201,6 @@ struct Lexer<'a> {
     tokens: Vec<Token>,
     /// Spark's `complex_type_level_counter`.
     complex_level: u32,
-    /// Closing-quote tables by (quote, escapes), built after the first
-    /// unterminated quote of that kind.
-    closes: Vec<CloseTable>,
 }
 
 impl Lexer<'_> {
@@ -164,7 +224,7 @@ impl Lexer<'_> {
         tail.find(|c| !pred(c)).unwrap_or(tail.len())
     }
 
-    fn run(&mut self) -> Result<(), ParseError> {
+    fn run(&mut self) {
         while let Some(c) = self.rest().chars().next() {
             let next = self.byte(self.pos + 1);
             match c {
@@ -173,21 +233,37 @@ impl Lexer<'_> {
                 '/' if next == b'*' && self.byte(self.pos + 2) == b'+' => {
                     self.push(TokenKind::HintStart, 3);
                 }
-                '/' if next == b'*' => self.block_comment()?,
+                '/' if next == b'*' => self.block_comment(),
                 '*' if next == b'/' => self.push(TokenKind::HintEnd, 2),
-                '\'' => self.quoted(b'\'', 0, TokenKind::String, true),
-                '"' => self.quoted(b'"', 0, TokenKind::DoubleQuoted, true),
-                '`' => self.quoted(b'`', 0, TokenKind::QuotedIdent, false),
-                'r' | 'R' if matches!(next, b'\'' | b'"') => {
-                    self.quoted(next, 1, TokenKind::String, false);
+                '\'' => {
+                    self.quoted(b'\'', 0, TokenKind::String, true);
                 }
+                '"' => {
+                    self.quoted(b'"', 0, TokenKind::DoubleQuoted, true);
+                }
+                '`' => {
+                    self.quoted(b'`', 0, TokenKind::QuotedIdent, false);
+                }
+                'r' | 'R' if matches!(next, b'\'' | b'"') => {
+                    // Unterminated, `r` is an identifier and the quote
+                    // starts an ordinary string, as Spark lexes it.
+                    if !self.quoted(next, 1, TokenKind::String, false) {
+                        self.push(TokenKind::Word, 1);
+                    }
+                }
+                '$' => self.dollar(),
                 '0'..='9' => self.number(),
                 '.' if next.is_ascii_digit() => self.number(),
                 c if is_ident_char(c) => self.word(),
                 _ => self.symbol(c),
             }
         }
-        Ok(())
+    }
+
+    /// The rest of the input as one token.
+    fn push_rest(&mut self, kind: TokenKind) {
+        let len = self.src.len() - self.pos;
+        self.push(kind, len);
     }
 
     /// `--` up to the end of the line; `\` before the newline continues it.
@@ -203,17 +279,16 @@ impl Lexer<'_> {
                 i += 1;
             }
         }
-        self.pos = i;
+        self.push(TokenKind::Comment, i - self.pos);
     }
 
     /// A nested `/* */` comment; an inner `/*+` does not nest.
-    fn block_comment(&mut self) -> Result<(), ParseError> {
+    fn block_comment(&mut self) {
         let bytes = self.src.as_bytes();
-        let start = self.pos;
         let (mut i, mut depth) = (self.pos + 2, 1_u32);
         while depth > 0 {
             match (bytes.get(i), bytes.get(i + 1)) {
-                (None, _) => return Err(unclosed_comment(Span::new(start, self.src.len()))),
+                (None, _) => return self.push_rest(TokenKind::UnclosedComment),
                 (Some(b'/'), Some(b'*')) if bytes.get(i + 2) != Some(&b'+') => {
                     depth += 1;
                     i += 2;
@@ -225,68 +300,54 @@ impl Lexer<'_> {
                 _ => i += 1,
             }
         }
-        self.pos = i;
-        Ok(())
+        self.push(TokenKind::Comment, i - self.pos);
     }
 
     /// A quoted token starting `prefix` bytes after `pos`. Backslash escapes
     /// (when `escapes`) and doubled quotes (except in raw strings) stay
-    /// inside it; unterminated, the opening character is unrecognized.
-    fn quoted(&mut self, quote: u8, prefix: usize, kind: TokenKind, escapes: bool) {
+    /// inside it. Unterminated, a raw string pushes nothing and returns
+    /// `false`; any other quote runs to the end of the input.
+    fn quoted(&mut self, quote: u8, prefix: usize, kind: TokenKind, escapes: bool) -> bool {
         let doubling = escapes || quote == b'`';
-        let body = self.pos + prefix + 1;
-        let close = match self.closes.iter().find(|c| c.0 == (quote, escapes)) {
-            Some((_, ends)) => ends.get(body).copied().flatten(),
-            None => self.scan_close(quote, escapes, doubling, body),
-        };
-        match close {
-            Some(end) => self.push(kind, end + 1 - self.pos),
-            None => {
-                // Each later quote would scan to the end again: index the
-                // closing quote of every start position instead.
-                if !self.closes.iter().any(|c| c.0 == (quote, escapes)) {
-                    let ends = self.close_table(quote, escapes, doubling);
-                    self.closes.push(((quote, escapes), ends));
-                }
-                self.push(TokenKind::Unrecognized, 1);
-            }
-        }
-    }
-
-    /// The closing quote of a body starting at `i`, by scanning.
-    fn scan_close(&self, quote: u8, escapes: bool, doubling: bool, mut i: usize) -> Option<usize> {
         let bytes = self.src.as_bytes();
+        let mut i = self.pos + prefix + 1;
         loop {
-            match *bytes.get(i)? {
-                b if b == quote && doubling && bytes.get(i + 1) == Some(&quote) => i += 2,
-                b if b == quote => return Some(i),
-                b'\\' if escapes => i += 2,
-                _ => i += 1,
+            match bytes.get(i) {
+                None if prefix > 0 => return false,
+                None => {
+                    self.push_rest(TokenKind::Unterminated);
+                    return true;
+                }
+                Some(&b) if b == quote && doubling && bytes.get(i + 1) == Some(&quote) => i += 2,
+                Some(&b) if b == quote => {
+                    self.push(kind, i + 1 - self.pos);
+                    return true;
+                }
+                Some(b'\\') if escapes => i += 2,
+                Some(_) => i += 1,
             }
         }
     }
 
-    /// [`Self::scan_close`] for every start position, right to left.
-    fn close_table(&self, quote: u8, escapes: bool, doubling: bool) -> Vec<Option<usize>> {
-        let bytes = self.src.as_bytes();
-        let n = bytes.len();
-        let mut ends = vec![None; n + 2];
-        for i in (0..n).rev() {
-            let skip2 = || ends.get(i + 2).copied().flatten();
-            ends[i] = match bytes[i] {
-                b if b == quote && doubling && bytes.get(i + 1) == Some(&quote) => skip2(),
-                b if b == quote => Some(i),
-                b'\\' if escapes => skip2(),
-                _ => ends[i + 1],
-            };
+    /// `$tag$ ... $tag$` (`tag` is ASCII letters, maybe none); a lone `$`
+    /// is unrecognized.
+    fn dollar(&mut self) {
+        let letters = self.run_len(1, |c| c.is_ascii_alphabetic());
+        if self.byte(self.pos + 1 + letters) != b'$' {
+            return self.push(TokenKind::Unrecognized, 1);
         }
-        ends
+        let tag_len = letters + 2;
+        let tag = self.rest().get(..tag_len).unwrap_or_default();
+        match self.rest().get(tag_len..).and_then(|body| body.find(tag)) {
+            Some(end) => self.push(TokenKind::DollarString, tag_len + end + tag_len),
+            None => self.push_rest(TokenKind::Unterminated),
+        }
     }
 
     fn word(&mut self) {
         let mut len = self.run_len(0, is_ident_char);
         let word = self.rest().get(..len).unwrap_or_default();
-        if word.chars().all(char::is_alphabetic)
+        if word.chars().all(is_letter)
             && self.rest().get(len..).is_some_and(|r| r.starts_with("://"))
         {
             let uri = self.run_len(len + 3, is_uri_char);
