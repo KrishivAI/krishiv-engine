@@ -1,0 +1,186 @@
+{
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_error_classes.py",
+ "top_level_classes": 1322,
+ "leaf_classes": 1929,
+ "cases": [
+  {
+   "class": "DIVIDE_BY_ZERO",
+   "sql_state": "22012",
+   "parameters": {
+    "config": "'abc'"
+   },
+   "message": "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 and return NULL instead. If necessary set 'abc' to \"false\" to bypass this error. SQLSTATE: 22012"
+  },
+  {
+   "class": "ARITHMETIC_OVERFLOW",
+   "sql_state": "22003",
+   "parameters": {
+    "alternative": "`a`.`b`",
+    "config": "a$1 \\n ${x}",
+    "message": "\"STRING\""
+   },
+   "message": "[ARITHMETIC_OVERFLOW] \"STRING\".`a`.`b` If necessary set a$1 \\n ${x} to \"false\" to bypass this error. SQLSTATE: 22003"
+  },
+  {
+   "class": "CAST_INVALID_INPUT",
+   "sql_state": "22018",
+   "parameters": {
+    "expression": "`a`.`b`",
+    "sourceType": "a$1 \\n ${x}",
+    "targetType": "<other> and <nested>"
+   },
+   "message": "[CAST_INVALID_INPUT] The value `a`.`b` of the type a$1 \\n ${x} cannot be cast to <other> and <nested> because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018"
+  },
+  {
+   "class": "CAST_OVERFLOW",
+   "sql_state": "22003",
+   "parameters": {
+    "sourceType": "<other> and <nested>",
+    "targetType": "line1\nline2",
+    "value": "a$1 \\n ${x}"
+   },
+   "message": "[CAST_OVERFLOW] The value a$1 \\n ${x} of the type <other> and <nested> cannot be cast to line1\nline2 due to an overflow. Use `try_cast` to tolerate overflow and return NULL instead. SQLSTATE: 22003"
+  },
+  {
+   "class": "INTERNAL_ERROR",
+   "sql_state": "XX000",
+   "parameters": {
+    "message": "<other> and <nested>"
+   },
+   "message": "[INTERNAL_ERROR] <other> and <nested> SQLSTATE: XX000"
+  },
+  {
+   "class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "line1\nline2",
+    "hint": "naïve ✓ 日本"
+   },
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near line1\nline2naïve ✓ 日本. SQLSTATE: 42601"
+  },
+  {
+   "class": "TABLE_OR_VIEW_NOT_FOUND",
+   "sql_state": "42P01",
+   "parameters": {
+    "relationName": "naïve ✓ 日本",
+    "searchPath": ""
+   },
+   "message": "[TABLE_OR_VIEW_NOT_FOUND] The table or view naïve ✓ 日本 cannot be found. Verify the spelling and correctness of the schema and catalog.\nSearch path: .\nIf you did not qualify the name with a schema, verify the current_schema() output, or qualify the name with the correct schema and catalog.\nTo tolerate the error on drop use DROP VIEW IF EXISTS or DROP TABLE IF EXISTS. SQLSTATE: 42P01"
+  },
+  {
+   "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "parameters": {
+    "objectName": "",
+    "proposal": "'abc'"
+   },
+   "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name  cannot be resolved. Did you mean one of the following? ['abc']. SQLSTATE: 42703"
+  },
+  {
+   "class": "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+   "sql_state": "42703",
+   "parameters": {
+    "objectName": "'abc'"
+   },
+   "message": "[UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter with name 'abc' cannot be resolved.  SQLSTATE: 42703"
+  },
+  {
+   "class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+   "sql_state": "42K09",
+   "parameters": {
+    "left": "`a`.`b`",
+    "right": "a$1 \\n ${x}",
+    "sqlExpr": "\"STRING\""
+   },
+   "message": "[DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES] Cannot resolve \"STRING\" due to data type mismatch: the left and right operands of the binary operator have incompatible types (`a`.`b` and a$1 \\n ${x}). SQLSTATE: 42K09"
+  },
+  {
+   "class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "parameters": {
+    "inputSql": "line1\nline2",
+    "inputType": "naïve ✓ 日本",
+    "paramIndex": "a$1 \\n ${x}",
+    "requiredType": "<other> and <nested>",
+    "sqlExpr": "`a`.`b`"
+   },
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve `a`.`b` due to data type mismatch: The a$1 \\n ${x} parameter requires the <other> and <nested> type, however line1\nline2 has the type naïve ✓ 日本. SQLSTATE: 42K09"
+  },
+  {
+   "class": "AMBIGUOUS_ALIAS_IN_NESTED_CTE",
+   "sql_state": "42KD0",
+   "parameters": {
+    "config": "<other> and <nested>",
+    "docroot": "line1\nline2",
+    "name": "a$1 \\n ${x}"
+   },
+   "message": "[AMBIGUOUS_ALIAS_IN_NESTED_CTE] Name a$1 \\n ${x} is ambiguous in nested CTE.\nPlease set <other> and <nested> to \"CORRECTED\" so that name defined in inner CTE takes precedence. If set it to \"LEGACY\", outer CTE definitions will take precedence.\nSee 'line1\nline2/sql-migration-guide.html#query-engine'. SQLSTATE: 42KD0"
+  },
+  {
+   "class": "CANNOT_MERGE_SCHEMAS",
+   "sql_state": "42KD9",
+   "parameters": {
+    "left": "<other> and <nested>",
+    "right": "line1\nline2"
+   },
+   "message": "[CANNOT_MERGE_SCHEMAS] Failed merging schemas:\nInitial schema:\n<other> and <nested>\nSchema that cannot be merged with the initial schema:\nline1\nline2. SQLSTATE: 42KD9"
+  },
+  {
+   "class": "INVALID_FRACTION_OF_SECOND",
+   "sql_state": "22023",
+   "parameters": {
+    "secAndMicros": "line1\nline2"
+   },
+   "message": "[INVALID_FRACTION_OF_SECOND] Valid range for seconds is [0, 60] (inclusive), but the provided value is line1\nline2. To avoid this error, use `try_make_timestamp`, which returns NULL on error.\nIf you do not want to use the session default timestamp version of this function, use `try_make_timestamp_ntz` or `try_make_timestamp_ltz`. SQLSTATE: 22023"
+  },
+  {
+   "class": "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION",
+   "sql_state": "22003",
+   "parameters": {
+    "config": "\"STRING\"",
+    "precision": "",
+    "scale": "'abc'",
+    "value": "naïve ✓ 日本"
+   },
+   "message": "[NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION]  naïve ✓ 日本 cannot be represented as Decimal(, 'abc'). If necessary set \"STRING\" to \"false\" to bypass this error, and return NULL instead. SQLSTATE: 22003"
+  },
+  {
+   "class": "INVALID_ARRAY_INDEX",
+   "sql_state": "22003",
+   "parameters": {
+    "arraySize": "'abc'",
+    "indexValue": ""
+   },
+   "message": "[INVALID_ARRAY_INDEX] The index  is out of bounds. The array has 'abc' elements. Use the SQL function `get()` to tolerate accessing element at invalid index and return NULL instead. SQLSTATE: 22003"
+  },
+  {
+   "class": "AGGREGATE_OUT_OF_MEMORY",
+   "sql_state": "82001",
+   "parameters": {},
+   "message": "[AGGREGATE_OUT_OF_MEMORY] No enough memory for aggregation SQLSTATE: 82001"
+  },
+  {
+   "class": "ALL_PARAMETERS_MUST_BE_NAMED",
+   "sql_state": "07001",
+   "parameters": {
+    "exprs": "\"STRING\""
+   },
+   "message": "[ALL_PARAMETERS_MUST_BE_NAMED] Using name parameterized queries requires all parameters to be named. Parameters missing names: \"STRING\". SQLSTATE: 07001"
+  },
+  {
+   "class": "COLUMN_ALREADY_EXISTS",
+   "sql_state": "42711",
+   "parameters": {
+    "columnName": "`a`.`b`"
+   },
+   "message": "[COLUMN_ALREADY_EXISTS] The column `a`.`b` already exists. Choose another name or rename the existing column. SQLSTATE: 42711"
+  },
+  {
+   "class": "_LEGACY_ERROR_TEMP_3092",
+   "sql_state": null,
+   "parameters": {},
+   "message": "Collection types with wildcards (e.g. List<?> or Map<?, ?>) are unsupported because Spark cannot infer the data type for these type parameters."
+  }
+ ]
+}

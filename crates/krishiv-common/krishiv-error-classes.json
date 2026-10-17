@@ -1,0 +1,20 @@
+{
+  "KRISHIV_INVALID_CONFIG_VALUE" : {
+    "message" : [
+      "The value <value> for config <key> is invalid: <reason>."
+    ],
+    "sqlState" : "22023"
+  },
+  "KRISHIV_UNKNOWN_CONFIG" : {
+    "message" : [
+      "The config <key> is not a known Krishiv config. Verify the spelling, or see the configuration reference."
+    ],
+    "sqlState" : "42K0I"
+  },
+  "KRISHIV_UNSUPPORTED_FEATURE" : {
+    "message" : [
+      "The feature <feature> is not supported by Krishiv yet."
+    ],
+    "sqlState" : "0A000"
+  }
+}

@@ -24,8 +24,8 @@ Read by path: `../krishiv-internal/adr/0008-spark-semantics-layer.md`, `0009-int
 5. **Implement** in `krishiv-functions` (semantics, type coercion, version keying — `match spark_version`, not flags)
    on top of `krishiv-kernels` (vectorised; generics inside kernels). Selection vectors respected: no errors from
    unselected rows (CASE/IF/COALESCE, AND/OR short-circuit). Spark float ordering in every compare/hash/sort.
-   Errors: typed, with the error class from `crates/krishiv-common/error-classes.json` (add new classes there, copied
-   from Spark's `error-conditions.json` at the tag).
+   Errors: typed, with the error class from the generated registry (every Spark 4.2.0 class is already in
+   `crates/krishiv-common/vendored/spark-error-conditions.json`; Krishiv-only `KRISHIV_*` classes go in `krishiv-error-classes.json`).
 6. **Kernel specialisations** (nullable/non-null, dictionary, Utf8 vs Utf8View, scalar-vs-array): each one tested.
 7. **Verify:** `cargo nextest run -p krishiv-functions -p krishiv-kernels --no-tests=pass`, clippy `-D warnings`, `cargo xtask layering`,
    `cargo xtask docs-errors` if error classes changed. Micro-bench with criterion if the function is hot.

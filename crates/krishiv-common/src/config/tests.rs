@@ -101,7 +101,7 @@ fn invalid_values_are_typed_errors() {
             ErrorClass::KrishivInvalidConfigValue,
             "{k}"
         );
-        assert_eq!(e.sql_state(), "22023");
+        assert_eq!(e.sql_state(), Some("22023"));
     }
     // A failed set leaves the previous value in place.
     assert_eq!(c.get(&ANSI_ENABLED), Some(&ConfigValue::Bool(true)));

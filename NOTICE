@@ -17,6 +17,8 @@ Apache Spark
   Used for: vendored SQLQueryTestSuite golden files and error-condition
   definitions under tests/ and crates/krishiv-common (added by the tasks that
   import them; keep this entry in sync).
+  Vendored so far: crates/krishiv-common/vendored/spark-error-conditions.json, a verbatim
+  copy of Spark 4.2.0's error/error-conditions.json (Apache-2.0, unmodified).
 
 --------------------------------------------------------------------------------
 (Further entries: DataFusion, Feldera and others, if code is copied. Currently

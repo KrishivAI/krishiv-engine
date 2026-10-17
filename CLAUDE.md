@@ -89,7 +89,7 @@ New crate → add it to `xtask/layers.toml` and root `Cargo.toml`, and write its
 - **`unsafe` only** in krishiv-memory, krishiv-kernels and FFI crates (krishiv-python, SDK bridges), each block with
   `// SAFETY:`; everything else `#![forbid(unsafe_code)]` (ADR 0029).
 - No `unwrap`/`expect`/`panic` in library code; `thiserror` errors with a Spark error class + SQLSTATE from
-  `crates/krishiv-common/error-classes.json`; no `anyhow` in libraries.
+  the generated registry (`crates/krishiv-common/vendored/spark-error-conditions.json`, Spark 4.2.0); no `anyhow` in libraries.
 - On-disk formats carry a version; N reads N−1 (ADR 0026). Public surfaces change only via ADR.
 - Identifiers are `krishiv` / `krishiv-*` (ADR 0030). Decisions change only through an ADR (skill `krishiv-adr`).
 - Never commit secrets. Commit identity: the user's only (`gopal tathe`, noreply); end commit messages with the
