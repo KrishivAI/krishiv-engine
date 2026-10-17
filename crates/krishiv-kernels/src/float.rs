@@ -12,7 +12,7 @@ use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer};
 
 use crate::chunk::{self, CHUNK, Resolved, Side, split};
 use crate::dispatch::KernelCtx;
-use crate::error::KernelError;
+use crate::error::{KernelError, with_capacity};
 use crate::ops::Operand;
 use crate::unsafe_dispatch::{Kernel, run};
 
@@ -122,10 +122,7 @@ where
         Resolved::Lanes { l, r, nulls, len } => (l, r, nulls, len),
     };
     let n_words = len.div_ceil(CHUNK);
-    let mut words = Vec::new();
-    words
-        .try_reserve_exact(n_words)
-        .map_err(|_| KernelError::out_of_memory(n_words.saturating_mul(8)))?;
+    let mut words = with_capacity::<u64>(n_words)?;
     macro_rules! go {
         ($ls:literal, $rs:literal) => {
             run(
@@ -145,12 +142,15 @@ where
         (Side::Array(_), Side::Scalar(_)) => go!(false, true),
         (Side::Scalar(_), _) => go!(true, false),
     }
-    Ok(BooleanArray::new(bits(&words, len), nulls))
+    Ok(BooleanArray::new(bits(words, len), nulls))
 }
 
-fn bits(words: &[u64], len: usize) -> BooleanBuffer {
-    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-    BooleanBuffer::new(Buffer::from_vec(bytes), 0, len)
+/// The bitmap of `words`, without copying (Arrow bitmaps are little-endian).
+fn bits(mut words: Vec<u64>, len: usize) -> BooleanBuffer {
+    for w in &mut words {
+        *w = w.to_le();
+    }
+    BooleanBuffer::new(Buffer::from_vec(words), 0, len)
 }
 
 /// The comparison loop for one operand shape; `run` compiles it per CPU target.

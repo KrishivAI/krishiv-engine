@@ -13,13 +13,13 @@ use std::marker::PhantomData;
 
 use arrow_array::types::{Int32Type, Int64Type};
 use arrow_array::{ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::ScalarBuffer;
+use arrow_buffer::{NullBuffer, ScalarBuffer};
 
 use crate::chunk::{self, LaneOp, Resolved};
 use crate::dispatch::KernelCtx;
-use crate::error::{KernelError, zeroed};
+use crate::error::KernelError;
 use crate::ops::{BinaryOp, IntNative, Operand};
-use crate::policy::Overflow;
+use crate::policy::{Fault, Overflow};
 
 mod sealed {
     pub trait Sealed {}
@@ -66,8 +66,8 @@ impl<T: IntNative, Op: BinaryOp> LaneOp<T> for IntLane<Op> {
         Op::overflowing(a, b)
     }
     #[inline(always)]
-    fn is_bad(self, a: T, b: T) -> bool {
-        Op::overflowing(a, b).1
+    fn fault(self, a: T, b: T) -> Option<Fault> {
+        Op::overflowing(a, b).1.then_some(Fault::Overflow)
     }
 }
 
@@ -102,14 +102,48 @@ where
     Op: BinaryOp,
     O: Overflow,
 {
+    binary_impl::<T, Op, O>(l, r, ctx, false)
+}
+
+/// [`binary`] forced onto the nulls-aware specialization even when no row
+/// is NULL (an all-valid bitmap), so benchmarks can compare the `NULLS`
+/// axis on the same data. Not for production use.
+#[doc(hidden)]
+pub fn binary_nulls_path<T, Op, O>(
+    l: Operand<'_, T>,
+    r: Operand<'_, T>,
+    ctx: &KernelCtx,
+) -> Result<PrimitiveArray<T>, KernelError>
+where
+    T: SparkIntegral,
+    Op: BinaryOp,
+    O: Overflow,
+{
+    binary_impl::<T, Op, O>(l, r, ctx, true)
+}
+
+fn binary_impl<T, Op, O>(
+    l: Operand<'_, T>,
+    r: Operand<'_, T>,
+    ctx: &KernelCtx,
+    force_nulls: bool,
+) -> Result<PrimitiveArray<T>, KernelError>
+where
+    T: SparkIntegral,
+    Op: BinaryOp,
+    O: Overflow,
+{
     let (l, r, nulls, len) = match chunk::resolve(l, r)? {
         Resolved::AllNull(len) => return Ok(PrimitiveArray::new_null(len)),
         Resolved::Lanes { l, r, nulls, len } => (l, r, nulls, len),
     };
-    let out = zeroed(len)?;
+    let nulls = nulls.or_else(|| force_nulls.then(|| NullBuffer::new_valid(len)));
     let lane = IntLane::<Op>(PhantomData);
-    let c = chunk::compute::<T::Native, _, O>(ctx, l, r, nulls, out, lane)
-        .map_err(|row| KernelError::arithmetic_overflow(row, Op::OP))?;
+    let c = chunk::compute::<T::Native, _, O>(ctx, l, r, nulls, len, lane, |row, fault| {
+        KernelError::for_fault(row, fault, |row| {
+            KernelError::arithmetic_overflow(row, Some(Op::OP.try_function()))
+        })
+    })?;
     PrimitiveArray::try_new(ScalarBuffer::from(c.values), c.nulls)
         .map_err(|e| KernelError::internal(e.to_string()))
 }

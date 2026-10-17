@@ -19,9 +19,9 @@ use arrow_buffer::{ScalarBuffer, i256};
 
 use crate::chunk::{self, LaneOp, Resolved, Side};
 use crate::dispatch::KernelCtx;
-use crate::error::{KernelError, zeroed};
+use crate::error::KernelError;
 use crate::ops::{ArithOp, BinaryOp, IntNative, Operand};
-use crate::policy::{AnsiError, NullOnOverflow, Overflow, OverflowMode, Unchecked};
+use crate::policy::{AnsiError, Fault, NullOnOverflow, Overflow, OverflowMode, Unchecked};
 
 /// Spark's maximum decimal precision.
 pub const MAX_PRECISION: u8 = 38;
@@ -211,6 +211,12 @@ impl DecimalPlan {
         }
     }
 
+    /// The exact verdict for one row.
+    fn fault(&self, a: i128, b: i128) -> Option<Fault> {
+        self.out_of_range(self.exact(a, b))
+            .then_some(Fault::Overflow)
+    }
+
     fn out_of_range(&self, v: i256) -> bool {
         let bound = i256::from_i128(pow10(self.out.0));
         v >= bound || v <= bound.wrapping_neg()
@@ -274,8 +280,8 @@ impl<Op: BinaryOp> LaneOp<i128> for Lane128<'_, Op> {
         (v, bad)
     }
     #[inline(always)]
-    fn is_bad(self, a: i128, b: i128) -> bool {
-        self.plan.out_of_range(self.plan.exact(a, b))
+    fn fault(self, a: i128, b: i128) -> Option<Fault> {
+        self.plan.fault(a, b)
     }
 }
 
@@ -323,8 +329,8 @@ impl<Op: BinaryOp> LaneOp<i128> for Lane64<'_, Op> {
         (i128::from(v), bad)
     }
     #[inline(always)]
-    fn is_bad(self, a: i128, b: i128) -> bool {
-        self.plan.out_of_range(self.plan.exact(a, b))
+    fn fault(self, a: i128, b: i128) -> Option<Fault> {
+        self.plan.fault(a, b)
     }
 }
 
@@ -333,7 +339,9 @@ fn type_of(a: &Decimal128Array) -> DecimalType {
     (a.precision(), a.scale())
 }
 
-/// `l op r` under `plan` with overflow policy `O`.
+/// `l op r` under `plan` with overflow policy `O`. A scalar operand is a
+/// raw unscaled value and must already be in the plan's type for its side
+/// (scalars carry no type, so this is not checked; arrays are).
 ///
 /// # Errors
 /// - `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION` (with [`KernelError::row`])
@@ -378,16 +386,24 @@ where
         Resolved::AllNull(len) => return finish(PrimitiveArray::new_null(len), plan),
         Resolved::Lanes { l, r, nulls, len } => (l, r, nulls, len),
     };
-    let out = zeroed(len)?;
-    let computed = match plan.storage {
+    let raise = |row: usize, fault: Fault| {
+        KernelError::for_fault(row, fault, |row| {
+            let at = |s: Side<'_, i128>| match s {
+                Side::Array(v) => v.get(row).copied().unwrap_or_default(),
+                Side::Scalar(v) => v,
+            };
+            let value = plan.spark_value(plan.exact(at(sl), at(sr)));
+            KernelError::decimal_out_of_range(row, value, plan.out.0, plan.out.1)
+        })
+    };
+    let c = match plan.storage {
         DecimalStorage::I128 => {
-            let bound = pow10(plan.out.0);
             let lane = Lane128::<Op> {
                 plan,
-                bound,
+                bound: pow10(plan.out.0),
                 op: std::marker::PhantomData,
             };
-            chunk::compute::<i128, _, O>(ctx, sl, sr, nulls, out, lane)
+            chunk::compute::<i128, _, O>(ctx, sl, sr, nulls, len, lane, raise)
         }
         DecimalStorage::I64 => {
             let narrow = |v: i128| i64::try_from(v).unwrap_or(i64::MAX);
@@ -398,26 +414,14 @@ where
                 bound: narrow(pow10(plan.out.0)),
                 op: std::marker::PhantomData,
             };
-            chunk::compute::<i128, _, O>(ctx, sl, sr, nulls, out, lane)
+            chunk::compute::<i128, _, O>(ctx, sl, sr, nulls, len, lane, raise)
         }
-    };
-    match computed {
-        Ok(c) => finish(
-            PrimitiveArray::try_new(ScalarBuffer::from(c.values), c.nulls)
-                .map_err(|e| KernelError::internal(e.to_string()))?,
-            plan,
-        ),
-        Err(row) => {
-            let at = |s: Side<'_, i128>| match s {
-                Side::Array(v) => v.get(row).copied().unwrap_or_default(),
-                Side::Scalar(v) => v,
-            };
-            let value = plan.spark_value(plan.exact(at(sl), at(sr)));
-            Err(KernelError::decimal_out_of_range(
-                row, value, plan.out.0, plan.out.1,
-            ))
-        }
-    }
+    }?;
+    finish(
+        PrimitiveArray::try_new(ScalarBuffer::from(c.values), c.nulls)
+            .map_err(|e| KernelError::internal(e.to_string()))?,
+        plan,
+    )
 }
 
 fn finish(a: Decimal128Array, plan: &DecimalPlan) -> Result<Decimal128Array, KernelError> {

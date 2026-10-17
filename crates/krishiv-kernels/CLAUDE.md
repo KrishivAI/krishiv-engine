@@ -9,6 +9,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
 ## Layout (kernel specialization framework, P2-T020)
 - `policy` (4 overflow policies as ZSTs), `ops` (`Operand`, `BinaryOp`), `dispatch` (`Target`, `KernelCtx`).
 - `chunk`: the generic 64-row chunk engine; monomorphs `<NULLS, L_SCALAR, R_SCALAR>` × policy, chosen once per batch.
+  A `LaneOp` reports a `Fault` (overflow, divide-by-zero); the policy maps each fault to wrap / NULL / raise.
 - `unsafe_dispatch`: the only `unsafe` (calling `#[target_feature]` clones); `xtask source-guard` rejects `unsafe`
   in any other file here and `xtask budgets` counts unsafe sites.
 - Kernels: `integer` (int/bigint `+ - *`), `decimal` (`+ - *`, 64-bit hook), `float` (Spark comparisons).
@@ -29,5 +30,6 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
 
 ## Test
 `cargo nextest run -p krishiv-kernels --no-tests=pass` · `cargo clippy -p krishiv-kernels --all-targets -- -D warnings`
+`KRISHIV_REQUIRE_TARGETS=baseline,x86_64v3` makes a skipped CPU target a test failure (set in CI) ·
 `cargo +nightly miri test -p krishiv-kernels` · `cargo bench -p krishiv-kernels` ·
 `(cd crates/krishiv-kernels/fuzz && cargo +nightly fuzz run differential -- -max_total_time=60)`

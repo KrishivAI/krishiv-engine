@@ -21,15 +21,45 @@ mod sealed {
     pub trait Sealed {}
 }
 
+/// Why one row of a kernel has no exact result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Fault {
+    /// The exact result does not fit the result type.
+    Overflow,
+    /// A division or remainder by zero.
+    DivideByZero,
+}
+
+/// What a policy does with a faulting row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Action {
+    /// Keep the wrapped (two's-complement) value.
+    Wrap,
+    /// The row becomes NULL.
+    Null,
+    /// The kernel fails at the first such non-NULL row.
+    Raise,
+}
+
+impl OverflowMode {
+    /// The action this policy takes for `fault`. Overflow follows the policy
+    /// name. Division by zero has no wrapped value: Spark's legacy mode makes
+    /// it NULL (`JavaWrap`, `NullOnOverflow`), ANSI raises, and `Unchecked`
+    /// (a proof about overflow only) raises rather than guess.
+    #[must_use]
+    pub const fn action(self, fault: Fault) -> Action {
+        match (self, fault) {
+            (Self::Unchecked | Self::JavaWrap, Fault::Overflow) => Action::Wrap,
+            (Self::NullOnOverflow, _) | (Self::JavaWrap, Fault::DivideByZero) => Action::Null,
+            (Self::AnsiError, _) | (Self::Unchecked, Fault::DivideByZero) => Action::Raise,
+        }
+    }
+}
+
 /// An overflow policy (one of the four zero-sized types in this module).
 pub trait Overflow: sealed::Sealed + Copy + Send + Sync + 'static {
     /// The policy's runtime name.
     const MODE: OverflowMode;
-    /// Whether the kernel computes overflow flags at all.
-    const CHECKS: bool = matches!(
-        Self::MODE,
-        OverflowMode::NullOnOverflow | OverflowMode::AnsiError
-    );
 }
 
 /// Overflow is impossible by the operand types (decided at plan time, e.g. a
@@ -61,3 +91,23 @@ macro_rules! policy {
     )*};
 }
 policy!(Unchecked => Unchecked, JavaWrap => JavaWrap, NullOnOverflow => NullOnOverflow, AnsiError => AnsiError);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn actions_per_fault() {
+        use Action::{Null, Raise, Wrap};
+        use Fault::{DivideByZero as Div, Overflow as Ovf};
+        let table = [
+            (OverflowMode::Unchecked, Wrap, Raise),
+            (OverflowMode::JavaWrap, Wrap, Null),
+            (OverflowMode::NullOnOverflow, Null, Null),
+            (OverflowMode::AnsiError, Raise, Raise),
+        ];
+        for (mode, ovf, div) in table {
+            assert_eq!((mode.action(Ovf), mode.action(Div)), (ovf, div), "{mode:?}");
+        }
+    }
+}

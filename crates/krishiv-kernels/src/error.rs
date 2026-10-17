@@ -4,6 +4,7 @@
 //! | Situation | Error class |
 //! |---|---|
 //! | ANSI integral overflow (`int`, `bigint`) | `ARITHMETIC_OVERFLOW` |
+//! | ANSI division or remainder by zero (kernels that divide) | `DIVIDE_BY_ZERO` |
 //! | ANSI decimal result out of range | `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION` |
 //! | output buffer cannot be reserved | `UNABLE_TO_ACQUIRE_MEMORY` |
 //! | decimal plan Krishiv does not support yet | `KRISHIV_UNSUPPORTED_FEATURE` |
@@ -12,11 +13,11 @@
 //! Messages follow Spark 4.2 (the vendored registry's version).
 
 use krishiv_common::error::{
-    ArithmeticOverflow, ErrorClass, InternalError, KrishivError, KrishivUnsupportedFeature,
-    NumericValueOutOfRangeWithSuggestion, UnableToAcquireMemory,
+    ArithmeticOverflow, DivideByZero, ErrorClass, InternalError, KrishivError,
+    KrishivUnsupportedFeature, NumericValueOutOfRangeWithSuggestion, UnableToAcquireMemory,
 };
 
-use crate::ops::ArithOp;
+use crate::policy::Fault;
 
 /// Spark's `toSQLConf(spark.sql.ansi.enabled)`.
 const ANSI_CONF: &str = "\"spark.sql.ansi.enabled\"";
@@ -85,19 +86,43 @@ impl KernelError {
 
     /// `ARITHMETIC_OVERFLOW` from Spark's `MathUtils.*Exact` for `int` and
     /// `bigint`: Spark 4.2 canonicalizes the JDK's `"long overflow"` /
-    /// `"integer overflow"` to `"overflow"` and suggests the `try_` function.
-    pub(crate) fn arithmetic_overflow(row: usize, op: ArithOp) -> Self {
+    /// `"integer overflow"` to `"overflow"`. `try_function` is the suggested
+    /// `try_*` function; Spark's hint-less overloads pass `None`.
+    pub(crate) fn arithmetic_overflow(row: usize, try_function: Option<&str>) -> Self {
         Self {
             row: Some(row),
             error: ArithmeticOverflow {
                 message: "overflow".to_owned(),
-                alternative: format!(
-                    " Use '{}' to tolerate overflow and return NULL instead.",
-                    op.try_function()
-                ),
+                alternative: try_function.map_or_else(String::new, |f| {
+                    format!(" Use '{f}' to tolerate overflow and return NULL instead.")
+                }),
                 config: ANSI_CONF.to_owned(),
             }
             .into(),
+        }
+    }
+
+    /// `DIVIDE_BY_ZERO`.
+    pub(crate) fn divide_by_zero(row: usize) -> Self {
+        Self {
+            row: Some(row),
+            error: DivideByZero {
+                config: ANSI_CONF.to_owned(),
+            }
+            .into(),
+        }
+    }
+
+    /// The error for a raised `fault` at `row`; `overflow` builds the
+    /// kernel-specific overflow error.
+    pub(crate) fn for_fault(
+        row: usize,
+        fault: Fault,
+        overflow: impl FnOnce(usize) -> Self,
+    ) -> Self {
+        match fault {
+            Fault::Overflow => overflow(row),
+            Fault::DivideByZero => Self::divide_by_zero(row),
         }
     }
 
@@ -128,13 +153,12 @@ impl From<KernelError> for KrishivError {
     }
 }
 
-/// Reserves a zeroed output of `len` values, reporting allocation failure as
-/// an error instead of aborting.
-pub(crate) fn zeroed<T: Copy + Default>(len: usize) -> Result<Vec<T>, KernelError> {
+/// An empty vector with room for `len` values, reporting allocation
+/// failure as an error instead of aborting.
+pub(crate) fn with_capacity<T>(len: usize) -> Result<Vec<T>, KernelError> {
     let mut v = Vec::new();
     v.try_reserve_exact(len)
         .map_err(|_| KernelError::out_of_memory(len.saturating_mul(size_of::<T>())))?;
-    v.resize(len, T::default());
     Ok(v)
 }
 
@@ -144,7 +168,7 @@ mod tests {
 
     #[test]
     fn overflow_message_matches_spark_4_2() {
-        let e = KernelError::arithmetic_overflow(7, ArithOp::Add);
+        let e = KernelError::arithmetic_overflow(7, Some("try_add"));
         assert_eq!(e.row(), Some(7));
         assert_eq!(e.error_class(), ErrorClass::ArithmeticOverflow);
         assert_eq!(
@@ -153,6 +177,25 @@ mod tests {
              instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this \
              error. SQLSTATE: 22003"
         );
+    }
+
+    #[test]
+    fn faults_map_to_spark_classes() {
+        let hintless = KernelError::for_fault(1, Fault::Overflow, |r| {
+            KernelError::arithmetic_overflow(r, None)
+        });
+        assert_eq!(hintless.row(), Some(1));
+        assert!(
+            hintless
+                .to_string()
+                .starts_with("[ARITHMETIC_OVERFLOW] overflow. If necessary")
+        );
+        let div = KernelError::for_fault(2, Fault::DivideByZero, |_| unreachable!());
+        assert_eq!(
+            (div.row(), div.error_class()),
+            (Some(2), ErrorClass::DivideByZero)
+        );
+        assert!(div.to_string().contains("try_divide"));
     }
 
     #[test]
@@ -165,6 +208,7 @@ mod tests {
         assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
         let e = KernelError::out_of_memory(8);
         assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
-        assert!(zeroed::<u8>(usize::MAX).is_err());
+        assert!(with_capacity::<u8>(usize::MAX).is_err());
+        assert_eq!(with_capacity::<u64>(3).unwrap().capacity(), 3);
     }
 }

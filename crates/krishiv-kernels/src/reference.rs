@@ -75,7 +75,7 @@ pub fn integer_binary<T: SparkIntegral>(
             (_, false) | (OverflowMode::Unchecked | OverflowMode::JavaWrap, true) => Some(wrapped),
             (OverflowMode::NullOnOverflow, true) => None,
             (OverflowMode::AnsiError, true) => {
-                return Err(KernelError::arithmetic_overflow(i, op));
+                return Err(KernelError::arithmetic_overflow(i, Some(op.try_function())));
             }
         });
     }

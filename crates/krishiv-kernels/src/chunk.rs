@@ -3,11 +3,12 @@
 //!
 //! [`compute`] inspects the operands once, picks the
 //! `<NULLS, L_SCALAR, R_SCALAR>` monomorph and the CPU target, and runs the
-//! loop. Each chunk is computed branch-free; a policy that checks overflow
-//! ORs a cheap "may be bad" flag over the chunk and, only if it is set,
-//! re-scans the chunk with the exact verdict to build a 64-bit word of bad
-//! rows, which is then masked with the validity word (a NULL row never
-//! raises).
+//! loop. Each chunk is computed branch-free straight into the output (no
+//! pre-zeroing); a checking policy ORs a cheap "may fault" flag over the
+//! chunk and, only if it is set, re-scans the chunk with the exact
+//! [`LaneOp::fault`] verdict. Each fault kind maps to an [`Action`] of the
+//! policy: wrap, NULL (a word of rows cleared from the validity) or raise
+//! (the first such row whose validity bit is set — a NULL row never raises).
 
 use std::marker::PhantomData;
 
@@ -16,9 +17,9 @@ use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
 
 use crate::dispatch::KernelCtx;
-use crate::error::KernelError;
+use crate::error::{KernelError, with_capacity};
 use crate::ops::Operand;
-use crate::policy::{Overflow, OverflowMode};
+use crate::policy::{Action, Fault, Overflow};
 use crate::unsafe_dispatch::{Kernel, run};
 
 /// Rows per chunk: one validity word.
@@ -26,14 +27,16 @@ pub(crate) const CHUNK: usize = 64;
 
 /// An elementwise operation on two lanes.
 pub(crate) trait LaneOp<T>: Copy {
-    /// The unchecked result.
+    /// Whether the operation can fault with [`Fault::DivideByZero`].
+    const MAY_DIVIDE_BY_ZERO: bool = false;
+    /// The result without checks. Total: never panics.
     fn wrapping(self, a: T, b: T) -> T;
-    /// The result and a cheap flag that is set for every bad row (it may
-    /// also be set for a good one; [`LaneOp::is_bad`] decides).
+    /// The result and a cheap flag that is set for every faulting row (it
+    /// may also be set for a good one; [`LaneOp::fault`] decides).
     fn checked(self, a: T, b: T) -> (T, bool);
-    /// The exact verdict for a row whose flag was set (slow path). For a good
-    /// row, the value [`LaneOp::checked`] returned must be the exact result.
-    fn is_bad(self, a: T, b: T) -> bool;
+    /// The exact verdict for a row whose flag was set (slow path). For a row
+    /// without a fault, the value [`LaneOp::checked`] returned must be exact.
+    fn fault(self, a: T, b: T) -> Option<Fault>;
 }
 
 /// One operand reduced to its values.
@@ -98,31 +101,43 @@ pub(crate) fn resolve<'a, P: ArrowPrimitiveType>(
     })
 }
 
-/// The values of a chunk computation and, for [`OverflowMode::NullOnOverflow`],
-/// the output validity (input validity minus bad rows).
+/// The values of a chunk computation and the output validity (the input
+/// validity minus rows a policy turned NULL).
 #[derive(Debug)]
 pub(crate) struct Computed<T> {
     pub(crate) values: Vec<T>,
     pub(crate) nulls: Option<NullBuffer>,
 }
 
-/// Runs `op` over two resolved sides into `out` (one slot per row; `nulls`
-/// is the input validity). `Err(row)`: under [`OverflowMode::AnsiError`],
-/// the first bad non-NULL row.
+/// Whether policy `O` must check lane op `L` at all.
+fn checks<T, L: LaneOp<T>, O: Overflow>() -> bool {
+    O::MODE.action(Fault::Overflow) != Action::Wrap || L::MAY_DIVIDE_BY_ZERO
+}
+
+/// Runs `op` over two resolved sides (`len` rows; `nulls` is the input
+/// validity). A raised fault becomes the error `raise(row, fault)`.
 pub(crate) fn compute<T, L, O>(
     ctx: &KernelCtx,
     l: Side<'_, T>,
     r: Side<'_, T>,
     nulls: Option<NullBuffer>,
-    mut out: Vec<T>,
+    len: usize,
     op: L,
-) -> Result<Computed<T>, usize>
+    raise: impl FnOnce(usize, Fault) -> KernelError,
+) -> Result<Computed<T>, KernelError>
 where
     T: Copy + Default,
     L: LaneOp<T>,
     O: Overflow,
 {
-    let len = out.len();
+    let mut out = with_capacity::<T>(len)?;
+    let n_words = len.div_ceil(CHUNK);
+    // Space for one NULL-row word per chunk, reserved up front so the loop
+    // never allocates. Only policies that can turn a row NULL need it.
+    let may_null = checks::<T, L, O>()
+        && (O::MODE.action(Fault::Overflow) == Action::Null
+            || (L::MAY_DIVIDE_BY_ZERO && O::MODE.action(Fault::DivideByZero) == Action::Null));
+    let mut null_words = with_capacity::<u64>(if may_null { n_words } else { 0 })?;
     let n = nulls.as_ref();
     macro_rules! go {
         ($nulls:literal, $ls:literal, $rs:literal) => {
@@ -133,38 +148,44 @@ where
                     r,
                     validity: n,
                     out: &mut out,
+                    null_words: &mut null_words,
+                    len,
                     op,
                     policy: PhantomData,
                 },
             )
         };
     }
-    let bad = match (n.is_some(), l, r) {
+    let raised = match (n.is_some(), l, r) {
         (false, Side::Array(_), Side::Array(_)) => go!(false, false, false),
         (false, Side::Array(_), Side::Scalar(_)) => go!(false, false, true),
         (false, Side::Scalar(_), _) => go!(false, true, false),
         (true, Side::Array(_), Side::Array(_)) => go!(true, false, false),
         (true, Side::Array(_), Side::Scalar(_)) => go!(true, false, true),
         (true, Side::Scalar(_), _) => go!(true, true, false),
-    }?;
-    let nulls = match bad {
-        None => nulls,
-        Some(bad) => Some(clear_bits(nulls.as_ref(), &bad, len)),
+    };
+    if let Some((row, fault)) = raised {
+        return Err(raise(row, fault));
+    }
+    let nulls = if null_words.iter().any(|&w| w != 0) {
+        Some(clear_bits(nulls.as_ref(), null_words, len))
+    } else {
+        nulls
     };
     Ok(Computed { values: out, nulls })
 }
 
-/// `validity AND NOT bad` as a new null buffer (all valid when `validity` is
-/// `None`). `bad` has one word per chunk.
-fn clear_bits(validity: Option<&NullBuffer>, bad: &[u64], len: usize) -> NullBuffer {
-    let mut bytes = Vec::with_capacity(bad.len().saturating_mul(8));
+/// `validity AND NOT words` as a new null buffer (all valid when `validity`
+/// is `None`), built in place in `words` (one word per chunk).
+fn clear_bits(validity: Option<&NullBuffer>, mut words: Vec<u64>, len: usize) -> NullBuffer {
     let chunks = validity.map(|v| v.inner().bit_chunks());
     let mut valid = chunks.as_ref().map(BitChunks::iter_padded);
-    for &b in bad {
+    for w in &mut words {
         let v = valid.as_mut().map_or(u64::MAX, |it| it.next().unwrap_or(0));
-        bytes.extend_from_slice(&(v & !b).to_le_bytes());
+        // Arrow bitmaps are little-endian bytes.
+        *w = (v & !*w).to_le();
     }
-    NullBuffer::new(BooleanBuffer::new(Buffer::from_vec(bytes), 0, len))
+    NullBuffer::new(BooleanBuffer::new(Buffer::from_vec(words), 0, len))
 }
 
 /// Mask of the low `n` bits (`n <= 64`).
@@ -180,7 +201,12 @@ struct Chunks<'a, T, L, O, const NULLS: bool, const L_SCALAR: bool, const R_SCAL
     l: Side<'a, T>,
     r: Side<'a, T>,
     validity: Option<&'a NullBuffer>,
-    out: &'a mut [T],
+    /// Empty, with capacity for `len` values.
+    out: &'a mut Vec<T>,
+    /// Empty, with capacity for one word per chunk when the policy can
+    /// turn rows NULL.
+    null_words: &'a mut Vec<u64>,
+    len: usize,
     op: L,
     policy: PhantomData<O>,
 }
@@ -196,6 +222,14 @@ pub(crate) fn split<T: Copy + Default>(s: Side<'_, T>) -> (&[[T; CHUNK]], &[T], 
     }
 }
 
+/// What the slow scan of one chunk found: rows to turn NULL, and the first
+/// non-NULL row to raise at (bit index and fault).
+#[derive(Debug, Default, Clone, Copy)]
+struct ChunkFaults {
+    null: u64,
+    raise: Option<(u32, Fault)>,
+}
+
 impl<T, L, O, const NULLS: bool, const L_SCALAR: bool, const R_SCALAR: bool> Kernel
     for Chunks<'_, T, L, O, NULLS, L_SCALAR, R_SCALAR>
 where
@@ -203,67 +237,59 @@ where
     L: LaneOp<T>,
     O: Overflow,
 {
-    /// `Ok(Some(words))`: bad-row words for `NullOnOverflow`; `Err(row)`:
-    /// the first bad non-NULL row for `AnsiError`.
-    type Output = Result<Option<Vec<u64>>, usize>;
+    /// The first raised `(row, fault)`, if any.
+    type Output = Option<(usize, Fault)>;
 
     #[inline(always)]
     fn run(self) -> Self::Output {
+        let checks = checks::<T, L, O>();
         let (lc, lt, ls) = split(self.l);
         let (rc, rt, rs) = split(self.r);
         let zero = [T::default(); CHUNK];
-        let (out_chunks, out_tail) = self.out.as_chunks_mut::<CHUNK>();
-        let n_words = out_chunks
-            .len()
-            .saturating_add(usize::from(!out_tail.is_empty()));
+        let full = self.len / CHUNK;
         let chunks = self
             .validity
             .filter(|_| NULLS)
             .map(|v| v.inner().bit_chunks());
         let mut valid = chunks.as_ref().map(BitChunks::iter_padded);
         let mut next_valid = || valid.as_mut().map_or(u64::MAX, |it| it.next().unwrap_or(0));
-        let mut bad_words: Option<Vec<u64>> = None;
-        let mut on_bad = |word: usize, bad: u64| -> Result<(), usize> {
-            if bad == 0 {
-                return Ok(());
+        let null_words = self.null_words;
+        let mut record = |word: usize, f: ChunkFaults| -> Option<(usize, Fault)> {
+            if null_words.capacity() > 0 {
+                null_words.push(f.null);
             }
-            match O::MODE {
-                OverflowMode::AnsiError => Err(word
-                    .wrapping_mul(CHUNK)
-                    .wrapping_add(bad.trailing_zeros() as usize)),
-                _ => {
-                    if let Some(w) = bad_words
-                        .get_or_insert_with(|| vec![0; n_words])
-                        .get_mut(word)
-                    {
-                        *w = bad;
-                    }
-                    Ok(())
-                }
-            }
+            f.raise
+                .map(|(bit, fault)| (word.wrapping_mul(CHUNK).wrapping_add(bit as usize), fault))
         };
-        for (i, o) in out_chunks.iter_mut().enumerate() {
+        for i in 0..full {
             let a = lc.get(i).unwrap_or(&zero);
             let b = rc.get(i).unwrap_or(&zero);
-            let bad = chunk::<T, L, O, L_SCALAR, R_SCALAR>(a, ls, b, rs, o, self.op);
-            if O::CHECKS {
-                on_bad(i, bad & next_valid())?;
+            let any =
+                chunk::<T, L, L_SCALAR, R_SCALAR>(a, ls, b, rs, self.out, CHUNK, self.op, checks);
+            if any {
+                let f = faults::<T, L, O, L_SCALAR, R_SCALAR>(a, ls, b, rs, self.op, next_valid());
+                if let Some(raised) = record(i, f) {
+                    return Some(raised);
+                }
+            } else if checks {
+                let _ = next_valid();
+                record(i, ChunkFaults::default());
             }
         }
-        let rem = out_tail.len();
+        let rem = self.len.wrapping_sub(full.wrapping_mul(CHUNK));
         if rem > 0 {
-            let (mut a, mut b, mut o) = (zero, zero, zero);
+            let (mut a, mut b) = (zero, zero);
             copy_prefix(&mut a, lt);
             copy_prefix(&mut b, rt);
-            let bad = chunk::<T, L, O, L_SCALAR, R_SCALAR>(&a, ls, &b, rs, &mut o, self.op);
-            for (d, s) in out_tail.iter_mut().zip(&o) {
-                *d = *s;
-            }
-            if O::CHECKS {
-                on_bad(out_chunks.len(), bad & next_valid() & low_bits(rem))?;
+            if chunk::<T, L, L_SCALAR, R_SCALAR>(&a, ls, &b, rs, self.out, rem, self.op, checks) {
+                let valid = next_valid() & low_bits(rem);
+                let f = faults::<T, L, O, L_SCALAR, R_SCALAR>(&a, ls, &b, rs, self.op, valid);
+                return record(full, f);
+            } else if checks {
+                record(full, ChunkFaults::default());
             }
         }
-        Ok(bad_words)
+        None
     }
 }
 
@@ -274,48 +300,85 @@ fn copy_prefix<T: Copy>(dst: &mut [T; CHUNK], src: &[T]) {
     }
 }
 
-/// One chunk: writes 64 results and returns the exact bad-row word (always
-/// 0 when the policy does not check).
+/// One chunk: appends the first `take` results to `out` (whose capacity
+/// was reserved) and returns whether any row may fault (always `false` when
+/// the policy does not check).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the hot loop takes its operands unpacked so it inlines into each clone"
+)]
 #[inline(always)]
-fn chunk<T, L, O, const L_SCALAR: bool, const R_SCALAR: bool>(
+fn chunk<T, L, const L_SCALAR: bool, const R_SCALAR: bool>(
     a: &[T; CHUNK],
     ls: T,
     b: &[T; CHUNK],
     rs: T,
-    out: &mut [T; CHUNK],
+    out: &mut Vec<T>,
+    take: usize,
     op: L,
-) -> u64
+    checks: bool,
+) -> bool
+where
+    T: Copy,
+    L: LaneOp<T>,
+{
+    let pick = move |x: T, y: T| (if L_SCALAR { ls } else { x }, if R_SCALAR { rs } else { y });
+    let lanes = a.iter().zip(b).take(take);
+    if !checks {
+        out.extend(lanes.map(|(&x, &y)| {
+            let (x, y) = pick(x, y);
+            op.wrapping(x, y)
+        }));
+        return false;
+    }
+    let mut any = false;
+    out.extend(lanes.map(|(&x, &y)| {
+        let (x, y) = pick(x, y);
+        let (v, flag) = op.checked(x, y);
+        any |= flag;
+        v
+    }));
+    any
+}
+
+/// The slow scan of a flagged chunk: classifies each row with the exact
+/// verdict and applies the policy. `valid` has the row's validity bits (and
+/// zeros past the end of the data), so NULL and padding rows never raise.
+#[cold]
+#[inline(never)]
+fn faults<T, L, O, const L_SCALAR: bool, const R_SCALAR: bool>(
+    a: &[T; CHUNK],
+    ls: T,
+    b: &[T; CHUNK],
+    rs: T,
+    op: L,
+    valid: u64,
+) -> ChunkFaults
 where
     T: Copy,
     L: LaneOp<T>,
     O: Overflow,
 {
-    let pick = |x: T, y: T| (if L_SCALAR { ls } else { x }, if R_SCALAR { rs } else { y });
-    if !O::CHECKS {
-        for ((o, &x), &y) in out.iter_mut().zip(a).zip(b) {
-            let (x, y) = pick(x, y);
-            *o = op.wrapping(x, y);
-        }
-        return 0;
-    }
-    let mut any = false;
-    for ((o, &x), &y) in out.iter_mut().zip(a).zip(b) {
-        let (x, y) = pick(x, y);
-        let (v, flag) = op.checked(x, y);
-        *o = v;
-        any |= flag;
-    }
-    if !any {
-        return 0;
-    }
-    let mut word = 0_u64;
+    let mut f = ChunkFaults::default();
     for ((&x, &y), bit) in a.iter().zip(b).zip(0_u32..) {
-        let (x, y) = pick(x, y);
-        if op.is_bad(x, y) {
-            word |= 1_u64.wrapping_shl(bit);
+        let x = if L_SCALAR { ls } else { x };
+        let y = if R_SCALAR { rs } else { y };
+        let Some(fault) = op.fault(x, y) else {
+            continue;
+        };
+        let mask = 1_u64.wrapping_shl(bit);
+        match O::MODE.action(fault) {
+            Action::Null => f.null |= mask,
+            Action::Raise if valid & mask != 0 => {
+                f.raise = Some((bit, fault));
+                break;
+            }
+            // Wrap keeps the value; a NULL row never raises.
+            Action::Wrap | Action::Raise => {}
         }
     }
-    word
+    f.null &= valid;
+    f
 }
 
 #[cfg(test)]
@@ -332,7 +395,84 @@ mod tests {
 
     #[test]
     fn clear_bits_without_validity() {
-        let n = clear_bits(None, &[0b101], 3);
+        let n = clear_bits(None, vec![0b101], 3);
         assert_eq!(n.iter().collect::<Vec<_>>(), [false, true, false]);
+    }
+
+    /// A division lane, the shape T021a's `div`/`%` take: two fault kinds,
+    /// with legacy mode mixing them (x/0 is NULL, MIN/-1 wraps).
+    #[derive(Clone, Copy)]
+    struct Div;
+
+    impl LaneOp<i32> for Div {
+        const MAY_DIVIDE_BY_ZERO: bool = true;
+        fn wrapping(self, a: i32, b: i32) -> i32 {
+            a.checked_div(b).unwrap_or(0)
+        }
+        fn checked(self, a: i32, b: i32) -> (i32, bool) {
+            let bad = (b == 0) | ((a == i32::MIN) & (b == -1));
+            (
+                a.checked_div(b)
+                    .unwrap_or(if b == 0 { 0 } else { i32::MIN }),
+                bad,
+            )
+        }
+        fn fault(self, a: i32, b: i32) -> Option<Fault> {
+            match (a, b) {
+                (_, 0) => Some(Fault::DivideByZero),
+                (i32::MIN, -1) => Some(Fault::Overflow),
+                _ => None,
+            }
+        }
+    }
+
+    fn div<O: Overflow>(
+        a: &[i32],
+        b: &[i32],
+        nulls: Option<NullBuffer>,
+    ) -> Result<Computed<i32>, KernelError> {
+        compute::<i32, Div, O>(
+            &KernelCtx::new(),
+            Side::Array(a),
+            Side::Array(b),
+            nulls,
+            a.len(),
+            Div,
+            |row, f| KernelError::for_fault(row, f, |r| KernelError::arithmetic_overflow(r, None)),
+        )
+    }
+
+    #[test]
+    fn fault_kinds_map_per_policy() {
+        use crate::policy::{AnsiError, JavaWrap, Unchecked};
+        use krishiv_common::error::ErrorClass;
+        let mut a = vec![6; 70];
+        let mut b = vec![3; 70];
+        (a[1], b[1]) = (i32::MIN, -1);
+        b[66] = 0;
+        // Legacy: x/0 is NULL, MIN / -1 wraps.
+        let c = div::<JavaWrap>(&a, &b, None).unwrap();
+        assert_eq!((c.values[0], c.values[1]), (2, i32::MIN));
+        let n = c.nulls.unwrap();
+        assert_eq!((n.null_count(), n.is_null(66)), (1, true));
+        // ANSI raises the first fault, with its kind.
+        let e = div::<AnsiError>(&a, &b, None).unwrap_err();
+        assert_eq!(
+            (e.row(), e.error_class()),
+            (Some(1), ErrorClass::ArithmeticOverflow)
+        );
+        // A NULL row never raises: with row 1 NULL, the next fault is x/0.
+        let mut valid = vec![true; 70];
+        valid[1] = false;
+        let e = div::<AnsiError>(&a, &b, Some(NullBuffer::from(valid))).unwrap_err();
+        assert_eq!(
+            (e.row(), e.error_class()),
+            (Some(66), ErrorClass::DivideByZero)
+        );
+        // The lane's unchecked form is total.
+        assert_eq!((Div.wrapping(7, 0), Div.wrapping(7, 2)), (0, 3));
+        // Unchecked proves no overflow, not a non-zero divisor.
+        let e = div::<Unchecked>(&a[2..], &b[2..], None).unwrap_err();
+        assert_eq!(e.row(), Some(64));
     }
 }
