@@ -35,5 +35,4 @@ If a needed piece is missing (Sail/Polars/Flink adapter, Krishiv adapter), say s
 Criterion bench in `crates/<crate>/benches/` (no `divan`); suite queries under `bench/` with expected row counts so
 a wrong answer cannot look fast. Correctness first: verify results against DuckDB/Spark before timing.
 
-Targets for context (proposed, ADR 0032): single-node TPC-H/DS within 1.5x of DuckDB and faster than Sail;
-short-query planning < 5 ms.
+Performance targets are tracked in ADR 0032; report measured numbers, never claims.
