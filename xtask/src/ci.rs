@@ -77,52 +77,52 @@ impl SizeReport {
     }
 }
 
-/// Resolves git's rename notation (`a/{old => new}/b`, `old => new`) to the
-/// new path.
-fn resolve_rename(path: &str) -> String {
-    if let (Some(open), Some(close)) = (path.find('{'), path.find('}'))
-        && open < close
-        && let Some((_, new)) = path[open + 1..close].split_once(" => ")
-    {
-        let joined = format!("{}{}{}", &path[..open], new, &path[close + 1..]);
-        return joined.replace("//", "/");
-    }
-    match path.split_once(" => ") {
-        Some((_, new)) => new.to_owned(),
-        None => path.to_owned(),
-    }
-}
-
-/// Measures `git diff --numstat` output. Binary files (`-`) outside the
-/// allowlist are listed in [`SizeReport::binaries`] for the caller to size.
+/// Measures `git diff --numstat -z` output. The NUL-separated form keeps
+/// paths verbatim (no quoting, no `old => new` notation to parse); a rename
+/// is `added\tdeleted\t` followed by the old and new paths. Binary files
+/// (`-`) outside the allowlist are listed in [`SizeReport::binaries`] for the
+/// caller to size.
 ///
 /// # Errors
-/// Returns an error for a line that is not `added<TAB>deleted<TAB>path`.
-pub fn measure_numstat(numstat: &str) -> Result<SizeReport, String> {
+/// Returns an error for a malformed record.
+pub fn measure_numstat(raw: &str) -> Result<SizeReport, String> {
     let mut report = SizeReport {
         counted: 0,
         excluded: 0,
         binaries: Vec::new(),
     };
-    for line in numstat.lines().filter(|l| !l.trim().is_empty()) {
-        let mut parts = line.splitn(3, '\t');
+    let mut fields = raw.split('\0');
+    while let Some(record) = fields.next() {
+        if record.trim().is_empty() {
+            continue;
+        }
+        let mut parts = record.splitn(3, '\t');
         let (Some(added), Some(deleted), Some(path)) = (parts.next(), parts.next(), parts.next())
         else {
-            return Err(format!("malformed numstat line: {line:?}"));
+            return Err(format!("malformed numstat record: {record:?}"));
+        };
+        let path = if path.is_empty() {
+            // Rename or copy: the old path, then the new one.
+            let _old = fields.next();
+            fields
+                .next()
+                .filter(|p| !p.is_empty())
+                .ok_or_else(|| format!("rename record without paths: {record:?}"))?
+        } else {
+            path
         };
         let count = |s: &str| -> Result<u64, String> {
             if s == "-" {
                 Ok(0)
             } else {
-                s.parse().map_err(|_| format!("bad count in {line:?}"))
+                s.parse().map_err(|_| format!("bad count in {record:?}"))
             }
         };
         let lines = count(added)? + count(deleted)?;
-        let path = resolve_rename(path);
-        if is_size_excluded(&path) {
+        if is_size_excluded(path) {
             report.excluded += lines;
         } else if added == "-" && deleted == "-" {
-            report.binaries.push(path);
+            report.binaries.push(path.to_owned());
         } else {
             report.counted += lines;
         }

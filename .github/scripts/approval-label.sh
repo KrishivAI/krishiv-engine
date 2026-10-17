@@ -1,29 +1,28 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Prints 1 when the approval label LABEL counts for this PR, else 0.
-# It counts only when it is on the PR, the configured approver applied it,
-# and it was applied after the head commit was pushed: a push after the
-# approval needs a fresh approval.
-# Env: GH_TOKEN, REPO, PR, HEAD_SHA, APPROVER, HAS_LABEL (true|false).
+# Prints 1 when the approval label LABEL counts for this run, else 0.
+# Approval is bound to pushes, not timestamps: every push (`synchronize`)
+# removes the approval labels (job `reset-approvals` in ci.yml) and a run
+# triggered by a push never counts them, so a label always approves the head
+# that was current when the approver applied it. It also counts only when the
+# configured approver applied it.
+# Env: GH_TOKEN, REPO, PR, APPROVER, EVENT_ACTION, HAS_LABEL (true|false).
 set -euo pipefail
 label="$1"
 if [ "${HAS_LABEL:-false}" != "true" ]; then
   echo 0
   exit 0
 fi
-last=$(gh api "repos/$REPO/issues/$PR/events" --paginate \
-  --jq ".[] | select(.event == \"labeled\" and .label.name == \"$label\") | [.actor.login, .created_at] | @tsv" | tail -n1)
-actor=$(printf '%s' "$last" | cut -f1)
-labeled_at=$(printf '%s' "$last" | cut -f2)
-# When the head commit reached GitHub: the earliest check suite on it.
-pushed_at=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-suites" \
-  --jq '[.check_suites[].created_at] | min // empty')
-if [ -z "$APPROVER" ] || [ "$actor" != "$APPROVER" ]; then
+if [ "${EVENT_ACTION:-}" = "synchronize" ]; then
+  echo "::warning::$label is ignored on a push; the approver re-applies it to approve the new head" >&2
+  echo 0
+  exit 0
+fi
+actor=$(gh api "repos/$REPO/issues/$PR/events" --paginate \
+  --jq ".[] | select(.event == \"labeled\" and .label.name == \"$label\") | .actor.login" | tail -n1)
+if [ -n "$APPROVER" ] && [ "$actor" = "$APPROVER" ]; then
+  echo 1
+else
   echo "::warning::$label was applied by '$actor', not the approver; ignoring" >&2
   echo 0
-elif [ -z "$pushed_at" ] || [[ "$labeled_at" < "$pushed_at" ]]; then
-  echo "::warning::$label was applied before the latest push ($labeled_at < $pushed_at); re-apply it to approve this head" >&2
-  echo 0
-else
-  echo 1
 fi

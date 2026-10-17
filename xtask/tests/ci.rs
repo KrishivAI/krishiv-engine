@@ -6,7 +6,7 @@ use xtask::ci::{
 };
 
 fn numstat(path: &str, added: u64) -> String {
-    format!("{added}\t0\t{path}\n")
+    format!("{added}\t0\t{path}\0")
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn goldens_fixtures_vendored_and_generated_are_excluded() {
 
 #[test]
 fn deletions_count_binary_files_do_not_and_renames_resolve() {
-    let input = "0\t700\tcrates/a.rs\n800\t0\tcrates/b.rs\n-\t-\tlogo.png\n5\t5\ttests/{old => fixtures}/data.json\n";
+    let input = "0\t700\tcrates/a.rs\x00800\t0\tcrates/b.rs\x00-\t-\tlogo.png\x005\t5\t\x00tests/old/data.json\x00tests/fixtures/data.json\x00";
     let mut report = measure_numstat(input).unwrap();
     assert_eq!(report.counted, 1500);
     assert_eq!(report.excluded, 10);
@@ -53,6 +53,10 @@ fn deletions_count_binary_files_do_not_and_renames_resolve() {
     assert_eq!(report.counted, 1601);
     assert!(!report.within_cap());
     assert!(measure_numstat("garbage").is_err());
+    // Paths are taken verbatim: no quoting, and ` => ` in a name is literal.
+    let odd = measure_numstat("3\t0\tdocs/a => b.rs\x00").unwrap();
+    assert_eq!(odd.counted, 3);
+    assert!(measure_numstat("1\t1\t\x00only-old\x00").is_err());
 }
 
 #[test]

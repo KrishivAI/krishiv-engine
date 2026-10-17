@@ -94,7 +94,14 @@ pub fn workflow_violations(name: &str, text: &str) -> Vec<String> {
             continue;
         }
         if let Some(rest) = t.strip_prefix("runs-on:") {
-            let bad: Vec<String> = runs_on_labels(&lines, i, rest)
+            let labels = runs_on_labels(&lines, i, rest);
+            if labels.is_empty() {
+                out.push(format!(
+                    "{name}:{}: `runs-on` has no label this lint can read; use a literal GitHub-hosted label",
+                    i + 1
+                ));
+            }
+            let bad: Vec<String> = labels
                 .into_iter()
                 .filter(|l| !is_github_hosted(l))
                 .collect();
