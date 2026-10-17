@@ -5,6 +5,12 @@
     ],
     "sqlState" : "22023"
   },
+  "KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY" : {
+    "message" : [
+      "The query was aborted to free memory for other work: it held <heldBytes> bytes, the most of any query, and spilling did not free enough memory in time. Increase \"krishiv.memory.limit\" or run fewer concurrent queries."
+    ],
+    "sqlState" : "53200"
+  },
   "KRISHIV_UNKNOWN_CONFIG" : {
     "message" : [
       "The config <key> is not a known Krishiv config. Verify the spelling, or see the configuration reference."

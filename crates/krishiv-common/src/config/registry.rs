@@ -16,6 +16,10 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &TARGET_PARTITION_BYTES,
     &SHUFFLE_PARTITIONS_HINT,
     &NETWORK_TIMEOUT,
+    &MEMORY_LIMIT,
+    &MEMORY_RESERVATION_QUANTUM,
+    &MEMORY_SPILL_WAIT_TIMEOUT,
+    &MEMORY_ABORT_RELEASE_TIMEOUT,
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
 ];
@@ -87,6 +91,59 @@ pub static NETWORK_TIMEOUT: ConfigEntry = ConfigEntry {
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: Some("spark.network.timeout"),
+};
+
+/// Process-wide memory limit for query execution.
+pub static MEMORY_LIMIT: ConfigEntry = ConfigEntry {
+    key: "krishiv.memory.limit",
+    value_type: ValueType::Size,
+    default: None,
+    doc: "Memory available to query execution in this process: the limit of the root memory \
+          pool. Operators reserve memory before allocating and spill when the limit is reached. \
+          When unset: 80% of the effective memory limit (the tightest cgroup limit, else \
+          physical memory), or 2 GiB where that cannot be determined.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Granularity of memory reservations.
+pub static MEMORY_RESERVATION_QUANTUM: ConfigEntry = ConfigEntry {
+    key: "krishiv.memory.reservationQuantum",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(MIB)),
+    doc: "Granularity of memory reservations: a consumer takes memory from its pools in steps \
+          of this size (at most 1/64 of the smallest pool limit above it), so small reservations \
+          rarely touch shared counters. Unused parts of a step are reclaimed before anything is \
+          spilled. `1b` disables rounding.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// How long the memory arbitrator waits for requested spills.
+pub static MEMORY_SPILL_WAIT_TIMEOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.memory.spillWaitTimeout",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(2))),
+    doc: "How long the memory arbitrator waits for requested spills to free memory before it \
+          aborts the query furthest above its fair share of memory.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// How long a request waits for aborted queries to release memory.
+pub static MEMORY_ABORT_RELEASE_TIMEOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.memory.abortReleaseTimeout",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(30))),
+    doc: "How long a memory request waits for queries the arbitrator aborted to release their \
+          memory; aborted queries release at their next batch boundary. While their memory \
+          covers the request, no other query is aborted. The request fails after this time.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
 };
 
 /// Experimental: incremental view maintenance.

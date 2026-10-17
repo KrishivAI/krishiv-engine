@@ -13,6 +13,8 @@ repository = "https://github.com/krishiv/krishiv-engine"
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "deny"
+# `--cfg loom` builds the loom model tests (krishiv-memory).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 # ADR 0029 (2026-10-17 lint set).
 unreachable_pub = "warn"
 missing_debug_implementations = "warn"
@@ -118,6 +120,8 @@ regex-lite = { version = "0.1", default-features = false, features = ["std", "st
 sqllogictest = { version = "0.29", default-features = false }
 # Property tests (dev-dependency only).
 proptest = { version = "1.9", default-features = false }
+# Concurrency model checking (dev-dependency only, under `--cfg loom`).
+loom = { version = "0.7", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 serde = { version = "1.0.229", default-features = false }
 serde_json = { version = "1.0.154", default-features = false }

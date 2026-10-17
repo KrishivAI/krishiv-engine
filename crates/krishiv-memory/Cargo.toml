@@ -10,3 +10,14 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+krishiv-common = { path = "../krishiv-common" }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = { workspace = true, features = ["futures"] }
