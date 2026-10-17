@@ -15,4 +15,6 @@ extend-exclude = [
 
 [default.extend-words]
 # Spark / Arrow / project vocabulary that looks like a typo.
+nd = "nd"                   # "nondeterministic" shorthand in the function-matrix generator
+unparseable = "unparseable" # key in committed function-matrix manifest
 ba = "ba"
