@@ -53,6 +53,22 @@ cargo xtask diff-coverage --base origin/main # coverage of the lines your branch
 Pull requests get a diff-coverage report in the job summary; the nightly job publishes the full HTML and JSON report
 as an artifact. Both upload to [Codecov](https://about.codecov.io/), which is informational only and never blocks a merge.
 
+## Python quality
+
+All Python (`python/`, `bench/`, `tests/scripts/`) is checked with the Astral toolchain: ruff (lint and format) and
+ty (types). Versions are pinned in each `uv.lock`; configuration lives in each `pyproject.toml`. The required CI job
+`python-quality` runs, per directory:
+
+```text
+uv run --frozen ruff check
+uv run --frozen ruff format --check
+uv run --frozen ty check
+```
+
+Any `ignore` or `noqa` needs a reason comment. Python line coverage (`pytest --cov=krishiv`, Codecov flag `python`)
+is reported from the `wheels` job; a nightly job also reports the Rust code reached through the Python API (flag
+`rust-from-python`). Both are informational.
+
 ## Python versions
 
 Krishiv supports CPython 3.11 and newer (`requires-python = ">=3.11"`). The default wheel is a single abi3 wheel

@@ -1,7 +1,9 @@
 """Suite runner: executes queries against an Engine, records a JSON result."""
+
 from __future__ import annotations
 
 import concurrent.futures as cf
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -14,8 +16,8 @@ from pathlib import Path
 
 import psutil
 
-from .adapters import Dataset, Engine, Query, make_engine
 from . import compare
+from .adapters import Dataset, Engine, Query, make_engine
 from .paths import bench_root, data_root, dataset_dir, fmt_sf, queries_dir, results_dir
 
 SUITE_DATASET = {"tpch": "tpch", "tpcds": "tpcds"}  # default dataset per suite
@@ -25,17 +27,15 @@ ANSWER_DATASETS = {"tpch-dbgen"}  # datasets whose data reproduces the official 
 def machine_info() -> dict:
     cpu = "unknown"
     try:
-        for line in open("/proc/cpuinfo"):
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
             if line.startswith("model name"):
                 cpu = line.split(":", 1)[1].strip()
                 break
     except OSError:
         cpu = platform.processor()
     gov = None
-    try:
+    with contextlib.suppress(OSError):
         gov = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor").read_text().strip()
-    except OSError:
-        pass
     return {
         "cpu_model": cpu,
         "cores_logical": os.cpu_count(),
@@ -51,22 +51,34 @@ def machine_info() -> dict:
 
 def git_info() -> dict:
     """Harness == engine repo here. `dirty` covers the whole repo (tracked changes and untracked files)."""
+
     def g(*a):
         return subprocess.run(["git", "-C", str(bench_root()), *a], capture_output=True, text=True).stdout.strip()
+
     porcelain = g("status", "--porcelain")
-    return {"commit": g("rev-parse", "HEAD") or None, "branch": g("rev-parse", "--abbrev-ref", "HEAD") or None,
-            "dirty": bool(porcelain), "dirty_files": len(porcelain.splitlines())}
+    return {
+        "commit": g("rev-parse", "HEAD") or None,
+        "branch": g("rev-parse", "--abbrev-ref", "HEAD") or None,
+        "dirty": bool(porcelain),
+        "dirty_files": len(porcelain.splitlines()),
+    }
 
 
 def dataset_provenance(ds_name: str, sf: float) -> dict:
     man = data_root() / "manifests" / f"{ds_name}-sf{fmt_sf(sf)}.sha256"
-    prov = {"manifest_path": str(man), "manifest_sha256": hashlib.sha256(man.read_bytes()).hexdigest() if man.exists() else None}
+    prov = {
+        "manifest_path": str(man),
+        "manifest_sha256": hashlib.sha256(man.read_bytes()).hexdigest() if man.exists() else None,
+    }
     if ds_name == "tpch":
         r = subprocess.run(["tpchgen-cli", "--version"], capture_output=True, text=True)
         prov["generator"] = r.stdout.strip() or "tpchgen-cli (unknown version)"
     else:
         import duckdb
-        prov["generator"] = f"duckdb {duckdb.__version__} " + ("tpch extension (dbgen)" if ds_name == "tpch-dbgen" else "tpcds extension (dsdgen)")
+
+        prov["generator"] = f"duckdb {duckdb.__version__} " + (
+            "tpch extension (dbgen)" if ds_name == "tpch-dbgen" else "tpcds extension (dsdgen)"
+        )
     return prov
 
 
@@ -94,9 +106,17 @@ def load_expected_rows(suite: str, sf: float) -> dict[str, int]:
     return json.loads(f.read_text()) if f.exists() else {}
 
 
-def run_suite(engine_name: str, suite: str, sf: float, iterations: int = 5, warmup: int = 2,
-              only: list[str] | None = None, engine_kwargs: dict | None = None,
-              timeout_s: float | None = 600, dataset: str | None = None) -> Path:
+def run_suite(
+    engine_name: str,
+    suite: str,
+    sf: float,
+    iterations: int = 5,
+    warmup: int = 2,
+    only: list[str] | None = None,
+    engine_kwargs: dict | None = None,
+    timeout_s: float | None = 600,
+    dataset: str | None = None,
+) -> Path:
     ds_name = dataset or SUITE_DATASET[suite]
     root = dataset_dir(ds_name, sf)
     tables = sorted(p.stem for p in root.glob("*.parquet"))
@@ -113,17 +133,28 @@ def run_suite(engine_name: str, suite: str, sf: float, iterations: int = 5, warm
     ds = Dataset(ds_name, sf, root, tables)
     queries = load_queries(suite, engine_name, only)
 
-    started = dt.datetime.now(dt.timezone.utc)
+    started = dt.datetime.now(dt.UTC)
     sf_s = fmt_sf(sf)
     stem = f"{started.strftime('%Y%m%dT%H%M%SZ')}_{engine_name}_{ds_name}_sf{sf_s}"
     record = {
-        "schema": 2, "started_utc": started.isoformat(), "machine": machine_info(),
+        "schema": 2,
+        "started_utc": started.isoformat(),
+        "machine": machine_info(),
         "git": {"repo": "krishiv-engine (harness lives in bench/)", **git_info()},
         "engine": {"name": engine_name, "version": eng.version(), "config": eng.config()},
-        "dataset": {"name": ds_name, "scale_factor": sf, "path": str(root), "tables": tables,
-                    **dataset_provenance(ds_name, sf)},
-        "suite": suite, "iterations": iterations, "warmup": warmup, "timeout_s": timeout_s,
-        "answers_available": bool(answers), "queries": {},
+        "dataset": {
+            "name": ds_name,
+            "scale_factor": sf,
+            "path": str(root),
+            "tables": tables,
+            **dataset_provenance(ds_name, sf),
+        },
+        "suite": suite,
+        "iterations": iterations,
+        "warmup": warmup,
+        "timeout_s": timeout_s,
+        "answers_available": bool(answers),
+        "queries": {},
     }
     rows_store: dict[str, list] = {}
     MAX_STORED_ROWS = 1_000_000
@@ -132,7 +163,8 @@ def run_suite(engine_name: str, suite: str, sf: float, iterations: int = 5, warm
     try:
         for q in queries:
             entry: dict = {"iterations": iterations}
-            times, rows, meas = [], None, []
+            times, meas = [], []
+            rows: list[tuple] = []
             try:
                 for i in range(warmup + iterations):
                     eng.begin_measure()
@@ -144,13 +176,11 @@ def run_suite(engine_name: str, suite: str, sf: float, iterations: int = 5, warm
                             rows = fut.result(timeout=timeout_s)
                         except cf.TimeoutError:
                             eng.cancel()
-                            try:
+                            with contextlib.suppress(Exception):
                                 fut.result(timeout=30)
-                            except Exception:
-                                pass
                             pool.shutdown(wait=False, cancel_futures=True)
                             pool = cf.ThreadPoolExecutor(max_workers=1)
-                            raise TimeoutError(f"query exceeded {timeout_s}s")
+                            raise TimeoutError(f"query exceeded {timeout_s}s") from None
                         dtm = time.perf_counter() - t0
                     finally:
                         m = eng.end_measure()
@@ -164,10 +194,15 @@ def run_suite(engine_name: str, suite: str, sf: float, iterations: int = 5, warm
                 continue
             ordered = compare.has_top_level_order_by(q.sql)
             entry.update(
-                times_s=times, p50_s=statistics.median(times), p99_s=percentile(times, 99),
-                min_s=min(times), max_s=max(times), mean_s=statistics.fmean(times),
+                times_s=times,
+                p50_s=statistics.median(times),
+                p99_s=percentile(times, 99),
+                min_s=min(times),
+                max_s=max(times),
+                mean_s=statistics.fmean(times),
                 throughput_qps=len(times) / sum(times),
-                rows_returned=len(rows), has_order_by=ordered,
+                rows_returned=len(rows),
+                has_order_by=ordered,
                 expected_rows=expected.get(q.id),
                 rows_match_expected=(len(rows) == expected[q.id]) if q.id in expected else None,
                 peak_rss_bytes=_max([m.peak_rss_bytes for m in meas]),
@@ -179,7 +214,12 @@ def run_suite(engine_name: str, suite: str, sf: float, iterations: int = 5, warm
                 ok, msg = compare.answer_check(rows, answers[q.id], ordered)
                 entry["answer_check"] = {"status": "pass" if ok else "fail", "detail": msg}
             else:
-                entry["answer_check"] = {"status": "not_checked", "detail": f"dataset {ds_name!r} does not reproduce the official answers (use tpch-dbgen)" if suite == "tpch" else "no official answer set"}
+                entry["answer_check"] = {
+                    "status": "not_checked",
+                    "detail": f"dataset {ds_name!r} does not reproduce the official answers (use tpch-dbgen)"
+                    if suite == "tpch"
+                    else "no official answer set",
+                }
             if len(rows) <= MAX_STORED_ROWS:
                 rows_store[q.id] = rows
                 entry["rows_stored"] = True
@@ -187,12 +227,12 @@ def run_suite(engine_name: str, suite: str, sf: float, iterations: int = 5, warm
                 entry["rows_stored"] = False
             ac = entry["answer_check"]
             flag = "" if ac["status"] != "fail" else f"  ANSWER MISMATCH: {ac['detail'][:100]}"
-            print(f"  {q.id}: p50={entry['p50_s']*1000:8.1f} ms rows={len(rows)} answer={ac['status']}{flag}")
+            print(f"  {q.id}: p50={entry['p50_s'] * 1000:8.1f} ms rows={len(rows)} answer={ac['status']}{flag}")
             record["queries"][q.id] = entry
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
         eng.teardown()
-    record["finished_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    record["finished_utc"] = dt.datetime.now(dt.UTC).isoformat()
     out = results_dir()
     out.mkdir(parents=True, exist_ok=True)
     compare.save_rows(out / f"{stem}.rows.json.gz", rows_store)

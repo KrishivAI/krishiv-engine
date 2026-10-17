@@ -86,6 +86,55 @@ jobs:
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: target/coverage/lcov.info
-          flags: nightly
+          flags: rust,nightly
+          use_oidc: true
+          fail_ci_if_error: false
+
+  # P2-T151: Rust code reached through the Python API. The extension is built
+  # under cargo-llvm-cov instrumentation, the Python tests run against it, and the
+  # profile data is reported as lcov. Report only (Codecov is informational).
+  python-rust-coverage:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write # Codecov OIDC upload (no secret)
+    env:
+      RUSTC_WRAPPER: "" # no sccache here: instrumented builds are not cacheable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml) and llvm-tools
+        run: |
+          rustup show active-toolchain
+          rustup component add llvm-tools-preview
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-llvm-cov
+      - name: Build the instrumented extension and run the Python tests
+        run: |
+          uv venv --python 3.11 "$RUNNER_TEMP/venv"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" "maturin>=1.9.4,<2" pytest
+          # Exports RUSTFLAGS, LLVM_PROFILE_FILE and the instrumented target dir.
+          # shellcheck source=/dev/null
+          source <(cargo llvm-cov show-env --sh)
+          # shellcheck source=/dev/null
+          source "$RUNNER_TEMP/venv/bin/activate"
+          (cd python && maturin develop && pytest tests -q)
+          mkdir -p target/coverage
+          cargo llvm-cov report --lcov --output-path target/coverage/python-lcov.info
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-rust-coverage
+          path: target/coverage/python-lcov.info
+          retention-days: 30
+      - name: Upload to Codecov (informational)
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: target/coverage/python-lcov.info
+          flags: rust-from-python
           use_oidc: true
           fail_ci_if_error: false

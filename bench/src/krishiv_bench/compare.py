@@ -5,12 +5,14 @@ Rules (values are the Python objects the engines return):
   * Decimal vs Decimal: compared at the *smaller* of the two scales (round half-up), so Spark's
     AVG(DECIMAL) -> DECIMAL(scale 6) matches an exact value that has more digits, but two
     DECIMALs of equal scale must be exactly equal.
-  * Decimal vs float: |d - f| <= 0.5 * 10^-scale(d) + 1e-9 * |f| (the double is rounded to the decimal's declared scale).
+  * Decimal vs float: |d - f| <= 0.5 * 10^-scale(d) + 1e-9 * |f| (the double is rounded to the decimal's
+    declared scale).
   * float vs float: relative tolerance 1e-6 (abs 1e-12 near zero).
   * int vs Decimal: exact numeric equality.
 Rows are compared *in order* when the query has a top-level ORDER BY, else as sorted multisets.
 Official TPC-H answers (DuckDB `tpch_answers()`) are text; `match_answer` parses each cell by the engine value's type.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -27,7 +29,7 @@ REL_DEC_VS_FLOAT = 1e-9
 
 # ------------------------------------------------------------ encoding (sidecar JSON)
 def enc(v):
-    if v is None or isinstance(v, (str, int)) and not isinstance(v, bool):
+    if v is None or (isinstance(v, (str, int)) and not isinstance(v, bool)):
         return v
     if isinstance(v, bool):
         return int(v)
@@ -63,11 +65,13 @@ def load_rows(path: Path) -> dict[str, list[tuple]]:
 
 # ------------------------------------------------------------ scalar comparison
 def _scale(d: Decimal) -> int:
-    return max(0, -d.as_tuple().exponent)
+    exponent = d.as_tuple().exponent
+    return max(0, -exponent) if isinstance(exponent, int) else 0
 
 
 def _round_to(d: Decimal, scale: int) -> Decimal:
     from decimal import ROUND_HALF_UP, localcontext
+
     with localcontext() as c:
         c.prec = 60
         return d.quantize(Decimal(1).scaleb(-scale), rounding=ROUND_HALF_UP)
@@ -98,7 +102,7 @@ def values_equal(a, b) -> bool:
         a, b = b, a
     if isinstance(b, float):  # a is Decimal or int, b float
         da = Decimal(a)
-        tol = Decimal(0.5) * Decimal(1).scaleb(-_scale(da)) + Decimal(REL_DEC_VS_FLOAT) * Decimal(abs(b))
+        tol = Decimal("0.5") * Decimal(1).scaleb(-_scale(da)) + Decimal(REL_DEC_VS_FLOAT) * Decimal(abs(b))
         return abs(da - Decimal(b)) <= tol
     da, db = Decimal(a), Decimal(b)  # Decimal/int mix
     s = min(_scale(da), _scale(db)) if (isinstance(a, Decimal) and isinstance(b, Decimal)) else None
@@ -108,11 +112,12 @@ def values_equal(a, b) -> bool:
 
 
 def row_equal(r1, r2) -> bool:
-    return len(r1) == len(r2) and all(values_equal(x, y) for x, y in zip(r1, r2))
+    return len(r1) == len(r2) and all(values_equal(x, y) for x, y in zip(r1, r2, strict=False))
 
 
 def _sort_key(row):
-    # coarse key stable across Decimal/float differences: strings kept, numbers rounded to 4 dp, so near-equal rows sort together
+    # coarse key stable across Decimal/float differences: strings kept, numbers rounded to 4 dp,
+    # so near-equal rows sort together
     out = []
     for c in row:
         if c is None:
@@ -130,19 +135,19 @@ def rows_match(a: list, b: list, ordered: bool) -> tuple[bool, str]:
     """Compare two result sets. Returns (ok, message). ordered=True requires identical row order."""
     if len(a) != len(b):
         return False, f"row count {len(a)} != {len(b)}"
-    for i, (x, y) in enumerate(zip(a, b)):
+    for i, (x, y) in enumerate(zip(a, b, strict=False)):
         if not row_equal(x, y):
             if ordered:
                 # distinguish a pure ordering difference from a value difference
                 sa, sb = sorted(a, key=_sort_key), sorted(b, key=_sort_key)
-                if all(row_equal(p, q) for p, q in zip(sa, sb)):
+                if all(row_equal(p, q) for p, q in zip(sa, sb, strict=False)):
                     return False, f"ORDER differs at row {i} (same rows as a set)"
                 return False, f"value mismatch at row {i}: {tuple(x)!r} vs {tuple(y)!r}"
             break
     else:
         return True, "ok"
     sa, sb = sorted(a, key=_sort_key), sorted(b, key=_sort_key)
-    for i, (x, y) in enumerate(zip(sa, sb)):
+    for i, (x, y) in enumerate(zip(sa, sb, strict=False)):
         if not row_equal(x, y):
             return False, f"value mismatch (unordered, sorted row {i}): {tuple(x)!r} vs {tuple(y)!r}"
     return True, "ok"
@@ -159,7 +164,7 @@ def has_top_level_order_by(sql: str) -> bool:
             depth += 1
         elif ch == ")":
             depth -= 1
-        elif depth == 0 and low.startswith("order", i) and (i == 0 or not low[i - 1].isalnum() and low[i - 1] != "_"):
+        elif depth == 0 and low.startswith("order", i) and (i == 0 or (not low[i - 1].isalnum() and low[i - 1] != "_")):
             m = re.match(r"order\s+by\b", low[i:])
             if m:
                 return True
@@ -171,12 +176,15 @@ def has_top_level_order_by(sql: str) -> bool:
 def load_tpch_answers(sf: float) -> dict[str, list[list[str]]]:
     """{qNN: [row-of-strings...]} from DuckDB's bundled official answer sets (header dropped)."""
     import duckdb
+
     con = duckdb.connect()
     con.execute("INSTALL tpch; LOAD tpch")
     out = {}
-    for nr, ans in con.execute("SELECT query_nr, answer FROM tpch_answers() WHERE scale_factor=? ORDER BY 1", [float(sf)]).fetchall():
-        lines = [l for l in ans.split("\n") if l.strip() != ""]
-        out[f"q{nr:02d}"] = [l.split("|") for l in lines[1:]]
+    for nr, ans in con.execute(
+        "SELECT query_nr, answer FROM tpch_answers() WHERE scale_factor=? ORDER BY 1", [float(sf)]
+    ).fetchall():
+        lines = [ln for ln in ans.split("\n") if ln.strip() != ""]
+        out[f"q{nr:02d}"] = [ln.split("|") for ln in lines[1:]]
     return out
 
 
@@ -211,9 +219,9 @@ def answer_check(rows: list, answer: list[list[str]], ordered: bool) -> tuple[bo
         return False, f"row count {len(rows)} != official {len(answer)}"
 
     def ok_row(r, a):
-        return len(r) == len(a) and all(match_answer(x, y) for x, y in zip(r, a))
+        return len(r) == len(a) and all(match_answer(x, y) for x, y in zip(r, a, strict=False))
 
-    if all(ok_row(r, a) for r, a in zip(rows, answer)):
+    if all(ok_row(r, a) for r, a in zip(rows, answer, strict=False)):
         return True, "ok"
     # unordered fallback: greedy match on sorted-by-text keys
     remaining = list(answer)
@@ -223,6 +231,6 @@ def answer_check(rows: list, answer: list[list[str]], ordered: bool) -> tuple[bo
                 del remaining[j]
                 break
         else:
-            i = next(i for i, (rr, aa) in enumerate(zip(rows, answer)) if not ok_row(rr, aa))
+            i = next(i for i, (rr, aa) in enumerate(zip(rows, answer, strict=False)) if not ok_row(rr, aa))
             return False, f"value mismatch vs official answer at row {i}: {tuple(rows[i])!r} vs {answer[i]!r}"
     return (False, "ORDER differs from official answer (same rows as a set)") if ordered else (True, "ok")

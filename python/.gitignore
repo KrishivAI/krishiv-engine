@@ -3,5 +3,9 @@ __pycache__/
 *.so
 *.pyd
 .pytest_cache/
-uv.lock
 .venv-*/
+
+# Python coverage data (pytest --cov)
+.coverage*
+coverage.xml
+*.profraw

@@ -19,6 +19,13 @@ python -c "import krishiv; print(krishiv.__version__)"
 pytest
 ```
 
+Code quality (ruff lint and format, ty; versions pinned in `uv.lock`):
+
+```sh
+cd python
+uv run ruff check && uv run ruff format --check && uv run ty check
+```
+
 ## Free-threaded build (cp314t)
 
 abi3 does not support free-threaded CPython, so that wheel is a separate,

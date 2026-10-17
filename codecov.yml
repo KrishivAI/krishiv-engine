@@ -28,3 +28,26 @@ ignore:
   - "**/tests/**"
   - "**/tests.rs"
   - "xtask/**"
+
+# Flags (P2-T151). `python` is pytest --cov of the wheel; `rust` is the Rust test suite
+# (`pr` and `nightly` uploads); `rust-from-python` is Rust reached via the Python API
+# (nightly, instrumented extension). Carryforward keeps a flag's last value when a
+# commit did not upload it (path-filtered PR runs, nightly-only flags).
+flag_management:
+  default_rules:
+    carryforward: true
+    statuses:
+      - type: project
+        informational: true
+      - type: patch
+        informational: true
+  individual_flags:
+    - name: python
+      paths:
+        - python/
+    - name: rust
+      paths:
+        - crates/
+    - name: rust-from-python
+      paths:
+        - crates/

@@ -21,6 +21,7 @@ Usage (from repo root; take the bench lock, start Spark, stop it afterwards; see
       python3 tests/scripts/gen_type_strings.py --out tests/fixtures/spark-4.2.0/type-strings.json
     docker compose -f bench/baselines/docker-compose.yml stop spark
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,52 +32,151 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from gen_function_matrix import container_image, spark_shell  # noqa: E402
+from gen_function_matrix import container_image, spark_shell
 
 FORMAT_VERSION = 1
 GENERATOR = "tests/scripts/gen_type_strings.py"
 
 DDL = [
     # boolean and integral types, with aliases and case variants
-    "boolean", "BOOLEAN", "Boolean",
-    "tinyint", "byte", "TINYINT",
-    "smallint", "short", "SMALLINT",
-    "int", "integer", "INT", "Integer",
-    "bigint", "long", "BIGINT",
+    "boolean",
+    "BOOLEAN",
+    "Boolean",
+    "tinyint",
+    "byte",
+    "TINYINT",
+    "smallint",
+    "short",
+    "SMALLINT",
+    "int",
+    "integer",
+    "INT",
+    "Integer",
+    "bigint",
+    "long",
+    "BIGINT",
     # floating point
-    "float", "real", "FLOAT",
-    "double", "DOUBLE", "double precision",
+    "float",
+    "real",
+    "FLOAT",
+    "double",
+    "DOUBLE",
+    "double precision",
     # string and binary
-    "string", "STRING", "binary", "BINARY",
+    "string",
+    "STRING",
+    "binary",
+    "BINARY",
     # decimal: defaults, aliases, spacing
-    "decimal", "dec", "numeric", "DECIMAL", "Decimal",
-    "decimal(10)", "decimal(10,2)", "decimal(10, 2)", "DECIMAL( 10 , 2 )", "dec(5,1)", "numeric(7,3)",
+    "decimal",
+    "dec",
+    "numeric",
+    "DECIMAL",
+    "Decimal",
+    "decimal(10)",
+    "decimal(10,2)",
+    "decimal(10, 2)",
+    "DECIMAL( 10 , 2 )",
+    "dec(5,1)",
+    "numeric(7,3)",
     "decimal(010,02)",
     # decimal bounds
-    "decimal(1,0)", "decimal(1,1)", "decimal(18,0)", "decimal(18,18)", "decimal(19,0)", "decimal(38,0)",
-    "DECIMAL(38, 38)", "decimal(38,10)", "decimal(0,0)", "decimal(0)",
-    "decimal(39,0)", "DECIMAL(39, 0)", "decimal(39)", "decimal(100,0)", "decimal(5,6)", "decimal(38,39)",
-    "decimal(10,-1)", "decimal(-1,0)", "decimal(99999999999,0)",
+    "decimal(1,0)",
+    "decimal(1,1)",
+    "decimal(18,0)",
+    "decimal(18,18)",
+    "decimal(19,0)",
+    "decimal(38,0)",
+    "DECIMAL(38, 38)",
+    "decimal(38,10)",
+    "decimal(0,0)",
+    "decimal(0)",
+    "decimal(39,0)",
+    "DECIMAL(39, 0)",
+    "decimal(39)",
+    "decimal(100,0)",
+    "decimal(5,6)",
+    "decimal(38,39)",
+    "decimal(10,-1)",
+    "decimal(-1,0)",
+    "decimal(99999999999,0)",
     # decimal syntax errors
-    "decimal()", "decimal(10,2,3)", "decimal(10,2", "decimal(", "decimal(1.5,0)",
+    "decimal()",
+    "decimal(10,2,3)",
+    "decimal(10,2",
+    "decimal(",
+    "decimal(1.5,0)",
     # date and timestamps
-    "date", "DATE",
-    "timestamp", "TIMESTAMP", "timestamp_ltz", "TIMESTAMP_LTZ", "timestamp_ntz", "TIMESTAMP_NTZ",
-    "TimeStamp_Ntz", "timestamp with local time zone", "timestamp without time zone",
+    "date",
+    "DATE",
+    "timestamp",
+    "TIMESTAMP",
+    "timestamp_ltz",
+    "TIMESTAMP_LTZ",
+    "timestamp_ntz",
+    "TIMESTAMP_NTZ",
+    "TimeStamp_Ntz",
+    "timestamp with local time zone",
+    "timestamp without time zone",
     # whitespace
-    "  int  ", "\tbigint\n", " decimal(10,2) ",
+    "  int  ",
+    "\tbigint\n",
+    " decimal(10,2) ",
     # out of scope for P2-T001a (nested, interval, char/varchar, variant, null, time, collation)
-    "void", "array<int>", "map<string,int>", "struct<a:int>", "char(5)", "varchar(10)",
-    "interval year to month", "interval day to second", "variant", "time", "string collate utf8_lcase",
+    "void",
+    "array<int>",
+    "map<string,int>",
+    "struct<a:int>",
+    "char(5)",
+    "varchar(10)",
+    "interval year to month",
+    "interval day to second",
+    "variant",
+    "time",
+    "string collate utf8_lcase",
     # malformed
-    "", "foo", "int,", "int int", "1", "`int`", "timestamp(3)",
-    "timestamp with time zone", "timestamp_ntz(3)", "binary(5)", "decimal (10,2)", "string collate utf8_binary",
+    "",
+    "foo",
+    "int,",
+    "int int",
+    "1",
+    "`int`",
+    "timestamp(3)",
+    "timestamp with time zone",
+    "timestamp_ntz(3)",
+    "binary(5)",
+    "decimal (10,2)",
+    "string collate utf8_binary",
     # lexer: comments, Unicode whitespace and case folding, backquotes, number tokens
-    "int /* c */", "int -- c", "/* c */ int", "int--c", "int /* a /* b */ c */", "int /* unclosed", "int\n-- c\n",
-    "int\u00a0", "\u3000int", "int\u2028", "\u200bint", "\u0131nt", "\u017ftring", "\u00e9", "int\u00e9",
-    "`a``b`", "`int", "``", "`int`(1)",
-    ".5", "1.", "1e5", "10L", "1a", "decimal(10L,2)", "decimal(1e1,0)", "decimal(.5,0)",
-    "decimal(5,99999999999)", "decimal(99999999999)",
+    "int /* c */",
+    "int -- c",
+    "/* c */ int",
+    "int--c",
+    "int /* a /* b */ c */",
+    "int /* unclosed",
+    "int\n-- c\n",
+    "int\u00a0",
+    "\u3000int",
+    "int\u2028",
+    "\u200bint",
+    "\u0131nt",
+    "\u017ftring",
+    "\u00e9",
+    "int\u00e9",
+    "`a``b`",
+    "`int",
+    "``",
+    "`int`(1)",
+    ".5",
+    "1.",
+    "1e5",
+    "10L",
+    "1a",
+    "decimal(10L,2)",
+    "decimal(1e1,0)",
+    "decimal(.5,0)",
+    "decimal(5,99999999999)",
+    "decimal(99999999999)",
 ]
 
 DECIMALS = [(38, 38), (38, 0), (1, 0), (18, 18), (39, 0), (0, 0), (5, 6), (10, -1), (100, 0)]
@@ -92,8 +192,9 @@ def main() -> None:
 
     data = "".join(json.dumps({"ddl": d}) + "\n" for d in DDL)
     data += "".join(json.dumps({"precision": p, "scale": s}) + "\n" for p, s in DECIMALS)
-    lines = spark_shell(args.container, (Path(__file__).parent / "typestr" / "dump_types.scala")
-                        .read_text(encoding="utf-8"), data)
+    lines = spark_shell(
+        args.container, (Path(__file__).parent / "typestr" / "dump_types.scala").read_text(encoding="utf-8"), data
+    )
     version = next(line.split(" ", 1)[1] for line in lines if line.startswith("@@VERSION "))
     ddl = [json.loads(line[4:]) for line in lines if line.startswith("@@T ")]
     decimals = [json.loads(line[4:]) for line in lines if line.startswith("@@D ")]
@@ -110,8 +211,8 @@ def main() -> None:
         "image": container_image(args.container),
         "generator": GENERATOR,
         "notes": "DDL strings parsed by CatalystSqlParser.parseDataType; decimal_constructor builds "
-                 "DecimalType(precision, scale) directly. Errors carry Spark's condition, SQLSTATE and "
-                 "message parameters.",
+        "DecimalType(precision, scale) directly. Errors carry Spark's condition, SQLSTATE and "
+        "message parameters.",
         "ddl": ddl,
         "decimal_constructor": decimals,
         "error_conditions": dict(sorted(conditions.items())),

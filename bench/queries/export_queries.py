@@ -4,6 +4,7 @@
 Writes queries/tpch/qNN.sql, queries/tpcds/qNN.sql and queries/tpch/expected_rows_sf1.json
 (row counts from DuckDB's bundled official SF1 answer sets).
 """
+
 import json
 from pathlib import Path
 
@@ -19,5 +20,5 @@ for ext, fn in (("tpch", "tpch_queries"), ("tpcds", "tpcds_queries")):
         (d / f"q{nr:02d}.sql").write_text(q.rstrip() + "\n")
 exp = {}
 for nr, ans in con.execute("SELECT query_nr, answer FROM tpch_answers() WHERE scale_factor=1 ORDER BY 1").fetchall():
-    exp[f"q{nr:02d}"] = len([l for l in ans.splitlines() if l.strip()]) - 1  # minus header
+    exp[f"q{nr:02d}"] = len([ln for ln in ans.splitlines() if ln.strip()]) - 1  # minus header
 (here / "tpch" / "expected_rows_sf1.json").write_text(json.dumps(exp, indent=1) + "\n")
