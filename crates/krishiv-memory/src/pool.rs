@@ -24,6 +24,7 @@ use krishiv_common::config::{
     MEMORY_SPILL_WAIT_TIMEOUT,
 };
 
+use crate::clock::{Clock, SystemClock};
 use crate::event::Event;
 use crate::rounds::Rounds;
 use crate::spill::{OwnerId, Spillable};
@@ -151,6 +152,7 @@ impl Drop for WaitGuard<'_> {
 /// State shared by every node of one tree.
 pub(crate) struct Shared {
     quantum: usize,
+    pub(crate) clock: Arc<dyn Clock>,
     pub(crate) spill_wait_timeout: Duration,
     pub(crate) abort_release_timeout: Duration,
     /// Every live consumer of the tree, for victim selection. Weak: nodes own
@@ -593,10 +595,16 @@ pub struct TreePool {
 }
 
 impl TreePool {
-    /// A new process root.
+    /// A new process root, timing arbitration with [`SystemClock`].
     pub fn new(config: &MemoryConfig) -> Arc<Self> {
+        Self::with_clock(config, Arc::new(SystemClock))
+    }
+
+    /// A new process root whose arbitration deadlines use `clock`.
+    pub fn with_clock(config: &MemoryConfig, clock: Arc<dyn Clock>) -> Arc<Self> {
         let shared = Arc::new(Shared {
             quantum: config.quantum.max(1),
+            clock,
             spill_wait_timeout: config.spill_wait_timeout,
             abort_release_timeout: config.abort_release_timeout,
             registry: Mutex::new(HashMap::new()),

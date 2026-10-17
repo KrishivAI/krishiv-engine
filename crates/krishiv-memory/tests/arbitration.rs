@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_memory::{
-    ArbitrationStats, MemoryConfig, MemoryError, MemoryPool, Reservation, SpillOwner, SpillSignal,
-    SpillTicket, Spillable, TreePool,
+    ArbitrationStats, BoxFuture, Clock, MemoryConfig, MemoryError, MemoryPool, Reservation,
+    SpillOwner, SpillSignal, SpillTicket, Spillable, SystemClock, TreePool,
 };
 use tokio::time::{Instant, sleep};
 
@@ -20,13 +20,30 @@ const MIB: usize = 1 << 20;
 const TIMEOUT: Duration = Duration::from_secs(2);
 const RELEASE: Duration = Duration::from_secs(30);
 
+/// Arbitration deadlines on Tokio's paused clock, for deterministic tests.
+#[derive(Debug)]
+struct TokioClock;
+
+impl Clock for TokioClock {
+    fn now(&self) -> std::time::Instant {
+        Instant::now().into_std()
+    }
+
+    fn sleep_until(&self, deadline: std::time::Instant) -> BoxFuture<'static, ()> {
+        Box::pin(tokio::time::sleep_until(Instant::from_std(deadline)))
+    }
+}
+
 fn new_root(limit: usize) -> Arc<TreePool> {
-    TreePool::new(&MemoryConfig {
-        limit: Some(limit),
-        quantum: MIB,
-        spill_wait_timeout: TIMEOUT,
-        abort_release_timeout: RELEASE,
-    })
+    TreePool::with_clock(
+        &MemoryConfig {
+            limit: Some(limit),
+            quantum: MIB,
+            spill_wait_timeout: TIMEOUT,
+            abort_release_timeout: RELEASE,
+        },
+        Arc::new(TokioClock),
+    )
 }
 
 fn stats(aborts: u64, spill_requests: u64, rounds: u64) -> ArbitrationStats {
@@ -588,24 +605,59 @@ impl Wake for ThreadWaker {
     }
 }
 
-#[test]
-fn reserve_outside_a_tokio_runtime_is_an_error_not_a_panic() {
-    let root = new_root(8 * MIB);
-    let qa = root.child("query-a", None);
-    let qb = root.child("query-b", None);
-    let _a = holder(&qa, "sort", 6 * MIB);
-    let id = qb.register("agg", None);
-    let mut fut = qb.reserve(id, 4 * MIB);
+/// Polls `fut` to completion on this thread, with no async runtime.
+fn block_on<T>(mut fut: BoxFuture<'_, T>) -> T {
     let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
-    let result = loop {
+    loop {
         match fut.as_mut().poll(&mut Context::from_waker(&waker)) {
-            Poll::Ready(r) => break r,
+            Poll::Ready(r) => return r,
             Poll::Pending => std::thread::park(),
         }
-    };
-    assert_eq!(result, Err(MemoryError::NoRuntime));
-    assert_eq!(
-        MemoryError::NoRuntime.error_class(),
-        ErrorClass::InternalErrorMemory
+    }
+}
+
+/// A request that only a query that never releases could satisfy: with the
+/// built-in system clock it fails once the release timeout has passed.
+fn timeout_scenario(
+    run: impl FnOnce(BoxFuture<'_, Result<(), MemoryError>>) -> Result<(), MemoryError>,
+) {
+    let root = TreePool::with_clock(
+        &MemoryConfig {
+            limit: Some(8 * MIB),
+            quantum: MIB,
+            spill_wait_timeout: Duration::from_millis(50),
+            abort_release_timeout: Duration::from_millis(100),
+        },
+        Arc::new(SystemClock),
     );
+    let qa = root.child("query-a", None);
+    let qb = root.child("query-b", None);
+    let _a = holder(&qa, "stuck", 6 * MIB);
+    let id = qb.register("agg", None);
+    let start = std::time::Instant::now();
+    let result = run(qb.reserve(id, 4 * MIB));
+    let waited = start.elapsed();
+    assert_eq!(
+        result.unwrap_err().error_class(),
+        ErrorClass::UnableToAcquireMemory
+    );
+    assert!(waited >= Duration::from_millis(100), "{waited:?}");
+    assert!(waited < Duration::from_secs(10), "{waited:?}");
+    assert!(qa.check_aborted().is_err(), "the holder was aborted once");
+    assert_eq!(root.stats().aborts, 1);
+}
+
+/// Arbitration needs no async runtime: its deadlines use the pool's clock.
+#[test]
+fn reserve_outside_any_runtime_times_out_correctly() {
+    timeout_scenario(block_on);
+}
+
+/// A Tokio runtime without its time driver: no panic, correct timeout.
+#[test]
+fn reserve_on_a_runtime_without_timers_times_out_correctly() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    timeout_scenario(|fut| rt.block_on(fut));
 }

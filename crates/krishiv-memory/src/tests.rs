@@ -11,13 +11,32 @@ use crate::pool::{Usage, round_up};
 
 const Q: usize = 1 << 20;
 
+/// Arbitration deadlines on Tokio's (pausable) clock, for deterministic tests.
+#[derive(Debug)]
+struct TokioClock;
+
+impl Clock for TokioClock {
+    fn now(&self) -> std::time::Instant {
+        tokio::time::Instant::now().into_std()
+    }
+
+    fn sleep_until(&self, deadline: std::time::Instant) -> BoxFuture<'static, ()> {
+        Box::pin(tokio::time::sleep_until(tokio::time::Instant::from_std(
+            deadline,
+        )))
+    }
+}
+
 fn root(limit: Option<usize>, quantum: usize) -> Arc<TreePool> {
-    TreePool::new(&MemoryConfig {
-        limit,
-        quantum,
-        spill_wait_timeout: Duration::from_secs(2),
-        abort_release_timeout: Duration::from_secs(30),
-    })
+    TreePool::with_clock(
+        &MemoryConfig {
+            limit,
+            quantum,
+            spill_wait_timeout: Duration::from_secs(2),
+            abort_release_timeout: Duration::from_secs(30),
+        },
+        Arc::new(TokioClock),
+    )
 }
 
 fn usage(pool: &TreePool, id: ConsumerId) -> Usage {
@@ -208,11 +227,6 @@ fn error_classes_and_messages() {
     );
     assert!(aborted.to_string().contains("it held 42 bytes"));
     let unknown = MemoryError::UnknownConsumer { id: ConsumerId(7) };
-    assert!(
-        MemoryError::NoRuntime
-            .to_string()
-            .starts_with("[INTERNAL_ERROR_MEMORY] memory arbitration must run on a Tokio runtime")
-    );
     assert_eq!(
         unknown.to_string(),
         "[INTERNAL_ERROR_MEMORY] memory consumer 7 is not registered with this pool SQLSTATE: XX000"

@@ -61,6 +61,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 mod arbitrate;
+mod clock;
 mod error;
 mod event;
 mod limit;
@@ -70,6 +71,7 @@ mod rounds;
 mod spill;
 mod sync;
 
+pub use clock::{Clock, SystemClock};
 pub use error::MemoryError;
 pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
 pub use pool::{ArbitrationStats, MemoryConfig, TreePool};
@@ -105,15 +107,15 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// aborted, or `id` is not registered with this pool.
     fn try_reserve(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError>;
     /// Slow path: may run arbitration. Called only by drivers between
-    /// batches or from async code, never with a sync lock held, on a Tokio
-    /// runtime with timers enabled. The arbitrator never asks the requester
+    /// batches or from async code, never with a sync lock held; any executor
+    /// works (deadlines use the pool's [`Clock`]). The arbitrator never asks the requester
     /// (or its driver) to spill: drivers use [`SpillOwner::reserve`], which
     /// spills the driver's own consumers first. Consumers outside a query
     /// (external pools, the root) get the fast path only.
     ///
     /// # Errors
     /// [`MemoryError`] if arbitration could not make room or the query was
-    /// aborted; [`MemoryError::NoRuntime`] outside a Tokio runtime.
+    /// aborted.
     fn reserve<'a>(
         &'a self,
         id: ConsumerId,

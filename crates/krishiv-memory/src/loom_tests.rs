@@ -11,7 +11,10 @@ use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use loom::thread;
 
 use crate::arbitrate::race_abort;
-use crate::{MemoryConfig, MemoryError, MemoryPool, SpillOwner, SpillSignal, Spillable, TreePool};
+use crate::{
+    BoxFuture, Clock, MemoryConfig, MemoryError, MemoryPool, SpillOwner, SpillSignal, Spillable,
+    TreePool,
+};
 
 fn model(f: impl Fn() + Sync + Send + 'static) {
     let mut b = loom::model::Builder::new();
@@ -19,13 +22,30 @@ fn model(f: impl Fn() + Sync + Send + 'static) {
     b.check(f);
 }
 
+/// Timeouts never fire in the models: progress must never depend on one.
+#[derive(Debug)]
+struct NeverClock;
+
+impl Clock for NeverClock {
+    fn now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
+
+    fn sleep_until(&self, _deadline: std::time::Instant) -> BoxFuture<'static, ()> {
+        Box::pin(std::future::pending())
+    }
+}
+
 fn pool(limit: usize, quantum: usize) -> Arc<TreePool> {
-    TreePool::new(&MemoryConfig {
-        limit: Some(limit),
-        quantum,
-        spill_wait_timeout: Duration::from_secs(1),
-        abort_release_timeout: Duration::from_secs(1),
-    })
+    TreePool::with_clock(
+        &MemoryConfig {
+            limit: Some(limit),
+            quantum,
+            spill_wait_timeout: Duration::from_secs(1),
+            abort_release_timeout: Duration::from_secs(1),
+        },
+        Arc::new(NeverClock),
+    )
 }
 
 /// Two queries race for the last quantum: exactly one wins, the loser's

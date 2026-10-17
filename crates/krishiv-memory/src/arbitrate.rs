@@ -30,7 +30,9 @@ use std::task::Poll;
 
 use crate::pool::{Consumer, Denied, Group, GroupKind, Node};
 use crate::spill::SpillTicket;
-use crate::sync::{Instant, Ordering, sleep_until, timers_available};
+use std::time::Instant;
+
+use crate::sync::Ordering;
 use crate::{ConsumerId, MemoryError};
 
 pub(crate) async fn reserve(
@@ -56,9 +58,6 @@ pub(crate) async fn reserve(
         // External or root consumers never start a round; a request larger
         // than the limit could never fit, whatever is freed.
         return Err(round.exhausted(&binding));
-    }
-    if !timers_available() {
-        return Err(MemoryError::NoRuntime);
     }
     let shared = Arc::clone(&round.node.shared);
     loop {
@@ -229,14 +228,14 @@ impl Round {
             .saturating_sub(plan.pending);
         let tickets = self.request_spills(&consumers, &plan, shortfall);
         if !tickets.is_empty() {
-            let deadline = Instant::now() + shared.spill_wait_timeout;
+            let deadline = shared.clock.now() + shared.spill_wait_timeout;
             if let Waited::Step(s) = self.wait(slot, deadline, tickets, true).await? {
                 return Ok(s);
             }
         }
 
         // 3. Abort, never more than the shortfall needs.
-        let deadline = Instant::now() + shared.abort_release_timeout;
+        let deadline = shared.clock.now() + shared.abort_release_timeout;
         loop {
             let (binding, need) = match self.step(slot)? {
                 Step::Short(b, need) => (b, need),
@@ -336,7 +335,7 @@ impl Round {
     ) -> Result<Waited, MemoryError> {
         let shared = &self.node.shared;
         let waiter = shared.release.wait();
-        let mut sleep = pin!(sleep_until(deadline));
+        let mut sleep = shared.clock.sleep_until(deadline);
         loop {
             let mut released = waiter.listen();
             let mut aborted = self.group().map(|g| g.abort_event.listen());

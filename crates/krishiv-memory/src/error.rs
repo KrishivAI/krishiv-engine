@@ -41,11 +41,6 @@ pub enum MemoryError {
         /// The unknown id.
         id: ConsumerId,
     },
-    /// [`MemoryPool::reserve`](crate::MemoryPool::reserve) was called outside
-    /// a Tokio runtime, so arbitration cannot time its waits
-    /// (`INTERNAL_ERROR_MEMORY`, SQLSTATE XX000).
-    #[error("{}", KrishivError::from(self))]
-    NoRuntime,
 }
 
 impl MemoryError {
@@ -54,9 +49,7 @@ impl MemoryError {
         match self {
             MemoryError::Exhausted { .. } => ErrorClass::UnableToAcquireMemory,
             MemoryError::Aborted { .. } => ErrorClass::KrishivQueryAbortedOutOfMemory,
-            MemoryError::UnknownConsumer { .. } | MemoryError::NoRuntime => {
-                ErrorClass::InternalErrorMemory
-            }
+            MemoryError::UnknownConsumer { .. } => ErrorClass::InternalErrorMemory,
         }
     }
 }
@@ -75,11 +68,6 @@ impl From<&MemoryError> for KrishivError {
             .into(),
             MemoryError::UnknownConsumer { id } => InternalErrorMemory {
                 message: format!("memory consumer {} is not registered with this pool", id.0),
-            }
-            .into(),
-            MemoryError::NoRuntime => InternalErrorMemory {
-                message: "memory arbitration must run on a Tokio runtime with timers enabled"
-                    .to_owned(),
             }
             .into(),
         }
