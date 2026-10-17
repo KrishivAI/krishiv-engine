@@ -42,12 +42,13 @@ checks CI runs, including `cargo deny`, `cargo xtask layering` and the size budg
 
 ## Coverage
 
-Coverage is reported, not gated yet (the diff-coverage ratchet starts at the end of P2a). Locally:
+Pull requests must cover at least 90% of the executable lines they add (`diff-coverage` is a required
+check); performance regressions fail the required CodSpeed check. Locally:
 
 ```text
 cargo xtask coverage --all-features --html   # cargo-llvm-cov line+branch (branch needs `rustup toolchain install nightly -c llvm-tools-preview`)
 cargo xtask coverage-summary                 # per-crate line/branch %
-cargo xtask diff-coverage --base origin/main # coverage of the lines your branch adds
+cargo xtask diff-coverage --base origin/main --fail-under 90 # the merge gate, on your branch
 ```
 
 Pull requests get a diff-coverage report in the job summary; the nightly job publishes the full HTML and JSON report

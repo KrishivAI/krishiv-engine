@@ -1,17 +1,13 @@
-name: Coverage (report only)
+name: Coverage
 
-# P2-T105: a diff-coverage REPORT for pull requests. It never gates a merge
-# (the ratchet is switched on at P2a exit, P2-T105b) and is not a required
-# check. Codecov upload is informational (codecov.yml). The full line+branch
-# run is the nightly `coverage` job in nightly.yml.
+# Diff coverage is a merge gate: at least 90% of the executable lines a PR
+# adds must run under the test suite (`diff-coverage` is a required check).
+# The workflow runs on every PR so the required check always reports; when a
+# PR changes nothing Rust-relevant it passes without building. Codecov upload
+# stays informational (codecov.yml). The full line+branch run is the nightly
+# `coverage` job in nightly.yml.
 on:
   pull_request:
-    paths:
-      - "crates/**"
-      - "xtask/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/coverage.yml"
 
 concurrency:
   group: coverage-${{ github.event.pull_request.number }}
@@ -38,23 +34,48 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Same Rust-relevance rule as CI's `changes` job, without building xtask.
+      - name: Rust-relevant changes?
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          rust=false
+          while IFS= read -r p; do
+            case "$p" in
+              .github/*|.claude/*|.githooks/*) rust=true ;;
+              docs/*|bench/*|.superpowers/*) ;;
+              crates/*|xtask/*) rust=true ;;
+              *.md) ;;
+              *) rust=true ;;
+            esac
+          done < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "Rust-relevant changes: $rust"
       - name: Toolchain (from rust-toolchain.toml) and llvm-tools
+        if: steps.changes.outputs.rust == 'true'
         run: |
           rustup show active-toolchain
           rustup component add llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.changes.outputs.rust == 'true'
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        if: steps.changes.outputs.rust == 'true'
         with:
           tool: cargo-llvm-cov,cargo-nextest
       # Line coverage on the pinned stable toolchain (branch coverage needs
       # nightly and runs in the nightly job).
-      - run: cargo xtask coverage --no-branch
-      - name: Diff coverage (report only)
+      - if: steps.changes.outputs.rust == 'true'
+        run: cargo xtask coverage --no-branch
+      - name: Diff coverage (gate at 90% of added lines)
+        if: steps.changes.outputs.rust == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: cargo xtask diff-coverage --base "$BASE_SHA" --head "$HEAD_SHA"
+        run: cargo xtask diff-coverage --base "$BASE_SHA" --head "$HEAD_SHA" --fail-under 90
       - name: Upload to Codecov (informational)
+        if: steps.changes.outputs.rust == 'true' && !cancelled()
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: target/coverage/lcov.info

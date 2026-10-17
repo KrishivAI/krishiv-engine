@@ -189,6 +189,15 @@ pub struct DiffCov {
     pub uncovered: BTreeMap<String, Vec<u32>>,
 }
 
+impl DiffCov {
+    /// Whether at least `min_percent` of the added executable lines ran. A
+    /// diff with no executable lines meets any threshold.
+    #[must_use]
+    pub fn meets(&self, min_percent: u64) -> bool {
+        self.total == 0 || self.covered * 100 >= min_percent * self.total
+    }
+}
+
 /// Coverage of the added lines. Only lines the tracefile instruments count;
 /// `root` is stripped from absolute `SF:` paths.
 #[must_use]
@@ -237,7 +246,7 @@ pub fn render_diff(d: &DiffCov) -> String {
         total: d.total,
     };
     let mut out = format!(
-        "### Diff coverage (report only)\n\n{} of {} added executable lines covered ({}).\n",
+        "### Diff coverage\n\n{} of {} added executable lines covered ({}).\n",
         d.covered,
         d.total,
         c.show()
@@ -382,18 +391,29 @@ pub fn run_summary(root: &Path, flags: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// `xtask diff-coverage --base REF [--head REF] [--lcov PATH]`: report-only
-/// coverage of the lines a PR adds; appended to the step summary in CI.
+/// `xtask diff-coverage --base REF [--head REF] [--lcov PATH] [--fail-under PCT]`:
+/// coverage of the lines a PR adds, appended to the step summary in CI. With
+/// `--fail-under`, fails when fewer than `PCT`% of the added executable lines
+/// ran (the merge gate is 90%).
 ///
 /// # Errors
 /// Returns an error for bad flags, a missing tracefile or a git failure.
 pub fn run_diff_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
     let mut lcov = coverage_dir(root).join("lcov.info");
+    let mut fail_under = None;
     let mut rest = Vec::new();
     let mut it = flags.iter();
     while let Some(f) = it.next() {
         if *f == "--lcov" {
             lcov = PathBuf::from(it.next().ok_or("--lcov needs a value")?);
+        } else if *f == "--fail-under" {
+            let v = it.next().ok_or("--fail-under needs a percentage")?;
+            let pct: u64 = v
+                .parse()
+                .ok()
+                .filter(|p| *p <= 100)
+                .ok_or_else(|| format!("--fail-under expects 0..=100, got {v}"))?;
+            fail_under = Some(pct);
         } else {
             rest.push(*f);
         }
@@ -419,7 +439,13 @@ pub fn run_diff_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
             let _ = writeln!(f, "{md}");
         }
     }
-    Ok(())
+    match fail_under {
+        Some(min) if !d.meets(min) => Err(format!(
+            "diff coverage {} of {} added lines is below {min}%; add tests for the uncovered lines listed above",
+            d.covered, d.total
+        )),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -485,5 +511,20 @@ mod tests {
         assert!(
             render_diff(&DiffCov::default()).contains("0 of 0 added executable lines covered (-)")
         );
+    }
+
+    #[test]
+    fn diff_coverage_threshold() {
+        let d = |covered, total| DiffCov {
+            covered,
+            total,
+            uncovered: BTreeMap::new(),
+        };
+        assert!(d(0, 0).meets(90));
+        assert!(d(9, 10).meets(90));
+        assert!(!d(8, 10).meets(90));
+        assert!(d(899, 999).meets(90) == (899 * 100 >= 90 * 999));
+        assert!(d(1, 1).meets(100));
+        assert!(d(0, 5).meets(0));
     }
 }
