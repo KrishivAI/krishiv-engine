@@ -4,10 +4,12 @@
 //! [`DataType`] models Spark SQL data types with Spark's renderings
 //! (`simpleString`, `catalogString`, `sql`, `typeName`), maps them to and from
 //! Arrow ([`arrow`]), and parses Spark DDL type strings ([`parse_data_type`]).
+//! [`batch::Batch`] is the engine's unit of data: Arrow columns plus row weights.
 
 #![forbid(unsafe_code)]
 
 pub mod arrow;
+pub mod batch;
 mod data_type;
 mod ddl;
 pub mod error;
