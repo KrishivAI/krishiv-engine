@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask docs-config` / `docs-errors`: Markdown reference docs
 //! generated from the krishiv-common registries.
 

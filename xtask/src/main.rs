@@ -1,6 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask <command>` entry point.
 
 #![forbid(unsafe_code)]
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "CLI binary: stdout/stderr are its interface"
+)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -8,8 +14,9 @@ use std::process::{Command, ExitCode};
 use xtask::budgets::{self, Budgets};
 use xtask::docs::{self, Doc};
 use xtask::layering;
+use xtask::policy::{self, DiffArgs};
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--write-baseline]>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--write-baseline] | setup | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -21,6 +28,22 @@ fn main() -> ExitCode {
     {
         ["layering"] => run_layering(),
         ["budgets", flags @ ..] => run_budgets(flags),
+        ["setup"] => policy::run_setup(&workspace_root()),
+        ["pr-size", flags @ ..] => {
+            DiffArgs::parse(flags, &workspace_root()).and_then(|a| policy::run_pr_size(&a))
+        }
+        ["changes", flags @ ..] => {
+            DiffArgs::parse(flags, &workspace_root()).and_then(|a| policy::run_changes(&a))
+        }
+        ["dco", flags @ ..] => {
+            DiffArgs::parse(flags, &workspace_root()).and_then(|a| policy::run_dco(&a))
+        }
+        ["workflow-lint"] => policy::run_workflow_lint(&workspace_root().join(".github/workflows")),
+        ["workflow-lint", dir] => policy::run_workflow_lint(Path::new(dir)),
+        ["spdx"] => policy::run_spdx(&workspace_root()),
+        ["spdx", root] => policy::run_spdx(Path::new(root)),
+        ["source-guard"] => policy::run_source_guard(&workspace_root()),
+        ["source-guard", root] => policy::run_source_guard(Path::new(root)),
         [cmd] | [cmd, _] if Doc::from_command(cmd).is_some() => run_docs(&args),
         _ => Err(USAGE.to_owned()),
     };

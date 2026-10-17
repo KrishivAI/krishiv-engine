@@ -27,6 +27,12 @@ the brief you were given; `.claude/skills/krishiv-spark-function/SKILL.md` (func
 3. Diff the tags: when behaviour differs across 3.5 / 4.0 / 4.1 / 4.2, record each version's behaviour separately
    (behaviour is keyed by Spark version, never by an ad-hoc flag).
 
+## Expectations are executed, never transcribed (review I12)
+Every expected value is **produced by executing Spark in the `krishiv-bench` container** (the T106a harness) and
+captured as output. Never transcribe an expectation from the Scala source, docs, a Spark `.out` file or memory.
+Hand-written expectations are allowed **only for error classes** (class, SQLSTATE, message), and each must cite the
+Spark test file (tag + path + line) it comes from.
+
 ## Cover (each one explicitly, with a test case)
 ANSI on (4.x default) and `spark.sql.ansi.enabled=false`; NULL inputs; NaN, -0.0, ±Infinity ordering and equality,
 including nested types; decimal precision/scale and overflow; binary/non-UTF-8 strings; Unicode and both whitespace
