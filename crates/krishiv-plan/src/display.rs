@@ -249,13 +249,19 @@ impl Display for NodeLine<'_> {
     }
 }
 
-/// Whether an option's value is redacted: its key matches Spark's default
-/// `spark.redaction.regex`, `(?i)secret|password|token|access[.]?key`.
-fn is_secret(key: &str) -> bool {
-    let k = key.to_ascii_lowercase();
+/// Whether an option's value is redacted. Like Spark's `Utils.redact`, the
+/// value is hidden when either its key or its value matches the default
+/// `spark.redaction.regex`, `(?i)secret|password|token|access[.]?key`, so a
+/// credential inside a URL value is hidden too.
+fn is_secret(key: &str, value: &str) -> bool {
+    matches_redaction(key) || matches_redaction(value)
+}
+
+fn matches_redaction(s: &str) -> bool {
+    let s = s.to_ascii_lowercase();
     ["secret", "password", "token", "access.key", "accesskey"]
         .iter()
-        .any(|s| k.contains(s))
+        .any(|p| s.contains(p))
 }
 
 struct SourceText<'a>(&'a ReadSource);
@@ -279,7 +285,7 @@ impl Display for SourceText<'_> {
         if !options.is_empty() {
             f.write_str(" {")?;
             for (i, (k, v)) in options.iter().enumerate() {
-                let v = if is_secret(k) {
+                let v = if is_secret(k, v) {
                     "*********(redacted)"
                 } else {
                     v
@@ -373,18 +379,24 @@ impl Display for Text<'_> {
         let mut pieces = Vec::new();
         let mut written = 0;
         while let Some(piece) = stack.pop() {
-            if written > MAX_EXPR_TEXT {
+            let text: &str = match &piece {
+                Piece::Str(s) => s,
+                Piece::Owned(s) => s,
+                Piece::Expr(_) => "",
+            };
+            if written + text.len() > MAX_EXPR_TEXT {
+                // Write only what fits, then the marker.
+                let mut end = MAX_EXPR_TEXT - written;
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                f.write_str(&text[..end])?;
                 return f.write_str("...(truncated)");
             }
+            written += text.len();
             match piece {
-                Piece::Str(s) => {
-                    written += s.len();
-                    f.write_str(s)?;
-                }
-                Piece::Owned(s) => {
-                    written += s.len();
-                    f.write_str(&s)?;
-                }
+                Piece::Str(s) => f.write_str(s)?,
+                Piece::Owned(s) => f.write_str(&s)?,
                 Piece::Expr(e) => {
                     expr_pieces(e, &mut pieces);
                     stack.extend(pieces.drain(..).rev());
@@ -392,6 +404,25 @@ impl Display for Text<'_> {
             }
         }
         Ok(())
+    }
+}
+
+/// A literal's text, never formatting more of a long string or binary
+/// value than an expression can print: the clipped value already overflows
+/// [`MAX_EXPR_TEXT`], so the writer cuts it and adds the marker.
+fn literal_text(v: &Literal) -> String {
+    match v {
+        Literal::String(s) if s.len() > MAX_EXPR_TEXT => {
+            let mut end = MAX_EXPR_TEXT + 1;
+            while !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            Literal::String(s[..end].to_owned()).to_string()
+        }
+        Literal::Binary(b) if b.len() > MAX_EXPR_TEXT => {
+            Literal::Binary(b[..=MAX_EXPR_TEXT].to_vec()).to_string()
+        }
+        v => v.to_string(),
     }
 }
 
@@ -413,7 +444,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             let id = c.plan_id.map(|id| format!("@plan{id}")).unwrap_or_default();
             out.push(Piece::Owned(format!("{}{id}", Name(&c.name))));
         }
-        ExprNode::Literal(v) => out.push(Piece::Owned(v.to_string())),
+        ExprNode::Literal(v) => out.push(Piece::Owned(literal_text(v))),
         ExprNode::Star(s) => {
             let q = if s.qualifier.is_empty() {
                 String::new()

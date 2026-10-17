@@ -116,3 +116,35 @@ fn shared_subtrees_print_once() {
     let shown = e.to_string();
     assert!(shown.len() < 70 * 1024 && shown.ends_with("...(truncated)"));
 }
+
+#[test]
+fn secrets_inside_option_values_are_redacted() {
+    let options: BTreeMap<String, String> = [(
+        "url".to_owned(),
+        "jdbc:postgresql://h/db?password=hunter2".to_owned(),
+    )]
+    .into_iter()
+    .collect();
+    let plan = LogicalPlan::new(PlanNode::Read(ReadSource::Table {
+        name: vec!["t".to_owned()],
+        options,
+    }));
+    let shown = plan.to_string();
+    assert!(!shown.contains("hunter2"), "{shown}");
+    assert!(shown.contains("url=*********(redacted)"), "{shown}");
+}
+
+#[test]
+fn huge_literals_are_cut_at_the_expression_cap() {
+    let big = "x".repeat(200 * 1024);
+    let shown = text(Literal::String(big));
+    assert!(
+        shown.ends_with("...(truncated)"),
+        "{}",
+        &shown[shown.len() - 40..]
+    );
+    assert!(shown.len() <= 64 * 1024 + "...(truncated)".len());
+    let bytes = text(Literal::Binary(vec![0xAB; 200 * 1024]));
+    assert!(bytes.ends_with("...(truncated)"));
+    assert!(bytes.len() <= 64 * 1024 + "...(truncated)".len());
+}
