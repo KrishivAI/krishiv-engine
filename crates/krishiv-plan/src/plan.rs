@@ -2,11 +2,13 @@
 //! Relation nodes, unresolved and resolved, and the versioned [`Plan`].
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 use krishiv_common::secret::OptionValue;
 
+use crate::dag::{self, Memo};
 use crate::walk::{self, Node};
 use crate::{BoundColumn, Expr, Origin, SortOrder};
 
@@ -52,9 +54,10 @@ impl Plan {
 
 /// A relation: a node and its [`Origin`]. Children are shared through `Arc`.
 ///
-/// `PartialEq` compares everything, origins included (see [`Expr`]).
-/// Dropping a plan never recurses.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `PartialEq` compares everything, origins included (see [`Expr`]), in
+/// time linear in the distinct nodes even when subtrees are shared;
+/// `Debug` prints a shared subtree once. Dropping a plan never recurses.
+#[derive(Clone)]
 pub struct LogicalPlan {
     /// What the relation is.
     pub node: PlanNode,
@@ -521,7 +524,9 @@ impl LogicalPlan {
     }
 
     /// Applies `f` to every relation, children first. Subquery plans are not
-    /// entered. Recurses once per level: call it only on plans within
+    /// entered. A relation shared by several parents (`Arc`) is rewritten
+    /// once and its rewrite shared, so `f` runs once per distinct relation.
+    /// Recurses once per level: call it only on plans within
     /// [`crate::MAX_DEPTH`].
     ///
     /// # Errors
@@ -530,8 +535,21 @@ impl LogicalPlan {
         self: Arc<Self>,
         f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
     ) -> Result<Arc<Self>, E> {
-        let plan = self.map_children(|c| c.transform_up(f))?;
-        f(plan)
+        self.up(f, &mut Memo::new())
+    }
+
+    fn up<E>(
+        self: Arc<Self>,
+        f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
+        done: &mut Memo<Self>,
+    ) -> Result<Arc<Self>, E> {
+        if let Some((_, out)) = done.get(&Arc::as_ptr(&self)) {
+            return Ok(Arc::clone(out));
+        }
+        let rebuilt = Arc::clone(&self).map_children(|c| c.up(f, done))?;
+        let out = f(rebuilt)?;
+        done.insert(Arc::as_ptr(&self), (self, Arc::clone(&out)));
+        Ok(out)
     }
 
     /// Applies `f` to every relation, parents first; see
@@ -543,7 +561,41 @@ impl LogicalPlan {
         self: Arc<Self>,
         f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
     ) -> Result<Arc<Self>, E> {
-        f(self)?.map_children(|c| c.transform_down(f))
+        self.down(f, &mut Memo::new())
+    }
+
+    fn down<E>(
+        self: Arc<Self>,
+        f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
+        done: &mut Memo<Self>,
+    ) -> Result<Arc<Self>, E> {
+        if let Some((_, out)) = done.get(&Arc::as_ptr(&self)) {
+            return Ok(Arc::clone(out));
+        }
+        let out = f(Arc::clone(&self))?.map_children(|c| c.down(f, done))?;
+        done.insert(Arc::as_ptr(&self), (self, Arc::clone(&out)));
+        Ok(out)
+    }
+}
+
+impl PartialEq for LogicalPlan {
+    fn eq(&self, other: &Self) -> bool {
+        dag::eq(Node::Plan(self), Node::Plan(other), || {
+            self.origin == other.origin && self.node == other.node
+        })
+    }
+}
+
+impl Eq for LogicalPlan {}
+
+impl fmt::Debug for LogicalPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        dag::debug(Node::Plan(self), f, "LogicalPlan", |f, name| {
+            f.debug_struct(name)
+                .field("node", &self.node)
+                .field("origin", &self.origin)
+                .finish()
+        })
     }
 }
 

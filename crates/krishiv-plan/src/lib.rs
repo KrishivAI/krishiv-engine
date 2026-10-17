@@ -21,7 +21,9 @@
 //!   names ([`function`]); resolved calls carry a typed [`FunctionId`] and
 //!   [`FunctionKind`].
 //! - Data types are [`krishiv_types::DataType`].
-//! - `PartialEq` compares everything, origins included. The canonical
+//! - `PartialEq` compares everything, origins included, and like `Debug`
+//!   and `transform_*` takes time linear in the distinct nodes when
+//!   subtrees are shared. The canonical
 //!   encoding ([`Plan::canonical_encoding`]) leaves origins out and is the
 //!   structural equality ([`Plan::structurally_eq`]); [`StructuralHash`] is
 //!   its 128-bit Merkle hash, stable across processes and platforms
@@ -72,6 +74,7 @@
 
 #![forbid(unsafe_code)]
 
+mod dag;
 mod encode;
 mod expr;
 pub mod function;

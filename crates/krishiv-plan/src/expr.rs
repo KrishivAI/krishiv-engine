@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Expression nodes, unresolved and resolved.
 
+use std::fmt;
 use std::sync::Arc;
 
 use krishiv_types::DataType;
 
+use crate::dag::{self, Memo};
 use crate::walk::{self, Node};
 use crate::{Builtin, FunctionId, FunctionKind, Literal, LogicalPlan, Origin, PlanId};
 
@@ -13,9 +15,11 @@ use crate::{Builtin, FunctionId, FunctionKind, Literal, LogicalPlan, Origin, Pla
 /// Children are `Arc<Expr>`, so rebuilding a node shares its unchanged
 /// subexpressions. `PartialEq` compares everything, origins included; the
 /// structural comparison that ignores origins is the canonical encoding
-/// (`Plan::structurally_eq`). Dropping an expression never recurses, so a
+/// (`Plan::structurally_eq`). Both take time linear in the distinct nodes
+/// when subexpressions are shared, and `Debug` prints a shared
+/// subexpression once. Dropping an expression never recurses, so a
 /// too-deep tree can still be rejected and dropped ([`crate::check_depth`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Expr {
     /// What the expression is.
     pub node: ExprNode,
@@ -411,7 +415,9 @@ impl Expr {
     }
 
     /// Applies `f` to every node, children first. Subquery plans are not
-    /// entered. Recurses once per level: call it only on expressions within
+    /// entered. A node shared by several parents (`Arc`) is rewritten once
+    /// and its rewrite shared, so `f` runs once per distinct node. Recurses
+    /// once per level: call it only on expressions within
     /// [`crate::MAX_DEPTH`].
     ///
     /// # Errors
@@ -420,8 +426,21 @@ impl Expr {
         self: Arc<Self>,
         f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
     ) -> Result<Arc<Self>, E> {
-        let expr = self.map_children(|c| c.transform_up(f))?;
-        f(expr)
+        self.up(f, &mut Memo::new())
+    }
+
+    fn up<E>(
+        self: Arc<Self>,
+        f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
+        done: &mut Memo<Self>,
+    ) -> Result<Arc<Self>, E> {
+        if let Some((_, out)) = done.get(&Arc::as_ptr(&self)) {
+            return Ok(Arc::clone(out));
+        }
+        let rebuilt = Arc::clone(&self).map_children(|c| c.up(f, done))?;
+        let out = f(rebuilt)?;
+        done.insert(Arc::as_ptr(&self), (self, Arc::clone(&out)));
+        Ok(out)
     }
 
     /// Applies `f` to every node, parents first; see [`Self::transform_up`].
@@ -432,7 +451,41 @@ impl Expr {
         self: Arc<Self>,
         f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
     ) -> Result<Arc<Self>, E> {
-        f(self)?.map_children(|c| c.transform_down(f))
+        self.down(f, &mut Memo::new())
+    }
+
+    fn down<E>(
+        self: Arc<Self>,
+        f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
+        done: &mut Memo<Self>,
+    ) -> Result<Arc<Self>, E> {
+        if let Some((_, out)) = done.get(&Arc::as_ptr(&self)) {
+            return Ok(Arc::clone(out));
+        }
+        let out = f(Arc::clone(&self))?.map_children(|c| c.down(f, done))?;
+        done.insert(Arc::as_ptr(&self), (self, Arc::clone(&out)));
+        Ok(out)
+    }
+}
+
+impl PartialEq for Expr {
+    fn eq(&self, other: &Self) -> bool {
+        dag::eq(Node::Expr(self), Node::Expr(other), || {
+            self.origin == other.origin && self.node == other.node
+        })
+    }
+}
+
+impl Eq for Expr {}
+
+impl fmt::Debug for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        dag::debug(Node::Expr(self), f, "Expr", |f, name| {
+            f.debug_struct(name)
+                .field("node", &self.node)
+                .field("origin", &self.origin)
+                .finish()
+        })
     }
 }
 

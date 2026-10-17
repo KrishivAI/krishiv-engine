@@ -3,6 +3,7 @@
 //! wildcard arms, so a new node fails to compile here until it is covered
 //! by the inventory, the generator and the mutation sites.
 
+mod dag;
 mod depth;
 mod encode;
 mod nodes;

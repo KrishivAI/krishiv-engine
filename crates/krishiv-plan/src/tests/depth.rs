@@ -38,10 +38,14 @@ fn nested_expr(n: usize) -> LogicalPlan {
     LogicalPlan::table(["t"]).filter(e)
 }
 
-fn exercise(plan: LogicalPlan) {
-    let plan = Plan::try_new(plan).unwrap();
+fn exercise(build: fn() -> LogicalPlan) {
+    let plan = Plan::try_new(build()).unwrap();
     let copy = plan.clone();
     assert_eq!(copy, plan);
+    // Built apart: `PartialEq` and `Debug` walk every level.
+    let apart = Plan::try_new(build()).unwrap();
+    assert_eq!(apart, plan);
+    assert!(format!("{apart:?}").len() > MAX_DEPTH);
     assert!(copy.structurally_eq(&plan));
     assert_eq!(plan.subtree_hashes()[0].1, plan.structural_hash());
     assert!(!plan.root().is_resolved());
@@ -56,8 +60,8 @@ fn exercise(plan: LogicalPlan) {
 
 #[test]
 fn plans_at_the_cap_survive_every_traversal() {
-    on_small_stack(|| exercise(filters(MAX_DEPTH - 1)));
-    on_small_stack(|| exercise(nested_expr(MAX_DEPTH - 1)));
+    on_small_stack(|| exercise(|| filters(MAX_DEPTH - 1)));
+    on_small_stack(|| exercise(|| nested_expr(MAX_DEPTH - 1)));
 }
 
 #[test]
