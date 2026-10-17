@@ -72,15 +72,28 @@ impl TestKind {
                     "true".to_owned(),
                 ),
             ],
-            Self::TimestampNtz => vec![
-                ansi("true"),
-                (
-                    "spark.sql.timestampType".to_owned(),
-                    "TIMESTAMP_NTZ".to_owned(),
-                ),
-            ],
+            // Spark sets only the timestamp type here and leaves ANSI at its default.
+            Self::TimestampNtz => vec![(
+                "spark.sql.timestampType".to_owned(),
+                "TIMESTAMP_NTZ".to_owned(),
+            )],
             Self::Regular | Self::Udf | Self::Udaf | Self::Udtf => vec![ansi("true")],
         }
+    }
+
+    /// Test functions Spark registers in the session: the identity-cast `udf` (`udaf` for
+    /// grouped-aggregate UDFs) for UDF folders, and `booleq`, `boolne` and `vol` for PostgreSQL
+    /// ones. `udtf/` registers Python UDTFs, which have no entry here.
+    #[must_use]
+    pub fn udfs(self) -> Vec<String> {
+        let names: &[&str] = match self {
+            Self::Udf => &["udf"],
+            Self::UdfPgSql => &["udf", "booleq", "boolne", "vol"],
+            Self::PgSql => &["booleq", "boolne", "vol"],
+            Self::Udaf => &["udaf"],
+            _ => &[],
+        };
+        names.iter().map(|n| (*n).to_owned()).collect()
     }
 }
 
@@ -99,6 +112,8 @@ pub enum Fixture {
     Onek,
     /// `tenk1`.
     Tenk1,
+    /// The TPC-DS table schemas Spark creates for `pipe-operators` (never detected by name).
+    TpcdsSchemas,
 }
 
 impl Fixture {
@@ -122,6 +137,7 @@ impl Fixture {
             Self::AggTest => "aggtest",
             Self::Onek => "onek",
             Self::Tenk1 => "tenk1",
+            Self::TpcdsSchemas => "tpcds",
         }
     }
 }
@@ -134,6 +150,8 @@ pub struct SessionSetup {
     /// Configs to apply in order (folder defaults, then `--SET`, then the `--CONFIG_DIM`
     /// combination); a later entry for a key overrides an earlier one.
     pub configs: Vec<(String, String)>,
+    /// Test functions the session must register (see [`TestKind::udfs`]).
+    pub udfs: Vec<String>,
     /// Fixture tables the file references (a textual over-approximation: a file that creates its
     /// own table of the same name is listed too).
     pub fixtures: Vec<Fixture>,
@@ -146,6 +164,7 @@ impl SessionSetup {
         Self {
             kind,
             configs: kind.configs(),
+            udfs: kind.udfs(),
             fixtures: Vec::new(),
         }
     }
@@ -195,6 +214,7 @@ impl FileSetup {
             fixtures: Fixture::ALL
                 .into_iter()
                 .filter(|f| words.contains(&f.table()))
+                .chain((name == "pipe-operators").then_some(Fixture::TpcdsSchemas))
                 .collect(),
         }
     }
@@ -224,6 +244,7 @@ impl FileSetup {
                 SessionSetup {
                     kind: self.kind,
                     configs,
+                    udfs: self.kind.udfs(),
                     fixtures: self.fixtures.clone(),
                 }
             })
@@ -247,6 +268,18 @@ mod tests {
             vec![("spark.sql.ansi.enabled".into(), "false".into())]
         );
         assert_eq!(SessionSetup::plain(TestKind::Regular).configs[0].1, "true");
+        let ntz = SessionSetup::plain(TestKind::TimestampNtz).configs;
+        assert_eq!(
+            ntz,
+            vec![("spark.sql.timestampType".into(), "TIMESTAMP_NTZ".into())]
+        );
+        let pg = SessionSetup::plain(TestKind::PgSql);
+        assert_eq!(pg.udfs, ["booleq", "boolne", "vol"]);
+        assert!(
+            pg.configs
+                .contains(&("spark.sql.legacy.interval.enabled".into(), "true".into()))
+        );
+        assert_eq!(TestKind::UdfPgSql.udfs()[0], "udf");
     }
 
     #[test]
@@ -269,6 +302,12 @@ mod tests {
             ]
         );
         assert_eq!(sessions[0].fixtures, vec![Fixture::TestData, Fixture::Onek]);
+    }
+
+    #[test]
+    fn pipe_operators_needs_tpcds_schemas() {
+        let setup = FileSetup::parse("pipe-operators", "select 1;");
+        assert_eq!(setup.sessions()[0].fixtures, vec![Fixture::TpcdsSchemas]);
     }
 
     #[test]
