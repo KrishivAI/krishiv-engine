@@ -195,3 +195,52 @@ jobs:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts
           retention-days: 30
+
+  # P2-T020: krishiv-kernels under AddressSanitizer with the property tests at
+  # full size (Miri runs the reduced cases per PR). std is rebuilt with ASan.
+  asan-kernels:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RUSTC_WRAPPER: "" # sanitizer builds are not cacheable
+      RUSTFLAGS: -Zsanitizer=address
+      RUSTDOCFLAGS: -Zsanitizer=address
+      PROPTEST_CASES: "1024"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nightly toolchain with rust-src
+        run: rustup toolchain install nightly-2026-08-12 --profile minimal --component rust-src
+      - name: Tests under ASan
+        run: >-
+          cargo +nightly-2026-08-12 test -Zbuild-std --target x86_64-unknown-linux-gnu
+          -p krishiv-kernels --locked --lib --tests
+
+  # P2-T020: differential fuzzing of the kernels (every specialization and CPU
+  # target vs the row-at-a-time reference); libFuzzer builds with ASan.
+  fuzz-kernels:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUSTC_WRAPPER: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nightly toolchain
+        run: rustup toolchain install nightly-2026-08-12 --profile minimal
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz
+      - name: differential (10 minutes)
+        working-directory: crates/krishiv-kernels/fuzz
+        run: cargo +nightly-2026-08-12 fuzz run differential -- -max_total_time=600
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-kernels-artifacts
+          path: crates/krishiv-kernels/fuzz/artifacts
+          retention-days: 30

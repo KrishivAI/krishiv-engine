@@ -278,6 +278,44 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo doc --workspace --no-deps --locked
 
+  # P2-T020: Miri on krishiv-kernels (ADR 0029; the crate holds unsafe and
+  # SIMD dispatch). The job always runs and reports, so it can be a required
+  # check; the path gate is inside: it only does work when the PR touches the
+  # kernels crate, this workflow, or the lockfile (and always on main).
+  miri-kernels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Path gate
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run=true
+          if [ "$EVENT" = "pull_request" ]; then
+            if ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
+              | grep -qE '^(crates/krishiv-kernels/|\.github/workflows/ci\.yml$|Cargo\.lock$)'; then
+              run=false
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "miri-kernels: run=$run"
+      # Dated nightly: Miri ships only on nightly; pinning keeps runs reproducible.
+      - name: Nightly toolchain with Miri
+        if: steps.gate.outputs.run == 'true'
+        run: rustup toolchain install nightly-2026-08-12 --profile minimal --component miri,rust-src
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.gate.outputs.run == 'true'
+      - name: Miri (unit, property and doc tests; reduced cases under cfg(miri))
+        if: steps.gate.outputs.run == 'true'
+        run: cargo +nightly-2026-08-12 miri test -p krishiv-kernels --locked
+
   # Pull requests only: measured against the base branch's budgets.json, so
   # growth always needs the label, even when the PR refreshes the baseline.
   # The baseline is updated by the PR that changes it, so main never needs to
