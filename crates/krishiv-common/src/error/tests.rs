@@ -278,3 +278,13 @@ fn class_without_sqlstate_has_no_suffix() {
     assert_eq!(e.sql_state(), None);
     assert!(!e.to_string().contains("SQLSTATE"));
 }
+
+#[test]
+fn every_legacy_class_omits_the_class_prefix() {
+    // Spark 4.2.0: `new SparkException("_LEGACY_ERROR_USER_RAISED_EXCEPTION",
+    // Map("errorClass" -> "X", "errorMessage" -> "boom"), null).getMessage`.
+    let e = KrishivError::from(LegacyErrorUserRaisedException {
+        error_message: "boom".to_owned(),
+    });
+    assert_eq!(e.to_string(), "boom SQLSTATE: P0001");
+}

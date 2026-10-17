@@ -44,7 +44,7 @@ include!(concat!(env!("OUT_DIR"), "/error_classes.rs"));
 ///
 /// `Display` matches Spark 4's `getMessage` without query context:
 /// `[ERROR_CLASS] message SQLSTATE: xxxxx` (no suffix for the Spark classes
-/// that have no SQLSTATE). Like Spark, `_LEGACY_ERROR_TEMP_*` classes omit
+/// that have no SQLSTATE). Like Spark, every `_LEGACY_ERROR_*` class omits
 /// the `[ERROR_CLASS]` prefix.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{}{message}{}", class_prefix(*class), sql_state_suffix(*class))]
@@ -55,7 +55,7 @@ pub struct KrishivError {
 }
 
 fn class_prefix(class: ErrorClass) -> String {
-    if class.name().starts_with("_LEGACY_ERROR_TEMP_") {
+    if class.name().starts_with("_LEGACY_ERROR_") {
         String::new()
     } else {
         format!("[{}] ", class.name())
