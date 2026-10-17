@@ -27,8 +27,10 @@ arrived_at=$(printf '%s\n%s\n' "$suite_at" "$forced_at" | sort | tail -n1)
 if [ -z "$APPROVER" ] || [ "$actor" != "$APPROVER" ]; then
   echo "::warning::$label was applied by '$actor', not the approver; ignoring" >&2
   echo 0
-elif [ -z "$arrived_at" ] || [[ "$labeled_at" < "$arrived_at" ]]; then
-  echo "::warning::$label was applied before the current head arrived ($labeled_at < $arrived_at); re-apply it to approve this head" >&2
+# Timestamps have one-second resolution: an approval in the same second as the
+# head's arrival does not prove it came after, so it must be strictly later.
+elif [ -z "$arrived_at" ] || ! [[ "$labeled_at" > "$arrived_at" ]]; then
+  echo "::warning::$label was not applied after the current head arrived ($labeled_at vs $arrived_at); re-apply it to approve this head" >&2
   echo 0
 else
   echo 1
