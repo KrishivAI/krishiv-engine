@@ -86,6 +86,51 @@ fn size_and_duration_units() {
 }
 
 #[test]
+fn memory_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&MEMORY_LIMIT), None);
+    assert_eq!(
+        c.get(&MEMORY_RESERVATION_QUANTUM)
+            .and_then(ConfigValue::as_size),
+        Some(1024 * 1024)
+    );
+    assert_eq!(
+        c.get(&MEMORY_SPILL_WAIT_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(2))
+    );
+    c.set("krishiv.memory.limit", "2g").unwrap();
+    c.set("krishiv.memory.reservationQuantum", "64k").unwrap();
+    c.set("krishiv.memory.spillWaitTimeout", "500ms").unwrap();
+    assert_eq!(
+        c.get(&MEMORY_ABORT_RELEASE_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(30))
+    );
+    c.set("krishiv.memory.abortReleaseTimeout", "1min").unwrap();
+    assert_eq!(
+        c.get(&MEMORY_ABORT_RELEASE_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_secs(60))
+    );
+    assert_eq!(
+        c.get(&MEMORY_LIMIT).and_then(ConfigValue::as_size),
+        Some(2 << 30)
+    );
+    assert_eq!(
+        c.get(&MEMORY_RESERVATION_QUANTUM)
+            .and_then(ConfigValue::as_size),
+        Some(64 << 10)
+    );
+    assert_eq!(
+        c.get(&MEMORY_SPILL_WAIT_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(Duration::from_millis(500))
+    );
+    assert!(c.set("krishiv.memory.limit", "lots").is_err());
+}
+
+#[test]
 fn invalid_values_are_typed_errors() {
     let mut c = Config::new();
     for (k, v) in [

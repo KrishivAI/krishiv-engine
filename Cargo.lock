@@ -1102,6 +1102,11 @@ version = "0.1.0-dev"
 [[package]]
 name = "krishiv-memory"
 version = "0.1.0-dev"
+dependencies = [
+ "krishiv-common",
+ "proptest",
+ "thiserror",
+]
 
 [[package]]
 name = "krishiv-optimizer"
