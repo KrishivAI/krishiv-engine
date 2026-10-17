@@ -839,6 +839,293 @@
    "message_parameters": {
     "typeName": "\"TIMESTAMP(3)\""
    }
+  },
+  {
+   "ddl": "timestamp with time zone",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "timestamp_ntz(3)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"TIMESTAMP_NTZ(3)\""
+   }
+  },
+  {
+   "ddl": "binary(5)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"BINARY(5)\""
+   }
+  },
+  {
+   "ddl": "decimal (10,2)",
+   "simple_string": "decimal(10,2)",
+   "catalog_string": "decimal(10,2)",
+   "sql": "DECIMAL(10,2)",
+   "type_name": "decimal(10,2)",
+   "json": "\"decimal(10,2)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "string collate utf8_binary",
+   "simple_string": "string collate UTF8_BINARY",
+   "catalog_string": "string collate UTF8_BINARY",
+   "sql": "STRING COLLATE UTF8_BINARY",
+   "type_name": "string collate UTF8_BINARY",
+   "json": "\"string collate UTF8_BINARY\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "int /* c */",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "int -- c",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "/* c */ int",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "int--c",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "int /* a /* b */ c */",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "int /* unclosed",
+   "error_class": "UNCLOSED_BRACKETED_COMMENT",
+   "sql_state": "42601",
+   "message_parameters": {}
+  },
+  {
+   "ddl": "int\n-- c\n",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "int ",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "　int",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "int ",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "​int",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'​'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "ınt",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "ſtring",
+   "simple_string": "string",
+   "catalog_string": "string",
+   "sql": "STRING",
+   "type_name": "string",
+   "json": "\"string\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "é",
+   "error_class": "INVALID_IDENTIFIER",
+   "sql_state": "42602",
+   "message_parameters": {
+    "ident": "é"
+   }
+  },
+  {
+   "ddl": "inté",
+   "error_class": "INVALID_IDENTIFIER",
+   "sql_state": "42602",
+   "message_parameters": {
+    "ident": "inté"
+   }
+  },
+  {
+   "ddl": "`a``b`",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"A`B\""
+   }
+  },
+  {
+   "ddl": "`int",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'`'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "``",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"\""
+   }
+  },
+  {
+   "ddl": "`int`(1)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INT(1)\""
+   }
+  },
+  {
+   "ddl": ".5",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'.5'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "1.",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'1.'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "1e5",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'1e5'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "10L",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'10L'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "1a",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"1A\""
+   }
+  },
+  {
+   "ddl": "decimal(10L,2)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'10L'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "decimal(1e1,0)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'1e1'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "decimal(.5,0)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'.5'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "decimal(5,99999999999)",
+   "error_class": "UNCLASSIFIED",
+   "exception": "java.lang.NumberFormatException"
+  },
+  {
+   "ddl": "decimal(99999999999)",
+   "error_class": "UNCLASSIFIED",
+   "exception": "java.lang.NumberFormatException"
   }
  ],
  "decimal_constructor": [
@@ -940,6 +1227,15 @@
    ],
    "sqlState": "22003"
   },
+  "INVALID_IDENTIFIER": {
+   "message": [
+    "The unquoted identifier <ident> is invalid and must be back quoted as: `<ident>`.",
+    "Unquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').",
+    "Unquoted identifiers must also not start with a digit.",
+    "Different data sources and meta stores may impose additional restrictions on valid identifiers."
+   ],
+   "sqlState": "42602"
+  },
   "NEGATIVE_SCALE_DISALLOWED": {
    "message": [
     "Negative scale is not allowed: '<scale>'. Set the config <sqlConf> to \"true\" to allow it."
@@ -955,6 +1251,12 @@
   "PARSE_SYNTAX_ERROR": {
    "message": [
     "Syntax error at or near <error><hint>."
+   ],
+   "sqlState": "42601"
+  },
+  "UNCLOSED_BRACKETED_COMMENT": {
+   "message": [
+    "Found an unclosed bracketed comment. Please, append */ at the end of the comment."
    ],
    "sqlState": "42601"
   },

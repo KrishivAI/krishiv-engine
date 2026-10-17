@@ -26,14 +26,24 @@ const OUT_OF_SCOPE: &[&str] = &[
     "variant",
     "time",
     "string collate utf8_lcase",
+    // Spark treats this as plain `string` but prints the collation; all
+    // collations are out of scope for now.
+    "string collate utf8_binary",
 ];
 
 /// Inputs where Spark fails without an error class; Krishiv raises the
 /// class named here instead.
-const UNCLASSIFIED_IN_SPARK: &[(&str, ErrorClass)] = &[(
-    "decimal(99999999999,0)",
-    ErrorClass::DecimalPrecisionExceedsMaxPrecision,
-)];
+const UNCLASSIFIED_IN_SPARK: &[(&str, ErrorClass)] = &[
+    (
+        "decimal(99999999999,0)",
+        ErrorClass::DecimalPrecisionExceedsMaxPrecision,
+    ),
+    (
+        "decimal(99999999999)",
+        ErrorClass::DecimalPrecisionExceedsMaxPrecision,
+    ),
+    ("decimal(5,99999999999)", ErrorClass::LegacyErrorTemp1228),
+];
 
 fn fixture() -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

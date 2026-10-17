@@ -12,6 +12,8 @@ import org.apache.spark.sql.types._
 import scala.jdk.CollectionConverters._
 
 val mapper = new ObjectMapper()
+// ASCII-only output: the reader splits lines on Unicode line separators too.
+mapper.getFactory.configure(com.fasterxml.jackson.core.JsonGenerator.Feature.ESCAPE_NON_ASCII, true)
 val seen = scala.collection.mutable.LinkedHashSet[String]()
 
 def putError(m: ObjectNode, e: Throwable): Unit = e match {

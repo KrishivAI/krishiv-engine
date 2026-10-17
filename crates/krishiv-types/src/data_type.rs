@@ -160,7 +160,10 @@ impl DecimalType {
     /// error when `scale > precision` (checked first, as in Spark).
     pub fn try_new(precision: u32, scale: u32) -> Result<Self> {
         if scale > precision {
-            return Err(error::scale_exceeds_precision(precision, scale));
+            return Err(error::scale_exceeds_precision(
+                &precision.to_string(),
+                &scale.to_string(),
+            ));
         }
         match (u8::try_from(precision), u8::try_from(scale)) {
             (Ok(p), Ok(s)) if p <= Self::MAX_PRECISION => Ok(Self {

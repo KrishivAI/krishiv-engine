@@ -314,6 +314,22 @@ fn parser_error_classes() {
     assert_eq!(class("foo"), Err(ErrorClass::UnsupportedDatatype));
     assert_eq!(class("`int`"), Err(ErrorClass::UnsupportedDatatype));
     assert_eq!(class("int int"), Err(ErrorClass::ParseSyntaxError));
+    assert_eq!(class("int /* x"), Err(ErrorClass::UnclosedBracketedComment));
+    assert_eq!(class("inté"), Err(ErrorClass::InvalidIdentifier));
+    assert_eq!(class("int /* a /* b */ */ -- c"), Ok(DataType::Integer));
+    let e = parse_data_type("decimal(5,0099999999999)").err();
+    let params = e
+        .as_ref()
+        .map(krishiv_common::error::KrishivError::message_parameters);
+    assert_eq!(
+        params,
+        Some(
+            &[
+                ("scale", "99999999999".to_owned()),
+                ("precision", "5".to_owned())
+            ][..]
+        )
+    );
     assert_eq!(class("decimal(5,6)"), Err(ErrorClass::LegacyErrorTemp1228));
     assert_eq!(
         class("array<int>"),
