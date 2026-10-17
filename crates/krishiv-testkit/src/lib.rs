@@ -4,7 +4,7 @@
 //! * [`hash_fixture`]: Spark `hash()`/`xxhash64()` golden fixtures (ADR 0010).
 //! * [`fn_matrix`]: Spark function-matrix fixtures and the coverage-matrix report (P2-T106a).
 //! * [`batch_stream`]: batch == bounded-stream invariant harness (ADR 0015/0017).
-//! * [`golden`]: Spark `SQLQueryTestSuite` golden-file enumeration.
+//! * [`golden`]: Spark `SQLQueryTestSuite` golden-file runner, exclusion manifest and three-number report.
 //! * [`slt`]: sqllogictest runner stub.
 #![forbid(unsafe_code)]
 

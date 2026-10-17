@@ -1,0 +1,72 @@
+---
+source: crates/krishiv-testkit/src/golden/report.rs
+expression: "to_json_string(&to_json(&run, \"v4.2.0\", &manifest))?"
+---
+{
+  "engine": "reject-all",
+  "exclusions": {
+    "entries": [
+      {
+        "added_after_freeze": false,
+        "file": "udf/x",
+        "note": "scala udf",
+        "reason": "jvm_udf",
+        "statements": 7
+      },
+      {
+        "added_after_freeze": true,
+        "file": "y",
+        "note": null,
+        "reason": "jdk_specific",
+        "statements": 0
+      }
+    ],
+    "excluded_since_freeze": 1,
+    "frozen": true
+  },
+  "files": [
+    {
+      "file": "a",
+      "negative": {
+        "passed": 0,
+        "total": 1
+      },
+      "parse": {
+        "passed": 1,
+        "total": 3
+      },
+      "result": {
+        "passed": 1,
+        "total": 2
+      },
+      "statements": 4,
+      "unclassified_errors": 1
+    }
+  ],
+  "format_version": 1,
+  "spark_tag": "v4.2.0",
+  "totals": {
+    "files_excluded": 1,
+    "files_run": 1,
+    "files_without_expected_output": 1,
+    "negative": {
+      "passed": 0,
+      "total": 1
+    },
+    "parse": {
+      "passed": 1,
+      "total": 3
+    },
+    "result": {
+      "passed": 1,
+      "total": 2
+    },
+    "statements": 4
+  },
+  "unregistered_error_classes": [
+    "NOT_A_CLASS"
+  ],
+  "without_expected_output": [
+    "z"
+  ]
+}

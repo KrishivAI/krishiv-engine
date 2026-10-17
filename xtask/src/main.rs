@@ -19,7 +19,7 @@ use xtask::layering;
 use xtask::policy::{self, DiffArgs};
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--write-baseline] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--write-baseline] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | golden [--tag T] [--manifest F] [--out F]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -30,6 +30,7 @@ fn main() -> ExitCode {
         .as_slice()
     {
         ["layering"] => run_layering(),
+        ["golden", flags @ ..] => run_golden(flags),
         ["registry-coverage"] => registry_coverage::run(&workspace_root()),
         ["budgets", flags @ ..] => run_budgets(flags),
         ["setup"] => dev::run_setup_full(&workspace_root(), false),
@@ -64,6 +65,33 @@ fn main() -> ExitCode {
             eprintln!("{msg}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Run the golden-file runner (`krishiv-testkit` `golden-report`); the report goes to
+/// `target/golden-report.json` unless `--out` is given.
+fn run_golden(flags: &[&str]) -> Result<(), String> {
+    let root = workspace_root();
+    let default_out = root.join("target/golden-report.json");
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&root)
+        .args([
+            "run",
+            "--quiet",
+            "-p",
+            "krishiv-testkit",
+            "--bin",
+            "golden-report",
+            "--",
+        ])
+        .args(flags);
+    if !flags.contains(&"--out") {
+        cmd.arg("--out").arg(default_out);
+    }
+    match cmd.status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("golden-report failed: {status}")),
+        Err(e) => Err(format!("cannot run cargo: {e}")),
     }
 }
 
