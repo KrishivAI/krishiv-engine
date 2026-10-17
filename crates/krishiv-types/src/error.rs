@@ -15,9 +15,10 @@
 //! | non-ASCII unquoted name | `INVALID_IDENTIFIER` |
 //! | unknown type name | `UNSUPPORTED_DATATYPE` |
 //! | a Spark type Krishiv does not support yet | `KRISHIV_UNSUPPORTED_FEATURE` |
+//! | a [`crate::batch::Batch`] invariant broken by the caller (an engine bug) | `INTERNAL_ERROR` |
 
 use krishiv_common::error::{
-    DecimalPrecisionExceedsMaxPrecision, InvalidIdentifier, KrishivError,
+    DecimalPrecisionExceedsMaxPrecision, InternalError, InvalidIdentifier, KrishivError,
     KrishivUnsupportedFeature, LegacyErrorTemp1228, NegativeScaleDisallowed, ParseEmptyStatement,
     ParseSyntaxError, UnclosedBracketedComment, UnsupportedDatatype,
 };
@@ -93,4 +94,9 @@ pub(crate) fn unsupported_data_type(type_name: &str) -> KrishivError {
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a feature Krishiv does not support yet.
 pub(crate) fn unsupported(feature: String) -> KrishivError {
     KrishivUnsupportedFeature { feature }.into()
+}
+
+/// `INTERNAL_ERROR`, for a broken engine invariant (not a user error).
+pub(crate) fn internal(message: String) -> KrishivError {
+    InternalError { message }.into()
 }
