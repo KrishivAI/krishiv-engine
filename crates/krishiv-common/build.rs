@@ -248,10 +248,15 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
     for (doc, fname, ty, body) in accessors {
         writeln!(o)?;
         writeln!(o, "    /// {doc}")?;
-        writeln!(
-            o,
-            "    #[allow(clippy::match_same_arms, clippy::allow_attributes, reason = \"generated code: arms may or may not coincide with the data\")]"
-        )?;
+        // `match_same_arms` fires only when two arms have the same body, so
+        // the expectation is emitted exactly where it will be fulfilled.
+        let mut seen = std::collections::HashSet::new();
+        if !leaves.iter().all(|l| seen.insert(body(l))) {
+            writeln!(
+                o,
+                "    #[expect(clippy::match_same_arms, reason = \"generated arms coincide for some classes\")]"
+            )?;
+        }
         writeln!(o, "    pub const fn {fname}(self) -> {ty} {{")?;
         writeln!(o, "        match self {{")?;
         for l in leaves {

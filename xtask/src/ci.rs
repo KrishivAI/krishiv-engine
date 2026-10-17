@@ -16,6 +16,7 @@ const EXCLUDED_NAMES: &[&str] = &[
     "pnpm-lock.yaml",
     "package-lock.json",
     "uv.lock",
+    "LICENSE",
 ];
 const EXCLUDED_PREFIXES: &[&str] = &[
     "tests/spark-golden/",
@@ -129,20 +130,42 @@ pub fn rust_relevant<'a>(paths: impl IntoIterator<Item = &'a str>) -> bool {
     })
 }
 
+/// Bot identities exempt from the sign-off requirement (exact email suffixes).
+const BOT_EMAILS: &[&str] = &[
+    "renovate[bot]@users.noreply.github.com",
+    "github-actions[bot]@users.noreply.github.com",
+];
+
+/// GitHub's web-flow committer, used when a bot's change is applied via the API.
+const WEB_FLOW_EMAIL: &str = "noreply@github.com";
+
+fn is_bot(email: &str) -> bool {
+    BOT_EMAILS
+        .iter()
+        .any(|b| email == *b || email.ends_with(&format!("+{b}")))
+}
+
 /// Commits that lack a `Signed-off-by: Name <email>` trailer (ADR 0033).
 ///
-/// `log` is `git log --format=%H%x1f%ae%x1f%B%x1e`. Bot authors
-/// (`[bot]` in the email, e.g. Renovate) are exempt.
+/// `log` is `git log --format=%H%x1f%ae%x1f%ce%x1f%B%x1e`. A commit is exempt
+/// only when its author is an allowlisted bot (Renovate, github-actions) and
+/// its committer is the same kind of bot or GitHub's web-flow.
 #[must_use]
 pub fn commits_missing_signoff(log: &str) -> Vec<String> {
     log.split('\u{1e}')
         .map(|r| r.trim_start_matches('\n'))
         .filter(|r| !r.trim().is_empty())
         .filter_map(|record| {
-            let mut fields = record.splitn(3, '\u{1f}');
-            let (sha, email, body) = (fields.next()?, fields.next()?, fields.next()?);
+            let mut fields = record.splitn(4, '\u{1f}');
+            let (sha, author, committer, body) = (
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+                fields.next()?,
+            );
             let signed = body.lines().any(is_signoff_line);
-            (!signed && !email.contains("[bot]")).then(|| sha.trim().to_owned())
+            let exempt = is_bot(author) && (is_bot(committer) || committer == WEB_FLOW_EMAIL);
+            (!signed && !exempt).then(|| sha.trim().to_owned())
         })
         .collect()
 }

@@ -128,7 +128,7 @@ pub fn run_dco(args: &DiffArgs) -> Result<(), String> {
     let log = args.git(&[
         "log",
         "--no-merges",
-        "--format=%H%x1f%ae%x1f%B%x1e",
+        "--format=%H%x1f%ae%x1f%ce%x1f%B%x1e",
         &format!("{}..{}", args.base, args.head),
     ])?;
     let bad = ci::commits_missing_signoff(&log);

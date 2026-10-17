@@ -128,5 +128,6 @@ fn ci_policy_wiring() {
     assert!(nightly.contains("[self-hosted, krishiv-heavy]"));
     assert!(nightly.contains("--all-features"));
     assert!(nightly.contains("sccache"));
+    assert!(!nightly.contains("/home/"));
     assert!(!nightly.contains("ubuntu-latest"));
 }
