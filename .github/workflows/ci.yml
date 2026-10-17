@@ -34,29 +34,6 @@ env:
 # toolchain installed below honours it.
 
 jobs:
-  # Approvals are bound to pushes: a push removes the approval labels, so the
-  # approver re-applies them for the new head. Fails loudly when it cannot
-  # (e.g. a fork PR's read-only token): a maintainer must then remove them.
-  reset-approvals:
-    if: github.event_name == 'pull_request' && github.event.action == 'synchronize'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      pull-requests: write
-    steps:
-      - name: Remove approval labels after a push
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
-        run: |
-          for label in size-approved budget-approved; do
-            case " $LABELS " in
-              *" $label "*) gh pr edit "$PR" -R "$REPO" --remove-label "$label" ;;
-            esac
-          done
-
   # Decides whether the Rust jobs run. Docs/bench/plan-only PRs skip them.
   changes:
     runs-on: ubuntu-latest
@@ -88,6 +65,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      checks: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -107,15 +85,15 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: cargo xtask dco --base "$BASE_SHA" --head "$HEAD_SHA"
       # The `size-approved` label only counts when the configured approver
-      # (repository variable SIZE_APPROVER, the maintainer) applied it, and
-      # never on a push run (.github/scripts/approval-label.sh).
+      # (repository variable SIZE_APPROVER, the maintainer) applied it after
+      # the current head arrived (.github/scripts/approval-label.sh).
       - name: Resolve size-approved label
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
-          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'size-approved') }}
           APPROVER: ${{ vars.SIZE_APPROVER }}
         run: echo "SIZE_APPROVED=$(.github/scripts/approval-label.sh size-approved)" >> "$GITHUB_ENV"
@@ -314,6 +292,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      checks: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -336,7 +315,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
-          EVENT_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'budget-approved') }}
           APPROVER: ${{ vars.SIZE_APPROVER }}
         run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
