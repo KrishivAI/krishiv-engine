@@ -17,3 +17,10 @@ arrow-buffer.workspace = true
 krishiv-common = { path = "../krishiv-common" }
 thiserror.workspace = true
 
+[dev-dependencies]
+criterion.workspace = true
+proptest = { workspace = true, features = ["std"] }
+
+[[bench]]
+name = "binary_add"
+harness = false

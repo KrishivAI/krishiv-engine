@@ -1112,7 +1112,9 @@ version = "0.1.0-dev"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
+ "codspeed-criterion-compat",
  "krishiv-common",
+ "proptest",
  "thiserror",
 ]
 
