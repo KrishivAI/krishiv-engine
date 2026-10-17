@@ -5,11 +5,18 @@ build-backend = "maturin"
 [project]
 name = "krishiv"
 description = "Krishiv: a Rust-native, Spark-compatible batch and streaming engine"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 dynamic = ["version"]
 classifiers = [
     "Private :: Do Not Upload",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Free Threading :: 2 - Beta",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
 ]
@@ -21,5 +28,5 @@ dev = ["pytest>=8"]
 manifest-path = "../crates/krishiv-python/Cargo.toml"
 module-name = "krishiv._native"
 python-source = "."
-# Default build is abi3-py310 (feature set in the crate). The free-threaded
+# Default build is abi3-py311 (feature set in the crate). The free-threaded
 # wheel is built separately; see README.md.

@@ -12,12 +12,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use xtask::budgets::{self, Budgets};
+use xtask::dev;
 use xtask::docs::{self, Doc};
 use xtask::layering;
 use xtask::policy::{self, DiffArgs};
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--write-baseline] | setup | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--write-baseline] | setup [--install] | doctor | stack up|down|status [--kafka] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -30,7 +31,11 @@ fn main() -> ExitCode {
         ["layering"] => run_layering(),
         ["registry-coverage"] => registry_coverage::run(&workspace_root()),
         ["budgets", flags @ ..] => run_budgets(flags),
-        ["setup"] => policy::run_setup(&workspace_root()),
+        ["setup"] => dev::run_setup_full(&workspace_root(), false),
+        ["setup", "--install"] => dev::run_setup_full(&workspace_root(), true),
+        ["doctor"] => dev::run_doctor(&workspace_root()),
+        ["stack", action] => dev::run_stack(&workspace_root(), action, false),
+        ["stack", action, "--kafka"] => dev::run_stack(&workspace_root(), action, true),
         ["pr-size", flags @ ..] => {
             DiffArgs::parse(flags, &workspace_root()).and_then(|a| policy::run_pr_size(&a))
         }

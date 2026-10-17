@@ -31,7 +31,9 @@ cargo xtask docs-config | docs-errors            # regenerate config / error-cla
 cargo xtask budgets [--build-time] [--write-baseline]   # crate-count / build-time / size budgets (budgets.json)
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace   # docs gate
 (cd bench && uv run pytest)                      # bench harness tests
-cargo xtask setup                                # install .githooks (pre-commit, pre-push)
+cargo xtask setup [--install]                    # install .githooks; print (or run) user-level fixes for missing tools
+cargo xtask doctor                               # toolchain/uv/Python/Docker/disk checks, a named fix per failure
+cargo xtask stack up|down|status [--kafka]       # bench/baselines compose project krishiv-bench only
 cargo xtask spdx | source-guard | workflow-lint  # SPDX headers; no ParquetObject{Reader,Writer}; no pull_request_target
 cargo xtask pr-size|dco|changes --base <ref>     # PR size cap (1,500 lines), DCO sign-off, Rust-job path filter
 taplo fmt --check; typos                         # TOML format, spelling (markdownlint-cli2 for *.md)

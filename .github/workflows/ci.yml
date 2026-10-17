@@ -277,3 +277,60 @@ jobs:
           name: budgets-current
           path: target/budgets-current.json
           if-no-files-found: ignore
+
+  # P2-T148: the Python wheels build and import. abi3 (CPython >= 3.11, one
+  # wheel) and the free-threaded cp314t wheel (not abi3). Not yet a required
+  # check; a maintainer adds it to branch protection.
+  wheels:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: abi3-cp311
+            python: "3.11"
+            maturin_args: ""
+            wheel_tag: cp311-abi3
+          - name: cp314t
+            python: "3.14t"
+            maturin_args: "--no-default-features"
+            wheel_tag: cp314t
+    name: wheels (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Install Python ${{ matrix.python }}
+        run: uv python install "${{ matrix.python }}"
+      - name: maturin build
+        working-directory: python
+        env:
+          PY: ${{ matrix.python }}
+          MATURIN_ARGS: ${{ matrix.maturin_args }}
+        run: |
+          read -r -a extra <<< "$MATURIN_ARGS"
+          uvx --from "maturin>=1.9.4,<2" maturin build --release "${extra[@]}" --interpreter "$(uv python find "$PY")" -o ../dist
+      - name: Wheel has the expected tag
+        env:
+          TAG: ${{ matrix.wheel_tag }}
+        run: |
+          find dist -name '*.whl' -print
+          find dist -name "*-${TAG}-*.whl" | grep -q .
+      - name: Import test in a clean venv
+        env:
+          PY: ${{ matrix.python }}
+        run: |
+          uv venv --python "$PY" "$RUNNER_TEMP/venv"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" dist/*.whl pytest
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/python" -c "import krishiv, sys; print(krishiv.__version__, sys.version)"
+          "$RUNNER_TEMP/venv/bin/pytest" "$GITHUB_WORKSPACE/python/tests" -q
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheel-${{ matrix.name }}
+          path: dist/*.whl

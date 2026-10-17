@@ -20,10 +20,10 @@ test = false
 doctest = false
 
 [features]
-# Default wheel: one abi3 wheel for CPython >= 3.10. The free-threaded (cp314t)
+# Default wheel: one abi3 wheel for CPython >= 3.11. The free-threaded (cp314t)
 # build cannot use abi3, so it builds with `--no-default-features`.
-default = ["abi3-py310"]
-abi3-py310 = ["pyo3/abi3-py310"]
+default = ["abi3-py311"]
+abi3-py311 = ["pyo3/abi3-py311"]
 
 [dependencies]
 # `extension-module` is deprecated: maturin sets PYO3_BUILD_EXTENSION_MODULE.
