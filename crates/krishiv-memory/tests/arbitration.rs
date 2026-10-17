@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Cooperative arbitration on a deterministic Tokio runtime (current thread,
 //! paused clock): spills at batch boundaries, fairness, timeouts, aborts.
+#![cfg(not(loom))]
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
 use std::sync::atomic::{AtomicBool, Ordering};

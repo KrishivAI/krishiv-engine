@@ -322,8 +322,19 @@ impl Node {
     /// Reads the counter word. Every decision taken from this read is
     /// re-validated by the compare-and-swap in [`Node::try_add`], so a stale
     /// value only costs a retry or a trip to the slow path.
+    #[cfg(not(all(test, loom)))]
     fn load_word(&self) -> usize {
         self.word.load(Ordering::Acquire)
+    }
+
+    /// Under loom 0.7 a plain load that returns a superseded store can trip
+    /// loom's own store-history assertion (`match_load_to_stores`, "TODO:
+    /// this sometimes fails"), so the models read the counter with an RMW,
+    /// which returns the latest value. Stale counter reads are still covered
+    /// by real races on the CAS.
+    #[cfg(all(test, loom))]
+    fn load_word(&self) -> usize {
+        self.word.fetch_add(0, Ordering::AcqRel)
     }
 
     /// Free bytes under this node's own limit.

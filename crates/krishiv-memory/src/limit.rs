@@ -108,7 +108,7 @@ fn walk_limits(mount: &Path, path: &str, file: &str, unlimited_from: u64) -> Opt
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use std::path::PathBuf;
 

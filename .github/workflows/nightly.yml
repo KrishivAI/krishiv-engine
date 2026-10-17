@@ -138,3 +138,21 @@ jobs:
           flags: rust-from-python
           use_oidc: true
           fail_ci_if_error: false
+
+  # P2-T010: loom models of the memory pool accounting, spill protocol, round
+  # admission and arbitration (`crates/krishiv-memory/src/loom_tests.rs`).
+  loom:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RUSTC_WRAPPER: "" # `--cfg loom` rebuilds every dependency; not worth caching
+      RUSTFLAGS: --cfg loom
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: loom models (krishiv-memory)
+        run: cargo test -p krishiv-memory --lib --release --locked

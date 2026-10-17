@@ -135,5 +135,8 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     fn check_aborted(&self) -> Result<(), MemoryError>;
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests;
+
+#[cfg(all(test, loom))]
+mod loom_tests;
