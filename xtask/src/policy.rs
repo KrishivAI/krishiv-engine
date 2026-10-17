@@ -53,6 +53,14 @@ impl DiffArgs {
         }
     }
 
+    /// `git diff -U0` of the range, for line-level reports.
+    ///
+    /// # Errors
+    /// Returns the git failure message.
+    pub fn unified_zero_diff(&self) -> Result<String, String> {
+        self.git(&["diff", "-U0", "--no-color", &self.range()])
+    }
+
     fn range(&self) -> String {
         format!("{}...{}", self.base, self.head)
     }

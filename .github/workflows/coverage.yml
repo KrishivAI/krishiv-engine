@@ -1,0 +1,63 @@
+name: Coverage (report only)
+
+# P2-T105: a diff-coverage REPORT for pull requests. It never gates a merge
+# (the ratchet is switched on at P2a exit, P2-T105b) and is not a required
+# check. Codecov upload is informational (codecov.yml). The full line+branch
+# run is the nightly `coverage` job in nightly.yml.
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/coverage.yml"
+
+concurrency:
+  group: coverage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  diff-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # `id-token: write` lets same-repo PRs upload to Codecov via OIDC (no
+    # secret). Fork PRs get no OIDC token and use Codecov's tokenless upload.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml) and llvm-tools
+        run: |
+          rustup show active-toolchain
+          rustup component add llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+      # Line coverage on the pinned stable toolchain (branch coverage needs
+      # nightly and runs in the nightly job).
+      - run: cargo xtask coverage --no-branch
+      - name: Diff coverage (report only)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cargo xtask diff-coverage --base "$BASE_SHA" --head "$HEAD_SHA"
+      - name: Upload to Codecov (informational)
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: target/coverage/lcov.info
+          flags: pr
+          use_oidc: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          fail_ci_if_error: false

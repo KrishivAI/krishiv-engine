@@ -5,6 +5,7 @@
 
 pub mod budgets;
 pub mod ci;
+pub mod coverage;
 pub mod dev;
 pub mod docs;
 pub mod layering;
