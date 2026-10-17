@@ -31,7 +31,7 @@ fn goldens_fixtures_vendored_and_generated_are_excluded() {
         numstat("tests/fixtures/spark-4.2/hash.json", 4000),
         numstat("Cargo.lock", 900),
         numstat("vendor/foo/src/lib.rs", 3000),
-        numstat("crates/x/src/generated/ids.rs", 2000),
+        numstat("crates/x/vendored/spec.json", 2000),
         numstat("crates/x/src/lib.rs", 10),
     ]
     .concat();
@@ -44,9 +44,14 @@ fn goldens_fixtures_vendored_and_generated_are_excluded() {
 #[test]
 fn deletions_count_binary_files_do_not_and_renames_resolve() {
     let input = "0\t700\tcrates/a.rs\n800\t0\tcrates/b.rs\n-\t-\tlogo.png\n5\t5\ttests/{old => fixtures}/data.json\n";
-    let report = measure_numstat(input).unwrap();
+    let mut report = measure_numstat(input).unwrap();
     assert_eq!(report.counted, 1500);
     assert_eq!(report.excluded, 10);
+    assert_eq!(report.binaries, vec!["logo.png".to_owned()]);
+    // A 6,401-byte binary counts as 101 lines and pushes the diff over the cap.
+    report.add_binary(6401);
+    assert_eq!(report.counted, 1601);
+    assert!(!report.within_cap());
     assert!(measure_numstat("garbage").is_err());
 }
 
@@ -56,6 +61,18 @@ fn allowlist_matches_expected_paths() {
     assert!(is_size_excluded("ui/pnpm-lock.yaml"));
     assert!(!is_size_excluded("crates/krishiv-sql/src/parser.rs"));
     assert!(!is_size_excluded("xtask/src/ci.rs"));
+    // Data directories count only at their fixed place under a crate.
+    assert!(is_size_excluded("crates/krishiv-common/vendored/x.json"));
+    assert!(is_size_excluded(
+        "crates/krishiv-io/tests/fixtures/a.parquet"
+    ));
+    assert!(!is_size_excluded("crates/x/src/generated/ids.rs"));
+    assert!(!is_size_excluded("crates/x/src/fixtures/helpers.rs"));
+    assert!(!is_size_excluded("docs/notes.out"));
+    assert!(!is_size_excluded("crates/x/src/source.map"));
+    assert!(is_size_excluded(
+        "crates/krishiv-ui-assets/assets/app.js.map"
+    ));
 }
 
 #[test]
@@ -75,6 +92,10 @@ fn docs_bench_and_plan_only_changes_skip_rust_jobs() {
     assert!(rust_relevant([".github/workflows/ci.yml"]));
     assert!(rust_relevant([".github/pull_request_template.md"]));
     assert!(rust_relevant([".claude/agents/reviewer.md"]));
+    // Crate Markdown can be included into rustdoc.
+    assert!(rust_relevant(["crates/krishiv-sql/README.md"]));
+    assert!(rust_relevant(["xtask/README.md"]));
+    assert!(!rust_relevant(["README.md", "CONTRIBUTING.md"]));
 }
 
 const GOOD: &str = "aaa\u{1f}dev@example.com\u{1f}dev@example.com\u{1f}feat: x\n\nSigned-off-by: Dev One <dev@example.com>\nCo-Authored-By: X <x@y>\n\u{1e}\n";

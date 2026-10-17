@@ -26,10 +26,17 @@ const EXCLUDED_PREFIXES: &[&str] = &[
     "crates/krishiv-ui-assets/assets/",
     ".github/ci-fixtures/",
 ];
-const EXCLUDED_SUFFIXES: &[&str] = &[
-    ".lock", ".out", ".snap", ".golden", ".pb.rs", ".min.js", ".map",
-];
-const EXCLUDED_CONTAINS: &[&str] = &["/generated/", "/fixtures/", "/goldens/", "/vendored/"];
+/// Suffixes of machine-written files. Kept specific: a loose suffix such as
+/// `.out` or `.map` would also exclude hand-written files.
+const EXCLUDED_SUFFIXES: &[&str] = &[".lock", ".snap", ".pb.rs", ".min.js", ".js.map"];
+/// Data directories directly under a crate (`crates/<name>/<dir>/`). They are
+/// matched at that position only, so a `generated/` or `fixtures/` directory
+/// inside `src/` still counts.
+const CRATE_DATA_DIRS: &[&str] = &["vendored/", "tests/fixtures/", "tests/goldens/"];
+
+/// Binary files have no line count in `git diff --numstat`; each started
+/// block of this many bytes counts as one changed line.
+pub const BINARY_BYTES_PER_LINE: u64 = 64;
 
 /// Whether `path` is on the size-cap allowlist.
 #[must_use]
@@ -38,7 +45,10 @@ pub fn is_size_excluded(path: &str) -> bool {
     EXCLUDED_NAMES.contains(&name)
         || EXCLUDED_PREFIXES.iter().any(|p| path.starts_with(p))
         || EXCLUDED_SUFFIXES.iter().any(|s| path.ends_with(s))
-        || EXCLUDED_CONTAINS.iter().any(|c| path.contains(c))
+        || path
+            .strip_prefix("crates/")
+            .and_then(|rest| rest.split_once('/'))
+            .is_some_and(|(_, inner)| CRATE_DATA_DIRS.iter().any(|d| inner.starts_with(d)))
 }
 
 /// Result of measuring a diff against the cap.
@@ -48,6 +58,9 @@ pub struct SizeReport {
     pub counted: u64,
     /// Changed lines in allowlisted files.
     pub excluded: u64,
+    /// Binary files outside the allowlist; their size is added to `counted`
+    /// with [`SizeReport::add_binary`].
+    pub binaries: Vec<String>,
 }
 
 impl SizeReport {
@@ -55,6 +68,12 @@ impl SizeReport {
     #[must_use]
     pub fn within_cap(&self) -> bool {
         self.counted <= MAX_CHANGED_LINES
+    }
+
+    /// Counts a binary file of `bytes` bytes as
+    /// `ceil(bytes / BINARY_BYTES_PER_LINE)` changed lines.
+    pub fn add_binary(&mut self, bytes: u64) {
+        self.counted += bytes.div_ceil(BINARY_BYTES_PER_LINE);
     }
 }
 
@@ -74,7 +93,8 @@ fn resolve_rename(path: &str) -> String {
     }
 }
 
-/// Measures `git diff --numstat` output. Binary files (`-`) count as zero.
+/// Measures `git diff --numstat` output. Binary files (`-`) outside the
+/// allowlist are listed in [`SizeReport::binaries`] for the caller to size.
 ///
 /// # Errors
 /// Returns an error for a line that is not `added<TAB>deleted<TAB>path`.
@@ -82,6 +102,7 @@ pub fn measure_numstat(numstat: &str) -> Result<SizeReport, String> {
     let mut report = SizeReport {
         counted: 0,
         excluded: 0,
+        binaries: Vec::new(),
     };
     for line in numstat.lines().filter(|l| !l.trim().is_empty()) {
         let mut parts = line.splitn(3, '\t');
@@ -97,8 +118,11 @@ pub fn measure_numstat(numstat: &str) -> Result<SizeReport, String> {
             }
         };
         let lines = count(added)? + count(deleted)?;
-        if is_size_excluded(&resolve_rename(path)) {
+        let path = resolve_rename(path);
+        if is_size_excluded(&path) {
             report.excluded += lines;
+        } else if added == "-" && deleted == "-" {
+            report.binaries.push(path);
         } else {
             report.counted += lines;
         }
@@ -122,10 +146,12 @@ pub fn rust_relevant<'a>(paths: impl IntoIterator<Item = &'a str>) -> bool {
         {
             return true;
         }
+        // Markdown under `crates/` or `xtask/` can be compiled into rustdoc
+        // (`include_str!`), so only Markdown elsewhere is docs-only.
         let skipped = ["docs/", "bench/", ".superpowers/"]
             .iter()
             .any(|d| p.starts_with(d))
-            || p.ends_with(".md");
+            || (p.ends_with(".md") && !p.starts_with("crates/") && !p.starts_with("xtask/"));
         !skipped
     })
 }
