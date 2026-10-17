@@ -11,7 +11,7 @@
 //! and incremental view maintenance ([`ChangeBatch`]). A batch query is an
 //! insert-only stream and carries [`Weights::Const`]`(1)`. Operators must
 //! route that case to the same code path as "no weights" (see
-//! [`Batch::is_insert_only`]); the operations here never turn a constant
+//! [`Batch::is_unweighted`]); the operations here never turn a constant
 //! weight into a column, except [`Batch::concat`] of batches whose constants
 //! differ.
 //!
@@ -27,7 +27,7 @@
 //!
 //! // A batch query's rows: weight 1 each, no weight column.
 //! let batch = Batch::new(data.clone());
-//! assert!(batch.is_insert_only());
+//! assert!(batch.is_unweighted());
 //!
 //! // A change stream: insert row 0, retract row 1, insert row 2 twice.
 //! let change = Batch::with_weights(data, Weights::Column(Int64Array::from(vec![1, -1, 2])))?;
@@ -55,8 +55,17 @@ use crate::error::{self, Result};
 ///
 /// The weight kind is known statically from the source and the plan:
 /// operators never re-detect a constant inside a [`Weights::Column`].
+///
+/// Weights are `i64`. Operations that multiply or sum them (join
+/// multiplicity, consolidation) must use checked arithmetic and raise an
+/// error on overflow; the operations here only copy them.
+///
+/// The enum is exhaustive on purpose: a new encoding must be a compile error
+/// at every operator that matches on it.
+///
+/// `PartialEq` is structural equality of the representation, not Z-set
+/// equality: `Const(1)` over two rows differs from `Column([1, 1])`.
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub enum Weights {
     /// Every row has this weight. `Const(1)` is the "no weights" fast path
     /// that batch queries and insert-only streams use.
@@ -73,6 +82,9 @@ pub enum Weights {
 ///
 /// Invariants, upheld by every constructor and operation:
 /// - a [`Weights::Column`] has exactly [`Self::num_rows`] values and no nulls.
+///
+/// `PartialEq` is structural equality (same data, schema and weight
+/// representation), not Z-set equality; compare Z-sets after consolidation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Batch {
     data: RecordBatch,
@@ -89,14 +101,9 @@ const _: () = {
     assert_send_sync::<Weights>();
 };
 
-impl From<RecordBatch> for Batch {
-    fn from(data: RecordBatch) -> Self {
-        Self::new(data)
-    }
-}
-
 impl Batch {
-    /// An insert-only batch: every row has weight 1 ([`Weights::Const`]`(1)`).
+    /// An unweighted batch: every row has weight 1 ([`Weights::Const`]`(1)`).
+    /// Change streams pass their weights explicitly with [`Self::with_weights`].
     pub fn new(data: RecordBatch) -> Self {
         Self {
             data,
@@ -151,8 +158,10 @@ impl Batch {
     /// Whether every row has weight 1 ([`Weights::Const`]`(1)`).
     ///
     /// Operators take the "no weights" code path when this is true; that is
-    /// what lets batch queries pay nothing for weights.
-    pub fn is_insert_only(&self) -> bool {
+    /// what lets batch queries pay nothing for weights. It is false for any
+    /// other constant: `Const(2)` must not take that path, or rows would
+    /// lose their multiplicity.
+    pub fn is_unweighted(&self) -> bool {
         self.weights == Weights::Const(1)
     }
 
@@ -271,10 +280,11 @@ impl Batch {
     /// The rows of `batches`, in order, as one batch with `schema` (copies,
     /// except that a single batch is returned with shared buffers).
     ///
-    /// Weights: if every batch has [`Weights::Const`]`(c)` with the same `c`,
-    /// the result is `Const(c)` (an empty `batches` gives `Const(1)`);
-    /// otherwise the result is a [`Weights::Column`] holding each batch's
-    /// weights in turn.
+    /// Weights: if every batch that has rows has [`Weights::Const`]`(c)` with
+    /// the same `c`, the result is `Const(c)`; batches with no rows do not
+    /// count. With no rows at all the result is the first batch's constant,
+    /// or `Const(1)`. Otherwise the result is a [`Weights::Column`] holding
+    /// each batch's weights in turn.
     ///
     /// ```
     /// # use std::sync::Arc;
@@ -323,19 +333,29 @@ impl Batch {
     }
 }
 
-/// The weights of `batches` concatenated: one shared constant stays constant,
-/// anything else becomes a column of `num_rows` values.
+/// The weights of `batches` concatenated: one constant shared by every
+/// non-empty batch stays constant, anything else becomes a column of
+/// `num_rows` values.
 fn concat_weights(batches: &[Batch], num_rows: usize) -> Weights {
-    let first = batches
-        .first()
-        .map_or(Weights::Const(1), |b| b.weights.clone());
-    if let Weights::Const(c) = first
-        && batches.iter().all(|b| b.weights == Weights::Const(c))
-    {
-        return Weights::Const(c);
-    }
     if let [only] = batches {
         return only.weights.clone();
+    }
+    let mut constants = batches
+        .iter()
+        .filter(|b| b.num_rows() > 0)
+        .map(|b| match b.weights {
+            Weights::Const(c) => Some(c),
+            Weights::Column(_) => None,
+        });
+    match constants.next() {
+        None => {
+            return match batches.first().map(|b| &b.weights) {
+                Some(Weights::Const(c)) => Weights::Const(*c),
+                Some(Weights::Column(_)) | None => Weights::Const(1),
+            };
+        }
+        Some(Some(c)) if constants.all(|x| x == Some(c)) => return Weights::Const(c),
+        Some(_) => {}
     }
     let mut values = Vec::with_capacity(num_rows);
     for b in batches {

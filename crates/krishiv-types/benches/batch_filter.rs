@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `Batch::filter` with constant (`Const(1)`) versus Int64 column weights,
-//! run under CodSpeed in CI. The constant case should cost the same as
-//! filtering the bare `RecordBatch`.
+//! `Batch::filter` with unit weights (`Const(1)`) and with an Int64 weight
+//! column, against filtering the bare `RecordBatch`; run under CodSpeed in
+//! CI. The `Const(1)` case should cost the same as the bare baseline.
 
 #![expect(
     missing_docs,
@@ -13,12 +13,24 @@ use std::sync::Arc;
 
 use arrow_array::{BooleanArray, Float64Array, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
+use arrow_select::filter::filter_record_batch;
 use criterion::{Criterion, criterion_group, criterion_main};
 use krishiv_types::batch::{Batch, Weights};
 
 const ROWS: i32 = 4096;
 
-fn inputs() -> Option<(Batch, Batch, BooleanArray)> {
+struct Inputs {
+    bare: RecordBatch,
+    unweighted: Batch,
+    weighted: Batch,
+    mask: BooleanArray,
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "a broken fixture must fail the bench loudly, not skip it"
+)]
+fn inputs() -> Inputs {
     let schema = Arc::new(Schema::new(vec![
         Field::new("k", DataType::Int64, false),
         Field::new("v", DataType::Float64, false),
@@ -28,29 +40,40 @@ fn inputs() -> Option<(Batch, Batch, BooleanArray)> {
     let weights: Vec<i64> = (0..ROWS).map(|i| if i % 2 == 0 { 1 } else { -1 }).collect();
     // About half the rows, in an irregular pattern.
     let mask: BooleanArray = (0..ROWS).map(|i| Some((i * 7919) % 13 < 6)).collect();
-    let data = RecordBatch::try_new(
+    let bare = RecordBatch::try_new(
         schema,
         vec![
             Arc::new(Int64Array::from(ids)),
             Arc::new(Float64Array::from(values)),
         ],
     )
-    .ok()?;
-    let column =
-        Batch::with_weights(data.clone(), Weights::Column(Int64Array::from(weights))).ok()?;
-    Some((Batch::new(data), column, mask))
+    .expect("bench fixture: record batch");
+    let weighted = Batch::with_weights(bare.clone(), Weights::Column(Int64Array::from(weights)))
+        .expect("bench fixture: weighted batch");
+    Inputs {
+        unweighted: Batch::new(bare.clone()),
+        bare,
+        weighted,
+        mask,
+    }
 }
 
 fn bench_filter(c: &mut Criterion) {
-    let Some((constant, column, mask)) = inputs() else {
-        return;
-    };
+    let Inputs {
+        bare,
+        unweighted,
+        weighted,
+        mask,
+    } = inputs();
     let mut group = c.benchmark_group("batch_filter");
+    group.bench_function("bare_record_batch", |b| {
+        b.iter(|| filter_record_batch(black_box(&bare), black_box(&mask)));
+    });
     group.bench_function("const_one", |b| {
-        b.iter(|| black_box(&constant).filter(black_box(&mask)));
+        b.iter(|| black_box(&unweighted).filter(black_box(&mask)));
     });
     group.bench_function("int64_weights", |b| {
-        b.iter(|| black_box(&column).filter(black_box(&mask)));
+        b.iter(|| black_box(&weighted).filter(black_box(&mask)));
     });
     group.finish();
 }

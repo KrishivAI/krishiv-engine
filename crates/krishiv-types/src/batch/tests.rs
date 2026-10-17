@@ -49,23 +49,22 @@ fn assert_internal(r: Result<Batch, KrishivError>) {
 }
 
 #[test]
-fn new_is_insert_only() {
+fn new_is_unweighted() {
     let b = Batch::new(data(&[1, 2, 3]));
     assert_eq!(b.num_rows(), 3);
     assert_eq!(b.weights(), &Weights::Const(1));
-    assert!(b.is_insert_only());
+    assert!(b.is_unweighted());
     assert_eq!(b.schema(), schema());
-    assert_eq!(Batch::from(data(&[1, 2, 3])), b);
 }
 
 #[test]
 fn with_weights_checks_column_length_and_nulls() {
     let b = Batch::with_weights(data(&[1, 2]), column(&[1, -1])).unwrap();
     assert_eq!(b.weights(), &column(&[1, -1]));
-    assert!(!b.is_insert_only());
+    assert!(!b.is_unweighted());
 
     let neg = Batch::with_weights(data(&[1, 2]), Weights::Const(-1)).unwrap();
-    assert!(!neg.is_insert_only());
+    assert!(!neg.is_unweighted());
 
     assert_internal(Batch::with_weights(data(&[1, 2]), column(&[1])));
     assert_internal(Batch::with_weights(data(&[1, 2]), column(&[1, 1, 1])));
@@ -177,7 +176,7 @@ fn project_keeps_rows_and_weights_without_copying() {
     assert!(Arc::ptr_eq(p.data().column(1), b.data().column(0)));
 
     let c = Batch::new(data(&[1])).project(&[0]).unwrap();
-    assert!(c.is_insert_only());
+    assert!(c.is_unweighted());
 
     assert_internal(b.project(&[2]));
 }
@@ -203,7 +202,7 @@ fn concat_equal_consts_stay_const() {
     let b = Batch::new(data(&[3]));
     let c = Batch::concat(&schema(), &[a, b]).unwrap();
     assert_eq!(ids(&c), [1, 2, 3]);
-    assert!(c.is_insert_only());
+    assert!(c.is_unweighted());
 
     let neg = Batch::with_weights(data(&[1]), Weights::Const(-2)).unwrap();
     let c = Batch::concat(&schema(), &[neg.clone(), neg]).unwrap();
@@ -226,10 +225,30 @@ fn concat_mixed_weights_become_a_column() {
 }
 
 #[test]
+fn concat_ignores_empty_batches_when_keeping_a_constant() {
+    let empty_col = Batch::with_weights(data(&[]), column(&[])).unwrap();
+    let c = Batch::concat(
+        &schema(),
+        &[Batch::new(data(&[1])), empty_col, Batch::new(data(&[2, 3]))],
+    )
+    .unwrap();
+    assert_eq!(ids(&c), [1, 2, 3]);
+    assert!(c.is_unweighted());
+
+    let empty_neg = Batch::with_weights(data(&[]), Weights::Const(-1)).unwrap();
+    let c = Batch::concat(&schema(), &[empty_neg.clone(), Batch::new(data(&[4]))]).unwrap();
+    assert!(c.is_unweighted());
+
+    // No rows at all: the first batch's constant.
+    let c = Batch::concat(&schema(), &[empty_neg.clone(), empty_neg]).unwrap();
+    assert_eq!((c.num_rows(), c.weights()), (0, &Weights::Const(-1)));
+}
+
+#[test]
 fn concat_empty_and_single() {
     let e = Batch::concat(&schema(), &[]).unwrap();
     assert_eq!(e.num_rows(), 0);
-    assert!(e.is_insert_only());
+    assert!(e.is_unweighted());
     assert_eq!(e.schema(), schema());
 
     let b = Batch::with_weights(data(&[1, 2]), column(&[2, 3])).unwrap();
@@ -256,7 +275,7 @@ fn concat_rejects_other_fields() {
 #[test]
 fn change_batch_is_batch() {
     let c: ChangeBatch = Batch::new(data(&[1]));
-    assert!(c.is_insert_only());
+    assert!(c.is_unweighted());
 }
 
 /// Row ids with a parallel mask (nulls included).
@@ -281,7 +300,7 @@ proptest! {
         let mask = BooleanArray::from(mask);
         let f = b.filter(&mask).unwrap();
         prop_assert_eq!(f.weights(), &Weights::Const(c));
-        prop_assert_eq!(f.is_insert_only(), c == 1);
+        prop_assert_eq!(f.is_unweighted(), c == 1);
         prop_assert_eq!(f.num_rows(), mask.true_count());
         // Chained ops on the result keep the constant too.
         let half = f.num_rows() / 2;
