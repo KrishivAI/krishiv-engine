@@ -71,4 +71,12 @@ mod tests {
         assert!(!is_enabled(&c, "notRegistered"));
         assert!(!is_enabled(&cfg(&[("ivm", "true")]), "ivm"));
     }
+
+    #[test]
+    fn unaligned_checkpoints_flag_is_independent() {
+        let c = cfg(&[("krishiv.experimental.unalignedCheckpoints", "true")]);
+        assert!(is_enabled(&c, "unalignedCheckpoints"));
+        assert!(is_enabled(&c, "krishiv.experimental.unalignedCheckpoints"));
+        assert!(!is_enabled(&c, "ivm"));
+    }
 }

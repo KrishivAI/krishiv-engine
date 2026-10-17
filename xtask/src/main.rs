@@ -15,8 +15,9 @@ use xtask::budgets::{self, Budgets};
 use xtask::docs::{self, Doc};
 use xtask::layering;
 use xtask::policy::{self, DiffArgs};
+use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--write-baseline] | setup | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT]>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--write-baseline] | setup | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -27,6 +28,7 @@ fn main() -> ExitCode {
         .as_slice()
     {
         ["layering"] => run_layering(),
+        ["registry-coverage"] => registry_coverage::run(&workspace_root()),
         ["budgets", flags @ ..] => run_budgets(flags),
         ["setup"] => policy::run_setup(&workspace_root()),
         ["pr-size", flags @ ..] => {
