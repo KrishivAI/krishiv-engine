@@ -66,21 +66,78 @@ pub struct Statement {
 }
 
 impl Statement {
-    /// Whether result order is significant: Spark keeps row order only for sorted queries and
-    /// sorts both sides otherwise. A textual `ORDER BY` stands in for Spark's plan check.
+    /// Text fallback for "is the result order significant", used only when the engine does not
+    /// report [`super::run::QueryOutput::sorted`]. Spark decides on the analyzed plan
+    /// (`isSemanticallySorted`); this approximation says "sorted" for a leading `DESC`/`DESCRIBE`
+    /// and for an `ORDER BY` at parenthesis depth 0, after dropping comments, string literals and
+    /// quoted identifiers. An `ORDER BY` inside `OVER (...)` or a subquery does not count.
     #[must_use]
-    pub fn is_ordered(&self) -> bool {
-        let q = self.query.to_ascii_lowercase();
-        let mut words = q
-            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-            .filter(|w| !w.is_empty());
-        while let Some(w) = words.next() {
-            if w == "order" && words.next() == Some("by") {
-                return true;
-            }
-        }
-        false
+    pub fn text_sorted(&self) -> bool {
+        text_sorted(&self.query)
     }
+}
+
+/// See [`Statement::text_sorted`].
+#[must_use]
+pub fn text_sorted(query: &str) -> bool {
+    let mut top = String::with_capacity(query.len());
+    let mut depth = 0_usize;
+    let mut chars = query.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' | '`' => {
+                while let Some(n) = chars.next() {
+                    if n == '\\' {
+                        chars.next();
+                    } else if n == c {
+                        break;
+                    }
+                }
+                top.push(' ');
+            }
+            '-' if chars.peek() == Some(&'-') => {
+                for n in chars.by_ref() {
+                    if n == '\n' {
+                        break;
+                    }
+                }
+                top.push(' ');
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                let mut prev = ' ';
+                for n in chars.by_ref() {
+                    if prev == '*' && n == '/' {
+                        break;
+                    }
+                    prev = n;
+                }
+                top.push(' ');
+            }
+            '(' => {
+                depth += 1;
+                top.push(' ');
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                top.push(' ');
+            }
+            _ if depth == 0 => top.push(c.to_ascii_lowercase()),
+            _ => {}
+        }
+    }
+    let mut words = top
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|w| !w.is_empty())
+        .peekable();
+    if matches!(words.peek(), Some(&"desc" | &"describe")) {
+        return true;
+    }
+    while let Some(w) = words.next() {
+        if w == "order" && words.peek() == Some(&"by") {
+            return true;
+        }
+    }
+    false
 }
 
 const QUERY: &str = "-- !query";
@@ -209,8 +266,25 @@ org.apache.spark.sql.catalyst.parser.ParseException\n{\n  \"errorClass\" : \"PAR
             "-- !query\nselect a\nfrom t\nORDER  BY a\n-- !query schema\nstruct<a:int>\n-- !query output\n1\n",
         )?;
         assert_eq!(s[0].query, "select a\nfrom t\nORDER  BY a");
-        assert!(s[0].is_ordered());
+        assert!(s[0].text_sorted());
         Ok(())
+    }
+
+    #[test]
+    fn text_fallback_counts_only_top_level_order_by() {
+        assert!(text_sorted("select * from t order by a"));
+        assert!(text_sorted("DESCRIBE EXTENDED t"));
+        assert!(text_sorted(
+            "with c as (select 1) select * from c -- x\n order by 1"
+        ));
+        assert!(!text_sorted(
+            "select a, row_number() over (order by a) from t"
+        ));
+        assert!(!text_sorted(
+            "select count(*) from (select * from t order by a)"
+        ));
+        assert!(!text_sorted("select 'order by' as x, `order by` from t"));
+        assert!(!text_sorted("select /* order by */ 1"));
     }
 
     #[test]

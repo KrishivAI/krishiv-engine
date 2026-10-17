@@ -24,6 +24,12 @@ expression: "to_json_string(&to_json(&run, \"v4.2.0\", &manifest))?"
     "excluded_since_freeze": 1,
     "frozen": true
   },
+  "failed_files": [
+    {
+      "error": "bad",
+      "file": "w"
+    }
+  ],
   "files": [
     {
       "file": "a",
@@ -39,6 +45,7 @@ expression: "to_json_string(&to_json(&run, \"v4.2.0\", &manifest))?"
         "passed": 1,
         "total": 2
       },
+      "runs": 2,
       "statements": 4,
       "unclassified_errors": 1
     }
@@ -47,6 +54,7 @@ expression: "to_json_string(&to_json(&run, \"v4.2.0\", &manifest))?"
   "spark_tag": "v4.2.0",
   "totals": {
     "files_excluded": 1,
+    "files_failed": 1,
     "files_run": 1,
     "files_without_expected_output": 1,
     "negative": {
@@ -61,7 +69,8 @@ expression: "to_json_string(&to_json(&run, \"v4.2.0\", &manifest))?"
       "passed": 1,
       "total": 2
     },
-    "statements": 4
+    "statements": 4,
+    "unclassified_errors": 1
   },
   "unregistered_error_classes": [
     "NOT_A_CLASS"
