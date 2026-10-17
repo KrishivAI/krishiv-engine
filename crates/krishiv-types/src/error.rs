@@ -11,13 +11,15 @@
 //! | negative scale (from Arrow) | `NEGATIVE_SCALE_DISALLOWED` |
 //! | malformed type string | `PARSE_SYNTAX_ERROR` |
 //! | empty type string | `PARSE_EMPTY_STATEMENT` |
+//! | unterminated `/*` comment | `UNCLOSED_BRACKETED_COMMENT` |
+//! | non-ASCII unquoted name | `INVALID_IDENTIFIER` |
 //! | unknown type name | `UNSUPPORTED_DATATYPE` |
 //! | a Spark type Krishiv does not support yet | `KRISHIV_UNSUPPORTED_FEATURE` |
 
 use krishiv_common::error::{
-    DecimalPrecisionExceedsMaxPrecision, KrishivError, KrishivUnsupportedFeature,
-    LegacyErrorTemp1228, NegativeScaleDisallowed, ParseEmptyStatement, ParseSyntaxError,
-    UnsupportedDatatype,
+    DecimalPrecisionExceedsMaxPrecision, InvalidIdentifier, KrishivError,
+    KrishivUnsupportedFeature, LegacyErrorTemp1228, NegativeScaleDisallowed, ParseEmptyStatement,
+    ParseSyntaxError, UnclosedBracketedComment, UnsupportedDatatype,
 };
 
 use crate::DecimalType;
@@ -35,10 +37,10 @@ pub(crate) fn precision_exceeds_max(precision: &str) -> KrishivError {
 }
 
 /// `_LEGACY_ERROR_TEMP_1228`.
-pub(crate) fn scale_exceeds_precision(precision: u32, scale: u32) -> KrishivError {
+pub(crate) fn scale_exceeds_precision(precision: &str, scale: &str) -> KrishivError {
     LegacyErrorTemp1228 {
-        scale: scale.to_string(),
-        precision: precision.to_string(),
+        scale: scale.to_owned(),
+        precision: precision.to_owned(),
     }
     .into()
 }
@@ -48,6 +50,19 @@ pub(crate) fn negative_scale(scale: i64) -> KrishivError {
     NegativeScaleDisallowed {
         scale: scale.to_string(),
         sql_conf: "\"spark.sql.legacy.allowNegativeScaleOfDecimal\"".to_owned(),
+    }
+    .into()
+}
+
+/// `UNCLOSED_BRACKETED_COMMENT`.
+pub(crate) fn unclosed_comment() -> KrishivError {
+    UnclosedBracketedComment {}.into()
+}
+
+/// `INVALID_IDENTIFIER`, for an unquoted name that is not ASCII.
+pub(crate) fn invalid_identifier(ident: &str) -> KrishivError {
+    InvalidIdentifier {
+        ident: ident.to_owned(),
     }
     .into()
 }

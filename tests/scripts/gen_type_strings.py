@@ -70,6 +70,13 @@ DDL = [
     "interval year to month", "interval day to second", "variant", "time", "string collate utf8_lcase",
     # malformed
     "", "foo", "int,", "int int", "1", "`int`", "timestamp(3)",
+    "timestamp with time zone", "timestamp_ntz(3)", "binary(5)", "decimal (10,2)", "string collate utf8_binary",
+    # lexer: comments, Unicode whitespace and case folding, backquotes, number tokens
+    "int /* c */", "int -- c", "/* c */ int", "int--c", "int /* a /* b */ c */", "int /* unclosed", "int\n-- c\n",
+    "int\u00a0", "\u3000int", "int\u2028", "\u200bint", "\u0131nt", "\u017ftring", "\u00e9", "int\u00e9",
+    "`a``b`", "`int", "``", "`int`(1)",
+    ".5", "1.", "1e5", "10L", "1a", "decimal(10L,2)", "decimal(1e1,0)", "decimal(.5,0)",
+    "decimal(5,99999999999)", "decimal(99999999999)",
 ]
 
 DECIMALS = [(38, 38), (38, 0), (1, 0), (18, 18), (39, 0), (0, 0), (5, 6), (10, -1), (100, 0)]

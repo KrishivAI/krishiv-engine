@@ -4,13 +4,11 @@
 //! Follows Spark's `dataType` grammar for the types in [`DataType`]: a type
 //! name, optionally followed by `(` integer `,` ... `)`, plus the multi-word
 //! forms `TIMESTAMP WITH LOCAL TIME ZONE` and `TIMESTAMP WITHOUT TIME ZONE`.
-//! Keywords are case-insensitive. Nested, interval, char/varchar, variant,
-//! void, time and collated string types are recognized and rejected with
-//! `KRISHIV_UNSUPPORTED_FEATURE`. SQL comments inside a type string are not
-//! supported.
-
-use std::iter::Peekable;
-use std::str::CharIndices;
+//! The lexer follows Spark's: case-insensitive keywords, Unicode whitespace,
+//! `--` and nested `/* */` comments, backquoted identifiers and numeric
+//! literal tokens. Nested, interval, char/varchar, variant, void, time and
+//! collated string types are recognized and rejected with
+//! `KRISHIV_UNSUPPORTED_FEATURE`.
 
 use crate::error::{self, Result};
 use crate::{DataType, DecimalType};
@@ -28,21 +26,17 @@ use crate::{DataType, DecimalType};
 /// ```
 ///
 /// # Errors
-/// `PARSE_SYNTAX_ERROR` / `PARSE_EMPTY_STATEMENT` for a malformed string,
-/// the Spark decimal bound errors, `UNSUPPORTED_DATATYPE` for an unknown type
-/// and `KRISHIV_UNSUPPORTED_FEATURE` for a Spark type not supported yet (see
-/// [`crate::error`]).
+/// `PARSE_SYNTAX_ERROR` / `PARSE_EMPTY_STATEMENT` /
+/// `UNCLOSED_BRACKETED_COMMENT` / `INVALID_IDENTIFIER` for a malformed
+/// string, the Spark decimal bound errors, `UNSUPPORTED_DATATYPE` for an
+/// unknown type and `KRISHIV_UNSUPPORTED_FEATURE` for a Spark type not
+/// supported yet (see [`crate::error`]).
 pub fn parse_data_type(input: &str) -> Result<DataType> {
-    let mut p = Parser {
-        lexer: Lexer {
-            src: input,
-            chars: input.char_indices().peekable(),
-        },
-        peeked: None,
-    };
-    if p.peek().is_none() {
+    let tokens = Lexer { src: input, pos: 0 }.tokens()?;
+    if tokens.is_empty() {
         return Err(error::empty_statement());
     }
+    let mut p = Parser { tokens, pos: 0 };
     let data_type = p.data_type()?;
     match p.next() {
         None => Ok(data_type),
@@ -59,22 +53,29 @@ enum Kind {
     Integer,
     /// A single punctuation character.
     Punct(char),
-    /// Any other token (a non-integer number, an unknown character).
+    /// Any other token (a numeric literal, an unknown character).
     Other,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Token<'a> {
     kind: Kind,
-    /// The token's text (for a quoted identifier, without the backquotes).
-    text: &'a str,
+    /// The token's text (for a quoted identifier, unescaped and without the
+    /// backquotes).
+    text: String,
     /// The token as written, for error messages.
     raw: &'a str,
 }
 
 impl Token<'_> {
+    /// Spark folds keywords with `Character.toUpperCase` per character, so
+    /// `ınt` (dotless i) is `INT`.
+    fn folded(&self) -> String {
+        self.text.chars().map(fold_char).collect()
+    }
+
     fn is_keyword(&self, keyword: &str) -> bool {
-        self.kind == (Kind::Word { quoted: false }) && self.text.eq_ignore_ascii_case(keyword)
+        self.kind == (Kind::Word { quoted: false }) && self.folded().eq_ignore_ascii_case(keyword)
     }
 
     fn syntax_error(&self) -> krishiv_common::error::KrishivError {
@@ -82,84 +83,197 @@ impl Token<'_> {
     }
 }
 
+fn fold_char(c: char) -> char {
+    let mut up = c.to_uppercase();
+    match (up.next(), up.next()) {
+        (Some(u), None) => u,
+        _ => c,
+    }
+}
+
+/// Spark's `WS` token: ASCII whitespace plus the Unicode space separators.
+fn is_spark_whitespace(c: char) -> bool {
+    c.is_ascii_whitespace()
+        || matches!(
+            c,
+            '\u{0B}' | '\u{A0}' | '\u{1680}' | '\u{2000}'..='\u{200A}'
+        )
+        || matches!(
+            c,
+            '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
+        )
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
 struct Lexer<'a> {
     src: &'a str,
-    chars: Peekable<CharIndices<'a>>,
+    pos: usize,
 }
 
 impl<'a> Lexer<'a> {
-    fn slice(&self, start: usize, end: usize) -> &'a str {
-        self.src.get(start..end).unwrap_or_default()
+    fn rest(&self) -> &'a str {
+        self.src.get(self.pos..).unwrap_or_default()
     }
 
-    /// Consumes characters while `pred` holds; returns the end offset.
-    fn eat_while(&mut self, pred: impl Fn(char) -> bool) -> usize {
-        while let Some(&(_, c)) = self.chars.peek() {
-            if !pred(c) {
-                break;
-            }
-            self.chars.next();
-        }
-        self.chars.peek().map_or(self.src.len(), |&(i, _)| i)
+    /// Length in bytes of the longest prefix of `rest()[from..]` whose chars
+    /// satisfy `pred`.
+    fn span(&self, from: usize, pred: impl Fn(char) -> bool) -> usize {
+        let tail = self.rest().get(from..).unwrap_or_default();
+        tail.find(|c| !pred(c)).unwrap_or(tail.len())
     }
 
-    fn next_token(&mut self) -> Option<Token<'a>> {
-        self.eat_while(|c| c.is_ascii_whitespace() || c == '\u{0B}');
-        let (start, c) = self.chars.next()?;
-        let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
-        let unquoted = |kind, raw| Token {
+    fn take(&mut self, len: usize, kind: Kind) -> Token<'a> {
+        let raw = self.rest().get(..len).unwrap_or_default();
+        self.pos += len;
+        Token {
             kind,
-            text: raw,
+            text: raw.to_owned(),
             raw,
-        };
-        let token = if is_word(c) {
-            let end = self.eat_while(is_word);
-            let text = self.slice(start, end);
-            if !text.bytes().all(|b| b.is_ascii_digit()) {
-                unquoted(Kind::Word { quoted: false }, text)
-            } else if self.chars.peek().is_some_and(|&(_, c)| c == '.') {
-                // A decimal literal such as `1.5` is a single token.
-                self.chars.next();
-                let end = self.eat_while(is_word);
-                unquoted(Kind::Other, self.slice(start, end))
+        }
+    }
+
+    fn tokens(mut self) -> Result<Vec<Token<'a>>> {
+        let mut out = Vec::new();
+        while self.skip_trivia()? {
+            out.push(self.token());
+        }
+        Ok(out)
+    }
+
+    /// Skips whitespace and comments; returns whether a token follows.
+    fn skip_trivia(&mut self) -> Result<bool> {
+        loop {
+            self.pos += self.span(0, is_spark_whitespace);
+            let rest = self.rest();
+            if rest.starts_with("--") {
+                self.pos += rest.find('\n').unwrap_or(rest.len());
+            } else if rest.starts_with("/*") {
+                // Bracketed comments nest, as in Spark.
+                let mut depth = 0_usize;
+                let mut i = 0;
+                loop {
+                    let tail = rest.get(i..).unwrap_or_default();
+                    if tail.is_empty() {
+                        return Err(error::unclosed_comment());
+                    } else if tail.starts_with("/*") {
+                        depth += 1;
+                        i += 2;
+                    } else if tail.starts_with("*/") {
+                        depth -= 1;
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        i += tail.chars().next().map_or(1, char::len_utf8);
+                    }
+                }
+                self.pos += i;
             } else {
-                unquoted(Kind::Integer, text)
+                return Ok(!rest.is_empty());
             }
+        }
+    }
+
+    fn token(&mut self) -> Token<'a> {
+        let rest = self.rest();
+        let mut chars = rest.chars();
+        let c = chars.next().unwrap_or(' ');
+        let starts_number =
+            c.is_ascii_digit() || (c == '.' && chars.next().is_some_and(|d| d.is_ascii_digit()));
+        if starts_number {
+            self.number()
+        } else if is_word_char(c) {
+            self.take(self.span(0, is_word_char), Kind::Word { quoted: false })
         } else if c == '`' {
-            let end = self.eat_while(|c| c != '`');
-            let close = self.chars.next().map_or(end, |(i, _)| i + 1);
-            Token {
-                kind: Kind::Word { quoted: true },
-                text: self.slice(start + 1, end),
-                raw: self.slice(start, close),
-            }
+            self.quoted()
         } else {
             let kind = if c.is_ascii_punctuation() {
                 Kind::Punct(c)
             } else {
                 Kind::Other
             };
-            unquoted(kind, self.slice(start, start + c.len_utf8()))
+            self.take(c.len_utf8(), kind)
+        }
+    }
+
+    /// Spark's numeric tokens: `INTEGER_VALUE`, decimal and exponent
+    /// literals, and suffixed literals (`10L`, `1.5BD`). Digits followed by
+    /// other word characters form an identifier (`1a`).
+    fn number(&mut self) -> Token<'a> {
+        let digit = |c: char| c.is_ascii_digit();
+        let rest = self.rest().as_bytes();
+        let mut end = self.span(0, digit);
+        let mut literal = false;
+        if rest.get(end) == Some(&b'.') {
+            end += 1 + self.span(end + 1, digit);
+            literal = true;
+        }
+        if matches!(rest.get(end), Some(b'e' | b'E')) {
+            let sign = usize::from(matches!(rest.get(end + 1), Some(b'+' | b'-')));
+            let exp = self.span(end + 1 + sign, digit);
+            if exp > 0 {
+                end += 1 + sign + exp;
+                literal = true;
+            }
+        }
+        let tail = self.span(end, is_word_char);
+        let suffix = self.rest().get(end..end + tail).unwrap_or_default();
+        let suffixes: &[&str] = if literal {
+            &["D", "F", "BD"]
+        } else {
+            &["L", "S", "Y", "D", "F", "BD"]
         };
-        Some(token)
+        if suffixes.iter().any(|s| s.eq_ignore_ascii_case(suffix)) {
+            self.take(end + tail, Kind::Other)
+        } else if literal {
+            self.take(end, Kind::Other)
+        } else if tail == 0 {
+            self.take(end, Kind::Integer)
+        } else {
+            self.take(end + tail, Kind::Word { quoted: false })
+        }
+    }
+
+    /// A backquoted identifier; ``` `` ``` inside it is a literal backquote.
+    /// An unterminated backquote is a token of its own.
+    fn quoted(&mut self) -> Token<'a> {
+        let rest = self.rest();
+        let mut text = String::new();
+        let mut i = 1;
+        while let Some(off) = rest.get(i..).and_then(|t| t.find('`')) {
+            text.push_str(rest.get(i..i + off).unwrap_or_default());
+            i += off + 1;
+            if rest.get(i..).is_some_and(|t| t.starts_with('`')) {
+                text.push('`');
+                i += 1;
+            } else {
+                let mut t = self.take(i, Kind::Word { quoted: true });
+                t.text = text;
+                return t;
+            }
+        }
+        self.take(1, Kind::Other)
     }
 }
 
 struct Parser<'a> {
-    lexer: Lexer<'a>,
-    peeked: Option<Option<Token<'a>>>,
+    tokens: Vec<Token<'a>>,
+    pos: usize,
 }
 
 impl<'a> Parser<'a> {
-    fn peek(&mut self) -> Option<Token<'a>> {
-        *self.peeked.get_or_insert_with(|| self.lexer.next_token())
+    fn peek(&self) -> Option<&Token<'a>> {
+        self.tokens.get(self.pos)
     }
 
     fn next(&mut self) -> Option<Token<'a>> {
-        match self.peeked.take() {
-            Some(t) => t,
-            None => self.lexer.next_token(),
-        }
+        let t = self.tokens.get(self.pos).cloned();
+        self.pos += 1;
+        t
     }
 
     /// Consumes the next token, which must satisfy `ok`.
@@ -171,9 +285,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_keywords(&mut self, keywords: &[&str]) -> Result<()> {
+    /// Consumes `keywords` after `lead`; a mismatch is reported at `lead`,
+    /// as Spark does for `TIMESTAMP WITH TIME ZONE`.
+    fn expect_keywords(&mut self, lead: &Token<'a>, keywords: &[&str]) -> Result<()> {
         for k in keywords {
-            self.expect(|t| t.is_keyword(k))?;
+            if !self.next().is_some_and(|t| t.is_keyword(k)) {
+                return Err(lead.syntax_error());
+            }
         }
         Ok(())
     }
@@ -181,20 +299,30 @@ impl<'a> Parser<'a> {
     fn data_type(&mut self) -> Result<DataType> {
         let name = self.expect(|t| matches!(t.kind, Kind::Word { .. }))?;
         let quoted = name.kind == (Kind::Word { quoted: true });
-        let lower = name.text.to_ascii_lowercase();
+        let lower = if quoted {
+            name.text
+        } else {
+            let folded = name.folded();
+            if !folded.is_ascii() {
+                return Err(error::invalid_identifier(name.raw));
+            }
+            folded.to_ascii_lowercase()
+        };
         if !quoted {
             if let Some(feature) = self.unsupported_type(&lower) {
                 return Err(error::unsupported(feature));
             }
             if lower == "timestamp" {
-                if self.peek().is_some_and(|t| t.is_keyword("with")) {
+                let lead = self.peek().cloned();
+                if let Some(lead) = lead.filter(|t| t.is_keyword("with")) {
                     self.next();
-                    self.expect_keywords(&["local", "time", "zone"])?;
+                    self.expect_keywords(&lead, &["local", "time", "zone"])?;
                     return Ok(DataType::Timestamp);
                 }
-                if self.peek().is_some_and(|t| t.is_keyword("without")) {
+                let lead = self.peek().cloned();
+                if let Some(lead) = lead.filter(|t| t.is_keyword("without")) {
                     self.next();
-                    self.expect_keywords(&["time", "zone"])?;
+                    self.expect_keywords(&lead, &["time", "zone"])?;
                     return Ok(DataType::TimestampNtz);
                 }
             }
@@ -203,14 +331,15 @@ impl<'a> Parser<'a> {
         if let Some(tok) = self.peek() {
             return Err(tok.syntax_error());
         }
+        let unsupported = || Err(unsupported_data_type(&lower, &args));
         if quoted {
-            return Err(unsupported_data_type(name.text, &args));
+            return unsupported();
         }
-        resolve(&lower, &args).unwrap_or_else(|| Err(unsupported_data_type(name.text, &args)))
+        resolve(&lower, &args).unwrap_or_else(unsupported)
     }
 
     /// Recognized types that are not represented yet.
-    fn unsupported_type(&mut self, lower: &str) -> Option<String> {
+    fn unsupported_type(&self, lower: &str) -> Option<String> {
         let what = match lower {
             "array" | "map" | "struct" => "nested data types",
             "interval" => "interval data types",
@@ -225,7 +354,7 @@ impl<'a> Parser<'a> {
     }
 
     /// `( INTEGER (, INTEGER)* )`, if present.
-    fn type_arguments(&mut self) -> Result<Vec<&'a str>> {
+    fn type_arguments(&mut self) -> Result<Vec<String>> {
         let mut args = Vec::new();
         if self.peek().is_some_and(|t| t.kind == Kind::Punct('(')) {
             self.next();
@@ -245,8 +374,9 @@ impl<'a> Parser<'a> {
 }
 
 /// The type named `lower` with `args`, or `None` if there is no such type.
-fn resolve(lower: &str, args: &[&str]) -> Option<Result<DataType>> {
-    let t = match (lower, args) {
+fn resolve(lower: &str, args: &[String]) -> Option<Result<DataType>> {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let t = match (lower, args.as_slice()) {
         ("boolean", []) => DataType::Boolean,
         ("tinyint" | "byte", []) => DataType::Byte,
         ("smallint" | "short", []) => DataType::Short,
@@ -267,17 +397,25 @@ fn resolve(lower: &str, args: &[&str]) -> Option<Result<DataType>> {
     Some(Ok(t))
 }
 
+/// Values too large for `u32` (Spark: an unclassified number format error)
+/// are reported with the digits as written, without leading zeros.
 fn decimal(precision: &str, scale: &str) -> Result<DataType> {
-    let Ok(p) = precision.parse::<u32>() else {
-        let digits = precision.trim_start_matches('0');
-        return Err(error::precision_exceeds_max(digits));
+    let digits = |s: &'_ str| match s.trim_start_matches('0') {
+        "" => "0".to_owned(),
+        d => d.to_owned(),
     };
-    let s = scale.parse::<u32>().unwrap_or(u32::MAX);
-    DecimalType::try_new(p, s).map(DataType::Decimal)
+    match (precision.parse::<u32>(), scale.parse::<u32>()) {
+        (Ok(p), Ok(s)) => DecimalType::try_new(p, s).map(DataType::Decimal),
+        (Ok(_), Err(_)) => Err(error::scale_exceeds_precision(
+            &digits(precision),
+            &digits(scale),
+        )),
+        (Err(_), _) => Err(error::precision_exceeds_max(&digits(precision))),
+    }
 }
 
 /// Spark renders the rejected type as `NAME(arg,...)`, upper-cased.
-fn unsupported_data_type(name: &str, args: &[&str]) -> krishiv_common::error::KrishivError {
+fn unsupported_data_type(name: &str, args: &[String]) -> krishiv_common::error::KrishivError {
     let mut s = name.to_ascii_uppercase();
     if !args.is_empty() {
         s.push('(');
