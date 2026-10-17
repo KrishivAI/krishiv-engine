@@ -10,3 +10,11 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+arrow-schema.workspace = true
+krishiv-common = { path = "../krishiv-common" }
+
+[dev-dependencies]
+arrow-array.workspace = true
+serde_json = { workspace = true, features = ["std"] }
