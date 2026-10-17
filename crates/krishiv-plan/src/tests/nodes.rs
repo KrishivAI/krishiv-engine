@@ -90,3 +90,14 @@ fn literal_equality_is_bitwise() {
     assert_ne!(Literal::Integer(1), Literal::Long(1));
     assert_ne!(Literal::Null(None), Literal::Null(Some(DataType::Integer)));
 }
+
+#[test]
+fn nan_literals_are_equal_whatever_the_payload() {
+    use crate::Literal;
+    let other_nan = f64::from_bits(f64::NAN.to_bits() ^ 1);
+    assert!(other_nan.is_nan());
+    assert_eq!(Literal::Double(f64::NAN), Literal::Double(other_nan));
+    let other_nan32 = f32::from_bits(f32::NAN.to_bits() ^ 1);
+    assert_eq!(Literal::Float(f32::NAN), Literal::Float(other_nan32));
+    assert_ne!(Literal::Double(0.0), Literal::Double(-0.0));
+}

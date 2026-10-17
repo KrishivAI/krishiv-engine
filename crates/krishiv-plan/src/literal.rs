@@ -5,9 +5,9 @@ use krishiv_types::{DataType, DecimalType};
 
 /// A literal value, in Spark's physical representation for its type.
 ///
-/// Equality compares floating-point values by their bits, so `NaN` equals
-/// itself and `0.0` differs from `-0.0`: two literals are equal exactly
-/// when they are the same literal.
+/// Equality follows Spark's `Literal.equals` (Java `Double.equals`): every
+/// `NaN` equals every other `NaN` whatever its payload, and `0.0` differs from
+/// `-0.0`.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Literal {
@@ -109,6 +109,26 @@ enum Key<'a> {
     DayTime(i64, DayTimeField, DayTimeField),
 }
 
+/// Bits of `x` with every `NaN` collapsed to one value, as Java's
+/// `Float.floatToIntBits` does; `-0.0` keeps its sign.
+pub(crate) fn canonical_f32_bits(x: f32) -> u32 {
+    if x.is_nan() {
+        f32::NAN.to_bits()
+    } else {
+        x.to_bits()
+    }
+}
+
+/// Bits of `x` with every `NaN` collapsed to one value, as Java's
+/// `Double.doubleToLongBits` does; `-0.0` keeps its sign.
+pub(crate) fn canonical_f64_bits(x: f64) -> u64 {
+    if x.is_nan() {
+        f64::NAN.to_bits()
+    } else {
+        x.to_bits()
+    }
+}
+
 impl Literal {
     fn key(&self) -> Key<'_> {
         match self {
@@ -118,8 +138,8 @@ impl Literal {
             Self::Short(v) => Key::Short(*v),
             Self::Integer(v) => Key::Integer(*v),
             Self::Long(v) => Key::Long(*v),
-            Self::Float(v) => Key::Float(v.to_bits()),
-            Self::Double(v) => Key::Double(v.to_bits()),
+            Self::Float(v) => Key::Float(canonical_f32_bits(*v)),
+            Self::Double(v) => Key::Double(canonical_f64_bits(*v)),
             Self::Decimal {
                 unscaled,
                 data_type,

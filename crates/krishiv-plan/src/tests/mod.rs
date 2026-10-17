@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! In-crate tests: they match the `#[non_exhaustive]` node enums without
-//! wildcard arms, so a new node fails to compile here until it is covered
-//! by the inventory, the generator and the mutation sites.
+//! In-crate tests. The compile-time guard for new node variants is the
+//! exhaustive matches in the child walkers (`LogicalPlan::for_each_child`,
+//! `LogicalPlan::for_each_expr`, `Expr::for_each_child`): `#[non_exhaustive]`
+//! does not apply inside this crate, so a new variant fails to compile there
+//! until it is handled.
 
 mod nodes;
