@@ -1159,6 +1159,7 @@ dependencies = [
  "arrow-array",
  "arrow-ipc",
  "arrow-schema",
+ "codspeed-criterion-compat",
  "krishiv-common",
  "krishiv-types",
  "loom",

@@ -20,8 +20,13 @@ krishiv-types = { path = "../krishiv-types" }
 thiserror.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 proptest = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
 
 [target.'cfg(loom)'.dev-dependencies]
 loom = { workspace = true, features = ["futures"] }
+
+[[bench]]
+name = "spill_file"
+harness = false
