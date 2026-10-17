@@ -8,7 +8,7 @@ Python bindings (PyO3) and the PyCapsule Arrow bridge; Python UDF runtime.
 
 ## Invariants
 - Own PyCapsule bridge via `arrow::ffi`; no `pyo3-arrow`/`arrow-pyarrow`.
-- abi3-py310 + free-threaded wheels.
+- abi3-py311 + free-threaded wheels.
 - `unsafe` allowed; every block has a `// SAFETY:` comment; runs under Miri in CI and nightly ASan/TSan (ADR 0029).
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 

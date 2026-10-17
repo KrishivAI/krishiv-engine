@@ -21,6 +21,13 @@ taplo fmt --check; typos                                                # TOML f
 Markdown is checked with markdownlint-cli2 (config in `.markdownlint-cli2.yaml`). `CLAUDE.md` lists the full set of
 checks CI runs, including `cargo deny`, `cargo xtask layering` and the size budgets.
 
+## Python versions
+
+Krishiv supports CPython 3.11 and newer (`requires-python = ">=3.11"`). The default wheel is a single abi3 wheel
+(`abi3-py311`) that runs on every CPython from 3.11 on; the free-threaded build (`cp314t`) cannot use abi3 and is
+built separately. When a new CPython is released it is added to the CI matrix; support for the oldest one is dropped
+no earlier than its end of life. See [python/README.md](python/README.md).
+
 CI runs only on GitHub-hosted runners; self-hosted runners are not used (`cargo xtask workflow-lint` enforces this).
 
 ## Developer Certificate of Origin

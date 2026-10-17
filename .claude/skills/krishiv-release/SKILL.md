@@ -25,7 +25,7 @@ Tooling is **release-plz** (config: `release-plz.toml`, everything disabled; all
 4. Gates: `cargo deny check`, `cargo xtask budgets`, `cargo msrv verify`, `cargo hack check --each-feature --workspace`,
    full test suite, upgrade tests (N reads N−1 formats).
 5. Local-only dry runs: `cargo package --list -p <crate>`, `release-plz update` (local
-   changes only), `maturin build --release` (wheels: abi3-py310 + cp313t/cp314t). `cargo publish --dry-run` is
+   changes only), `maturin build --release` (wheels: abi3-py311 + cp314t). `cargo publish --dry-run` is
    denied in settings because it shares the `cargo publish` prefix; use `cargo package` instead. `release-plz release --dry-run` is also denied by settings (`release-plz release:*`): run it only with the user's explicit approval, never on your own.
 6. SBOM (`cargo cyclonedx`) and signing (sigstore) configured, not executed against public infra.
 7. Write the release notes and a checklist of the publish commands into the PR for the user. **Stop.**
