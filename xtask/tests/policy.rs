@@ -125,9 +125,10 @@ fn ci_policy_wiring() {
         "PR nextest must use default features"
     );
     let nightly = read(".github/workflows/nightly.yml");
-    assert!(nightly.contains("[self-hosted, krishiv-heavy]"));
+    assert!(nightly.contains("runs-on: ubuntu-latest"));
+    assert!(!nightly.contains("self-hosted"));
+    assert!(!nightly.contains("krishiv-heavy"));
     assert!(nightly.contains("--all-features"));
     assert!(nightly.contains("sccache"));
     assert!(!nightly.contains("/home/"));
-    assert!(!nightly.contains("ubuntu-latest"));
 }

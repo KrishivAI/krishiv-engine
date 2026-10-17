@@ -21,8 +21,8 @@ env:
 # P2 CI policy (P2-T145, ADR 0029 CI topology):
 # - PR gates run on ubuntu-latest with DEFAULT features only (plus
 #   `cargo hack --each-feature check`, check not test). `--all-features` test runs,
-#   coverage, mutation, fuzz and macro benchmarks run nightly on the self-hosted
-#   `krishiv-heavy` runner (nightly.yml, ops/ci-runner.md).
+#   coverage, mutation, fuzz and macro benchmarks run nightly on GitHub-hosted
+#   runners (nightly.yml).
 # - Docs/bench/plan-only PRs skip the Rust jobs (`changes` job). `changes` and
 #   `policy` only build the small `xtask` crate; they always run so that DCO
 #   and the size cap still apply to docs PRs.

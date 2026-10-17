@@ -1,11 +1,10 @@
 name: Nightly (heavy)
 
-# Heavy jobs run on the self-hosted `krishiv-heavy` runner (ops/ci-runner.md,
-# ADR 0029 CI topology), never on pull_request: untrusted code must not reach
-# the runner (`cargo xtask workflow-lint` enforces both rules).
+# Heavy jobs run on GitHub-hosted runners (ADR 0029 CI topology); `cargo xtask
+# workflow-lint` rejects any other runner kind.
 # Coverage (cargo-llvm-cov), mutation (cargo-mutants), fuzz and the macro
 # benchmarks (TPC-H/TPC-DS/ClickBench) are added here by their own tasks
-# (P2-T105/T107/T108/T119) as further jobs with the same runner labels.
+# (P2-T105/T107/T108/T119) as further jobs with the same runner.
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -22,23 +21,17 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: 1
-  # Shared compiler cache on the runner (persists across jobs and runs).
+  # Compiler cache (per job; hosted runners do not persist it).
   RUSTC_WRAPPER: sccache
   SCCACHE_CACHE_SIZE: 20G
 
 jobs:
   all-features:
     if: github.repository == 'KrishivAI/krishiv-engine'
-    runs-on: [self-hosted, krishiv-heavy]
-    timeout-minutes: 120
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
-      - name: Shared sccache dir on the runner
-        env:
-          SCCACHE_DIR_VAR: ${{ vars.SCCACHE_DIR }}
-        run: echo "SCCACHE_DIR=${SCCACHE_DIR_VAR:-$RUNNER_TOOL_CACHE/sccache-krishiv}" >> "$GITHUB_ENV"
-      - name: Tools on PATH (runner service has a minimal PATH)
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: Pinned tools (sccache, nextest)

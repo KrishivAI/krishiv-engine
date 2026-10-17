@@ -1,15 +1,37 @@
 # Krishiv
 
-**Krishiv** is a Spark-compatible batch & streaming engine written in Rust.
+> **Status: Pre-alpha. Under active construction; not usable yet.** There is no query engine, no release and no
+> stable API. Everything may change without notice.
+
+**Krishiv** is a Rust-native, Spark-compatible batch and streaming engine (Spark 4.x semantics), with incremental
+materialized views and queryable streaming state.
+
 - Runs embedded, single-node or distributed.
-- APIs: Python (PySpark-compatible), Rust, SQL, Spark Connect, Flight SQL and MCP.
-- Incremental materialized views and queryable streaming state.
+- Planned APIs: Python (PySpark-compatible), Rust, SQL, Spark Connect, Flight SQL and MCP.
 
-> Private repository. Status: **P0 foundation in progress** on branch `p0/foundation` (PR #1); no query engine yet.
-> What exists: a 30-crate layered workspace skeleton (layering, dependency, size and lint gates in CI), the
-> Spark error-class and config registries (`krishiv-common`), a testkit with Spark golden/hash fixtures and a
-> batch==stream harness, a simulation seam, a benchmark harness with DuckDB and Spark baselines, a Python package
-> and Svelte UI skeleton, and the Claude Code setup under `.claude/`. Nothing is published anywhere.
-> Design, decisions, plans and status live in the private repo `KrishivAI/krishiv-internal` (cloned alongside as `../krishiv-internal`).
+## Current state
 
-License: to be decided (ADR 0033, proposed Apache-2.0).
+Phase P2a is in progress. The repository has a layered multi-crate workspace with layering, dependency, size and
+lint gates in CI, the Spark error-class and config registries, a test kit with Spark golden fixtures, a benchmark
+harness, and Python package and UI skeletons.
+
+## Design records
+
+References such as "ADR 0034" or "spec chapter" point to design records that are kept in a private repository for
+now. See [CONTRIBUTING.md](CONTRIBUTING.md) for how this affects contributors.
+
+## Contributing and community
+
+- [Contributing guide](CONTRIBUTING.md) (build, test, DCO sign-off, PR rules)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security policy](SECURITY.md)
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE) (see also [NOTICE](NOTICE)). Contributions require a DCO
+sign-off (`git commit -s`).
+
+## Trademarks
+
+Apache Spark is a trademark of the Apache Software Foundation. Krishiv is an independent project and is not
+affiliated with or endorsed by the Apache Software Foundation.
