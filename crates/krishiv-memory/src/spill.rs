@@ -276,9 +276,10 @@ impl SpillOwner {
 
     /// Whether any of this owner's signals has a pending request.
     pub fn pending(&self) -> bool {
-        self.live_signals()
+        // No allocation: drivers call this at every batch boundary.
+        lock(&self.signals)
             .iter()
-            .any(|s| s.spill_requested().is_some())
+            .any(|s| s.upgrade().is_some_and(|s| s.spill_requested().is_some()))
     }
 
     /// Completes after the next request to any of this owner's signals.
