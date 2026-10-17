@@ -42,6 +42,8 @@ fn exercise(plan: LogicalPlan) {
     let plan = Plan::try_new(plan).unwrap();
     let copy = plan.clone();
     assert_eq!(copy, plan);
+    assert!(copy.structurally_eq(&plan));
+    assert_eq!(plan.subtree_hashes()[0].1, plan.structural_hash());
     assert!(!plan.root().is_resolved());
     let root = Arc::clone(plan.root());
     let same = Arc::clone(&root)
