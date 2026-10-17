@@ -2,12 +2,14 @@
 //! Conformance test harness for Krishiv (P0-T20..T23).
 //!
 //! * [`hash_fixture`]: Spark `hash()`/`xxhash64()` golden fixtures (ADR 0010).
+//! * [`fn_matrix`]: Spark function-matrix fixtures and the coverage-matrix report (P2-T106a).
 //! * [`batch_stream`]: batch == bounded-stream invariant harness (ADR 0015/0017).
 //! * [`golden`]: Spark `SQLQueryTestSuite` golden-file enumeration.
 //! * [`slt`]: sqllogictest runner stub.
 #![forbid(unsafe_code)]
 
 pub mod batch_stream;
+pub mod fn_matrix;
 pub mod golden;
 pub mod hash_fixture;
 pub mod slt;
