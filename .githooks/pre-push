@@ -1,0 +1,40 @@
+#!/usr/bin/env sh
+# SPDX-License-Identifier: Apache-2.0
+# Krishiv pre-push (P2-T134): refuse pushes to main and non-fast-forward
+# (force) pushes. Interim guard until branch protection is available on the
+# org plan. Override deliberately with KRISHIV_ALLOW_MAIN_PUSH=1.
+# Install with `cargo xtask setup`.
+set -eu
+
+if [ "${KRISHIV_ALLOW_MAIN_PUSH:-0}" = "1" ]; then
+  echo "pre-push: KRISHIV_ALLOW_MAIN_PUSH=1, guard bypassed" >&2
+  exit 0
+fi
+
+zero=0000000000000000000000000000000000000000
+status=0
+# stdin: <local ref> <local sha> <remote ref> <remote sha> per ref being pushed.
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main | refs/heads/master)
+      echo "pre-push: refusing to push '$local_ref' to $remote_ref (set KRISHIV_ALLOW_MAIN_PUSH=1 to override)" >&2
+      status=1
+      continue
+      ;;
+  esac
+  # Branch deletion or creation cannot rewrite history.
+  if [ "$local_sha" = "$zero" ] || [ "$remote_sha" = "$zero" ]; then
+    continue
+  fi
+  case "$remote_ref" in
+    refs/heads/*)
+      # A remote commit we do not have, or one that is not an ancestor of what
+      # we push, means this push rewrites remote history.
+      if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+        echo "pre-push: refusing non-fast-forward (force) push to $remote_ref (set KRISHIV_ALLOW_MAIN_PUSH=1 to override)" >&2
+        status=1
+      fi
+      ;;
+  esac
+done
+exit "$status"
