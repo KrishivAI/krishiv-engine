@@ -42,18 +42,62 @@ impl Target {
     #[must_use]
     pub fn best() -> Self {
         static BEST: OnceLock<Target> = OnceLock::new();
-        *BEST.get_or_init(|| {
-            Self::ALL
-                .into_iter()
-                .rev()
-                .find(|t| t.is_available())
-                .unwrap_or(Self::Baseline)
-        })
+        *BEST.get_or_init(|| Self::select(has_v3(), has_v4_extra()))
+    }
+
+    /// The target chosen for a CPU with (`v3`) the x86-64-v3 features and
+    /// (`v4_extra`) the AVX-512 additions of x86-64-v4. Pure, so the choice
+    /// is testable on any machine.
+    #[must_use]
+    pub fn select(v3: bool, v4_extra: bool) -> Self {
+        match (v3, v4_extra) {
+            (true, true) => Self::X86_64V4,
+            (true, false) => Self::X86_64V3,
+            (false, _) => Self::Baseline,
+        }
     }
 
     /// The targets this CPU supports, baseline first.
     pub fn available() -> impl Iterator<Item = Self> {
         Self::ALL.into_iter().filter(|t| t.is_available())
+    }
+
+    /// The target's name: `baseline`, `x86_64v3` or `x86_64v4`.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::X86_64V3 => "x86_64v3",
+            Self::X86_64V4 => "x86_64v4",
+        }
+    }
+
+    /// Test-harness guard: the targets named in `required` (a comma
+    /// separated list of [`Target::name`]s, typically the
+    /// `KRISHIV_REQUIRE_TARGETS` environment variable) must all be available,
+    /// so a CI job cannot silently skip a code path its hardware should run.
+    ///
+    /// # Errors
+    /// A message naming unknown or unavailable targets.
+    pub fn check_required(required: &str) -> Result<(), String> {
+        let bad: Vec<&str> = required
+            .split(',')
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .filter(|n| {
+                !Self::ALL
+                    .into_iter()
+                    .any(|t| t.name() == *n && t.is_available())
+            })
+            .collect();
+        if bad.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "required kernel targets unknown or unavailable on this CPU: {}",
+                bad.join(", ")
+            ))
+        }
     }
 }
 
@@ -155,5 +199,25 @@ mod tests {
         }
         // v4 implies v3.
         assert!(!Target::X86_64V4.is_available() || Target::X86_64V3.is_available());
+    }
+
+    #[test]
+    fn selection_prefers_avx512_when_present() {
+        assert_eq!(Target::select(true, true), Target::X86_64V4);
+        assert_eq!(Target::select(true, false), Target::X86_64V3);
+        assert_eq!(Target::select(false, true), Target::Baseline);
+        assert_eq!(Target::select(false, false), Target::Baseline);
+        assert_eq!(Target::best(), Target::select(has_v3(), has_v4_extra()));
+    }
+
+    #[test]
+    fn required_targets() {
+        assert!(Target::check_required("").is_ok());
+        assert!(Target::check_required(" baseline ,").is_ok());
+        let e = Target::check_required("baseline,avx9").unwrap_err();
+        assert!(e.contains("avx9") && !e.contains("baseline"));
+        for t in Target::ALL {
+            assert_eq!(Target::check_required(t.name()).is_ok(), t.is_available());
+        }
     }
 }

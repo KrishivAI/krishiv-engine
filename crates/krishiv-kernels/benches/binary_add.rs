@@ -2,9 +2,12 @@
 //! 1M-row kernel benchmarks, one per specialization path, against the
 //! row-at-a-time reference ("generic path"); run under CodSpeed in CI.
 //!
-//! Design goals: the no-null fast path is at least 1.2x the generic path;
-//! `Unchecked`/`JavaWrap` cost the same; `AnsiError` stays close to them;
-//! the decimal 64-bit hook beats the 128-bit path.
+//! Design goals: the no-null fast path is at least 1.2x the generic
+//! (row-at-a-time reference) path; `Unchecked`/`JavaWrap` cost the same;
+//! `AnsiError` stays close to them; the decimal 64-bit hook beats the
+//! 128-bit path. `.../nulls_path` runs the nulls-aware specialization on the
+//! same no-null data, isolating the `NULLS` axis (informational: with
+//! compute-through-nulls the two are expected to be close).
 
 #![expect(
     missing_docs,
@@ -22,12 +25,17 @@ use arrow_array::{Decimal128Array, Float64Array, Int64Array, PrimitiveArray};
 use criterion::{Criterion, criterion_group, criterion_main};
 use krishiv_kernels::decimal::{DecimalPlan, DecimalStorage, decimal_binary};
 use krishiv_kernels::float::{Equal, compare};
-use krishiv_kernels::integer::binary;
+use krishiv_kernels::integer::{binary, binary_nulls_path};
 use krishiv_kernels::reference;
 use krishiv_kernels::{
     Add, AnsiError, ArithOp, JavaWrap, KernelCtx, NullOnOverflow, Operand, Overflow, Target,
     Unchecked,
 };
+
+/// The engine's shipped allocator, so 8 MB outputs reuse memory instead of
+/// paying fresh-page faults on every iteration.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const ROWS: i64 = 1 << 20;
 
@@ -62,6 +70,25 @@ fn add<O: Overflow>(
     });
 }
 
+fn nulls_path<O: Overflow>(
+    c: &mut Criterion,
+    name: &str,
+    a: &Int64Array,
+    b: &Int64Array,
+    ctx: &KernelCtx,
+) {
+    c.bench_function(name, |bench| {
+        bench.iter(|| {
+            binary_nulls_path::<Int64Type, Add, O>(
+                Operand::Array(black_box(a)),
+                Operand::Array(black_box(b)),
+                ctx,
+            )
+            .unwrap()
+        });
+    });
+}
+
 fn integer(c: &mut Criterion) {
     let ctx = KernelCtx::new();
     let (a, b) = (ints(None, 7919), ints(None, 104_729));
@@ -73,6 +100,10 @@ fn integer(c: &mut Criterion) {
     add::<Unchecked>(c, "i64_add/nulls_10pct/unchecked", &an, &bn, &ctx);
     add::<JavaWrap>(c, "i64_add/nulls_10pct/java_wrap", &an, &bn, &ctx);
     add::<AnsiError>(c, "i64_add/nulls_10pct/ansi", &an, &bn, &ctx);
+    // Same no-null data through the nulls-aware specialization: isolates
+    // the `NULLS` axis.
+    nulls_path::<Unchecked>(c, "i64_add/no_nulls/unchecked/nulls_path", &a, &b, &ctx);
+    nulls_path::<AnsiError>(c, "i64_add/no_nulls/ansi/nulls_path", &a, &b, &ctx);
     let base = KernelCtx::with_target(Target::Baseline).unwrap();
     add::<AnsiError>(c, "i64_add/no_nulls/ansi/baseline_target", &a, &b, &base);
     c.bench_function("i64_add/no_nulls/ansi/scalar", |bench| {

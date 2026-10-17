@@ -13,6 +13,7 @@ cargo-fuzz = true
 
 [dependencies]
 arrow-array = { version = "60", default-features = false }
+arrow-buffer = { version = "60", default-features = false }
 krishiv-kernels = { path = ".." }
 libfuzzer-sys = "0.4.13"
 

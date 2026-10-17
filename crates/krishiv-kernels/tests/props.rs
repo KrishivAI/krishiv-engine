@@ -22,6 +22,7 @@ use std::fmt::Debug;
 
 use arrow_array::types::{Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type};
 use arrow_array::{ArrowPrimitiveType, PrimitiveArray};
+use arrow_buffer::{NullBuffer, ScalarBuffer};
 use krishiv_kernels::decimal::{DecimalPlan, DecimalStorage, decimal_binary};
 use krishiv_kernels::float::{self, CompareOp, Equal, Greater, GreaterEq, Less, LessEq};
 use krishiv_kernels::integer::{SparkIntegral, binary};
@@ -54,7 +55,11 @@ fn config() -> ProptestConfig {
     }
 }
 
+/// Every available target. `KRISHIV_REQUIRE_TARGETS` (e.g.
+/// `baseline,x86_64v3`) makes a missing target a failure, not a skip.
 fn contexts() -> Vec<KernelCtx> {
+    let required = std::env::var("KRISHIV_REQUIRE_TARGETS").unwrap_or_default();
+    Target::check_required(&required).unwrap();
     Target::available()
         .map(|t| KernelCtx::with_target(t).unwrap())
         .collect()
@@ -68,14 +73,15 @@ struct Column<T> {
     offset: usize,
 }
 
-impl<T: Copy> Column<T> {
+impl<T: arrow_buffer::ArrowNativeType> Column<T> {
+    /// The sliced array. The drawn value stays in the slot under a NULL
+    /// (Arrow leaves those slots arbitrary), so overflowing values hide
+    /// under NULLs and must never raise.
     fn array<P: ArrowPrimitiveType<Native = T>>(&self) -> PrimitiveArray<P> {
-        let all: PrimitiveArray<P> = self
-            .values
-            .iter()
-            .zip(&self.valid)
-            .map(|(v, ok)| ok.then_some(*v))
-            .collect();
+        let all = PrimitiveArray::<P>::new(
+            ScalarBuffer::from(self.values.clone()),
+            Some(NullBuffer::from(self.valid.clone())),
+        );
         all.slice(self.offset, self.values.len() - self.offset)
     }
 }
@@ -94,7 +100,7 @@ struct Case<T> {
     shape: Shape<T>,
 }
 
-impl<T: Copy> Case<T> {
+impl<T: arrow_buffer::ArrowNativeType> Case<T> {
     fn with<P: ArrowPrimitiveType<Native = T>, R>(
         &self,
         f: impl Fn(Operand<'_, P>, Operand<'_, P>) -> R,
@@ -309,8 +315,9 @@ fn decimal_case() -> impl Strategy<Value = DecimalCase> {
     (op, ty.clone(), ty, 1..=38_u8).prop_flat_map(|(op, l, r, out_p)| {
         let max = |p: u8| 10_i128.pow(u32::from(p)) - 1;
         let (ml, mr) = (max(l.0), max(r.0));
-        // One value strategy covering both sides' precisions; values beyond
-        // a side's precision are clamped below.
+        // One value strategy covering both sides' precisions. Valid values
+        // are clamped to their side's precision below; values under NULLs
+        // keep any i128, including ones outside the declared precision.
         let m = ml.max(mr);
         let v = prop_oneof![
             Just(m),
@@ -318,14 +325,19 @@ fn decimal_case() -> impl Strategy<Value = DecimalCase> {
             Just(0_i128),
             Just(1),
             -1000..1000_i128,
-            -m..=m
+            -m..=m,
+            any::<i128>(),
         ];
         case(v).prop_map(move |mut c| {
-            for x in &mut c.l.values {
-                *x = (*x).clamp(-ml, ml);
+            for (x, ok) in c.l.values.iter_mut().zip(&c.l.valid) {
+                if *ok {
+                    *x = (*x).clamp(-ml, ml);
+                }
             }
-            for x in &mut c.r.values {
-                *x = (*x).clamp(-mr, mr);
+            for (x, ok) in c.r.values.iter_mut().zip(&c.r.valid) {
+                if *ok {
+                    *x = (*x).clamp(-mr, mr);
+                }
             }
             c.shape = match c.shape {
                 Shape::ArrayScalar(s) => Shape::ArrayScalar(s.map(|x| x.clamp(-mr, mr))),

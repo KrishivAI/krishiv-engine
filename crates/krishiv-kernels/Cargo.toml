@@ -19,6 +19,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+# Benchmarks run under the shipped allocator (design note: relative, mimalloc).
+mimalloc.workspace = true
 proptest = { workspace = true, features = ["std"] }
 
 [[bench]]

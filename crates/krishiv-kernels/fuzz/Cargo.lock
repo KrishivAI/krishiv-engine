@@ -316,6 +316,7 @@ name = "krishiv-kernels-fuzz"
 version = "0.0.0"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
  "krishiv-kernels",
  "libfuzzer-sys",
 ]

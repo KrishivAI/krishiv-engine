@@ -1114,6 +1114,7 @@ dependencies = [
  "arrow-buffer",
  "codspeed-criterion-compat",
  "krishiv-common",
+ "mimalloc",
  "proptest",
  "thiserror",
 ]

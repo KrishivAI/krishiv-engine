@@ -74,6 +74,25 @@ fn policies_differ_only_on_overflow() {
 }
 
 #[test]
+fn nulls_path_matches_the_no_null_path() {
+    use krishiv_kernels::integer::binary_nulls_path;
+    let a = Int64Array::from(vec![1, i64::MAX, 3]);
+    let one = Operand::Scalar(Some(1));
+    let fast = binary::<Int64Type, Add, NullOnOverflow>(Operand::Array(&a), one, &ctx()).unwrap();
+    let nulls =
+        binary_nulls_path::<Int64Type, Add, NullOnOverflow>(Operand::Array(&a), one, &ctx());
+    assert_eq!(nulls.unwrap(), fast);
+    let e = binary_nulls_path::<Int64Type, Add, AnsiError>(Operand::Array(&a), one, &ctx());
+    assert_eq!(e.unwrap_err().row(), Some(1));
+    let all_null = binary_nulls_path::<Int64Type, Add, AnsiError>(
+        Operand::Array(&a),
+        Operand::Scalar(None),
+        &ctx(),
+    );
+    assert_eq!(all_null.unwrap().null_count(), 3);
+}
+
+#[test]
 fn null_scalar_and_engine_errors() {
     let a = Int64Array::from(vec![1, 2, 3]);
     let out =
@@ -214,6 +233,8 @@ fn decimal_flagged_but_in_range_is_not_an_error() {
 
 #[test]
 fn dispatch_baseline_and_best_agree() {
+    let required = std::env::var("KRISHIV_REQUIRE_TARGETS").unwrap_or_default();
+    Target::check_required(&required).unwrap();
     let n = if cfg!(miri) { 300 } else { 100_000 };
     let a: Int64Array = (0..n).map(|i| (i % 7 != 0).then_some(i * 7919)).collect();
     let b: Int64Array = (0..n).map(|i| Some(i64::MAX - i * 13)).collect();
