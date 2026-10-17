@@ -16,7 +16,7 @@ From a worktree, the docs repo is `$(git rev-parse --path-format=absolute --git-
 (or set `KRISHIV_INTERNAL`).
 
 ## Commands
-```
+```text
 cargo build --workspace                          # toolchain pinned: rust-toolchain.toml (1.99.1); MSRV 1.97
 cargo nextest run --workspace --all-features --locked --no-tests=pass   # CI form (empty crates have no tests yet)
 cargo nextest run -p <crate> --no-tests=pass     # one crate (krishiv-python is test=false)
@@ -31,7 +31,16 @@ cargo xtask docs-config | docs-errors            # regenerate config / error-cla
 cargo xtask budgets [--build-time] [--write-baseline]   # crate-count / build-time / size budgets (budgets.json)
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace   # docs gate
 (cd bench && uv run pytest)                      # bench harness tests
+cargo xtask setup                                # install .githooks (pre-commit, pre-push)
+cargo xtask spdx | source-guard | workflow-lint  # SPDX headers; no ParquetObject{Reader,Writer}; no pull_request_target
+cargo xtask pr-size|dco|changes --base <ref>     # PR size cap (1,500 lines), DCO sign-off, Rust-job path filter
+taplo fmt --check; typos                         # TOML format, spelling (markdownlint-cli2 for *.md)
 ```
+**Every commit needs a DCO sign-off: `git commit -s`** (ADR 0033; CI fails otherwise). Source files start with
+`SPDX-License-Identifier: Apache-2.0`. Lint exceptions are `#[expect(lint, reason = "...")]`, never bare `#[allow]`.
+Pre-push hook refuses pushes to `main` and force pushes unless `KRISHIV_ALLOW_MAIN_PUSH=1` (`cargo xtask setup`).
+CI: PR gates use default features; `--all-features`, coverage, mutation and fuzz run nightly on the self-hosted
+`krishiv-heavy` runner (`.github/workflows/nightly.yml`). Never `pull_request_target`.
 Pre-commit hook (fmt, clippy, deny; skips clippy/deny for docs-only commits or with `SKIP_CLIPPY=1`). Git config is
 not versioned, so enable it once per fresh clone (repo-local, never `--global`): `git config core.hooksPath .githooks`.
 

@@ -1,0 +1,5 @@
+[package]
+name   =    "unformatted"
+version="0.1.0"
+[dependencies]
+a={version="1",features=["x","y"]}

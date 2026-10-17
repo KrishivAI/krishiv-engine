@@ -1,0 +1,11 @@
+# taplo (TOML formatter/linter) configuration. CI: `taplo fmt --check`.
+include = ["**/*.toml"]
+exclude = ["target/**", ".github/ci-fixtures/**", "**/node_modules/**", "bench/**"]
+
+[formatting]
+align_entries = false
+array_auto_expand = true
+array_auto_collapse = false
+column_width = 140
+reorder_keys = false
+indent_string = "    "

@@ -1,0 +1,18 @@
+# typos (spell checker) configuration. CI: `typos`.
+[files]
+extend-exclude = [
+    "target/**",
+    ".github/ci-fixtures/**",
+    "tests/spark-golden/**",
+    "tests/fixtures/**",
+    "tests/sqllogictest/**",
+    "crates/krishiv-ui-assets/assets/**",
+    "**/*.lock",
+    "**/pnpm-lock.yaml",
+    "**/*.out",
+    "**/*.sql",
+]
+
+[default.extend-words]
+# Spark / Arrow / project vocabulary that looks like a typo.
+ba = "ba"

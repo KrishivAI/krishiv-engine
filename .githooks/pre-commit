@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
+# SPDX-License-Identifier: Apache-2.0
 # Krishiv pre-commit (ADR 0029): fmt, clippy, cargo-deny.
 # Enable once per clone:  git config core.hooksPath .githooks
 # Docs-only commits (no staged *.rs / Cargo.* / deny.toml / rust-toolchain.toml)

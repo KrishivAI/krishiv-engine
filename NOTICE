@@ -1,0 +1,23 @@
+Krishiv
+Copyright 2026 The Krishiv Authors
+
+This product is licensed under the Apache License, Version 2.0.
+Contributions are accepted under the Developer Certificate of Origin (DCO);
+sign off every commit with `git commit -s` (ADR 0033).
+
+This product includes software developed by third parties. Notices that must
+be preserved are listed below. Add an entry whenever third-party code, data or
+test files are copied into this repository (not for ordinary dependencies,
+whose licenses are tracked by `cargo deny`).
+
+--------------------------------------------------------------------------------
+Apache Spark
+  Copyright 2014 and onwards The Apache Software Foundation.
+  Licensed under the Apache License, Version 2.0.
+  Used for: vendored SQLQueryTestSuite golden files and error-condition
+  definitions under tests/ and crates/krishiv-common (added by the tasks that
+  import them; keep this entry in sync).
+
+--------------------------------------------------------------------------------
+(Further entries: DataFusion, Feldera and others, if code is copied. Currently
+none.)

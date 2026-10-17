@@ -18,13 +18,121 @@ env:
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: 1
 
+# P2 CI policy (P2-T145, ADR 0029 CI topology):
+# - PR gates run on ubuntu-latest with DEFAULT features only (plus
+#   `cargo hack --each-feature check`, check not test). `--all-features` test runs,
+#   coverage, mutation, fuzz and macro benchmarks run nightly on the self-hosted
+#   `krishiv-heavy` runner (nightly.yml, ops/ci-runner.md).
+# - Docs/bench/plan-only PRs skip the Rust jobs (`changes` job). `changes` and
+#   `policy` only build the small `xtask` crate; they always run so that DCO
+#   and the size cap still apply to docs PRs.
+# - Never use `pull_request_target` (enforced by `cargo xtask workflow-lint`).
+
 # NOTE: actions are pinned to major version tags for now; pin to full commit
 # SHAs (Renovate can maintain them) before the repository goes public.
 # The toolchain comes from rust-toolchain.toml (1.99.1); the rustup default
 # toolchain installed below honours it.
 
 jobs:
+  # Decides whether the Rust jobs run. Docs/bench/plan-only PRs skip them.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@v2
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            cargo xtask changes --base "$BASE_SHA" --head "$HEAD_SHA"
+          else
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Repository policy: always runs (cheap; builds xtask only).
+  policy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask workflow-lint
+      - run: cargo xtask spdx
+      - run: cargo xtask source-guard
+      - name: DCO sign-off (ADR 0033)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cargo xtask dco --base "$BASE_SHA" --head "$HEAD_SHA"
+      # The `size-approved` label only counts when the configured approver
+      # (repository variable SIZE_APPROVER, the maintainer) applied it.
+      - name: Resolve size-approved label
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'size-approved') }}
+          APPROVER: ${{ vars.SIZE_APPROVER }}
+        run: |
+          approved=0
+          if [ "$HAS_LABEL" = "true" ]; then
+            actor=$(gh api "repos/$REPO/issues/$PR/events" --paginate \
+              --jq '.[] | select(.event=="labeled" and .label.name=="size-approved") | .actor.login' | tail -n1)
+            if [ -n "$APPROVER" ] && [ "$actor" = "$APPROVER" ]; then
+              approved=1
+            else
+              echo "::warning::size-approved was applied by '$actor', not the approver; ignoring"
+            fi
+          fi
+          echo "SIZE_APPROVED=$approved" >> "$GITHUB_ENV"
+      - name: PR size cap (1,500 lines excluding goldens, fixtures, vendored, generated)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cargo xtask pr-size --base "$BASE_SHA" --head "$HEAD_SHA"
+
+  # Formatting and spelling of non-Rust files; no Rust toolchain needed.
+  text-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: typos,taplo
+      - run: typos
+      - run: taplo fmt --check
+      - name: markdownlint
+        run: docker run --rm -v "$PWD:/workdir" davidanson/markdownlint-cli2:v0.23.3 "**/*.md"
+      # Self-test: each checker must reject its fixture, or the gate is vacuous.
+      - name: Checkers reject their fixtures
+        run: |
+          if typos .github/ci-fixtures/typo.md; then echo "typos accepted the typo fixture"; exit 1; fi
+          if taplo fmt --check --config .github/ci-fixtures/taplo.toml .github/ci-fixtures/unformatted.toml; then echo "taplo accepted the unformatted fixture"; exit 1; fi
+          if docker run --rm -v "$PWD/.github/ci-fixtures:/workdir" davidanson/markdownlint-cli2:v0.23.3 bad.md; then echo "markdownlint accepted the bad fixture"; exit 1; fi
+
   fmt:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +143,8 @@ jobs:
       - run: cargo fmt --all -- --check
 
   clippy:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,9 +153,11 @@ jobs:
           toolchain: 1.99.1
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,10 +168,12 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
-      - run: cargo nextest run --workspace --all-features --locked --no-tests=pass
+      - run: cargo nextest run --workspace --locked --no-tests=pass
       - run: cargo test --workspace --doc --locked
 
   deny:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,6 +182,8 @@ jobs:
           command: check
 
   machete:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,6 +193,8 @@ jobs:
       - run: cargo machete
 
   hack:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -90,6 +208,8 @@ jobs:
       - run: cargo hack check --each-feature --workspace --locked
 
   layering:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,6 +220,8 @@ jobs:
       - run: cargo xtask layering
 
   msrv:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -114,6 +236,8 @@ jobs:
           RUSTUP_TOOLCHAIN: "1.97"
 
   docs:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     env:
       RUSTDOCFLAGS: -D warnings
@@ -123,7 +247,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --workspace --no-deps --all-features --locked
+      - run: cargo doc --workspace --no-deps --locked
 
   # Pull requests only: the baseline (budgets.json) is updated by the PR that
   # changes it, so main never needs to re-run this. If a PR exceeds the budget,
@@ -132,7 +256,8 @@ jobs:
   #   cargo xtask budgets --write-baseline
   # and commit budgets.json (see the job summary).
   budgets:
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
