@@ -16,11 +16,17 @@ path = "src/main.rs"
 clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
 krishiv = { path = "../krishiv" }
 krishiv-server = { path = "../krishiv-server", optional = true }
+mimalloc = { workspace = true, optional = true }
+
+[dev-dependencies]
+libmimalloc-sys = { workspace = true, features = ["extended"] }
 
 [lints]
 workspace = true
 
 [features]
+# The binary links mimalloc by default (P2-T012); libraries never do.
+default = ["mimalloc"]
 # Strictly additive (ADR 0027); each forwards to the facade crate.
 kafka = ["krishiv/kafka"]
 iceberg = ["krishiv/iceberg"]
@@ -33,7 +39,7 @@ python = ["krishiv/python"]
 wasm-udf = ["krishiv/wasm-udf"]
 ui = ["krishiv/ui", "dep:krishiv-server"]
 celeborn = ["krishiv/celeborn"]
-mimalloc = ["krishiv/mimalloc"]
+mimalloc = ["krishiv/mimalloc", "dep:mimalloc"]
 full = ["krishiv/full"]
 
 [package.metadata.cargo-machete]

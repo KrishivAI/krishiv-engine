@@ -21,10 +21,14 @@ doctest = false
 
 [features]
 # Default wheel: one abi3 wheel for CPython >= 3.11. The free-threaded (cp314t)
-# build cannot use abi3, so it builds with `--no-default-features`.
-default = ["abi3-py311"]
+# build cannot use abi3, so it builds with
+# `--no-default-features --features mimalloc`.
+default = ["abi3-py311", "mimalloc"]
 abi3-py311 = ["pyo3/abi3-py311"]
+# mimalloc is the global allocator of the extension module (P2-T012).
+mimalloc = ["dep:mimalloc"]
 
 [dependencies]
 # `extension-module` is deprecated: maturin sets PYO3_BUILD_EXTENSION_MODULE.
 pyo3 = { workspace = true, features = ["macros"] }
+mimalloc = { workspace = true, optional = true }

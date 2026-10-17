@@ -11,6 +11,8 @@ Register-name: "krishiv" (already wired in adapters/__init__.py).
 
 from __future__ import annotations
 
+import importlib
+
 from .base import Dataset, Engine, Query
 
 
@@ -25,3 +27,11 @@ class KrishivEngine(Engine):
 
     def run(self, query: Query) -> list[tuple]:
         raise NotImplementedError("Krishiv adapter is implemented in P2")
+
+    def build_info(self) -> dict[str, str]:
+        """Build facts from the installed wheel (``krishiv.build_info()``); the CLI prints it via ``--version``."""
+        try:
+            krishiv = importlib.import_module("krishiv")  # optional: the wheel is not a bench dependency
+        except ImportError:
+            return {}
+        return dict(krishiv.build_info())

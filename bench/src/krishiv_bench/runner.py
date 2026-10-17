@@ -49,6 +49,15 @@ def machine_info() -> dict:
     }
 
 
+def engine_record(eng: Engine, engine_name: str) -> dict:
+    """The ``engine`` block of the run metadata. ``allocator`` is recorded when the engine reports one."""
+    build = eng.build_info()
+    rec = {"name": engine_name, "version": eng.version(), "config": eng.config(), "build": build}
+    if "allocator" in build:
+        rec["allocator"] = build["allocator"]
+    return rec
+
+
 def git_info() -> dict:
     """Harness == engine repo here. `dirty` covers the whole repo (tracked changes and untracked files)."""
 
@@ -141,7 +150,7 @@ def run_suite(
         "started_utc": started.isoformat(),
         "machine": machine_info(),
         "git": {"repo": "krishiv-engine (harness lives in bench/)", **git_info()},
-        "engine": {"name": engine_name, "version": eng.version(), "config": eng.config()},
+        "engine": engine_record(eng, engine_name),
         "dataset": {
             "name": ds_name,
             "scale_factor": sf,
