@@ -64,6 +64,10 @@ impl DiffArgs {
     fn range(&self) -> String {
         format!("{}...{}", self.base, self.head)
     }
+
+    fn head_ref(&self) -> &str {
+        &self.head
+    }
 }
 
 fn step_summary(text: &str) {
@@ -84,10 +88,40 @@ fn step_summary(text: &str) {
 /// # Errors
 /// Returns the failure message when the cap is exceeded or git fails.
 pub fn run_pr_size(args: &DiffArgs) -> Result<(), String> {
-    let numstat = args.git(&["diff", "--numstat", &args.range()])?;
-    let report = ci::measure_numstat(&numstat)?;
+    let numstat = args.git(&["diff", "--numstat", "-z", &args.range()])?;
+    let mut report = ci::measure_numstat(&numstat)?;
+    let deleted = args.git(&[
+        "diff",
+        "--name-only",
+        "-z",
+        "--diff-filter=D",
+        &args.range(),
+    ])?;
+    let deleted: Vec<&str> = deleted.split('\0').filter(|p| !p.is_empty()).collect();
+    for path in report.binaries.clone() {
+        if deleted.contains(&path.as_str()) {
+            continue; // a deleted binary adds nothing
+        }
+        // Fail closed: a binary present at the head must be sized.
+        let spec = format!("{}:{path}", args.head_ref());
+        let size = args.git(&["cat-file", "-s", &spec])?;
+        let bytes = size
+            .trim()
+            .parse::<u64>()
+            .map_err(|e| format!("cannot size binary {path}: {e} ({size:?})"))?;
+        report.add_binary(bytes);
+    }
+    let binaries = if report.binaries.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " Binary files (counted at {} bytes per line): {}.",
+            ci::BINARY_BYTES_PER_LINE,
+            report.binaries.join(", ")
+        )
+    };
     let summary = format!(
-        "## PR size\n\n{} counted changed lines (cap {}); {} more in goldens/fixtures/vendored/generated files (excluded).",
+        "## PR size\n\n{} counted changed lines (cap {}); {} more in allowlisted data files (lock files, snapshots, Spark goldens, test fixtures, vendored data; see `xtask/src/ci.rs`).{binaries}",
         report.counted,
         ci::MAX_CHANGED_LINES,
         report.excluded
