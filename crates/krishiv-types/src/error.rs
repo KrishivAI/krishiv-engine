@@ -82,6 +82,15 @@ pub(crate) fn syntax_error(at: &str) -> KrishivError {
     .into()
 }
 
+/// `PARSE_SYNTAX_ERROR` at a token Spark drops as `extra input`.
+pub(crate) fn extra_input(at: &str) -> KrishivError {
+    ParseSyntaxError {
+        error: at.to_owned(),
+        hint: format!(": extra input {at}"),
+    }
+    .into()
+}
+
 /// `UNSUPPORTED_DATATYPE`; `type_name` is upper-cased by the caller, and
 /// double-quoted here, as Spark renders it.
 pub(crate) fn unsupported_data_type(type_name: &str) -> KrishivError {
