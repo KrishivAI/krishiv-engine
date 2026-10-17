@@ -1,0 +1,25 @@
+# cargo-fuzz targets (nightly toolchain, libFuzzer); a workspace of its own,
+# outside the product workspace and its dependency gates. Run with
+# `cargo +nightly fuzz run <target>` from this directory.
+[package]
+name = "krishiv-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.10"
+krishiv-sql = { path = "../crates/krishiv-sql" }
+
+[[bin]]
+name = "sql_parse"
+path = "fuzz_targets/sql_parse.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
