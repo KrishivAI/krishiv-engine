@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Deterministic simulation testing (DST) harness skeleton (P0-T24).
 //!
 //! The simulator choice (`madsim` vs `turmoil`) is an open question for E01/P1; see the

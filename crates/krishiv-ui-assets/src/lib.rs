@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Embedded web UI assets (layer L6).
 //!
 //! The assets in `assets/` are the committed output of `ui/` (`pnpm build`,

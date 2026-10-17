@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Loader for the Spark `hash()` golden fixtures (`tests/fixtures/spark-4.2.0/hash.json`).
 //!
 //! The fixture is generated against a real Spark by `tests/scripts/gen_hash_goldens.py`.

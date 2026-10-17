@@ -112,7 +112,17 @@ deny = [
     { crate = "arrow-csv", deny-multiple-versions = true },
     { crate = "arrow-json", deny-multiple-versions = true },
     { crate = "arrow", deny-multiple-versions = true },
+    # object_store is Krishiv's version to coordinate with delta_kernel (ADR 0028
+    # update 2026-10-17): pinned to =0.14.2 in Cargo.toml, never two versions.
+    { crate = "object_store", deny-multiple-versions = true },
 ]
+
+# The parquet crate's `object_store` feature is banned: Krishiv owns its
+# object-store reader/writer (ADR 0014/0028), so ParquetObjectReader and
+# ParquetObjectWriter must not exist (also checked by `cargo xtask source-guard`).
+[[bans.features]]
+crate = "parquet"
+deny = ["object_store"]
 
 # EXCEPTION (not yet active): the iceberg connector depends on Arrow 58 while
 # the workspace is on Arrow 60. When krishiv-connectors-iceberg gains the real

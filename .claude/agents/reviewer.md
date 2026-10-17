@@ -34,11 +34,18 @@ Get the diff with `git diff <base>...<branch>` / `gh pr diff <n>`; do not rely o
   (aliasing, alignment, bounds, lifetimes, Send/Sync).
 - Concurrency: lock ordering, cancellation safety across `.await`, no blocking in async, loom tests for primitives.
 - Performance-sensitive paths: no needless allocation/clones in hot loops; benchmarks if the brief has a threshold.
+- **Perf checklist (ADR 0034; mirrors the PR template)** — check each and report under "Perf" in the output:
+  1. allocations per row (no per-row `String`/`Vec`/`Box` in hot loops);
+  2. copies (no avoidable buffer/batch/array copies or clones);
+  3. dyn dispatch in hot loops (dispatch per batch, not per row);
+  4. locks across `.await` (no guard held over an await);
+  5. blocking in async (blocking calls in async code).
 - Public items documented; names follow ADR 0030 (`krishiv`, `krishiv-*`).
 - Run: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run -p <crates> --no-tests=pass`.
 
 ## Output
 Write the review to the path in your brief (default `.superpowers/sdd/<task-id>-review.md`): verdict
 (APPROVE / APPROVE_WITH_NITS / CHANGES_REQUIRED), findings ordered by severity with `file:line` and the rule/ADR
-violated, commands run with results. Reply in under 15 lines: verdict, blocker count, top issues, review path.
+violated, a **Perf** section (one line per perf-checklist item: ok / finding with `file:line` / not applicable),
+commands run with results. Reply in under 15 lines: verdict, blocker count, top issues, review path.
 Never edit code, never merge, never push, never dispatch subagents.

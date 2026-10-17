@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Krishiv facade crate (layer L7; empty skeleton).
 
 #![forbid(unsafe_code)]

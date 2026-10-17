@@ -7,17 +7,42 @@ version = "0.1.0-dev"
 edition = "2024"
 # MSRV = latest stable (1.99) minus two minor releases.
 rust-version = "1.97"
-license = "Apache-2.0" # placeholder until ADR 0033 is accepted
+license = "Apache-2.0"                                   # ADR 0033
 repository = "https://github.com/krishiv/krishiv-engine"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "deny"
+# ADR 0029 (2026-10-17 lint set).
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+# Exceptions only via `#[expect(lint, reason = "...")]`, never a bare `allow` (ADR 0029).
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+undocumented_unsafe_blocks = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+clone_on_ref_ptr = "deny"
+await_holding_lock = "deny"
+large_futures = "deny"
+large_stack_arrays = "deny"
+mem_forget = "deny"
+rc_buffer = "deny"
+unwrap_in_result = "warn"
+if_then_some_else_none = "warn"
+redundant_clone = "warn"
 # Curated pedantic subset (ADR 0029); CI runs clippy with -D warnings.
 cast_lossless = "warn"
 cast_possible_truncation = "warn"
@@ -43,7 +68,9 @@ arrow-data = { version = "60", default-features = false }
 arrow-ipc = { version = "60", default-features = false }
 arrow-flight = { version = "60", default-features = false }
 parquet = { version = "60", default-features = false }
-object_store = { version = "0.14.2", default-features = false }
+# object_store is pinned to the version delta_kernel 0.30 builds against (ADR 0028
+# update 2026-10-17); never enable parquet's `object_store` feature (deny.toml).
+object_store = { version = "=0.14.2", default-features = false }
 tokio = { version = "1.53", default-features = false }
 tonic = { version = "0.14.6", default-features = false }
 prost = { version = "0.14.4", default-features = false }
@@ -66,7 +93,7 @@ memchr = { version = "2.8", default-features = false }
 jiff = { version = "0.2.38", default-features = false }
 slatedb = { version = "0.17", default-features = false }
 foyer = { version = "0.22.6", default-features = false }
-delta_kernel = { version = "0.29", default-features = false }
+delta_kernel = { version = "0.30", default-features = false }
 iceberg = { version = "0.10.1", default-features = false }
 rdkafka = { version = "0.39", default-features = false }
 wasmtime = { version = "49", default-features = false }

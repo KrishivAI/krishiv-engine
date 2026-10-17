@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! The config entries. Add new entries here and to [`REGISTRY`].
 
 use std::borrow::Cow;
