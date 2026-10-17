@@ -1,0 +1,46 @@
+name: Bug report
+description: Report incorrect behavior, a crash or a Spark-compatibility difference.
+title: "bug: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Krishiv is pre-alpha, so please check existing issues first.
+        For security vulnerabilities, use the private advisory link instead of this form.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: A minimal SQL or PySpark snippet and input data if possible.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: spark-difference
+    attributes:
+      label: Spark behavior (if a compatibility difference)
+      description: The result Apache Spark gives for the same query, and the Spark version.
+  - type: input
+    id: version
+    attributes:
+      label: Krishiv version or commit
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture and Rust toolchain version.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or backtrace
+      render: text
