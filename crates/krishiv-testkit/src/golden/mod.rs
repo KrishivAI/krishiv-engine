@@ -11,6 +11,7 @@ pub mod manifest;
 pub mod parse;
 pub mod report;
 pub mod run;
+pub mod setup;
 
 use std::collections::BTreeSet;
 use std::io;
@@ -152,14 +153,14 @@ mod tests {
         let run = run::run(&mut run::RejectAllEngine, &set, &manifest)?;
         let (parse, negative, result) = report::totals(&run);
         assert_eq!((parse.passed, negative.passed, result.passed), (0, 0, 0));
-        assert!(parse.total > 0 && negative.total > 0 && result.total > 0);
+        assert_eq!(
+            (parse.total, negative.total, result.total),
+            (18_827, 3_857, 15_363)
+        );
+        let statements: u64 = run.files.iter().map(|f| f.statements).sum();
+        let unclassified: u64 = run.files.iter().map(|f| f.unclassified_errors).sum();
+        assert_eq!((statements, unclassified), (19_284, 64));
         for f in &run.files {
-            let denominators = f.parse.total + f.negative.total + f.result.total;
-            assert!(
-                denominators <= f.statements * 2,
-                "{}: inconsistent denominators",
-                f.name
-            );
             assert_eq!(
                 f.result.total + f.negative.total + f.unclassified_errors,
                 f.statements,
@@ -167,6 +168,11 @@ mod tests {
                 f.name
             );
         }
+        assert!(run.failed_files.is_empty());
+        assert!(
+            run.files.iter().any(|f| f.runs > 1),
+            "CONFIG_DIM files run more than once"
+        );
         assert_eq!(
             run.files.len() + run.excluded.len() + run.without_expected.len(),
             set.pairs.len() + set.unpaired_inputs.len()

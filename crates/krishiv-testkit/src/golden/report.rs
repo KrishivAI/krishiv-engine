@@ -20,6 +20,7 @@ fn file_json(f: &FileResult) -> Value {
     json!({
         "file": f.name,
         "statements": f.statements,
+        "runs": f.runs,
         "parse": tally(f.parse),
         "negative": tally(f.negative),
         "result": tally(f.result),
@@ -70,6 +71,8 @@ pub fn to_json(run: &RunResult, tag: &str, manifest: &ExclusionManifest) -> Valu
             "files_run": run.files.len(),
             "files_excluded": run.excluded.len(),
             "files_without_expected_output": run.without_expected.len(),
+            "files_failed": run.failed_files.len(),
+            "unclassified_errors": run.files.iter().map(|f| f.unclassified_errors).sum::<u64>(),
             "statements": statements,
             "parse": tally(parse),
             "negative": tally(negative),
@@ -77,6 +80,7 @@ pub fn to_json(run: &RunResult, tag: &str, manifest: &ExclusionManifest) -> Valu
         },
         "files": run.files.iter().map(file_json).collect::<Vec<_>>(),
         "without_expected_output": run.without_expected,
+        "failed_files": run.failed_files.iter().map(|f| json!({"file": f.name, "error": f.error})).collect::<Vec<_>>(),
         "exclusions": {
             "frozen": manifest.frozen,
             "excluded_since_freeze": manifest.entries.iter().filter(|e| e.added_after_freeze).count(),
@@ -117,7 +121,7 @@ pub fn summary(run: &RunResult) -> String {
 mod tests {
     use super::*;
     use crate::golden::manifest::ExclusionManifest;
-    use crate::golden::run::SkippedFile;
+    use crate::golden::run::{FailedFile, SkippedFile};
 
     #[test]
     fn report_json_schema_snapshot() -> Result<(), Box<dyn std::error::Error>> {
@@ -144,12 +148,17 @@ mod tests {
                     total: 2,
                 },
                 unclassified_errors: 1,
+                runs: 2,
             }],
             excluded: vec![SkippedFile {
                 name: "udf/x".into(),
                 statements: 7,
             }],
             without_expected: vec!["z".into()],
+            failed_files: vec![FailedFile {
+                name: "w".into(),
+                error: "bad".into(),
+            }],
             unregistered_classes: ["NOT_A_CLASS".to_owned()].into(),
         };
         insta::assert_snapshot!(to_json_string(&to_json(&run, "v4.2.0", &manifest))?);

@@ -122,7 +122,7 @@ pub struct Exclusion {
 /// The exclusion manifest.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExclusionManifest {
-    /// Whether the manifest has been frozen (user checkpoint at the P2a exit).
+    /// Whether the manifest has been frozen.
     pub frozen: bool,
     /// Entries, in file order.
     pub entries: Vec<Exclusion>,

@@ -4,10 +4,18 @@
 //!
 //! 1. **parse**: of the statements Spark parsed, how many the engine parses.
 //! 2. **negative**: of the statements Spark rejected with an error class, how many the engine
-//!    rejects with the same class (and the same SQLSTATE when Spark recorded one).
+//!    rejects with the same class (and the same SQLSTATE when Spark recorded one). Spark errors
+//!    without a class are counted separately as `unclassified_errors` and are outside this
+//!    denominator. Only class and SQLSTATE are compared, not message parameters.
 //! 3. **result**: of the statements Spark executed, how many the engine answers with the same
-//!    schema and rows. Like `SQLQueryTestSuite`, rows are sorted on both sides unless the query
-//!    has an `ORDER BY`.
+//!    schema and rows. The comparison is exact text, as in Spark (no float tolerance). Like
+//!    `SQLQueryTestSuite`, rows are sorted (per row, in UTF-16 order) unless the result is
+//!    sorted, which the engine reports in [`QueryOutput::sorted`].
+//!
+//! A file runs once per `--CONFIG_DIM` combination (see [`super::setup`]); a statement counts as
+//! passed only if it passes in every run, and counts once in the denominators. Excluded files
+//! are never parsed or run; a file that cannot be read or parsed is recorded in
+//! [`RunResult::failed_files`] and the run continues.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -16,6 +24,7 @@ use krishiv_common::error::ErrorClass;
 
 use super::manifest::{ExclusionManifest, ManifestError};
 use super::parse::{Expected, ExpectedError, ParseError, Statement, parse_results};
+use super::setup::{FileSetup, SessionSetup};
 use super::{GoldenPair, GoldenSet};
 
 /// An engine failure on one statement.
@@ -34,17 +43,22 @@ pub struct EngineError {
 pub struct QueryOutput {
     /// Schema as Spark's `struct<name:type,...>` string.
     pub schema: String,
-    /// Rows; every cell rendered as in Spark's golden files (`NULL` for SQL NULL).
+    /// Rows; every cell rendered as Spark's `HiveResult.hiveResultString` does (`NULL` for SQL
+    /// NULL), cells joined by a tab.
     pub rows: Vec<Vec<String>>,
+    /// Whether the result order is significant, as Spark's `isSemanticallySorted` decides on the
+    /// analyzed plan. An engine fills this from its own plan; `None` falls back to
+    /// [`Statement::text_sorted`], an approximation meant for stubs.
+    pub sorted: Option<bool>,
 }
 
-/// The engine under test. One session per golden file: [`Engine::reset`] starts it.
+/// The engine under test.
 pub trait Engine {
     /// Engine name for the report.
     fn name(&self) -> &str;
-    /// Start a fresh session (called before every file).
-    fn reset(&mut self);
-    /// Parse `sql` without running it.
+    /// Start a fresh session configured as `setup` (called before every run of every file).
+    fn reset(&mut self, setup: &SessionSetup) -> Result<(), EngineError>;
+    /// Parse `sql` without running it, under the current session configs.
     fn parse(&mut self, sql: &str) -> Result<(), EngineError>;
     /// Run `sql` in the current session.
     fn execute(&mut self, sql: &str) -> Result<QueryOutput, EngineError>;
@@ -69,7 +83,9 @@ impl Engine for RejectAllEngine {
         "reject-all"
     }
 
-    fn reset(&mut self) {}
+    fn reset(&mut self, _setup: &SessionSetup) -> Result<(), EngineError> {
+        Ok(())
+    }
 
     fn parse(&mut self, _sql: &str) -> Result<(), EngineError> {
         Err(Self::reject())
@@ -106,8 +122,10 @@ impl Tally {
 pub struct FileResult {
     /// Golden name.
     pub name: String,
-    /// Statements in the file (0 when it has no `.sql.out`).
+    /// Statements in the file.
     pub statements: u64,
+    /// Runs of the file (`--CONFIG_DIM` combinations; at least 1).
+    pub runs: u64,
     /// Number 1: parse.
     pub parse: Tally,
     /// Number 2: negative / error-class match.
@@ -123,8 +141,17 @@ pub struct FileResult {
 pub struct SkippedFile {
     /// Golden name.
     pub name: String,
-    /// Statements the file has.
+    /// Statements the file has (0 for a file excluded without being parsed).
     pub statements: u64,
+}
+
+/// A file that could not be run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedFile {
+    /// Golden name.
+    pub name: String,
+    /// Why.
+    pub error: String,
 }
 
 /// Results of a whole run.
@@ -134,8 +161,10 @@ pub struct RunResult {
     pub engine: String,
     /// Per-file results of the files that ran.
     pub files: Vec<FileResult>,
-    /// Excluded files (manifest order).
+    /// Excluded files, in scan order (statement counts are 0: excluded files are not parsed).
     pub excluded: Vec<SkippedFile>,
+    /// Files that could not be read or parsed; the run continued without them.
+    pub failed_files: Vec<FailedFile>,
     /// `.sql` inputs without a `.sql.out`; nothing to compare against.
     pub without_expected: Vec<String>,
     /// Error classes Spark expects that Krishiv's registry does not know.
@@ -194,30 +223,37 @@ pub fn run(
         ..RunResult::default()
     };
     for pair in &set.pairs {
-        let statements = load_statements(pair)?;
-        note_unregistered(&statements, &mut result.unregistered_classes);
         if manifest.get(&pair.name).is_some() {
             result.excluded.push(SkippedFile {
                 name: pair.name.clone(),
-                statements: statements.len() as u64,
-            });
-        } else {
-            engine.reset();
-            result.files.push(run_file(engine, &pair.name, &statements));
-        }
-    }
-    result.without_expected = set
-        .unpaired_inputs
-        .iter()
-        .filter(|n| manifest.get(n).is_none())
-        .cloned()
-        .collect();
-    for e in &manifest.entries {
-        if set.unpaired_inputs.contains(&e.file) {
-            result.excluded.push(SkippedFile {
-                name: e.file.clone(),
                 statements: 0,
             });
+            continue;
+        }
+        let loaded = load_statements(pair)
+            .and_then(|statements| read_lossy(&pair.sql).map(|sql| (statements, sql)));
+        match loaded {
+            Ok((statements, sql)) => {
+                note_unregistered(&statements, &mut result.unregistered_classes);
+                let setup = FileSetup::parse(&pair.name, &sql);
+                result
+                    .files
+                    .push(run_file(engine, &pair.name, &statements, &setup));
+            }
+            Err(e) => result.failed_files.push(FailedFile {
+                name: pair.name.clone(),
+                error: e.to_string(),
+            }),
+        }
+    }
+    for name in &set.unpaired_inputs {
+        if manifest.get(name).is_some() {
+            result.excluded.push(SkippedFile {
+                name: name.clone(),
+                statements: 0,
+            });
+        } else {
+            result.without_expected.push(name.clone());
         }
     }
     Ok(result)
@@ -234,43 +270,116 @@ fn note_unregistered(statements: &[Statement], out: &mut BTreeSet<String>) {
     }
 }
 
-/// Run one file's statements in the engine's current session.
-pub fn run_file(engine: &mut dyn Engine, name: &str, statements: &[Statement]) -> FileResult {
+/// What one statement scored in one run; `None` means it does not count for that number.
+#[derive(Debug, Clone, Copy, Default)]
+struct Outcome {
+    parse: Option<bool>,
+    negative: Option<bool>,
+    result: Option<bool>,
+    unclassified: bool,
+}
+
+impl Outcome {
+    /// Pass only if passed in both runs.
+    fn and(self, other: Self) -> Self {
+        let both = |a: Option<bool>, b: Option<bool>| match (a, b) {
+            (Some(a), Some(b)) => Some(a && b),
+            (a, b) => a.or(b),
+        };
+        Self {
+            parse: both(self.parse, other.parse),
+            negative: both(self.negative, other.negative),
+            result: both(self.result, other.result),
+            unclassified: self.unclassified,
+        }
+    }
+}
+
+/// Run one file's statements once per session of `setup`.
+pub fn run_file(
+    engine: &mut dyn Engine,
+    name: &str,
+    statements: &[Statement],
+    setup: &FileSetup,
+) -> FileResult {
+    let sessions = setup.sessions();
+    let mut merged: Option<Vec<Outcome>> = None;
+    for session in &sessions {
+        let outcomes = match engine.reset(session) {
+            Ok(()) => run_session(engine, statements),
+            // The session could not be set up: every statement fails.
+            Err(_) => statements.iter().map(failed).collect(),
+        };
+        merged = Some(match merged {
+            None => outcomes,
+            Some(prev) => prev
+                .into_iter()
+                .zip(outcomes)
+                .map(|(a, b)| a.and(b))
+                .collect(),
+        });
+    }
     let mut file = FileResult {
         name: name.to_owned(),
         statements: statements.len() as u64,
+        runs: sessions.len() as u64,
         ..FileResult::default()
     };
-    for s in statements {
-        let parsed = engine.parse(&s.query);
-        let executed = engine.execute(&s.query);
-        match &s.expected {
-            Expected::Rows(output) => {
-                file.parse.record(parsed.is_ok());
-                file.result.record(
-                    executed
-                        .as_ref()
-                        .is_ok_and(|got| result_matches(s, output, got)),
-                );
-            }
-            Expected::Error(e) => {
-                if !e.is_parse_error() {
-                    file.parse.record(parsed.is_ok());
-                }
-                match &e.error_class {
-                    None => file.unclassified_errors += 1,
-                    Some(class) => {
-                        let ok = executed
-                            .as_ref()
-                            .err()
-                            .is_some_and(|got| error_matches(e, class, got));
-                        file.negative.record(ok);
-                    }
-                }
+    for o in merged.unwrap_or_default() {
+        for (tally, v) in [
+            (&mut file.parse, o.parse),
+            (&mut file.negative, o.negative),
+            (&mut file.result, o.result),
+        ] {
+            if let Some(v) = v {
+                tally.record(v);
             }
         }
+        file.unclassified_errors += u64::from(o.unclassified);
     }
     file
+}
+
+fn failed(s: &Statement) -> Outcome {
+    outcome(s, false, None)
+}
+
+fn run_session(engine: &mut dyn Engine, statements: &[Statement]) -> Vec<Outcome> {
+    statements
+        .iter()
+        .map(|s| {
+            let parsed = engine.parse(&s.query).is_ok();
+            outcome(s, parsed, Some(engine.execute(&s.query)))
+        })
+        .collect()
+}
+
+fn outcome(
+    s: &Statement,
+    parsed: bool,
+    executed: Option<Result<QueryOutput, EngineError>>,
+) -> Outcome {
+    match &s.expected {
+        Expected::Rows(output) => Outcome {
+            parse: Some(parsed),
+            result: Some(
+                executed
+                    .and_then(Result::ok)
+                    .is_some_and(|got| result_matches(s, output, &got)),
+            ),
+            ..Outcome::default()
+        },
+        Expected::Error(e) => Outcome {
+            parse: (!e.is_parse_error()).then_some(parsed),
+            negative: e.error_class.as_deref().map(|class| {
+                executed
+                    .and_then(Result::err)
+                    .is_some_and(|got| error_matches(e, class, &got))
+            }),
+            unclassified: e.error_class.is_none(),
+            ..Outcome::default()
+        },
+    }
 }
 
 fn error_matches(expected: &ExpectedError, class: &str, got: &EngineError) -> bool {
@@ -285,22 +394,13 @@ fn result_matches(s: &Statement, expected_output: &str, got: &QueryOutput) -> bo
     if got.schema != s.schema {
         return false;
     }
-    let rendered = got
-        .rows
-        .iter()
-        .map(|r| r.join("\t"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    normalise(expected_output, s.is_ordered()) == normalise(&rendered, s.is_ordered())
-}
-
-/// Spark's comparison form: output lines, sorted when the query has no `ORDER BY`.
-fn normalise(output: &str, ordered: bool) -> Vec<&str> {
-    let mut lines: Vec<&str> = output.trim_end().split('\n').collect();
-    if !ordered {
-        lines.sort_unstable();
+    let mut rows: Vec<String> = got.rows.iter().map(|r| r.join("\t")).collect();
+    if !got.sorted.unwrap_or_else(|| s.text_sorted()) {
+        // Spark sorts the row strings (Scala `String` order is UTF-16 code-unit order). The
+        // golden text was sorted the same way when it was recorded.
+        rows.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
     }
-    lines
+    rows.join("\n").trim_end() == expected_output.trim_end()
 }
 
 #[cfg(test)]
@@ -316,7 +416,9 @@ mod tests {
         fn name(&self) -> &str {
             "canned"
         }
-        fn reset(&mut self) {}
+        fn reset(&mut self, _setup: &SessionSetup) -> Result<(), EngineError> {
+            Ok(())
+        }
         fn parse(&mut self, sql: &str) -> Result<(), EngineError> {
             if self.0.iter().any(|(q, _)| *q == sql) {
                 Ok(())
@@ -338,10 +440,15 @@ mod tests {
 -- !query\nselect 1/0\n-- !query schema\nstruct<>\n-- !query output\norg.apache.spark.SparkArithmeticException\n\
 {\n  \"errorClass\" : \"DIVIDE_BY_ZERO\",\n  \"sqlState\" : \"22012\"\n}\n";
 
+    fn plain() -> FileSetup {
+        FileSetup::parse("t", "")
+    }
+
     fn out(rows: &[&str]) -> Result<QueryOutput, EngineError> {
         Ok(QueryOutput {
             schema: "struct<a:int>".into(),
             rows: rows.iter().map(|r| vec![(*r).to_owned()]).collect(),
+            sorted: None,
         })
     }
 
@@ -360,7 +467,7 @@ mod tests {
                 }),
             ),
         ]);
-        let f = run_file(&mut engine, "t", &statements);
+        let f = run_file(&mut engine, "t", &statements, &plain());
         assert_eq!(
             f.parse,
             Tally {
@@ -400,7 +507,7 @@ mod tests {
                 }),
             ),
         ]);
-        let f = run_file(&mut engine, "t", &statements);
+        let f = run_file(&mut engine, "t", &statements, &plain());
         assert_eq!(
             f.result,
             Tally {
@@ -421,7 +528,7 @@ mod tests {
     #[test]
     fn reject_all_scores_zero_with_denominators() -> R {
         let statements = parse_results(OUT)?;
-        let f = run_file(&mut RejectAllEngine, "t", &statements);
+        let f = run_file(&mut RejectAllEngine, "t", &statements, &plain());
         assert_eq!(f.statements, 3);
         assert_eq!(
             f.parse,
