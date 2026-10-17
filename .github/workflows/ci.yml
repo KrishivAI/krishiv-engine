@@ -314,8 +314,8 @@ jobs:
           if-no-files-found: ignore
 
   # P2-T148: the Python wheels build and import. abi3 (CPython >= 3.11, one
-  # wheel) and the free-threaded cp314t wheel (not abi3). Not yet a required
-  # check; a maintainer adds it to branch protection.
+  # wheel) and the free-threaded cp314t wheel (not abi3). Branch protection
+  # requires `wheels-ok` below, not the matrix legs.
   wheels:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -393,3 +393,23 @@ jobs:
         with:
           name: wheel-${{ matrix.name }}
           path: dist/*.whl
+
+  # Required-check summary for the `wheels` matrix: a skipped matrix job reports
+  # under an unexpanded name, so the legs themselves cannot be required. This job
+  # always reports and passes when the wheels passed or were skipped (no Rust change).
+  wheels-ok:
+    needs: wheels
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Check the wheel builds
+        env:
+          RESULT: ${{ needs.wheels.result }}
+        run: |
+          echo "wheels: $RESULT"
+          case "$RESULT" in
+            success | skipped) ;;
+            *) exit 1 ;;
+          esac
