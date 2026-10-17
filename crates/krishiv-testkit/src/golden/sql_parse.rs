@@ -44,7 +44,19 @@ impl ParseOnlyEngine {
         let sql = sql.trim().trim_end_matches(';').trim();
         let word = sql.split_whitespace().next().unwrap_or_default();
         if word.eq_ignore_ascii_case("RESET") {
-            self.conf = self.session.iter().cloned().collect();
+            // A bare `RESET` restores every key; `RESET key` restores only
+            // that key (to its session value, or unset).
+            match sql.get(5..).map(str::trim).filter(|k| !k.is_empty()) {
+                None => self.conf = self.session.iter().cloned().collect(),
+                Some(key) => match self.session.iter().find(|(k, _)| k == key) {
+                    Some((k, v)) => {
+                        self.conf.insert(k.clone(), v.clone());
+                    }
+                    None => {
+                        self.conf.remove(key);
+                    }
+                },
+            }
             return true;
         }
         if !word.eq_ignore_ascii_case("SET") {
@@ -230,5 +242,18 @@ mod tests {
         assert!(e.execute("RESET").is_err());
         assert!(e.parse("SELECT 1 AS select").is_ok());
         assert_eq!(e.name(), "krishiv-sql parse-only (DQL subset)");
+    }
+
+    #[test]
+    fn keyed_reset_restores_only_that_key() {
+        let mut e = ParseOnlyEngine::default();
+        assert!(e.apply_set("SET spark.sql.ansi.doubleQuotedIdentifiers = true"));
+        assert!(e.apply_set("SET spark.sql.ansi.enforceReservedKeywords = true;"));
+        assert!(e.options().double_quoted_identifiers);
+        assert!(e.apply_set("RESET spark.sql.ansi.doubleQuotedIdentifiers"));
+        assert!(!e.options().double_quoted_identifiers);
+        assert!(e.options().enforce_reserved_keywords);
+        assert!(e.apply_set("RESET"));
+        assert!(!e.options().enforce_reserved_keywords);
     }
 }

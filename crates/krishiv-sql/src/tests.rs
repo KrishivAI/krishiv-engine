@@ -260,6 +260,12 @@ fn other_error_classes() {
         class("SELECT 1 /* a /* b */"),
         ErrorClass::UnclosedBracketedComment
     );
+    // Spark checks the unclosed comment only after the statement parsed, so a
+    // syntax error before it wins.
+    assert_eq!(
+        class("SELECT FROM WHERE /* never closed"),
+        ErrorClass::ParseSyntaxError
+    );
     assert_eq!(
         class("SELECT ab\u{e9} FROM t"),
         ErrorClass::InvalidIdentifier

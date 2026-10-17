@@ -76,10 +76,22 @@ pub(crate) fn parse_query(src: &str, opts: ParserOptions) -> Result<Query, Parse
         return Err(error::empty_statement(Span::new(0, src.len())));
     }
     let mut toks = tokenize(src);
-    if let Some(t) = toks.iter().find(|t| t.kind == TokenKind::UnclosedComment) {
-        return Err(error::unclosed_comment(t.span));
+    // Spark reports an unclosed bracketed comment only once the statement
+    // parsed (`exitSingleStatement`), so a syntax error is not masked.
+    let unclosed = toks
+        .iter()
+        .find(|t| t.kind == TokenKind::UnclosedComment)
+        .map(|t| t.span);
+    toks.retain(|t| !t.kind.is_trivia() && t.kind != TokenKind::UnclosedComment);
+    let parsed = parse_tokens(src, toks, opts)?;
+    match unclosed {
+        Some(span) => Err(error::unclosed_comment(span)),
+        None => Ok(parsed),
     }
-    toks.retain(|t| !t.kind.is_trivia());
+}
+
+/// Parses the non-trivia tokens of one query statement.
+fn parse_tokens(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<Query, ParseError> {
     if nesting_bound(src, &toks) <= INLINE_NESTING {
         return run(src, toks, opts);
     }

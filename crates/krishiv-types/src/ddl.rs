@@ -278,10 +278,16 @@ impl<'a> Parser<'a> {
     /// that starts no token as "extra input".
     fn unexpected(&self, tok: &Token<'a>) -> krishiv_common::error::KrishivError {
         let last = self.pos + 1 == self.tokens.len();
-        let unrecognized = tok.kind == Kind::Other
-            && !tok
+        // Spark's lexer has single-character tokens only for these; any other
+        // character (`#`, `@`, `$`, `{`, ...) is UNRECOGNIZED.
+        const SPARK_PUNCT: &str = "&*!:,.=>^[(<-%|+?]);/~";
+        let unrecognized = match tok.kind {
+            Kind::Other => !tok
                 .raw
-                .starts_with(|c: char| c.is_ascii_digit() || c == '.');
+                .starts_with(|c: char| c.is_ascii_digit() || c == '.'),
+            Kind::Punct(c) => !SPARK_PUNCT.contains(c),
+            _ => false,
+        };
         if last && unrecognized {
             error::extra_input(&format!("'{}'", tok.raw))
         } else {

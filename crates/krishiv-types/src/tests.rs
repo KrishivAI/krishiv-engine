@@ -341,3 +341,19 @@ fn parser_error_classes() {
         Some("[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP(3)\". SQLSTATE: 0A000")
     );
 }
+
+#[test]
+fn trailing_unrecognized_character_gets_the_extra_input_hint() {
+    // Spark's lexer has no token for `#`, `@`, `$`, `{` or `}`, so a trailing
+    // one is UNRECOGNIZED and reported as extra input; a recognized
+    // punctuation character is not.
+    for c in ['#', '@', '$', '{', '}'] {
+        let e = parse_data_type(&format!("int{c}")).unwrap_err();
+        assert!(
+            e.to_string().contains(&format!("extra input '{c}'")),
+            "{c}: {e}"
+        );
+    }
+    let e = parse_data_type("int;").unwrap_err();
+    assert!(!e.to_string().contains("extra input"), "{e}");
+}
