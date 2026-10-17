@@ -1,0 +1,31 @@
+{
+ "label": "3.14t",
+ "python": "3.14.8 free-threading build (main, Oct 14 2026, 01:04:58) [Clang 23.1.3 ]",
+ "gil_enabled": false,
+ "in_process_allocation_visibility": {
+  "python bytearray": {
+   "alloc_mb": 256,
+   "rss_delta_mb": 256,
+   "tracemalloc_delta_mb": 256,
+   "pyarrow_pool_delta_mb": 0
+  },
+  "numpy (np.ones)": {
+   "alloc_mb": 256,
+   "rss_delta_mb": 256,
+   "tracemalloc_delta_mb": 256,
+   "pyarrow_pool_delta_mb": 0
+  },
+  "pyarrow native buffer (pa.allocate_buffer, Arrow memory pool)": {
+   "alloc_mb": 256,
+   "rss_delta_mb": 258,
+   "tracemalloc_delta_mb": 0,
+   "pyarrow_pool_delta_mb": 256
+  },
+  "ctypes libc malloc+memset (native ext proxy)": {
+   "alloc_mb": 256,
+   "rss_delta_mb": 256,
+   "tracemalloc_delta_mb": 0,
+   "pyarrow_pool_delta_mb": 0
+  }
+ }
+}
