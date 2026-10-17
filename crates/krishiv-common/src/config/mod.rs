@@ -138,10 +138,15 @@ fn is_valid_time_zone(s: &str) -> bool {
         return true;
     }
     for prefix in ["UTC", "GMT", "UT"] {
-        if let Some(rest) = s.strip_prefix(prefix)
-            && (rest.is_empty() || is_valid_offset(rest))
-        {
-            return true;
+        if let Some(rest) = s.strip_prefix(prefix) {
+            if rest.is_empty() {
+                return true;
+            }
+            // A prefixed offset is decided here; it must not fall through to
+            // the region-ID check (which would accept `UTC+25`).
+            if rest.starts_with(['+', '-']) {
+                return is_valid_offset(rest);
+            }
         }
     }
     if is_valid_offset(s) {
