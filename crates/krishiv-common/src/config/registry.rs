@@ -20,6 +20,10 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_RESERVATION_QUANTUM,
     &MEMORY_SPILL_WAIT_TIMEOUT,
     &MEMORY_ABORT_RELEASE_TIMEOUT,
+    &SPILL_DIR,
+    &SPILL_MAX_BYTES,
+    &SPILL_COMPRESSION,
+    &SPILL_ZSTD_LEVEL,
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
 ];
@@ -141,6 +145,59 @@ pub static MEMORY_ABORT_RELEASE_TIMEOUT: ConfigEntry = ConfigEntry {
     doc: "How long a memory request waits for queries the arbitrator aborted to release their \
           memory; aborted queries release at their next batch boundary. While their memory \
           covers the request, no other query is aborted. The request fails after this time.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Directory for spill files.
+pub static SPILL_DIR: ConfigEntry = ConfigEntry {
+    key: "krishiv.spill.dir",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Directory for spill files (operator state written to local disk under memory \
+          pressure). Each process creates its own subdirectory and removes it on exit; \
+          subdirectories left behind by crashed processes are removed at the next start. \
+          When unset: `krishiv-spill` under the system temporary directory. Prefer a local \
+          SSD.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Byte cap on spill files.
+pub static SPILL_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.spill.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(64 * 1024 * MIB)),
+    doc: "Most bytes spill files may occupy on disk at once, over all queries of the process. \
+          A spill that would exceed it fails with `KRISHIV_SPILL_CAP_EXCEEDED`.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Spill file compression.
+pub static SPILL_COMPRESSION: ConfigEntry = ConfigEntry {
+    key: "krishiv.spill.compression",
+    value_type: ValueType::Enum(&["lz4", "zstd", "none"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("lz4"))),
+    doc: "Compression of the Arrow IPC buffers in spill files: `lz4` (fastest), `zstd` \
+          (smaller files, more CPU) or `none`. Files are self-describing, so the setting \
+          only affects files written afterwards.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Zstandard level for spill files.
+pub static SPILL_ZSTD_LEVEL: ConfigEntry = ConfigEntry {
+    key: "krishiv.spill.zstd.level",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(1)),
+    doc: "Zstandard compression level for spill files when `krishiv.spill.compression` is \
+          `zstd`: 1 is fastest; higher levels (up to 22) give smaller files and cost more CPU. \
+          Levels from -131072 (ultra-fast) are accepted.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
