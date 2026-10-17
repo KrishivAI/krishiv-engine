@@ -14,6 +14,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4.10"
 krishiv-sql = { path = "../crates/krishiv-sql" }
+krishiv-testkit = { path = "../crates/krishiv-testkit" }
 
 [[bin]]
 name = "sql_parse"

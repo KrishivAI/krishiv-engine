@@ -157,10 +157,10 @@ jobs:
       - name: loom models (krishiv-memory)
         run: cargo test -p krishiv-memory --lib --release --locked
 
-
-  # cargo-fuzz targets (`fuzz/`), one hour each on a GitHub-hosted runner.
-  # Seeds are the vendored Spark golden inputs; a crash or timeout fails the
-  # job and uploads the reproducer.
+  # cargo-fuzz targets (`fuzz/`), one hour each on a GitHub-hosted runner, on
+  # a pinned nightly. Seeds are the Spark golden statements, one per file; a
+  # crash, a timeout or more than 2 GiB of memory fails the job and uploads
+  # the reproducer.
   fuzz:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
@@ -176,23 +176,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Nightly toolchain (cargo-fuzz needs it)
-        run: rustup toolchain install nightly --profile minimal
+      - name: Pinned nightly toolchain (cargo-fuzz needs it)
+        run: rustup toolchain install nightly-2026-08-12 --profile minimal
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-fuzz@0.13.2
       - name: Seed corpus
-        run: |
-          mkdir -p "fuzz/corpus/$TARGET"
-          find tests/spark-golden -name '*.sql' -print0 |
-            while IFS= read -r -d '' f; do
-              cp "$f" "fuzz/corpus/$TARGET/$(sha1sum "$f" | cut -c1-16)"
-            done
+        run: python3 tests/scripts/fuzz_seed_sql.py "fuzz/corpus/$TARGET"
       - name: Fuzz for one hour
         working-directory: fuzz
         run: >-
-          cargo +nightly fuzz run "$TARGET" "corpus/$TARGET" --
-          -max_total_time=3600 -dict=sql.dict -max_len=4096 -timeout=10
+          cargo +nightly-2026-08-12 fuzz run "$TARGET" "corpus/$TARGET" --
+          -max_total_time=3600 -dict=sql.dict -max_len=262144 -timeout=10
+          -rss_limit_mb=2048
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
