@@ -1,0 +1,26 @@
+// Krishiv development container (P2-T123). Reproduces `cargo xtask doctor`
+// green on a fresh machine: Rust (pinned by rust-toolchain.toml), uv/Python,
+// and the host's Docker for `cargo xtask stack`. Nothing here uses sudo beyond
+// what the base image already provides.
+{
+  "name": "krishiv",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/rust:1": { "profile": "minimal" },
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+  },
+  "containerEnv": {
+    // One target dir per worktree/clone; keep it on the fast disk.
+    "CARGO_TARGET_DIR": "/workspaces/.krishiv-target",
+    "KRISHIV_DATA": "/workspaces/.krishiv-data"
+  },
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:/home/vscode/.local/bin"
+  },
+  "postCreateCommand": "mkdir -p /workspaces/.krishiv-data && curl -LsSf https://astral.sh/uv/install.sh | sh && cargo xtask setup --install",
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml", "ms-python.python"]
+    }
+  }
+}

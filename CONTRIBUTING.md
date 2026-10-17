@@ -4,12 +4,31 @@ Thank you for your interest. Krishiv is a Rust-native, Spark-compatible batch, s
 materialized-view engine. It is **pre-alpha** and under active construction, so expect churn. Please read the
 [Code of Conduct](CODE_OF_CONDUCT.md) first; report security issues as described in [SECURITY.md](SECURITY.md).
 
+## Quick start (target: green `cargo nextest run` in under 15 minutes)
+
+```text
+git clone https://github.com/KrishivAI/krishiv-engine && cd krishiv-engine
+cargo xtask doctor           # checks toolchain, uv/Python, Docker, disk; names a fix for anything missing
+cargo xtask setup --install  # installs git hooks, then runs the user-level fixes (rustup, cargo install, uv)
+cargo nextest run --workspace --locked --no-tests=pass
+```
+
+`cargo xtask setup` without `--install` only prints the fixes. xtask never runs `sudo`; commands that need it
+(for example `sysctl kernel.perf_event_paranoid=1` for benchmark counters) are printed for you to run. Running
+several worktrees: give each its own `CARGO_TARGET_DIR` on a large disk (doctor reminds you).
+A [dev container](.devcontainer/devcontainer.json) provides the same setup for VS Code and Codespaces.
+Measured on a 12-core Linux workstation (2026-10-17, tools already installed), a fresh clone with a cold target
+directory reached a green `cargo nextest run` in 23 s; compiling the cargo tools from source with `setup --install`
+adds a few minutes.
+
+The baseline stack (Spark Connect 4.2 + MinIO, optionally Kafka) is `cargo xtask stack up|down|status [--kafka]`.
+It addresses only the `krishiv-bench` compose project and `down` keeps its volumes.
+
 ## Build and test
 
 The toolchain is pinned in `rust-toolchain.toml`.
 
 ```text
-cargo xtask setup                                                       # install the git hooks (once per clone)
 cargo build --workspace
 cargo nextest run --workspace --locked --no-tests=pass
 cargo test --workspace --doc --locked

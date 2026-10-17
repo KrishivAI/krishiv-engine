@@ -5,6 +5,7 @@
 
 pub mod budgets;
 pub mod ci;
+pub mod dev;
 pub mod docs;
 pub mod layering;
 pub mod lint;
