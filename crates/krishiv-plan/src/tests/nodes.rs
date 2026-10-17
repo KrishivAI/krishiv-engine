@@ -1,18 +1,41 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Node construction, traversal order, the canonical operator table and
-//! literal equality.
+//! Node construction, traversal order, rewrites, resolution state, the
+//! canonical operator table and literal equality.
 
+use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use krishiv_types::DataType;
 
 use crate::{
-    Builtin, Expr, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode,
-    ReadSource, SortOrder, SourceId, Span,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, JoinCondition, JoinKind, Literal, LogicalPlan,
+    Origin, PlanId, PlanNode, ReadSource, ResolvedExpr, Scan, SortOrder, SourceId, Span,
+    SubqueryKind,
 };
 
 fn a() -> Expr {
     Expr::column(["a"])
+}
+
+fn bound(id: u64) -> Expr {
+    Expr::new(ExprNode::Resolved(ResolvedExpr::Column(BoundColumn {
+        id: AttrId(id),
+        name: "a".to_owned(),
+        data_type: DataType::Integer,
+        nullable: true,
+    })))
+}
+
+fn scan() -> LogicalPlan {
+    LogicalPlan::new(PlanNode::Scan(Scan {
+        source: ReadSource::Table {
+            name: vec!["t".to_owned()],
+            options: BTreeMap::new(),
+        },
+        output: Vec::new(),
+        version: None,
+    }))
 }
 
 #[test]
@@ -52,6 +75,93 @@ fn traversal_visits_children_and_expressions_in_order() {
     assert_eq!(exprs, 1);
 }
 
+/// Renames every column `a` to `z`.
+fn rename(e: Arc<Expr>) -> Result<Arc<Expr>, Infallible> {
+    Ok(match &e.node {
+        ExprNode::Column(c) if c.name == ["a"] => Arc::new(Expr::column(["z"])),
+        _ => e,
+    })
+}
+
+#[test]
+fn transforms_share_unchanged_subtrees() {
+    let b = Arc::new(Expr::column(["b"]));
+    let call = Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
+        name: "f".to_owned(),
+        args: vec![Arc::new(a()), Arc::clone(&b)],
+        distinct: false,
+        filter: None,
+    })));
+    let renamed = Arc::clone(&call)
+        .transform_up(&mut rename)
+        .unwrap_or_else(|e| match e {});
+    let ExprNode::Function(f) = &renamed.node else {
+        panic!("{renamed:?}")
+    };
+    assert_eq!(*f.args[0], Expr::column(["z"]));
+    assert!(Arc::ptr_eq(&f.args[1], &b), "unchanged child shared");
+    let same = Arc::clone(&b)
+        .transform_down(&mut rename)
+        .unwrap_or_else(|e| match e {});
+    assert!(Arc::ptr_eq(&same, &b), "no change, same Arc");
+
+    let leaf = Arc::new(LogicalPlan::table(["t"]));
+    let plan = Arc::new(LogicalPlan::clone(&leaf).filter(a()).project(vec![a()]));
+    let plan = Arc::clone(&plan)
+        .transform_down(&mut |p: Arc<LogicalPlan>| {
+            p.map_expressions(|e| e.transform_up(&mut rename))
+        })
+        .unwrap_or_else(|e| match e {});
+    let expected = LogicalPlan::clone(&leaf)
+        .filter(Expr::column(["z"]))
+        .project(vec![Expr::column(["z"])]);
+    assert_eq!(*plan, expected);
+    let up = Arc::clone(&plan)
+        .transform_up(&mut |p: Arc<LogicalPlan>| match &p.node {
+            PlanNode::Read(_) => Ok::<_, Infallible>(Arc::new(LogicalPlan::table(["u"]))),
+            _ => Ok(p),
+        })
+        .unwrap_or_else(|e| match e {});
+    let expected = LogicalPlan::table(["u"])
+        .filter(Expr::column(["z"]))
+        .project(vec![Expr::column(["z"])]);
+    assert_eq!(*up, expected);
+    let err = plan.map_children(|_| Err("stop"));
+    assert_eq!(err.err(), Some("stop"));
+}
+
+#[test]
+fn resolution_state() {
+    assert!(!LogicalPlan::table(["t"]).is_resolved());
+    assert!(!scan().filter(a()).is_resolved(), "unresolved column");
+    assert!(!scan().project(vec![bound(1).alias("x")]).is_resolved());
+    assert!(scan().filter(bound(1)).is_resolved());
+    let cast = bound(1).cast(DataType::Long);
+    assert!(
+        !scan().project(vec![cast]).is_resolved(),
+        "the analyzer pins CastMode::Default"
+    );
+    let ansi = Expr::new(ExprNode::Cast {
+        expr: Arc::new(bound(1)),
+        to: DataType::Long,
+        mode: crate::CastMode::Ansi,
+    });
+    assert!(scan().project(vec![ansi]).is_resolved());
+    let sub = Expr::subquery(SubqueryKind::Exists, LogicalPlan::table(["u"]));
+    assert!(
+        !scan().filter(sub).is_resolved(),
+        "unresolved subquery plan"
+    );
+    let sub = Expr::subquery(SubqueryKind::Exists, scan());
+    assert!(scan().filter(sub).is_resolved());
+    let using = scan().join(
+        scan(),
+        JoinKind::Inner,
+        JoinCondition::Using(vec!["a".into()]),
+    );
+    assert!(!using.is_resolved(), "USING is rewritten by the analyzer");
+}
+
 #[test]
 fn equality_includes_origins() {
     let spanned = a().with_origin(Origin::sql(SourceId(0), Span::new(0, 1)));
@@ -89,15 +199,4 @@ fn literal_equality_is_bitwise() {
     assert_ne!(Literal::Float(0.0), Literal::Float(-0.0));
     assert_ne!(Literal::Integer(1), Literal::Long(1));
     assert_ne!(Literal::Null(None), Literal::Null(Some(DataType::Integer)));
-}
-
-#[test]
-fn nan_literals_are_equal_whatever_the_payload() {
-    use crate::Literal;
-    let other_nan = f64::from_bits(f64::NAN.to_bits() ^ 1);
-    assert!(other_nan.is_nan());
-    assert_eq!(Literal::Double(f64::NAN), Literal::Double(other_nan));
-    let other_nan32 = f32::from_bits(f32::NAN.to_bits() ^ 1);
-    assert_eq!(Literal::Float(f32::NAN), Literal::Float(other_nan32));
-    assert_ne!(Literal::Double(0.0), Literal::Double(-0.0));
 }

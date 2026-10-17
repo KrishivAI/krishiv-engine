@@ -37,3 +37,11 @@ krishiv-cli = 7
 # Test infrastructure: publish = false, may depend on anything.
 krishiv-testkit = 7
 krishiv-sim = 7
+
+# Packages a crate must never depend on, directly or transitively (normal and
+# build dependencies, all features on, so feature unification can only add
+# reports). Every key must be a crate listed in [layers]. The logical-plan
+# IR stays free of the Spark Connect wire format: protos are translated at
+# the boundary (ADR 0003).
+[forbidden]
+krishiv-plan = ["krishiv-connect", "prost", "protobuf", "tonic"]

@@ -5,14 +5,16 @@
 //! Connect protobuf (translated at the API boundary in `krishiv-connect`),
 //! and the native Python and Rust DataFrame APIs. The analyzer turns an
 //! unresolved plan into a resolved one in the same model. This crate never
-//! depends on `prost`, `tonic` or `krishiv-connect`.
+//! depends on `prost`, `tonic` or `krishiv-connect` (`cargo xtask layering`).
 //!
 //! # Model
 //!
-//! - A [`Plan`] is a root [`LogicalPlan`] and its [`IR_VERSION`].
+//! - A [`Plan`] is a root [`LogicalPlan`] and its [`IR_VERSION`], checked to
+//!   nest no deeper than [`MAX_DEPTH`].
 //! - A [`LogicalPlan`] is a [`PlanNode`] plus its [`Origin`]; an [`Expr`]
 //!   is an [`ExprNode`] plus its [`Origin`]. Children are `Arc`s, so
-//!   rebuilt nodes share unchanged subtrees.
+//!   rewrites (`map_children`, `transform_up`, `transform_down`) share
+//!   unchanged subtrees. Dropping never recurses.
 //! - An [`Origin`] holds an optional DataFrame [`PlanId`] and an optional
 //!   SQL [`SourceId`] and [`Span`].
 //! - Unresolved operators are [`ExprNode::Function`] calls with canonical
@@ -22,7 +24,8 @@
 //! - `PartialEq` compares everything, origins included.
 //!
 //! Unresolved and resolved nodes share one tree. The analyzer replaces the
-//! unresolved-only nodes (marked U below) by resolved ones (R).
+//! unresolved-only nodes (marked U below) by resolved ones (R);
+//! [`LogicalPlan::is_resolved`] is true when none is left.
 //!
 //! # Node inventory
 //!
@@ -69,6 +72,7 @@ mod origin;
 mod plan;
 #[cfg(test)]
 mod tests;
+mod walk;
 
 pub use expr::{
     AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, NullOrdering,
@@ -81,3 +85,4 @@ pub use plan::{
     Cte, Grouping, IR_VERSION, JoinCondition, JoinKind, LogicalPlan, Plan, PlanNode, ReadSource,
     Scan, SqlArgs, TableVersion,
 };
+pub use walk::{MAX_DEPTH, check_depth};

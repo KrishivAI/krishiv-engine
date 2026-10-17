@@ -61,3 +61,78 @@ fn dev_deps_are_ignored_and_unmapped_crates_flagged() {
     let errs = check(&json2, &map).unwrap();
     assert!(errs[0].contains("`mystery` is not listed"));
 }
+
+/// `krishiv-plan` reaching `prost` through `mid`, with `prost` reachable
+/// only as a dev-dependency when `dev_only`.
+fn forbidden_fixture(dev_only: bool) -> String {
+    let kind = if dev_only { r#""dev""# } else { "null" };
+    format!(
+        r#"{{
+  "workspace_members": ["plan"],
+  "packages": [
+    {{"id":"plan","name":"krishiv-plan","dependencies":[]}},
+    {{"id":"mid","name":"some-crate","dependencies":[]}},
+    {{"id":"pb","name":"prost","dependencies":[]}}
+  ],
+  "resolve": {{"nodes": [
+    {{"id":"plan","deps":[{{"pkg":"mid","dep_kinds":[{{"kind":{kind}}}]}}]}},
+    {{"id":"mid","deps":[{{"pkg":"pb","dep_kinds":[{{"kind":null}}]}}]}},
+    {{"id":"pb","deps":[]}}
+  ]}}
+}}"#
+    )
+}
+
+#[test]
+fn plan_depending_on_prost_transitively_fails() {
+    let map = parse_map(MAP).unwrap();
+    let errs = check(&forbidden_fixture(false), &map).unwrap();
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        errs[0].contains("`krishiv-plan` must not depend on `prost`"),
+        "{errs:?}"
+    );
+    assert!(
+        errs[0].contains("krishiv-plan -> some-crate -> prost"),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn forbidden_rules_ignore_dev_dependencies() {
+    let map = parse_map(MAP).unwrap();
+    assert!(check(&forbidden_fixture(true), &map).unwrap().is_empty());
+}
+
+#[test]
+fn plan_depending_on_connect_fails() {
+    let map = parse_map(MAP).unwrap();
+    let json = r#"{"workspace_members":["plan","conn"],"packages":[
+      {"id":"plan","name":"krishiv-plan","dependencies":[{"name":"krishiv-connect","kind":null}]},
+      {"id":"conn","name":"krishiv-connect","dependencies":[]}],
+      "resolve":{"nodes":[
+      {"id":"plan","deps":[{"pkg":"conn","dep_kinds":[{"kind":null}]}]},
+      {"id":"conn","deps":[]}]}}"#;
+    let errs = check(json, &map).unwrap();
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("`krishiv-plan` must not depend on `krishiv-connect`")),
+        "{errs:?}"
+    );
+    let no_resolve = r#"{"workspace_members":["plan"],"packages":[
+      {"id":"plan","name":"krishiv-plan","dependencies":[]}]}"#;
+    assert!(check(no_resolve, &map).is_err(), "needs the resolve graph");
+}
+
+#[test]
+fn forbidden_rule_for_a_non_member_fails() {
+    let map =
+        parse_map("[layers]\nkrishiv-plan = 3\n[forbidden]\nkrishiv-gone = [\"prost\"]\n").unwrap();
+    let json = r#"{"workspace_members":["plan"],"packages":[
+      {"id":"plan","name":"krishiv-plan","dependencies":[]}],"resolve":{"nodes":[]}}"#;
+    let errs = check(json, &map).unwrap();
+    assert!(
+        errs[0].contains("`krishiv-gone`, which is not a crate in [layers]"),
+        "{errs:?}"
+    );
+}

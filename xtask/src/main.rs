@@ -117,7 +117,13 @@ fn run_layering() -> Result<(), String> {
     let map = layering::parse_map(&map_text)?;
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let out = Command::new(cargo)
-        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--all-features",
+            "--locked",
+        ])
         .current_dir(&root)
         .output()
         .map_err(|e| format!("failed to run cargo metadata: {e}"))?;
