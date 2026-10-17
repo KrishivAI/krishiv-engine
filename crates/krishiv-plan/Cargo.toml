@@ -15,6 +15,7 @@ twox-hash = { workspace = true, features = ["xxhash3_128"] }
 
 [dev-dependencies]
 criterion.workspace = true
+proptest = { workspace = true, features = ["std"] }
 
 [[bench]]
 name = "plan_key"

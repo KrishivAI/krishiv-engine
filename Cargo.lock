@@ -1106,6 +1106,7 @@ dependencies = [
  "codspeed-criterion-compat",
  "krishiv-common",
  "krishiv-types",
+ "proptest",
  "twox-hash",
 ]
 

@@ -6,3 +6,4 @@
 mod depth;
 mod encode;
 mod nodes;
+mod props;
