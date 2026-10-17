@@ -12,7 +12,8 @@
 //!   error;
 //! - an unknown `krishiv.*` key is a `KRISHIV_UNKNOWN_CONFIG` error;
 //! - any other unknown key (e.g. `spark.*`) is kept verbatim and reported as
-//!   a [`ConfigWarning`], never an error.
+//!   a [`ConfigWarning`], never an error. The warning is returned and also
+//!   logged once per key through `tracing`.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -59,6 +60,10 @@ pub enum ValueType {
     Duration,
     /// Any string, stored verbatim.
     String,
+    /// A session time zone, stored verbatim after validation: `Z`, a
+    /// zone offset (`+08:00`, `-0530`, `+8`), a region ID such as
+    /// `America/Los_Angeles`, or `UTC`/`GMT`/`UT` optionally followed by an offset.
+    TimeZone,
     /// One of the listed values, matched ASCII case-insensitively and
     /// stored in the listed spelling.
     Enum(&'static [&'static str]),
@@ -89,6 +94,17 @@ impl ValueType {
                 .map(|us| ConfigValue::Duration(Duration::from_micros(us)))
                 .ok_or_else(|| "expected a duration such as `500ms` or `120s`".to_owned()),
             ValueType::String => Ok(ConfigValue::String(Cow::Owned(raw.to_owned()))),
+            ValueType::TimeZone => {
+                if is_valid_time_zone(s) {
+                    Ok(ConfigValue::String(Cow::Owned(s.to_owned())))
+                } else {
+                    Err(
+                        "expected a region ID such as `America/Los_Angeles` or a zone \
+                         offset such as `+08:00`"
+                            .to_owned(),
+                    )
+                }
+            }
             ValueType::Enum(allowed) => allowed
                 .iter()
                 .find(|a| a.eq_ignore_ascii_case(s))
@@ -106,12 +122,76 @@ impl fmt::Display for ValueType {
             ValueType::Size => f.write_str("size"),
             ValueType::Duration => f.write_str("duration"),
             ValueType::String => f.write_str("string"),
+            ValueType::TimeZone => f.write_str("time zone"),
             ValueType::Enum(allowed) => {
                 let list: Vec<String> = allowed.iter().map(|a| format!("`{a}`")).collect();
                 write!(f, "enum ({})", list.join(", "))
             }
         }
     }
+}
+
+/// Checks the syntax of a Spark session time zone. There is no tz database
+/// here, so a region ID is accepted when it is well formed.
+fn is_valid_time_zone(s: &str) -> bool {
+    if s == "Z" {
+        return true;
+    }
+    for prefix in ["UTC", "GMT", "UT"] {
+        if let Some(rest) = s.strip_prefix(prefix)
+            && (rest.is_empty() || is_valid_offset(rest))
+        {
+            return true;
+        }
+    }
+    if is_valid_offset(s) {
+        return true;
+    }
+    // Region ID: `Area/Location[/Sub]` or a bare legacy ID such as `PST`,
+    // made of letters, digits and `_ - + .` with a leading letter per segment.
+    !s.is_empty()
+        && s.split('/').all(|seg| {
+            seg.starts_with(|c: char| c.is_ascii_alphabetic())
+                && seg
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '.'))
+        })
+}
+
+/// `+h`, `+hh`, `+hh:mm`, `+hhmm`, `+hh:mm:ss`, `+hhmmss` (sign required),
+/// with hours at most 18 and minutes and seconds below 60.
+fn is_valid_offset(s: &str) -> bool {
+    let Some(body) = s.strip_prefix(['+', '-']) else {
+        return false;
+    };
+    let parts: Vec<&str> = if body.contains(':') {
+        body.split(':').collect()
+    } else if body.len() == 4 || body.len() == 6 {
+        body.as_bytes()
+            .chunks(2)
+            .filter_map(|c| std::str::from_utf8(c).ok())
+            .collect()
+    } else {
+        vec![body]
+    };
+    if parts.is_empty()
+        || parts.len() > 3
+        || !parts
+            .iter()
+            .all(|p| (1..=2).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return false;
+    }
+    let num = |i: usize| {
+        parts
+            .get(i)
+            .and_then(|p| p.parse::<u32>().ok())
+            .unwrap_or(0)
+    };
+    let (h, m, sec) = (num(0), num(1), num(2));
+    // `+h` only allows the hour; `+hh:mm` and longer need two-digit fields.
+    let wide_ok = parts.len() == 1 || parts.iter().skip(1).all(|p| p.len() == 2);
+    wide_ok && (h < 18 || (h == 18 && m == 0 && sec == 0)) && m < 60 && sec < 60
 }
 
 /// Unit suffixes with their multiplier (binary, as Spark's `byteStringAs`).
@@ -358,10 +438,19 @@ impl Config {
             }
             .into())
         } else {
-            self.unregistered.insert(key.to_owned(), value.to_owned());
-            Ok(Some(ConfigWarning::UnknownKey {
+            // One warning per key: re-setting a key already seen stays silent.
+            if self
+                .unregistered
+                .insert(key.to_owned(), value.to_owned())
+                .is_some()
+            {
+                return Ok(None);
+            }
+            let warning = ConfigWarning::UnknownKey {
                 key: key.to_owned(),
-            }))
+            };
+            tracing::warn!("{warning}");
+            Ok(Some(warning))
         }
     }
 

@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 thiserror.workspace = true
+tracing = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 criterion.workspace = true
