@@ -2,7 +2,15 @@
 //! Enumeration of vendored Spark `SQLQueryTestSuite` golden files (`tests/spark-golden/<tag>/`).
 //!
 //! `inputs/<name>.sql` pairs with `results/<name>.sql.out`. Variant outputs such as
-//! `*.sql.out.java21` are not paired (they are JDK-specific alternates). Execution is a P2 task.
+//! `*.sql.out.java21` are not paired (they are JDK-specific alternates).
+//!
+//! The runner ([`run`]) parses the `.sql.out` files ([`parse`]), drives an [`run::Engine`] and reports
+//! three separate numbers ([`report`]); [`manifest`] holds the exclusion manifest.
+
+pub mod manifest;
+pub mod parse;
+pub mod report;
+pub mod run;
 
 use std::collections::BTreeSet;
 use std::io;
@@ -125,10 +133,44 @@ mod tests {
         Ok(())
     }
 
-    /// Runs every golden through Krishiv and diffs against the `.out` file.
     #[test]
-    #[ignore = "P2: SQL execution not implemented"]
-    fn spark_golden_conformance() -> R {
-        Err("krishiv SQL execution not implemented".into())
+    fn every_vendored_result_file_parses() -> R {
+        let set = GoldenSet::scan(&GoldenSet::tag_dir(DEFAULT_TAG))?;
+        let mut statements = 0;
+        for pair in &set.pairs {
+            statements += run::load_statements(pair)?.len();
+        }
+        assert!(statements > 10_000, "too few statements: {statements}");
+        Ok(())
+    }
+
+    #[test]
+    fn stub_engine_scores_zero_with_per_file_denominators() -> R {
+        let set = GoldenSet::scan(&GoldenSet::tag_dir(DEFAULT_TAG))?;
+        let manifest =
+            manifest::ExclusionManifest::load(&manifest::ExclusionManifest::default_path())?;
+        let run = run::run(&mut run::RejectAllEngine, &set, &manifest)?;
+        let (parse, negative, result) = report::totals(&run);
+        assert_eq!((parse.passed, negative.passed, result.passed), (0, 0, 0));
+        assert!(parse.total > 0 && negative.total > 0 && result.total > 0);
+        for f in &run.files {
+            let denominators = f.parse.total + f.negative.total + f.result.total;
+            assert!(
+                denominators <= f.statements * 2,
+                "{}: inconsistent denominators",
+                f.name
+            );
+            assert_eq!(
+                f.result.total + f.negative.total + f.unclassified_errors,
+                f.statements,
+                "{}",
+                f.name
+            );
+        }
+        assert_eq!(
+            run.files.len() + run.excluded.len() + run.without_expected.len(),
+            set.pairs.len() + set.unpaired_inputs.len()
+        );
+        Ok(())
     }
 }
