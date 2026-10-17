@@ -24,7 +24,11 @@
 //! - `PartialEq` compares everything, origins included. The canonical
 //!   encoding ([`Plan::canonical_encoding`]) leaves origins out and is the
 //!   structural equality ([`Plan::structurally_eq`]); [`StructuralHash`] is
-//!   its 128-bit Merkle hash, stable across processes and platforms.
+//!   its 128-bit Merkle hash, stable across processes and platforms
+//!   (within one process for plans holding inline secrets, ADR 0038).
+//! - Read options are [`krishiv_common::secret::OptionValue`]s: secrets are
+//!   typed, so no `Display`, `Debug` or encoding of a plan holds their
+//!   plaintext.
 //!
 //! Unresolved and resolved nodes share one tree. The analyzer replaces the
 //! unresolved-only nodes (marked U below) by resolved ones (R);

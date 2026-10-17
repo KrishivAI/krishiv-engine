@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
+use krishiv_common::secret::OptionValue;
 
 use crate::walk::{self, Node};
 use crate::{BoundColumn, Expr, Origin, SortOrder};
@@ -153,6 +154,10 @@ pub enum PlanNode {
 }
 
 /// What an unresolved read reads.
+///
+/// Option values are typed ([`OptionValue`], ADR 0038): front ends build
+/// them with [`OptionValue::from_user`], so secrets never print, not even
+/// through `Debug`, and never enter the canonical encoding in plaintext.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ReadSource {
@@ -161,7 +166,7 @@ pub enum ReadSource {
         /// Name parts, e.g. `["cat", "db", "t"]`.
         name: Vec<String>,
         /// Data source options.
-        options: BTreeMap<String, String>,
+        options: BTreeMap<String, OptionValue>,
     },
     /// Files of a format (`spark.read.parquet(path)`).
     Files {
@@ -170,7 +175,7 @@ pub enum ReadSource {
         /// Paths or globs.
         paths: Vec<String>,
         /// Data source options.
-        options: BTreeMap<String, String>,
+        options: BTreeMap<String, OptionValue>,
     },
 }
 

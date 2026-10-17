@@ -9,6 +9,16 @@
 //! [`ENCODING_VERSION`] and [`crate::IR_VERSION`]; a change to the layout
 //! bumps the version.
 //!
+//! It never holds secret plaintext (ADR 0038). A `secret('scope', 'key')`
+//! reference is encoded as its scope and key. An inline secret, given as an
+//! option or found inside a URL option, is encoded as its keyed fingerprint
+//! ([`krishiv_common::secret::SecretString::fingerprint`]): plans that differ
+//! only in an inline secret get different keys, but the fingerprint key is
+//! random per process, so the keys of such plans (only those) differ
+//! between processes. That is intended: another credential may mean other
+//! data or permissions, and a cache entry must not outlive its process's
+//! view of it.
+//!
 //! A `plan_id` reference (`df["a"]`) is encoded by where its candidate
 //! targets are, relative to the operator that holds the reference: every
 //! relation carrying that `plan_id` in the operator's subtree (Spark
@@ -44,11 +54,12 @@
 //! references replaced by the children's digests. Every subtree's key is
 //! computed once, bottom-up.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use krishiv_common::secret::{OptionValue, SecretValue, UrlPart};
 use twox_hash::XxHash3_128;
 
 use crate::{BoundColumn, Scan};
@@ -60,11 +71,12 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 2;
+pub const ENCODING_VERSION: u16 = 3;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
-/// have equal keys in every process and on every platform. A cache that
+/// have equal keys in every process and on every platform, except plans
+/// with inline secrets, whose keys hold only within a process. A cache that
 /// finds a key confirms the hit with [`Plan::structurally_eq`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StructuralHash(u128);
@@ -439,11 +451,44 @@ impl<'k, 'a> Encoder<'k, 'a> {
         v.iter().for_each(|s| self.str(s));
     }
 
-    fn options(&mut self, m: &std::collections::BTreeMap<String, String>) {
+    /// Options: a plain value as itself, a reference as its (scope, key),
+    /// an inline secret (alone or inside a URL) as its keyed fingerprint,
+    /// never its plaintext (ADR 0038).
+    fn options(&mut self, m: &BTreeMap<String, OptionValue>) {
         self.len(m.len());
         for (k, v) in m {
             self.str(k);
-            self.str(v);
+            match v {
+                OptionValue::Plain(s) => {
+                    self.u8(1);
+                    self.str(s);
+                }
+                OptionValue::Secret(SecretValue::Reference { scope, key }) => {
+                    self.u8(2);
+                    self.str(scope);
+                    self.str(key);
+                }
+                OptionValue::Secret(SecretValue::Inline(s)) => {
+                    self.u8(3);
+                    self.put(&s.fingerprint());
+                }
+                OptionValue::Url(url) => {
+                    self.u8(4);
+                    self.len(url.parts().len());
+                    for part in url.parts() {
+                        match part {
+                            UrlPart::Text(s) => {
+                                self.u8(1);
+                                self.str(s);
+                            }
+                            UrlPart::Secret(s) => {
+                                self.u8(2);
+                                self.put(&s.fingerprint());
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
