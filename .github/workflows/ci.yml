@@ -76,6 +76,7 @@ jobs:
       - run: cargo xtask workflow-lint
       - run: cargo xtask spdx
       - run: cargo xtask source-guard
+      - run: cargo xtask registry-coverage
       - name: DCO sign-off (ADR 0033)
         if: github.event_name == 'pull_request'
         env:
