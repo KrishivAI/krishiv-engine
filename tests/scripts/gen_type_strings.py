@@ -158,6 +158,7 @@ DDL = [
     "int\u00a0",
     "\u3000int",
     "int\u2028",
+    "int\u2029",
     "\u200bint",
     "\u0131nt",
     "\u017ftring",

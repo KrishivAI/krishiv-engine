@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 krishiv-common = { path = "../krishiv-common" }
+krishiv-sql = { path = "../krishiv-sql" }
 regex-lite.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 sqllogictest.workspace = true

@@ -2,9 +2,9 @@ name: Nightly (heavy)
 
 # Heavy jobs run on GitHub-hosted runners (ADR 0029 CI topology); `cargo xtask
 # workflow-lint` rejects any other runner kind.
-# Mutation (cargo-mutants), fuzz and the macro
-# benchmarks (TPC-H/TPC-DS/ClickBench) are added here by their own tasks
-# (P2-T107/T108/T119) as further jobs with the same runner.
+# Mutation (cargo-mutants) and the macro benchmarks (TPC-H/TPC-DS/ClickBench)
+# are added here by their own tasks (P2-T107/T108/T119) as further jobs with
+# the same runner; `fuzz` runs every cargo-fuzz target of `fuzz/`.
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -156,3 +156,42 @@ jobs:
         run: rustup show active-toolchain
       - name: loom models (krishiv-memory)
         run: cargo test -p krishiv-memory --lib --release --locked
+
+  # cargo-fuzz targets (`fuzz/`), one hour each on a GitHub-hosted runner, on
+  # a pinned nightly. Seeds are the Spark golden statements, one per file; a
+  # crash, a timeout or more than 2 GiB of memory fails the job and uploads
+  # the reproducer.
+  fuzz:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [sql_parse]
+    env:
+      RUSTC_WRAPPER: "" # instrumented builds are not cacheable
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned nightly toolchain (cargo-fuzz needs it)
+        run: rustup toolchain install nightly-2026-08-12 --profile minimal
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz@0.13.2
+      - name: Seed corpus
+        run: python3 tests/scripts/fuzz_seed_sql.py "fuzz/corpus/$TARGET"
+      - name: Fuzz for one hour
+        working-directory: fuzz
+        run: >-
+          cargo +nightly-2026-08-12 fuzz run "$TARGET" "corpus/$TARGET" --
+          -max_total_time=3600 -dict=sql.dict -max_len=262144 -timeout=10
+          -rss_limit_mb=2048
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts
+          retention-days: 30

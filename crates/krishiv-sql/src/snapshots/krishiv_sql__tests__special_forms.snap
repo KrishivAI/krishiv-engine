@@ -1,0 +1,1307 @@
+---
+source: crates/krishiv-sql/src/tests.rs
+expression: "snapshot(&[\"SELECT extract(YEAR FROM d), extract('year', d), substring(s FROM 2 FOR 3), substr(s, 2), substring(s, 1, 2)\",\n\"SELECT trim(BOTH 'x' FROM s), trim(LEADING FROM s), trim(TRAILING 'y' FROM s), trim(s), trim(s, 'z')\",\n\"SELECT position('a' IN s), position('a', s), overlay(s PLACING 'x' FROM 2 FOR 1), overlay(s PLACING 'y' FROM 1)\",\n\"SELECT timestampadd(DAY, 1, t), dateadd(HOUR, 2, t), date_add(d, 1), timestampdiff(MONTH, a, b), datediff(year, 1)\",])"
+---
+-- SELECT extract(YEAR FROM d), extract('year', d), substring(s FROM 2 FOR 3), substr(s, 2), substring(s, 1, 2)
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "extract",
+                                                quoted: false,
+                                                span: 7..14,
+                                            },
+                                        ],
+                                        span: 7..14,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Keyword(
+                                                    Ident {
+                                                        value: "YEAR",
+                                                        quoted: false,
+                                                        span: 15..19,
+                                                    },
+                                                ),
+                                                span: 15..19,
+                                            },
+                                            span: 15..19,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "d",
+                                                            quoted: false,
+                                                            span: 25..26,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 25..26,
+                                            },
+                                            span: 25..26,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 7..27,
+                                },
+                            ),
+                            span: 7..27,
+                        },
+                        alias: None,
+                        span: 7..27,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "extract",
+                                                quoted: false,
+                                                span: 29..36,
+                                            },
+                                        ],
+                                        span: 29..36,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    String(
+                                                        "year",
+                                                    ),
+                                                ),
+                                                span: 37..43,
+                                            },
+                                            span: 37..43,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "d",
+                                                            quoted: false,
+                                                            span: 45..46,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 45..46,
+                                            },
+                                            span: 45..46,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 29..47,
+                                },
+                            ),
+                            span: 29..47,
+                        },
+                        alias: None,
+                        span: 29..47,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "substring",
+                                                quoted: false,
+                                                span: 49..58,
+                                            },
+                                        ],
+                                        span: 49..58,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 59..60,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 59..60,
+                                            },
+                                            span: 59..60,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "2",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 66..67,
+                                            },
+                                            span: 66..67,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "3",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 72..73,
+                                            },
+                                            span: 72..73,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 49..74,
+                                },
+                            ),
+                            span: 49..74,
+                        },
+                        alias: None,
+                        span: 49..74,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "substr",
+                                                quoted: false,
+                                                span: 76..82,
+                                            },
+                                        ],
+                                        span: 76..82,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 83..84,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 83..84,
+                                            },
+                                            span: 83..84,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "2",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 86..87,
+                                            },
+                                            span: 86..87,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 76..88,
+                                },
+                            ),
+                            span: 76..88,
+                        },
+                        alias: None,
+                        span: 76..88,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "substring",
+                                                quoted: false,
+                                                span: 90..99,
+                                            },
+                                        ],
+                                        span: 90..99,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 100..101,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 100..101,
+                                            },
+                                            span: 100..101,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 103..104,
+                                            },
+                                            span: 103..104,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "2",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 106..107,
+                                            },
+                                            span: 106..107,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 90..108,
+                                },
+                            ),
+                            span: 90..108,
+                        },
+                        alias: None,
+                        span: 90..108,
+                    },
+                ],
+                from: None,
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..108,
+            },
+        ),
+        span: 0..108,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..108,
+}
+-- SELECT trim(BOTH 'x' FROM s), trim(LEADING FROM s), trim(TRAILING 'y' FROM s), trim(s), trim(s, 'z')
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "trim",
+                                                quoted: false,
+                                                span: 7..11,
+                                            },
+                                        ],
+                                        span: 7..11,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 26..27,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 26..27,
+                                            },
+                                            span: 26..27,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    String(
+                                                        "x",
+                                                    ),
+                                                ),
+                                                span: 17..20,
+                                            },
+                                            span: 17..20,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 7..28,
+                                },
+                            ),
+                            span: 7..28,
+                        },
+                        alias: None,
+                        span: 7..28,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "ltrim",
+                                                quoted: false,
+                                                span: 30..34,
+                                            },
+                                        ],
+                                        span: 30..34,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 48..49,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 48..49,
+                                            },
+                                            span: 48..49,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 30..50,
+                                },
+                            ),
+                            span: 30..50,
+                        },
+                        alias: None,
+                        span: 30..50,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "rtrim",
+                                                quoted: false,
+                                                span: 52..56,
+                                            },
+                                        ],
+                                        span: 52..56,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 75..76,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 75..76,
+                                            },
+                                            span: 75..76,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    String(
+                                                        "y",
+                                                    ),
+                                                ),
+                                                span: 66..69,
+                                            },
+                                            span: 66..69,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 52..77,
+                                },
+                            ),
+                            span: 52..77,
+                        },
+                        alias: None,
+                        span: 52..77,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "trim",
+                                                quoted: false,
+                                                span: 79..83,
+                                            },
+                                        ],
+                                        span: 79..83,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 84..85,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 84..85,
+                                            },
+                                            span: 84..85,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 79..86,
+                                },
+                            ),
+                            span: 79..86,
+                        },
+                        alias: None,
+                        span: 79..86,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "trim",
+                                                quoted: false,
+                                                span: 88..92,
+                                            },
+                                        ],
+                                        span: 88..92,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 93..94,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 93..94,
+                                            },
+                                            span: 93..94,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    String(
+                                                        "z",
+                                                    ),
+                                                ),
+                                                span: 96..99,
+                                            },
+                                            span: 96..99,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 88..100,
+                                },
+                            ),
+                            span: 88..100,
+                        },
+                        alias: None,
+                        span: 88..100,
+                    },
+                ],
+                from: None,
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..100,
+            },
+        ),
+        span: 0..100,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..100,
+}
+-- SELECT position('a' IN s), position('a', s), overlay(s PLACING 'x' FROM 2 FOR 1), overlay(s PLACING 'y' FROM 1)
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "position",
+                                                quoted: false,
+                                                span: 7..15,
+                                            },
+                                        ],
+                                        span: 7..15,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    String(
+                                                        "a",
+                                                    ),
+                                                ),
+                                                span: 16..19,
+                                            },
+                                            span: 16..19,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 23..24,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 23..24,
+                                            },
+                                            span: 23..24,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 7..25,
+                                },
+                            ),
+                            span: 7..25,
+                        },
+                        alias: None,
+                        span: 7..25,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "position",
+                                                quoted: false,
+                                                span: 27..35,
+                                            },
+                                        ],
+                                        span: 27..35,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    String(
+                                                        "a",
+                                                    ),
+                                                ),
+                                                span: 36..39,
+                                            },
+                                            span: 36..39,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 41..42,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 41..42,
+                                            },
+                                            span: 41..42,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 27..43,
+                                },
+                            ),
+                            span: 27..43,
+                        },
+                        alias: None,
+                        span: 27..43,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "overlay",
+                                                quoted: false,
+                                                span: 45..52,
+                                            },
+                                        ],
+                                        span: 45..52,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 53..54,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 53..54,
+                                            },
+                                            span: 53..54,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    String(
+                                                        "x",
+                                                    ),
+                                                ),
+                                                span: 63..66,
+                                            },
+                                            span: 63..66,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "2",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 72..73,
+                                            },
+                                            span: 72..73,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 78..79,
+                                            },
+                                            span: 78..79,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 45..80,
+                                },
+                            ),
+                            span: 45..80,
+                        },
+                        alias: None,
+                        span: 45..80,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "overlay",
+                                                quoted: false,
+                                                span: 82..89,
+                                            },
+                                        ],
+                                        span: 82..89,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "s",
+                                                            quoted: false,
+                                                            span: 90..91,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 90..91,
+                                            },
+                                            span: 90..91,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    String(
+                                                        "y",
+                                                    ),
+                                                ),
+                                                span: 100..103,
+                                            },
+                                            span: 100..103,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 109..110,
+                                            },
+                                            span: 109..110,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 82..111,
+                                },
+                            ),
+                            span: 82..111,
+                        },
+                        alias: None,
+                        span: 82..111,
+                    },
+                ],
+                from: None,
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..111,
+            },
+        ),
+        span: 0..111,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..111,
+}
+-- SELECT timestampadd(DAY, 1, t), dateadd(HOUR, 2, t), date_add(d, 1), timestampdiff(MONTH, a, b), datediff(year, 1)
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "timestampadd",
+                                                quoted: false,
+                                                span: 7..19,
+                                            },
+                                        ],
+                                        span: 7..19,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Keyword(
+                                                    Ident {
+                                                        value: "DAY",
+                                                        quoted: false,
+                                                        span: 20..23,
+                                                    },
+                                                ),
+                                                span: 20..23,
+                                            },
+                                            span: 20..23,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 25..26,
+                                            },
+                                            span: 25..26,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "t",
+                                                            quoted: false,
+                                                            span: 28..29,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 28..29,
+                                            },
+                                            span: 28..29,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 7..30,
+                                },
+                            ),
+                            span: 7..30,
+                        },
+                        alias: None,
+                        span: 7..30,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "dateadd",
+                                                quoted: false,
+                                                span: 32..39,
+                                            },
+                                        ],
+                                        span: 32..39,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Keyword(
+                                                    Ident {
+                                                        value: "HOUR",
+                                                        quoted: false,
+                                                        span: 40..44,
+                                                    },
+                                                ),
+                                                span: 40..44,
+                                            },
+                                            span: 40..44,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "2",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 46..47,
+                                            },
+                                            span: 46..47,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "t",
+                                                            quoted: false,
+                                                            span: 49..50,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 49..50,
+                                            },
+                                            span: 49..50,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 32..51,
+                                },
+                            ),
+                            span: 32..51,
+                        },
+                        alias: None,
+                        span: 32..51,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "date_add",
+                                                quoted: false,
+                                                span: 53..61,
+                                            },
+                                        ],
+                                        span: 53..61,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "d",
+                                                            quoted: false,
+                                                            span: 62..63,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 62..63,
+                                            },
+                                            span: 62..63,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 65..66,
+                                            },
+                                            span: 65..66,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 53..67,
+                                },
+                            ),
+                            span: 53..67,
+                        },
+                        alias: None,
+                        span: 53..67,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "timestampdiff",
+                                                quoted: false,
+                                                span: 69..82,
+                                            },
+                                        ],
+                                        span: 69..82,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Keyword(
+                                                    Ident {
+                                                        value: "MONTH",
+                                                        quoted: false,
+                                                        span: 83..88,
+                                                    },
+                                                ),
+                                                span: 83..88,
+                                            },
+                                            span: 83..88,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "a",
+                                                            quoted: false,
+                                                            span: 90..91,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 90..91,
+                                            },
+                                            span: 90..91,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "b",
+                                                            quoted: false,
+                                                            span: 93..94,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 93..94,
+                                            },
+                                            span: 93..94,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 69..95,
+                                },
+                            ),
+                            span: 69..95,
+                        },
+                        alias: None,
+                        span: 69..95,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "datediff",
+                                                quoted: false,
+                                                span: 97..105,
+                                            },
+                                        ],
+                                        span: 97..105,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "year",
+                                                            quoted: false,
+                                                            span: 106..110,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 106..110,
+                                            },
+                                            span: 106..110,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 112..113,
+                                            },
+                                            span: 112..113,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 97..114,
+                                },
+                            ),
+                            span: 97..114,
+                        },
+                        alias: None,
+                        span: 97..114,
+                    },
+                ],
+                from: None,
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..114,
+            },
+        ),
+        span: 0..114,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..114,
+}

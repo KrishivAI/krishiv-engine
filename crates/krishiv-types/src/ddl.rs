@@ -91,17 +91,15 @@ fn fold_char(c: char) -> char {
     }
 }
 
-/// Spark's `WS` token: ASCII whitespace plus the Unicode space separators.
+/// Spark's `WS` token: ASCII whitespace plus the Unicode space separators
+/// it lists (U+2028 but not U+2029).
 fn is_spark_whitespace(c: char) -> bool {
     c.is_ascii_whitespace()
         || matches!(
             c,
             '\u{0B}' | '\u{A0}' | '\u{1680}' | '\u{2000}'..='\u{200A}'
         )
-        || matches!(
-            c,
-            '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
-        )
+        || matches!(c, '\u{2028}' | '\u{202F}' | '\u{205F}' | '\u{3000}')
 }
 
 fn is_word_char(c: char) -> bool {
@@ -276,6 +274,27 @@ impl<'a> Parser<'a> {
         t
     }
 
+    /// The error at `tok`, the next token: Spark drops a last character
+    /// that starts no token as "extra input".
+    fn unexpected(&self, tok: &Token<'a>) -> krishiv_common::error::KrishivError {
+        let last = self.pos + 1 == self.tokens.len();
+        // Spark's lexer has single-character tokens only for these; any other
+        // character (`#`, `@`, `$`, `{`, ...) is UNRECOGNIZED.
+        const SPARK_PUNCT: &str = "&*!:,.=>^[(<-%|+?]);/~";
+        let unrecognized = match tok.kind {
+            Kind::Other => !tok
+                .raw
+                .starts_with(|c: char| c.is_ascii_digit() || c == '.'),
+            Kind::Punct(c) => !SPARK_PUNCT.contains(c),
+            _ => false,
+        };
+        if last && unrecognized {
+            error::extra_input(&format!("'{}'", tok.raw))
+        } else {
+            tok.syntax_error()
+        }
+    }
+
     /// Consumes the next token, which must satisfy `ok`.
     fn expect(&mut self, ok: impl Fn(&Token<'a>) -> bool) -> Result<Token<'a>> {
         match self.next() {
@@ -329,7 +348,7 @@ impl<'a> Parser<'a> {
         }
         let args = self.type_arguments()?;
         if let Some(tok) = self.peek() {
-            return Err(tok.syntax_error());
+            return Err(self.unexpected(tok));
         }
         let unsupported = || Err(unsupported_data_type(&lower, &args));
         if quoted {

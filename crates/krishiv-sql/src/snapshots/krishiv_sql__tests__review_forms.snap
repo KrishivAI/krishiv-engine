@@ -1,0 +1,1602 @@
+---
+source: crates/krishiv-sql/src/tests.rs
+expression: "snapshot(&[\"SELECT * FROM t VERSION AS OF 1, u FOR SYSTEM_TIME AS OF '2020-01-01' AS x\",\n\"SELECT * FROM t WITH ('k' = 'v', a.b 1, c = true, d) x\",\n\"SELECT a IN ((SELECT 1), 2), a IN ((SELECT 1) UNION (SELECT 2)), a IN ((SELECT 1) + 1)\",\n\"SELECT interval '1-2' year to month 1 day, interval 1 day 2 hours '3:4' hour to minute\",\n\"SELECT `date` '2020-01-01', geo 'x', dateadd(MICROSECOND, 1, t), extract(dow FROM d)\",\n\"SELECT sum(a) OVER (CLUSTER BY a), sum(a) OVER (DISTRIBUTE BY a SORT BY b)\",\n\"SELECT a LIKE ANY ('x') ESCAPE '/', ?, ?, CASE END\",\n\"FROM t SELECT 1 SELECT 2 ORDER BY 1\",\n\"WITH order AS (SELECT 1) SELECT * FROM order AS u\",])"
+---
+-- SELECT * FROM t VERSION AS OF 1, u FOR SYSTEM_TIME AS OF '2020-01-01' AS x
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Wildcard {
+                                qualifier: [],
+                                except: [],
+                            },
+                            span: 7..8,
+                        },
+                        alias: None,
+                        span: 7..8,
+                    },
+                ],
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 14..15,
+                                                },
+                                            ],
+                                            span: 14..15,
+                                        },
+                                        temporal: Some(
+                                            TemporalClause {
+                                                kind: Version,
+                                                value: Expr {
+                                                    kind: Literal(
+                                                        Number {
+                                                            text: "1",
+                                                            kind: Int,
+                                                        },
+                                                    ),
+                                                    span: 30..31,
+                                                },
+                                                span: 16..31,
+                                            },
+                                        ),
+                                        options: [],
+                                    },
+                                    alias: None,
+                                    span: 14..31,
+                                },
+                                extensions: [],
+                                span: 14..31,
+                            },
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "u",
+                                                    quoted: false,
+                                                    span: 33..34,
+                                                },
+                                            ],
+                                            span: 33..34,
+                                        },
+                                        temporal: Some(
+                                            TemporalClause {
+                                                kind: Timestamp,
+                                                value: Expr {
+                                                    kind: Literal(
+                                                        String(
+                                                            "2020-01-01",
+                                                        ),
+                                                    ),
+                                                    span: 57..69,
+                                                },
+                                                span: 35..69,
+                                            },
+                                        ),
+                                        options: [],
+                                    },
+                                    alias: Some(
+                                        TableAlias {
+                                            name: Ident {
+                                                value: "x",
+                                                quoted: false,
+                                                span: 73..74,
+                                            },
+                                            columns: [],
+                                            span: 70..74,
+                                        },
+                                    ),
+                                    span: 33..74,
+                                },
+                                extensions: [],
+                                span: 33..74,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 9..74,
+                    },
+                ),
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..74,
+            },
+        ),
+        span: 0..74,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..74,
+}
+-- SELECT * FROM t WITH ('k' = 'v', a.b 1, c = true, d) x
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Wildcard {
+                                qualifier: [],
+                                except: [],
+                            },
+                            span: 7..8,
+                        },
+                        alias: None,
+                        span: 7..8,
+                    },
+                ],
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 14..15,
+                                                },
+                                            ],
+                                            span: 14..15,
+                                        },
+                                        temporal: None,
+                                        options: [
+                                            TableOption {
+                                                key: OptionKey {
+                                                    parts: [
+                                                        Ident {
+                                                            value: "k",
+                                                            quoted: true,
+                                                            span: 22..25,
+                                                        },
+                                                    ],
+                                                    is_string: true,
+                                                    span: 22..25,
+                                                },
+                                                value: Some(
+                                                    Expr {
+                                                        kind: Literal(
+                                                            String(
+                                                                "v",
+                                                            ),
+                                                        ),
+                                                        span: 28..31,
+                                                    },
+                                                ),
+                                                span: 22..31,
+                                            },
+                                            TableOption {
+                                                key: OptionKey {
+                                                    parts: [
+                                                        Ident {
+                                                            value: "a",
+                                                            quoted: false,
+                                                            span: 33..34,
+                                                        },
+                                                        Ident {
+                                                            value: "b",
+                                                            quoted: false,
+                                                            span: 35..36,
+                                                        },
+                                                    ],
+                                                    is_string: false,
+                                                    span: 33..36,
+                                                },
+                                                value: Some(
+                                                    Expr {
+                                                        kind: Literal(
+                                                            Number {
+                                                                text: "1",
+                                                                kind: Int,
+                                                            },
+                                                        ),
+                                                        span: 37..38,
+                                                    },
+                                                ),
+                                                span: 33..38,
+                                            },
+                                            TableOption {
+                                                key: OptionKey {
+                                                    parts: [
+                                                        Ident {
+                                                            value: "c",
+                                                            quoted: false,
+                                                            span: 40..41,
+                                                        },
+                                                    ],
+                                                    is_string: false,
+                                                    span: 40..41,
+                                                },
+                                                value: Some(
+                                                    Expr {
+                                                        kind: Literal(
+                                                            Boolean(
+                                                                true,
+                                                            ),
+                                                        ),
+                                                        span: 44..48,
+                                                    },
+                                                ),
+                                                span: 40..48,
+                                            },
+                                            TableOption {
+                                                key: OptionKey {
+                                                    parts: [
+                                                        Ident {
+                                                            value: "d",
+                                                            quoted: false,
+                                                            span: 50..51,
+                                                        },
+                                                    ],
+                                                    is_string: false,
+                                                    span: 50..51,
+                                                },
+                                                value: None,
+                                                span: 50..51,
+                                            },
+                                        ],
+                                    },
+                                    alias: Some(
+                                        TableAlias {
+                                            name: Ident {
+                                                value: "x",
+                                                quoted: false,
+                                                span: 53..54,
+                                            },
+                                            columns: [],
+                                            span: 53..54,
+                                        },
+                                    ),
+                                    span: 14..54,
+                                },
+                                extensions: [],
+                                span: 14..54,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 9..54,
+                    },
+                ),
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..54,
+            },
+        ),
+        span: 0..54,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..54,
+}
+-- SELECT a IN ((SELECT 1), 2), a IN ((SELECT 1) UNION (SELECT 2)), a IN ((SELECT 1) + 1)
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: InList {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "a",
+                                                quoted: false,
+                                                span: 7..8,
+                                            },
+                                        ],
+                                    ),
+                                    span: 7..8,
+                                },
+                                list: [
+                                    Expr {
+                                        kind: Subquery(
+                                            Query {
+                                                with: None,
+                                                body: SetExpr {
+                                                    kind: Select(
+                                                        Select {
+                                                            hints: [],
+                                                            quantifier: None,
+                                                            projection: [
+                                                                SelectItem {
+                                                                    expr: Expr {
+                                                                        kind: Literal(
+                                                                            Number {
+                                                                                text: "1",
+                                                                                kind: Int,
+                                                                            },
+                                                                        ),
+                                                                        span: 21..22,
+                                                                    },
+                                                                    alias: None,
+                                                                    span: 21..22,
+                                                                },
+                                                            ],
+                                                            from: None,
+                                                            lateral_views: [],
+                                                            selection: None,
+                                                            group_by: None,
+                                                            having: None,
+                                                            windows: [],
+                                                            qualify: None,
+                                                            span: 14..22,
+                                                        },
+                                                    ),
+                                                    span: 14..22,
+                                                },
+                                                order_by: [],
+                                                cluster_by: [],
+                                                distribute_by: [],
+                                                sort_by: [],
+                                                windows: [],
+                                                limit: None,
+                                                offset: None,
+                                                span: 14..22,
+                                            },
+                                        ),
+                                        span: 13..23,
+                                    },
+                                    Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "2",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 25..26,
+                                    },
+                                ],
+                                negated: false,
+                            },
+                            span: 7..27,
+                        },
+                        alias: None,
+                        span: 7..27,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: InSubquery {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "a",
+                                                quoted: false,
+                                                span: 29..30,
+                                            },
+                                        ],
+                                    ),
+                                    span: 29..30,
+                                },
+                                query: Query {
+                                    with: None,
+                                    body: SetExpr {
+                                        kind: SetOp {
+                                            op: Union,
+                                            quantifier: None,
+                                            left: SetExpr {
+                                                kind: Query(
+                                                    Query {
+                                                        with: None,
+                                                        body: SetExpr {
+                                                            kind: Select(
+                                                                Select {
+                                                                    hints: [],
+                                                                    quantifier: None,
+                                                                    projection: [
+                                                                        SelectItem {
+                                                                            expr: Expr {
+                                                                                kind: Literal(
+                                                                                    Number {
+                                                                                        text: "1",
+                                                                                        kind: Int,
+                                                                                    },
+                                                                                ),
+                                                                                span: 43..44,
+                                                                            },
+                                                                            alias: None,
+                                                                            span: 43..44,
+                                                                        },
+                                                                    ],
+                                                                    from: None,
+                                                                    lateral_views: [],
+                                                                    selection: None,
+                                                                    group_by: None,
+                                                                    having: None,
+                                                                    windows: [],
+                                                                    qualify: None,
+                                                                    span: 36..44,
+                                                                },
+                                                            ),
+                                                            span: 36..44,
+                                                        },
+                                                        order_by: [],
+                                                        cluster_by: [],
+                                                        distribute_by: [],
+                                                        sort_by: [],
+                                                        windows: [],
+                                                        limit: None,
+                                                        offset: None,
+                                                        span: 36..44,
+                                                    },
+                                                ),
+                                                span: 35..45,
+                                            },
+                                            right: SetExpr {
+                                                kind: Query(
+                                                    Query {
+                                                        with: None,
+                                                        body: SetExpr {
+                                                            kind: Select(
+                                                                Select {
+                                                                    hints: [],
+                                                                    quantifier: None,
+                                                                    projection: [
+                                                                        SelectItem {
+                                                                            expr: Expr {
+                                                                                kind: Literal(
+                                                                                    Number {
+                                                                                        text: "2",
+                                                                                        kind: Int,
+                                                                                    },
+                                                                                ),
+                                                                                span: 60..61,
+                                                                            },
+                                                                            alias: None,
+                                                                            span: 60..61,
+                                                                        },
+                                                                    ],
+                                                                    from: None,
+                                                                    lateral_views: [],
+                                                                    selection: None,
+                                                                    group_by: None,
+                                                                    having: None,
+                                                                    windows: [],
+                                                                    qualify: None,
+                                                                    span: 53..61,
+                                                                },
+                                                            ),
+                                                            span: 53..61,
+                                                        },
+                                                        order_by: [],
+                                                        cluster_by: [],
+                                                        distribute_by: [],
+                                                        sort_by: [],
+                                                        windows: [],
+                                                        limit: None,
+                                                        offset: None,
+                                                        span: 53..61,
+                                                    },
+                                                ),
+                                                span: 52..62,
+                                            },
+                                        },
+                                        span: 35..62,
+                                    },
+                                    order_by: [],
+                                    cluster_by: [],
+                                    distribute_by: [],
+                                    sort_by: [],
+                                    windows: [],
+                                    limit: None,
+                                    offset: None,
+                                    span: 35..62,
+                                },
+                                negated: false,
+                            },
+                            span: 29..63,
+                        },
+                        alias: None,
+                        span: 29..63,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: InList {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "a",
+                                                quoted: false,
+                                                span: 65..66,
+                                            },
+                                        ],
+                                    ),
+                                    span: 65..66,
+                                },
+                                list: [
+                                    Expr {
+                                        kind: Binary(
+                                            Expr {
+                                                kind: Subquery(
+                                                    Query {
+                                                        with: None,
+                                                        body: SetExpr {
+                                                            kind: Select(
+                                                                Select {
+                                                                    hints: [],
+                                                                    quantifier: None,
+                                                                    projection: [
+                                                                        SelectItem {
+                                                                            expr: Expr {
+                                                                                kind: Literal(
+                                                                                    Number {
+                                                                                        text: "1",
+                                                                                        kind: Int,
+                                                                                    },
+                                                                                ),
+                                                                                span: 79..80,
+                                                                            },
+                                                                            alias: None,
+                                                                            span: 79..80,
+                                                                        },
+                                                                    ],
+                                                                    from: None,
+                                                                    lateral_views: [],
+                                                                    selection: None,
+                                                                    group_by: None,
+                                                                    having: None,
+                                                                    windows: [],
+                                                                    qualify: None,
+                                                                    span: 72..80,
+                                                                },
+                                                            ),
+                                                            span: 72..80,
+                                                        },
+                                                        order_by: [],
+                                                        cluster_by: [],
+                                                        distribute_by: [],
+                                                        sort_by: [],
+                                                        windows: [],
+                                                        limit: None,
+                                                        offset: None,
+                                                        span: 72..80,
+                                                    },
+                                                ),
+                                                span: 71..81,
+                                            },
+                                            Plus,
+                                            Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 84..85,
+                                            },
+                                        ),
+                                        span: 71..85,
+                                    },
+                                ],
+                                negated: false,
+                            },
+                            span: 65..86,
+                        },
+                        alias: None,
+                        span: 65..86,
+                    },
+                ],
+                from: None,
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..86,
+            },
+        ),
+        span: 0..86,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..86,
+}
+-- SELECT interval '1-2' year to month 1 day, interval 1 day 2 hours '3:4' hour to minute
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Interval(
+                                    Interval {
+                                        units: [],
+                                        range: Some(
+                                            (
+                                                IntervalValue {
+                                                    negative: false,
+                                                    value: "1-2",
+                                                    is_string: true,
+                                                    span: 16..21,
+                                                },
+                                                "year",
+                                                "month",
+                                            ),
+                                        ),
+                                        trailing: Some(
+                                            Interval {
+                                                units: [
+                                                    (
+                                                        IntervalValue {
+                                                            negative: false,
+                                                            value: "1",
+                                                            is_string: false,
+                                                            span: 36..37,
+                                                        },
+                                                        "day",
+                                                    ),
+                                                ],
+                                                range: None,
+                                                trailing: None,
+                                                span: 36..41,
+                                            },
+                                        ),
+                                        span: 7..41,
+                                    },
+                                ),
+                            ),
+                            span: 7..41,
+                        },
+                        alias: None,
+                        span: 7..41,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Interval(
+                                    Interval {
+                                        units: [
+                                            (
+                                                IntervalValue {
+                                                    negative: false,
+                                                    value: "1",
+                                                    is_string: false,
+                                                    span: 52..53,
+                                                },
+                                                "day",
+                                            ),
+                                            (
+                                                IntervalValue {
+                                                    negative: false,
+                                                    value: "2",
+                                                    is_string: false,
+                                                    span: 58..59,
+                                                },
+                                                "hours",
+                                            ),
+                                        ],
+                                        range: None,
+                                        trailing: Some(
+                                            Interval {
+                                                units: [],
+                                                range: Some(
+                                                    (
+                                                        IntervalValue {
+                                                            negative: false,
+                                                            value: "3:4",
+                                                            is_string: true,
+                                                            span: 66..71,
+                                                        },
+                                                        "hour",
+                                                        "minute",
+                                                    ),
+                                                ),
+                                                trailing: None,
+                                                span: 66..86,
+                                            },
+                                        ),
+                                        span: 43..86,
+                                    },
+                                ),
+                            ),
+                            span: 43..86,
+                        },
+                        alias: None,
+                        span: 43..86,
+                    },
+                ],
+                from: None,
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..86,
+            },
+        ),
+        span: 0..86,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..86,
+}
+-- SELECT `date` '2020-01-01', geo 'x', dateadd(MICROSECOND, 1, t), extract(dow FROM d)
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Typed {
+                                    type_name: Ident {
+                                        value: "date",
+                                        quoted: true,
+                                        span: 7..13,
+                                    },
+                                    value: "2020-01-01",
+                                },
+                            ),
+                            span: 7..26,
+                        },
+                        alias: None,
+                        span: 7..26,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Typed {
+                                    type_name: Ident {
+                                        value: "geo",
+                                        quoted: false,
+                                        span: 28..31,
+                                    },
+                                    value: "x",
+                                },
+                            ),
+                            span: 28..35,
+                        },
+                        alias: None,
+                        span: 28..35,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "dateadd",
+                                                quoted: false,
+                                                span: 37..44,
+                                            },
+                                        ],
+                                        span: 37..44,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Keyword(
+                                                    Ident {
+                                                        value: "MICROSECOND",
+                                                        quoted: false,
+                                                        span: 45..56,
+                                                    },
+                                                ),
+                                                span: 45..56,
+                                            },
+                                            span: 45..56,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 58..59,
+                                            },
+                                            span: 58..59,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "t",
+                                                            quoted: false,
+                                                            span: 61..62,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 61..62,
+                                            },
+                                            span: 61..62,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 37..63,
+                                },
+                            ),
+                            span: 37..63,
+                        },
+                        alias: None,
+                        span: 37..63,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "extract",
+                                                quoted: false,
+                                                span: 65..72,
+                                            },
+                                        ],
+                                        span: 65..72,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Keyword(
+                                                    Ident {
+                                                        value: "dow",
+                                                        quoted: false,
+                                                        span: 73..76,
+                                                    },
+                                                ),
+                                                span: 73..76,
+                                            },
+                                            span: 73..76,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "d",
+                                                            quoted: false,
+                                                            span: 82..83,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 82..83,
+                                            },
+                                            span: 82..83,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: None,
+                                    span: 65..84,
+                                },
+                            ),
+                            span: 65..84,
+                        },
+                        alias: None,
+                        span: 65..84,
+                    },
+                ],
+                from: None,
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..84,
+            },
+        ),
+        span: 0..84,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..84,
+}
+-- SELECT sum(a) OVER (CLUSTER BY a), sum(a) OVER (DISTRIBUTE BY a SORT BY b)
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "sum",
+                                                quoted: false,
+                                                span: 7..10,
+                                            },
+                                        ],
+                                        span: 7..10,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "a",
+                                                            quoted: false,
+                                                            span: 11..12,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 11..12,
+                                            },
+                                            span: 11..12,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: Some(
+                                        Spec(
+                                            WindowSpec {
+                                                partitioning: Some(
+                                                    Cluster,
+                                                ),
+                                                partition_by: [
+                                                    Expr {
+                                                        kind: Column(
+                                                            [
+                                                                Ident {
+                                                                    value: "a",
+                                                                    quoted: false,
+                                                                    span: 31..32,
+                                                                },
+                                                            ],
+                                                        ),
+                                                        span: 31..32,
+                                                    },
+                                                ],
+                                                order_by: [],
+                                                frame: None,
+                                                span: 19..33,
+                                            },
+                                        ),
+                                    ),
+                                    span: 7..33,
+                                },
+                            ),
+                            span: 7..33,
+                        },
+                        alias: None,
+                        span: 7..33,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Function(
+                                Function {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "sum",
+                                                quoted: false,
+                                                span: 35..38,
+                                            },
+                                        ],
+                                        span: 35..38,
+                                    },
+                                    quantifier: None,
+                                    args: [
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "a",
+                                                            quoted: false,
+                                                            span: 39..40,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 39..40,
+                                            },
+                                            span: 39..40,
+                                        },
+                                    ],
+                                    within_group: [],
+                                    filter: None,
+                                    null_treatment: None,
+                                    over: Some(
+                                        Spec(
+                                            WindowSpec {
+                                                partitioning: Some(
+                                                    Distribute,
+                                                ),
+                                                partition_by: [
+                                                    Expr {
+                                                        kind: Column(
+                                                            [
+                                                                Ident {
+                                                                    value: "a",
+                                                                    quoted: false,
+                                                                    span: 62..63,
+                                                                },
+                                                            ],
+                                                        ),
+                                                        span: 62..63,
+                                                    },
+                                                ],
+                                                order_by: [
+                                                    SortItem {
+                                                        expr: Expr {
+                                                            kind: Column(
+                                                                [
+                                                                    Ident {
+                                                                        value: "b",
+                                                                        quoted: false,
+                                                                        span: 72..73,
+                                                                    },
+                                                                ],
+                                                            ),
+                                                            span: 72..73,
+                                                        },
+                                                        asc: None,
+                                                        nulls_first: None,
+                                                        span: 72..73,
+                                                    },
+                                                ],
+                                                frame: None,
+                                                span: 47..74,
+                                            },
+                                        ),
+                                    ),
+                                    span: 35..74,
+                                },
+                            ),
+                            span: 35..74,
+                        },
+                        alias: None,
+                        span: 35..74,
+                    },
+                ],
+                from: None,
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..74,
+            },
+        ),
+        span: 0..74,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..74,
+}
+-- SELECT a LIKE ANY ('x') ESCAPE '/', ?, ?, CASE END
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Like {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "a",
+                                                quoted: false,
+                                                span: 7..8,
+                                            },
+                                        ],
+                                    ),
+                                    span: 7..8,
+                                },
+                                pattern: Expr {
+                                    kind: Function(
+                                        Function {
+                                            name: ObjectName {
+                                                parts: [
+                                                    Ident {
+                                                        value: "ANY",
+                                                        quoted: false,
+                                                        span: 14..17,
+                                                    },
+                                                ],
+                                                span: 14..17,
+                                            },
+                                            quantifier: None,
+                                            args: [
+                                                FunctionArg {
+                                                    name: None,
+                                                    expr: Expr {
+                                                        kind: Literal(
+                                                            String(
+                                                                "x",
+                                                            ),
+                                                        ),
+                                                        span: 19..22,
+                                                    },
+                                                    span: 19..22,
+                                                },
+                                            ],
+                                            within_group: [],
+                                            filter: None,
+                                            null_treatment: None,
+                                            over: None,
+                                            span: 14..23,
+                                        },
+                                    ),
+                                    span: 14..23,
+                                },
+                                escape: Some(
+                                    "/",
+                                ),
+                                negated: false,
+                                case_insensitive: false,
+                            },
+                            span: 7..34,
+                        },
+                        alias: None,
+                        span: 7..34,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Parameter(
+                                0,
+                            ),
+                            span: 36..37,
+                        },
+                        alias: None,
+                        span: 36..37,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Parameter(
+                                1,
+                            ),
+                            span: 39..40,
+                        },
+                        alias: None,
+                        span: 39..40,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Column(
+                                [
+                                    Ident {
+                                        value: "CASE",
+                                        quoted: false,
+                                        span: 42..46,
+                                    },
+                                ],
+                            ),
+                            span: 42..46,
+                        },
+                        alias: Some(
+                            Name(
+                                Ident {
+                                    value: "END",
+                                    quoted: false,
+                                    span: 47..50,
+                                },
+                            ),
+                        ),
+                        span: 42..50,
+                    },
+                ],
+                from: None,
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..50,
+            },
+        ),
+        span: 0..50,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..50,
+}
+-- FROM t SELECT 1 SELECT 2 ORDER BY 1
+Query {
+    with: None,
+    body: SetExpr {
+        kind: FromStatement(
+            FromStatement {
+                from: FromClause {
+                    relations: [
+                        Relation {
+                            lateral: false,
+                            primary: TableFactor {
+                                kind: Table {
+                                    name: ObjectName {
+                                        parts: [
+                                            Ident {
+                                                value: "t",
+                                                quoted: false,
+                                                span: 5..6,
+                                            },
+                                        ],
+                                        span: 5..6,
+                                    },
+                                    temporal: None,
+                                    options: [],
+                                },
+                                alias: None,
+                                span: 5..6,
+                            },
+                            extensions: [],
+                            span: 5..6,
+                        },
+                    ],
+                    lateral_views: [],
+                    pivot: None,
+                    unpivot: None,
+                    span: 0..6,
+                },
+                bodies: [
+                    Query {
+                        with: None,
+                        body: SetExpr {
+                            kind: Select(
+                                Select {
+                                    hints: [],
+                                    quantifier: None,
+                                    projection: [
+                                        SelectItem {
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 14..15,
+                                            },
+                                            alias: None,
+                                            span: 14..15,
+                                        },
+                                    ],
+                                    from: None,
+                                    lateral_views: [],
+                                    selection: None,
+                                    group_by: None,
+                                    having: None,
+                                    windows: [],
+                                    qualify: None,
+                                    span: 7..15,
+                                },
+                            ),
+                            span: 7..15,
+                        },
+                        order_by: [],
+                        cluster_by: [],
+                        distribute_by: [],
+                        sort_by: [],
+                        windows: [],
+                        limit: None,
+                        offset: None,
+                        span: 7..15,
+                    },
+                    Query {
+                        with: None,
+                        body: SetExpr {
+                            kind: Select(
+                                Select {
+                                    hints: [],
+                                    quantifier: None,
+                                    projection: [
+                                        SelectItem {
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "2",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 23..24,
+                                            },
+                                            alias: None,
+                                            span: 23..24,
+                                        },
+                                    ],
+                                    from: None,
+                                    lateral_views: [],
+                                    selection: None,
+                                    group_by: None,
+                                    having: None,
+                                    windows: [],
+                                    qualify: None,
+                                    span: 16..24,
+                                },
+                            ),
+                            span: 16..24,
+                        },
+                        order_by: [
+                            SortItem {
+                                expr: Expr {
+                                    kind: Literal(
+                                        Number {
+                                            text: "1",
+                                            kind: Int,
+                                        },
+                                    ),
+                                    span: 34..35,
+                                },
+                                asc: None,
+                                nulls_first: None,
+                                span: 34..35,
+                            },
+                        ],
+                        cluster_by: [],
+                        distribute_by: [],
+                        sort_by: [],
+                        windows: [],
+                        limit: None,
+                        offset: None,
+                        span: 16..35,
+                    },
+                ],
+                span: 0..35,
+            },
+        ),
+        span: 0..35,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..35,
+}
+-- WITH order AS (SELECT 1) SELECT * FROM order AS u
+Query {
+    with: Some(
+        With {
+            recursive: false,
+            ctes: [
+                Cte {
+                    name: Ident {
+                        value: "order",
+                        quoted: false,
+                        span: 5..10,
+                    },
+                    columns: [],
+                    max_recursion_level: None,
+                    query: Query {
+                        with: None,
+                        body: SetExpr {
+                            kind: Select(
+                                Select {
+                                    hints: [],
+                                    quantifier: None,
+                                    projection: [
+                                        SelectItem {
+                                            expr: Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 22..23,
+                                            },
+                                            alias: None,
+                                            span: 22..23,
+                                        },
+                                    ],
+                                    from: None,
+                                    lateral_views: [],
+                                    selection: None,
+                                    group_by: None,
+                                    having: None,
+                                    windows: [],
+                                    qualify: None,
+                                    span: 15..23,
+                                },
+                            ),
+                            span: 15..23,
+                        },
+                        order_by: [],
+                        cluster_by: [],
+                        distribute_by: [],
+                        sort_by: [],
+                        windows: [],
+                        limit: None,
+                        offset: None,
+                        span: 15..23,
+                    },
+                    span: 5..24,
+                },
+            ],
+            span: 0..24,
+        },
+    ),
+    body: SetExpr {
+        kind: Select(
+            Select {
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Wildcard {
+                                qualifier: [],
+                                except: [],
+                            },
+                            span: 32..33,
+                        },
+                        alias: None,
+                        span: 32..33,
+                    },
+                ],
+                from: Some(
+                    FromClause {
+                        relations: [
+                            Relation {
+                                lateral: false,
+                                primary: TableFactor {
+                                    kind: Table {
+                                        name: ObjectName {
+                                            parts: [
+                                                Ident {
+                                                    value: "order",
+                                                    quoted: false,
+                                                    span: 39..44,
+                                                },
+                                            ],
+                                            span: 39..44,
+                                        },
+                                        temporal: None,
+                                        options: [],
+                                    },
+                                    alias: Some(
+                                        TableAlias {
+                                            name: Ident {
+                                                value: "u",
+                                                quoted: false,
+                                                span: 48..49,
+                                            },
+                                            columns: [],
+                                            span: 45..49,
+                                        },
+                                    ),
+                                    span: 39..49,
+                                },
+                                extensions: [],
+                                span: 39..49,
+                            },
+                        ],
+                        lateral_views: [],
+                        pivot: None,
+                        unpivot: None,
+                        span: 34..49,
+                    },
+                ),
+                lateral_views: [],
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 25..49,
+            },
+        ),
+        span: 25..49,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..49,
+}

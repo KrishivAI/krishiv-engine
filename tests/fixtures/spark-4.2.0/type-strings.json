@@ -971,6 +971,15 @@
    "simple_string_reparses": true
   },
   {
+   "ddl": "int ",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "' '",
+    "hint": ": extra input ' '"
+   }
+  },
+  {
    "ddl": "​int",
    "error_class": "PARSE_SYNTAX_ERROR",
    "sql_state": "42601",
