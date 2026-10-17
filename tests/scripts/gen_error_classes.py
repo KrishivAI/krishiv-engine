@@ -18,6 +18,7 @@ Usage (from repo root; needs docker, no running Spark required):
 
 Output is deterministic. Pass `--container NAME` to reuse a running Spark 4.2.0 container instead.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -107,11 +108,8 @@ def main() -> None:
     else:
         base = ["docker", "run", "--rm", "-i", "--entrypoint", "", image()]
 
-    extract = (
-        "import zipfile,sys;"
-        f"sys.stdout.buffer.write(zipfile.ZipFile('{JAR}').read('{ENTRY}'))"
-    )
-    raw = subprocess.run(base + ["python3", "-c", extract], capture_output=True, check=True).stdout
+    extract = f"import zipfile,sys;sys.stdout.buffer.write(zipfile.ZipFile('{JAR}').read('{ENTRY}'))"
+    raw = subprocess.run([*base, "python3", "-c", extract], capture_output=True, check=True).stdout
     doc = json.loads(raw)
     table = leaves(doc)
     (ROOT / "crates/krishiv-common/vendored/spark-error-conditions.json").write_bytes(raw)
@@ -136,29 +134,26 @@ def main() -> None:
     import base64
 
     bundle = json.dumps({"s": script, "d": "".join(json.dumps(c) + "\n" for c in cases)})
-    out = run(base + ["sh", "-c", shell], base64.b64encode(bundle.encode()).decode())
+    out = run([*base, "sh", "-c", shell], base64.b64encode(bundle.encode()).decode())
     lines = [ln for ln in out.splitlines() if ln.startswith("@@")]
     if "@@END" not in lines:
         raise SystemExit("spark-shell did not complete:\n" + out[-2000:])
     version = next(ln.split(" ", 1)[1] for ln in lines if ln.startswith("@@VERSION "))
     if version != "4.2.0":
         raise SystemExit(f"expected Spark 4.2.0, got {version}")
-    results = [json.loads(ln[len("@@CASE "):]) for ln in lines if ln.startswith("@@CASE ")]
+    results = [json.loads(ln[len("@@CASE ") :]) for ln in lines if ln.startswith("@@CASE ")]
     fixture = {
         "spark_version": version,
         "generator": "tests/scripts/gen_error_classes.py",
         "top_level_classes": len(doc),
         "leaf_classes": len(table),
         "cases": [
-            {"class": r["c"], "sql_state": r["state"], "parameters": r["params"], "message": r["full"]}
-            for r in results
+            {"class": r["c"], "sql_state": r["state"], "parameters": r["params"], "message": r["full"]} for r in results
         ],
     }
     dest = ROOT / "tests/fixtures/spark-4.2.0/error-classes"
     dest.mkdir(parents=True, exist_ok=True)
-    (dest / "render.json").write_text(
-        json.dumps(fixture, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    (dest / "render.json").write_text(json.dumps(fixture, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"{len(doc)} top-level classes, {len(table)} leaves, {len(results)} rendered", file=sys.stderr)
 
 

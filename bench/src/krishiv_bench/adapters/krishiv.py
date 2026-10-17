@@ -8,6 +8,7 @@ Planned shape (so P2 only fills in the bodies):
     endpoint (or /proc of the spawned process).
 Register-name: "krishiv" (already wired in adapters/__init__.py).
 """
+
 from __future__ import annotations
 
 from .base import Dataset, Engine, Query

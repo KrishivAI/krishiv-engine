@@ -35,9 +35,11 @@ Usage (from repo root; take the bench lock, start Spark, stop it afterwards; see
          --out ../tests/fixtures/spark-4.2.0/function-matrix'
     docker compose -f bench/baselines/docker-compose.yml stop spark
 """
+
 from __future__ import annotations
 
 import argparse
+import contextlib
 import getpass
 import hashlib
 import json
@@ -47,9 +49,8 @@ import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
-
 from decimal import Decimal
+from pathlib import Path
 
 FORMAT_VERSION = 1
 GENERATOR = "tests/scripts/gen_function_matrix.py"
@@ -85,24 +86,45 @@ SUPPLEMENTAL_SEEDS = {
 # Determinism is decided by Spark per case (fnmatrix/classify_cases.scala). Seeded rand/randn/uuid/
 # shuffle are excluded too: Spark marks them non-deterministic even with a seed. The only hand-kept
 # addition: Spark marks these deterministic, but with no `iv` argument they draw a random IV.
-VALUE_UNSTABLE = {"aes_encrypt": "random IV when `iv` is omitted",
-                  "try_aes_encrypt": "random IV when `iv` is omitted"}
+VALUE_UNSTABLE = {"aes_encrypt": "random IV when `iv` is omitted", "try_aes_encrypt": "random IV when `iv` is omitted"}
 
 # Conf keys that change how values render or parse; their effective values are read from Spark and
 # pinned in base_conf (unset ones are listed in the manifest). ANSI is per mode.
 RENDER_CONF_KEYS = [
-    "spark.sql.ansi.doubleQuotedIdentifiers", "spark.sql.binaryOutputStyle",
-    "spark.sql.decimalOperations.allowPrecisionLoss", "spark.sql.function.concatBinaryAsString",
-    "spark.sql.legacy.castComplexTypesToString.enabled", "spark.sql.legacy.interval.enabled",
-    "spark.sql.legacy.timeParserPolicy", "spark.sql.parser.escapedStringLiterals", "spark.sql.timestampType",
+    "spark.sql.ansi.doubleQuotedIdentifiers",
+    "spark.sql.binaryOutputStyle",
+    "spark.sql.decimalOperations.allowPrecisionLoss",
+    "spark.sql.function.concatBinaryAsString",
+    "spark.sql.legacy.castComplexTypesToString.enabled",
+    "spark.sql.legacy.interval.enabled",
+    "spark.sql.legacy.timeParserPolicy",
+    "spark.sql.parser.escapedStringLiterals",
+    "spark.sql.timestampType",
 ]
 
 # Integer edges (min/max) are not substituted into size/count arguments of these functions: Spark
 # would try to materialise multi-GB values or rows, which tests the JVM heap, not semantics.
 SIZE_ARG_FUNCTIONS = {
-    "array_repeat", "format_number", "lpad", "rpad", "randstr", "range", "repeat", "sequence", "space",
-    "array_insert", "stack", "explode", "inline", "posexplode", "bloom_filter_agg", "count_min_sketch",
-    "approx_percentile", "percentile_approx", "approx_top_k", "approx_top_k_accumulate",
+    "array_repeat",
+    "format_number",
+    "lpad",
+    "rpad",
+    "randstr",
+    "range",
+    "repeat",
+    "sequence",
+    "space",
+    "array_insert",
+    "stack",
+    "explode",
+    "inline",
+    "posexplode",
+    "bloom_filter_agg",
+    "count_min_sketch",
+    "approx_percentile",
+    "percentile_approx",
+    "approx_top_k",
+    "approx_top_k_accumulate",
 }
 
 # No edge/probe derivation at all (examples only): substitutions make Spark's *analyzer* (which a
@@ -181,6 +203,7 @@ D38_MIN_INT = "CAST('-99999999999999999999999999999999999999' AS DECIMAL(38,0))"
 # --------------------------------------------------------------------------------------------------
 # SQL text scanning (quote/paren aware; only for deriving inputs, never for expectations)
 # --------------------------------------------------------------------------------------------------
+
 
 def _scan(s: str):
     """Yield (index, char, depth, in_quote) for each character of `s`."""
@@ -290,7 +313,7 @@ def find_infix(stmt: str, name: str) -> list[tuple[int, int]] | None:
             continue
         lhs = (body_start, mm.start())
         rhs = (mm.end(), len(stmt))
-        if not stmt[rhs[0]:rhs[1]].strip():
+        if not stmt[rhs[0] : rhs[1]].strip():
             return None
         # Reject an operator that is part of a longer operator token (e.g. `<` inside `<=>`).
         if not word:
@@ -298,7 +321,7 @@ def find_infix(stmt: str, name: str) -> list[tuple[int, int]] | None:
             after = stmt[mm.end()] if mm.end() < len(stmt) else " "
             if before in "<>=!|&^*/%+-~" or after in "<>=!|&^*/%+-~":
                 continue
-        spans = [rhs] if not stmt[lhs[0]:lhs[1]].strip() else [lhs, rhs]
+        spans = [rhs] if not stmt[lhs[0] : lhs[1]].strip() else [lhs, rhs]
         if any("," in stmt[a:b] and top_level_comma(stmt[a:b]) for a, b in spans):
             return None
         return spans
@@ -331,30 +354,44 @@ def parse_examples(text: str) -> list[str]:
 # Edge and probe values per Spark type (simpleString)
 # --------------------------------------------------------------------------------------------------
 
+
 def edge_values(t: str) -> list[tuple[str, str, dict]]:
     """(label, sql_expr, extra_conf) edge inputs for an argument of Spark type `t`."""
     out = [("null", "NULL" if t == "void" else f"CAST(NULL AS {t})", {})]
     if t in ("float", "double"):
         T = t.upper()
-        out += [("nan", f"CAST('NaN' AS {T})", {}), ("neg_zero", f"CAST('-0.0' AS {T})", {}),
-                ("pos_inf", f"CAST('Infinity' AS {T})", {}), ("neg_inf", f"CAST('-Infinity' AS {T})", {})]
+        out += [
+            ("nan", f"CAST('NaN' AS {T})", {}),
+            ("neg_zero", f"CAST('-0.0' AS {T})", {}),
+            ("pos_inf", f"CAST('Infinity' AS {T})", {}),
+            ("neg_inf", f"CAST('-Infinity' AS {T})", {}),
+        ]
     elif t in INT_BOUNDS:
         lo, hi = INT_BOUNDS[t]
         out += [("int_min", lo, {}), ("int_max", hi, {})]
     elif t.startswith("decimal"):
         out += [("decimal38_max_frac", D38_MAX_FRAC, {}), ("decimal38_min_int", D38_MIN_INT, {})]
     elif t == "string" or t.startswith("string collate"):
-        out += [("empty_string", "''", {}), ("invalid_utf8", "CAST(X'C328FF' AS STRING)", {}),
-                ("unicode", "'Ä€日本語😀é'", {}), ("whitespace", "' \\t a\\u3000\\n '", {})]
+        out += [
+            ("empty_string", "''", {}),
+            ("invalid_utf8", "CAST(X'C328FF' AS STRING)", {}),
+            ("unicode", "'Ä€日本語😀é'", {}),
+            ("whitespace", "' \\t a\\u3000\\n '", {}),
+        ]
     elif t == "binary":
         out += [("empty_binary", "X''", {}), ("binary_bytes", "X'00FF7F80'", {})]
     elif t == "date":
-        out += [("date_min", "DATE'0001-01-01'", {}), ("date_max", "DATE'9999-12-31'", {}),
-                ("date_julian_gap", "DATE'1582-10-10'", {})]
+        out += [
+            ("date_min", "DATE'0001-01-01'", {}),
+            ("date_max", "DATE'9999-12-31'", {}),
+            ("date_julian_gap", "DATE'1582-10-10'", {}),
+        ]
     elif t == "timestamp":
-        out += [("ts_pre_epoch", "TIMESTAMP'1969-12-31 23:59:59.999999'", {}),
-                ("dst_gap", "TIMESTAMP'2024-03-10 02:30:00'", {TZ: DST_TZ}),
-                ("dst_overlap", "TIMESTAMP'2024-11-03 01:30:00'", {TZ: DST_TZ})]
+        out += [
+            ("ts_pre_epoch", "TIMESTAMP'1969-12-31 23:59:59.999999'", {}),
+            ("dst_gap", "TIMESTAMP'2024-03-10 02:30:00'", {TZ: DST_TZ}),
+            ("dst_overlap", "TIMESTAMP'2024-11-03 01:30:00'", {TZ: DST_TZ}),
+        ]
     elif t == "timestamp_ntz":
         out += [("ntz_dst_gap", "TIMESTAMP_NTZ'2024-03-10 02:30:00'", {TZ: DST_TZ})]
     elif t.startswith("array<"):
@@ -372,8 +409,10 @@ def agg_row_edges(t: str) -> list[tuple[str, list[str]]]:
         out.append(("rows_int_max", [INT_BOUNDS[t][1]] * 2))
     elif t in ("float", "double"):
         T = t.upper()
-        out += [("rows_nan", [f"CAST('NaN' AS {T})", f"CAST(1.0 AS {T})"]),
-                ("rows_signed_zero", [f"CAST('-0.0' AS {T})", f"CAST(0.0 AS {T})"])]
+        out += [
+            ("rows_nan", [f"CAST('NaN' AS {T})", f"CAST(1.0 AS {T})"]),
+            ("rows_signed_zero", [f"CAST('-0.0' AS {T})", f"CAST(0.0 AS {T})"]),
+        ]
     elif t.startswith("decimal"):
         out.append(("rows_decimal38", [D38_MAX_FRAC] * 2))
     return out
@@ -382,6 +421,7 @@ def agg_row_edges(t: str) -> list[tuple[str, list[str]]]:
 # --------------------------------------------------------------------------------------------------
 # Case derivation
 # --------------------------------------------------------------------------------------------------
+
 
 def family_of(fn: dict) -> str:
     g = fn["group"] or ("operators" if fn["registry"] == "operator" else "misc_funcs")
@@ -413,7 +453,7 @@ class TypeOracle:
         if expr not in self.cache:
             try:
                 self.cache[expr] = self.spark.sql(f"SELECT {expr}").schema.fields[0].dataType.simpleString()
-            except Exception:  # noqa: BLE001 - unresolvable on its own (column refs, lambdas, ...)
+            except Exception:
                 self.cache[expr] = None
         return self.cache[expr]
 
@@ -424,10 +464,7 @@ def derive_variants(fn: dict, stmt: str, oracle: TypeOracle, seen: set) -> list[
     if name in DERIVE_SKIP:
         return []
     call = find_call(stmt, name)
-    if call:
-        spans = split_args(stmt, call[0] + 1, call[1])
-    else:
-        spans = find_infix(stmt, name) or []
+    spans = split_args(stmt, call[0] + 1, call[1]) if call else find_infix(stmt, name) or []
     infix = call is None
     out = []
     for pos, (a, b) in enumerate(spans):
@@ -471,7 +508,7 @@ def derive_agg_rows(fn: dict, stmt: str, oracle: TypeOracle, seen: set) -> list[
     try:
         t = oracle.spark.sql(f"SELECT {m.group('col')} FROM VALUES {rows}{m.group('tail')}").schema.fields[0]
         t = t.dataType.simpleString()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
     out = []
     for label, vals in agg_row_edges(t):
@@ -505,6 +542,7 @@ def has_top_level_order_by(sql: str) -> bool:
 # Execution
 # --------------------------------------------------------------------------------------------------
 
+
 def norm_message(msg: str) -> str:
     """Message text without the JVM stack trace or the appended logical plan; expr ids normalised."""
     msg = msg.split("\n\nJVM stacktrace:")[0]
@@ -519,6 +557,7 @@ def norm_message(msg: str) -> str:
 def spark_phase(e: Exception) -> str:
     """Phase implied by Spark's exception type: parse, analysis, or execution (runtime evaluation)."""
     from pyspark.errors.exceptions.connect import AnalysisException, ParseException
+
     if isinstance(e, ParseException):
         return "parse"
     return "analysis" if isinstance(e, AnalysisException) else "execution"
@@ -532,6 +571,7 @@ def error_of(e: Exception) -> dict:
     params = {k: re.sub(r"#\d+", "#N", str(v)) for k, v in sorted(params.items())}
     if not cond:
         from pyspark.errors.exceptions.connect import SparkConnectGrpcException
+
         if isinstance(e, SparkConnectGrpcException):
             # Raised by Spark without an error condition (legacy JVM exception): keep the phase.
             cond = f"UNCLASSIFIED.{type(e).__name__}"
@@ -540,8 +580,7 @@ def error_of(e: Exception) -> dict:
             cond = f"CLIENT.{type(e).__name__}"
     # Unclassified JVM exceptions have unstable text (the JIT may drop it: OmitStackTraceInFastThrow).
     message = "" if cond.startswith("UNCLASSIFIED.") else norm_message(str(e))
-    err = {"error_class": cond, "sqlstate": state, "message": message, "message_parameters": params,
-           "phase": phase}
+    err = {"error_class": cond, "sqlstate": state, "message": message, "message_parameters": params, "phase": phase}
     if cond.startswith(("_LEGACY_ERROR_TEMP_", "UNCLASSIFIED.", "CLIENT.")) or not state:
         err["stability"] = "unstable"  # not stable API (ADR 0008): compare "errors" + phase only
     return err
@@ -563,6 +602,7 @@ def text_columns(F, types: list[str]):
 
 def _float_cell(v, t) -> dict:
     import numpy as np
+
     if pa_types().is_float32(t):
         f = np.float32(v)
         return {"f32": f"{int(f.view(np.uint32)):08x}", "repr": repr(f)}
@@ -573,19 +613,22 @@ def _float_cell(v, t) -> dict:
 def _decimal_cell(d: Decimal, scale: int) -> dict:
     sign, digits, exp = d.as_tuple()
     n = int("".join(map(str, digits)) or "0")
+    assert isinstance(exp, int)  # finite decimals only; NaN/Inf exponents are strings
     k = exp + scale
-    n = n * 10 ** k if k >= 0 else n // 10 ** (-k)
+    n = n * 10**k if k >= 0 else n // 10 ** (-k)
     return {"unscaled": str(-n if sign else n), "scale": scale}
 
 
 def pa_types():
     import pyarrow as pa
+
     return pa.types
 
 
 def encode_typed(arr) -> list:
     """Typed JSON cells of an Arrow array (exact; NULL is JSON null, never the string "null")."""
     import pyarrow as pa
+
     t = arr.type
     T = pa.types
     if T.is_null(t):
@@ -597,7 +640,7 @@ def encode_typed(arr) -> list:
     elif T.is_list(t) or T.is_large_list(t):
         child = encode_typed(arr.values)
         offs = arr.offsets.to_pylist()
-        vals = [child[offs[i]:offs[i + 1]] for i in range(len(arr))]
+        vals = [child[offs[i] : offs[i + 1]] for i in range(len(arr))]
     elif T.is_struct(t):
         names = [t.field(j).name for j in range(t.num_fields)]
         fields = [encode_typed(f) for f in arr.flatten()]
@@ -621,7 +664,7 @@ def encode_typed(arr) -> list:
     else:
         vals = [{"arrow": str(t), "text": str(v)} for v in arr.to_pylist()]
     valid = arr.is_valid().to_pylist() if arr.null_count else None
-    return vals if valid is None else [v if ok else None for v, ok in zip(vals, valid)]
+    return vals if valid is None else [v if ok else None for v, ok in zip(vals, valid, strict=True)]
 
 
 def _utf8_or_hex(b: bytes):
@@ -634,8 +677,10 @@ def _utf8_or_hex(b: bytes):
 def collect(df, F, types: list[str]) -> tuple[list, list, list | None, str | None]:
     """One query returning text and typed cells: (rows, render kinds, typed_rows, typed_unavailable)."""
     import pyarrow as pa
+
     text = text_columns(F, types)
     raw = [F.col(f"c{i}").alias(f"r{i}") for i in range(len(types))]
+
     def arrow(cols):
         try:
             return df.select(*cols).toArrow()
@@ -648,26 +693,30 @@ def collect(df, F, types: list[str]) -> tuple[list, list, list | None, str | Non
 
     try:
         table, typed_reason = arrow([e for e, _ in text] + raw), None
-    except Exception as e:  # noqa: BLE001 - a raw column Arrow cannot carry (interval, TIME, dup names)
+    except Exception as e:
         typed_reason = getattr(e, "getCondition", lambda: None)() or type(e).__name__
         table = arrow([e for e, _ in text])
     n = len(types)
-    cols = [pa.concat_arrays(table.column(i).chunks) if table.column(i).num_chunks else pa.array([], table.column(i).type)
-            for i in range(table.num_columns)]
+    cols = [
+        pa.concat_arrays(table.column(i).chunks) if table.column(i).num_chunks else pa.array([], table.column(i).type)
+        for i in range(table.num_columns)
+    ]
     kinds = [k for _, k in text]
     text_cells = []
     for i in range(n):
         cells = [None if b is None else _utf8_or_hex(b) for b in cols[i].cast(pa.binary()).to_pylist()]
         if any(isinstance(c, dict) for c in cells):  # not valid UTF-8: whole column as hex of the bytes
-            cells = [None if c is None else (c["utf8_hex"] if isinstance(c, dict) else c.encode().hex().upper())
-                     for c in cells]
+            cells = [
+                None if c is None else (c["utf8_hex"] if isinstance(c, dict) else c.encode().hex().upper())
+                for c in cells
+            ]
             kinds[i] = "utf8_hex"
         text_cells.append(cells)
-    rows = [list(r) for r in zip(*text_cells)] if n else [[] for _ in range(table.num_rows)]
+    rows = [list(r) for r in zip(*text_cells, strict=True)] if n else [[] for _ in range(table.num_rows)]
     typed = None
     if typed_reason is None:
         tc = [encode_typed(cols[n + i]) for i in range(n)]
-        typed = [list(r) for r in zip(*tc)] if n else [[] for _ in range(table.num_rows)]
+        typed = [list(r) for r in zip(*tc, strict=True)] if n else [[] for _ in range(table.num_rows)]
     return rows, kinds, typed, typed_reason
 
 
@@ -682,16 +731,16 @@ class Watchdog:
     def __enter__(self):
         def fire():
             self.fired = True
-            try:
+            with contextlib.suppress(Exception):
                 self.spark.interruptAll()
-            except Exception:  # noqa: BLE001
-                pass
+
         self.timer = threading.Timer(QUERY_TIMEOUT_S, fire)
         self.timer.start()
         return self
 
     def __exit__(self, *exc):
-        self.timer.cancel()
+        if self.timer is not None:
+            self.timer.cancel()
         return False
 
 
@@ -700,7 +749,7 @@ def run_case(spark, F, sql: str, nondet: bool) -> dict:
         try:
             df = spark.sql(sql)
             fields = df.schema.fields
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return {"timeout": True} if wd.fired else {"error": error_of(e)}
         schema = [{"name": f.name, "type": f.dataType.simpleString(), "nullable": f.nullable} for f in fields]
         if nondet:
@@ -709,11 +758,15 @@ def run_case(spark, F, sql: str, nondet: bool) -> dict:
         renamed = df.toDF(*[f"c{i}" for i in range(len(types))]).limit(MAX_ROWS + 1)
         try:
             rows, kinds, typed, typed_reason = collect(renamed, F, types)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return {"timeout": True} if wd.fired else {"schema": schema, "error": error_of(e)}
-    result: dict = {"schema": schema, "render": kinds, "truncated": len(rows) > MAX_ROWS,
-                    "ordered": has_top_level_order_by(sql)}
-    pairs = list(zip(rows, typed if typed is not None else [None] * len(rows)))[:MAX_ROWS]
+    result: dict = {
+        "schema": schema,
+        "render": kinds,
+        "truncated": len(rows) > MAX_ROWS,
+        "ordered": has_top_level_order_by(sql),
+    }
+    pairs = list(zip(rows, typed if typed is not None else [None] * len(rows), strict=True))[:MAX_ROWS]
     if not result["ordered"]:
         pairs.sort(key=lambda p: json.dumps(p, ensure_ascii=False, sort_keys=True))
     if any(v is not None and JVM_IDENTITY.search(v) for r, _ in pairs for v in r):
@@ -729,6 +782,7 @@ def run_case(spark, F, sql: str, nondet: bool) -> dict:
 class Session:
     def __init__(self, remote: str):
         from pyspark.sql import SparkSession
+
         self.spark = SparkSession.builder.remote(remote).create()
         self.conf: dict[str, str] = {}
 
@@ -741,10 +795,8 @@ class Session:
         self.conf = dict(conf)
 
     def close(self):
-        try:
+        with contextlib.suppress(Exception):
             self.spark.stop()
-        except Exception:  # noqa: BLE001
-            pass
 
 
 def is_parse_error(res: dict) -> bool:
@@ -775,8 +827,7 @@ def build_cases(fn: dict, oracle: TypeOracle) -> list[dict]:
         if cid in ids:
             continue
         ids.add(cid)
-        cases.append({"id": cid, "function": fn["name"], "kind": kind, "sql": sql,
-                      "conf": dict(sorted(extra.items()))})
+        cases.append({"id": cid, "function": fn["name"], "kind": kind, "sql": sql, "conf": dict(sorted(extra.items()))})
     return cases
 
 
@@ -784,15 +835,23 @@ def build_cases(fn: dict, oracle: TypeOracle) -> list[dict]:
 # Registry
 # --------------------------------------------------------------------------------------------------
 
+
 def spark_shell(container: str, script: str, data: str = "") -> list[str]:
     """Run a Scala script with `spark-shell -I` inside the container; returns its `@@` lines."""
     files = {"/tmp/krishiv_script.scala": script, "/tmp/krishiv_cases.jsonl": data}
     for path, text in files.items():
-        subprocess.run(["docker", "exec", "-i", container, "sh", "-c", f"cat > {path}"], input=text,
-                       text=True, check=True)
-    cmd = ["docker", "exec", container, "sh", "-c",
-           "/opt/spark/bin/spark-shell --master 'local[1]' --driver-memory 2g -I /tmp/krishiv_script.scala "
-           "2>/dev/null; rm -f /tmp/krishiv_script.scala /tmp/krishiv_cases.jsonl"]
+        subprocess.run(
+            ["docker", "exec", "-i", container, "sh", "-c", f"cat > {path}"], input=text, text=True, check=True
+        )
+    cmd = [
+        "docker",
+        "exec",
+        container,
+        "sh",
+        "-c",
+        "/opt/spark/bin/spark-shell --master 'local[1]' --driver-memory 2g -I /tmp/krishiv_script.scala "
+        "2>/dev/null; rm -f /tmp/krishiv_script.scala /tmp/krishiv_cases.jsonl",
+    ]
     out = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, check=True).stdout
     lines = [line for line in out.splitlines() if line.startswith("@@")]
     if "@@END" not in lines:
@@ -816,9 +875,10 @@ def classify_nondeterministic(container: str, keys: list[tuple[str, dict]]) -> s
 
 def container_image(container: str) -> str:
     try:
-        return subprocess.run(["docker", "inspect", "-f", "{{.Config.Image}}", container],
-                              capture_output=True, text=True, check=True).stdout.strip()
-    except Exception:  # noqa: BLE001
+        return subprocess.run(
+            ["docker", "inspect", "-f", "{{.Config.Image}}", container], capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except Exception:
         return "unknown"
 
 
@@ -836,12 +896,22 @@ def self_check(out: Path, by_family: dict) -> None:
     path-like literals (`%SystemDrive%/Users/John`), so result values are not scanned for them. The
     host and user names are looked for everywhere.
     """
-    bad = [f"{c['id']}/{m}" for cases in by_family.values() for c in cases for m, _ in MODES
-           if c[m].get("error", {}).get("error_class", "").startswith(("CLIENT.", "GENERATOR."))]
+    bad = [
+        f"{c['id']}/{m}"
+        for cases in by_family.values()
+        for c in cases
+        for m, _ in MODES
+        if c[m].get("error", {}).get("error_class", "").startswith(("CLIENT.", "GENERATOR."))
+    ]
     if bad:
         raise SystemExit(f"generator-side failures must not be committed: {bad[:20]}")
-    leaks = [f"{c['id']}/{m}" for cases in by_family.values() for c in cases for m, _ in MODES
-             if LOCAL_PATH.search(json.dumps(c[m].get("error", {})))]
+    leaks = [
+        f"{c['id']}/{m}"
+        for cases in by_family.values()
+        for c in cases
+        for m, _ in MODES
+        if LOCAL_PATH.search(json.dumps(c[m].get("error", {})))
+    ]
     if leaks:
         raise SystemExit(f"local paths in error text: {leaks[:20]}")
     user = getpass.getuser()
@@ -863,7 +933,8 @@ def main() -> int:
     ap.add_argument("--only", default="", help="comma-separated function names (debugging; partial output)")
     args = ap.parse_args()
 
-    from pyspark.sql import SparkSession, functions as F
+    from pyspark.sql import SparkSession
+    from pyspark.sql import functions as F
 
     started = time.time()
     version, registry = dump_registry(args.container)
@@ -876,9 +947,11 @@ def main() -> int:
         by_name.setdefault(fn["name"], fn)  # function registry wins over table/operator duplicates
     missing = sorted(set(shown) - set(by_name))
     extra = sorted(set(by_name) - set(shown))
-    print(f"Spark {version}: SHOW FUNCTIONS = {len(shown)}; registry dump = {len(by_name)} distinct names "
-          f"({len(registry)} entries); missing from dump = {missing}; not in SHOW FUNCTIONS = {extra}",
-          file=sys.stderr)
+    print(
+        f"Spark {version}: SHOW FUNCTIONS = {len(shown)}; registry dump = {len(by_name)} distinct names "
+        f"({len(registry)} entries); missing from dump = {missing}; not in SHOW FUNCTIONS = {extra}",
+        file=sys.stderr,
+    )
     if missing:
         raise SystemExit("every SHOW FUNCTIONS name must be in the registry dump")
     names = shown if not args.only else sorted(set(args.only.split(",")) & set(shown))
@@ -892,12 +965,18 @@ def main() -> int:
     oracle = TypeOracle(builder.spark)
     planned = {name: build_cases(by_name[name], oracle) for name in names}
     builder.close()
-    keys = sorted({(c["sql"], json.dumps({**base_conf, **c["conf"]}, sort_keys=True))
-                   for cases in planned.values() for c in cases})
+    keys = sorted(
+        {
+            (c["sql"], json.dumps({**base_conf, **c["conf"]}, sort_keys=True))
+            for cases in planned.values()
+            for c in cases
+        }
+    )
     nd_idx = classify_nondeterministic(args.container, [(sql, json.loads(conf)) for sql, conf in keys])
     nondet = {(keys[i][0], keys[i][1]) for i in nd_idx}
-    print(f"planned {sum(map(len, planned.values()))} cases; Spark marks {len(nondet)} non-deterministic",
-          file=sys.stderr)
+    print(
+        f"planned {sum(map(len, planned.values()))} cases; Spark marks {len(nondet)} non-deterministic", file=sys.stderr
+    )
 
     out = Path(args.out)
     (out / "cases").mkdir(parents=True, exist_ok=True)
@@ -946,24 +1025,37 @@ def main() -> int:
             kept.append(c)
         cases = sorted(kept, key=lambda c: c["id"])
         by_family.setdefault(family, []).extend(cases)
-        fn_rows.append({"name": name, "family": family, "registry": fn["registry"], "class": fn["class"],
-                        "since": fn["since"], "deprecated": fn["deprecated"].strip(), "cases": len(cases),
-                        "seed_source": "examples" if fn["examples"].strip() else "supplemental"})
+        fn_rows.append(
+            {
+                "name": name,
+                "family": family,
+                "registry": fn["registry"],
+                "class": fn["class"],
+                "since": fn["since"],
+                "deprecated": fn["deprecated"].strip(),
+                "cases": len(cases),
+                "seed_source": "examples" if fn["examples"].strip() else "supplemental",
+            }
+        )
         if done:
-            done.write_text(json.dumps({"cases": cases, "row": fn_rows[-1],
-                                        "dropped": dropped_parse - dropped_before}, ensure_ascii=False),
-                            encoding="utf-8")
+            done.write_text(
+                json.dumps(
+                    {"cases": cases, "row": fn_rows[-1], "dropped": dropped_parse - dropped_before}, ensure_ascii=False
+                ),
+                encoding="utf-8",
+            )
         print(f"[{idx + 1}/{len(names)}] {name}: {len(cases)} cases", file=sys.stderr)
 
-    families = []
+    families: list[dict] = []
     for family in sorted(by_family):
         cases = sorted(by_family[family], key=lambda c: (c["function"], c["id"]))
         shard = f"cases/{family}.jsonl"
         with open(out / shard, "w", encoding="utf-8") as f:
             for c in cases:
                 f.write(json.dumps(c, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-        families.append({"family": family, "shard": shard,
-                         "functions": len({c["function"] for c in cases}), "cases": len(cases)})
+        families.append(
+            {"family": family, "shard": shard, "functions": len({c["function"] for c in cases}), "cases": len(cases)}
+        )
     manifest = {
         "format_version": FORMAT_VERSION,
         "spark_version": version,
@@ -971,19 +1063,19 @@ def main() -> int:
         "generator": GENERATOR,
         "seed": None,
         "determinism": "no randomness; content-hashed ids; sorted output; unordered results sorted; cases "
-                       "Spark analyzes as non-deterministic or CURRENT_LIKE (incl. seeded rand/uuid/shuffle), "
-                       "value_unstable_functions, and outputs with JVM identity hashes record schema only",
+        "Spark analyzes as non-deterministic or CURRENT_LIKE (incl. seeded rand/uuid/shuffle), "
+        "value_unstable_functions, and outputs with JVM identity hashes record schema only",
         "base_conf": base_conf,
         "unset_conf": unset_conf,
         "modes": {mode: {ANSI: ansi} for mode, ansi in MODES},
         "case_format": "one JSON object per line: id, function, kind, sql, conf (overrides of base_conf; "
-                       "mode-independent); family = the shard's family; per mode (ansi_on, ansi_off) either "
-                       "{schema, rows, render, ordered, truncated, typed_rows | typed_unavailable}, "
-                       "{schema?, error{error_class, sqlstate, message, message_parameters, phase, "
-                       "stability?}}, {schema, nondeterministic}, or {same_as: <mode>}",
+        "mode-independent); family = the shard's family; per mode (ansi_on, ansi_off) either "
+        "{schema, rows, render, ordered, truncated, typed_rows | typed_unavailable}, "
+        "{schema?, error{error_class, sqlstate, message, message_parameters, phase, "
+        "stability?}}, {schema, nondeterministic}, or {same_as: <mode>}",
         "typed_cell_format": "JSON null = SQL NULL; bool/int as JSON; string as JSON string or {utf8_hex}; "
-                             "{f64|f32: IEEE bits hex, repr}; {unscaled, scale}; {ts_us, tz} / {ntz_us}; "
-                             "{days}; {hex}; arrays as JSON arrays; {map: [[k, v]]}; {struct: [[name, v]]}",
+        "{f64|f32: IEEE bits hex, repr}; {unscaled, scale}; {ts_us, tz} / {ntz_us}; "
+        "{days}; {hex}; arrays as JSON arrays; {map: [[k, v]]}; {struct: [[name, v]]}",
         "max_rows": MAX_ROWS,
         "show_functions_count": len(shown),
         "show_functions": shown,
@@ -991,7 +1083,7 @@ def main() -> int:
         "derive_skip_functions": sorted(DERIVE_SKIP),
         "size_arg_functions": sorted(SIZE_ARG_FUNCTIONS),
         "edge_catalog": EDGE_CATALOG,
-        "type_probes": {label: expr for label, expr in TYPE_PROBES},
+        "type_probes": dict(TYPE_PROBES),
         "total_cases": sum(f["cases"] for f in families),
         "total_mode_cases": sum(f["cases"] for f in families) * len(MODES),
         "dropped_unparseable_variants": dropped_parse,
@@ -1000,9 +1092,11 @@ def main() -> int:
     }
     write_json(out / "manifest.json", manifest)
     self_check(out, by_family)
-    print(f"wrote {manifest['total_cases']} cases x {len(MODES)} modes for {len(fn_rows)} functions in "
-          f"{len(families)} families against Spark {version} ({time.time() - started:.0f}s; timeouts: {timeouts})",
-          file=sys.stderr)
+    print(
+        f"wrote {manifest['total_cases']} cases x {len(MODES)} modes for {len(fn_rows)} functions in "
+        f"{len(families)} families against Spark {version} ({time.time() - started:.0f}s; timeouts: {timeouts})",
+        file=sys.stderr,
+    )
     return 0
 
 

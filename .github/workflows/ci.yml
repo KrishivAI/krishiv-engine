@@ -131,6 +131,41 @@ jobs:
           if taplo fmt --check --config .github/ci-fixtures/taplo.toml .github/ci-fixtures/unformatted.toml; then echo "taplo accepted the unformatted fixture"; exit 1; fi
           if docker run --rm -v "$PWD/.github/ci-fixtures:/workdir" davidanson/markdownlint-cli2:v0.23.3 bad.md; then echo "markdownlint accepted the bad fixture"; exit 1; fi
 
+  # P2-T151: Python code quality (ruff lint + format, ty) for python/, bench/ and
+  # tests/scripts/. Needs no Rust toolchain and no built extension, and it is cheap, so it
+  # runs on every PR instead of being gated by `changes`. Required check (a maintainer
+  # adds `python-quality` to branch protection). Versions come from each uv.lock.
+  python-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: python/ (ruff, ty)
+        working-directory: python
+        run: |
+          uv sync --frozen --no-install-project
+          uv run --frozen --no-sync ruff check
+          uv run --frozen --no-sync ruff format --check
+          uv run --frozen --no-sync ty check
+      - name: bench/ (ruff, ty)
+        working-directory: bench
+        run: |
+          uv sync --frozen --no-install-project
+          uv run --frozen --no-sync ruff check
+          uv run --frozen --no-sync ruff format --check
+          uv run --frozen --no-sync ty check
+      # The generator scripts are not a package; they use the python/ tool environment
+      # and their own tests/scripts/pyproject.toml configuration.
+      - name: tests/scripts/ (ruff, ty)
+        working-directory: tests/scripts
+        run: |
+          uv sync --frozen --no-install-project --project ../../python
+          uv run --frozen --no-sync --project ../../python ruff check .
+          uv run --frozen --no-sync --project ../../python ruff format --check .
+          uv run --frozen --no-sync --project ../../python ty check .
+
   fmt:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -285,6 +320,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    # `id-token: write` lets the coverage leg upload to Codecov via OIDC (no secret).
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -293,10 +332,12 @@ jobs:
             python: "3.11"
             maturin_args: ""
             wheel_tag: cp311-abi3
+            coverage: true
           - name: cp314t
             python: "3.14t"
             maturin_args: "--no-default-features"
             wheel_tag: cp314t
+            coverage: false
     name: wheels (${{ matrix.name }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -324,12 +365,30 @@ jobs:
       - name: Import test in a clean venv
         env:
           PY: ${{ matrix.python }}
+          COVERAGE: ${{ matrix.coverage }}
         run: |
           uv venv --python "$PY" "$RUNNER_TEMP/venv"
-          uv pip install --python "$RUNNER_TEMP/venv/bin/python" dist/*.whl pytest
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" dist/*.whl pytest pytest-cov
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/venv/bin/python" -c "import krishiv, sys; print(krishiv.__version__, sys.version)"
-          "$RUNNER_TEMP/venv/bin/pytest" "$GITHUB_WORKSPACE/python/tests" -q
+          if [ "$COVERAGE" = "true" ]; then
+            # Run from the workspace root so [tool.coverage.paths] maps the installed
+            # package back to python/krishiv. The pytest entry point does not put the
+            # current directory on sys.path, so the installed wheel is still what is tested.
+            cd "$GITHUB_WORKSPACE"
+            "$RUNNER_TEMP/venv/bin/pytest" python/tests -q --cov=krishiv --cov-config=python/pyproject.toml \
+              --cov-report=xml:python-coverage.xml --cov-report=term
+          else
+            "$RUNNER_TEMP/venv/bin/pytest" "$GITHUB_WORKSPACE/python/tests" -q
+          fi
+      - name: Upload Python coverage to Codecov (informational)
+        if: matrix.coverage
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: python-coverage.xml
+          flags: python
+          use_oidc: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          fail_ci_if_error: false
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheel-${{ matrix.name }}

@@ -31,6 +31,7 @@ cargo xtask docs-config | docs-errors            # regenerate config / error-cla
 cargo xtask budgets [--build-time] [--write-baseline]   # crate-count / build-time / size budgets (budgets.json)
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace   # docs gate
 (cd bench && uv run pytest)                      # bench harness tests
+(cd python && uv run ruff check && uv run ruff format --check && uv run ty check)   # python-quality gate (also bench/, tests/scripts/)
 cargo xtask setup [--install]                    # install .githooks; print (or run) user-level fixes for missing tools
 cargo xtask doctor                               # toolchain/uv/Python/Docker/disk checks, a named fix per failure
 cargo xtask stack up|down|status [--kafka]       # bench/baselines compose project krishiv-bench only
@@ -120,6 +121,6 @@ New crate → add it to `xtask/layers.toml` and root `Cargo.toml`, and write its
 - **Batch same-shape work** (e.g. a family of functions) into one brief and one agent, not many tiny dispatches.
 - **Review scaled to risk**: light for docs/mechanical/golden-backed bulk work, deep for unsafe, concurrency,
   formats and public API.
-- **CI gates are the police**: fmt, clippy, deny, machete, hack, layering, budgets, tests. Run them instead of
+- **CI gates are the police**: fmt, clippy, deny, machete, hack, layering, budgets, tests, python-quality (ruff, ty). Run them instead of
   re-reading code to check rules; don't hand-verify what a gate already enforces.
 - Read only what the task needs: the task entry, its ADRs, the crate CLAUDE.md files, then the code.

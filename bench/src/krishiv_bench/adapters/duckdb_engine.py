@@ -15,12 +15,13 @@ class DuckDBEngine(Engine):
     Resource probes use /proc/self (VmHWM reset via clear_refs) outside the timed region: the number is
     the whole harness process (Python + pyarrow baseline recorded separately). Spill: null (not exposed).
     """
+
     name = "duckdb"
 
     def __init__(self, threads: int | None = None, memory_limit: str | None = "12GB"):
         self.threads = threads or os.cpu_count()
         self.memory_limit = memory_limit
-        self.con = None
+        self.con: duckdb.DuckDBPyConnection | None = None
         self._p = LocalProc("self")
 
     def version(self) -> str:
@@ -31,15 +32,15 @@ class DuckDBEngine(Engine):
 
     def setup(self, dataset: Dataset) -> None:
         self._p.check()
-        self.con = duckdb.connect()
-        self.con.execute(f"SET threads={self.threads}")
+        con = self.con = duckdb.connect()
+        con.execute(f"SET threads={self.threads}")
         if self.memory_limit:
-            self.con.execute(f"SET memory_limit='{self.memory_limit}'")
+            con.execute(f"SET memory_limit='{self.memory_limit}'")
         for t in dataset.tables:
-            self.con.execute(
-                f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{dataset.root / (t + '.parquet')}')")
+            con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{dataset.root / (t + '.parquet')}')")
 
     def run(self, query: Query) -> list[tuple]:
+        assert self.con is not None, "setup() not called"
         return self.con.execute(query.sql).fetchall()
 
     def cancel(self) -> None:

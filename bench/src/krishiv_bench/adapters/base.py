@@ -5,6 +5,7 @@ Lifecycle: ``setup(dataset)`` once -> ``run(query)`` many times -> ``teardown()`
 normalises and checksums them). Adapters report engine-side resource use via
 ``begin_measure()`` / ``end_measure()`` which bracket each timed run (not the timing itself).
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -14,22 +15,22 @@ from pathlib import Path
 
 @dataclass
 class Dataset:
-    name: str            # "tpch", "tpcds", ...
+    name: str  # "tpch", "tpcds", ...
     sf: float
-    root: Path           # directory holding <table>.parquet files (host path)
+    root: Path  # directory holding <table>.parquet files (host path)
     tables: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Query:
-    id: str              # "q01"
+    id: str  # "q01"
     sql: str
     suite: str
 
 
 @dataclass
 class Measure:
-    peak_rss_bytes: int | None = None      # process RSS high-water during the run (VmHWM after clear_refs reset)
+    peak_rss_bytes: int | None = None  # process RSS high-water during the run (VmHWM after clear_refs reset)
     baseline_rss_bytes: int | None = None  # process RSS just before the run
     cpu_seconds: float | None = None
     spill_bytes: int | None = None
@@ -49,13 +50,13 @@ class Engine(ABC):
     def run(self, query: Query) -> list[tuple]:
         """Execute to completion, return all rows."""
 
-    def teardown(self) -> None:  # pragma: no cover - default no-op
+    def teardown(self) -> None:  # noqa: B027  # optional hook, default no-op  # pragma: no cover
         pass
 
-    def cancel(self) -> None:
+    def cancel(self) -> None:  # noqa: B027  # optional hook, default no-op
         """Best-effort abort of the in-flight query (called from another thread on timeout)."""
 
-    def begin_measure(self) -> None:
+    def begin_measure(self) -> None:  # noqa: B027  # optional hook, default no-op
         pass
 
     def end_measure(self) -> Measure:

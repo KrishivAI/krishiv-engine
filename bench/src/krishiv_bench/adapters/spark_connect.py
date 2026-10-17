@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import contextlib
+from typing import TYPE_CHECKING
+
 from .base import Dataset, Engine, Measure, Query
 from .proc_mem import DockerProc
+
+if TYPE_CHECKING:
+    from pyspark.sql import SparkSession
 
 
 class SparkConnectEngine(Engine):
@@ -13,16 +19,22 @@ class SparkConnectEngine(Engine):
     as DuckDB). A JVM keeps its committed heap, so peaks are cumulative/order-dependent. Failures of the
     probe raise (never silently record a lifetime HWM). Spill: not collected -> null.
     """
+
     name = "spark-connect"
 
-    def __init__(self, remote: str = "sc://127.0.0.1:15002", container: str | None = "krishiv-bench-spark",
-                 container_data_root: str = "/data", host_data_root: str | None = None):
+    def __init__(
+        self,
+        remote: str = "sc://127.0.0.1:15002",
+        container: str | None = "krishiv-bench-spark",
+        container_data_root: str = "/data",
+        host_data_root: str | None = None,
+    ):
         self.remote = remote
         self.container = container
         self.cdata = container_data_root.rstrip("/")
         self.host_data_root = host_data_root
-        self.spark = None
-        self._p = None
+        self.spark: SparkSession | None = None
+        self._p: DockerProc | None = None
 
     def _spark_version_server(self) -> str:
         return self.spark.version if self.spark else "?"
@@ -30,20 +42,22 @@ class SparkConnectEngine(Engine):
     def version(self) -> str:
         if self.spark is None:
             from pyspark.sql import SparkSession
+
             self.spark = SparkSession.builder.remote(self.remote).getOrCreate()
         return self.spark.version
 
     def config(self) -> dict:
         out = {"remote": self.remote, "container": self.container}
-        try:
+        spark = self.spark
+        with contextlib.suppress(Exception):
+            assert spark is not None
             for k in ("spark.sql.shuffle.partitions", "spark.driver.memory", "spark.master", "spark.sql.ansi.enabled"):
-                out[k] = self.spark.conf.get(k, None)
-        except Exception:
-            pass
+                out[k] = spark.conf.get(k, None)
         return out
 
     def setup(self, dataset: Dataset) -> None:
         from pyspark.sql import SparkSession
+
         self.spark = SparkSession.builder.remote(self.remote).getOrCreate()
         host_root = str(self.host_data_root or dataset.root.parents[1])
         for t in dataset.tables:
@@ -54,22 +68,23 @@ class SparkConnectEngine(Engine):
             self._p.check()
 
     def run(self, query: Query) -> list[tuple]:
+        assert self.spark is not None, "setup() not called"
         return [tuple(r) for r in self.spark.sql(query.sql).collect()]
 
     def cancel(self) -> None:
-        try:
-            self.spark.interruptAll()
-        except Exception:
-            pass
+        if self.spark is not None:
+            with contextlib.suppress(Exception):
+                self.spark.interruptAll()
 
     def begin_measure(self) -> None:
-        if self.container:
+        if self._p is not None:
             self._p.reset()
             self._rss0, _, self._cpu0 = self._p.read()
 
     def end_measure(self) -> Measure:
         if not self.container:
             return Measure()
+        assert self._p is not None
         _, hwm, cpu = self._p.read()
         return Measure(peak_rss_bytes=hwm, baseline_rss_bytes=self._rss0, cpu_seconds=cpu - self._cpu0)
 

@@ -3,11 +3,11 @@
 All output goes to $KRISHIV_DATA/<dataset>/sf<N>/ as Parquet, plus a sha256 manifest in
 $KRISHIV_DATA/manifests/. Nothing here is ever written inside the repo.
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import shutil
 import subprocess
 import sys
@@ -130,7 +130,7 @@ def zipf_keys(rows: int, keys: int, alpha: float, seed: int = 0) -> np.ndarray:
     numpy's Generator.zipf requires alpha > 1 and is unbounded, so we sample the bounded
     distribution by inverse-CDF over the explicit pmf. Key 0 is the hottest key.
     """
-    if not 0.0 < alpha:
+    if not alpha > 0.0:
         raise ValueError("alpha must be > 0")
     if keys < 1 or rows < 0:
         raise ValueError("keys must be >= 1 and rows >= 0")
@@ -142,16 +142,25 @@ def zipf_keys(rows: int, keys: int, alpha: float, seed: int = 0) -> np.ndarray:
     return np.searchsorted(cdf, u, side="right").clip(max=keys - 1).astype(np.int64)
 
 
-def gen_zipf(rows: int, keys: int, alpha: float, out: Path | None = None, seed: int = 0,
-             payload_cols: int = 2, chunk: int = 5_000_000) -> Path:
+def gen_zipf(
+    rows: int,
+    keys: int,
+    alpha: float,
+    out: Path | None = None,
+    seed: int = 0,
+    payload_cols: int = 2,
+    chunk: int = 5_000_000,
+) -> Path:
     """Parquet with columns: key (int64, Zipf-skewed), id (int64), v0..vN (float64 payload)."""
     out = out or (data_root() / "zipf" / f"a{alpha}_k{keys}_r{rows}.parquet")
     out.parent.mkdir(parents=True, exist_ok=True)
-    schema = pa.schema([("key", pa.int64()), ("id", pa.int64())]
-                       + [(f"v{i}", pa.float64()) for i in range(payload_cols)])
+    schema = pa.schema(
+        [("key", pa.int64()), ("id", pa.int64())] + [(f"v{i}", pa.float64()) for i in range(payload_cols)]
+    )
     rng = np.random.default_rng(seed + 1)
     pmf = 1.0 / np.arange(1, keys + 1, dtype=np.float64) ** alpha
-    cdf = np.cumsum(pmf); cdf /= cdf[-1]
+    cdf = np.cumsum(pmf)
+    cdf /= cdf[-1]
     krng = np.random.default_rng(seed)
     with pq.ParquetWriter(out, schema, compression="zstd") as w:
         done = 0
@@ -166,8 +175,14 @@ def gen_zipf(rows: int, keys: int, alpha: float, out: Path | None = None, seed: 
 
 
 # ---------------------------------------------------------------- Nexmark
-def gen_nexmark(events: int, seed: int = 0, out_dir: Path | None = None,
-                num_people: int = 1000, num_auctions: int = 5000, hot_ratio: float = 0.5) -> Path:
+def gen_nexmark(
+    events: int,
+    seed: int = 0,
+    out_dir: Path | None = None,
+    num_people: int = 1000,
+    num_auctions: int = 5000,
+    hot_ratio: float = 0.5,
+) -> Path:
     """Small Python Nexmark-style generator -> person/auction/bid Parquet (batch form).
 
     Event mix follows the Nexmark default proportions (person 2%, auction 6%, bid 92%).
@@ -189,28 +204,34 @@ def gen_nexmark(events: int, seed: int = 0, out_dir: Path | None = None,
         return k.astype(np.int64)
 
     n_p, n_a, n_b = (kind == 0).sum(), (kind == 1).sum(), (kind == 2).sum()
-    person = pa.table({
-        "id": np.arange(n_p, dtype=np.int64),
-        "name": [f"person_{i}" for i in range(n_p)],
-        "state": rng.choice(["OR", "ID", "CA", "WA", "AZ"], n_p),
-        "city": rng.choice(["Phoenix", "Portland", "Boise", "Seattle", "LA"], n_p),
-        "date_time": base + ts[kind == 0],
-    })
-    auction = pa.table({
-        "id": np.arange(n_a, dtype=np.int64),
-        "seller": pick(n_a, max(1, num_people)),
-        "category": rng.integers(0, 20, n_a).astype(np.int64),
-        "initial_bid": rng.integers(100, 10_000, n_a).astype(np.int64),
-        "date_time": base + ts[kind == 1],
-        "expires": base + ts[kind == 1] + rng.integers(1_000, 100_000, n_a),
-    })
-    bid = pa.table({
-        "auction": pick(n_b, max(1, num_auctions)),
-        "bidder": pick(n_b, max(1, num_people)),
-        "price": rng.integers(100, 100_000, n_b).astype(np.int64),
-        "channel": rng.choice(["apple", "google", "facebook", "baidu"], n_b),
-        "date_time": base + ts[kind == 2],
-    })
+    person = pa.table(
+        {
+            "id": np.arange(n_p, dtype=np.int64),
+            "name": [f"person_{i}" for i in range(n_p)],
+            "state": rng.choice(["OR", "ID", "CA", "WA", "AZ"], n_p),
+            "city": rng.choice(["Phoenix", "Portland", "Boise", "Seattle", "LA"], n_p),
+            "date_time": base + ts[kind == 0],
+        }
+    )
+    auction = pa.table(
+        {
+            "id": np.arange(n_a, dtype=np.int64),
+            "seller": pick(n_a, max(1, num_people)),
+            "category": rng.integers(0, 20, n_a).astype(np.int64),
+            "initial_bid": rng.integers(100, 10_000, n_a).astype(np.int64),
+            "date_time": base + ts[kind == 1],
+            "expires": base + ts[kind == 1] + rng.integers(1_000, 100_000, n_a),
+        }
+    )
+    bid = pa.table(
+        {
+            "auction": pick(n_b, max(1, num_auctions)),
+            "bidder": pick(n_b, max(1, num_people)),
+            "price": rng.integers(100, 100_000, n_b).astype(np.int64),
+            "channel": rng.choice(["apple", "google", "facebook", "baidu"], n_b),
+            "date_time": base + ts[kind == 2],
+        }
+    )
     for name, t in (("person", person), ("auction", auction), ("bid", bid)):
         pq.write_table(t, out_dir / f"{name}.parquet", compression="zstd")
     return out_dir

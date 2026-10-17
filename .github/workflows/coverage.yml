@@ -58,6 +58,6 @@ jobs:
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: target/coverage/lcov.info
-          flags: pr
+          flags: rust,pr
           use_oidc: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           fail_ci_if_error: false

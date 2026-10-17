@@ -22,7 +22,12 @@ classifiers = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=6",
+    "ruff==0.17.1",
+    "ty==0.0.89",
+]
 
 [tool.maturin]
 manifest-path = "../crates/krishiv-python/Cargo.toml"
@@ -30,3 +35,32 @@ module-name = "krishiv._native"
 python-source = "."
 # Default build is abi3-py311 (feature set in the crate). The free-threaded
 # wheel is built separately; see README.md.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["krishiv"]
+branch = true
+relative_files = true
+parallel = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT"]
+
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.analysis]
+# The compiled extension only exists after `maturin develop`; its typed stub is
+# P2-T130's job, so until then the import is allowed to stay unresolved.
+allowed-unresolved-imports = ["krishiv._native"]
+
+[tool.coverage.paths]
+# The wheel is tested from its installed location; map it back to the source tree so
+# reports (and Codecov) show repository paths.
+source = ["python/krishiv", "*/site-packages/krishiv"]
