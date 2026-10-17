@@ -8,7 +8,7 @@
 //!    without a class are counted separately as `unclassified_errors` and are outside this
 //!    denominator. Only class and SQLSTATE are compared, not message parameters.
 //! 3. **result**: of the statements Spark executed, how many the engine answers with the same
-//!    schema and rows. The comparison is exact text, as in Spark (no float tolerance). Like
+//!    schema and rows, after Spark's output masking ([`super::normalise`]). The comparison is exact text, as in Spark (no float tolerance). Like
 //!    `SQLQueryTestSuite`, rows are sorted (per row, in UTF-16 order) unless the result is
 //!    sorted, which the engine reports in [`QueryOutput::sorted`].
 //!
@@ -23,9 +23,10 @@ use std::path::{Path, PathBuf};
 use krishiv_common::error::ErrorClass;
 
 use super::manifest::{ExclusionManifest, ManifestError};
+use super::normalise::Masker;
 use super::parse::{Expected, ExpectedError, ParseError, Statement, parse_results};
 use super::setup::{FileSetup, SessionSetup};
-use super::{GoldenPair, GoldenSet};
+use super::{GoldenPair, GoldenSet, Jdk};
 
 /// An engine failure on one statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +57,10 @@ pub struct QueryOutput {
 pub trait Engine {
     /// Engine name for the report.
     fn name(&self) -> &str;
+    /// The session's warehouse directory, masked out of rows like Spark does (empty: none).
+    fn warehouse_dir(&self) -> &str {
+        ""
+    }
     /// Start a fresh session configured as `setup` (called before every run of every file).
     fn reset(&mut self, setup: &SessionSetup) -> Result<(), EngineError>;
     /// Parse `sql` without running it, under the current session configs.
@@ -167,6 +172,10 @@ pub struct RunResult {
     pub failed_files: Vec<FailedFile>,
     /// `.sql` inputs without a `.sql.out`; nothing to compare against.
     pub without_expected: Vec<String>,
+    /// JDK the results were chosen for.
+    pub jdk: Jdk,
+    /// Files compared against their JDK-specific alternate results.
+    pub variant_files: Vec<String>,
     /// Error classes Spark expects that Krishiv's registry does not know.
     pub unregistered_classes: BTreeSet<String>,
 }
@@ -220,6 +229,7 @@ pub fn run(
     manifest.validate(set)?;
     let mut result = RunResult {
         engine: engine.name().to_owned(),
+        jdk: set.jdk,
         ..RunResult::default()
     };
     for pair in &set.pairs {
@@ -229,6 +239,9 @@ pub fn run(
                 statements: 0,
             });
             continue;
+        }
+        if pair.variant {
+            result.variant_files.push(pair.name.clone());
         }
         let loaded = load_statements(pair)
             .and_then(|statements| read_lossy(&pair.sql).map(|sql| (statements, sql)));
@@ -341,15 +354,18 @@ pub fn run_file(
 }
 
 fn failed(s: &Statement) -> Outcome {
-    outcome(s, false, None)
+    outcome(s, false, None, None)
 }
 
 fn run_session(engine: &mut dyn Engine, statements: &[Statement]) -> Vec<Outcome> {
+    let Ok(masker) = Masker::new(engine.warehouse_dir()) else {
+        return statements.iter().map(failed).collect();
+    };
     statements
         .iter()
         .map(|s| {
             let parsed = engine.parse(&s.query).is_ok();
-            outcome(s, parsed, Some(engine.execute(&s.query)))
+            outcome(s, parsed, Some(engine.execute(&s.query)), Some(&masker))
         })
         .collect()
 }
@@ -358,6 +374,7 @@ fn outcome(
     s: &Statement,
     parsed: bool,
     executed: Option<Result<QueryOutput, EngineError>>,
+    masker: Option<&Masker>,
 ) -> Outcome {
     match &s.expected {
         Expected::Rows(output) => Outcome {
@@ -365,7 +382,8 @@ fn outcome(
             result: Some(
                 executed
                     .and_then(Result::ok)
-                    .is_some_and(|got| result_matches(s, output, &got)),
+                    .zip(masker)
+                    .is_some_and(|(got, m)| result_matches(s, output, &got, m)),
             ),
             ..Outcome::default()
         },
@@ -390,14 +408,23 @@ fn error_matches(expected: &ExpectedError, class: &str, got: &EngineError) -> bo
             .is_none_or(|st| got.sql_state.as_ref() == Some(st))
 }
 
-fn result_matches(s: &Statement, expected_output: &str, got: &QueryOutput) -> bool {
+fn result_matches(
+    s: &Statement,
+    expected_output: &str,
+    got: &QueryOutput,
+    masker: &Masker,
+) -> bool {
     if got.schema != s.schema {
         return false;
     }
-    let mut rows: Vec<String> = got.rows.iter().map(|r| r.join("\t")).collect();
+    // `getNormalizedQueryExecutionResult`: mask each row, then sort unless the plan is sorted.
+    let mut rows: Vec<String> = got
+        .rows
+        .iter()
+        .map(|r| masker.mask(&r.join("\t")))
+        .collect();
     if !got.sorted.unwrap_or_else(|| s.text_sorted()) {
-        // Spark sorts the row strings (Scala `String` order is UTF-16 code-unit order). The
-        // golden text was sorted the same way when it was recorded.
+        // Scala `String` order is UTF-16 code-unit order.
         rows.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
     }
     rows.join("\n").trim_end() == expected_output.trim_end()

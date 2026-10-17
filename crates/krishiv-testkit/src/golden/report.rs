@@ -66,6 +66,8 @@ pub fn to_json(run: &RunResult, tag: &str, manifest: &ExclusionManifest) -> Valu
     json!({
         "format_version": REPORT_FORMAT_VERSION,
         "spark_tag": tag,
+        "jdk": run.jdk.version(),
+        "jdk_variant_files": run.variant_files,
         "engine": run.engine,
         "totals": {
             "files_run": run.files.len(),
@@ -120,6 +122,7 @@ pub fn summary(run: &RunResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::golden::Jdk;
     use crate::golden::manifest::ExclusionManifest;
     use crate::golden::run::{FailedFile, SkippedFile};
 
@@ -155,6 +158,8 @@ mod tests {
                 statements: 7,
             }],
             without_expected: vec!["z".into()],
+            jdk: Jdk::Java21,
+            variant_files: vec!["v".into()],
             failed_files: vec![FailedFile {
                 name: "w".into(),
                 error: "bad".into(),

@@ -112,6 +112,7 @@ metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 # Benchmarks: drop-in criterion replacement that CodSpeed instruments (dev-dependency only).
 criterion = { package = "codspeed-criterion-compat", version = "5.0", default-features = false }
 insta = { version = "1.48", default-features = false }
+regex-lite = { version = "0.1", default-features = false, features = ["std", "string"] }
 sqllogictest = { version = "0.29", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 serde = { version = "1.0.229", default-features = false }
