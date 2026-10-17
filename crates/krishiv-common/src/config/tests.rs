@@ -207,3 +207,88 @@ fn docs_markdown_lists_every_entry_deterministically() {
     assert_eq!(rows, sorted);
     assert_eq!(md, docs_markdown());
 }
+
+#[test]
+fn session_time_zone_is_validated() {
+    let mut c = Config::new();
+    for ok in [
+        "UTC",
+        "Z",
+        "America/Los_Angeles",
+        "Etc/GMT+8",
+        "+08:00",
+        "-0530",
+        "+8",
+        "GMT+02:00",
+        "PST",
+    ] {
+        c.set("spark.sql.session.timeZone", ok).unwrap();
+        assert_eq!(
+            c.get(&SESSION_TIME_ZONE).and_then(ConfigValue::as_str),
+            Some(ok)
+        );
+    }
+    for bad in [
+        "",
+        "Mars/ Olympus",
+        "+25:00",
+        "UTC+25",
+        "GMT-19:00",
+        "UT+08:75",
+        "+08:75",
+        "+8:0",
+        "1/2",
+        "a//b",
+    ] {
+        let e = c.set("spark.sql.session.timeZone", bad).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivInvalidConfigValue,
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn spark_shuffle_partitions_maps_to_the_hint() {
+    let mut c = Config::new();
+    assert_eq!(c.set("spark.sql.shuffle.partitions", "64").unwrap(), None);
+    assert_eq!(c.get(&SHUFFLE_PARTITIONS_HINT), Some(&ConfigValue::Int(64)));
+}
+
+/// Counts `WARN` events seen by a thread-local subscriber.
+struct WarnCounter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl tracing::Subscriber for WarnCounter {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        if *event.metadata().level() == tracing::Level::WARN {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+#[test]
+fn unknown_spark_key_logs_exactly_one_warning_per_key() {
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut c = Config::new();
+    tracing::subscriber::with_default(WarnCounter(std::sync::Arc::clone(&count)), || {
+        // Mapped keys do not warn.
+        c.set("spark.sql.ansi.enabled", "true").unwrap();
+        assert!(c.set("spark.unknown.a", "1").unwrap().is_some());
+        // Setting the same key again does not warn again.
+        assert_eq!(c.set("spark.unknown.a", "2").unwrap(), None);
+        assert!(c.set("spark.unknown.b", "1").unwrap().is_some());
+    });
+    assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(c.get_unregistered("spark.unknown.a"), Some("2"));
+}

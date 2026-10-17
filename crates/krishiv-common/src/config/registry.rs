@@ -35,7 +35,7 @@ pub static ANSI_ENABLED: ConfigEntry = ConfigEntry {
 /// Session time zone.
 pub static SESSION_TIME_ZONE: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.session.timeZone",
-    value_type: ValueType::String,
+    value_type: ValueType::TimeZone,
     default: None,
     doc: "Session time zone: a region ID such as `America/Los_Angeles` or a zone offset. \
           When unset, the local system time zone is used, as in Spark.",

@@ -985,6 +985,7 @@ dependencies = [
  "codspeed-criterion-compat",
  "serde_json",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
