@@ -74,36 +74,55 @@ fn run_end(text: &str, from: usize, stop: fn(u8) -> bool) -> usize {
         .map_or(text.len(), |n| from + n)
 }
 
-/// URL credentials. Each run of non-space text is parsed once, from its
-/// first URL start, so the work is linear in `text` (a run such as
-/// `jdbc:jdbc:...` or `x://x://...` is not rescanned per match).
+/// URL credentials. A run of non-space text can hold several URLs (a
+/// comma-separated list of paths or hosts), so the run is split at every URL
+/// start (`scheme://` or `jdbc:`) and each segment is parsed on its own. The
+/// segments are disjoint and each scheme is scanned back only to the
+/// previous segment, so the work stays linear in `text` (`jdbc:jdbc:...` or
+/// `x://x://...` become short segments).
 fn urls(text: &str, out: &mut Vec<Range<usize>>) {
-    let bytes = text.as_bytes();
     let mut run_start = 0;
     while run_start < text.len() {
         let run_end = run_end(text, run_start, ends_url);
-        let run = &text[run_start..run_end];
-        let scheme = run.find("://").map(|i| {
-            bytes[run_start..run_start + i]
-                .iter()
-                .rposition(|&b| !(b.is_ascii_alphanumeric() || b"+-.:".contains(&b)))
-                .map_or(0, |p| p + 1)
-        });
-        let jdbc = run.find("jdbc:");
-        let first = match (scheme, jdbc) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
-        if let Some(first) = first {
-            let start = run_start + first;
+        for seg in url_segments(&text[run_start..run_end]) {
+            let (start, end) = (run_start + seg.start, run_start + seg.end);
             out.extend(
-                url_secret_ranges(&text[start..run_end])
+                url_secret_ranges(&text[start..end])
                     .into_iter()
                     .map(|r| start + r.start..start + r.end),
             );
         }
         run_start = run_end + 1;
     }
+}
+
+/// The URL segments of one run: from each URL start to the next one (or
+/// the end of the run), in order.
+fn url_segments(run: &str) -> Vec<Range<usize>> {
+    let bytes = run.as_bytes();
+    let mut starts = Vec::new();
+    let mut floor = 0;
+    for (i, _) in run.match_indices("://") {
+        // The scheme runs back from `://` over scheme characters, but never
+        // past the previous match, which bounds the backward scans.
+        let start = bytes[floor..i]
+            .iter()
+            .rposition(|&b| !(b.is_ascii_alphanumeric() || b"+-.:".contains(&b)))
+            .map_or(floor, |p| floor + p + 1);
+        if start < i {
+            starts.push(start);
+        }
+        floor = i + 3;
+    }
+    starts.extend(run.match_indices("jdbc:").map(|(i, _)| i));
+    starts.sort_unstable();
+    starts.dedup();
+    let mut segments = Vec::with_capacity(starts.len());
+    for (k, &s) in starts.iter().enumerate() {
+        let e = starts.get(k + 1).copied().unwrap_or(run.len());
+        segments.push(s..e);
+    }
+    segments
 }
 
 /// `key=value` pairs with sensitive keys. A separator inside a value
@@ -230,6 +249,39 @@ mod tests {
             (
                 "jdbc:oracle:thin:scott/Canary-7f3a9c@h:1521:orcl",
                 "jdbc:oracle:thin:scott/*********(redacted)@h:1521:orcl",
+            ),
+            // Every URL of a comma-separated list, not just the first.
+            (
+                "https://h1/?a=1,https://u2:Canary-7f3a9c@h2/",
+                "https://h1/?a=1,https://u2:*********(redacted)@h2/",
+            ),
+            // Raw `/`, `;` and `&` inside a password.
+            (
+                "s3a://AKIA:ab/c+d@Canary-7f3a9c@bucket/k",
+                "s3a://AKIA:*********(redacted)@bucket/k",
+            ),
+            (
+                "postgresql://u:pa;Canary-7f3a9c@h/db",
+                "postgresql://u:*********(redacted)@h/db",
+            ),
+            (
+                "postgresql://u:pa&Canary-7f3a9c@h/db?ssl=1",
+                "postgresql://u:*********(redacted)@h/db?ssl=1",
+            ),
+            // A userinfo without `:` may be a token.
+            (
+                "https://Canary-7f3a9c@github.com/o/r",
+                "https://*********(redacted)@github.com/o/r",
+            ),
+            // Opaque JDBC with a raw `;` in the password.
+            (
+                "jdbc:oracle:thin:scott/ti;Canary-7f3a9c@h:1521:orcl",
+                "jdbc:oracle:thin:scott/*********(redacted)@h:1521:orcl",
+            ),
+            // jTDS: credentials only as `;` parameters.
+            (
+                "jdbc:jtds:sqlserver://h:1433/db;user=u;password=p@Canary-7f3a9c",
+                "jdbc:jtds:sqlserver://h:1433/db;user=u;password=*********(redacted)",
             ),
         ];
         for (text, want) in cases {

@@ -71,30 +71,42 @@ pub fn is_sensitive_key(key: &str) -> bool {
 /// Characters that start a parameter.
 const SEPARATORS: [char; 4] = ['?', '&', ';', '#'];
 
-/// The byte ranges of the credentials in `url`, in order and disjoint;
+/// The byte ranges of the credentials in `url`, sorted and disjoint;
 /// empty when `url` is not a URL or holds none. Linear in `url.len()`.
 ///
-/// The userinfo is searched for only before the first parameter separator
-/// (`?`, `&`, `;`, `#`), so an `@` inside a parameter value is never taken
-/// for the end of a userinfo. Within that head the last `@` ends it, so a
-/// password may hold `@`, `:` or `/` (base64 keys do) unescaped.
+/// Two scans, merged, so that an ambiguous URL is over-redacted, never
+/// leaked:
+/// - the userinfo runs to the last `@` before the query or fragment (`?`
+///   or `#`, and `;` for SQL Server URLs), so a password may hold raw `/`
+///   (base64 secret keys do) as well as raw
+///   `@`, `:`, `;` or `&`; without a `:` the whole userinfo is hidden (it may
+///   be a token, as in `https://<token>@host`);
+/// - `;`/`?`/`&` parameters are scanned from the start of the URL, so a
+///   credential parameter whose value holds `@`
+///   (`jdbc:sqlserver://h;password=p@ss`) is hidden even when the userinfo
+///   scan above misreads where the userinfo ends.
 pub(crate) fn url_secret_ranges(url: &str) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     let params_from = if let Some(i) = url.find("://").filter(|&i| is_scheme(&url[..i])) {
         // `scheme://user:password@host...`
         let start = i + 3;
-        let head = url[start..]
-            .find(SEPARATORS)
+        // The userinfo search stops at the query or fragment, not at `/`:
+        // secret keys may hold `/`. A path holding `@` is then over-redacted,
+        // never leaked. SQL Server URLs (`jdbc:sqlserver://h:1433;...`, jTDS)
+        // carry credentials only as `;` parameters, so `;` ends it too.
+        let scheme = url[..i].to_ascii_lowercase();
+        let semicolon_params = scheme.ends_with("sqlserver") || scheme.contains("jtds");
+        let auth_end = url[start..]
+            .find(|c: char| matches!(c, '?' | '#') || (semicolon_params && c == ';'))
             .map_or(url.len(), |e| start + e);
-        match url[start..head].rfind('@') {
-            Some(at) => {
-                if let Some(colon) = url[start..start + at].find(':') {
-                    push(&mut out, start + colon + 1..start + at);
-                }
-                start + at + 1
+        if let Some(at) = url[start..auth_end].rfind('@') {
+            let userinfo = start..start + at;
+            match url[userinfo.clone()].find(':') {
+                Some(colon) => push(&mut out, start + colon + 1..userinfo.end),
+                None => push(&mut out, userinfo),
             }
-            None => start,
         }
+        start
     } else if url
         .get(..5)
         .is_some_and(|p| p.eq_ignore_ascii_case("jdbc:"))
@@ -102,32 +114,42 @@ pub(crate) fn url_secret_ranges(url: &str) -> Vec<Range<usize>> {
         // Opaque: `jdbc:<subprotocol>:...:user/password@host`, e.g.
         // `jdbc:oracle:thin:scott/tiger@//h:1521/svc`. The user starts after
         // the subprotocol names (`oracle:`, `thin:`).
-        let head = url.find(SEPARATORS).unwrap_or(url.len());
-        match url[..head].rfind('@') {
-            Some(at) => {
-                let mut user = 5;
-                while let Some(colon) = url[user..at].find(':') {
-                    let name = &url[user..user + colon];
-                    if name.is_empty()
-                        || !name
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                    {
-                        break;
-                    }
-                    user += colon + 1;
+        let head = url.find(['?', '#']).unwrap_or(url.len());
+        if let Some(at) = url[..head].rfind('@') {
+            let mut user = 5;
+            while let Some(colon) = url[user..at].find(':') {
+                let name = &url[user..user + colon];
+                if name.is_empty()
+                    || !name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                {
+                    break;
                 }
-                if let Some(slash) = url[user..at].find('/') {
-                    push(&mut out, user + slash + 1..at);
-                }
-                at + 1
+                user += colon + 1;
             }
-            None => 5,
+            if let Some(slash) = url[user..at].find('/') {
+                push(&mut out, user + slash + 1..at);
+            }
         }
+        5
     } else {
         return out;
     };
     params(url, params_from, &mut out);
+    merged(out)
+}
+
+/// `ranges` sorted, with overlapping or touching ranges joined.
+fn merged(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    ranges.sort_unstable_by_key(|r| r.start);
+    let mut out: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        match out.last_mut() {
+            Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+            _ => out.push(r),
+        }
+    }
     out
 }
 
