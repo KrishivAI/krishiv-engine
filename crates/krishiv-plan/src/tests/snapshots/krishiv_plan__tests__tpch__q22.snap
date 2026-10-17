@@ -1,0 +1,16 @@
+---
+source: crates/krishiv-plan/src/tests/tpch.rs
+expression: plan.to_string()
+---
+Sort [cntrycode ASC NULLS FIRST], true
++- Aggregate [cntrycode], [cntrycode, count(*) AS numcust, sum(c_acctbal) AS totacctbal]
+   +- SubqueryAlias custsale
+      +- Project [substring(c_phone, 1, 2) AS cntrycode, c_acctbal]
+         +- Filter (((substring(c_phone, 1, 2) IN ('13', '31', '23', '29', '30', '18', '17')) and (c_acctbal > scalar-subquery)) and (NOT exists))
+            :  :- Project [avg(c_acctbal)]
+            :  :  +- Filter ((c_acctbal > 0.00) and (substring(c_phone, 1, 2) IN ('13', '31', '23', '29', '30', '18', '17')))
+            :  :     +- Read customer
+            :  +- Project [*]
+            :     +- Filter (o_custkey == c_custkey)
+            :        +- Read orders
+            +- Read customer

@@ -1,0 +1,13 @@
+---
+source: crates/krishiv-plan/src/tests/tpch.rs
+expression: plan.to_string()
+---
+Sort [supplier_cnt DESC NULLS LAST, p_brand ASC NULLS FIRST, p_type ASC NULLS FIRST, p_size ASC NULLS FIRST], true
++- Aggregate [p_brand, p_type, p_size], [p_brand, p_type, p_size, count(DISTINCT ps_suppkey) AS supplier_cnt]
+   +- Filter ((((p_partkey == ps_partkey) and (NOT (p_brand == 'Brand#45'))) and (NOT (p_type like 'MEDIUM POLISHED%'))) and ((p_size IN (49, 14, 23, 45, 19, 3, 36, 9)) and (NOT ((ps_suppkey) IN (list-query)))))
+      :  +- Project [s_suppkey]
+      :     +- Filter (s_comment like '%Customer%Complaints%')
+      :        +- Read supplier
+      +- Join Inner
+         :- Read partsupp
+         +- Read part

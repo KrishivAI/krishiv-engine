@@ -1,0 +1,19 @@
+---
+source: crates/krishiv-plan/src/tests/tpch.rs
+expression: plan.to_string()
+---
+Sort [s_name ASC NULLS FIRST], true
++- Project [s_name, s_address]
+   +- Filter ((((s_suppkey) IN (list-query)) and (s_nationkey == n_nationkey)) and (n_name == 'CANADA'))
+      :  +- Project [ps_suppkey]
+      :     +- Filter (((ps_partkey) IN (list-query)) and (ps_availqty > scalar-subquery))
+      :        :  :- Project [p_partkey]
+      :        :  :  +- Filter (p_name like 'forest%')
+      :        :  :     +- Read part
+      :        :  +- Project [(0.5 * sum(l_quantity))]
+      :        :     +- Filter (((l_partkey == ps_partkey) and (l_suppkey == ps_suppkey)) and ((l_shipdate >= CAST('1994-01-01' AS DATE)) and (l_shipdate < CAST('1995-01-01' AS DATE))))
+      :        :        +- Read lineitem
+      :        +- Read partsupp
+      +- Join Inner
+         :- Read supplier
+         +- Read nation

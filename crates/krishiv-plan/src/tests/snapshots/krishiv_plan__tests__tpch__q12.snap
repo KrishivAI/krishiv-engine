@@ -1,0 +1,10 @@
+---
+source: crates/krishiv-plan/src/tests/tpch.rs
+expression: plan.to_string()
+---
+Sort [l_shipmode ASC NULLS FIRST], true
++- Aggregate [l_shipmode], [l_shipmode, sum(CASE WHEN ((o_orderpriority == '1-URGENT') or (o_orderpriority == '2-HIGH')) THEN 1 ELSE 0 END) AS high_line_count, sum(CASE WHEN ((NOT (o_orderpriority == '1-URGENT')) and (NOT (o_orderpriority == '2-HIGH'))) THEN 1 ELSE 0 END) AS low_line_count]
+   +- Filter ((((o_orderkey == l_orderkey) and (l_shipmode IN ('MAIL', 'SHIP'))) and (l_commitdate < l_receiptdate)) and (((l_shipdate < l_commitdate) and (l_receiptdate >= CAST('1994-01-01' AS DATE))) and (l_receiptdate < CAST('1995-01-01' AS DATE))))
+      +- Join Inner
+         :- Read orders
+         +- Read lineitem
