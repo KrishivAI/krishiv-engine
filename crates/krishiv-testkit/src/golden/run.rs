@@ -226,6 +226,17 @@ pub fn run(
     set: &GoldenSet,
     manifest: &ExclusionManifest,
 ) -> Result<RunResult, RunError> {
+    run_with(engine, set, manifest, &|_| true)
+}
+
+/// [`run`], counting only the statements whose SQL satisfies `keep` (the
+/// others still run, so that `SET` statements take effect).
+pub fn run_with(
+    engine: &mut dyn Engine,
+    set: &GoldenSet,
+    manifest: &ExclusionManifest,
+    keep: &dyn Fn(&str) -> bool,
+) -> Result<RunResult, RunError> {
     manifest.validate(set)?;
     let mut result = RunResult {
         engine: engine.name().to_owned(),
@@ -251,7 +262,7 @@ pub fn run(
                 let setup = FileSetup::parse(&pair.name, &sql);
                 result
                     .files
-                    .push(run_file(engine, &pair.name, &statements, &setup));
+                    .push(run_file_with(engine, &pair.name, &statements, &setup, keep));
             }
             Err(e) => result.failed_files.push(FailedFile {
                 name: pair.name.clone(),
@@ -315,6 +326,17 @@ pub fn run_file(
     statements: &[Statement],
     setup: &FileSetup,
 ) -> FileResult {
+    run_file_with(engine, name, statements, setup, &|_| true)
+}
+
+/// [`run_file`], counting only the statements whose SQL satisfies `keep`.
+pub fn run_file_with(
+    engine: &mut dyn Engine,
+    name: &str,
+    statements: &[Statement],
+    setup: &FileSetup,
+    keep: &dyn Fn(&str) -> bool,
+) -> FileResult {
     let sessions = setup.sessions();
     let mut merged: Option<Vec<Outcome>> = None;
     for session in &sessions {
@@ -332,13 +354,15 @@ pub fn run_file(
                 .collect(),
         });
     }
+    let kept: Vec<bool> = statements.iter().map(|s| keep(&s.query)).collect();
     let mut file = FileResult {
         name: name.to_owned(),
-        statements: statements.len() as u64,
+        statements: kept.iter().filter(|k| **k).count() as u64,
         runs: sessions.len() as u64,
         ..FileResult::default()
     };
-    for o in merged.unwrap_or_default() {
+    let merged = merged.unwrap_or_default().into_iter().zip(kept);
+    for o in merged.filter_map(|(o, k)| k.then_some(o)) {
         for (tally, v) in [
             (&mut file.parse, o.parse),
             (&mut file.negative, o.negative),

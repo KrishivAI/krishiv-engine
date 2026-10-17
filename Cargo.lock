@@ -1197,6 +1197,7 @@ version = "0.1.0-dev"
 dependencies = [
  "insta",
  "krishiv-common",
+ "krishiv-sql",
  "regex-lite",
  "serde_json",
  "sqllogictest",

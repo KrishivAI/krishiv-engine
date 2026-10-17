@@ -15,6 +15,7 @@ pub mod parse;
 pub mod report;
 pub mod run;
 pub mod setup;
+pub mod sql_parse;
 
 use std::collections::BTreeSet;
 use std::io;
