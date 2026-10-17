@@ -14,6 +14,8 @@ workspace = true
 [dependencies]
 krishiv-common = { path = "../krishiv-common" }
 thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
 
 [dev-dependencies]
 proptest = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }

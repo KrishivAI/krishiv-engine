@@ -1106,6 +1106,7 @@ dependencies = [
  "krishiv-common",
  "proptest",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

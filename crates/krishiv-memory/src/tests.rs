@@ -107,6 +107,21 @@ fn release_keeps_at_most_one_quantum_of_slack() {
 }
 
 #[test]
+fn trim_reclaims_the_slack() {
+    let root = root(None, Q);
+    let id = root.register("op", None);
+    root.try_reserve(id, 10).unwrap();
+    let c = root.node().consumer(id).unwrap();
+    assert_eq!(c.trim(root.node()), Q - 10);
+    assert_eq!(root.reserved(), 10);
+    // A release never grows the grant back to a whole quantum.
+    root.release(id, 5);
+    assert_eq!(root.reserved(), 10);
+    root.release(id, 5);
+    assert_eq!(root.reserved(), 0);
+}
+
+#[test]
 fn unregister_and_drop_return_everything() {
     let root = root(None, Q);
     let q = root.child("q", None);
@@ -252,11 +267,13 @@ fn ids_from_another_tree_are_unknown() {
 }
 
 #[test]
-fn zero_byte_requests_still_see_unregister() {
+fn zero_byte_requests_still_see_abort_and_unregister() {
     let root = root(None, Q);
     let q = root.child_pool("q", None);
     let id = q.register("op", None);
     q.try_reserve(id, 0).unwrap();
+    q.node().abort(MemoryError::Aborted { held: 0 });
+    assert_eq!(q.try_reserve(id, 0), Err(MemoryError::Aborted { held: 0 }));
     let other = root.child_pool("q2", None);
     let id2 = other.register("op", None);
     other.unregister(id2);
@@ -264,6 +281,36 @@ fn zero_byte_requests_still_see_unregister() {
         other.try_reserve(id2, 0),
         Err(MemoryError::UnknownConsumer { id: id2 })
     );
+}
+
+#[test]
+fn an_abort_stops_every_grant_and_memory_only_goes_down() {
+    let root = root(None, 1);
+    let q = root.child_pool("q", None);
+    let task = q.child_pool("task", None);
+    let id = task.register("op", None);
+    task.try_reserve(id, 100).unwrap();
+    q.node().abort(MemoryError::Aborted { held: 100 });
+    let e = MemoryError::Aborted { held: 100 };
+    assert_eq!(task.try_reserve(id, 1), Err(e.clone()));
+    assert_eq!(q.check_aborted(), Err(e.clone()));
+    assert_eq!(task.check_aborted(), Err(e));
+    assert_eq!(
+        (task.reserved(), q.reserved(), root.reserved()),
+        (100, 100, 100)
+    );
+    task.release(id, 40);
+    assert_eq!(
+        (task.reserved(), q.reserved(), root.reserved()),
+        (60, 60, 60)
+    );
+    // The abort bit stops grants even when the group flag was not checked
+    // yet (as for a reservation already past that check).
+    let other = root.child_pool("other", None);
+    let oid = other.register("op", None);
+    other.node().abort(MemoryError::Aborted { held: 0 });
+    assert!(other.try_reserve(oid, 1).is_err());
+    assert_eq!(root.reserved(), 60);
 }
 
 #[test]
@@ -303,6 +350,7 @@ enum Op {
     Grow(usize, usize),
     Shrink(usize, usize),
     Drop(usize),
+    Trim(usize),
     Unregister(usize),
     DropQuery(usize),
 }
@@ -313,6 +361,7 @@ fn op() -> impl Strategy<Value = Op> {
         (0..8usize, 0..300_000usize).prop_map(|(r, n)| Op::Grow(r, n)),
         (0..8usize, 0..300_000usize).prop_map(|(r, n)| Op::Shrink(r, n)),
         (0..8usize).prop_map(Op::Drop),
+        (0..4usize).prop_map(Op::Trim),
         (0..4usize).prop_map(Op::Unregister),
         (0..2usize).prop_map(Op::DropQuery),
     ]
@@ -375,6 +424,12 @@ impl Model {
                     self.live.swap_remove(r);
                 }
             }
+            Op::Trim(c) => {
+                let q = &self.queries[c % 2];
+                if let Some(Ok(consumer)) = self.ids[c].map(|id| q.node().consumer(id)) {
+                    consumer.trim(q.node());
+                }
+            }
             Op::Unregister(c) => {
                 if let Some(id) = self.ids[c].take() {
                     self.queries[c % 2].unregister(id);
@@ -401,8 +456,8 @@ proptest! {
     /// Accounted bytes never go negative, never exceed a limit, and always
     /// equal the grants of live consumers; each consumer's `used` equals the
     /// sum of its live reservations (with quantum 1, pool totals equal the
-    /// sum of live reservations exactly). Covers unregister and dropping a
-    /// query pool.
+    /// sum of live reservations exactly). Covers trim, unregister and
+    /// dropping a query pool.
     #[test]
     fn accounting_matches_live_reservations(
         quantum in prop_oneof![Just(1usize), Just(64), Just(5000)],
@@ -439,6 +494,64 @@ proptest! {
     }
 }
 
+/// A driver queued for arbitration is woken by a spill request from a round
+/// admitted after it queued, and services it, so that round never times out.
+#[tokio::test(start_paused = true)]
+async fn a_queued_driver_services_a_later_rounds_request() {
+    let root = root(Some(8 * Q), Q);
+    let q1 = root.child_pool("q1", None);
+    let q2 = root.child_pool("q2", None);
+    let d1 = SpillOwner::new();
+    let x_signal = d1.signal();
+    let x_id = q1.register("x", Some(Arc::clone(&x_signal) as Arc<dyn Spillable>));
+    let x = Arc::new(std::sync::Mutex::new(Reservation::new(
+        Arc::clone(&q1) as Arc<dyn MemoryPool>,
+        x_id,
+    )));
+    x.lock().unwrap().try_grow(6 * Q).unwrap();
+    let y_id = q1.register("y", Some(d1.signal() as Arc<dyn Spillable>));
+
+    // An active round at the root makes the next rounds queue behind it.
+    let slot = root
+        .node()
+        .shared
+        .rounds
+        .enter(Arc::clone(root.node()))
+        .await;
+    let w_id = q2.register("w", None);
+    let q2c = Arc::clone(&q2);
+    let d2 = tokio::spawn(async move { q2c.reserve(w_id, 4 * Q).await });
+    tokio::task::yield_now().await;
+    let service = {
+        let (signal, x) = (Arc::clone(&x_signal), Arc::clone(&x));
+        move || {
+            let (signal, x) = (Arc::clone(&signal), Arc::clone(&x));
+            async move {
+                if let Some(target) = signal.spill_requested() {
+                    let mut r = x.lock().unwrap();
+                    let freed = target.min(r.size());
+                    r.shrink(freed);
+                    signal.set_spillable_bytes(r.size());
+                    signal.complete(freed);
+                }
+            }
+        }
+    };
+    let q1c = Arc::clone(&q1);
+    let d1_task = tokio::spawn(async move { d1.reserve(&*q1c, y_id, 3 * Q, service).await });
+    tokio::task::yield_now().await; // D1 found nothing to self-spill and queued
+    x_signal.set_spillable_bytes(6 * Q);
+    let start = tokio::time::Instant::now();
+    drop(slot); // D2 is admitted and asks X (D1's) to spill
+    d2.await.unwrap().unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "serviced, no timeout"
+    );
+    assert_eq!(x.lock().unwrap().size(), 4 * Q);
+    d1_task.abort();
+}
+
 #[test]
 fn debug_output_names_the_pieces() {
     let root = root(Some(64 * Q), Q);
@@ -450,6 +563,9 @@ fn debug_output_names_the_pieces() {
     assert!(format!("{r:?}").contains("Reservation"));
     assert!(format!("{:?}", q.node().consumer(id).unwrap()).contains("op-debug"));
     assert!(format!("{:?}", SpillTicket::ready(1)).contains("Some(1)"));
+    let owner = SpillOwner::new();
+    assert_ne!(owner.id(), SpillOwner::new().id());
+    assert!(format!("{owner:?}").contains("SpillOwner"));
 }
 
 #[test]
@@ -469,4 +585,99 @@ fn dropping_an_empty_pool_and_unregistering_mid_reserve() {
         ))
     ));
     assert_eq!(root.reserved(), 0);
+}
+
+#[test]
+fn external_pools_hang_off_the_root_wherever_they_are_made() {
+    let root = root(Some(64 * Q), Q);
+    let task = root.child_pool("q", None).child_pool("task", None);
+    let ext = task.external("prefetch", 8 * Q);
+    let id = ext.register("buffers", None);
+    ext.try_reserve(id, Q).unwrap();
+    assert_eq!((root.reserved(), task.reserved()), (Q, 0));
+    assert!(ext.check_aborted().is_ok());
+}
+
+/// Runs `owner.reserve` with a service that spills `x` by the requested
+/// amount.
+async fn owner_reserve(
+    owner: &SpillOwner,
+    pool: &Arc<TreePool>,
+    id: ConsumerId,
+    bytes: usize,
+    signal: &Arc<SpillSignal>,
+    x: &Arc<std::sync::Mutex<Reservation>>,
+) -> Result<(), MemoryError> {
+    let service = || {
+        let (signal, x) = (Arc::clone(signal), Arc::clone(x));
+        async move {
+            if let Some(target) = signal.spill_requested() {
+                let mut r = x.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let freed = target.min(r.size());
+                r.shrink(freed);
+                signal.complete(freed);
+            }
+        }
+    };
+    owner.reserve(&**pool, id, bytes, service).await
+}
+
+#[tokio::test(start_paused = true)]
+async fn spill_owner_reserve_paths() {
+    let root = root(Some(64 * Q), Q);
+    let q = root.child_pool("q", None);
+    let owner = SpillOwner::new();
+    let signal = owner.signal();
+    let x_id = q.register("x", Some(Arc::clone(&signal) as Arc<dyn Spillable>));
+    let x = Arc::new(std::sync::Mutex::new(Reservation::new(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        x_id,
+    )));
+    let y_id = q.register("y", Some(owner.signal() as Arc<dyn Spillable>));
+
+    // Fast path.
+    owner_reserve(&owner, &q, y_id, Q, &signal, &x)
+        .await
+        .unwrap();
+    // A non-retryable error is returned as is.
+    let other = root.child_pool("other", None);
+    let foreign = other.register("z", None);
+    assert!(matches!(
+        owner_reserve(&owner, &q, foreign, Q, &signal, &x).await,
+        Err(MemoryError::UnknownConsumer { .. })
+    ));
+    // A request already pending on an own consumer with no spillable bytes
+    // advertised is serviced before arbitrating.
+    x.lock().unwrap().try_grow(63 * Q).unwrap();
+    let woken = owner.requested();
+    drop(signal.request_spill(Q));
+    woken.await; // the request woke the owner
+    assert!(owner.pending());
+    owner_reserve(&owner, &q, y_id, Q, &signal, &x)
+        .await
+        .unwrap();
+    assert_eq!(x.lock().unwrap().size(), 62 * Q);
+    assert!(!owner.pending());
+}
+
+/// Root-level consumers take part in a root round's plan without belonging
+/// to a query.
+#[tokio::test(start_paused = true)]
+async fn root_level_consumers_are_counted_but_never_aborted() {
+    let root = root(Some(64 * Q), Q);
+    let cache = root.register("cache", None);
+    root.try_reserve(cache, 32 * Q).unwrap();
+    let a = root.child_pool("a", None);
+    let ida = a.register("held", None);
+    a.try_reserve(ida, 30 * Q).unwrap();
+    let b = root.child_pool("b", None);
+    let idb = b.register("agg", None);
+    // `a` never releases, so the request fails after the release timeout.
+    let e = b.reserve(idb, 4 * Q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert!(
+        a.check_aborted().is_err(),
+        "the query, not the cache, was aborted"
+    );
+    assert_eq!(root.stats().aborts, 1);
 }

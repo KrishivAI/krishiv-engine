@@ -10,6 +10,7 @@ Memory management: pools, reservations, the memory arbitrator and spill accounti
 - Every operator allocation is accounted through reservations; pools are empty at query end (tested).
 - Arbitration and OOM paths return typed errors or trigger spill; never panic.
 - Concurrency primitives tested with loom.
+- Arbitration is cooperative: never call into, lock or mutate another task's operator state; no sync lock across an await.
 - `unsafe` allowed; every block has a `// SAFETY:` comment; runs under Miri in CI and nightly ASan/TSan (ADR 0029).
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
