@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Typed runtime configuration registry (ADR 0027).
 //!
 //! Every behaviour flag is a [`ConfigEntry`] in [`REGISTRY`], with a type,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Batch == bounded-stream invariant harness (ADR 0015 / 0017).
 //!
 //! The same query must return the same multiset of rows whether it runs as a batch job or as a

@@ -1,6 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Krishiv command line binary (layer L7).
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    feature = "ui",
+    expect(
+        clippy::print_stdout,
+        clippy::print_stderr,
+        reason = "CLI binary: stdout/stderr are its interface"
+    )
+)]
 
 use clap::Parser;
 

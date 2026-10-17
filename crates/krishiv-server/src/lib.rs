@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Admin and UI API server (layer L6).
 //!
 //! Serves the embedded SPA at `/` and the versioned REST surface under

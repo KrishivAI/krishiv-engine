@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask layering`: enforce the crate layer map (ADR 0026).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
