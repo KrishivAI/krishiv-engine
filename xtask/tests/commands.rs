@@ -192,3 +192,58 @@ fn big_fixture_diff_does_not_count() {
             .success()
     );
 }
+
+#[test]
+fn diff_coverage_gate_passes_and_fails_on_a_real_repo() {
+    let dir = init_repo("diffcov");
+    let repo = dir.to_str().unwrap();
+    git(&dir, &["switch", "-q", "-c", "feature"]);
+    let src: String = (1..=10).map(|i| format!("let x{i} = {i};\n")).collect();
+    write(&dir, "crates/x/src/lib.rs", &src);
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "add"]);
+    // Relative `SF:` paths match the diff's paths whatever the xtask root is.
+    let lcov = |hit: u32| {
+        let da: String = (1..=10)
+            .map(|i| format!("DA:{i},{}\n", u32::from(i <= hit)))
+            .collect();
+        let path = dir.join(format!("lcov-{hit}.info"));
+        std::fs::write(
+            &path,
+            format!("SF:crates/x/src/lib.rs\n{da}end_of_record\n"),
+        )
+        .unwrap();
+        path.to_str().unwrap().to_owned()
+    };
+    let run = |lcov: &str, extra: &[&str]| {
+        let mut args = vec![
+            "diff-coverage",
+            "--repo",
+            repo,
+            "--base",
+            "main",
+            "--lcov",
+            lcov,
+        ];
+        args.extend_from_slice(extra);
+        xtask(&args)
+    };
+    let nine = lcov(9);
+    let eight = lcov(8);
+    // Report only: never fails.
+    let report = run(&eight, &[]);
+    assert!(report.status.success());
+    assert!(String::from_utf8_lossy(&report.stdout).contains("8 of 10"));
+    // The gate: 9/10 meets 90%, 8/10 does not and names the uncovered lines.
+    assert!(run(&nine, &["--fail-under", "90"]).status.success());
+    let failed = run(&eight, &["--fail-under", "90"]);
+    assert!(!failed.status.success());
+    let out = String::from_utf8_lossy(&failed.stdout);
+    assert!(out.contains("uncovered lines 9, 10"), "{out}");
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("below 90%"));
+    // Bad thresholds are usage errors.
+    for bad in ["101", "x"] {
+        assert!(!run(&nine, &["--fail-under", bad]).status.success());
+    }
+    assert!(!run(&nine, &["--fail-under"]).status.success());
+}
