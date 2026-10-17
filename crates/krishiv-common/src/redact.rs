@@ -97,10 +97,13 @@ fn urls(text: &str, out: &mut Vec<Range<usize>>) {
 }
 
 /// The URL segments of one run: from each URL start to the next one (or
-/// the end of the run), in order.
+/// the end of the run), in order. A scheme-like `x://` or `jdbc:` inside an
+/// earlier URL's userinfo (a password may hold `://`) is not a new start.
+/// Linear: the userinfo ends come from two precomputed tables.
 fn url_segments(run: &str) -> Vec<Range<usize>> {
     let bytes = run.as_bytes();
-    let mut starts = Vec::new();
+    // (start, where the part after the scheme begins), in order.
+    let mut starts: Vec<(usize, usize)> = Vec::new();
     let mut floor = 0;
     for (i, _) in run.match_indices("://") {
         // The scheme runs back from `://` over scheme characters, but never
@@ -110,17 +113,44 @@ fn url_segments(run: &str) -> Vec<Range<usize>> {
             .rposition(|&b| !(b.is_ascii_alphanumeric() || b"+-.:".contains(&b)))
             .map_or(floor, |p| floor + p + 1);
         if start < i {
-            starts.push(start);
+            starts.push((start, i + 3));
         }
         floor = i + 3;
     }
-    starts.extend(run.match_indices("jdbc:").map(|(i, _)| i));
+    starts.extend(run.match_indices("jdbc:").map(|(i, _)| (i, i + 5)));
     starts.sort_unstable();
-    starts.dedup();
-    let mut segments = Vec::with_capacity(starts.len());
-    for (k, &s) in starts.iter().enumerate() {
-        let e = starts.get(k + 1).copied().unwrap_or(run.len());
-        segments.push(s..e);
+    starts.dedup_by_key(|s| s.0);
+    // next_qf[p]: the first `?` or `#` at or after p; last_at[p]: one past
+    // the last `@` before p.
+    let mut next_qf = vec![run.len(); run.len() + 1];
+    for p in (0..run.len()).rev() {
+        next_qf[p] = if matches!(bytes[p], b'?' | b'#') {
+            p
+        } else {
+            next_qf[p + 1]
+        };
+    }
+    let mut last_at = vec![None; run.len() + 1];
+    for p in 0..run.len() {
+        last_at[p + 1] = if bytes[p] == b'@' {
+            Some(p)
+        } else {
+            last_at[p]
+        };
+    }
+    let mut segments: Vec<Range<usize>> = Vec::new();
+    let mut skip_until = 0;
+    for (start, after) in starts {
+        if start < skip_until {
+            continue; // inside the previous URL's userinfo
+        }
+        if let Some(prev) = segments.last_mut() {
+            prev.end = start;
+        }
+        segments.push(start..run.len());
+        if let Some(at) = last_at[next_qf[after]].filter(|&at| at >= after) {
+            skip_until = at + 1;
+        }
     }
     segments
 }
@@ -159,13 +189,7 @@ fn pairs(text: &str, out: &mut Vec<Range<usize>>) {
             v += 1;
         }
         let range = match bytes.get(v) {
-            Some(&q @ (b'"' | b'\'')) => {
-                let end = bytes[v + 1..]
-                    .iter()
-                    .position(|&c| c == q)
-                    .map_or(text.len(), |n| v + 1 + n);
-                v + 1..end
-            }
+            Some(&q @ (b'"' | b'\'')) => v + 1..quoted_end(bytes, v + 1, q),
             _ => {
                 let mut end = run_end(text, v, ends_value);
                 let word = &text[v..end];
@@ -181,6 +205,27 @@ fn pairs(text: &str, out: &mut Vec<Range<usize>>) {
             out.push(range);
         }
     }
+}
+
+/// The end of a quoted value whose content starts at `from`: the closing
+/// `q`, skipping `\\`-escaped characters and doubled quotes (`''` in SQL),
+/// or the end of the text when it is unterminated.
+fn quoted_end(bytes: &[u8], from: usize, q: u8) -> usize {
+    let mut i = from;
+    while let Some(&b) = bytes.get(i) {
+        if b == b'\\' {
+            i += 2;
+        } else if b == q {
+            if bytes.get(i + 1) == Some(&q) {
+                i += 2;
+            } else {
+                return i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    bytes.len()
 }
 
 /// The token after an HTTP authorization scheme (`Bearer x`, `Basic x`).
@@ -272,6 +317,24 @@ mod tests {
             (
                 "https://Canary-7f3a9c@github.com/o/r",
                 "https://*********(redacted)@github.com/o/r",
+            ),
+            // A password holding `://` is not split into two URLs.
+            (
+                "postgresql://u:abc://Canary-7f3a9c@host/db",
+                "postgresql://u:*********(redacted)@host/db",
+            ),
+            (
+                "jdbc:postgresql://u:x,jdbc:Canary-7f3a9c@h/db",
+                "jdbc:postgresql://u:*********(redacted)@h/db",
+            ),
+            // Doubled and backslash-escaped quotes stay inside the value.
+            (
+                "password = 'abc''Canary-7f3a9c' and x = 1",
+                "password = '*********(redacted)' and x = 1",
+            ),
+            (
+                r#"token: "a\"Canary-7f3a9c" rest"#,
+                r#"token: "*********(redacted)" rest"#,
             ),
             // Opaque JDBC with a raw `;` in the password.
             (
