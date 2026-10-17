@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 krishiv-common = { path = "../krishiv-common" }
 krishiv-types = { path = "../krishiv-types" }
+twox-hash = { workspace = true, features = ["xxhash3_128"] }
 
 
 [lints]

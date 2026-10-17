@@ -71,10 +71,12 @@ pub enum ExprNode {
 pub struct ColumnRef {
     /// The name parts, e.g. `["t", "a"]` for `t.a`.
     pub name: Vec<String>,
-    /// The DataFrame the column belongs to, for PySpark's `df["a"]`. It
-    /// names the nearest relation with this `plan_id` in the subtree of the
-    /// operator that holds the reference (then in enclosing queries, for a
-    /// reference inside a subquery).
+    /// The DataFrame the column belongs to, for PySpark's `df["a"]`. The
+    /// analyzer resolves it among the relations carrying this `plan_id` in
+    /// the subtree of the operator that holds the reference (then in
+    /// enclosing queries, for a reference inside a subquery). The canonical
+    /// encoding records all of those carriers, so plans with equal keys
+    /// resolve the reference alike, whichever rule picks among them.
     pub plan_id: Option<PlanId>,
 }
 

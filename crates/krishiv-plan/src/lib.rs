@@ -21,7 +21,10 @@
 //!   names ([`function`]); resolved calls carry a typed [`FunctionId`] and
 //!   [`FunctionKind`].
 //! - Data types are [`krishiv_types::DataType`].
-//! - `PartialEq` compares everything, origins included.
+//! - `PartialEq` compares everything, origins included. The canonical
+//!   encoding ([`Plan::canonical_encoding`]) leaves origins out and is the
+//!   structural equality ([`Plan::structurally_eq`]); [`StructuralHash`] is
+//!   its 128-bit Merkle hash, stable across processes and platforms.
 //!
 //! Unresolved and resolved nodes share one tree. The analyzer replaces the
 //! unresolved-only nodes (marked U below) by resolved ones (R);
@@ -65,6 +68,7 @@
 
 #![forbid(unsafe_code)]
 
+mod encode;
 mod expr;
 pub mod function;
 mod literal;
@@ -74,6 +78,7 @@ mod plan;
 mod tests;
 mod walk;
 
+pub use encode::{ENCODING_VERSION, StructuralHash};
 pub use expr::{
     AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, NullOrdering,
     ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star, SubqueryKind,
