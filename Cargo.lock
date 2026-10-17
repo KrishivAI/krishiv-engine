@@ -1103,6 +1103,7 @@ version = "0.1.0-dev"
 name = "krishiv-plan"
 version = "0.1.0-dev"
 dependencies = [
+ "krishiv-common",
  "krishiv-types",
 ]
 

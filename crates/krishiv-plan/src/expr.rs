@@ -5,12 +5,16 @@ use std::sync::Arc;
 
 use krishiv_types::DataType;
 
+use crate::walk::{self, Node};
 use crate::{Builtin, FunctionId, FunctionKind, Literal, LogicalPlan, Origin, PlanId};
 
 /// An expression: a node and its [`Origin`].
 ///
 /// Children are `Arc<Expr>`, so rebuilding a node shares its unchanged
-/// subexpressions. `PartialEq` compares everything, origins included.
+/// subexpressions. `PartialEq` compares everything, origins included; the
+/// structural comparison that ignores origins is the canonical encoding
+/// (`Plan::structurally_eq`). Dropping an expression never recurses, so a
+/// too-deep tree can still be rejected and dropped ([`crate::check_depth`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Expr {
     /// What the expression is.
@@ -315,6 +319,13 @@ impl Expr {
         })
     }
 
+    /// Whether no unresolved node remains, subquery plans included. It does
+    /// not recurse.
+    #[must_use]
+    pub fn is_resolved(&self) -> bool {
+        walk::all_resolved(Node::Expr(self))
+    }
+
     /// Calls `f` on each direct child expression, in order. Subquery plans
     /// are not expressions and are not visited.
     pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Arc<Self>)) {
@@ -339,10 +350,98 @@ impl Expr {
             },
         }
     }
+
+    /// Calls `f` on each direct child expression slot, in the order of
+    /// [`Self::for_each_child`].
+    pub(crate) fn for_each_child_mut(&mut self, f: &mut dyn FnMut(&mut Arc<Self>)) {
+        match &mut self.node {
+            ExprNode::Column(_)
+            | ExprNode::Literal(_)
+            | ExprNode::Star(_)
+            | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {}
+            ExprNode::Function(FunctionCall { args, filter, .. })
+            | ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+                args, filter, ..
+            })) => {
+                args.iter_mut().for_each(&mut *f);
+                filter.iter_mut().for_each(f);
+            }
+            ExprNode::Cast { expr, .. }
+            | ExprNode::Alias { expr, .. }
+            | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => f(expr),
+            ExprNode::Subquery { kind, .. } => match kind {
+                SubqueryKind::In(values) => values.iter_mut().for_each(f),
+                SubqueryKind::Scalar | SubqueryKind::Exists => {}
+            },
+        }
+    }
+
+    /// Replaces each direct child by `f(child)`. Returns `self` itself
+    /// (the same `Arc`) when every child comes back unchanged
+    /// (`Arc::ptr_eq`), so unchanged trees are never copied.
+    ///
+    /// # Errors
+    /// The first error `f` returns.
+    pub fn map_children<E>(
+        self: Arc<Self>,
+        mut f: impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
+    ) -> Result<Arc<Self>, E> {
+        let mut old = Vec::new();
+        self.for_each_child(&mut |c| old.push(Arc::clone(c)));
+        let mut new = Vec::with_capacity(old.len());
+        let mut changed = false;
+        for child in old {
+            let next = f(Arc::clone(&child))?;
+            changed |= !Arc::ptr_eq(&next, &child);
+            new.push(next);
+        }
+        if !changed {
+            return Ok(self);
+        }
+        let mut expr = Arc::unwrap_or_clone(self);
+        let mut new = new.into_iter();
+        expr.for_each_child_mut(&mut |slot| {
+            if let Some(next) = new.next() {
+                *slot = next;
+            }
+        });
+        Ok(Arc::new(expr))
+    }
+
+    /// Applies `f` to every node, children first. Subquery plans are not
+    /// entered. Recurses once per level: call it only on expressions within
+    /// [`crate::MAX_DEPTH`].
+    ///
+    /// # Errors
+    /// The first error `f` returns.
+    pub fn transform_up<E>(
+        self: Arc<Self>,
+        f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
+    ) -> Result<Arc<Self>, E> {
+        let expr = self.map_children(|c| c.transform_up(f))?;
+        f(expr)
+    }
+
+    /// Applies `f` to every node, parents first; see [`Self::transform_up`].
+    ///
+    /// # Errors
+    /// The first error `f` returns.
+    pub fn transform_down<E>(
+        self: Arc<Self>,
+        f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
+    ) -> Result<Arc<Self>, E> {
+        f(self)?.map_children(|c| c.transform_down(f))
+    }
 }
 
 impl From<Literal> for Expr {
     fn from(value: Literal) -> Self {
         Self::literal(value)
+    }
+}
+
+impl Drop for Expr {
+    fn drop(&mut self) {
+        walk::teardown_expr(self);
     }
 }

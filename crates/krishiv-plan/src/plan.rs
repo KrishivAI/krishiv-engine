@@ -4,13 +4,17 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use krishiv_common::error::KrishivError;
+
+use crate::walk::{self, Node};
 use crate::{BoundColumn, Expr, Origin, SortOrder};
 
 /// The IR version a [`Plan`] is written in. It changes when a node changes
 /// meaning; adding a node or field does not change it before 1.0.
 pub const IR_VERSION: u32 = 1;
 
-/// A logical plan with the IR version it is written in.
+/// A logical plan with the IR version it is written in, checked to be
+/// within [`crate::MAX_DEPTH`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     ir_version: u32,
@@ -19,12 +23,17 @@ pub struct Plan {
 
 impl Plan {
     /// A plan in the current [`IR_VERSION`].
-    #[must_use]
-    pub fn new(root: impl Into<Arc<LogicalPlan>>) -> Self {
-        Self {
+    ///
+    /// # Errors
+    /// `FAILED_TO_PARSE_TOO_COMPLEX` when the plan nests deeper than
+    /// [`crate::MAX_DEPTH`] (see [`crate::check_depth`]).
+    pub fn try_new(root: impl Into<Arc<LogicalPlan>>) -> Result<Self, KrishivError> {
+        let root = root.into();
+        crate::check_depth(&root)?;
+        Ok(Self {
             ir_version: IR_VERSION,
-            root: root.into(),
-        }
+            root,
+        })
     }
 
     /// The IR version.
@@ -43,6 +52,7 @@ impl Plan {
 /// A relation: a node and its [`Origin`]. Children are shared through `Arc`.
 ///
 /// `PartialEq` compares everything, origins included (see [`Expr`]).
+/// Dropping a plan never recurses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogicalPlan {
     /// What the relation is.
@@ -370,6 +380,27 @@ impl LogicalPlan {
         }
     }
 
+    fn for_each_child_mut(&mut self, f: &mut dyn FnMut(&mut Arc<Self>)) {
+        match &mut self.node {
+            PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::Scan(_) => {}
+            PlanNode::Project { input, .. }
+            | PlanNode::WithColumns { input, .. }
+            | PlanNode::Filter { input, .. }
+            | PlanNode::Aggregate { input, .. }
+            | PlanNode::Sort { input, .. }
+            | PlanNode::Limit { input, .. }
+            | PlanNode::SubqueryAlias { input, .. } => f(input),
+            PlanNode::Join { left, right, .. } => {
+                f(left);
+                f(right);
+            }
+            PlanNode::WithCte { input, ctes } => {
+                ctes.iter_mut().for_each(|c| f(&mut c.plan));
+                f(input);
+            }
+        }
+    }
+
     /// Calls `f` on each expression this node holds (not its children's),
     /// in order.
     pub fn for_each_expr<'a>(&'a self, f: &mut impl FnMut(&'a Arc<Expr>)) {
@@ -408,8 +439,146 @@ impl LogicalPlan {
             PlanNode::Sort { order, .. } => order.iter().for_each(|o| f(&o.expr)),
         }
     }
+
+    fn for_each_expr_mut(&mut self, f: &mut dyn FnMut(&mut Arc<Expr>)) {
+        match &mut self.node {
+            PlanNode::Read(_)
+            | PlanNode::Scan(_)
+            | PlanNode::SubqueryAlias { .. }
+            | PlanNode::WithCte { .. } => {}
+            PlanNode::Sql { args, .. } => match args {
+                SqlArgs::None => {}
+                SqlArgs::Positional(v) => v.iter_mut().for_each(f),
+                SqlArgs::Named(m) => m.values_mut().for_each(f),
+            },
+            PlanNode::Project { exprs, .. } => exprs.iter_mut().for_each(f),
+            PlanNode::WithColumns { columns, .. } => {
+                columns.iter_mut().for_each(|(_, e)| f(e));
+            }
+            PlanNode::Filter { predicate: e, .. } | PlanNode::Limit { limit: e, .. } => f(e),
+            PlanNode::Aggregate {
+                grouping,
+                aggregates,
+                ..
+            } => {
+                match grouping {
+                    Grouping::GroupBy(v) | Grouping::Rollup(v) | Grouping::Cube(v) => {
+                        v.iter_mut().for_each(&mut *f);
+                    }
+                    Grouping::GroupingSets { exprs, sets } => exprs
+                        .iter_mut()
+                        .chain(sets.iter_mut().flatten())
+                        .for_each(&mut *f),
+                }
+                aggregates.iter_mut().for_each(f);
+            }
+            PlanNode::Join { condition, .. } => match condition {
+                JoinCondition::On(e) => f(e),
+                JoinCondition::None | JoinCondition::Using(_) => {}
+            },
+            PlanNode::Sort { order, .. } => order.iter_mut().for_each(|o| f(&mut o.expr)),
+        }
+    }
+
+    /// Whether no unresolved node remains anywhere in the plan, subquery
+    /// plans included. It does not recurse.
+    #[must_use]
+    pub fn is_resolved(&self) -> bool {
+        walk::all_resolved(Node::Plan(self))
+    }
+
+    /// Replaces each child relation by `f(child)`; returns `self` itself
+    /// when every child comes back unchanged (`Arc::ptr_eq`).
+    ///
+    /// # Errors
+    /// The first error `f` returns.
+    pub fn map_children<E>(
+        self: Arc<Self>,
+        mut f: impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
+    ) -> Result<Arc<Self>, E> {
+        let mut old = Vec::new();
+        self.for_each_child(&mut |c| old.push(Arc::clone(c)));
+        rebuild(self, old, &mut f, Self::for_each_child_mut)
+    }
+
+    /// Replaces each expression of this node by `f(expr)`; returns `self`
+    /// itself when every expression comes back unchanged.
+    ///
+    /// # Errors
+    /// The first error `f` returns.
+    pub fn map_expressions<E>(
+        self: Arc<Self>,
+        mut f: impl FnMut(Arc<Expr>) -> Result<Arc<Expr>, E>,
+    ) -> Result<Arc<Self>, E> {
+        let mut old = Vec::new();
+        self.for_each_expr(&mut |e| old.push(Arc::clone(e)));
+        rebuild(self, old, &mut f, Self::for_each_expr_mut)
+    }
+
+    /// Applies `f` to every relation, children first. Subquery plans are not
+    /// entered. Recurses once per level: call it only on plans within
+    /// [`crate::MAX_DEPTH`].
+    ///
+    /// # Errors
+    /// The first error `f` returns.
+    pub fn transform_up<E>(
+        self: Arc<Self>,
+        f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
+    ) -> Result<Arc<Self>, E> {
+        let plan = self.map_children(|c| c.transform_up(f))?;
+        f(plan)
+    }
+
+    /// Applies `f` to every relation, parents first; see
+    /// [`Self::transform_up`].
+    ///
+    /// # Errors
+    /// The first error `f` returns.
+    pub fn transform_down<E>(
+        self: Arc<Self>,
+        f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
+    ) -> Result<Arc<Self>, E> {
+        f(self)?.map_children(|c| c.transform_down(f))
+    }
+}
+
+/// Visits a node's `Arc` slots of one kind (children or expressions).
+type Slots<T> = fn(&mut LogicalPlan, &mut dyn FnMut(&mut Arc<T>));
+
+/// Maps `old` (the current slots, in visiting order) through `f` and writes
+/// the results back with `slots` when any changed.
+fn rebuild<T, E>(
+    plan: Arc<LogicalPlan>,
+    old: Vec<Arc<T>>,
+    f: &mut impl FnMut(Arc<T>) -> Result<Arc<T>, E>,
+    slots: Slots<T>,
+) -> Result<Arc<LogicalPlan>, E> {
+    let mut new = Vec::with_capacity(old.len());
+    let mut changed = false;
+    for item in old {
+        let next = f(Arc::clone(&item))?;
+        changed |= !Arc::ptr_eq(&next, &item);
+        new.push(next);
+    }
+    if !changed {
+        return Ok(plan);
+    }
+    let mut plan = Arc::unwrap_or_clone(plan);
+    let mut new = new.into_iter();
+    slots(&mut plan, &mut |slot| {
+        if let Some(next) = new.next() {
+            *slot = next;
+        }
+    });
+    Ok(Arc::new(plan))
 }
 
 fn arcs(exprs: Vec<Expr>) -> Vec<Arc<Expr>> {
     exprs.into_iter().map(Arc::new).collect()
+}
+
+impl Drop for LogicalPlan {
+    fn drop(&mut self) {
+        walk::teardown_plan(self);
+    }
 }
