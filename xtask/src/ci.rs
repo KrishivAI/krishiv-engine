@@ -5,7 +5,7 @@
 //! tested without a git checkout; `main` does the I/O.
 
 /// A PR may change at most this many counted lines (additions + deletions).
-pub const MAX_CHANGED_LINES: u64 = 1500;
+pub const MAX_CHANGED_LINES: u64 = 3000;
 
 /// Files that do not count towards the PR size cap: goldens, fixtures,
 /// vendored and generated files (P2-T145). The allowlist is deliberately

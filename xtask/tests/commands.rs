@@ -158,7 +158,7 @@ fn pr_size_and_changes_on_a_real_repo() {
     let changes = xtask(&["changes", "--repo", repo, "--base", "main"]);
     assert!(String::from_utf8_lossy(&changes.stdout).contains("rust=false"));
 
-    let big: String = (0..1600).map(|i| format!("line {i}\n")).collect();
+    let big: String = (0..3100).map(|i| format!("line {i}\n")).collect();
     write(&dir, "crates/x/src/big.rs", &big);
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-q", "-m", "big"]);

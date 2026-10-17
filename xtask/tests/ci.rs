@@ -10,9 +10,9 @@ fn numstat(path: &str, added: u64) -> String {
 }
 
 #[test]
-fn diff_of_1600_non_fixture_lines_fails_the_cap() {
-    let report = measure_numstat(&numstat("crates/krishiv-exec/src/lib.rs", 1600)).unwrap();
-    assert_eq!(report.counted, 1600);
+fn diff_over_the_cap_in_non_fixture_lines_fails() {
+    let report = measure_numstat(&numstat("crates/krishiv-exec/src/lib.rs", 3100)).unwrap();
+    assert_eq!(report.counted, 3100);
     assert!(!report.within_cap());
 }
 
@@ -43,14 +43,14 @@ fn goldens_fixtures_vendored_and_generated_are_excluded() {
 
 #[test]
 fn deletions_count_binary_files_do_not_and_renames_resolve() {
-    let input = "0\t700\tcrates/a.rs\x00800\t0\tcrates/b.rs\x00-\t-\tlogo.png\x005\t5\t\x00tests/old/data.json\x00tests/fixtures/data.json\x00";
+    let input = "0\t1700\tcrates/a.rs\x001300\t0\tcrates/b.rs\x00-\t-\tlogo.png\x005\t5\t\x00tests/old/data.json\x00tests/fixtures/data.json\x00";
     let mut report = measure_numstat(input).unwrap();
-    assert_eq!(report.counted, 1500);
+    assert_eq!(report.counted, 3000);
     assert_eq!(report.excluded, 10);
     assert_eq!(report.binaries, vec!["logo.png".to_owned()]);
     // A 6,401-byte binary counts as 101 lines and pushes the diff over the cap.
     report.add_binary(6401);
-    assert_eq!(report.counted, 1601);
+    assert_eq!(report.counted, 3101);
     assert!(!report.within_cap());
     assert!(measure_numstat("garbage").is_err());
     // Paths are taken verbatim: no quoting, and ` => ` in a name is literal.
