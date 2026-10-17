@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Generate the Spark SQL parse-probe fixture (P2-T070).
+
+Every expectation comes from a REAL Spark 4.2 run, never from docs or memory: each statement below is
+parsed by Spark's session SQL parser (`sqlParser.parsePlan`, what `spark.sql` uses) inside the Spark
+container (`sqlparse/parse_probe.scala`, run through `spark-shell`) with the case's configs set, and the
+fixture records whether it parsed or the error condition, SQLSTATE, message parameters and query-context
+indexes Spark raised. The cases are the places where Spark's ANTLR grammar resolves keyword/identifier
+ambiguity by prediction (keywords as columns and aliases, trailing keywords), error positions and
+`extra input` / `missing` hints, the keyword configs, and lexer edge cases. Output is deterministic and
+contains no local paths or hostnames.
+
+Usage (from repo root; take the bench lock, start Spark, stop it afterwards; see bench/README.md):
+
+    docker compose -f bench/baselines/docker-compose.yml up -d spark
+    flock "$KRISHIV_DATA/.bench.lock" nice -n 19 \
+      python3 tests/scripts/gen_sql_parse_probe.py --out tests/fixtures/spark-4.2.0/sql-parse-probe.json
+    docker compose -f bench/baselines/docker-compose.yml stop spark
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from gen_function_matrix import container_image, spark_shell
+from gen_type_strings import LOCAL_PATH
+
+FORMAT_VERSION = 1
+GENERATOR = "tests/scripts/gen_sql_parse_probe.py"
+ANSI_KEYWORDS = {"spark.sql.ansi.enabled": "true", "spark.sql.ansi.enforceReservedKeywords": "true"}
+DOUBLE_QUOTED = {"spark.sql.ansi.enabled": "true", "spark.sql.ansi.doubleQuotedIdentifiers": "true"}
+LEGACY_SETOPS = {"spark.sql.legacy.setopsPrecedence.enabled": "true"}
+
+DEFAULT = [
+    # keywords as columns, aliases and table names (ANTLR prediction)
+    "SELECT FROM",
+    "SELECT all, b FROM t",
+    "SELECT all, distinct FROM t",
+    "SELECT all + 1",
+    "SELECT count(ALL)",
+    "SELECT * FROM from t",
+    "SELECT * FROM t LATERAL VIEW explode(x) AS c",
+    "SELECT a NOT",
+    "SELECT a FROM",
+    "SELECT a WHERE",
+    "SELECT a, FROM",
+    "SELECT a FROM t WHERE",
+    "SELECT a AS",
+    "SELECT * FROM t AS",
+    "SELECT a FROM t LIMIT",
+    "SELECT * FROM VALUES",
+    "SELECT INTERVAL 1 DAY TO",
+    "SELECT 1 AS select",
+    "SELECT x -> 1",
+    "SELECT transform(a, all -> all * all)",
+    "SELECT current_date",
+    "SELECT a FROM t ORDER BY ALL",
+    "SELECT a FROM t GROUP BY ALL",
+    "SELECT EXISTS(1)",
+    "SELECT a IN ((SELECT 1))",
+    "SELECT 1.5a",
+    "SELECT a.b.c.* FROM t",
+    "SELECT * EXCEPT (a) FROM t",
+    "SELECT date_add(d, 1), datediff(year, 1)",
+    "FROM t",
+    "FROM t SELECT a SELECT b",
+    "SELECT a FROM t GROUP BY a, b GROUPING SETS ((a), (a + b) * 2)",
+    "SELECT a b, c AS d, e AS (f, g) FROM t",
+    "SELECT a (b, c) FROM t",
+    "SELECT a FROM t LIMIT ALL",
+    "SELECT 1 UNION SELECT 2 INTERSECT DISTINCT SELECT 3",
+    "SELECT * FROM t, LATERAL (SELECT t.a) AS s (b)",
+    "SELECT * FROM a LEFT SEMI JOIN b SEMI JOIN c ANTI JOIN d",
+    "SELECT x[0], x.y.z, x::int, -1::string",
+    "SELECT \"a\" \"b\", 'c' 'd'",
+    # syntax errors: position and hint
+    "SELECT 1 abc def",
+    "SELECT (1 AS a)",
+    "SELECT 'a\nb' c d e",
+    "SELECT\t'unterminated",
+    "SELECT 1 +",
+    "SELECT (1",
+    "-- only a comment",
+    "SELECT 1 FROM t WHERE a = 1 b",
+    "SELECT array(1) >> 1",
+    "SELECT 1 FROM t t2 t3",
+    "SELECT a FROM t ORDER BY",
+    "SELECT a, count(*) FROM t GROUP BY a HAVING",
+    "SELECT (SELECT 1",
+    "SELECT 1; SELECT 2",
+    "SELECT a FROM t UNION",
+    "SELECT a b c",
+    "SELECT a.b.c d.e",
+    "SELECT f(",
+    "SELECT CAST(1 AS)",
+    "SELECT CAST(1 AS INT",
+    "SELECT a FROM t JOIN",
+    "SELECT a FROM t JOIN u ON",
+    "SELECT 1 1",
+    "SELECT `a",
+    "SELECT 'a",
+    'SELECT "a',
+    "SELECT x::",
+    "WITH a AS (SELECT 1)",
+    "WITH a AS SELECT 1 SELECT 1",
+    "SELECT INTERVAL 1",
+    "SELECT a[1",
+    "SELECT * FROM test-table",
+    "SELECT café FROM t",
+    "SELECT 1 /* x",
+    "   ",
+]
+CASES = (
+    [(sql, {}) for sql in DEFAULT]
+    + [
+        (sql, ANSI_KEYWORDS)
+        for sql in ["SELECT 1 AS select", "SELECT all FROM t", "SELECT a FROM", "SELECT current_date", "SELECT x -> 1"]
+    ]
+    + [(sql, DOUBLE_QUOTED) for sql in ['SELECT "a""b" FROM t', "SELECT \"a\" 'b'"]]
+    + [(sql, LEGACY_SETOPS) for sql in ["SELECT 1 UNION SELECT 2 INTERSECT SELECT 3"]]
+)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--container", default="krishiv-bench-spark")
+    ap.add_argument("--out", default="tests/fixtures/spark-4.2.0/sql-parse-probe.json")
+    args = ap.parse_args()
+
+    data = "".join(json.dumps({"sql": sql, "conf": conf}) + "\n" for sql, conf in CASES)
+    script = (Path(__file__).parent / "sqlparse" / "parse_probe.scala").read_text(encoding="utf-8")
+    lines = spark_shell(args.container, script, data)
+    version = next(line.split(" ", 1)[1] for line in lines if line.startswith("@@VERSION "))
+    results = [json.loads(line[4:]) for line in lines if line.startswith("@@P ")]
+    if [r["sql"] for r in results] != [sql for sql, _ in CASES]:
+        raise SystemExit("spark-shell output does not match the inputs")
+    for r, (_, conf) in zip(results, CASES, strict=True):
+        r["conf"] = conf
+    doc = {
+        "format_version": FORMAT_VERSION,
+        "spark_version": version,
+        "image": container_image(args.container),
+        "generator": GENERATOR,
+        "notes": "Statements parsed by Spark's session SQL parser with each case's configs; errors carry "
+        "Spark's condition, SQLSTATE, message parameters and query-context start/stop indexes.",
+        "cases": results,
+    }
+    text = json.dumps(doc, indent=1, ensure_ascii=False) + "\n"
+    if LOCAL_PATH.search(text):
+        raise SystemExit("refusing to write a fixture that contains a local path")
+    Path(args.out).write_text(text, encoding="utf-8")
+    print(f"wrote {len(results)} cases against Spark {version} -> {args.out}")
+
+
+if __name__ == "__main__":
+    main()

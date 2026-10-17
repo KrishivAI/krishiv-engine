@@ -1,0 +1,1246 @@
+---
+source: crates/krishiv-sql/src/tests.rs
+expression: "snapshot(&[\"SELECT 1, -1, 1L, 2S, 3Y, 1.5, .5, 1., 1e3, 1.5E-3, 2D, 3F, 4BD, -1.5BD, - 2\",\n\"SELECT 'a' 'b' \\\"c\\\", R'\\\\n', DATE '2020-01-01', TIMESTAMP_NTZ '2020-01-01', X'1F', TIME '10:00', geometry 'POINT'\",\n\"SELECT NULL, TRUE, FALSE, INTERVAL '1 day', INTERVAL 1 DAY 2 HOURS, INTERVAL -'1-2' YEAR TO MONTH, INTERVAL '1' 'x' SECOND\",\n\"SELECT INTERVAL + 1.5 MINUTES - 3 SECOND, interval, interval.a, INTERVAL 1 DAY TO\",\n\"SELECT CAST(a AS DECIMAL(10, 2)), TRY_CAST(b AS ARRAY<MAP<STRING, STRUCT<x: INT NOT NULL COMMENT 'c', `y z` ARRAY<INT>>>>), c::STRUCT<>, d::array\",\n\"SELECT CAST(a AS TIMESTAMP WITH LOCAL TIME ZONE), CAST(b AS TIMESTAMP WITHOUT TIME ZONE), CAST(c AS TIME(6) WITHOUT TIME ZONE)\",\n\"SELECT CAST(a AS INTERVAL YEAR TO MONTH), CAST(b AS INTERVAL DAY TO SECOND), CAST(c AS INTERVAL HOUR), CAST(d AS INTERVAL), CAST(e AS geometry(ANY)), CAST(f AS map), CAST(g AS struct)\",])"
+---
+-- SELECT 1, -1, 1L, 2S, 3Y, 1.5, .5, 1., 1e3, 1.5E-3, 2D, 3F, 4BD, -1.5BD, - 2
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                from_first: false,
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "1",
+                                    kind: Int,
+                                },
+                            ),
+                            span: 7..8,
+                        },
+                        alias: None,
+                        span: 7..8,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "-1",
+                                    kind: Int,
+                                },
+                            ),
+                            span: 10..12,
+                        },
+                        alias: None,
+                        span: 10..12,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "1",
+                                    kind: Long,
+                                },
+                            ),
+                            span: 14..16,
+                        },
+                        alias: None,
+                        span: 14..16,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "2",
+                                    kind: Short,
+                                },
+                            ),
+                            span: 18..20,
+                        },
+                        alias: None,
+                        span: 18..20,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "3",
+                                    kind: Byte,
+                                },
+                            ),
+                            span: 22..24,
+                        },
+                        alias: None,
+                        span: 22..24,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "1.5",
+                                    kind: Decimal,
+                                },
+                            ),
+                            span: 26..29,
+                        },
+                        alias: None,
+                        span: 26..29,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: ".5",
+                                    kind: Decimal,
+                                },
+                            ),
+                            span: 31..33,
+                        },
+                        alias: None,
+                        span: 31..33,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "1.",
+                                    kind: Decimal,
+                                },
+                            ),
+                            span: 35..37,
+                        },
+                        alias: None,
+                        span: 35..37,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "1e3",
+                                    kind: Exponent,
+                                },
+                            ),
+                            span: 39..42,
+                        },
+                        alias: None,
+                        span: 39..42,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "1.5E-3",
+                                    kind: Exponent,
+                                },
+                            ),
+                            span: 44..50,
+                        },
+                        alias: None,
+                        span: 44..50,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "2",
+                                    kind: Double,
+                                },
+                            ),
+                            span: 52..54,
+                        },
+                        alias: None,
+                        span: 52..54,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "3",
+                                    kind: Float,
+                                },
+                            ),
+                            span: 56..58,
+                        },
+                        alias: None,
+                        span: 56..58,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "4",
+                                    kind: BigDecimal,
+                                },
+                            ),
+                            span: 60..63,
+                        },
+                        alias: None,
+                        span: 60..63,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "-1.5",
+                                    kind: BigDecimal,
+                                },
+                            ),
+                            span: 65..71,
+                        },
+                        alias: None,
+                        span: 65..71,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "-2",
+                                    kind: Int,
+                                },
+                            ),
+                            span: 73..76,
+                        },
+                        alias: None,
+                        span: 73..76,
+                    },
+                ],
+                from: [],
+                lateral_views: [],
+                pivot: None,
+                unpivot: None,
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..76,
+            },
+        ),
+        span: 0..76,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..76,
+}
+-- SELECT 'a' 'b' "c", R'\n', DATE '2020-01-01', TIMESTAMP_NTZ '2020-01-01', X'1F', TIME '10:00', geometry 'POINT'
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                from_first: false,
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                String(
+                                    "abc",
+                                ),
+                            ),
+                            span: 7..18,
+                        },
+                        alias: None,
+                        span: 7..18,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                String(
+                                    "\\n",
+                                ),
+                            ),
+                            span: 20..25,
+                        },
+                        alias: None,
+                        span: 20..25,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Typed {
+                                    type_name: "date",
+                                    value: "2020-01-01",
+                                },
+                            ),
+                            span: 27..44,
+                        },
+                        alias: None,
+                        span: 27..44,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Typed {
+                                    type_name: "timestamp_ntz",
+                                    value: "2020-01-01",
+                                },
+                            ),
+                            span: 46..72,
+                        },
+                        alias: None,
+                        span: 46..72,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Typed {
+                                    type_name: "x",
+                                    value: "1F",
+                                },
+                            ),
+                            span: 74..79,
+                        },
+                        alias: None,
+                        span: 74..79,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Typed {
+                                    type_name: "time",
+                                    value: "10:00",
+                                },
+                            ),
+                            span: 81..93,
+                        },
+                        alias: None,
+                        span: 81..93,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Typed {
+                                    type_name: "geometry",
+                                    value: "POINT",
+                                },
+                            ),
+                            span: 95..111,
+                        },
+                        alias: None,
+                        span: 95..111,
+                    },
+                ],
+                from: [],
+                lateral_views: [],
+                pivot: None,
+                unpivot: None,
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..111,
+            },
+        ),
+        span: 0..111,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..111,
+}
+-- SELECT NULL, TRUE, FALSE, INTERVAL '1 day', INTERVAL 1 DAY 2 HOURS, INTERVAL -'1-2' YEAR TO MONTH, INTERVAL '1' 'x' SECOND
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                from_first: false,
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Null,
+                            ),
+                            span: 7..11,
+                        },
+                        alias: None,
+                        span: 7..11,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Boolean(
+                                    true,
+                                ),
+                            ),
+                            span: 13..17,
+                        },
+                        alias: None,
+                        span: 13..17,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Boolean(
+                                    false,
+                                ),
+                            ),
+                            span: 19..24,
+                        },
+                        alias: None,
+                        span: 19..24,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Typed {
+                                    type_name: "interval",
+                                    value: "1 day",
+                                },
+                            ),
+                            span: 26..42,
+                        },
+                        alias: None,
+                        span: 26..42,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Interval(
+                                    Interval {
+                                        units: [
+                                            (
+                                                IntervalValue {
+                                                    negative: false,
+                                                    value: "1",
+                                                    is_string: false,
+                                                    span: 53..54,
+                                                },
+                                                "day",
+                                            ),
+                                            (
+                                                IntervalValue {
+                                                    negative: false,
+                                                    value: "2",
+                                                    is_string: false,
+                                                    span: 59..60,
+                                                },
+                                                "hours",
+                                            ),
+                                        ],
+                                        range: None,
+                                        span: 44..66,
+                                    },
+                                ),
+                            ),
+                            span: 44..66,
+                        },
+                        alias: None,
+                        span: 44..66,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Interval(
+                                    Interval {
+                                        units: [],
+                                        range: Some(
+                                            (
+                                                IntervalValue {
+                                                    negative: true,
+                                                    value: "1-2",
+                                                    is_string: true,
+                                                    span: 77..83,
+                                                },
+                                                "year",
+                                                "month",
+                                            ),
+                                        ),
+                                        span: 68..97,
+                                    },
+                                ),
+                            ),
+                            span: 68..97,
+                        },
+                        alias: None,
+                        span: 68..97,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Interval(
+                                    Interval {
+                                        units: [
+                                            (
+                                                IntervalValue {
+                                                    negative: false,
+                                                    value: "1x",
+                                                    is_string: true,
+                                                    span: 108..115,
+                                                },
+                                                "second",
+                                            ),
+                                        ],
+                                        range: None,
+                                        span: 99..122,
+                                    },
+                                ),
+                            ),
+                            span: 99..122,
+                        },
+                        alias: None,
+                        span: 99..122,
+                    },
+                ],
+                from: [],
+                lateral_views: [],
+                pivot: None,
+                unpivot: None,
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..122,
+            },
+        ),
+        span: 0..122,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..122,
+}
+-- SELECT INTERVAL + 1.5 MINUTES - 3 SECOND, interval, interval.a, INTERVAL 1 DAY TO
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                from_first: false,
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Interval(
+                                    Interval {
+                                        units: [
+                                            (
+                                                IntervalValue {
+                                                    negative: false,
+                                                    value: "1.5",
+                                                    is_string: false,
+                                                    span: 16..21,
+                                                },
+                                                "minutes",
+                                            ),
+                                            (
+                                                IntervalValue {
+                                                    negative: true,
+                                                    value: "3",
+                                                    is_string: false,
+                                                    span: 30..33,
+                                                },
+                                                "second",
+                                            ),
+                                        ],
+                                        range: None,
+                                        span: 7..40,
+                                    },
+                                ),
+                            ),
+                            span: 7..40,
+                        },
+                        alias: None,
+                        span: 7..40,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Column(
+                                [
+                                    Ident {
+                                        value: "interval",
+                                        quoted: false,
+                                        span: 42..50,
+                                    },
+                                ],
+                            ),
+                            span: 42..50,
+                        },
+                        alias: None,
+                        span: 42..50,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Column(
+                                [
+                                    Ident {
+                                        value: "interval",
+                                        quoted: false,
+                                        span: 52..60,
+                                    },
+                                    Ident {
+                                        value: "a",
+                                        quoted: false,
+                                        span: 61..62,
+                                    },
+                                ],
+                            ),
+                            span: 52..62,
+                        },
+                        alias: None,
+                        span: 52..62,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Literal(
+                                Interval(
+                                    Interval {
+                                        units: [
+                                            (
+                                                IntervalValue {
+                                                    negative: false,
+                                                    value: "1",
+                                                    is_string: false,
+                                                    span: 73..74,
+                                                },
+                                                "day",
+                                            ),
+                                        ],
+                                        range: None,
+                                        span: 64..78,
+                                    },
+                                ),
+                            ),
+                            span: 64..78,
+                        },
+                        alias: Some(
+                            Name(
+                                Ident {
+                                    value: "TO",
+                                    quoted: false,
+                                    span: 79..81,
+                                },
+                            ),
+                        ),
+                        span: 64..81,
+                    },
+                ],
+                from: [],
+                lateral_views: [],
+                pivot: None,
+                unpivot: None,
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..81,
+            },
+        ),
+        span: 0..81,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..81,
+}
+-- SELECT CAST(a AS DECIMAL(10, 2)), TRY_CAST(b AS ARRAY<MAP<STRING, STRUCT<x: INT NOT NULL COMMENT 'c', `y z` ARRAY<INT>>>>), c::STRUCT<>, d::array
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                from_first: false,
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "a",
+                                                quoted: false,
+                                                span: 12..13,
+                                            },
+                                        ],
+                                    ),
+                                    span: 12..13,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Primitive {
+                                        name: "decimal",
+                                        args: [
+                                            "10",
+                                            "2",
+                                        ],
+                                    },
+                                    span: 17..31,
+                                },
+                                try_cast: false,
+                            },
+                            span: 7..32,
+                        },
+                        alias: None,
+                        span: 7..32,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "b",
+                                                quoted: false,
+                                                span: 43..44,
+                                            },
+                                        ],
+                                    ),
+                                    span: 43..44,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Array(
+                                        Some(
+                                            DataTypeSpec {
+                                                kind: Map(
+                                                    Some(
+                                                        (
+                                                            DataTypeSpec {
+                                                                kind: Primitive {
+                                                                    name: "string",
+                                                                    args: [],
+                                                                },
+                                                                span: 58..64,
+                                                            },
+                                                            DataTypeSpec {
+                                                                kind: Struct(
+                                                                    Some(
+                                                                        [
+                                                                            StructField {
+                                                                                name: Ident {
+                                                                                    value: "x",
+                                                                                    quoted: false,
+                                                                                    span: 73..74,
+                                                                                },
+                                                                                data_type: DataTypeSpec {
+                                                                                    kind: Primitive {
+                                                                                        name: "int",
+                                                                                        args: [],
+                                                                                    },
+                                                                                    span: 76..79,
+                                                                                },
+                                                                                not_null: true,
+                                                                                comment: Some(
+                                                                                    "c",
+                                                                                ),
+                                                                                span: 73..100,
+                                                                            },
+                                                                            StructField {
+                                                                                name: Ident {
+                                                                                    value: "y z",
+                                                                                    quoted: true,
+                                                                                    span: 102..107,
+                                                                                },
+                                                                                data_type: DataTypeSpec {
+                                                                                    kind: Array(
+                                                                                        Some(
+                                                                                            DataTypeSpec {
+                                                                                                kind: Primitive {
+                                                                                                    name: "int",
+                                                                                                    args: [],
+                                                                                                },
+                                                                                                span: 114..117,
+                                                                                            },
+                                                                                        ),
+                                                                                    ),
+                                                                                    span: 108..118,
+                                                                                },
+                                                                                not_null: false,
+                                                                                comment: None,
+                                                                                span: 102..118,
+                                                                            },
+                                                                        ],
+                                                                    ),
+                                                                ),
+                                                                span: 66..119,
+                                                            },
+                                                        ),
+                                                    ),
+                                                ),
+                                                span: 54..120,
+                                            },
+                                        ),
+                                    ),
+                                    span: 48..121,
+                                },
+                                try_cast: true,
+                            },
+                            span: 34..122,
+                        },
+                        alias: None,
+                        span: 34..122,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "c",
+                                                quoted: false,
+                                                span: 124..125,
+                                            },
+                                        ],
+                                    ),
+                                    span: 124..125,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Struct(
+                                        Some(
+                                            [],
+                                        ),
+                                    ),
+                                    span: 127..135,
+                                },
+                                try_cast: false,
+                            },
+                            span: 124..135,
+                        },
+                        alias: None,
+                        span: 124..135,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "d",
+                                                quoted: false,
+                                                span: 137..138,
+                                            },
+                                        ],
+                                    ),
+                                    span: 137..138,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Array(
+                                        None,
+                                    ),
+                                    span: 140..145,
+                                },
+                                try_cast: false,
+                            },
+                            span: 137..145,
+                        },
+                        alias: None,
+                        span: 137..145,
+                    },
+                ],
+                from: [],
+                lateral_views: [],
+                pivot: None,
+                unpivot: None,
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..145,
+            },
+        ),
+        span: 0..145,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..145,
+}
+-- SELECT CAST(a AS TIMESTAMP WITH LOCAL TIME ZONE), CAST(b AS TIMESTAMP WITHOUT TIME ZONE), CAST(c AS TIME(6) WITHOUT TIME ZONE)
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                from_first: false,
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "a",
+                                                quoted: false,
+                                                span: 12..13,
+                                            },
+                                        ],
+                                    ),
+                                    span: 12..13,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Primitive {
+                                        name: "timestamp with local time zone",
+                                        args: [],
+                                    },
+                                    span: 17..47,
+                                },
+                                try_cast: false,
+                            },
+                            span: 7..48,
+                        },
+                        alias: None,
+                        span: 7..48,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "b",
+                                                quoted: false,
+                                                span: 55..56,
+                                            },
+                                        ],
+                                    ),
+                                    span: 55..56,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Primitive {
+                                        name: "timestamp without time zone",
+                                        args: [],
+                                    },
+                                    span: 60..87,
+                                },
+                                try_cast: false,
+                            },
+                            span: 50..88,
+                        },
+                        alias: None,
+                        span: 50..88,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "c",
+                                                quoted: false,
+                                                span: 95..96,
+                                            },
+                                        ],
+                                    ),
+                                    span: 95..96,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Primitive {
+                                        name: "time without time zone",
+                                        args: [
+                                            "6",
+                                        ],
+                                    },
+                                    span: 100..125,
+                                },
+                                try_cast: false,
+                            },
+                            span: 90..126,
+                        },
+                        alias: None,
+                        span: 90..126,
+                    },
+                ],
+                from: [],
+                lateral_views: [],
+                pivot: None,
+                unpivot: None,
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..126,
+            },
+        ),
+        span: 0..126,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..126,
+}
+-- SELECT CAST(a AS INTERVAL YEAR TO MONTH), CAST(b AS INTERVAL DAY TO SECOND), CAST(c AS INTERVAL HOUR), CAST(d AS INTERVAL), CAST(e AS geometry(ANY)), CAST(f AS map), CAST(g AS struct)
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Select(
+            Select {
+                from_first: false,
+                hints: [],
+                quantifier: None,
+                projection: [
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "a",
+                                                quoted: false,
+                                                span: 12..13,
+                                            },
+                                        ],
+                                    ),
+                                    span: 12..13,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Primitive {
+                                        name: "interval year to month",
+                                        args: [],
+                                    },
+                                    span: 17..39,
+                                },
+                                try_cast: false,
+                            },
+                            span: 7..40,
+                        },
+                        alias: None,
+                        span: 7..40,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "b",
+                                                quoted: false,
+                                                span: 47..48,
+                                            },
+                                        ],
+                                    ),
+                                    span: 47..48,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Primitive {
+                                        name: "interval day to second",
+                                        args: [],
+                                    },
+                                    span: 52..74,
+                                },
+                                try_cast: false,
+                            },
+                            span: 42..75,
+                        },
+                        alias: None,
+                        span: 42..75,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "c",
+                                                quoted: false,
+                                                span: 82..83,
+                                            },
+                                        ],
+                                    ),
+                                    span: 82..83,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Primitive {
+                                        name: "interval hour",
+                                        args: [],
+                                    },
+                                    span: 87..100,
+                                },
+                                try_cast: false,
+                            },
+                            span: 77..101,
+                        },
+                        alias: None,
+                        span: 77..101,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "d",
+                                                quoted: false,
+                                                span: 108..109,
+                                            },
+                                        ],
+                                    ),
+                                    span: 108..109,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Primitive {
+                                        name: "interval",
+                                        args: [],
+                                    },
+                                    span: 113..121,
+                                },
+                                try_cast: false,
+                            },
+                            span: 103..122,
+                        },
+                        alias: None,
+                        span: 103..122,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "e",
+                                                quoted: false,
+                                                span: 129..130,
+                                            },
+                                        ],
+                                    ),
+                                    span: 129..130,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Primitive {
+                                        name: "geometry",
+                                        args: [
+                                            "ANY",
+                                        ],
+                                    },
+                                    span: 134..147,
+                                },
+                                try_cast: false,
+                            },
+                            span: 124..148,
+                        },
+                        alias: None,
+                        span: 124..148,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "f",
+                                                quoted: false,
+                                                span: 155..156,
+                                            },
+                                        ],
+                                    ),
+                                    span: 155..156,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Map(
+                                        None,
+                                    ),
+                                    span: 160..163,
+                                },
+                                try_cast: false,
+                            },
+                            span: 150..164,
+                        },
+                        alias: None,
+                        span: 150..164,
+                    },
+                    SelectItem {
+                        expr: Expr {
+                            kind: Cast {
+                                expr: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "g",
+                                                quoted: false,
+                                                span: 171..172,
+                                            },
+                                        ],
+                                    ),
+                                    span: 171..172,
+                                },
+                                data_type: DataTypeSpec {
+                                    kind: Struct(
+                                        None,
+                                    ),
+                                    span: 176..182,
+                                },
+                                try_cast: false,
+                            },
+                            span: 166..183,
+                        },
+                        alias: None,
+                        span: 166..183,
+                    },
+                ],
+                from: [],
+                lateral_views: [],
+                pivot: None,
+                unpivot: None,
+                selection: None,
+                group_by: None,
+                having: None,
+                windows: [],
+                qualify: None,
+                span: 0..183,
+            },
+        ),
+        span: 0..183,
+    },
+    order_by: [],
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..183,
+}

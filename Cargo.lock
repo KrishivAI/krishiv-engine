@@ -1173,6 +1173,15 @@ version = "0.1.0-dev"
 [[package]]
 name = "krishiv-sql"
 version = "0.1.0-dev"
+dependencies = [
+ "codspeed-criterion-compat",
+ "insta",
+ "krishiv-common",
+ "krishiv-plan",
+ "krishiv-types",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "krishiv-state"

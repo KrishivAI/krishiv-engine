@@ -10,3 +10,18 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+krishiv-common = { path = "../krishiv-common" }
+krishiv-types = { path = "../krishiv-types" }
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+insta = { workspace = true }
+krishiv-plan = { path = "../krishiv-plan" }
+serde_json = { workspace = true, features = ["std"] }
+
+[[bench]]
+name = "parse"
+harness = false

@@ -1,0 +1,675 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "image": "apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89",
+ "generator": "tests/scripts/gen_sql_parse_probe.py",
+ "notes": "Statements parsed by Spark's session SQL parser with each case's configs; errors carry Spark's condition, SQLSTATE, message parameters and query-context start/stop indexes.",
+ "cases": [
+  {
+   "sql": "SELECT FROM",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT all, b FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT all, distinct FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT all + 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT count(ALL)",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT * FROM from t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT * FROM t LATERAL VIEW explode(x) AS c",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a NOT",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a FROM",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a WHERE",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a, FROM",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a FROM t WHERE",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a AS",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT * FROM t AS",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a FROM t LIMIT",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT * FROM VALUES",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT INTERVAL 1 DAY TO",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1 AS select",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT x -> 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT transform(a, all -> all * all)",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT current_date",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a FROM t ORDER BY ALL",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a FROM t GROUP BY ALL",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT EXISTS(1)",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a IN ((SELECT 1))",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1.5a",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a.b.c.* FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT * EXCEPT (a) FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT date_add(d, 1), datediff(year, 1)",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "FROM t SELECT a SELECT b",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a FROM t GROUP BY a, b GROUPING SETS ((a), (a + b) * 2)",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a b, c AS d, e AS (f, g) FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a (b, c) FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a FROM t LIMIT ALL",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1 UNION SELECT 2 INTERSECT DISTINCT SELECT 3",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT * FROM t, LATERAL (SELECT t.a) AS s (b)",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT * FROM a LEFT SEMI JOIN b SEMI JOIN c ANTI JOIN d",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT x[0], x.y.z, x::int, -1::string",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT \"a\" \"b\", 'c' 'd'",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1 abc def",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'def'",
+    "hint": ": extra input 'def'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT (1 AS a)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 'a\nb' c d e",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'d'",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT\t'unterminated",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'''",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1 +",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT (1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "-- only a comment",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1 FROM t WHERE a = 1 b",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'b'",
+    "hint": ": extra input 'b'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT array(1) >> 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1 FROM t t2 t3",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'t3'",
+    "hint": ": extra input 't3'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a FROM t ORDER BY",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'BY'",
+    "hint": ": extra input 'BY'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a, count(*) FROM t GROUP BY a HAVING",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'HAVING'",
+    "hint": ": extra input 'HAVING'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT (SELECT 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": missing ')'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1; SELECT 2",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'SELECT'",
+    "hint": ": extra input 'SELECT'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a FROM t UNION",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a b c",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'c'",
+    "hint": ": extra input 'c'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a.b.c d.e",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'.'",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT f(",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(1 AS)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(1 AS INT",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a FROM t JOIN",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a FROM t JOIN u ON",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'1'",
+    "hint": ": extra input '1'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT `a",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'`'",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 'a",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'''",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT \"a",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'\"'",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT x::",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "WITH a AS (SELECT 1)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "WITH a AS SELECT 1 SELECT 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'SELECT'",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT INTERVAL 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a[1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": missing ']'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT * FROM test-table",
+   "parses": false,
+   "error_class": "INVALID_IDENTIFIER",
+   "sql_state": "42602",
+   "message_parameters": {
+    "ident": "test-table"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT café FROM t",
+   "parses": false,
+   "error_class": "INVALID_IDENTIFIER",
+   "sql_state": "42602",
+   "message_parameters": {
+    "ident": "café"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1 /* x",
+   "parses": false,
+   "error_class": "UNCLOSED_BRACKETED_COMMENT",
+   "sql_state": "42601",
+   "message_parameters": {},
+   "conf": {}
+  },
+  {
+   "sql": "   ",
+   "parses": false,
+   "error_class": "PARSE_EMPTY_STATEMENT",
+   "sql_state": "42617",
+   "message_parameters": {},
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1 AS select",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'select'",
+    "hint": ""
+   },
+   "conf": {
+    "spark.sql.ansi.enabled": "true",
+    "spark.sql.ansi.enforceReservedKeywords": "true"
+   }
+  },
+  {
+   "sql": "SELECT all FROM t",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'FROM'",
+    "hint": ""
+   },
+   "conf": {
+    "spark.sql.ansi.enabled": "true",
+    "spark.sql.ansi.enforceReservedKeywords": "true"
+   }
+  },
+  {
+   "sql": "SELECT a FROM",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'FROM'",
+    "hint": ""
+   },
+   "conf": {
+    "spark.sql.ansi.enabled": "true",
+    "spark.sql.ansi.enforceReservedKeywords": "true"
+   }
+  },
+  {
+   "sql": "SELECT current_date",
+   "parses": true,
+   "conf": {
+    "spark.sql.ansi.enabled": "true",
+    "spark.sql.ansi.enforceReservedKeywords": "true"
+   }
+  },
+  {
+   "sql": "SELECT x -> 1",
+   "parses": true,
+   "conf": {
+    "spark.sql.ansi.enabled": "true",
+    "spark.sql.ansi.enforceReservedKeywords": "true"
+   }
+  },
+  {
+   "sql": "SELECT \"a\"\"b\" FROM t",
+   "parses": true,
+   "conf": {
+    "spark.sql.ansi.enabled": "true",
+    "spark.sql.ansi.doubleQuotedIdentifiers": "true"
+   }
+  },
+  {
+   "sql": "SELECT \"a\" 'b'",
+   "parses": false,
+   "error_class": "UNSUPPORTED_TYPED_LITERAL",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "supportedTypes": "\"DATE\", \"TIMESTAMP_NTZ\", \"TIMESTAMP_LTZ\", \"TIMESTAMP\", \"INTERVAL\", \"X\", \"TIME\"",
+    "unsupportedType": "\"A\""
+   },
+   "start": 7,
+   "stop": 13,
+   "conf": {
+    "spark.sql.ansi.enabled": "true",
+    "spark.sql.ansi.doubleQuotedIdentifiers": "true"
+   }
+  },
+  {
+   "sql": "SELECT 1 UNION SELECT 2 INTERSECT SELECT 3",
+   "parses": true,
+   "conf": {
+    "spark.sql.legacy.setopsPrecedence.enabled": "true"
+   }
+  }
+ ]
+}
