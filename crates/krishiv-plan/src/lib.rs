@@ -1,4 +1,83 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Logical and physical plans (layer L3; empty skeleton).
+//! Krishiv's logical-plan IR (layer L3; ADR 0003, updates of 2026-10-17).
+//!
+//! Every front end lowers into one model: the SQL parser's AST, Spark
+//! Connect protobuf (translated at the API boundary in `krishiv-connect`),
+//! and the native Python and Rust DataFrame APIs. The analyzer turns an
+//! unresolved plan into a resolved one in the same model. This crate never
+//! depends on `prost`, `tonic` or `krishiv-connect`.
+//!
+//! # Model
+//!
+//! - A [`Plan`] is a root [`LogicalPlan`] and its [`IR_VERSION`].
+//! - A [`LogicalPlan`] is a [`PlanNode`] plus its [`Origin`]; an [`Expr`]
+//!   is an [`ExprNode`] plus its [`Origin`]. Children are `Arc`s, so
+//!   rebuilt nodes share unchanged subtrees.
+//! - An [`Origin`] holds an optional DataFrame [`PlanId`] and an optional
+//!   SQL [`SourceId`] and [`Span`].
+//! - Unresolved operators are [`ExprNode::Function`] calls with canonical
+//!   names ([`function`]); resolved calls carry a typed [`FunctionId`] and
+//!   [`FunctionKind`].
+//! - Data types are [`krishiv_types::DataType`].
+//! - `PartialEq` compares everything, origins included.
+//!
+//! Unresolved and resolved nodes share one tree. The analyzer replaces the
+//! unresolved-only nodes (marked U below) by resolved ones (R).
+//!
+//! # Node inventory
+//!
+//! Which nodes the 22 TPC-H queries (`bench/queries/tpch`) and the
+//! DataFrame slice need.
+//!
+//! | Node | Form | TPC-H | DataFrame slice |
+//! |---|---|---|---|
+//! | `PlanNode::Read` | U | all | `read.table`, `read.parquet` |
+//! | `PlanNode::Sql` | U | - | `sql` |
+//! | `PlanNode::Scan` | R | - | - |
+//! | `PlanNode::Project` | U, R | Q2, Q4, Q6-Q9, Q11, Q14-Q17, Q19-Q22 | `select` |
+//! | `PlanNode::WithColumns` | U | - | `withColumn` |
+//! | `PlanNode::Filter` | U, R | Q1-Q12, Q14-Q22 | `filter`, `where` |
+//! | `PlanNode::Aggregate` | U, R | Q1, Q3-Q5, Q7-Q13, Q15, Q16, Q18, Q21, Q22 | `groupBy.agg` |
+//! | `PlanNode::Join` | U, R | Q2, Q3, Q5, Q7-Q21 | `join` |
+//! | `PlanNode::Sort` | U, R | Q1-Q5, Q7-Q13, Q15, Q16, Q18, Q20-Q22 | `orderBy`, `sort` |
+//! | `PlanNode::Limit` | U, R | Q2, Q3, Q10, Q18, Q21 | `limit` |
+//! | `PlanNode::SubqueryAlias` | U, R | Q7-Q9, Q13, Q21, Q22 | `df.alias` |
+//! | `PlanNode::WithCte` | U, R | Q15 | - |
+//! | `ExprNode::Column` | U | all | `col`, `df["a"]` |
+//! | `ExprNode::Literal` | U, R | all | `lit` |
+//! | `ExprNode::Star` | U | Q1, Q4, Q13, Q21, Q22 | `select("*")` |
+//! | `ExprNode::Function` | U | all | `operators`, `functions` |
+//! | `ExprNode::Cast` | U, R | Q1, Q3-Q8, Q10, Q12, Q14, Q15, Q20 | `cast` |
+//! | `ExprNode::Alias` | U | Q1, Q3-Q17, Q19, Q21, Q22 | `col.alias` |
+//! | `ExprNode::Subquery` | U, R | Q2, Q4, Q11, Q15-Q18, Q20-Q22 | - |
+//! | `ResolvedExpr::Column` | R | - | - |
+//! | `ResolvedExpr::OuterColumn` | R | - | - |
+//! | `ResolvedExpr::Function` | R | - | - |
+//! | `ResolvedExpr::Alias` | R | - | - |
+//!
+//! Not in v1 (spec 13 §9; added with the features that need them):
+//! `Window`, `SetOp`, `Generate`, `Repartition`, `Hint`, `Pivot`, `Command`,
+//! `Extension`, `ToDF`, `Offset`, `Deduplicate`, `LocalRelation` and `Range`
+//! relations; lambda, window, extract-value and extension expressions.
 
 #![forbid(unsafe_code)]
+
+mod expr;
+pub mod function;
+mod literal;
+mod origin;
+mod plan;
+#[cfg(test)]
+mod tests;
+
+pub use expr::{
+    AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, NullOrdering,
+    ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star, SubqueryKind,
+};
+pub use function::{Builtin, FunctionId, FunctionKind};
+pub use literal::{DayTimeField, Literal, YearMonthField};
+pub use origin::{Origin, PlanId, SourceId, Span};
+pub use plan::{
+    Cte, Grouping, IR_VERSION, JoinCondition, JoinKind, LogicalPlan, Plan, PlanNode, ReadSource,
+    Scan, SqlArgs, TableVersion,
+};
