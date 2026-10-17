@@ -27,8 +27,17 @@
 //! distinct relation or expression (its own fields, with child references
 //! as record indices), records in post-order of first appearance, equal
 //! records stored once. Structurally equal plans have equal encodings
-//! however their subtrees are shared, and the encoding and every key take
-//! time linear in the distinct nodes.
+//! however their subtrees are shared.
+//!
+//! Cost: records and digests are linear in the distinct nodes. Encoding a
+//! `plan_id` reference walks only the part of the referencing operator's
+//! subtree that holds a carrier of that id: each relation keeps a bit set of
+//! the ids carried below it (one word-wise merge per distinct relation), and
+//! subtrees without the id are skipped. A chain of N operators each
+//! referencing the previous one, the common PySpark `withColumn`/`df["x"]`
+//! shape, is then O(N) walks plus O(N²/64) bit-set words; references whose
+//! carriers sit deep under the operator still walk down to them. A benchmark
+//! tracks the chain case.
 //!
 //! The structural hash is a Merkle hash: each record's digest is XXH3-128
 //! (seeded with [`ENCODING_VERSION`]) of its own fields with child
@@ -37,6 +46,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use twox_hash::XxHash3_128;
@@ -140,6 +150,11 @@ struct Keys {
     /// The carrier record of a `plan_id` in a subtree; `None` when no
     /// relation in it carries the `plan_id`.
     carriers: HashMap<(*const LogicalPlan, PlanId), Option<Key>>,
+    /// Per relation, the bit set of `plan_id`s carried anywhere in its
+    /// subtree, so carrier walks skip subtrees that cannot hold the id.
+    below: HashMap<*const LogicalPlan, Rc<[u64]>>,
+    /// Dense bit index of each carried `plan_id`.
+    id_bits: HashMap<PlanId, usize>,
     records: Vec<Vec<u8>>,
     index: HashMap<Vec<u8>, u64>,
     /// Relation keys per (relation, enclosing-operator context).
@@ -169,12 +184,19 @@ impl Keys {
     /// The carrier record of `id` in the subtree of `p`: whether `p`
     /// carries `id`, then each child's carrier record or "none". It mirrors
     /// the subtree's shape, so it fixes every carrier's position. `None`
-    /// when no relation in the subtree carries `id`. Memoised per relation,
-    /// so it is linear in distinct relations.
+    /// when no relation in the subtree carries `id`. Memoised per
+    /// (relation, id), and only relations whose subtree holds the id are
+    /// visited.
     fn carriers(&mut self, p: &LogicalPlan, id: PlanId) -> Option<Key> {
         let key = (std::ptr::from_ref(p), id);
         if let Some(&found) = self.carriers.get(&key) {
             return found;
+        }
+        // Pruning only: a subtree without the id yields `None` either way,
+        // so the encoding is unchanged.
+        if !self.carried_below(p, id) {
+            self.carriers.insert(key, None);
+            return None;
         }
         let mut children = Vec::new();
         p.for_each_child(&mut |c| children.push(Arc::clone(c)));
@@ -204,6 +226,45 @@ impl Keys {
         let found = Some(self.intern(rec, &dig));
         self.carriers.insert(key, found);
         found
+    }
+
+    /// Whether any relation in the subtree of `p` carries `id`.
+    fn carried_below(&mut self, p: &LogicalPlan, id: PlanId) -> bool {
+        let bits = self.ids_below(p);
+        self.id_bits
+            .get(&id)
+            .is_some_and(|&b| bits.get(b / 64).is_some_and(|w| w & (1 << (b % 64)) != 0))
+    }
+
+    /// The bit set of `plan_id`s carried in the subtree of `p`, memoised per
+    /// relation: one pass over the distinct relations, each merging its
+    /// children's sets word by word.
+    fn ids_below(&mut self, p: &LogicalPlan) -> Rc<[u64]> {
+        let ptr = std::ptr::from_ref(p);
+        if let Some(bits) = self.below.get(&ptr) {
+            return Rc::clone(bits);
+        }
+        let mut bits: Vec<u64> = Vec::new();
+        if let Some(id) = p.origin.plan_id {
+            let next = self.id_bits.len();
+            let b = *self.id_bits.entry(id).or_insert(next);
+            bits.resize(b / 64 + 1, 0);
+            bits[b / 64] |= 1 << (b % 64);
+        }
+        let mut children = Vec::new();
+        p.for_each_child(&mut |c| children.push(Arc::clone(c)));
+        for child in &children {
+            let theirs = self.ids_below(child);
+            if theirs.len() > bits.len() {
+                bits.resize(theirs.len(), 0);
+            }
+            for (word, other) in bits.iter_mut().zip(theirs.iter()) {
+                *word |= other;
+            }
+        }
+        let bits: Rc<[u64]> = bits.into();
+        self.below.insert(ptr, Rc::clone(&bits));
+        bits
     }
 
     /// Where `id` may point from `op`: (levels out, carrier record) at the
