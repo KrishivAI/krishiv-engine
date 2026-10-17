@@ -5,6 +5,7 @@ extend-exclude = [
     ".github/ci-fixtures/**",
     "tests/spark-golden/**",
     "tests/fixtures/**",
+    "crates/krishiv-common/vendored/spark-error-conditions.json",
     "tests/sqllogictest/**",
     "crates/krishiv-ui-assets/assets/**",
     "**/*.lock",
