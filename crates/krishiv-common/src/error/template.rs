@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Message-template placeholders, matching Spark's `<([a-zA-Z0-9_-]+)>`.
 //!
 //! Shared with `build.rs` (via `#[path]`) so that the parameters the build
@@ -19,8 +20,7 @@ fn placeholder_at(template: &str, start: usize) -> Option<(&str, usize)> {
 }
 
 /// Unique placeholder names in order of first appearance.
-#[allow(dead_code)] // used by build.rs and tests only
-pub fn placeholders(template: &str) -> Vec<&str> {
+pub(crate) fn placeholders(template: &str) -> Vec<&str> {
     let mut out: Vec<&str> = Vec::new();
     let mut i = 0;
     while let Some(off) = template.get(i..).and_then(|s| s.find('<')) {
@@ -40,8 +40,7 @@ pub fn placeholders(template: &str) -> Vec<&str> {
 
 /// Substitutes `<name>` placeholders in one left-to-right pass. Values are
 /// inserted verbatim (never re-scanned); unknown placeholders are kept.
-#[allow(dead_code)] // unused by build.rs, which includes this file
-pub fn render(template: &str, params: &[(&str, String)]) -> String {
+pub(crate) fn render(template: &str, params: &[(&str, String)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut i = 0;
     while let Some(off) = template.get(i..).and_then(|s| s.find('<')) {

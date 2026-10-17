@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Generates the error-class registry from `error-classes.json`.
 //!
 //! The JSON file mirrors the shape of Spark's `error-conditions.json` and is
@@ -11,6 +12,10 @@ use std::path::PathBuf;
 use serde_json::{Map, Value};
 
 #[path = "src/error/template.rs"]
+#[expect(
+    dead_code,
+    reason = "shared with the library via #[path]; build.rs uses only `placeholders`"
+)]
 mod template;
 
 type BoxError = Box<dyn Error>;
@@ -243,7 +248,10 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
     for (doc, fname, ty, body) in accessors {
         writeln!(o)?;
         writeln!(o, "    /// {doc}")?;
-        writeln!(o, "    #[allow(clippy::match_same_arms)]")?;
+        writeln!(
+            o,
+            "    #[allow(clippy::match_same_arms, clippy::allow_attributes, reason = \"generated code: arms may or may not coincide with the data\")]"
+        )?;
         writeln!(o, "    pub const fn {fname}(self) -> {ty} {{")?;
         writeln!(o, "        match self {{")?;
         for l in leaves {

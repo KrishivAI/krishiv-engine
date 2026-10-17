@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Tests for the layering checker.
 
 use xtask::layering::{check, parse_map};

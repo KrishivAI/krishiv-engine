@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Conformance test harness for Krishiv (P0-T20..T23).
 //!
 //! * [`hash_fixture`]: Spark `hash()`/`xxhash64()` golden fixtures (ADR 0010).

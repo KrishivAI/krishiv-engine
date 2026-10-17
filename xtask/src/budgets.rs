@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask budgets`: dependency, build-time and binary-size budgets.
 //!
 //! Measures are compared with the committed `budgets.json` baseline; growth
@@ -107,7 +108,10 @@ fn growth_pct(base: u64, now: u64) -> f64 {
     if base == 0 {
         return 0.0;
     }
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "ratio of small counts; precision loss is irrelevant"
+    )]
     {
         (now as f64 - base as f64) / base as f64 * 100.0
     }

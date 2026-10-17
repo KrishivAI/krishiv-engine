@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Enumeration of vendored Spark `SQLQueryTestSuite` golden files (`tests/spark-golden/<tag>/`).
 //!
 //! `inputs/<name>.sql` pairs with `results/<name>.sql.out`. Variant outputs such as

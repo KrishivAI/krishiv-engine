@@ -7,11 +7,11 @@
 # on a scratch copy to preview changelogs/versions).
 
 [workspace]
-release = false            # no package is released
-publish = false            # never `cargo publish`
-git_release_enable = false # no GitHub/Gitea release
-git_tag_enable = false     # no tags
-changelog_update = false   # no CHANGELOG edits yet
+release = false             # no package is released
+publish = false             # never `cargo publish`
+git_release_enable = false  # no GitHub/Gitea release
+git_tag_enable = false      # no tags
+changelog_update = false    # no CHANGELOG edits yet
 semver_check = false
 dependencies_update = false
 pr_draft = true

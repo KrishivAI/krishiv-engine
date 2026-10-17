@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! sqllogictest runner stub (P0-T23). The adapter answers every statement with `NotImplemented`
 //! until Krishiv can execute SQL (P2).
 

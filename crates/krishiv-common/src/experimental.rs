@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Runtime gate for `krishiv.experimental.*` config keys (ADR 0027).
 //!
 //! Experimental features are registered [`crate::config`] entries of type
