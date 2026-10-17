@@ -1,0 +1,973 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "image": "apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89",
+ "generator": "tests/scripts/gen_type_strings.py",
+ "notes": "DDL strings parsed by CatalystSqlParser.parseDataType; decimal_constructor builds DecimalType(precision, scale) directly. Errors carry Spark's condition, SQLSTATE and message parameters.",
+ "ddl": [
+  {
+   "ddl": "boolean",
+   "simple_string": "boolean",
+   "catalog_string": "boolean",
+   "sql": "BOOLEAN",
+   "type_name": "boolean",
+   "json": "\"boolean\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "BOOLEAN",
+   "simple_string": "boolean",
+   "catalog_string": "boolean",
+   "sql": "BOOLEAN",
+   "type_name": "boolean",
+   "json": "\"boolean\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "Boolean",
+   "simple_string": "boolean",
+   "catalog_string": "boolean",
+   "sql": "BOOLEAN",
+   "type_name": "boolean",
+   "json": "\"boolean\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "tinyint",
+   "simple_string": "tinyint",
+   "catalog_string": "tinyint",
+   "sql": "TINYINT",
+   "type_name": "byte",
+   "json": "\"byte\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "byte",
+   "simple_string": "tinyint",
+   "catalog_string": "tinyint",
+   "sql": "TINYINT",
+   "type_name": "byte",
+   "json": "\"byte\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "TINYINT",
+   "simple_string": "tinyint",
+   "catalog_string": "tinyint",
+   "sql": "TINYINT",
+   "type_name": "byte",
+   "json": "\"byte\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "smallint",
+   "simple_string": "smallint",
+   "catalog_string": "smallint",
+   "sql": "SMALLINT",
+   "type_name": "short",
+   "json": "\"short\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "short",
+   "simple_string": "smallint",
+   "catalog_string": "smallint",
+   "sql": "SMALLINT",
+   "type_name": "short",
+   "json": "\"short\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "SMALLINT",
+   "simple_string": "smallint",
+   "catalog_string": "smallint",
+   "sql": "SMALLINT",
+   "type_name": "short",
+   "json": "\"short\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "int",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "integer",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "INT",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "Integer",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "bigint",
+   "simple_string": "bigint",
+   "catalog_string": "bigint",
+   "sql": "BIGINT",
+   "type_name": "long",
+   "json": "\"long\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "long",
+   "simple_string": "bigint",
+   "catalog_string": "bigint",
+   "sql": "BIGINT",
+   "type_name": "long",
+   "json": "\"long\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "BIGINT",
+   "simple_string": "bigint",
+   "catalog_string": "bigint",
+   "sql": "BIGINT",
+   "type_name": "long",
+   "json": "\"long\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "float",
+   "simple_string": "float",
+   "catalog_string": "float",
+   "sql": "FLOAT",
+   "type_name": "float",
+   "json": "\"float\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "real",
+   "simple_string": "float",
+   "catalog_string": "float",
+   "sql": "FLOAT",
+   "type_name": "float",
+   "json": "\"float\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "FLOAT",
+   "simple_string": "float",
+   "catalog_string": "float",
+   "sql": "FLOAT",
+   "type_name": "float",
+   "json": "\"float\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "double",
+   "simple_string": "double",
+   "catalog_string": "double",
+   "sql": "DOUBLE",
+   "type_name": "double",
+   "json": "\"double\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "DOUBLE",
+   "simple_string": "double",
+   "catalog_string": "double",
+   "sql": "DOUBLE",
+   "type_name": "double",
+   "json": "\"double\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "double precision",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'precision'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "string",
+   "simple_string": "string",
+   "catalog_string": "string",
+   "sql": "STRING",
+   "type_name": "string",
+   "json": "\"string\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "STRING",
+   "simple_string": "string",
+   "catalog_string": "string",
+   "sql": "STRING",
+   "type_name": "string",
+   "json": "\"string\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "binary",
+   "simple_string": "binary",
+   "catalog_string": "binary",
+   "sql": "BINARY",
+   "type_name": "binary",
+   "json": "\"binary\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "BINARY",
+   "simple_string": "binary",
+   "catalog_string": "binary",
+   "sql": "BINARY",
+   "type_name": "binary",
+   "json": "\"binary\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal",
+   "simple_string": "decimal(10,0)",
+   "catalog_string": "decimal(10,0)",
+   "sql": "DECIMAL(10,0)",
+   "type_name": "decimal(10,0)",
+   "json": "\"decimal(10,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "dec",
+   "simple_string": "decimal(10,0)",
+   "catalog_string": "decimal(10,0)",
+   "sql": "DECIMAL(10,0)",
+   "type_name": "decimal(10,0)",
+   "json": "\"decimal(10,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "numeric",
+   "simple_string": "decimal(10,0)",
+   "catalog_string": "decimal(10,0)",
+   "sql": "DECIMAL(10,0)",
+   "type_name": "decimal(10,0)",
+   "json": "\"decimal(10,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "DECIMAL",
+   "simple_string": "decimal(10,0)",
+   "catalog_string": "decimal(10,0)",
+   "sql": "DECIMAL(10,0)",
+   "type_name": "decimal(10,0)",
+   "json": "\"decimal(10,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "Decimal",
+   "simple_string": "decimal(10,0)",
+   "catalog_string": "decimal(10,0)",
+   "sql": "DECIMAL(10,0)",
+   "type_name": "decimal(10,0)",
+   "json": "\"decimal(10,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(10)",
+   "simple_string": "decimal(10,0)",
+   "catalog_string": "decimal(10,0)",
+   "sql": "DECIMAL(10,0)",
+   "type_name": "decimal(10,0)",
+   "json": "\"decimal(10,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(10,2)",
+   "simple_string": "decimal(10,2)",
+   "catalog_string": "decimal(10,2)",
+   "sql": "DECIMAL(10,2)",
+   "type_name": "decimal(10,2)",
+   "json": "\"decimal(10,2)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(10, 2)",
+   "simple_string": "decimal(10,2)",
+   "catalog_string": "decimal(10,2)",
+   "sql": "DECIMAL(10,2)",
+   "type_name": "decimal(10,2)",
+   "json": "\"decimal(10,2)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "DECIMAL( 10 , 2 )",
+   "simple_string": "decimal(10,2)",
+   "catalog_string": "decimal(10,2)",
+   "sql": "DECIMAL(10,2)",
+   "type_name": "decimal(10,2)",
+   "json": "\"decimal(10,2)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "dec(5,1)",
+   "simple_string": "decimal(5,1)",
+   "catalog_string": "decimal(5,1)",
+   "sql": "DECIMAL(5,1)",
+   "type_name": "decimal(5,1)",
+   "json": "\"decimal(5,1)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "numeric(7,3)",
+   "simple_string": "decimal(7,3)",
+   "catalog_string": "decimal(7,3)",
+   "sql": "DECIMAL(7,3)",
+   "type_name": "decimal(7,3)",
+   "json": "\"decimal(7,3)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(010,02)",
+   "simple_string": "decimal(10,2)",
+   "catalog_string": "decimal(10,2)",
+   "sql": "DECIMAL(10,2)",
+   "type_name": "decimal(10,2)",
+   "json": "\"decimal(10,2)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(1,0)",
+   "simple_string": "decimal(1,0)",
+   "catalog_string": "decimal(1,0)",
+   "sql": "DECIMAL(1,0)",
+   "type_name": "decimal(1,0)",
+   "json": "\"decimal(1,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(1,1)",
+   "simple_string": "decimal(1,1)",
+   "catalog_string": "decimal(1,1)",
+   "sql": "DECIMAL(1,1)",
+   "type_name": "decimal(1,1)",
+   "json": "\"decimal(1,1)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(18,0)",
+   "simple_string": "decimal(18,0)",
+   "catalog_string": "decimal(18,0)",
+   "sql": "DECIMAL(18,0)",
+   "type_name": "decimal(18,0)",
+   "json": "\"decimal(18,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(18,18)",
+   "simple_string": "decimal(18,18)",
+   "catalog_string": "decimal(18,18)",
+   "sql": "DECIMAL(18,18)",
+   "type_name": "decimal(18,18)",
+   "json": "\"decimal(18,18)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(19,0)",
+   "simple_string": "decimal(19,0)",
+   "catalog_string": "decimal(19,0)",
+   "sql": "DECIMAL(19,0)",
+   "type_name": "decimal(19,0)",
+   "json": "\"decimal(19,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(38,0)",
+   "simple_string": "decimal(38,0)",
+   "catalog_string": "decimal(38,0)",
+   "sql": "DECIMAL(38,0)",
+   "type_name": "decimal(38,0)",
+   "json": "\"decimal(38,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "DECIMAL(38, 38)",
+   "simple_string": "decimal(38,38)",
+   "catalog_string": "decimal(38,38)",
+   "sql": "DECIMAL(38,38)",
+   "type_name": "decimal(38,38)",
+   "json": "\"decimal(38,38)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(38,10)",
+   "simple_string": "decimal(38,10)",
+   "catalog_string": "decimal(38,10)",
+   "sql": "DECIMAL(38,10)",
+   "type_name": "decimal(38,10)",
+   "json": "\"decimal(38,10)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(0,0)",
+   "simple_string": "decimal(0,0)",
+   "catalog_string": "decimal(0,0)",
+   "sql": "DECIMAL(0,0)",
+   "type_name": "decimal(0,0)",
+   "json": "\"decimal(0,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(0)",
+   "simple_string": "decimal(0,0)",
+   "catalog_string": "decimal(0,0)",
+   "sql": "DECIMAL(0,0)",
+   "type_name": "decimal(0,0)",
+   "json": "\"decimal(0,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "decimal(39,0)",
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "39"
+   }
+  },
+  {
+   "ddl": "DECIMAL(39, 0)",
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "39"
+   }
+  },
+  {
+   "ddl": "decimal(39)",
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "39"
+   }
+  },
+  {
+   "ddl": "decimal(100,0)",
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "100"
+   }
+  },
+  {
+   "ddl": "decimal(5,6)",
+   "error_class": "_LEGACY_ERROR_TEMP_1228",
+   "sql_state": "",
+   "message_parameters": {
+    "precision": "5",
+    "scale": "6"
+   }
+  },
+  {
+   "ddl": "decimal(38,39)",
+   "error_class": "_LEGACY_ERROR_TEMP_1228",
+   "sql_state": "",
+   "message_parameters": {
+    "precision": "38",
+    "scale": "39"
+   }
+  },
+  {
+   "ddl": "decimal(10,-1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'-'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "decimal(-1,0)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'-'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "decimal(99999999999,0)",
+   "error_class": "UNCLASSIFIED",
+   "exception": "java.lang.NumberFormatException"
+  },
+  {
+   "ddl": "decimal()",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "decimal(10,2,3)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"DECIMAL(10,2,3)\""
+   }
+  },
+  {
+   "ddl": "decimal(10,2",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "decimal(",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "decimal(1.5,0)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'1.5'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "date",
+   "simple_string": "date",
+   "catalog_string": "date",
+   "sql": "DATE",
+   "type_name": "date",
+   "json": "\"date\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "DATE",
+   "simple_string": "date",
+   "catalog_string": "date",
+   "sql": "DATE",
+   "type_name": "date",
+   "json": "\"date\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "timestamp",
+   "simple_string": "timestamp",
+   "catalog_string": "timestamp",
+   "sql": "TIMESTAMP",
+   "type_name": "timestamp",
+   "json": "\"timestamp\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "TIMESTAMP",
+   "simple_string": "timestamp",
+   "catalog_string": "timestamp",
+   "sql": "TIMESTAMP",
+   "type_name": "timestamp",
+   "json": "\"timestamp\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "timestamp_ltz",
+   "simple_string": "timestamp",
+   "catalog_string": "timestamp",
+   "sql": "TIMESTAMP",
+   "type_name": "timestamp",
+   "json": "\"timestamp\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "TIMESTAMP_LTZ",
+   "simple_string": "timestamp",
+   "catalog_string": "timestamp",
+   "sql": "TIMESTAMP",
+   "type_name": "timestamp",
+   "json": "\"timestamp\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "timestamp_ntz",
+   "simple_string": "timestamp_ntz",
+   "catalog_string": "timestamp_ntz",
+   "sql": "TIMESTAMP_NTZ",
+   "type_name": "timestamp_ntz",
+   "json": "\"timestamp_ntz\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "TIMESTAMP_NTZ",
+   "simple_string": "timestamp_ntz",
+   "catalog_string": "timestamp_ntz",
+   "sql": "TIMESTAMP_NTZ",
+   "type_name": "timestamp_ntz",
+   "json": "\"timestamp_ntz\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "TimeStamp_Ntz",
+   "simple_string": "timestamp_ntz",
+   "catalog_string": "timestamp_ntz",
+   "sql": "TIMESTAMP_NTZ",
+   "type_name": "timestamp_ntz",
+   "json": "\"timestamp_ntz\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "timestamp with local time zone",
+   "simple_string": "timestamp",
+   "catalog_string": "timestamp",
+   "sql": "TIMESTAMP",
+   "type_name": "timestamp",
+   "json": "\"timestamp\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "timestamp without time zone",
+   "simple_string": "timestamp_ntz",
+   "catalog_string": "timestamp_ntz",
+   "sql": "TIMESTAMP_NTZ",
+   "type_name": "timestamp_ntz",
+   "json": "\"timestamp_ntz\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "  int  ",
+   "simple_string": "int",
+   "catalog_string": "int",
+   "sql": "INT",
+   "type_name": "integer",
+   "json": "\"integer\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "\tbigint\n",
+   "simple_string": "bigint",
+   "catalog_string": "bigint",
+   "sql": "BIGINT",
+   "type_name": "long",
+   "json": "\"long\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": " decimal(10,2) ",
+   "simple_string": "decimal(10,2)",
+   "catalog_string": "decimal(10,2)",
+   "sql": "DECIMAL(10,2)",
+   "type_name": "decimal(10,2)",
+   "json": "\"decimal(10,2)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "void",
+   "simple_string": "void",
+   "catalog_string": "void",
+   "sql": "VOID",
+   "type_name": "void",
+   "json": "\"void\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<int>",
+   "simple_string": "array<int>",
+   "catalog_string": "array<int>",
+   "sql": "ARRAY<INT>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"integer\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "map<string,int>",
+   "simple_string": "map<string,int>",
+   "catalog_string": "map<string,int>",
+   "sql": "MAP<STRING, INT>",
+   "type_name": "map",
+   "json": "{\"type\":\"map\",\"keyType\":\"string\",\"valueType\":\"integer\",\"valueContainsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a:int>",
+   "simple_string": "struct<a:int>",
+   "catalog_string": "struct<a:int>",
+   "sql": "STRUCT<a: INT>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "char(5)",
+   "simple_string": "char(5)",
+   "catalog_string": "char(5)",
+   "sql": "CHAR(5)",
+   "type_name": "char(5)",
+   "json": "\"char(5)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "varchar(10)",
+   "simple_string": "varchar(10)",
+   "catalog_string": "varchar(10)",
+   "sql": "VARCHAR(10)",
+   "type_name": "varchar(10)",
+   "json": "\"varchar(10)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval year to month",
+   "simple_string": "interval year to month",
+   "catalog_string": "interval year to month",
+   "sql": "INTERVAL YEAR TO MONTH",
+   "type_name": "interval year to month",
+   "json": "\"interval year to month\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval day to second",
+   "simple_string": "interval day to second",
+   "catalog_string": "interval day to second",
+   "sql": "INTERVAL DAY TO SECOND",
+   "type_name": "interval day to second",
+   "json": "\"interval day to second\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "variant",
+   "simple_string": "variant",
+   "catalog_string": "variant",
+   "sql": "VARIANT",
+   "type_name": "variant",
+   "json": "\"variant\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "string collate utf8_lcase",
+   "simple_string": "string collate UTF8_LCASE",
+   "catalog_string": "string collate UTF8_LCASE",
+   "sql": "STRING COLLATE UTF8_LCASE",
+   "type_name": "string collate UTF8_LCASE",
+   "json": "\"string collate UTF8_LCASE\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "",
+   "error_class": "PARSE_EMPTY_STATEMENT",
+   "sql_state": "42617",
+   "message_parameters": {}
+  },
+  {
+   "ddl": "foo",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   }
+  },
+  {
+   "ddl": "int,",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "','",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "int int",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "1",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'1'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "`int`",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INT\""
+   }
+  },
+  {
+   "ddl": "timestamp(3)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"TIMESTAMP(3)\""
+   }
+  }
+ ],
+ "decimal_constructor": [
+  {
+   "precision": 38,
+   "scale": 38,
+   "simple_string": "decimal(38,38)",
+   "catalog_string": "decimal(38,38)",
+   "sql": "DECIMAL(38,38)",
+   "type_name": "decimal(38,38)",
+   "json": "\"decimal(38,38)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "precision": 38,
+   "scale": 0,
+   "simple_string": "decimal(38,0)",
+   "catalog_string": "decimal(38,0)",
+   "sql": "DECIMAL(38,0)",
+   "type_name": "decimal(38,0)",
+   "json": "\"decimal(38,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "precision": 1,
+   "scale": 0,
+   "simple_string": "decimal(1,0)",
+   "catalog_string": "decimal(1,0)",
+   "sql": "DECIMAL(1,0)",
+   "type_name": "decimal(1,0)",
+   "json": "\"decimal(1,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "precision": 18,
+   "scale": 18,
+   "simple_string": "decimal(18,18)",
+   "catalog_string": "decimal(18,18)",
+   "sql": "DECIMAL(18,18)",
+   "type_name": "decimal(18,18)",
+   "json": "\"decimal(18,18)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "precision": 39,
+   "scale": 0,
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "39"
+   }
+  },
+  {
+   "precision": 0,
+   "scale": 0,
+   "simple_string": "decimal(0,0)",
+   "catalog_string": "decimal(0,0)",
+   "sql": "DECIMAL(0,0)",
+   "type_name": "decimal(0,0)",
+   "json": "\"decimal(0,0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "precision": 5,
+   "scale": 6,
+   "error_class": "_LEGACY_ERROR_TEMP_1228",
+   "sql_state": "",
+   "message_parameters": {
+    "precision": "5",
+    "scale": "6"
+   }
+  },
+  {
+   "precision": 10,
+   "scale": -1,
+   "error_class": "NEGATIVE_SCALE_DISALLOWED",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "scale": "-1",
+    "sqlConf": "\"spark.sql.legacy.allowNegativeScaleOfDecimal\""
+   }
+  },
+  {
+   "precision": 100,
+   "scale": 0,
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "100"
+   }
+  }
+ ],
+ "error_conditions": {
+  "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION": {
+   "message": [
+    "Decimal precision <precision> exceeds max precision <maxPrecision>."
+   ],
+   "sqlState": "22003"
+  },
+  "NEGATIVE_SCALE_DISALLOWED": {
+   "message": [
+    "Negative scale is not allowed: '<scale>'. Set the config <sqlConf> to \"true\" to allow it."
+   ],
+   "sqlState": "0A000"
+  },
+  "PARSE_EMPTY_STATEMENT": {
+   "message": [
+    "Syntax error, unexpected empty statement."
+   ],
+   "sqlState": "42617"
+  },
+  "PARSE_SYNTAX_ERROR": {
+   "message": [
+    "Syntax error at or near <error><hint>."
+   ],
+   "sqlState": "42601"
+  },
+  "UNSUPPORTED_DATATYPE": {
+   "message": [
+    "Unsupported data type <typeName>."
+   ],
+   "sqlState": "0A000"
+  },
+  "_LEGACY_ERROR_TEMP_1228": {
+   "message": [
+    "Decimal scale (<scale>) cannot be greater than precision (<precision>)."
+   ]
+  }
+ }
+}
