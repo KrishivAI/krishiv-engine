@@ -110,6 +110,22 @@ daily = orders.groupBy("order_date").agg(F.sum("amount").alias("revenue"))
 daily.toPandas()  # results arrive as Arrow
 ```
 
+**Python: the native Krishiv API — same code, embedded in your process.**
+
+```python
+import krishiv
+from krishiv.sql import functions as F
+
+# Planned: PySpark-compatible API running in-process — no server, no JVM.
+spark = krishiv.SparkSession.builder.getOrCreate()
+
+orders = spark.read.parquet("s3://lake/orders/")
+daily = orders.groupBy("order_date").agg(F.sum("amount").alias("revenue"))
+
+daily.to_arrow()   # zero-copy Arrow table (also .to_polars(), .toPandas())
+# Same code against a cluster: krishiv.SparkSession.builder.remote("sc://...")
+```
+
 **SQL: an always-fresh view over a stream.**
 
 ```sql
