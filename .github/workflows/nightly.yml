@@ -2,9 +2,9 @@ name: Nightly (heavy)
 
 # Heavy jobs run on GitHub-hosted runners (ADR 0029 CI topology); `cargo xtask
 # workflow-lint` rejects any other runner kind.
-# Coverage (cargo-llvm-cov), mutation (cargo-mutants), fuzz and the macro
+# Mutation (cargo-mutants), fuzz and the macro
 # benchmarks (TPC-H/TPC-DS/ClickBench) are added here by their own tasks
-# (P2-T105/T107/T108/T119) as further jobs with the same runner.
+# (P2-T107/T108/T119) as further jobs with the same runner.
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -51,3 +51,41 @@ jobs:
       - name: sccache stats
         if: always()
         run: sccache --show-stats
+
+  # P2-T105: full line + branch coverage (branch needs nightly rustc), report only.
+  coverage:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write # Codecov OIDC upload (no secret)
+    env:
+      RUSTC_WRAPPER: "" # no sccache here: instrumented builds are not cacheable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nightly toolchain with llvm-tools (branch coverage)
+        run: rustup toolchain install nightly --profile minimal --component llvm-tools-preview
+      - uses: taiki-e/install-action@899b013517f9e7774591216672bf75a46bb9a481 # v2.9.4
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+      - run: cargo xtask coverage --all-features --html
+      - name: Per-crate summary
+        run: cargo xtask coverage-summary --markdown | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-report
+          path: |
+            target/coverage/html
+            target/coverage/summary.json
+            target/coverage/lcov.info
+          retention-days: 30
+      - name: Upload to Codecov (informational)
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: target/coverage/lcov.info
+          flags: nightly
+          use_oidc: true
+          fail_ci_if_error: false

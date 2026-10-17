@@ -40,6 +40,19 @@ taplo fmt --check; typos                                                # TOML f
 Markdown is checked with markdownlint-cli2 (config in `.markdownlint-cli2.yaml`). `CLAUDE.md` lists the full set of
 checks CI runs, including `cargo deny`, `cargo xtask layering` and the size budgets.
 
+## Coverage
+
+Coverage is reported, not gated yet (the diff-coverage ratchet starts at the end of P2a). Locally:
+
+```text
+cargo xtask coverage --all-features --html   # cargo-llvm-cov line+branch (branch needs `rustup toolchain install nightly -c llvm-tools-preview`)
+cargo xtask coverage-summary                 # per-crate line/branch %
+cargo xtask diff-coverage --base origin/main # coverage of the lines your branch adds
+```
+
+Pull requests get a diff-coverage report in the job summary; the nightly job publishes the full HTML and JSON report
+as an artifact. Both upload to [Codecov](https://about.codecov.io/), which is informational only and never blocks a merge.
+
 ## Python versions
 
 Krishiv supports CPython 3.11 and newer (`requires-python = ">=3.11"`). The default wheel is a single abi3 wheel

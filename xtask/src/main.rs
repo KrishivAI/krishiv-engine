@@ -12,13 +12,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use xtask::budgets::{self, Budgets};
+use xtask::coverage;
 use xtask::dev;
 use xtask::docs::{self, Doc};
 use xtask::layering;
 use xtask::policy::{self, DiffArgs};
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--write-baseline] | setup [--install] | doctor | stack up|down|status [--kafka] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--write-baseline] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -36,6 +37,9 @@ fn main() -> ExitCode {
         ["doctor"] => dev::run_doctor(&workspace_root()),
         ["stack", action] => dev::run_stack(&workspace_root(), action, false),
         ["stack", action, "--kafka"] => dev::run_stack(&workspace_root(), action, true),
+        ["coverage", flags @ ..] => coverage::run_coverage(&workspace_root(), flags),
+        ["coverage-summary", flags @ ..] => coverage::run_summary(&workspace_root(), flags),
+        ["diff-coverage", flags @ ..] => coverage::run_diff_coverage(&workspace_root(), flags),
         ["pr-size", flags @ ..] => {
             DiffArgs::parse(flags, &workspace_root()).and_then(|a| policy::run_pr_size(&a))
         }

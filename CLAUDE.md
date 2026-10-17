@@ -34,6 +34,8 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace   # docs gate
 cargo xtask setup [--install]                    # install .githooks; print (or run) user-level fixes for missing tools
 cargo xtask doctor                               # toolchain/uv/Python/Docker/disk checks, a named fix per failure
 cargo xtask stack up|down|status [--kafka]       # bench/baselines compose project krishiv-bench only
+cargo xtask coverage [--no-branch] [--all-features] [--html]   # cargo-llvm-cov -> target/coverage (branch needs nightly)
+cargo xtask coverage-summary | diff-coverage --base <ref>      # per-crate %; coverage of added lines (report only)
 cargo xtask spdx | source-guard | workflow-lint  # SPDX headers; no ParquetObject{Reader,Writer}; no pull_request_target
 cargo xtask pr-size|dco|changes --base <ref>     # PR size cap (1,500 lines), DCO sign-off, Rust-job path filter
 taplo fmt --check; typos                         # TOML format, spelling (markdownlint-cli2 for *.md)

@@ -1,0 +1,30 @@
+# Codecov configuration (P2-T105, ADR 0029). Codecov is INFORMATIONAL only:
+# nothing here blocks a merge. The merge gate is our own diff-coverage check
+# (`cargo xtask diff-coverage`, switched on at P2a exit as P2-T105b).
+codecov:
+  require_ci_to_pass: false
+
+coverage:
+  precision: 1
+  round: down
+  range: "60...90"
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+comment:
+  layout: "condensed_header, diff, files"
+  behavior: default
+  require_changes: false
+
+github_checks:
+  annotations: false
+
+ignore:
+  - "**/tests/**"
+  - "**/tests.rs"
+  - "xtask/**"
