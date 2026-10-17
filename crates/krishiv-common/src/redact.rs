@@ -74,31 +74,46 @@ fn run_end(text: &str, from: usize, stop: fn(u8) -> bool) -> usize {
         .map_or(text.len(), |n| from + n)
 }
 
+/// URL credentials. Each run of non-space text is parsed once, from its
+/// first URL start, so the work is linear in `text` (a run such as
+/// `jdbc:jdbc:...` or `x://x://...` is not rescanned per match).
 fn urls(text: &str, out: &mut Vec<Range<usize>>) {
     let bytes = text.as_bytes();
-    let starts = text
-        .match_indices("://")
-        .map(|(i, _)| {
-            bytes[..i]
+    let mut run_start = 0;
+    while run_start < text.len() {
+        let run_end = run_end(text, run_start, ends_url);
+        let run = &text[run_start..run_end];
+        let scheme = run.find("://").map(|i| {
+            bytes[run_start..run_start + i]
                 .iter()
                 .rposition(|&b| !(b.is_ascii_alphanumeric() || b"+-.:".contains(&b)))
                 .map_or(0, |p| p + 1)
-        })
-        .chain(text.match_indices("jdbc:").map(|(i, _)| i));
-    for start in starts {
-        let end = run_end(text, start, ends_url);
-        out.extend(
-            url_secret_ranges(&text[start..end])
-                .into_iter()
-                .map(|r| start + r.start..start + r.end),
-        );
+        });
+        let jdbc = run.find("jdbc:");
+        let first = match (scheme, jdbc) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        if let Some(first) = first {
+            let start = run_start + first;
+            out.extend(
+                url_secret_ranges(&text[start..run_end])
+                    .into_iter()
+                    .map(|r| start + r.start..start + r.end),
+            );
+        }
+        run_start = run_end + 1;
     }
 }
 
+/// `key=value` pairs with sensitive keys. A separator inside a value
+/// already redacted is skipped, so every byte is scanned a bounded number
+/// of times.
 fn pairs(text: &str, out: &mut Vec<Range<usize>>) {
     let bytes = text.as_bytes();
+    let mut covered = 0;
     for (sep, &b) in bytes.iter().enumerate() {
-        if b != b'=' && b != b':' {
+        if (b != b'=' && b != b':') || sep < covered {
             continue;
         }
         if b == b':' && bytes.get(sep + 1..sep + 3) == Some(b"//") {
@@ -142,6 +157,7 @@ fn pairs(text: &str, out: &mut Vec<Range<usize>>) {
                 v..end
             }
         };
+        covered = range.end;
         if !range.is_empty() && !text[range.start..].starts_with(REDACTED) {
             out.push(range);
         }
@@ -152,12 +168,17 @@ fn pairs(text: &str, out: &mut Vec<Range<usize>>) {
 fn schemes(text: &str, out: &mut Vec<Range<usize>>) {
     let lower = text.to_ascii_lowercase();
     for word in ["bearer ", "basic "] {
+        let mut covered = 0;
         for (i, _) in lower.match_indices(word) {
+            if i < covered {
+                continue;
+            }
             let mut v = i + word.len();
             while text.as_bytes().get(v) == Some(&b' ') {
                 v += 1;
             }
             let end = run_end(text, v, ends_value);
+            covered = end;
             if v < end && !text[v..].starts_with(REDACTED) {
                 out.push(v..end);
             }
@@ -203,6 +224,10 @@ mod tests {
                 "fs.s3a.secret.key : '*********(redacted)' used",
             ),
             (
+                "jdbc:sqlserver://h:1433;password=p@ssCanary-7f3a9c;user=u",
+                "jdbc:sqlserver://h:1433;password=*********(redacted);user=u",
+            ),
+            (
                 "jdbc:oracle:thin:scott/Canary-7f3a9c@h:1521:orcl",
                 "jdbc:oracle:thin:scott/*********(redacted)@h:1521:orcl",
             ),
@@ -226,6 +251,31 @@ mod tests {
             assert!(
                 matches!(redact(text), std::borrow::Cow::Borrowed(_)),
                 "{text}"
+            );
+        }
+    }
+
+    /// Adversarial inputs without spaces take time linear in their size:
+    /// quadrupling the input at most quadruples the work (plus noise), where
+    /// a quadratic scan would multiply it by 16.
+    #[test]
+    fn work_is_linear_on_adversarial_runs() {
+        for unit in ["jdbc:", "x://", "token=", "a:b@", "?sig=", "bearer "] {
+            let time = |n: usize| {
+                let text = unit.repeat(n / unit.len());
+                (0..3)
+                    .map(|_| {
+                        let start = std::time::Instant::now();
+                        std::hint::black_box(redact(&text));
+                        start.elapsed()
+                    })
+                    .min()
+                    .unwrap_or_default()
+            };
+            let (small, large) = (time(256 << 10), time(1 << 20));
+            assert!(
+                large < small * 10 + std::time::Duration::from_millis(5),
+                "{unit}: {small:?} -> {large:?}"
             );
         }
     }
