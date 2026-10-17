@@ -13,58 +13,12 @@ fn code_lines(text: &str) -> impl Iterator<Item = &str> {
     text.lines().filter(|l| !l.trim_start().starts_with('#'))
 }
 
-/// Triggers a workflow with self-hosted jobs may use. Anything that can run
-/// untrusted code (pull_request*, workflow_run, issue_comment, ...) is refused.
-const SELF_HOSTED_TRIGGERS: &[&str] = &["schedule", "workflow_dispatch", "push"];
-
-/// Trigger names of a workflow, with the text of each trigger's block.
-fn triggers(text: &str) -> Vec<(String, String)> {
-    let lines: Vec<&str> = code_lines(text).collect();
-    let mut out: Vec<(String, String)> = Vec::new();
-    let Some(start) = lines
-        .iter()
-        .position(|l| l.starts_with("on:") || l.starts_with("\"on\":") || l.starts_with("true:"))
-    else {
-        return out;
-    };
-    let rest = lines[start].split_once(':').map_or("", |(_, r)| r).trim();
-    if !rest.is_empty() {
-        for name in rest.split(|c: char| c == '[' || c == ']' || c == ',' || c.is_whitespace()) {
-            if !name.is_empty() {
-                out.push((name.to_owned(), String::new()));
-            }
-        }
-        return out;
-    }
-    let mut child_indent = None;
-    for line in &lines[start + 1..] {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let indent = line.len() - line.trim_start().len();
-        if indent == 0 {
-            break;
-        }
-        let ci = *child_indent.get_or_insert(indent);
-        if indent == ci {
-            let name = line.trim().split(':').next().unwrap_or("").trim();
-            out.push((name.to_owned(), String::new()));
-        } else if let Some(last) = out.last_mut() {
-            last.1.push_str(line);
-            last.1.push('\n');
-        }
-    }
-    out
-}
-
 /// Policy violations in one workflow file's text.
 ///
 /// - `pull_request_target` is banned everywhere (it runs with secrets on
 ///   untrusted code).
-/// - A workflow with a job on a self-hosted runner (`self-hosted` or the
-///   `krishiv-heavy` label) may only trigger on `schedule`, `workflow_dispatch`
-///   or `push` to `main` (ops/ci-runner.md: untrusted code never reaches the
-///   runner).
+/// - Self-hosted runners are banned (public repository policy): any
+///   `self-hosted` or `krishiv-heavy` runner label fails the lint.
 #[must_use]
 pub fn workflow_violations(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -72,21 +26,14 @@ pub fn workflow_violations(name: &str, text: &str) -> Vec<String> {
         out.push(format!("{name}: `pull_request_target` is banned"));
     }
     let self_hosted = code_lines(text).any(|l| {
-        l.contains("runs-on") && (l.contains("self-hosted") || l.contains("krishiv-heavy"))
-    }) || code_lines(text).any(|l| {
         let t = l.trim();
-        t.starts_with("- self-hosted") || t.starts_with("- krishiv-heavy")
+        (l.contains("runs-on") || t.starts_with("- "))
+            && (l.contains("self-hosted") || l.contains("krishiv-heavy"))
     });
     if self_hosted {
-        for (trigger, block) in triggers(text) {
-            let ok = SELF_HOSTED_TRIGGERS.contains(&trigger.as_str())
-                && (trigger != "push" || block.contains("[main]") || block.contains("- main"));
-            if !ok {
-                out.push(format!(
-                    "{name}: self-hosted jobs must not run on trigger `{trigger}` (allowed: schedule, workflow_dispatch, push to main)"
-                ));
-            }
-        }
+        out.push(format!(
+            "{name}: self-hosted runners (`self-hosted`, `krishiv-heavy`) are banned; use GitHub-hosted runners"
+        ));
     }
     out
 }

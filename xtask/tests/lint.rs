@@ -18,46 +18,22 @@ fn commented_mentions_are_ignored() {
 }
 
 #[test]
-fn self_hosted_with_pull_request_trigger_fails() {
-    let wf = "on:\n  pull_request:\njobs:\n  a:\n    runs-on: [self-hosted, krishiv-heavy]\n";
-    assert_eq!(workflow_violations("bad.yml", wf).len(), 1);
-    let inline = "on: [push, pull_request]\njobs:\n  a:\n    runs-on: [self-hosted]\n";
-    let v = workflow_violations("bad2.yml", inline);
-    // Inline `push` has no branch restriction, so it is refused as well.
-    assert_eq!(v.len(), 2, "{v:?}");
-    assert!(v.iter().any(|m| m.contains("`pull_request`")));
-}
-
-#[test]
-fn krishiv_heavy_label_alone_counts_as_self_hosted() {
-    let wf = "on:\n  pull_request:\njobs:\n  a:\n    runs-on: krishiv-heavy\n";
-    assert_eq!(workflow_violations("bad.yml", wf).len(), 1);
-}
-
-#[test]
-fn self_hosted_rejects_untrusted_triggers() {
-    for trig in [
-        "workflow_run",
-        "issue_comment",
-        "pull_request_review",
-        "pull_request_review_comment",
-        "pull_request",
+fn any_self_hosted_label_fails() {
+    for runs_on in [
+        "[self-hosted, krishiv-heavy]",
+        "[self-hosted]",
+        "krishiv-heavy",
+        "self-hosted",
     ] {
-        let wf = format!("on:\n  {trig}:\njobs:\n  a:\n    runs-on: [self-hosted]\n");
-        let v = workflow_violations("bad.yml", &wf);
-        assert_eq!(v.len(), 1, "{trig}: {v:?}");
-        assert!(v[0].contains(trig));
+        for trig in ["pull_request", "schedule", "workflow_dispatch"] {
+            let wf = format!("on:\n  {trig}:\njobs:\n  a:\n    runs-on: {runs_on}\n");
+            let v = workflow_violations("bad.yml", &wf);
+            assert_eq!(v.len(), 1, "{trig} {runs_on}: {v:?}");
+            assert!(v[0].contains("self-hosted"));
+        }
     }
-}
-
-#[test]
-fn self_hosted_push_only_to_main() {
-    let ok = "on:\n  push:\n    branches: [main]\njobs:\n  a:\n    runs-on: [self-hosted]\n";
-    assert!(workflow_violations("ok.yml", ok).is_empty());
-    let any = "on:\n  push:\njobs:\n  a:\n    runs-on: [self-hosted]\n";
-    assert_eq!(workflow_violations("bad.yml", any).len(), 1);
-    let other = "on:\n  push:\n    branches: [dev]\njobs:\n  a:\n    runs-on: [self-hosted]\n";
-    assert_eq!(workflow_violations("bad.yml", other).len(), 1);
+    let multiline = "on:\n  schedule:\n    - cron: '0 2 * * *'\njobs:\n  a:\n    runs-on:\n      - self-hosted\n      - linux\n";
+    assert_eq!(workflow_violations("bad.yml", multiline).len(), 1);
 }
 
 #[test]
@@ -67,8 +43,8 @@ fn hosted_workflows_may_use_pull_request() {
 }
 
 #[test]
-fn self_hosted_nightly_is_fine() {
-    let wf = "on:\n  schedule:\n    - cron: '0 2 * * *'\n  workflow_dispatch:\njobs:\n  a:\n    runs-on: [self-hosted, krishiv-heavy]\n";
+fn hosted_nightly_is_fine() {
+    let wf = "on:\n  schedule:\n    - cron: '0 2 * * *'\n  workflow_dispatch:\njobs:\n  a:\n    runs-on: ubuntu-latest\n";
     assert!(workflow_violations("nightly.yml", wf).is_empty());
 }
 

@@ -39,8 +39,8 @@ taplo fmt --check; typos                         # TOML format, spelling (markdo
 **Every commit needs a DCO sign-off: `git commit -s`** (ADR 0033; CI fails otherwise). Source files start with
 `SPDX-License-Identifier: Apache-2.0`. Lint exceptions are `#[expect(lint, reason = "...")]`, never bare `#[allow]`.
 Pre-push hook refuses pushes to `main` and force pushes unless `KRISHIV_ALLOW_MAIN_PUSH=1` (`cargo xtask setup`).
-CI: PR gates use default features; `--all-features`, coverage, mutation and fuzz run nightly on the self-hosted
-`krishiv-heavy` runner (`.github/workflows/nightly.yml`). Never `pull_request_target`.
+CI: PR gates use default features; `--all-features`, coverage, mutation and fuzz run nightly on GitHub-hosted
+runners (`.github/workflows/nightly.yml`); self-hosted runners are banned by `workflow-lint`. Never `pull_request_target`.
 Pre-commit hook (fmt, clippy, deny; skips clippy/deny for docs-only commits or with `SKIP_CLIPPY=1`). Git config is
 not versioned, so enable it once per fresh clone (repo-local, never `--global`): `git config core.hooksPath .githooks`.
 

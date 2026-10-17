@@ -1,0 +1,57 @@
+# Contributing to Krishiv
+
+Thank you for your interest. Krishiv is a Rust-native, Spark-compatible batch, streaming and incremental
+materialized-view engine. It is **pre-alpha** and under active construction, so expect churn. Please read the
+[Code of Conduct](CODE_OF_CONDUCT.md) first; report security issues as described in [SECURITY.md](SECURITY.md).
+
+## Build and test
+
+The toolchain is pinned in `rust-toolchain.toml`.
+
+```text
+cargo xtask setup                                                       # install the git hooks (once per clone)
+cargo build --workspace
+cargo nextest run --workspace --locked --no-tests=pass
+cargo test --workspace --doc --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+taplo fmt --check; typos                                                # TOML format and spelling
+```
+
+Markdown is checked with markdownlint-cli2 (config in `.markdownlint-cli2.yaml`). `CLAUDE.md` lists the full set of
+checks CI runs, including `cargo deny`, `cargo xtask layering` and the size budgets.
+
+CI runs only on GitHub-hosted runners; self-hosted runners are not used (`cargo xtask workflow-lint` enforces this).
+
+## Developer Certificate of Origin
+
+Contributions are accepted under the Apache-2.0 license and the Developer Certificate of Origin (DCO). Every
+commit must carry a sign-off:
+
+```text
+git commit -s
+```
+
+CI fails on commits without a `Signed-off-by` line (`cargo xtask dco`).
+
+## Pull requests
+
+- Keep a PR under about 1,500 changed lines (goldens, fixtures, vendored and generated files excluded). A
+  maintainer can apply the `size-approved` label to allow a larger one. Prefer splitting.
+- Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages (`feat:`, `fix:`, `chore:`).
+- Fill in the [pull request template](.github/pull_request_template.md), including the tests you ran.
+- Source files start with an `SPDX-License-Identifier: Apache-2.0` header (`cargo xtask spdx`).
+- Lint exceptions use `#[expect(lint, reason = "...")]`, never a bare `#[allow]`.
+- Every `unsafe` block needs a `// SAFETY:` comment. Write tests first; update docs in the same PR.
+
+## Design records
+
+Design documents (ADRs and the specification) are maintained in a private repository for now and are referenced by
+number, for example "ADR 0034". If you need context for a referenced record, ask in the issue or PR and a
+maintainer will summarize it.
+
+## Spark compatibility wording
+
+Say "Spark-compatible" to describe behavior. Apache Spark is a trademark of the Apache Software Foundation (ASF);
+Krishiv is an independent project and is not affiliated with or endorsed by the ASF. Spark-observable
+expectations must come from executing Spark, never from transcription.
