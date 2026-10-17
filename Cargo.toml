@@ -122,6 +122,8 @@ thiserror = { version = "2.0", default-features = false }
 serde = { version = "1.0.229", default-features = false }
 serde_json = { version = "1.0.154", default-features = false }
 mimalloc = { version = "0.1.52", default-features = false }
+# FFI crate of mimalloc; dev-dependency only, for the allocator-linked test (P2-T012).
+libmimalloc-sys = { version = "0.1.49", default-features = false }
 clap = { version = "4.6", default-features = false }
 reedline = { version = "0.52", default-features = false }
 uuid = { version = "1.28", default-features = false }

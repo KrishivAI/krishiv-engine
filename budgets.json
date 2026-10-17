@@ -1,6 +1,6 @@
 {
-  "transitive_crates": 10,
-  "transitive_crates_all_features": 147,
-  "binary_bytes": 956152,
+  "transitive_crates": 12,
+  "transitive_crates_all_features": 221,
+  "binary_bytes": 1120240,
   "clean_build_secs": null
 }

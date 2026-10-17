@@ -5,9 +5,21 @@
 
 use pyo3::prelude::*;
 
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// Name of the global allocator this build links.
+#[cfg(feature = "mimalloc")]
+const ALLOCATOR: &str = "mimalloc";
+/// Name of the global allocator this build links.
+#[cfg(not(feature = "mimalloc"))]
+const ALLOCATOR: &str = "system";
+
 /// The `krishiv._native` module.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add("__allocator__", ALLOCATOR)?;
     Ok(())
 }

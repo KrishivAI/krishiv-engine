@@ -65,3 +65,7 @@ class Engine(ABC):
     def config(self) -> dict:
         """Engine configuration recorded in the result JSON."""
         return {}
+
+    def build_info(self) -> dict[str, str]:
+        """Build facts of the engine under test (e.g. ``{"allocator": "mimalloc"}``), recorded in the result JSON."""
+        return {}
