@@ -14,5 +14,12 @@ workspace = true
 [dependencies]
 thiserror.workspace = true
 
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "config_lookup"
+harness = false
+
 [build-dependencies]
 serde_json = { workspace = true, features = ["std"] }

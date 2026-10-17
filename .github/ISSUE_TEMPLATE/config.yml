@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/KrishivAI/krishiv-engine/discussions
+    about: Ask questions and share ideas in GitHub Discussions.
+  - name: Report a security vulnerability
+    url: https://github.com/KrishivAI/krishiv-engine/security/advisories/new
+    about: Privately report a vulnerability. Please do not open a public issue.

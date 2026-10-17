@@ -91,7 +91,8 @@ deny = [
     # Banned crates here are not currently in the dependency graph. If a
     # third-party dependency ever pulls one in, add `wrappers = ["<parent>"]`
     # to that entry with a justification rather than removing the ban.
-    { crate = "anyhow", reason = "libraries use thiserror (ADR 0028)" },
+    # Exception: the `codspeed` bench instrumentation crate (dev-dependency only, never shipped).
+    { crate = "anyhow", wrappers = ["codspeed"], reason = "libraries use thiserror (ADR 0028)" },
     # Single-version crates (deny duplicates).
     { crate = "tokio", deny-multiple-versions = true },
     { crate = "prost", deny-multiple-versions = true },
