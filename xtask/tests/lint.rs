@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Tests for the workflow, SPDX and banned-identifier lints.
 
-use xtask::lint::{banned_idents_in, has_spdx_header, workflow_violations};
+use xtask::lint::{
+    banned_idents_in, has_spdx_header, unsafe_allowed_in, unsafe_lines, unsafe_sites_per_crate,
+    workflow_violations,
+};
 
 #[test]
 fn pull_request_target_fails_the_lint() {
@@ -138,4 +141,44 @@ fn parquet_object_adapters_are_found() {
         [(1, "ParquetObjectReader"), (3, "ParquetObjectWriter")]
     );
     assert!(banned_idents_in("fn fine() {}").is_empty());
+}
+
+#[test]
+fn unsafe_keyword_lines_only() {
+    let src = "#![forbid(unsafe_code)]\n#![deny(unsafe_op_in_unsafe_fn)]\n// unsafe in a comment\nlet s = \"unsafe\";\nunsafe { f() }\nfn g() {} // unsafe\npub unsafe fn h() {}\n";
+    assert_eq!(unsafe_lines(src), vec![5, 7]);
+    assert_eq!(
+        unsafe_lines("let s = \"a\\\" unsafe\";"),
+        Vec::<usize>::new()
+    );
+}
+
+#[test]
+fn kernel_unsafe_only_in_unsafe_modules() {
+    assert!(unsafe_allowed_in(
+        "crates/krishiv-kernels/src/unsafe_dispatch.rs"
+    ));
+    assert!(!unsafe_allowed_in("crates/krishiv-kernels/src/chunk.rs"));
+    assert!(!unsafe_allowed_in("crates/krishiv-kernels/src/unsafe/x.rs"));
+    assert!(unsafe_allowed_in("crates/krishiv-memory/src/arena.rs"));
+}
+
+#[test]
+fn unsafe_sites_are_counted_per_crate() {
+    let root = std::env::temp_dir().join(format!("xtask-unsafe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let src = root.join("crates/k/src/inner");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(root.join("crates/clean/src")).unwrap();
+    std::fs::write(src.join("a.rs"), "unsafe { f() }\nunsafe fn g() {}\n").unwrap();
+    std::fs::write(
+        root.join("crates/k/src/b.rs"),
+        "unsafe impl Send for X {}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("crates/k/src/c.txt"), "unsafe\n").unwrap();
+    std::fs::write(root.join("crates/clean/src/lib.rs"), "fn f() {}\n").unwrap();
+    let sites = unsafe_sites_per_crate(&root);
+    assert_eq!(sites.into_iter().collect::<Vec<_>>(), [("k".to_owned(), 3)]);
+    let _ = std::fs::remove_dir_all(&root);
 }

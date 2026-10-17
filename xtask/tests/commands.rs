@@ -121,6 +121,29 @@ fn source_guard_fails_on_parquet_object_reader_fixture() {
 }
 
 #[test]
+fn source_guard_confines_kernel_unsafe() {
+    let dir = tmp("guard-unsafe");
+    write(
+        &dir,
+        "crates/krishiv-kernels/src/unsafe_x.rs",
+        "unsafe { f() }\n",
+    );
+    assert!(
+        xtask(&["source-guard", dir.to_str().unwrap()])
+            .status
+            .success()
+    );
+    write(
+        &dir,
+        "crates/krishiv-kernels/src/x.rs",
+        "fn a() { unsafe { f() } }\n",
+    );
+    let out = xtask(&["source-guard", dir.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("x.rs:1"));
+}
+
+#[test]
 fn repo_sources_pass_the_source_guard() {
     assert!(xtask(&["source-guard"]).status.success());
 }

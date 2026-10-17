@@ -151,3 +151,90 @@ pub fn banned_idents_in(text: &str) -> Vec<(usize, &'static str)> {
     }
     out
 }
+
+/// Lines (1-based) holding an `unsafe` keyword in code: the whole word
+/// `unsafe` outside `//` comments and string literals (`unsafe_code`,
+/// `unsafe_op_in_unsafe_fn` and `undocumented_unsafe_blocks` do not count).
+/// One site per line (`unsafe { .. }`, `unsafe fn`, `unsafe impl`).
+#[must_use]
+pub fn unsafe_lines(text: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let mut code = String::new();
+        let mut in_str = false;
+        let mut prev = '\0';
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            if !in_str && c == '/' && chars.peek() == Some(&'/') {
+                break;
+            }
+            if c == '"' && prev != '\\' {
+                in_str = !in_str;
+            }
+            code.push(if in_str { ' ' } else { c });
+            prev = c;
+        }
+        if code
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .any(|w| w == "unsafe")
+        {
+            out.push(n + 1);
+        }
+    }
+    out
+}
+
+/// Crate directories (under `crates/`) whose `unsafe` must live in files
+/// named `unsafe_*.rs` (the kernel unsafe policy, ADR 0029): every unsafe
+/// site sits in a small, separately reviewed helper module.
+pub const UNSAFE_FILE_CRATES: &[&str] = &["krishiv-kernels"];
+
+/// Whether `rel_path` (relative to the repository root) may contain
+/// `unsafe`: outside [`UNSAFE_FILE_CRATES`] the crate's own
+/// `forbid(unsafe_code)` decides; inside, only `unsafe_*.rs` files may.
+#[must_use]
+pub fn unsafe_allowed_in(rel_path: &str) -> bool {
+    let p = rel_path.replace('\\', "/");
+    let governed = UNSAFE_FILE_CRATES
+        .iter()
+        .any(|c| p.starts_with(&format!("crates/{c}/")));
+    !governed
+        || p.rsplit('/')
+            .next()
+            .is_some_and(|f| f.starts_with("unsafe_"))
+}
+
+/// Lines with an `unsafe` keyword per crate under `root/crates/*/src`
+/// (crates with none are omitted), for `xtask budgets`.
+#[must_use]
+pub fn unsafe_sites_per_crate(root: &std::path::Path) -> std::collections::BTreeMap<String, u64> {
+    fn walk(dir: &std::path::Path, n: &mut u64) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, n);
+            } else if p.extension().is_some_and(|x| x == "rs")
+                && let Ok(text) = std::fs::read_to_string(&p)
+            {
+                let lines = u64::try_from(unsafe_lines(&text).len()).unwrap_or(u64::MAX);
+                *n = n.saturating_add(lines);
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    for c in std::fs::read_dir(root.join("crates"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let mut n = 0;
+        walk(&c.path().join("src"), &mut n);
+        if n > 0 {
+            out.insert(c.file_name().to_string_lossy().into_owned(), n);
+        }
+    }
+    out
+}

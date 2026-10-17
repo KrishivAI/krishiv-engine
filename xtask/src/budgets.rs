@@ -5,7 +5,7 @@
 //! of more than [`MAX_GROWTH_PERCENT`] in any metric is a failure unless the
 //! caller opts out (CI sets `BUDGET_APPROVED=1` for `budget-approved` PRs).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,11 @@ pub struct Budgets {
     pub binary_bytes: Option<u64>,
     /// Clean release build wall time in seconds (CI only).
     pub clean_build_secs: Option<u64>,
+    /// Lines with an `unsafe` keyword per crate (`crates/<name>/src`), for
+    /// crates that have any. Any growth needs approval (ADR 0029: every new
+    /// unsafe site is reviewed); `None` means not measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsafe_sites: Option<BTreeMap<String, u64>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,6 +174,22 @@ pub fn compare(base: &Budgets, now: &Budgets) -> Comparison {
             }
         }
     }
+    if let (Some(b), Some(n)) = (&base.unsafe_sites, &now.unsafe_sites) {
+        for (krate, &count) in n {
+            let was = b.get(krate).copied().unwrap_or(0);
+            let flag = if count > was {
+                violations.push(format!(
+                    "unsafe sites in {krate}: {was} -> {count}; new unsafe needs review"
+                ));
+                " NEEDS REVIEW"
+            } else {
+                ""
+            };
+            markdown.push_str(&format!(
+                "| unsafe sites: {krate} | {was} | {count} | {flag} |\n"
+            ));
+        }
+    }
     Comparison {
         markdown,
         violations,
@@ -185,7 +206,28 @@ mod tests {
             transitive_crates_all_features: None,
             binary_bytes: bytes,
             clean_build_secs: None,
+            unsafe_sites: None,
         }
+    }
+
+    #[test]
+    fn any_unsafe_growth_is_a_violation() {
+        let with = |n: u64| Budgets {
+            unsafe_sites: Some(BTreeMap::from([("k".to_owned(), n)])),
+            ..b(1, None)
+        };
+        assert!(compare(&with(2), &with(2)).violations.is_empty());
+        assert!(compare(&with(3), &with(2)).violations.is_empty());
+        let c = compare(&with(2), &with(3));
+        assert_eq!(c.violations.len(), 1);
+        assert!(c.markdown.contains("NEEDS REVIEW"));
+        // A crate new to the baseline counts from zero.
+        assert_eq!(compare(&b(1, None), &with(1)).violations.len(), 0);
+        let base = Budgets {
+            unsafe_sites: Some(BTreeMap::new()),
+            ..b(1, None)
+        };
+        assert_eq!(compare(&base, &with(1)).violations.len(), 1);
     }
 
     #[test]

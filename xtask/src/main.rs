@@ -246,6 +246,7 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
         transitive_crates_all_features: Some(transitive_crates_all_features),
         binary_bytes: Some(binary_bytes),
         clean_build_secs,
+        unsafe_sites: Some(xtask::lint::unsafe_sites_per_crate(&root)),
     };
     let json = serde_json::to_string_pretty(&now).map_err(|e| e.to_string())? + "\n";
     let baseline_path = root.join("budgets.json");
