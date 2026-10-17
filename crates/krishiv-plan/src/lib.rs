@@ -31,6 +31,22 @@
 //! - Read options are [`krishiv_common::secret::OptionValue`]s: secrets are
 //!   typed, so no `Display`, `Debug` or encoding of a plan holds their
 //!   plaintext.
+//! - `Display` prints a plan as a tree in the style of Spark's `treeString`.
+//!
+//! ```
+//! use krishiv_plan::{Builtin, Expr, Literal, LogicalPlan, Origin, Plan, SourceId, Span};
+//!
+//! // SELECT a FROM t WHERE 1 < a
+//! let lt = Expr::builtin(Builtin::Lt, vec![Literal::Integer(1).into(), Expr::column(["a"])]);
+//! let plan = LogicalPlan::table(["t"]).filter(lt).project(vec![Expr::column(["a"])]);
+//! assert_eq!(plan.to_string(), "Project [a]\n+- Filter (1 < a)\n   +- Read t\n");
+//! // Origins change neither the encoding nor the hash.
+//! let spanned = plan.clone().with_origin(Origin::sql(SourceId(0), Span::new(0, 28)));
+//! let (a, b) = (Plan::try_new(plan)?, Plan::try_new(spanned)?);
+//! assert!(a.structurally_eq(&b));
+//! assert_eq!(a.structural_hash(), b.structural_hash());
+//! # Ok::<(), krishiv_common::error::KrishivError>(())
+//! ```
 //!
 //! Unresolved and resolved nodes share one tree. The analyzer replaces the
 //! unresolved-only nodes (marked U below) by resolved ones (R);
@@ -75,6 +91,7 @@
 #![forbid(unsafe_code)]
 
 mod dag;
+mod display;
 mod encode;
 mod expr;
 pub mod function;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! ADR 0038 canary tests: a known secret, injected through every path an
-//! option can take, never appears in `Debug`, option `Display`, the
+//! option can take, never appears in `Debug`, `Display` (EXPLAIN text), the
 //! canonical encoding or an error the IR raises.
 
 use std::collections::BTreeMap;
@@ -69,6 +69,11 @@ fn the_canary_never_leaks() {
         crate::JoinCondition::None,
     ))
     .unwrap();
+    let explain = plan.root().to_string();
+    assert!(!explain.contains(CANARY), "{explain}");
+    assert!(explain.contains(
+        "url=jdbc:postgresql://user:*********(redacted)@h/db?password=*********(redacted)&ssl=true"
+    ));
     let debug = format!("{plan:?} {plan:#?}");
     assert!(!debug.contains(CANARY), "{debug}");
     assert!(debug.contains("ssl=true") && debug.contains("Reference"));

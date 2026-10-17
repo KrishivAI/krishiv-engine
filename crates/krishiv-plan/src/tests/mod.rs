@@ -5,6 +5,8 @@
 
 mod dag;
 mod depth;
+mod display;
+mod display_more;
 mod encode;
 mod nodes;
 mod props;
