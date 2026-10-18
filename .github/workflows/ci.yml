@@ -83,7 +83,7 @@ jobs:
         run: |
           python=true
           if [ "$EVENT" = "pull_request" ] && ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
-            | grep -qE '^(crates/krishiv-python/|python/|xtask/|\.github/workflows/wheels\.yml$|\.github/scripts/(wheel-test|approval-label)\.sh$|Cargo\.(toml|lock)$|rust-toolchain\.toml$|budgets\.json$)'; then
+            | grep -qE '^(crates/krishiv-python/|python/|xtask/|\.github/workflows/ci\.yml$|\.github/workflows/wheels\.yml$|\.github/scripts/(wheel-test|approval-label)\.sh$|Cargo\.(toml|lock)$|rust-toolchain\.toml$|budgets\.json$)'; then
             python=false
           fi
           echo "python=$python" >> "$GITHUB_OUTPUT"
