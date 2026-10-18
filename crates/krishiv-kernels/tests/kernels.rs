@@ -497,6 +497,7 @@ fn float_arithmetic_matches_spark() {
     let neg = float::unary(UnaryOp::Negate, &Float64Array::from(vec![2.5])).unwrap();
     assert_eq!(neg.value(0), -2.5);
 }
+
 #[test]
 fn comparison_engine_errors() {
     use arrow_array::StringArray;
@@ -519,4 +520,212 @@ fn comparison_engine_errors() {
         BytesOperand::Scalar(None),
     );
     assert!(e.is_err());
+}
+
+/// `l op r` under Spark 4.2's default result type (precision loss allowed).
+fn dec_op(
+    op: krishiv_kernels::decimal::DecimalOp,
+    l: (i128, (u8, i8)),
+    r: (i128, (u8, i8)),
+) -> Result<Decimal128Array, krishiv_kernels::KernelError> {
+    use krishiv_kernels::decimal::{decimal_arith, result_type};
+    let out = result_type(op, l.1, r.1, true)?;
+    let plan = DecimalPlan::new(op, l.1, r.1, out)?;
+    let (a, b) = (
+        dec(vec![Some(l.0)], l.1.0, l.1.1),
+        dec(vec![Some(r.0)], r.1.0, r.1.1),
+    );
+    decimal_arith::<AnsiError>(Operand::Array(&a), Operand::Array(&b), &plan, &ctx())
+}
+
+/// Values, types and messages recorded from Spark 4.2.
+#[test]
+fn decimal_division_and_rounding_match_spark() {
+    use krishiv_kernels::decimal::DecimalOp::{Divide, Multiply, Remainder};
+    let check = |r: Result<Decimal128Array, _>, v: i128, p: u8, s: i8| {
+        let r = r.unwrap();
+        assert_eq!((r.value(0), r.precision(), r.scale()), (v, p, s));
+    };
+    check(dec_op(Divide, (1, (38, 0)), (3, (38, 0))), 333_333, 38, 6);
+    let two_thirds = 6_666_666_666_666_666_666_666_666_666_666_666_667;
+    check(
+        dec_op(Divide, (2 * 10_i128.pow(37), (38, 37)), (3, (1, 0))),
+        two_thirds,
+        38,
+        37,
+    );
+    check(
+        dec_op(Divide, (10_i128.pow(9), (10, 9)), (8, (1, 0))),
+        12_500_000_000,
+        12,
+        11,
+    );
+    check(dec_op(Divide, (5, (5, 0)), (9, (5, 0))), 555_556, 11, 6);
+    check(dec_op(Divide, (-1, (5, 0)), (16, (5, 0))), -62_500, 11, 6);
+    check(dec_op(Divide, (1, (1, 0)), (2_000_000, (7, 0))), 50, 9, 8);
+    check(dec_op(Divide, (-1, (1, 0)), (3_000_000, (7, 0))), -33, 9, 8);
+    // 0.000005 * 0.5 at decimal(38,6) rounds half up to 0.000003.
+    check(dec_op(Multiply, (5, (38, 6)), (5, (38, 1))), 3, 38, 6);
+    check(dec_op(Multiply, (-5, (38, 6)), (5, (38, 1))), -3, 38, 6);
+    check(dec_op(Remainder, (-75, (3, 1)), (20, (3, 1))), -15, 3, 1);
+    check(dec_op(Remainder, (-7, (1, 0)), (3, (1, 1))), -1, 1, 1);
+    check(dec_op(Remainder, (7, (38, 0)), (3, (38, 38))), 1, 38, 38);
+    // Spark's "Division impossible": the integral quotient needs 40 digits.
+    let e = dec_op(Remainder, (-100, (3, 0)), (3, (38, 38))).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivDecimalRemainderImpossible
+    );
+    assert!(
+        e.to_string()
+            .contains("-100 divided by 0.00000000000000000000000000000000000003"),
+        "{e}"
+    );
+    // Java cuts the quotient to 39 significant digits and fails only when a
+    // dropped digit is not zero: Spark 4.0-4.2 return 0E-38 for these, in
+    // every mode.
+    let big = 12_345_678_901_234_567_890_123_456_789_012_345_678;
+    for (a, b) in [
+        (10_i128.pow(37), 1),
+        (10_i128.pow(37), 2),
+        (big, 3),
+        (big, 1),
+    ] {
+        check(dec_op(Remainder, (a, (38, 0)), (b, (38, 38))), 0, 38, 38);
+        let plan = DecimalPlan::new(Remainder, (38, 0), (38, 38), (38, 38)).unwrap();
+        let (l, r) = (dec(vec![Some(a)], 38, 0), dec(vec![Some(b)], 38, 38));
+        let legacy = krishiv_kernels::decimal::decimal_arith::<NullOnOverflow>(
+            Operand::Array(&l),
+            Operand::Array(&r),
+            &plan,
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!((legacy.is_valid(0), legacy.value(0)), (true, 0));
+    }
+    // Still impossible: a non-zero digit is dropped.
+    for (a, b) in [(10_i128.pow(37), (3, (38, 38))), (-big, (-7, (3, 3)))] {
+        let e = dec_op(Remainder, (a, (38, 0)), b).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivDecimalRemainderImpossible
+        );
+    }
+    let msg = |r: Result<Decimal128Array, krishiv_kernels::KernelError>| r.unwrap_err().to_string();
+    let tail = " cannot be represented as Decimal(38, 6). If necessary set \"spark.sql.ansi.enabled\" \
+                to \"false\" to bypass this error, and return NULL instead. SQLSTATE: 22003";
+    assert_eq!(
+        msg(dec_op(Divide, (1, (38, 0)), (1, (38, 38)))),
+        format!(
+            "[NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION]  1{}.{}{tail}",
+            "0".repeat(38),
+            "0".repeat(39)
+        )
+    );
+    assert_eq!(
+        msg(dec_op(Divide, (-2, (38, 0)), (3, (38, 38)))),
+        format!(
+            "[NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION]  -{}.{}{tail}",
+            "6".repeat(38),
+            "6".repeat(39)
+        )
+    );
+    // 99999999999999999999999999999.999999999 * 99999999.9999999999.
+    let a = 99_999_999_999_999_999_999_999_999_999_999_999_999;
+    assert_eq!(
+        msg(dec_op(
+            Multiply,
+            (a, (38, 9)),
+            (999_999_999_999_999_999, (38, 10))
+        )),
+        format!(
+            "[NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION]  9999999999999999989999999999999999999.90{tail}"
+        )
+    );
+    let e = dec_op(Divide, (1, (2, 1)), (0, (1, 0))).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    let e = dec_op(Remainder, (1, (2, 1)), (0, (1, 0))).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::RemainderByZero);
+}
+
+#[test]
+fn decimal_div_and_unary_match_spark() {
+    use krishiv_kernels::decimal::{decimal_integral_divide, decimal_unary};
+    let a = dec(vec![Some(999), Some(-999), Some(-75), None], 3, 2);
+    let b = dec(vec![Some(1), Some(200), Some(20), Some(1)], 3, 2);
+    let q = decimal_integral_divide::<AnsiError>(
+        Operand::Array(&a),
+        Operand::Array(&b),
+        (3, 2),
+        (3, 2),
+        &ctx(),
+    );
+    assert_eq!(
+        q.unwrap(),
+        Int64Array::from(vec![Some(999), Some(-4), Some(-3), None])
+    );
+    // 12345678901234567890123456789012345678 div 1 keeps the low 64 bits.
+    let big = dec(
+        vec![Some(12_345_678_901_234_567_890_123_456_789_012_345_678)],
+        38,
+        0,
+    );
+    let one = Operand::Scalar(Some(1));
+    let q =
+        decimal_integral_divide::<AnsiError>(Operand::Array(&big), one, (38, 0), (1, 0), &ctx());
+    assert_eq!(q.unwrap().value(0), -4_302_749_291_975_740_594);
+    // The quotient must fit decimal(38, 0) before it becomes a bigint.
+    let tiny = dec(vec![Some(1)], 38, 38);
+    let e = decimal_integral_divide::<AnsiError>(
+        Operand::Scalar(Some(1)),
+        Operand::Array(&tiny),
+        (1, 0),
+        (38, 38),
+        &ctx(),
+    );
+    assert_eq!(
+        e.unwrap_err().to_string(),
+        format!(
+            "[NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION]  1{} cannot be represented as Decimal(38, 0). If \
+             necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error, and return NULL \
+             instead. SQLSTATE: 22003",
+            "0".repeat(38)
+        )
+    );
+    let n = decimal_integral_divide::<NullOnOverflow>(
+        Operand::Scalar(Some(1)),
+        Operand::Array(&tiny),
+        (1, 0),
+        (38, 38),
+        &ctx(),
+    );
+    assert_eq!(n.unwrap().null_count(), 1);
+    let z = decimal_integral_divide::<NullOnOverflow>(
+        Operand::Array(&a),
+        Operand::Scalar(Some(0)),
+        (3, 2),
+        (1, 0),
+        &ctx(),
+    );
+    assert_eq!(z.unwrap().null_count(), 4);
+    let e = decimal_integral_divide::<AnsiError>(
+        Operand::Array(&a),
+        Operand::Scalar(Some(0)),
+        (3, 2),
+        (1, 0),
+        &ctx(),
+    );
+    assert_eq!(e.unwrap_err().error_class(), ErrorClass::DivideByZero);
+    let n = decimal_integral_divide::<AnsiError>(
+        Operand::Scalar(None),
+        Operand::Array(&b),
+        (3, 2),
+        (3, 2),
+        &ctx(),
+    );
+    assert_eq!(n.unwrap().null_count(), 4);
+    let neg = decimal_unary(UnaryOp::Negate, &dec(vec![Some(150), None], 10, 2)).unwrap();
+    assert_eq!(neg, dec(vec![Some(-150), None], 10, 2));
+    let abs = decimal_unary(UnaryOp::Abs, &dec(vec![Some(-150)], 10, 2)).unwrap();
+    assert_eq!(abs, dec(vec![Some(150)], 10, 2));
 }

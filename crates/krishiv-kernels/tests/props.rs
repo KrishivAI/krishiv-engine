@@ -29,7 +29,9 @@ use krishiv_kernels::compare::{
     self, BoolOperand, BytesOperand, CompareKind, CompareOp, Equal, Greater, GreaterEq, Less,
     LessEq, NotEqual, SparkOrd, Validity,
 };
-use krishiv_kernels::decimal::{DecimalPlan, DecimalStorage, decimal_binary};
+use krishiv_kernels::decimal::{
+    DecimalOp, DecimalPlan, DecimalStorage, decimal_arith, decimal_integral_divide, result_type,
+};
 use krishiv_kernels::float::{self, SparkFloat};
 use krishiv_kernels::integer::{SparkIntegral, UnaryOp, binary, integral_divide, remainder, unary};
 use krishiv_kernels::ops::BinaryOp;
@@ -458,18 +460,27 @@ fn check_float_arith<P: ArrowPrimitiveType<Native: SparkFloat>>(c: &Case<P::Nati
 }
 
 /// A decimal type, its values and a result precision.
-/// `(op, left type, right type, result precision, values)`.
-type DecimalCase = (ArithOp, (u8, i8), (u8, i8), u8, Case<i128>);
+/// `(op, left type, right type, (result type choice, precision, scale), values)`.
+type DecimalCase = (DecimalOp, (u8, i8), (u8, i8), (u8, u8, u8), Case<i128>);
 
 type DecOperand<'a> = Operand<'a, Decimal128Type>;
 type DecResult = Result<PrimitiveArray<Decimal128Type>, KernelError>;
 
 fn decimal_case() -> impl Strategy<Value = DecimalCase> {
     let ty = (1..=38_u8)
-        .prop_flat_map(|p| (Just(p), 0..=p.min(20)))
+        .prop_flat_map(|p| (Just(p), prop_oneof![0..=p.min(20), 0..=p]))
         .prop_map(|(p, s)| (p, i8::try_from(s).unwrap()));
-    let op = proptest::sample::select(&[ArithOp::Add, ArithOp::Subtract, ArithOp::Multiply][..]);
-    (op, ty.clone(), ty, 1..=38_u8).prop_flat_map(|(op, l, r, out_p)| {
+    let op = proptest::sample::select(
+        &[
+            DecimalOp::Add,
+            DecimalOp::Subtract,
+            DecimalOp::Multiply,
+            DecimalOp::Divide,
+            DecimalOp::Remainder,
+        ][..],
+    );
+    let out = (0..3_u8, 1..=38_u8, 0..=38_u8);
+    (op, ty.clone(), ty, out).prop_flat_map(|(op, l, r, out)| {
         let max = |p: u8| 10_i128.pow(u32::from(p)) - 1;
         let (ml, mr) = (max(l.0), max(r.0));
         // One value strategy covering both sides' precisions. Valid values
@@ -501,7 +512,7 @@ fn decimal_case() -> impl Strategy<Value = DecimalCase> {
                 Shape::ScalarArray(s) => Shape::ScalarArray(s.map(|x| x.clamp(-ml, ml))),
                 s => s,
             };
-            (op, l, r, out_p, c)
+            (op, l, r, out, c)
         })
     })
 }
@@ -512,7 +523,7 @@ fn decimal_array(c: &Column<i128>, t: (u8, i8)) -> PrimitiveArray<Decimal128Type
         .unwrap()
 }
 
-fn check_decimal<Op: BinaryOp, O: krishiv_kernels::decimal::DecimalOverflow>(
+fn check_decimal<O: krishiv_kernels::decimal::DecimalOverflow>(
     plan: &DecimalPlan,
     l: (u8, i8),
     r: (u8, i8),
@@ -524,29 +535,56 @@ fn check_decimal<Op: BinaryOp, O: krishiv_kernels::decimal::DecimalOverflow>(
         Shape::ArrayScalar(s) => f(Operand::Array(&la), Operand::Scalar(s)),
         Shape::ScalarArray(s) => f(Operand::Scalar(s), Operand::Array(&ra)),
     };
-    let slow = run(&|a, b| reference::decimal_binary(plan, O::MODE, a, b));
-    let mut storages = vec![DecimalStorage::I128];
-    if plan.storage() == DecimalStorage::I64 {
-        storages.push(DecimalStorage::I64);
-    }
-    for s in storages {
-        let p = plan.with_storage(s).unwrap();
-        for ctx in contexts() {
-            let fast = run(&|a, b| decimal_binary::<Op, O>(a, b, &p, &ctx));
-            if O::MODE == OverflowMode::Unchecked {
+    for ctx in version_contexts() {
+        let v = ctx.spark_version();
+        let slow = run(&|a, b| reference::decimal_arith(plan, O::MODE, v, a, b));
+        let mut storages = vec![DecimalStorage::I128];
+        if plan.storage() == DecimalStorage::I64 {
+            storages.push(DecimalStorage::I64);
+        }
+        for s in storages {
+            let p = plan.with_storage(s).unwrap();
+            let fast = run(&|a, b| decimal_arith::<O>(a, b, &p, &ctx));
+            if O::MODE == OverflowMode::Unchecked && slow.is_ok() {
                 assert_eq!(fast.unwrap(), slow.clone().unwrap());
             } else {
                 assert_same(&fast, &slow);
             }
         }
     }
+    if plan.types_op() == DecimalOp::Divide {
+        let slow = c.with_decimal(&la, &ra, |a, b| {
+            reference::decimal_integral_divide(l, r, O::MODE, a, b)
+        });
+        for ctx in contexts() {
+            let fast = c.with_decimal(&la, &ra, |a, b| {
+                decimal_integral_divide::<O>(a, b, l, r, &ctx)
+            });
+            assert_same(&fast, &slow);
+        }
+    }
 }
 
-fn check_decimal_op<Op: BinaryOp>(plan: &DecimalPlan, l: (u8, i8), r: (u8, i8), c: &Case<i128>) {
-    check_decimal::<Op, NullOnOverflow>(plan, l, r, c);
-    check_decimal::<Op, AnsiError>(plan, l, r, c);
+impl Case<i128> {
+    fn with_decimal<R>(
+        &self,
+        la: &PrimitiveArray<Decimal128Type>,
+        ra: &PrimitiveArray<Decimal128Type>,
+        f: impl Fn(DecOperand<'_>, DecOperand<'_>) -> R,
+    ) -> R {
+        match self.shape {
+            Shape::ArrayArray => f(Operand::Array(la), Operand::Array(ra)),
+            Shape::ArrayScalar(s) => f(Operand::Array(la), Operand::Scalar(s)),
+            Shape::ScalarArray(s) => f(Operand::Scalar(s), Operand::Array(ra)),
+        }
+    }
+}
+
+fn check_decimal_op(plan: &DecimalPlan, l: (u8, i8), r: (u8, i8), c: &Case<i128>) {
+    check_decimal::<NullOnOverflow>(plan, l, r, c);
+    check_decimal::<AnsiError>(plan, l, r, c);
     if plan.overflow_impossible() {
-        check_decimal::<Op, Unchecked>(plan, l, r, c);
+        check_decimal::<Unchecked>(plan, l, r, c);
     }
 }
 
@@ -604,20 +642,23 @@ proptest! {
     }
 
     #[test]
-    fn decimal_arith((op, l, r, out_p, c) in decimal_case()) {
-        let (ls, rs) = (l.1, r.1);
-        let os = match op {
-            ArithOp::Multiply => ls + rs,
+    fn decimal_ops((op, l, r, (choice, out_p, out_s), c) in decimal_case()) {
+        let (ls, rs) = (l.1.unsigned_abs(), r.1.unsigned_abs());
+        let exact = match op {
+            DecimalOp::Multiply => ls + rs,
+            DecimalOp::Divide => 38,
             _ => ls.max(rs),
         };
-        prop_assume!(os <= 38);
-        let out = (out_p.max(u8::try_from(os).unwrap()).max(1), os);
+        let out = match choice {
+            0 | 1 => result_type(op, l, r, choice == 0).unwrap(),
+            _ => {
+                prop_assume!(exact <= 38);
+                let s = if op == DecimalOp::Remainder { exact } else { out_s.min(exact) };
+                (out_p.max(s).max(1), i8::try_from(s).unwrap())
+            }
+        };
         let plan = DecimalPlan::new(op, l, r, out).unwrap();
-        match op {
-            ArithOp::Add => check_decimal_op::<Add>(&plan, l, r, &c),
-            ArithOp::Subtract => check_decimal_op::<Sub>(&plan, l, r, &c),
-            ArithOp::Multiply => check_decimal_op::<Mul>(&plan, l, r, &c),
-        }
+        check_decimal_op(&plan, l, r, &c);
     }
 }
 

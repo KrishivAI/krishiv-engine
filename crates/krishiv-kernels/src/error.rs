@@ -8,6 +8,7 @@
 //! | ANSI division by zero (`/`, `div`) | `DIVIDE_BY_ZERO` |
 //! | ANSI remainder by zero (`%`) | `REMAINDER_BY_ZERO` (Spark 4.0: `DIVIDE_BY_ZERO`) |
 //! | ANSI decimal result out of range | `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION` |
+//! | decimal `%` whose integral quotient exceeds 39 significant digits (every mode) | `KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE` |
 //! | output buffer cannot be reserved | `UNABLE_TO_ACQUIRE_MEMORY` |
 //! | decimal plan Krishiv does not support yet | `KRISHIV_UNSUPPORTED_FEATURE` |
 //! | caller broke a kernel precondition (an engine bug) | `INTERNAL_ERROR` |
@@ -18,8 +19,8 @@
 
 use krishiv_common::error::{
     ArithmeticOverflow, BinaryArithmeticOverflow, DivideByZero, ErrorClass, InternalError,
-    KrishivError, KrishivUnsupportedFeature, NumericValueOutOfRangeWithSuggestion, RemainderByZero,
-    UnableToAcquireMemory,
+    KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
+    NumericValueOutOfRangeWithSuggestion, RemainderByZero, UnableToAcquireMemory,
 };
 
 use crate::policy::Fault;
@@ -169,6 +170,22 @@ impl KernelError {
         match fault {
             Fault::Overflow => overflow(row),
             Fault::DivideByZero => Self::divide_by_zero(row),
+            Fault::Impossible => {
+                Self::internal("a kernel without unrepresentable rows reported one")
+            }
+        }
+    }
+
+    /// `KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE` (Spark: an unclassified
+    /// `ArithmeticException("Division impossible")`, raised in every mode).
+    pub(crate) fn decimal_remainder_impossible(
+        row: usize,
+        dividend: String,
+        divisor: String,
+    ) -> Self {
+        Self {
+            row: Some(row),
+            error: KrishivDecimalRemainderImpossible { dividend, divisor }.into(),
         }
     }
 

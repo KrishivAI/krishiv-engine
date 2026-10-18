@@ -16,7 +16,7 @@ use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, Decimal128Array, Prim
 use arrow_buffer::i256;
 
 use crate::compare::CompareKind;
-use crate::decimal::DecimalPlan;
+use crate::decimal::{DecimalOp, DecimalPlan};
 use crate::dispatch::KernelCtx;
 use crate::error::KernelError;
 use crate::float::SparkFloat;
@@ -194,54 +194,210 @@ pub fn integer_unary<T: SparkIntegral>(
     Ok(out.into_iter().collect())
 }
 
-/// Reference for [`crate::decimal::decimal_binary`]: exact 256-bit
-/// arithmetic, range-checked by counting digits.
+/// `v` (at some scale) with its last `drop` digits removed, rounded half
+/// away from zero, computed on the decimal digits.
+fn round_digits(v: i256, drop: usize) -> i256 {
+    let text = v.to_string();
+    let (neg, digits) = text
+        .strip_prefix('-')
+        .map_or((false, text.as_str()), |d| (true, d));
+    if drop == 0 {
+        return v;
+    }
+    let keep = digits.len().saturating_sub(drop);
+    let (kept, dropped) = digits.split_at(keep);
+    let mut q = if kept.is_empty() {
+        i256::ZERO
+    } else {
+        kept.parse().unwrap_or_default()
+    };
+    // A dropped run shorter than `drop` has an implicit leading 0 digit.
+    if dropped.len() == drop && dropped.as_bytes().first().is_some_and(|&d| d >= b'5') {
+        q = q.wrapping_add(i256::ONE);
+    }
+    if neg { q.wrapping_neg() } else { q }
+}
+
+/// `v` truncated (towards zero) to `digits` significant digits; returns
+/// the value and how many digits were removed.
+fn truncate_significant(v: i256, digits: usize) -> (i256, usize) {
+    let text = v.to_string();
+    let (neg, all) = text
+        .strip_prefix('-')
+        .map_or((false, text.as_str()), |d| (true, d));
+    if all.len() <= digits {
+        return (v, 0);
+    }
+    let kept: i256 = all
+        .get(..digits)
+        .unwrap_or_default()
+        .parse()
+        .unwrap_or_default();
+    (
+        if neg { kept.wrapping_neg() } else { kept },
+        all.len().saturating_sub(digits),
+    )
+}
+
+/// Reference for [`crate::decimal::decimal_arith`] (and
+/// [`crate::decimal::decimal_binary`]): follows Spark's `Decimal` steps
+/// literally on decimal digits — exact `+ - %`, products truncated to 39
+/// digits and quotients to 39 decimals (`MATH_CONTEXT`, `DOWN`), then
+/// `HALF_UP` to the result scale — and range-checks by counting digits.
 ///
 /// # Errors
 /// As the fast path (policy/plan mismatches excepted).
-pub fn decimal_binary(
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "scale arithmetic on validated scales (0..=38) cannot overflow"
+)]
+pub fn decimal_arith(
     plan: &DecimalPlan,
     mode: OverflowMode,
+    version: SparkVersion,
     l: Operand<'_, Decimal128Type>,
     r: Operand<'_, Decimal128Type>,
 ) -> Result<Decimal128Array, KernelError> {
     let len = length(l, r)?;
     let (op, (_, ls), (_, rs), (out_p, os)) = plan.types();
+    let (ls, rs, os) = (ls.unsigned_abs(), rs.unsigned_abs(), os.unsigned_abs());
     let ten = i256::from_i128(10);
-    let scale_up = |v: i128, from: i8| {
-        let k = u32::try_from(os.saturating_sub(from)).unwrap_or(0);
-        i256::from_i128(v).wrapping_mul(ten.checked_pow(k).unwrap_or(i256::ONE))
-    };
+    let pow = |k: u8| ten.checked_pow(u32::from(k)).unwrap_or(i256::ONE);
     let mut out = Vec::with_capacity(len);
     for i in 0..len {
         let (Some(a), Some(b)) = (value(l, i), value(r, i)) else {
             out.push(None);
             continue;
         };
-        let exact = match op {
-            ArithOp::Add => scale_up(a, ls).wrapping_add(scale_up(b, rs)),
-            ArithOp::Subtract => scale_up(a, ls).wrapping_sub(scale_up(b, rs)),
-            ArithOp::Multiply => i256::from_i128(a).wrapping_mul(i256::from_i128(b)),
+        let (wa, wb) = (i256::from_i128(a), i256::from_i128(b));
+        let es = ls.max(rs);
+        // (result at scale os, Spark's pre-rounding text for the error).
+        let computed = match op {
+            DecimalOp::Add | DecimalOp::Subtract => {
+                let (x, y) = (wa.wrapping_mul(pow(es - ls)), wb.wrapping_mul(pow(es - rs)));
+                let exact = if op == DecimalOp::Add {
+                    x.wrapping_add(y)
+                } else {
+                    x.wrapping_sub(y)
+                };
+                Some((
+                    round_digits(exact, usize::from(es - os)),
+                    plan.spark_value(exact),
+                ))
+            }
+            DecimalOp::Multiply => {
+                let exact = wa.wrapping_mul(wb);
+                let (t, removed) = truncate_significant(exact, 39);
+                let scale = usize::from(ls + rs).saturating_sub(removed);
+                let v = if scale >= usize::from(os) {
+                    round_digits(t, scale - usize::from(os))
+                } else {
+                    t.wrapping_mul(
+                        ten.checked_pow(u32::try_from(usize::from(os) - scale).unwrap_or(0))
+                            .unwrap_or(i256::ONE),
+                    )
+                };
+                Some((v, plan.spark_value(exact)))
+            }
+            DecimalOp::Remainder | DecimalOp::Divide | DecimalOp::IntegralDivide if b == 0 => None,
+            DecimalOp::Remainder => {
+                let (n, d) = (wa.wrapping_mul(pow(es - ls)), wb.wrapping_mul(pow(es - rs)));
+                // Java's remainder cuts the integral quotient to 39
+                // significant digits and fails if a dropped digit is not 0.
+                let q = crate::decimal::quotient_text(n, d, 0);
+                let q = q.trim_start_matches('-');
+                if q.get(39..)
+                    .is_some_and(|dropped| dropped.bytes().any(|c| c != b'0'))
+                {
+                    return Err(KernelError::decimal_remainder_impossible(
+                        i,
+                        plan.spark_operand(a, plan.types().1.1),
+                        plan.spark_operand(b, plan.types().2.1),
+                    ));
+                }
+                let v = n.checked_rem(d).unwrap_or_default();
+                Some((v, plan.spark_value(v)))
+            }
+            DecimalOp::Divide | DecimalOp::IntegralDivide => {
+                let (n, d) = (wa.wrapping_mul(pow(rs)), wb.wrapping_mul(pow(ls)));
+                let q39 = crate::decimal::quotient_text(n, d, 39);
+                let digits: String = q39.chars().filter(|c| *c != '.').collect();
+                // Beyond 256 bits it is far outside any decimal type.
+                let q: i256 = digits.parse().unwrap_or(i256::MAX);
+                Some((round_digits(q, usize::from(39 - os)), q39))
+            }
         };
-        let digits = exact.to_string().trim_start_matches('-').len();
-        let fits = digits <= usize::from(out_p);
-        let fits_i128 = exact.to_i128();
-        out.push(match (mode, fits, fits_i128) {
-            (_, true, Some(v)) => Some(v),
-            (OverflowMode::AnsiError, _, _) => {
+        let Some((v, text)) = computed else {
+            out.push(settle(mode, Fault::DivideByZero, 0, || {
+                if op == DecimalOp::Remainder {
+                    KernelError::remainder_by_zero(i, version)
+                } else {
+                    KernelError::divide_by_zero(i)
+                }
+            })?);
+            continue;
+        };
+        let digits = v.to_string().trim_start_matches('-').len();
+        let fits = v == i256::ZERO || digits <= usize::from(out_p);
+        out.push(match (fits, v.to_i128()) {
+            (true, Some(v)) => Some(v),
+            // Decimals never wrap: an overflowing row raises or is NULL.
+            _ if mode == OverflowMode::AnsiError => {
                 return Err(KernelError::decimal_out_of_range(
                     i,
-                    plan.spark_value(exact),
+                    text,
                     out_p,
-                    os,
+                    plan.out().1,
                 ));
             }
             _ => None,
         });
     }
     let a: Decimal128Array = out.into_iter().collect();
-    a.with_precision_and_scale(out_p, os)
+    a.with_precision_and_scale(out_p, plan.out().1)
         .map_err(|e| KernelError::internal(e.to_string()))
+}
+
+/// Reference for [`crate::decimal::decimal_integral_divide`]: the
+/// quotient's integral digits, wrapped to 64 bits.
+///
+/// # Errors
+/// As the fast path.
+pub fn decimal_integral_divide(
+    left: (u8, i8),
+    right: (u8, i8),
+    mode: OverflowMode,
+    l: Operand<'_, Decimal128Type>,
+    r: Operand<'_, Decimal128Type>,
+) -> Result<PrimitiveArray<Int64Type>, KernelError> {
+    let ten = i256::from_i128(10);
+    let pow = |s: i8| {
+        ten.checked_pow(u32::from(s.unsigned_abs()))
+            .unwrap_or(i256::ONE)
+    };
+    rows(l, r, |i, a, b| {
+        if b == 0 {
+            return settle(mode, Fault::DivideByZero, 0, || {
+                KernelError::divide_by_zero(i)
+            });
+        }
+        let n = i256::from_i128(a).wrapping_mul(pow(right.1));
+        let d = i256::from_i128(b).wrapping_mul(pow(left.1));
+        let text = crate::decimal::quotient_text(n, d, 0);
+        if text.trim_start_matches('-').len() > 38 {
+            return settle(mode, Fault::Overflow, 0, || {
+                KernelError::decimal_out_of_range(i, text, 38, 0)
+            });
+        }
+        let q: i256 = text.parse().unwrap_or_default();
+        // BigDecimal.longValue: the low 64 bits.
+        Ok(Some(i64::from_le_bytes(
+            q.to_le_bytes()
+                .first_chunk::<8>()
+                .copied()
+                .unwrap_or_default(),
+        )))
+    })
 }
 
 /// Spark's `SQLOrderingUtil.compareDoubles` / `compareFloats`.

@@ -1,4 +1,10 @@
 {
+  "KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE" : {
+    "message" : [
+      "The remainder of <dividend> divided by <divisor> needs an integral quotient of more than 39 significant digits, so it cannot be computed (Spark raises `ArithmeticException: Division impossible` here in every mode)."
+    ],
+    "sqlState" : "22003"
+  },
   "KRISHIV_INVALID_CONFIG_VALUE" : {
     "message" : [
       "The value <value> for config <key> is invalid: <reason>."

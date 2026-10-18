@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Differential fuzz target: every specialization of the framework's
-//! kernels (integer and decimal `+ - *` under every overflow policy, Spark
-//! float comparisons) on arbitrary sliced, NULL-bearing arrays, on every
+//! kernels (integer `+ - * %` and `div`, decimal `+ - *` under every overflow
+//! policy, Spark float comparisons) on arbitrary sliced, NULL-bearing arrays, on every
 //! available CPU target, must equal the row-at-a-time reference.
 
 #![no_main]
@@ -9,9 +9,11 @@
 use arrow_array::types::{Decimal128Type, Float64Type, Int32Type, Int64Type};
 use arrow_array::{ArrowPrimitiveType, PrimitiveArray};
 use arrow_buffer::{ArrowNativeType, NullBuffer};
+use krishiv_kernels::compare::{
+    self, CompareKind, CompareOp, Equal, Greater, GreaterEq, Less, LessEq,
+};
 use krishiv_kernels::decimal::{DecimalPlan, DecimalStorage, decimal_binary};
-use krishiv_kernels::compare::{self, CompareKind, CompareOp, Equal, Greater, GreaterEq, Less, LessEq};
-use krishiv_kernels::integer::{SparkIntegral, binary};
+use krishiv_kernels::integer::{SparkIntegral, binary, integral_divide, remainder};
 use krishiv_kernels::ops::BinaryOp;
 use krishiv_kernels::reference;
 use krishiv_kernels::{
@@ -110,6 +112,25 @@ fn int<P: SparkIntegral, Op: BinaryOp, O: Overflow>(i: &Input<P::Native>) {
     }
 }
 
+fn rem<P: SparkIntegral, O: Overflow>(i: &Input<P::Native>) {
+    let slow = i.run::<P, _>(
+        |l, r| reference::integer_remainder::<P>(O::MODE, SparkVersion::V4_2, l, r),
+        |a| a,
+    );
+    for ctx in ctxs() {
+        let fast = i.run::<P, _>(|l, r| remainder::<P, O>(l, r, &ctx), |a| a);
+        assert_eq!(fast, slow);
+    }
+}
+
+fn div<O: Overflow>(i: &Input<i64>) {
+    let slow = i.run::<Int64Type, _>(|l, r| reference::integer_divide(O::MODE, l, r), |a| a);
+    for ctx in ctxs() {
+        let fast = i.run::<Int64Type, _>(|l, r| integral_divide::<O>(l, r, &ctx), |a| a);
+        assert_eq!(fast, slow);
+    }
+}
+
 fn int_all<P: SparkIntegral>(op: u8, i: &Input<P::Native>) {
     macro_rules! policies {
         ($op:ty) => {{
@@ -119,18 +140,25 @@ fn int_all<P: SparkIntegral>(op: u8, i: &Input<P::Native>) {
             int::<P, $op, AnsiError>(i);
         }};
     }
-    match op % 3 {
+    match op % 4 {
         0 => policies!(Add),
         1 => policies!(Sub),
-        _ => policies!(Mul),
+        2 => policies!(Mul),
+        _ => {
+            rem::<P, JavaWrap>(i);
+            rem::<P, NullOnOverflow>(i);
+            rem::<P, AnsiError>(i);
+        }
     }
 }
 
 fn cmp<Op: CompareOp>(kind: CompareKind, i: &Input<f64>) {
     let slow = i.run::<Float64Type, _>(|l, r| reference::compare::<Float64Type>(kind, l, r), |a| a);
     for ctx in ctxs() {
-        let fast =
-            i.run::<Float64Type, _>(|l, r| compare::compare::<Float64Type, Op>(l, r, &ctx), |a| a);
+        let fast = i.run::<Float64Type, _>(
+            |l, r| compare::compare::<Float64Type, Op>(l, r, &ctx),
+            |a| a,
+        );
         assert_eq!(fast, slow);
     }
 }
@@ -146,17 +174,14 @@ fn dec<Op: BinaryOp, O: krishiv_kernels::decimal::DecimalOverflow>(
         move |a: PrimitiveArray<Decimal128Type>| a.with_precision_and_scale(t.0, t.1).unwrap()
     };
     let call = |f: &dyn Fn(Operand<'_, Decimal128Type>, Operand<'_, Decimal128Type>) -> _| {
-        let (la, ra) = (
-            fix(l)(array(&i.l, i.offset)),
-            fix(r)(array(&i.r, i.offset)),
-        );
+        let (la, ra) = (fix(l)(array(&i.l, i.offset)), fix(r)(array(&i.r, i.offset)));
         match i.shape {
             0 => f(Operand::Array(&la), Operand::Array(&ra)),
             1 => f(Operand::Array(&la), Operand::Scalar(i.scalar)),
             _ => f(Operand::Scalar(i.scalar), Operand::Array(&ra)),
         }
     };
-    let slow = call(&|a, b| reference::decimal_binary(plan, O::MODE, a, b));
+    let slow = call(&|a, b| reference::decimal_arith(plan, O::MODE, SparkVersion::V4_2, a, b));
     for s in [DecimalStorage::I128, DecimalStorage::I64] {
         let Ok(p) = plan.with_storage(s) else {
             continue;
@@ -188,7 +213,13 @@ fn decimal(u: &mut Unstructured<'_>) -> Result<()> {
     };
     let m = 10_i128.pow(u32::from(l.0.min(r.0))) - 1;
     // Valid values respect the precision; values under NULLs are any i128.
-    let i = input(u, |u, valid| if valid { u.int_in_range(-m..=m) } else { u.arbitrary() })?;
+    let i = input(u, |u, valid| {
+        if valid {
+            u.int_in_range(-m..=m)
+        } else {
+            u.arbitrary()
+        }
+    })?;
     macro_rules! policies {
         ($op:ty) => {{
             dec::<$op, NullOnOverflow>(&plan, l, r, &i);
@@ -213,6 +244,9 @@ fn one(data: &[u8]) -> Result<()> {
             let op = u.arbitrary()?;
             let i = input(&mut u, |u, _| u.arbitrary::<i64>())?;
             int_all::<Int64Type>(op, &i);
+            div::<JavaWrap>(&i);
+            div::<NullOnOverflow>(&i);
+            div::<AnsiError>(&i);
         }
         1 => {
             let op = u.arbitrary()?;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Arithmetic kernel benchmarks per operator family (64K rows, one
 //! thread; run under CodSpeed in CI): integral `% div`, unary ops,
-//! narrow-type `+` and float `* /`.
+//! narrow-type `+`, float `* /` and decimal `/` and rounding `*`.
 
 #![expect(
     missing_docs,
@@ -15,8 +15,9 @@
 use std::hint::black_box;
 
 use arrow_array::types::{Float64Type, Int8Type, Int32Type, Int64Type};
-use arrow_array::{Float64Array, Int8Array, Int32Array, Int64Array};
+use arrow_array::{Decimal128Array, Float64Array, Int8Array, Int32Array, Int64Array};
 use criterion::{Criterion, criterion_group, criterion_main};
+use krishiv_kernels::decimal::{DecimalOp, DecimalPlan, decimal_arith, result_type};
 use krishiv_kernels::float;
 use krishiv_kernels::integer::{UnaryOp, binary, integral_divide, remainder, unary};
 use krishiv_kernels::{Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Operand};
@@ -143,5 +144,70 @@ fn float(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, integral, float);
+fn decimals(rows: i64, null_every: Option<i64>, seed: i128) -> Decimal128Array {
+    let a: Decimal128Array = (0..rows)
+        .map(|i| {
+            let v = (i128::from(i).wrapping_mul(seed) % 10_000_000_000).wrapping_add(1);
+            match null_every {
+                Some(n) if i % n == 0 => None,
+                _ => Some(v),
+            }
+        })
+        .collect();
+    a.with_precision_and_scale(15, 2).unwrap()
+}
+
+fn decimal(c: &mut Criterion) {
+    let ctx = KernelCtx::new();
+    let a = decimals(ROWS, None, 7919);
+    let b = decimals(ROWS, None, 104_729);
+    let out = result_type(DecimalOp::Divide, (15, 2), (15, 2), true).unwrap();
+    let div = DecimalPlan::new(DecimalOp::Divide, (15, 2), (15, 2), out).unwrap();
+    let mut run = |name: &str, l: &Decimal128Array, r: &Decimal128Array, plan: &DecimalPlan| {
+        c.bench_function(name, |bench| {
+            bench.iter(|| {
+                decimal_arith::<AnsiError>(
+                    Operand::Array(black_box(l)),
+                    Operand::Array(r),
+                    plan,
+                    &ctx,
+                )
+                .unwrap()
+            });
+        });
+    };
+    run("decimal_div/15_2", &a, &b, &div);
+    // Same data with 10% NULLs; and 90% of the rows without NULLs, the
+    // upper bound of what skipping NULL rows (a `by_nulls` axis) could save.
+    run(
+        "decimal_div/15_2/nulls_10pct",
+        &decimals(ROWS, Some(10), 7919),
+        &b,
+        &div,
+    );
+    let n = ROWS * 9 / 10;
+    run(
+        "decimal_div/15_2/rows_90pct",
+        &decimals(n, None, 7919),
+        &decimals(n, None, 104_729),
+        &div,
+    );
+    // A product that rounds: decimal(38,10) * decimal(38,10) -> decimal(38,6).
+    let wide = |s: i128| -> Decimal128Array {
+        let v: Decimal128Array = (0..ROWS)
+            .map(|i| Some(i128::from(i).wrapping_mul(s)))
+            .collect();
+        v.with_precision_and_scale(38, 10).unwrap()
+    };
+    let out = result_type(DecimalOp::Multiply, (38, 10), (38, 10), true).unwrap();
+    let mul = DecimalPlan::new(DecimalOp::Multiply, (38, 10), (38, 10), out).unwrap();
+    run(
+        "decimal_mul/38_10_rounding",
+        &wide(7919),
+        &wide(104_729),
+        &mul,
+    );
+}
+
+criterion_group!(benches, integral, float, decimal);
 criterion_main!(benches);
