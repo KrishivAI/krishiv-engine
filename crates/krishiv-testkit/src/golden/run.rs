@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use krishiv_common::error::ErrorClass;
 
 use super::manifest::{ExclusionManifest, ManifestError};
-use super::normalise::Masker;
+use super::normalise::{Masker, normalize_test_results};
 use super::parse::{Expected, ExpectedError, ParseError, Statement, parse_results};
 use super::setup::{FileSetup, SessionSetup};
 use super::{GoldenPair, GoldenSet, Jdk};
@@ -452,7 +452,8 @@ fn result_matches(
         // Scala `String` order is UTF-16 code-unit order.
         rows.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
     }
-    rows.join("\n").trim_end() == expected_output.trim_end()
+    // `normalizeTestResults` on both sides.
+    normalize_test_results(&rows.join("\n")) == normalize_test_results(expected_output)
 }
 
 #[cfg(test)]
@@ -571,6 +572,32 @@ mod tests {
             f.negative,
             Tally {
                 passed: 0,
+                total: 1
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn python_tracebacks_do_not_count() -> R {
+        let golden = "-- !query\nselect a from t\n-- !query schema\nstruct<a:int>\n-- !query output\n1\nboom\n";
+        let statements = parse_results(golden)?;
+        let rows = [
+            "1",
+            "Traceback (most recent call last):",
+            "  File \"u.py\", line 2",
+            "boom",
+        ];
+        let mut canned = out(&rows);
+        if let Ok(o) = canned.as_mut() {
+            o.sorted = Some(true);
+        }
+        let mut engine = Canned(vec![("select a from t", canned)]);
+        let f = run_file(&mut engine, "t", &statements, &plain());
+        assert_eq!(
+            f.result,
+            Tally {
+                passed: 1,
                 total: 1
             }
         );
