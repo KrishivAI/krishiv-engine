@@ -324,9 +324,11 @@ fn rules() {
         );
         insta::assert_snapshot!(*name, optimized.root().to_string(), sql);
         // Limits and nondeterministic calls choose rows; the interpreter
-        // keeps numbers in fixed point, without NaN.
+        // keeps numbers in unbounded fixed point, without NaN or integral
+        // overflow (whose ANSI error or legacy wrap it does not model).
         let skip = ["LIMIT", "rand()", "first(", "DOUBLE", "1.0F"];
-        if !skip.iter().any(|s| sql.contains(s)) {
+        let overflows = ["fold_arith", "fold_int_overflow", "fold_negative"];
+        if !skip.iter().any(|s| sql.contains(s)) && !overflows.contains(name) {
             for seed in 1..=8 {
                 let db = data::small(seed);
                 let want = eval::rows(&db, plan.root());
