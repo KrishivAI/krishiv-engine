@@ -21,6 +21,7 @@ use krishiv_kernels::datetime::{
     DatePart, current_date, date_add, date_add_months, date_diff, date_sub, extract_date,
     extract_timestamp, timestamp_add_day_time, timestamp_add_months,
 };
+use krishiv_kernels::policy::OverflowMode;
 use krishiv_sql::ast::{self, ExprKind};
 
 use super::{AOp, Binder, EvalError, Evaluator, Node, Shape, Skip, ltz, simple_string};
@@ -44,8 +45,10 @@ pub(super) enum IntervalVal {
 /// A datetime function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DtFn {
-    DateAdd,
-    DateSub,
+    /// `date_add`/`date + int`; `try_`.
+    DateAdd(bool),
+    /// `date_sub`/`date - int`; `try_`.
+    DateSub(bool),
     DateDiff,
     Extract(DatePart),
     CurrentDate,
@@ -53,7 +56,7 @@ pub(super) enum DtFn {
     /// `date +/- year-month interval`; `negate`, `try_`.
     DateMonths(bool, bool),
     /// `date +/- DAY interval`.
-    DateDays(bool),
+    DateDays(bool, bool),
     /// `timestamp +/- year-month interval`: `negate`, `try_`, `ntz`.
     TsMonths(bool, bool, bool),
     /// `timestamp +/- day-time interval`: `negate`, `try_`.
@@ -230,9 +233,9 @@ impl Binder<'_> {
         }
         let (start, days) = (self.bind(a)?, self.bind(b)?);
         let f = if name == "date_sub" {
-            DtFn::DateSub
+            DtFn::DateSub(self.try_)
         } else {
-            DtFn::DateAdd
+            DtFn::DateAdd(self.try_)
         };
         Ok(Self::dt(
             f,
@@ -325,7 +328,11 @@ impl Binder<'_> {
             _ => None,
         };
         if let Some((d, n)) = days {
-            let f = if negate { DtFn::DateSub } else { DtFn::DateAdd };
+            let f = if negate {
+                DtFn::DateSub(self.try_)
+            } else {
+                DtFn::DateAdd(self.try_)
+            };
             let n = self.implicit(n.clone(), &DataType::Int32);
             return Some(Ok(Self::dt(f, vec![d.clone(), n], DataType::Date32)));
         }
@@ -348,7 +355,7 @@ impl Binder<'_> {
             (DataType::Date32, DataType::Interval(_)) => {
                 (DtFn::DateMonths(negate, try_), DataType::Date32)
             }
-            (DataType::Date32, _) if day_only => (DtFn::DateDays(negate), DataType::Date32),
+            (DataType::Date32, _) if day_only => (DtFn::DateDays(negate, try_), DataType::Date32),
             (DataType::Date32, _) => (DtFn::DateMicros(negate, try_), ltz()),
             (t, DataType::Interval(_)) => {
                 let ntz = matches!(t, DataType::Timestamp(_, None));
@@ -385,6 +392,30 @@ impl Evaluator<'_> {
         }
     }
 
+    /// The overflow policy of day arithmetic on dates: ANSI raises, `try_*`
+    /// gives NULL, legacy wraps like Java's `int`.
+    fn day_mode(&self, try_: bool) -> OverflowMode {
+        match (try_, self.ansi) {
+            (true, _) => OverflowMode::NullOnOverflow,
+            (false, true) => OverflowMode::AnsiError,
+            (false, false) => OverflowMode::JavaWrap,
+        }
+    }
+
+    /// Boxes a day-arithmetic result, noting an ANSI overflow: Spark wraps
+    /// there, Krishiv raises (a documented divergence, ADR 0023).
+    fn day_overflow<A: Array + 'static>(
+        &self,
+        r: Result<A, krishiv_kernels::KernelError>,
+    ) -> Result<ArrayRef, EvalError> {
+        if r.as_ref().is_err_and(|e| {
+            e.error_class() == krishiv_common::error::ErrorClass::ArithmeticOverflow
+        }) {
+            self.day_overflow.set(true);
+        }
+        Ok(Arc::new(r?))
+    }
+
     /// The interval literal as an array in this evaluator's shape.
     pub(super) fn interval_array(&self, v: IntervalVal) -> Result<ArrayRef, EvalError> {
         let a: ArrayRef = match v {
@@ -413,21 +444,20 @@ impl Evaluator<'_> {
             }
         };
         Ok(match f {
-            DtFn::DateAdd | DtFn::DateSub => {
+            DtFn::DateAdd(try_) | DtFn::DateSub(try_) => {
                 let days = v[1].as_primitive::<Int32Type>();
                 let (s, d) = (self.operand(date(0), 0, n), self.operand(days, 1, n));
-                let out = if f == DtFn::DateAdd {
-                    date_add(s, d, ctx)?
+                let mode = self.day_mode(try_);
+                self.day_overflow(if matches!(f, DtFn::DateAdd(_)) {
+                    date_add(s, d, mode, ctx)
                 } else {
-                    date_sub(s, d, ctx)?
-                };
-                Arc::new(out)
+                    date_sub(s, d, mode, ctx)
+                })?
             }
-            DtFn::DateDiff => Arc::new(date_diff(
-                self.operand(date(0), 0, n),
-                self.operand(date(1), 1, n),
-                ctx,
-            )?),
+            DtFn::DateDiff => {
+                let (e, s) = (self.operand(date(0), 0, n), self.operand(date(1), 1, n));
+                self.day_overflow(date_diff(e, s, self.day_mode(false), ctx))?
+            }
             DtFn::Extract(part) => match v[0].data_type() {
                 DataType::Date32 => extract_date(part, date(0))?,
                 _ => extract_timestamp(part, ts(0), zone(0))?,
@@ -450,7 +480,7 @@ impl Evaluator<'_> {
                     ctx,
                 )?)
             }
-            DtFn::DateDays(negate) => {
+            DtFn::DateDays(negate, try_) => {
                 let micros = v[1].as_primitive::<arrow_array::types::DurationMicrosecondType>();
                 #[expect(
                     clippy::cast_possible_truncation,
@@ -458,11 +488,12 @@ impl Evaluator<'_> {
                 )]
                 let days: Int32Array = micros.unary(|m| (m / MICROS_PER_DAY) as i32);
                 let (s, d) = (self.operand(date(0), 0, n), self.operand(&days, 1, n));
-                Arc::new(if negate {
-                    date_sub(s, d, ctx)?
+                let mode = self.day_mode(try_);
+                self.day_overflow(if negate {
+                    date_sub(s, d, mode, ctx)
                 } else {
-                    date_add(s, d, ctx)?
-                })
+                    date_add(s, d, mode, ctx)
+                })?
             }
             DtFn::TsMonths(negate, try_, _) => {
                 let months = v[1].as_primitive::<IntervalYearMonthType>();

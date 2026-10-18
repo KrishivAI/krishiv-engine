@@ -839,6 +839,9 @@ struct Evaluator<'z> {
     /// Set when a `BINARY` -> `STRING` cast met bytes that are not UTF-8:
     /// Krishiv's STRING is valid UTF-8 (documented divergence, ADR 0023).
     invalid_utf8: std::cell::Cell<bool>,
+    /// Set when ANSI day arithmetic on dates overflowed: Spark wraps there,
+    /// Krishiv raises (documented divergence, ADR 0023).
+    day_overflow: std::cell::Cell<bool>,
 }
 
 /// A scalar of a one-row primitive array.
@@ -1320,6 +1323,7 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
             ansi,
             shape,
             invalid_utf8: std::cell::Cell::new(false),
+            day_overflow: std::cell::Cell::new(false),
         };
         let got = ev.eval(&node);
         let outcome = match (got, expected_rows, expected_error) {
@@ -1379,6 +1383,12 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
             if ev.invalid_utf8.get() {
                 return CellOutcome::NotRun(
                     "documented divergence (ADR 0023): STRING holds valid UTF-8 only".to_owned(),
+                );
+            }
+            if ev.day_overflow.get() {
+                return CellOutcome::NotRun(
+                    "documented divergence (ADR 0023): ANSI date day arithmetic raises where Spark wraps"
+                        .to_owned(),
                 );
             }
             return CellOutcome::Fail(why);
@@ -1535,8 +1545,17 @@ pub fn run_golden(text: &str, ansi: bool) -> Result<GoldenTally, crate::golden::
             ansi,
             shape: Shape::Arrays,
             invalid_utf8: std::cell::Cell::new(false),
+            day_overflow: std::cell::Cell::new(false),
         };
         let values: Result<Vec<ArrayRef>, EvalError> = nodes.iter().map(|n| ev.eval(n)).collect();
+        if ev.day_overflow.get() {
+            t.needs_engine.push((
+                q.to_owned(),
+                "documented divergence (ADR 0023): ANSI date day arithmetic raises where Spark wraps"
+                    .to_owned(),
+            ));
+            continue;
+        }
         let types: Vec<String> = nodes.iter().map(|n| simple_string(&n.ty())).collect();
         let verdict = match (values, &st.expected) {
             (Err(EvalError::Other(why)), _) => {
@@ -2136,6 +2155,19 @@ mod tests {
             let outcome = cell(f, sql, on, rows(ty, want));
             assert_eq!(outcome, CellOutcome::Pass, "{sql}");
         }
+        // Day arithmetic past the `int` range: Spark wraps; Krishiv wraps with
+        // ANSI off and raises with ANSI on (reported as a documented divergence).
+        let sql = "SELECT date_add('2016-07-30', 2147483647)";
+        let wrapped = rows("date", day(-2_147_466_637));
+        assert_eq!(
+            cell("date_add", sql, Mode::AnsiOff, wrapped.clone()),
+            CellOutcome::Pass
+        );
+        let ansi = cell("date_add", sql, on, wrapped);
+        assert!(
+            matches!(&ansi, CellOutcome::NotRun(w) if w.contains("ADR 0023")),
+            "{ansi:?}"
+        );
         // The clock functions only check the result type.
         let nd = |ty: &str| Expected::Nondeterministic {
             schema: vec![Field {

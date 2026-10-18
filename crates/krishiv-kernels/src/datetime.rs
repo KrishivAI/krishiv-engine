@@ -31,7 +31,7 @@ use crate::dispatch::KernelCtx;
 use crate::error::{KernelError, with_capacity};
 use crate::integer;
 use crate::ops::{Add, Operand, Sub};
-use crate::policy::JavaWrap;
+use crate::policy::{JavaWrap, OverflowMode};
 use crate::version::IntWidth;
 
 // ---------------------------------------------------------------------
@@ -56,46 +56,83 @@ fn with_days<R>(d: Operand<'_, Date32Type>, f: impl FnOnce(Operand<'_, Int32Type
     }
 }
 
-/// `date_add(start, days)`: `start + days`, wrapping like Java's `int`
-/// addition (`date_add('2016-07-30', 2147483647)` is a date before the epoch).
+/// Day arithmetic on dates: Java `int` wrap for the wrapping modes, else the
+/// checked result is `ARITHMETIC_OVERFLOW` (ANSI; the Spark-version text, no
+/// `try_` hint) or NULL (`try_*`).
+fn day_arith<B: arrow_array::ArrowPrimitiveType<Native = i32>>(
+    a: Operand<'_, Date32Type>,
+    b: Operand<'_, B>,
+    checked: fn(i32, i32) -> Option<i32>,
+    mode: OverflowMode,
+    ctx: &KernelCtx,
+) -> Result<Date32Array, KernelError> {
+    let message = ctx.spark_version().overflow_message(IntWidth::Int);
+    map2(a, b, checked, mode == OverflowMode::NullOnOverflow, |row| {
+        KernelError::arithmetic_overflow(row, message, None)
+    })
+}
+
+/// `date_add(start, days)`: `start + days`. `mode` is the ANSI policy of the
+/// session: `AnsiError` raises `ARITHMETIC_OVERFLOW` where the day number
+/// leaves the `int` range, `NullOnOverflow` (`try_add`) gives NULL; any other
+/// mode wraps like Java's `int` addition, as Spark does with ANSI off
+/// (`date_add('2016-07-30', 2147483647)` is a date before the epoch). With
+/// ANSI on this differs from Spark, which wraps silently (ADR 0023).
 ///
 /// # Errors
-/// `INTERNAL_ERROR` for operands of different lengths or two literals.
+/// `ARITHMETIC_OVERFLOW` as above; `INTERNAL_ERROR` for operands of different
+/// lengths or two literals.
 pub fn date_add(
     start: Operand<'_, Date32Type>,
     days: Operand<'_, Int32Type>,
+    mode: OverflowMode,
     ctx: &KernelCtx,
 ) -> Result<Date32Array, KernelError> {
+    if matches!(mode, OverflowMode::AnsiError | OverflowMode::NullOnOverflow) {
+        return day_arith(start, days, i32::checked_add, mode, ctx);
+    }
     let out = with_days(start, |s| {
         integer::binary::<Int32Type, Add, JavaWrap>(s, days, ctx)
     })?;
     Ok(as_dates(&out))
 }
 
-/// `date_sub(start, days)`: `start - days`, wrapping.
+/// `date_sub(start, days)`: `start - days`, with the overflow modes of
+/// [`date_add`].
 ///
 /// # Errors
 /// As [`date_add`].
 pub fn date_sub(
     start: Operand<'_, Date32Type>,
     days: Operand<'_, Int32Type>,
+    mode: OverflowMode,
     ctx: &KernelCtx,
 ) -> Result<Date32Array, KernelError> {
+    if matches!(mode, OverflowMode::AnsiError | OverflowMode::NullOnOverflow) {
+        return day_arith(start, days, i32::checked_sub, mode, ctx);
+    }
     let out = with_days(start, |s| {
         integer::binary::<Int32Type, Sub, JavaWrap>(s, days, ctx)
     })?;
     Ok(as_dates(&out))
 }
 
-/// `datediff(end, start)`: the days from `start` to `end`.
+/// `datediff(end, start)`: the days from `start` to `end`. The difference of
+/// two day numbers can leave the `int` range; the overflow modes are those of
+/// [`date_add`].
 ///
 /// # Errors
 /// As [`date_add`].
 pub fn date_diff(
     end: Operand<'_, Date32Type>,
     start: Operand<'_, Date32Type>,
+    mode: OverflowMode,
     ctx: &KernelCtx,
 ) -> Result<Int32Array, KernelError> {
+    if matches!(mode, OverflowMode::AnsiError | OverflowMode::NullOnOverflow) {
+        let out = day_arith(end, start, i32::checked_sub, mode, ctx)?;
+        return Ok(as_days(&out));
+    }
     with_days(end, |e| {
         with_days(start, |s| {
             integer::binary::<Int32Type, Sub, JavaWrap>(e, s, ctx)
