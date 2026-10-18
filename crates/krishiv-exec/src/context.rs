@@ -328,11 +328,13 @@ impl TaskContext {
         F: FnOnce() -> Result<T> + Send + 'static,
     {
         let guard = self.query.blocking_started();
-        run_blocking(&*self.executor, move || {
-            let _guard = guard;
-            f()
-        })
-        .await
+        // The guard travels with the result, so a result that holds memory
+        // (a reservation) and is dropped because the caller went away (a
+        // cancelled query) is dropped before the query can count the
+        // closure as done (a tuple drops its fields in order).
+        let (out, guard) = run_blocking(&*self.executor, move || f().map(|v| (v, guard))).await?;
+        drop(guard);
+        Ok(out)
     }
 
     /// The operator this context belongs to.
