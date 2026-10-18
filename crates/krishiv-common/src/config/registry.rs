@@ -38,6 +38,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.dir", &SPILL_DIR),
     ("krishiv.memory.limit", &MEMORY_LIMIT),
     ("spark.network.timeout", &NETWORK_TIMEOUT),
+    ("krishiv.exec.batchSize", &EXEC_BATCH_SIZE),
     ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
