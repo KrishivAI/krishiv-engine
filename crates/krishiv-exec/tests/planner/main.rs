@@ -6,8 +6,13 @@
     clippy::unwrap_used,
     clippy::panic,
     clippy::unwrap_in_result,
-    reason = "test helpers sit outside #[test] fns"
+    clippy::print_stderr,
+    reason = "test helpers sit outside #[test] fns; the TPC-H runs print their timings"
 )]
+
+mod semantics;
+mod tpch;
+mod write;
 
 use std::sync::Arc;
 
@@ -303,25 +308,17 @@ fn a_self_join_instance_reads_shifted_ids() {
 #[test]
 fn unsupported_and_inconsistent_plans_fail_clearly() {
     let env = env();
-    let e = env.plan("SELECT a + 1 FROM t").unwrap_err();
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{e}"
-    );
-    let e = env.plan("SELECT a FROM t WHERE b > 1").unwrap_err();
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{e}"
-    );
-    assert!(e.to_string().contains("Filter"), "{e}");
-    let e = env.plan("SELECT a FROM t ORDER BY a + 1").unwrap_err();
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{e}"
-    );
+    for sql in [
+        "SELECT x.a FROM t AS x FULL OUTER JOIN t AS y ON x.a = y.a",
+        "SELECT coalesce(a, 1) FROM t",
+    ] {
+        let e = env.plan(sql).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}: {e}"
+        );
+    }
     // An unresolved plan.
     let unresolved = Plan::try_new(LogicalPlan::table(["t"])).unwrap();
     let e = DefaultPlanner.plan(&unresolved, &env.cx()).unwrap_err();

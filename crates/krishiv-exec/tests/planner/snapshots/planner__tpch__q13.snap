@@ -1,0 +1,15 @@
+---
+source: crates/krishiv-exec/tests/planner/tpch.rs
+expression: tpch.plan(q).to_string()
+---
+Sort [custdist#20 DESC NULLS LAST, c_count#19 DESC NULLS LAST]
++- Project [c_count#19, count(1)#4611686018427387911 AS custdist#20]
+   +- HashAggregate keys=[c_count#19], functions=[count(1)]
+      +- Project [count(o_orderkey#8)#4611686018427387910 AS c_count#19]
+         +- HashAggregate keys=[c_custkey#0], functions=[count(o_orderkey#8)]
+            +- Project [c_custkey#0, o_orderkey#8]
+               +- HashJoin LeftOuter, [c_custkey#0] = [o_custkey#9]
+                  :- Scan spark_catalog.default.customer [c_custkey#0]
+                  +- Project [o_orderkey#8, o_custkey#9]
+                     +- Filter (NOT (o_comment#16 like '%special%requests%'))
+                        +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_comment#16], PushedFilters: [(NOT (o_comment#16 like '%special%requests%'))]

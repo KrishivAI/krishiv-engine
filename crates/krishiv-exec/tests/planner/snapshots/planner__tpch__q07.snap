@@ -1,0 +1,25 @@
+---
+source: crates/krishiv-exec/tests/planner/tpch.rs
+expression: tpch.plan(q).to_string()
+---
+Sort [supp_nation#48 ASC NULLS FIRST, cust_nation#49 ASC NULLS FIRST, l_year#50 ASC NULLS FIRST]
++- Project [supp_nation#48, cust_nation#49, l_year#50, sum(volume#51)#4611686018427387919 AS revenue#52]
+   +- HashAggregate keys=[supp_nation#48, cust_nation#49, l_year#50], functions=[sum(volume#51)]
+      +- Project [n_name#41 AS supp_nation#48, n_name#45 AS cust_nation#49, extract('year', l_shipdate#17) AS l_year#50, (l_extendedprice#12 * (1 - l_discount#13)) AS volume#51]
+         +- HashJoin Inner, [s_nationkey#3, s_suppkey#0] = [n_nationkey#40, l_suppkey#9]
+            :- Scan spark_catalog.default.supplier [s_suppkey#0, s_nationkey#3]
+            +- Project [l_suppkey#9, l_extendedprice#12, l_discount#13, l_shipdate#17, n_nationkey#40, n_name#41, n_name#45]
+               +- HashJoin Inner, [l_orderkey#7] = [o_orderkey#23]
+                  :- Filter ((l_shipdate#17 >= DATE '1995-01-01') and (l_shipdate#17 <= DATE '1996-12-31'))
+                  :  +- Scan spark_catalog.default.lineitem [l_orderkey#7, l_suppkey#9, l_extendedprice#12, l_discount#13, l_shipdate#17], PushedFilters: [((l_shipdate#17 >= DATE '1995-01-01') and (l_shipdate#17 <= DATE '1996-12-31'))]
+                  +- Project [o_orderkey#23, n_nationkey#40, n_name#41, n_name#45]
+                     +- HashJoin Inner, [o_custkey#24] = [c_custkey#32]
+                        :- Scan spark_catalog.default.orders [o_orderkey#23, o_custkey#24]
+                        +- Project [c_custkey#32, n_nationkey#40, n_name#41, n_name#45]
+                           +- HashJoin Inner, [c_nationkey#35] = [n_nationkey#44]
+                              :- Scan spark_catalog.default.customer [c_custkey#32, c_nationkey#35]
+                              +- NestedLoopJoin Inner, (((n_name#41 == 'FRANCE') and (n_name#45 == 'GERMANY')) or ((n_name#41 == 'GERMANY') and (n_name#45 == 'FRANCE')))
+                                 :- Filter ((n_name#41 == 'FRANCE') or (n_name#41 == 'GERMANY'))
+                                 :  +- Scan spark_catalog.default.nation [n_nationkey#40, n_name#41], PushedFilters: [((n_name#41 == 'FRANCE') or (n_name#41 == 'GERMANY'))]
+                                 +- Filter ((n_name#41 == 'GERMANY') or (n_name#41 == 'FRANCE')) (ids +4)
+                                    +- Scan spark_catalog.default.nation [n_nationkey#40, n_name#41], PushedFilters: [((n_name#41 == 'GERMANY') or (n_name#41 == 'FRANCE'))]

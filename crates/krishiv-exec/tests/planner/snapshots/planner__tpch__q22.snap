@@ -1,0 +1,18 @@
+---
+source: crates/krishiv-exec/tests/planner/tpch.rs
+expression: tpch.plan(q).to_string()
+---
+Sort [cntrycode#26 ASC NULLS FIRST]
++- Project [cntrycode#26, count(1)#4611686018427387910 AS numcust#27, sum(c_acctbal#5)#4611686018427387911 AS totacctbal#28]
+   +- HashAggregate keys=[cntrycode#26], functions=[count(1), sum(c_acctbal#5)]
+      +- Project [substring(c_phone#4, 1, 2) AS cntrycode#26, c_acctbal#5]
+         +- HashJoin LeftAnti, [c_custkey#0] = [o_custkey#18]
+            :- Filter ((substring(c_phone#4, 1, 2) IN ('13', '31', '23', '29', '30', '18', '17')) and (CAST(c_acctbal#5 AS DECIMAL(19,6)) > scalar-subquery))
+            :  :- Scan spark_catalog.default.customer [c_custkey#0, c_phone#4, c_acctbal#5]
+            :  +- Subquery scalar
+            :     +- Project [avg(c_acctbal#13)#4611686018427387909 AS avg(c_acctbal)#16]
+            :        +- HashAggregate keys=[], functions=[avg(c_acctbal#13)]
+            :           +- Project [c_acctbal#13]
+            :              +- Filter ((c_acctbal#5 > 0.00) and (substring(c_phone#4, 1, 2) IN ('13', '31', '23', '29', '30', '18', '17'))) (ids +8)
+            :                 +- Scan spark_catalog.default.customer [c_custkey#0, c_phone#4, c_acctbal#5], PushedFilters: [((c_acctbal#5 > 0.00) and (substring(c_phone#4, 1, 2) IN ('13', '31', '23', '29', '30', '18', '17')))]
+            +- Scan spark_catalog.default.orders [o_custkey#18]
