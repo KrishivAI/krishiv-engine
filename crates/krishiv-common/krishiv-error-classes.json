@@ -11,6 +11,24 @@
     ],
     "sqlState" : "53200"
   },
+  "KRISHIV_SPILL_CAP_EXCEEDED" : {
+    "message" : [
+      "Spilling <requestedBytes> more bytes would exceed the spill limit of <capBytes> bytes (<usedBytes> bytes are in use). Increase \"krishiv.spill.maxBytes\" or run fewer spilling queries at once."
+    ],
+    "sqlState" : "53100"
+  },
+  "KRISHIV_SPILL_FILE_CORRUPT" : {
+    "message" : [
+      "The spill file <path> is corrupt or truncated: <reason>."
+    ],
+    "sqlState" : "XX001"
+  },
+  "KRISHIV_SPILL_IO_ERROR" : {
+    "message" : [
+      "Spill I/O failed while trying to <operation> <path>: <reason>."
+    ],
+    "sqlState" : "58030"
+  },
   "KRISHIV_UNKNOWN_CONFIG" : {
     "message" : [
       "The config <key> is not a known Krishiv config. Verify the spelling, or see the configuration reference."

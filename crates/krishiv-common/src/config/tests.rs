@@ -131,6 +131,39 @@ fn memory_entries_parse_and_default() {
 }
 
 #[test]
+fn spill_entries_parse_and_default() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        (
+            c.get(&SPILL_DIR)
+                .and_then(ConfigValue::as_str)
+                .map(str::to_owned),
+            c.get(&SPILL_MAX_BYTES).and_then(ConfigValue::as_size),
+            c.get(&SPILL_COMPRESSION)
+                .and_then(ConfigValue::as_str)
+                .map(str::to_owned),
+            c.get(&SPILL_ZSTD_LEVEL).and_then(ConfigValue::as_int),
+        )
+    };
+    assert_eq!(get(&c), (None, Some(64 << 30), Some("lz4".into()), Some(1)));
+    c.set("krishiv.spill.dir", "/mnt/ssd/spill").unwrap();
+    c.set("krishiv.spill.maxBytes", "10g").unwrap();
+    c.set("krishiv.spill.compression", "ZSTD").unwrap();
+    c.set("krishiv.spill.zstd.level", "9").unwrap();
+    assert_eq!(
+        get(&c),
+        (
+            Some("/mnt/ssd/spill".into()),
+            Some(10 << 30),
+            Some("zstd".into()),
+            Some(9)
+        )
+    );
+    assert!(c.set("krishiv.spill.compression", "gzip").is_err());
+    assert!(c.set("krishiv.spill.maxBytes", "lots").is_err());
+}
+
+#[test]
 fn invalid_values_are_typed_errors() {
     let mut c = Config::new();
     for (k, v) in [
@@ -336,4 +369,22 @@ fn unknown_spark_key_logs_exactly_one_warning_per_key() {
     });
     assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert_eq!(c.get_unregistered("spark.unknown.a"), Some("2"));
+}
+
+#[test]
+fn the_lookup_index_is_sorted_and_complete() {
+    use super::registry::{INDEX, REGISTRY};
+    assert!(
+        INDEX
+            .windows(2)
+            .all(|w| (w[0].0.len(), w[0].0) < (w[1].0.len(), w[1].0)),
+        "INDEX must be strictly sorted by (length, name)"
+    );
+    let mut want: Vec<(&str, &str)> = REGISTRY
+        .iter()
+        .flat_map(|e| std::iter::once((e.key, e.key)).chain(e.spark_alias.map(|a| (a, e.key))))
+        .collect();
+    want.sort_unstable_by_key(|(n, _)| (n.len(), *n));
+    let got: Vec<(&str, &str)> = INDEX.iter().map(|(n, e)| (*n, e.key)).collect();
+    assert_eq!(got, want, "INDEX must hold exactly every key and alias");
 }

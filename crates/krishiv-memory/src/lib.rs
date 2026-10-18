@@ -69,6 +69,7 @@ mod pool;
 mod reservation;
 mod rounds;
 mod spill;
+mod spillfile;
 mod sync;
 
 pub use clock::{Clock, SystemClock};
@@ -77,6 +78,10 @@ pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_
 pub use pool::{ArbitrationStats, MemoryConfig, TreePool};
 pub use reservation::Reservation;
 pub use spill::{OwnerId, SpillOwner, SpillSignal, SpillTicket, Spillable};
+pub use spillfile::{
+    SpillCodec, SpillConfig, SpillError, SpillFile, SpillManager, SpillReader, SpillScope,
+    SpillWriter,
+};
 
 /// A boxed `Send` future (the same type as `futures::future::BoxFuture`).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
