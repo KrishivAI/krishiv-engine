@@ -327,3 +327,73 @@ fn diff_coverage_ignores_what_the_base_gained_after_the_branch_point() {
     );
     assert!(String::from_utf8_lossy(&out.stdout).contains("2 of 2"));
 }
+
+/// `budgets --compare FILE` (the CI gate) against the repository baseline.
+#[test]
+fn budgets_compare_gates_growth_on_the_approval_labels() {
+    let dir = tmp("budgets");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let base: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("budgets.json")).unwrap()).unwrap();
+    let measured = |edit: &dyn Fn(&mut serde_json::Value)| {
+        let mut v = base.clone();
+        edit(&mut v);
+        let path = dir.join("m.json");
+        std::fs::write(&path, v.to_string()).unwrap();
+        path
+    };
+    let summary = dir.join("summary.md");
+    let run = |file: &Path, env: &[(&str, &str)]| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        c.args(["budgets", "--compare", file.to_str().unwrap()])
+            .env_remove("BUDGET_APPROVED")
+            .env_remove("UNSAFE_APPROVED")
+            .env("GITHUB_STEP_SUMMARY", &summary);
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        c.output().unwrap()
+    };
+    // Unchanged: passes, and the table lands in the job summary.
+    let same = measured(&|_| {});
+    let out = run(&same, &[]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        std::fs::read_to_string(&summary)
+            .unwrap()
+            .contains("| transitive crates |")
+    );
+    // Growth needs budget-approved; unsafe growth needs unsafe-reviewed.
+    let grown = measured(&|v| {
+        v["transitive_crates"] = (v["transitive_crates"].as_u64().unwrap() * 2).into();
+    });
+    let out = run(&grown, &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("budget-approved"));
+    let out = run(&grown, &[("BUDGET_APPROVED", "1")]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Refresh the baseline"));
+    let unsafe_grown = measured(&|v| {
+        v["unsafe_sites"]["krishiv-new"] = 1.into();
+    });
+    let out = run(&unsafe_grown, &[("BUDGET_APPROVED", "1")]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unsafe-reviewed"));
+    assert!(
+        run(&unsafe_grown, &[("UNSAFE_APPROVED", "1")])
+            .status
+            .success()
+    );
+    // A missing or malformed measurement is an error, never a pass.
+    let out = run(&dir.join("missing.json"), &[]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
+    std::fs::write(dir.join("bad.json"), "{").unwrap();
+    let out = run(&dir.join("bad.json"), &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("bad "));
+    // Flags that make no sense together are a usage error.
+    assert!(
+        !xtask(&["budgets", "--compare", "x", "--build-time"])
+            .status
+            .success()
+    );
+}
