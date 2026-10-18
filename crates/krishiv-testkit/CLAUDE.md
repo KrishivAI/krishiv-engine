@@ -17,7 +17,11 @@ runs the arithmetic/comparison/cast matrix cells and the literal statements of S
 `krishiv-kernels` with a minimal Spark 4.2 implicit-cast typer (tests `kernel_matrix`, `kernel_golden`); it is a
 harness, not the analyzer.
 The generic `FileFormat` conformance suite (`file_format`, P2-T117: 12 checks over a `FormatFixture`,
-`file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it.
+`file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it, directly and
+through the executor (`file_format::drive::ThroughExecutor`, P2-T117b). `file_format::parquet::ParquetFixture`
+(P2-T080a) reads through the real Parquet reader and writes through a test-only `ArrowWriter` encoder.
+`tests/parquet_interop.rs`: other engines' Parquet files read to pyarrow's values; its TPC-H SF1 test is ignored
+because it needs ~1 GB of generated data (`KRISHIV_TPCH_DIR`, see `tests/scripts/tpch_parquet_checksums.py`).
 
 ## Invariants
 - Golden data comes from a real Spark run or the vendored Spark tag, never hand-written (ADR 0008, 0010).

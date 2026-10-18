@@ -166,10 +166,10 @@ jobs:
         run: cargo test -p krishiv-exec --lib --release --locked
 
   # cargo-fuzz targets (`fuzz/`), one hour each on a GitHub-hosted runner, on
-  # a pinned nightly. Seeds are the Spark golden statements (sql_parse) and the
-  # PySpark Connect plans of the golden tests (connect_decode), one per file; a
-  # crash, a timeout or more than 2 GiB of memory fails the job and uploads
-  # the reproducer.
+  # a pinned nightly. Seeds are the Spark golden statements (sql_parse), the
+  # PySpark Connect plans of the golden tests (connect_decode) and the Parquet
+  # interoperability fixtures (parquet_read), one per file; a crash, a timeout
+  # or more than 2 GiB of memory fails the job and uploads the reproducer.
   fuzz:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
@@ -181,6 +181,8 @@ jobs:
           - target: sql_parse
             args: -dict=sql.dict -max_len=262144
           - target: connect_decode
+            args: -max_len=1048576
+          - target: parquet_read
             args: -max_len=1048576
     env:
       RUSTC_WRAPPER: "" # instrumented builds are not cacheable
@@ -203,6 +205,7 @@ jobs:
         run: |
           case "$TARGET" in
             sql_parse) python3 tests/scripts/fuzz_seed_sql.py "fuzz/corpus/$TARGET" ;;
+            parquet_read) python3 tests/scripts/fuzz_seed_parquet.py "fuzz/corpus/$TARGET" ;;
             connect_decode)
               KRISHIV_FUZZ_SEED_DIR="$PWD/fuzz/corpus/$TARGET" \
                 cargo test -p krishiv-connect --test goldens --locked ;;

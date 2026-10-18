@@ -40,6 +40,7 @@
 pub mod data;
 pub mod drive;
 pub mod mock;
+pub mod parquet;
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -333,6 +334,98 @@ fn concat(schema: &SchemaRef, batches: &[RecordBatch]) -> SuiteResult<RecordBatc
     arrow_select::concat::concat_batches(schema, batches).map_err(|e| e.to_string())
 }
 
+/// `batch` with every struct's nulls pushed into its children (through
+/// lists and maps too): a value under a null struct is not observable, and
+/// formats such as Parquet cannot store one. Batches equal after this are
+/// equal for every reader.
+fn logical(batch: &RecordBatch) -> SuiteResult<RecordBatch> {
+    let columns = batch
+        .columns()
+        .iter()
+        .map(push_nulls)
+        .collect::<SuiteResult<Vec<_>>>()?;
+    RecordBatch::try_new_with_options(
+        batch.schema(),
+        columns,
+        &arrow_array::RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn push_nulls(a: &arrow_array::ArrayRef) -> SuiteResult<arrow_array::ArrayRef> {
+    use arrow_array::cast::AsArray;
+    let bad = |e: arrow_schema::ArrowError| e.to_string();
+    Ok(match a.data_type() {
+        DataType::Struct(fields) => {
+            let s = a.as_struct();
+            let children = s
+                .columns()
+                .iter()
+                .map(|c| {
+                    let c = push_nulls(c)?;
+                    let nulls = arrow_buffer::NullBuffer::union(s.nulls(), c.nulls());
+                    let data = c
+                        .to_data()
+                        .into_builder()
+                        .nulls(nulls)
+                        .build()
+                        .map_err(bad)?;
+                    Ok(arrow_array::make_array(data))
+                })
+                .collect::<SuiteResult<Vec<_>>>()?;
+            Arc::new(
+                arrow_array::StructArray::try_new_with_length(
+                    fields.clone(),
+                    children,
+                    s.nulls().cloned(),
+                    s.len(),
+                )
+                .map_err(bad)?,
+            )
+        }
+        DataType::List(f) => {
+            let l = a.as_list::<i32>();
+            Arc::new(
+                arrow_array::ListArray::try_new(
+                    Arc::clone(f),
+                    l.offsets().clone(),
+                    push_nulls(l.values())?,
+                    l.nulls().cloned(),
+                )
+                .map_err(bad)?,
+            )
+        }
+        DataType::Map(f, sorted) => {
+            let m = a.as_map();
+            let entries: arrow_array::ArrayRef = Arc::new(m.entries().clone());
+            let entries = push_nulls(&entries)?;
+            Arc::new(
+                arrow_array::MapArray::try_new(
+                    Arc::clone(f),
+                    m.offsets().clone(),
+                    entries.as_struct().clone(),
+                    m.nulls().cloned(),
+                    *sorted,
+                )
+                .map_err(bad)?,
+            )
+        }
+        _ => Arc::clone(a),
+    })
+}
+
+/// Whether two batches hold the same rows: same schema, and every column
+/// equal, as a whole or row by row (Arrow's whole-array comparison of
+/// nested view arrays can differ for equal rows, by buffer layout).
+fn same_rows(a: &RecordBatch, b: &RecordBatch) -> bool {
+    a.schema() == b.schema()
+        && a.num_rows() == b.num_rows()
+        && a.columns().iter().zip(b.columns()).all(|(x, y)| {
+            x.to_data() == y.to_data()
+                || (0..x.len()).all(|r| x.slice(r, 1).to_data() == y.slice(r, 1).to_data())
+        })
+}
+
 fn rows(batches: &[RecordBatch]) -> usize {
     batches.iter().map(RecordBatch::num_rows).sum()
 }
@@ -392,7 +485,10 @@ pub fn round_trip(fx: &dyn FormatFixture) -> SuiteResult {
             .map_err(|e| e.to_string())?,
     )?;
     let got = concat(&out_schema, &got)?;
-    ensure!(got == want, "round trip differs");
+    ensure!(
+        same_rows(&logical(&got)?, &logical(&want)?),
+        "round trip differs"
+    );
     let md = env
         .block_on(env.io.read_metadata(
             fx.format().as_ref(),
@@ -498,7 +594,10 @@ pub fn projection(fx: &dyn FormatFixture) -> SuiteResult {
         let want_file = project_batch(&input, &file_req)?;
         let want = mapper.map_batch(&want_file).map_err(|e| e.to_string())?;
         let got = concat(mapper.output_schema(), &got)?;
-        ensure!(got == want, "projection {paths:?} differs");
+        ensure!(
+            same_rows(&logical(&got)?, &logical(&want)?),
+            "projection {paths:?} differs"
+        );
     }
     Ok(())
 }
@@ -1241,7 +1340,15 @@ pub fn cancellation(fx: &dyn FormatFixture) -> SuiteResult {
     .map_err(|e| e.to_string())?;
     let mut aborted = 0;
     for n in [1, 4, 8, 16] {
-        let env = Env::new(None)?;
+        // The smallest part size, so a 6 MiB file takes a multipart upload
+        // whatever the format's overhead.
+        let env = Env::with_config(
+            None,
+            IoConfig {
+                multipart_part_bytes: krishiv_io::io::upload::MIN_PART_BYTES,
+                ..IoConfig::default()
+            },
+        )?;
         env.store.set_latency(Duration::from_millis(5));
         let o = env.options(fx, &fx.unit_rows(8))?;
         let driver = fx.driver();

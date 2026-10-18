@@ -1611,8 +1611,10 @@ dependencies = [
  "krishiv-sql",
  "krishiv-types",
  "object_store",
+ "parquet",
  "regex-lite",
  "serde_json",
+ "sha2",
  "sqllogictest",
  "thiserror",
  "tokio",
@@ -1873,12 +1875,17 @@ dependencies = [
  "http",
  "humantime",
  "itertools 0.15.0",
+ "nix",
  "parking_lot",
  "percent-encoding",
  "thiserror",
+ "tokio",
+ "tracing",
  "url",
+ "walkdir",
  "wasm-bindgen-futures",
  "web-time",
+ "windows-sys",
 ]
 
 [[package]]

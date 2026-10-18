@@ -20,7 +20,10 @@ multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detectio
 `parquet/` (P2-T080a) `ParquetFormat` over arrow-rs's `ParquetPushDecoder`, no custom decoders: `meta.rs` footer
 (one tail read, checked against the file size, engine types, exact-only row-group statistics, calendar markers) ·
 `decode.rs` the sans-IO decoder (projection mask, row-group selections, row index, unsigned widening) · `tests.rs`.
-Its conformance, interoperability and fuzz tests live in `krishiv-testkit` and `fuzz/`.
+Interop fixtures (pyarrow codecs/pages, INT96, unsigned, DuckDB, Spark 4.2): `tests/fixtures/parquet/`
+(`tests/scripts/gen_parquet_fixtures.py`, checked by `krishiv-testkit/tests/parquet_interop.rs`); TPC-H SF1 parity
+with pyarrow: `tests/scripts/tpch_parquet_checksums.py` + the ignored `tpch_sf1_reads_as_pyarrow_reads_it`; fuzz
+target `fuzz/fuzz_targets/parquet_read.rs` (seeds: `tests/scripts/fuzz_seed_parquet.py`).
 
 ## Invariants
 - Formats never touch `object_store`: all I/O goes through `IoContext` (counters, retries, `if_match`/
