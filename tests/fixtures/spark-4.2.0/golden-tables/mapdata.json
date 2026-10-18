@@ -1,0 +1,26 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_golden_fixtures.py",
+ "image": "apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89",
+ "sources": {
+  "spark_commit": "32f7299601108917fb01920a54e084595b7b3bf8",
+  "sha256": {
+   "sql/core/src/test/resources/test-data/postgresql/agg.data": "ef281324e147482d6426b920a23bafd3fee151b57d59a913d611551a6a1935e6",
+   "sql/core/src/test/resources/test-data/postgresql/onek.data": "1f59332622392237c33d997e605177db5d77dc09b370599005223b0adf901b5c",
+   "sql/core/src/test/resources/test-data/postgresql/tenk.data": "d62f34bdc0a25a5ba36f2dbe62a35479d9e51a7326d482e418091ea2ed40e484",
+   "sql/core/src/test/scala/org/apache/spark/sql/TPCDSSchema.scala": "12f13507a2cc99a3a7dcd7129987b03c7731153661068e47240c95bf31544b3f"
+  }
+ },
+ "name": "mapdata",
+ "columns": [
+  {"name": "mapcol", "type": "map<int,string>", "nullable": true}
+ ],
+ "rows": [
+  [[[5, "e1"], [1, "a1"], [2, "b1"], [3, "c1"], [4, "d1"]]],
+  [[[1, "a2"], [2, "b2"], [3, "c2"], [4, "d2"]]],
+  [[[1, "a3"], [2, "b3"], [3, "c3"]]],
+  [[[1, "a4"], [2, "b4"]]],
+  [[[1, "a5"]]]
+ ]
+}
