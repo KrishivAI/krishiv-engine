@@ -516,7 +516,7 @@ async fn deterministic_mode_replays_spilling_joins() {
 }
 
 /// Cancelling while the grace phase runs releases memory and files.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cancelling_a_spilling_join_releases_everything() {
     let build = skewed(30_000, 20_000);
     let probe = skewed(40_000, 25_000);
@@ -528,7 +528,7 @@ async fn cancelling_a_spilling_join_releases_everything() {
         scan(&schema(), batches(&data(&build), 1024)),
         scan(&schema(), batches(&data(&probe), 1024)),
     );
-    let runner = runner(2);
+    let runner = runner_for(2, 1536 << 10);
     let mut stream = krishiv_exec::Scheduler::submit(&runner, plan, Arc::clone(&q))
         .await
         .unwrap();
@@ -587,6 +587,11 @@ async fn limits_above_and_below_a_spilling_join() {
             "below: {below}"
         );
         assert!(metric(&q, "HashJoinBuild", "spilled_partitions") > 0);
+        // Counted as rows arrive, also by drivers whose flush was skipped.
+        assert!(
+            metric(&q, "HashJoinProbe", "probe_rows") >= 5_000,
+            "below: {below}"
+        );
         assert_released(&root);
         assert_eq!(spill_files(&scope), 0);
     }
@@ -603,4 +608,25 @@ async fn empty_build_partitions_do_not_defer_probe_rows() {
         assert_eq!(got, c.oracle(&probe, &build));
         assert_eq!(metric(&q, "HashJoinProbe", "probe_spilled_rows"), 0);
     }
+}
+
+/// A `LIMIT` above an in-memory join finishes while rows stream, so no
+/// driver flushes the probe; its rows are still counted for `EXPLAIN
+/// ANALYZE`.
+#[tokio::test]
+async fn probe_rows_are_counted_when_a_limit_skips_the_flush() {
+    use krishiv_exec::testing::{Limit, Pipe};
+    let unique: Vec<Row> = (0..40_000).map(|i| r(Some(i), Some("k"), i % 50)).collect();
+    let root = root(256 * MIB);
+    let q = query(&root, 1, ExecConfig::default());
+    let plan = join(
+        case(JoinType::Inner, 1, false, false).spec(None),
+        scan(&schema(), batches(&data(&unique), 1024)),
+        scan(&schema(), batches(&data(&unique), 1024)),
+    );
+    let plan = Arc::new(Pipe(plan, Limit::new(10)));
+    let out = run(&runner(2), plan, &q).await.unwrap();
+    assert_eq!(out.iter().map(Batch::num_rows).sum::<usize>(), 10);
+    assert!(metric(&q, "HashJoinProbe", "probe_rows") >= 10);
+    assert_released(&root);
 }
