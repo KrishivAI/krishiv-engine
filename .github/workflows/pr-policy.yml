@@ -1,0 +1,73 @@
+name: PR policy
+
+# Label-dependent repository policy (DCO, PR size cap with the `size-approved`
+# label). Kept out of ci.yml so that label changes re-run only this small job
+# instead of cancelling and rebuilding the full CI run. The job name `policy`
+# is a required status check; do not rename it.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+
+concurrency:
+  group: pr-policy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Repository policy: always runs (cheap; builds xtask only).
+  policy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - run: cargo xtask workflow-lint
+      - run: cargo xtask spdx
+      - run: cargo xtask source-guard
+      - run: cargo xtask registry-coverage
+      - name: DCO sign-off (ADR 0033)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cargo xtask dco --base "$BASE_SHA" --head "$HEAD_SHA"
+      # The `size-approved` label only counts when the configured approver
+      # (repository variable SIZE_APPROVER, the maintainer) applied it after
+      # the current head arrived (.github/scripts/approval-label.sh).
+      - name: Resolve size-approved label
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'size-approved') }}
+          APPROVER: ${{ vars.SIZE_APPROVER }}
+        run: echo "SIZE_APPROVED=$(.github/scripts/approval-label.sh size-approved)" >> "$GITHUB_ENV"
+      - name: PR size cap (3,000 counted lines; allowlisted data files excluded)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cargo xtask pr-size --base "$BASE_SHA" --head "$HEAD_SHA"
