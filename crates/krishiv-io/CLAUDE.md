@@ -14,7 +14,9 @@ typed format options, and the scan/write drivers (`ScanStream`, `FileWriter`) th
 sound `prune` (TriState) · `options.rs` OptionSchema/FormatOptions (unknown-option warning, strict mode,
 secrets) · `schema_map.rs` SchemaMapper (case rules, field ids, Delta column mapping, widening, predicate
 re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.2.0/file-splits.json`) ·
-`scan.rs` ScanStream · `write.rs` FileWriter · `io/` IoScheduler, IoContext, coalescing, metadata cache,
+`scan.rs` ScanStream · `write.rs` FileWriter · `commit.rs` `SaveMode` + `DirectoryWrite` (Spark's save modes on a
+directory, `_SUCCESS`, the empty-output file; files written under final names, never renamed) · `io/` IoScheduler,
+IoContext (reads, uploads, listing), coalescing, metadata cache,
 multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detection), `pace.rs` prefix pacing
 (`StorePolicy`, per-store; single-flight footer reads live in `cache.rs`).
 `parquet/` (P2-T080a) `ParquetFormat` over arrow-rs's `ParquetPushDecoder`, no custom decoders: `meta.rs` footer

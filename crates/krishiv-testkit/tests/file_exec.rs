@@ -27,9 +27,9 @@ use krishiv_io::io::FaultStore;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::split::{FilePartition, FileSplit, SplitConfig};
 use krishiv_io::{
-    ByteRange, CmpOp, ColumnPath, FileFormat, FileRef, IoConfig, IoCounters, IoScheduler,
-    MetadataCols, MetadataNeeds, PushdownExpr, RowSelection, ScalarValue, ScanOptions, StoreId,
-    StorePolicy, WriteOptions,
+    ByteRange, CmpOp, ColumnPath, DirectoryWrite, FileFormat, FileRef, IoConfig, IoCounters,
+    IoScheduler, MetadataCols, MetadataNeeds, PushdownExpr, RowSelection, SaveMode, ScalarValue,
+    ScanOptions, StoreId, StorePolicy, WriteOptions,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
 use krishiv_testkit::file_format::mock::MockFormat;
@@ -900,6 +900,118 @@ fn parquet_options(kv: &[(&str, &str)]) -> krishiv_io::FormatOptions {
         .0
 }
 
+/// `df.write.mode(m).parquet(path)` end to end: the directory write begins,
+/// the executor writes the files, the commit publishes them.
+fn write_directory(
+    env: &Env,
+    dir: &str,
+    mode: SaveMode,
+    uuid: &str,
+    batches: Vec<RecordBatch>,
+) -> Result<Vec<String>, KrishivError> {
+    let o = parquet_options(&[("compression", "zstd")]);
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let Some(w) = env.block_on(DirectoryWrite::begin(
+        &env.io,
+        StoreId::new("memory://suite"),
+        Path::from(dir),
+        mode,
+        uuid,
+    ))?
+    else {
+        return Ok(Vec::new());
+    };
+    let input = MemoryScan::try_new(schema(), batches.into_iter().map(Batch::new).collect())?;
+    let mut options = w.write_options(0);
+    options.max_records_per_file = 600;
+    let sink = Arc::new(FileWriteSink::try_new(
+        Arc::clone(&format),
+        env.io.clone(),
+        schema(),
+        o.clone(),
+        options,
+    )?);
+    let plan = Arc::new(FileWrite {
+        input: Arc::new(Leaf(Arc::new(input))),
+        sink: Arc::clone(&sink),
+    });
+    env.block_on(run(&env.query, plan, 2))?;
+    let files = env.block_on(w.commit(&env.io, format.as_ref(), schema(), &o, sink.files()))?;
+    Ok(files.into_iter().map(|f| f.path.to_string()).collect())
+}
+
+fn listed(env: &Env, dir: &str) -> Vec<String> {
+    let mut v: Vec<String> = env
+        .block_on(
+            env.io
+                .list(&StoreId::new("memory://suite"), &Path::from(dir)),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|m| m.location.to_string())
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn parquet_directory_writes_follow_spark_save_modes() {
+    let env = Env::new(None).unwrap();
+    let files = write_directory(
+        &env,
+        "pq",
+        SaveMode::ErrorIfExists,
+        "a",
+        vec![sorted(1000, 0), sorted(500, 1000)],
+    )
+    .unwrap();
+    assert!(files.len() >= 3, "{files:?}");
+    assert!(
+        files.iter().all(|f| f.ends_with(".zstd.parquet")),
+        "{files:?}"
+    );
+    let mut want = files.clone();
+    want.push("pq/_SUCCESS".to_owned());
+    want.sort();
+    assert_eq!(listed(&env, "pq"), want);
+    // Every file reads back with the rows written.
+    let mut rows = 0;
+    for f in &files {
+        let file = env.block_on(env.file(&Path::from(f.as_str()))).unwrap();
+        let md = env
+            .block_on(env.io.read_metadata(
+                &ParquetFormat,
+                &file,
+                MetadataNeeds::default(),
+                &parquet_options(&[]),
+            ))
+            .unwrap();
+        rows += match md.statistics().rows {
+            krishiv_io::Precision::Exact(n) => n,
+            other => panic!("{other:?}"),
+        };
+    }
+    assert_eq!(rows, 1500);
+    let e =
+        write_directory(&env, "pq", SaveMode::ErrorIfExists, "b", vec![sorted(1, 0)]).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::PathAlreadyExists);
+    assert!(
+        write_directory(&env, "pq", SaveMode::Ignore, "b", vec![sorted(1, 0)])
+            .unwrap()
+            .is_empty()
+    );
+    let appended = write_directory(&env, "pq", SaveMode::Append, "c", vec![sorted(10, 0)]).unwrap();
+    assert_eq!(listed(&env, "pq").len(), want.len() + appended.len());
+    // Overwrite with no rows: one empty file holding the schema remains.
+    let replaced = write_directory(&env, "pq", SaveMode::Overwrite, "d", Vec::new()).unwrap();
+    assert_eq!(replaced, ["pq/part-00000-d-c000.zstd.parquet"]);
+    assert_eq!(
+        listed(&env, "pq"),
+        ["pq/_SUCCESS", "pq/part-00000-d-c000.zstd.parquet"]
+    );
+    assert_eq!(env.root.reserved(), 0);
+}
+
 #[test]
 fn a_bad_write_setting_fails_when_the_write_is_planned() {
     let env = Env::new(None).unwrap();
@@ -925,4 +1037,5 @@ fn a_bad_write_setting_fails_when_the_write_is_planned() {
     )
     .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(listed(&env, "x").is_empty());
 }
