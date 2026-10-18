@@ -374,10 +374,18 @@ impl ConfigEntry {
 /// of [`registry::INDEX`] ordered by (length, name): no initialisation or
 /// allocation, and most probes compare lengths only.
 pub fn lookup(key: &str) -> Option<&'static ConfigEntry> {
-    registry::INDEX
+    search(registry::INDEX, key).copied()
+}
+
+/// The value for `key` in `index`, a slice ordered by (length, name) as
+/// [`registry::INDEX`] is. Public so the benchmark measures the same search
+/// on a fixed-size index (the registry's own size changes as keys are added).
+#[doc(hidden)]
+pub fn search<'a, T>(index: &'a [(&str, T)], key: &str) -> Option<&'a T> {
+    index
         .binary_search_by(|(name, _)| name.len().cmp(&key.len()).then_with(|| (*name).cmp(key)))
         .ok()
-        .map(|i| registry::INDEX[i].1)
+        .map(|i| &index[i].1)
 }
 
 /// A non-fatal problem found while setting config.
