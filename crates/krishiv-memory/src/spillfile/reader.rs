@@ -2,12 +2,13 @@
 //! Finished spill files and reading them back, a batch at a time.
 
 use std::fs::{self, File};
-use std::io::{self, Cursor, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow_array::{Array, Int64Array};
-use arrow_ipc::reader::StreamReader;
+use arrow_buffer::Buffer;
+use arrow_ipc::reader::StreamDecoder;
 use arrow_schema::SchemaRef;
 use krishiv_types::batch::{Batch, Weights};
 
@@ -147,16 +148,19 @@ fn read_exact(
 
 /// Streams the batches of a [`SpillFile`] in the order they were written.
 ///
-/// It is an [`Iterator`] of `Result<Batch, SpillError>` and fused: after an
-/// error or the last batch it returns `None`.
+/// It is an [`Iterator`] of `Result<Batch, SpillError>` and fused: after the
+/// last batch or an error other than [`SpillError::Memory`] it returns `None`.
+/// Each open reader holds one file descriptor (a k-way merge over many runs
+/// needs a descriptor budget).
 ///
 /// # Memory
-/// One frame at a time: the reader reserves the frame's size before reading
-/// it, then the decoded batch's size, and keeps the decoded batch's bytes
-/// reserved until the next call or until it drops, so the batch it just
-/// returned is covered while the caller processes it. A caller that keeps a
-/// batch longer must reserve it itself. A frame the pool cannot hold is
-/// [`SpillError::Memory`]; the reader never reads it.
+/// One frame at a time. Before it reads anything the reader reserves the
+/// frame's size plus the `decoded` bound recorded when the frame was written,
+/// and it keeps that reserved until the next call or until it drops, so the
+/// batch it just returned is covered while the caller processes it (at most
+/// about twice the batch's real size, since an uncompressed batch shares the
+/// frame buffer). A caller that keeps a batch longer must reserve it itself.
+/// A frame the pool cannot hold is a retryable [`SpillError::Memory`].
 #[derive(Debug)]
 pub struct SpillReader {
     file: Arc<FileInner>,
@@ -185,6 +189,7 @@ impl SpillReader {
             return Ok(None);
         }
         self.file.scope.check_cancelled()?;
+        let start = self.pos;
         let mut raw = [0u8; FRAME_HEADER_LEN];
         let remaining = self.len - self.pos;
         if remaining == 0 {
@@ -198,25 +203,37 @@ impl SpillReader {
         let header = FrameHeader::parse(&raw);
         if header.len > self.len - self.pos {
             return Err(self.corrupt(format!(
-                "frame of {} bytes at offset {} runs past the end of the file",
-                header.len,
-                self.pos - FRAME_HEADER_LEN as u64
+                "frame of {} bytes at offset {start} runs past the end of the file",
+                header.len
             )));
         }
         match header.kind {
-            KIND_FOOTER => self.read_footer(&header),
-            KIND_PLAIN | KIND_WEIGHTED => self.read_data(&header).map(Some),
+            KIND_FOOTER => self.read_footer(&header, start),
+            KIND_PLAIN | KIND_WEIGHTED => self.read_data(&header, start).map(Some),
             other => Err(self.corrupt(format!("unknown frame kind {other}"))),
         }
     }
 
-    /// Reads a frame's payload into memory the reservation covers.
-    fn read_payload(&mut self, header: &FrameHeader) -> Result<(Vec<u8>, usize), SpillError> {
+    /// Reserves `len + decoded` bytes, then reads and verifies the payload.
+    /// A refusal by the pool leaves the reader at the start of the frame, so
+    /// the call can be repeated once memory is free.
+    fn read_payload(&mut self, header: &FrameHeader, start: u64) -> Result<Vec<u8>, SpillError> {
         // `header.len` fits the file, so this only fails on a 32-bit target.
         let len = usize::try_from(header.len)
             .map_err(|_| self.corrupt("frame too large for this platform"))?;
-        self.reservation.try_grow(len)?;
-        self.held += len;
+        // Compression ratios stay far below this; a larger claim is damage.
+        if header.decoded > header.len.saturating_mul(1 << 12).saturating_add(1 << 20) {
+            return Err(self.corrupt(format!("implausible decoded size {}", header.decoded)));
+        }
+        let need = len.saturating_add(usize::try_from(header.decoded).unwrap_or(usize::MAX));
+        if let Err(e) = self.reservation.try_grow(need) {
+            self.handle
+                .seek(SeekFrom::Start(start))
+                .map_err(|e| SpillError::io("seek in", &self.file.path, e))?;
+            self.pos = start;
+            return Err(e.into());
+        }
+        self.held += need;
         let mut payload = vec![0u8; len];
         read_exact(&mut self.handle, &mut payload, &self.file, "a frame")?;
         self.pos += header.len;
@@ -226,14 +243,18 @@ impl SpillReader {
                 self.pos
             )));
         }
-        Ok((payload, len))
+        Ok(payload)
     }
 
-    fn read_footer(&mut self, header: &FrameHeader) -> Result<Option<Batch>, SpillError> {
+    fn read_footer(
+        &mut self,
+        header: &FrameHeader,
+        start: u64,
+    ) -> Result<Option<Batch>, SpillError> {
         if header.len != FOOTER_PAYLOAD_LEN as u64 {
             return Err(self.corrupt("malformed footer"));
         }
-        let (payload, _) = self.read_payload(header)?;
+        let payload = self.read_payload(header, start)?;
         let mut b = [0u8; 8];
         let mut r = [0u8; 8];
         b.copy_from_slice(payload.get(..8).unwrap_or_default());
@@ -254,41 +275,29 @@ impl SpillReader {
         Ok(None)
     }
 
-    fn read_data(&mut self, header: &FrameHeader) -> Result<Batch, SpillError> {
-        let (payload, frame_len) = self.read_payload(header)?;
-        let batch = self.decode(header, &payload)?;
-        drop(payload);
-        // The frame buffer is gone; the decoded batch takes its place.
-        let decoded = batch.data().get_array_memory_size()
-            + match batch.weights() {
-                Weights::Const(_) => 0,
-                Weights::Column(c) => c.get_array_memory_size(),
-            };
-        self.reservation.try_grow(decoded)?;
-        self.held += decoded;
-        self.reservation.shrink(frame_len);
-        self.held -= frame_len;
+    fn read_data(&mut self, header: &FrameHeader, start: u64) -> Result<Batch, SpillError> {
+        let payload = self.read_payload(header, start)?;
+        let batch = self.decode(header, payload)?;
         self.batches += 1;
         self.rows += batch.num_rows() as u64;
         Ok(batch)
     }
 
-    fn decode(&self, header: &FrameHeader, payload: &[u8]) -> Result<Batch, SpillError> {
+    /// Decodes without copying: uncompressed buffers are slices of `payload`.
+    fn decode(&self, header: &FrameHeader, payload: Vec<u8>) -> Result<Batch, SpillError> {
         let err = |e: arrow_schema::ArrowError| self.corrupt(format!("undecodable batch: {e}"));
-        let mut cursor = Cursor::new(payload);
-        let mut stream = StreamReader::try_new(&mut cursor, None).map_err(err)?;
-        let record = match stream.next() {
-            Some(Ok(record)) => record,
-            Some(Err(e)) => return Err(err(e)),
-            None => return Err(self.corrupt("frame holds no batch")),
-        };
-        if stream.next().is_some() {
-            return Err(self.corrupt("frame holds more than one batch"));
+        let mut buf = Buffer::from_vec(payload);
+        let mut decoder = StreamDecoder::new();
+        let mut decoded = None;
+        while !buf.is_empty() {
+            if let Some(batch) = decoder.decode(&mut buf).map_err(err)?
+                && decoded.replace(batch).is_some()
+            {
+                return Err(self.corrupt("frame holds more than one batch"));
+            }
         }
-        drop(stream);
-        if cursor.position() != payload.len() as u64 {
-            return Err(self.corrupt("undecodable batch: data after the end of the IPC stream"));
-        }
+        decoder.finish().map_err(err)?;
+        let record = decoded.ok_or_else(|| self.corrupt("frame holds no batch"))?;
         let (data, weights) = if header.kind == KIND_WEIGHTED {
             let n = record
                 .num_columns()
@@ -319,7 +328,9 @@ impl Iterator for SpillReader {
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.read_batch().transpose();
-        if matches!(item, Some(Err(_))) {
+        // A refusal by the memory pool is not final: the reader is back at the
+        // start of the frame and the call can be repeated.
+        if matches!(item, Some(Err(ref e)) if !matches!(e, SpillError::Memory(_))) {
             self.done = true;
             self.release();
         }

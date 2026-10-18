@@ -71,6 +71,53 @@ fn spilling_child() {
     drop(result);
 }
 
+/// A process that starts and stops spill sessions in a loop; does nothing
+/// unless the parent test started it with `KRISHIV_SPILL_OPEN_DIR` set.
+#[test]
+fn opening_child() {
+    let Some(dir) = std::env::var_os("KRISHIV_SPILL_OPEN_DIR") else {
+        return;
+    };
+    let config = SpillConfig {
+        dir: PathBuf::from(dir),
+        ..SpillConfig::default()
+    };
+    for _ in 0..150 {
+        SpillManager::open(&config).unwrap();
+    }
+}
+
+#[test]
+fn processes_starting_together_on_one_directory_all_succeed() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("spill-open-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let children: Vec<_> = (0..3)
+        .map(|_| {
+            Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "opening_child", "--test-threads=1"])
+                .env("KRISHIV_SPILL_OPEN_DIR", &root)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    let config = SpillConfig {
+        dir: root.clone(),
+        ..SpillConfig::default()
+    };
+    for _ in 0..150 {
+        SpillManager::open(&config).unwrap();
+    }
+    for mut child in children {
+        assert!(child.wait().unwrap().success(), "a concurrent start failed");
+    }
+    // Everything every process created is gone.
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn files_of_a_killed_process_are_removed_at_the_next_start() {
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))

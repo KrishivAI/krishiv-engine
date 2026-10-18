@@ -56,7 +56,7 @@ pub struct SpillConfig {
     /// `krishiv.spill.compression`: the codec for files written.
     pub codec: SpillCodec,
     /// `krishiv.spill.zstd.level`: used when `codec` is [`SpillCodec::Zstd`].
-    pub zstd_level: i32,
+    pub zstd_level: i64,
 }
 
 impl Default for SpillConfig {
@@ -71,7 +71,7 @@ impl SpillConfig {
         let dir = config
             .get(&SPILL_DIR)
             .and_then(|v| v.as_str())
-            .map_or_else(|| std::env::temp_dir().join("krishiv-spill"), PathBuf::from);
+            .map_or_else(default_dir, PathBuf::from);
         let max_bytes = config
             .get(&SPILL_MAX_BYTES)
             .and_then(ConfigValue::as_size)
@@ -84,7 +84,7 @@ impl SpillConfig {
         let zstd_level = config
             .get(&SPILL_ZSTD_LEVEL)
             .and_then(ConfigValue::as_int)
-            .map_or(1, |l| i32::try_from(l).unwrap_or(i32::MAX));
+            .unwrap_or(1);
         Self {
             dir,
             max_bytes,
@@ -101,7 +101,7 @@ pub(crate) struct ManagerInner {
     cap: u64,
     used: AtomicU64,
     codec: SpillCodec,
-    zstd_level: i32,
+    zstd_level: i64,
     next_scope: AtomicU64,
     stale_removed: usize,
     /// Holds the advisory lock; released by the kernel when dropped or when
@@ -184,6 +184,10 @@ impl SpillManager {
         let root = config.dir.as_path();
         create_private_dir(root, true).map_err(|e| SpillError::io("create", root, e))?;
         check_root_is_private(root).map_err(|e| SpillError::io("use", root, e))?;
+        if let Some(fs_type) = network_fs(root) {
+            let reason = format!("locks do not work reliably on a {fs_type} file system");
+            return Err(SpillError::io("use", root, io::Error::other(reason)));
+        }
         let stale_removed = remove_stale_sessions(root);
         for attempt in 0..ID_ATTEMPTS {
             let id = new_id(attempt);
@@ -193,9 +197,15 @@ impl SpillManager {
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(SpillError::io("create", &lock_path, e)),
             };
-            if let Err(e) = lock.try_lock() {
-                let _ = fs::remove_file(&lock_path);
-                return Err(SpillError::io("lock", &lock_path, lock_error(e)));
+            match lock.try_lock() {
+                Ok(()) => {}
+                // A concurrent start is reclaiming what it took for a stale
+                // session: it removes the file, and we take another id.
+                Err(std::fs::TryLockError::WouldBlock) => continue,
+                Err(std::fs::TryLockError::Error(e)) => {
+                    let _ = fs::remove_file(&lock_path);
+                    return Err(SpillError::io("lock", &lock_path, e));
+                }
             }
             // A concurrent start may have reclaimed the file between its
             // creation and our lock; then our lock guards nothing. Retry.
@@ -329,6 +339,11 @@ impl SpillScope {
             schema,
             reservation,
         )
+        // A cancel that removed the directory under us is a cancel.
+        .map_err(|e| match e {
+            SpillError::Io { .. } if self.is_cancelled() => SpillError::Cancelled,
+            other => other,
+        })
     }
 
     /// The query was cancelled: stop all spill I/O and delete the files now.
@@ -336,13 +351,22 @@ impl SpillScope {
     /// at their next call and clean up as they drop. Safe to call from any
     /// thread, any number of times, while a write is in progress. On a
     /// failure to delete (the flag is set regardless), dropping the last
-    /// handle retries.
+    /// handle retries. Disk blocks of files that are still open are freed when
+    /// their writers and readers drop.
     ///
     /// # Errors
     /// [`SpillError::Io`] if the directory could not be removed.
     pub fn cancel(&self) -> Result<(), SpillError> {
         self.inner.cancelled.store(true, Ordering::Release);
-        match fs::remove_dir_all(&self.inner.dir) {
+        // A writer that raced the flag may create a file while we delete.
+        let mut result = Ok(());
+        for _ in 0..3 {
+            result = fs::remove_dir_all(&self.inner.dir);
+            if !matches!(&result, Err(e) if e.kind() == io::ErrorKind::DirectoryNotEmpty) {
+                break;
+            }
+        }
+        match result {
             Err(e) if e.kind() != io::ErrorKind::NotFound => {
                 Err(SpillError::io("remove", &self.inner.dir, e))
             }
@@ -358,15 +382,6 @@ impl SpillScope {
     /// This scope's directory.
     pub fn dir(&self) -> &Path {
         &self.inner.dir
-    }
-}
-
-fn lock_error(e: std::fs::TryLockError) -> io::Error {
-    match e {
-        std::fs::TryLockError::Error(e) => e,
-        std::fs::TryLockError::WouldBlock => {
-            io::Error::new(io::ErrorKind::WouldBlock, "lock is held")
-        }
     }
 }
 
@@ -447,25 +462,99 @@ fn create_private_dir(path: &Path, recursive: bool) -> io::Result<()> {
     builder.create(path)
 }
 
-/// Refuses a spill root any user can write to (world-writable, unless it is
-/// sticky, like `/tmp`): they could plant look-alike entries or swap files,
-/// and spilled data is query data.
+/// The default directory: per user, so one user cannot occupy or read
+/// another's: `$XDG_RUNTIME_DIR/krishiv-spill` (a private per-user directory),
+/// else `krishiv-spill-<uid>` under the temporary directory.
+fn default_dir() -> PathBuf {
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").filter(|p| !p.is_empty()) {
+        return PathBuf::from(runtime).join("krishiv-spill");
+    }
+    #[cfg(unix)]
+    let user = fs::metadata("/proc/self")
+        .ok()
+        .map(|m| std::os::unix::fs::MetadataExt::uid(&m).to_string());
+    #[cfg(not(unix))]
+    let user: Option<String> = None;
+    let user = user
+        .or_else(|| std::env::var("USER").ok())
+        .unwrap_or_else(|| "user".to_owned());
+    std::env::temp_dir().join(format!("krishiv-spill-{user}"))
+}
+
+/// Refuses a spill root that is not a real directory owned by this user and
+/// closed to group and others: they could plant look-alike entries, deny
+/// service or read spilled query data. Symlinks are not followed.
 fn check_root_is_private(root: &Path) -> io::Result<()> {
-    let meta = fs::metadata(root)?;
+    let meta = fs::symlink_metadata(root)?;
+    if meta.file_type().is_symlink() {
+        return Err(io::Error::other("is a symbolic link"));
+    }
     if !meta.is_dir() {
         return Err(io::ErrorKind::NotADirectory.into());
     }
     #[cfg(unix)]
     {
-        let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions());
-        if mode & 0o002 != 0 && mode & 0o1000 == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "directory is writable by other users",
-            ));
-        }
+        // Our uid is the owner of a file we create.
+        let probe = root.join(format!(".probe-{}", new_id(0)));
+        let owner = create_new_file(&probe).and_then(|f| f.metadata());
+        let _ = fs::remove_file(&probe);
+        validate_owner_and_mode(&meta, std::os::unix::fs::MetadataExt::uid(&owner?))?;
     }
     Ok(())
+}
+
+#[cfg(unix)]
+pub(crate) fn validate_owner_and_mode(meta: &fs::Metadata, uid: u32) -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    if meta.uid() != uid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "directory is owned by another user",
+        ));
+    }
+    if meta.permissions().mode() & 0o022 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "directory is writable by group or others",
+        ));
+    }
+    Ok(())
+}
+
+/// The file system type of `root` if it is one whose advisory locks cannot
+/// be trusted (network and FUSE file systems). Linux only; elsewhere `None`.
+fn network_fs(root: &Path) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let mounts = fs::read_to_string("/proc/self/mounts").ok()?;
+        network_fs_in(&mounts, &fs::canonicalize(root).ok()?)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = root;
+        None
+    }
+}
+
+/// The type of the mount containing `path` in `/proc/self/mounts` text, if
+/// it is a network or FUSE file system.
+pub(crate) fn network_fs_in(mounts: &str, path: &Path) -> Option<String> {
+    let (_, fs_type) = mounts
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            let (_, point, ty) = (f.next()?, f.next()?, f.next()?);
+            path.starts_with(point.replace("\\040", " "))
+                .then_some((point.len(), ty))
+        })
+        .max_by_key(|(len, _)| *len)?;
+    let network = [
+        "nfs", "cifs", "smb", "ceph", "gluster", "lustre", "9p", "afs", "fuse",
+    ];
+    network
+        .iter()
+        .any(|p| fs_type.starts_with(p))
+        .then(|| fs_type.to_owned())
 }
 
 /// Creates a new file (mode 0600 where modes exist), failing if it exists.

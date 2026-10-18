@@ -127,7 +127,11 @@ impl From<&SpillError> for KrishivError {
             } => KrishivSpillIoError {
                 operation: (*operation).to_owned(),
                 path: path.display().to_string(),
-                reason: source.to_string(),
+                reason: if source.kind() == io::ErrorKind::StorageFull {
+                    format!("the spill disk is full ({source})")
+                } else {
+                    source.to_string()
+                },
             }
             .into(),
             SpillError::Corrupt { path, reason } => KrishivSpillFileCorrupt {

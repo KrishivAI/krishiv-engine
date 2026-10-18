@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value generators derive narrow test values from i64 seeds"
+)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -7,14 +13,20 @@ use std::time::Duration;
 
 use arrow_array::types::Int32Type;
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Decimal128Array,
-    DictionaryArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
-    LargeBinaryArray, LargeStringArray, RecordBatch, RecordBatchOptions, StringArray,
-    StringViewArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
-    UInt64Array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, Decimal256Array, DictionaryArray, DurationMicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
+    Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
+    LargeListArray, LargeStringArray, ListArray, MapArray, NullArray, RecordBatch,
+    RecordBatchOptions, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
+    UInt16Array, UInt32Array, UInt64Array,
 };
-use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
+use arrow_buffer::{NullBuffer, OffsetBuffer, i256};
+use arrow_schema::{DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit};
 use krishiv_common::config::Config;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_types::batch::{Batch, Weights};
@@ -35,6 +47,13 @@ impl TestDir {
         Self(std::env::temp_dir().join(format!("krishiv-spilltest-{}-{n}", std::process::id())))
     }
 
+    /// Creates the directory the way a careful user would (mode 0700).
+    fn create(&self) {
+        fs::create_dir_all(&self.0).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&self.0, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    }
+
     fn config(&self, codec: SpillCodec) -> SpillConfig {
         SpillConfig {
             dir: self.0.clone(),
@@ -47,6 +66,15 @@ impl TestDir {
 impl Drop for TestDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+impl SpillConfig {
+    fn with_dir(self, dir: &Path) -> Self {
+        Self {
+            dir: dir.to_owned(),
+            ..self
+        }
     }
 }
 
@@ -185,7 +213,7 @@ fn type_strategy() -> impl Strategy<Value = DataType> {
         TimeUnit::Microsecond,
         TimeUnit::Nanosecond,
     ];
-    prop_oneof![
+    let leaf = prop_oneof![
         prop::sample::select(vec![
             Boolean,
             Int8,
@@ -205,14 +233,49 @@ fn type_strategy() -> impl Strategy<Value = DataType> {
             LargeBinary,
             BinaryView,
             Date32,
+            Date64,
+            Null,
+            Time32(TimeUnit::Second),
+            Time32(TimeUnit::Millisecond),
+            Time64(TimeUnit::Microsecond),
+            Time64(TimeUnit::Nanosecond),
+            Interval(IntervalUnit::YearMonth),
+            Interval(IntervalUnit::DayTime),
+            Interval(IntervalUnit::MonthDayNano),
+            Dictionary(Box::new(Int32), Box::new(Utf8)),
         ]),
         (0..units.len(), any::<bool>()).prop_map(move |(u, tz)| {
             Timestamp(units[u], tz.then(|| Arc::from("America/Los_Angeles")))
         }),
+        (0..units.len()).prop_map(move |u| Duration(units[u])),
+        (1i32..9).prop_map(FixedSizeBinary),
         (1u8..=38)
             .prop_flat_map(|p| (Just(p), 0..=p))
             .prop_map(|(p, s)| Decimal128(p, i8::try_from(s).unwrap_or(0))),
-    ]
+        (1u8..=76)
+            .prop_flat_map(|p| (Just(p), 0..=p))
+            .prop_map(|(p, s)| Decimal256(p, i8::try_from(s).unwrap_or(0))),
+    ];
+    leaf.prop_recursive(2, 6, 2, |inner| {
+        let item = |t: DataType| Arc::new(Field::new("item", t, true));
+        prop_oneof![
+            inner.clone().prop_map(move |t| List(item(t))),
+            inner.clone().prop_map(move |t| LargeList(item(t))),
+            (inner.clone(), inner.clone()).prop_map(|(a, b)| {
+                Struct(vec![Field::new("a", a, true), Field::new("b", b, true)].into())
+            }),
+            inner.prop_map(|t| {
+                let entries = Struct(
+                    vec![
+                        Field::new("keys", Int32, false),
+                        Field::new("values", t, true),
+                    ]
+                    .into(),
+                );
+                Map(Arc::new(Field::new("entries", entries, false)), false)
+            }),
+        ]
+    })
 }
 
 fn text(seed: i64) -> String {
@@ -226,6 +289,12 @@ fn text(seed: i64) -> String {
 fn bytes(seed: i64) -> Vec<u8> {
     let n = usize::try_from(seed.rem_euclid(9)).unwrap_or(0);
     seed.to_le_bytes().into_iter().take(n).collect()
+}
+
+const KEYS: [&str; 5] = ["k0", "k1", "k2", "k3", "k4"];
+
+fn validity(seeds: &[Option<i64>]) -> NullBuffer {
+    seeds.iter().map(Option::is_some).collect()
 }
 
 /// An array of type `dt` whose values (and nulls) derive from `seeds`.
@@ -290,6 +359,111 @@ fn build(dt: &DataType, seeds: &[Option<i64>]) -> ArrayRef {
                 .with_precision_and_scale(*p, *s)
                 .unwrap(),
         ),
+        DataType::Decimal256(p, s) => Arc::new(
+            Decimal256Array::from_iter(seeds.iter().map(|s| s.map(|v| i256::from_i128(v.into()))))
+                .with_precision_and_scale(*p, *s)
+                .unwrap(),
+        ),
+        DataType::Date64 => arr!(Date64Array, |v| v),
+        DataType::Time32(TimeUnit::Second) => arr!(Time32SecondArray, |v| (v % 86_400) as i32),
+        DataType::Time32(_) => arr!(Time32MillisecondArray, |v| (v % 86_400_000) as i32),
+        DataType::Time64(TimeUnit::Microsecond) => arr!(Time64MicrosecondArray, |v| v),
+        DataType::Time64(_) => arr!(Time64NanosecondArray, |v| v),
+        DataType::Duration(TimeUnit::Second) => arr!(DurationSecondArray, |v| v),
+        DataType::Duration(TimeUnit::Millisecond) => arr!(DurationMillisecondArray, |v| v),
+        DataType::Duration(TimeUnit::Microsecond) => arr!(DurationMicrosecondArray, |v| v),
+        DataType::Duration(TimeUnit::Nanosecond) => arr!(DurationNanosecondArray, |v| v),
+        DataType::Interval(IntervalUnit::YearMonth) => arr!(IntervalYearMonthArray, |v| v as i32),
+        DataType::Interval(IntervalUnit::DayTime) => {
+            arr!(IntervalDayTimeArray, |v| IntervalDayTime::new(
+                v as i32,
+                (v >> 32) as i32
+            ))
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => arr!(IntervalMonthDayNanoArray, |v| {
+            IntervalMonthDayNano::new(v as i32, (v >> 32) as i32, v)
+        }),
+        DataType::FixedSizeBinary(w) => Arc::new(
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                seeds.iter().map(|s| {
+                    s.map(|v| {
+                        v.to_le_bytes()
+                            .into_iter()
+                            .cycle()
+                            .take(*w as usize)
+                            .collect::<Vec<u8>>()
+                    })
+                }),
+                *w,
+            )
+            .unwrap(),
+        ),
+        DataType::Null => Arc::new(NullArray::new(seeds.len())),
+        DataType::Dictionary(..) => Arc::new(DictionaryArray::<Int32Type>::from_iter(
+            seeds
+                .iter()
+                .map(|s| s.map(|v| KEYS[v.rem_euclid(5) as usize])),
+        )),
+        DataType::Struct(fields) => {
+            let columns = fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    let shifted: Vec<_> = seeds
+                        .iter()
+                        .map(|s| s.map(|v| v.wrapping_add(i as i64)))
+                        .collect();
+                    build(f.data_type(), &shifted)
+                })
+                .collect();
+            Arc::new(StructArray::new(
+                fields.clone(),
+                columns,
+                Some(validity(seeds)),
+            ))
+        }
+        DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
+            let lens: Vec<usize> = seeds
+                .iter()
+                .map(|s| s.map_or(0, |v| usize::try_from(v.rem_euclid(4)).unwrap_or(0)))
+                .collect();
+            let items: Vec<Option<i64>> = seeds
+                .iter()
+                .zip(&lens)
+                .flat_map(|(s, n)| (0..*n).map(move |j| s.map(|v| v.wrapping_add(j as i64 * 7))))
+                .collect();
+            let nulls = Some(validity(seeds));
+            match dt {
+                DataType::List(_) => Arc::new(ListArray::new(
+                    Arc::clone(f),
+                    OffsetBuffer::from_lengths(lens),
+                    build(f.data_type(), &items),
+                    nulls,
+                )),
+                DataType::LargeList(_) => Arc::new(LargeListArray::new(
+                    Arc::clone(f),
+                    OffsetBuffer::from_lengths(lens),
+                    build(f.data_type(), &items),
+                    nulls,
+                )),
+                _ => {
+                    let DataType::Struct(entry_fields) = f.data_type() else {
+                        unreachable!("map entries are structs")
+                    };
+                    let keys: ArrayRef =
+                        Arc::new(Int32Array::from_iter_values(0..items.len() as i32));
+                    let values = build(entry_fields[1].data_type(), &items);
+                    let entries = StructArray::new(entry_fields.clone(), vec![keys, values], None);
+                    Arc::new(MapArray::new(
+                        Arc::clone(f),
+                        OffsetBuffer::from_lengths(lens),
+                        entries,
+                        nulls,
+                        false,
+                    ))
+                }
+            }
+        }
         other => panic!("type {other} has no test generator"),
     }
 }
@@ -301,6 +475,7 @@ struct BatchSpec {
     column_weights: bool,
     constant: i64,
     weights: Vec<i64>,
+    skip: usize,
 }
 
 fn batch_spec() -> impl Strategy<Value = BatchSpec> {
@@ -310,14 +485,16 @@ fn batch_spec() -> impl Strategy<Value = BatchSpec> {
         any::<bool>(),
         any::<i64>(),
         prop::collection::vec(any::<i64>(), 48),
+        0usize..48,
     )
         .prop_map(
-            |(rows, seeds, column_weights, constant, weights)| BatchSpec {
+            |(rows, seeds, column_weights, constant, weights, skip)| BatchSpec {
                 rows,
                 seeds,
                 column_weights,
                 constant,
                 weights,
+                skip,
             },
         )
 }
@@ -340,7 +517,12 @@ fn make(cols: &[DataType], spec: &BatchSpec) -> Batch {
     } else {
         Weights::Const(spec.constant)
     };
-    Batch::with_weights(record, weights).unwrap()
+    let batch = Batch::with_weights(record, weights).unwrap();
+    // Filters and limits hand out slices: offset != 0 must round-trip too.
+    match spec.rows {
+        0 => batch,
+        n => batch.slice(spec.skip % n, n - spec.skip % n).unwrap(),
+    }
 }
 
 proptest! {
@@ -550,7 +732,7 @@ fn a_directory_removed_under_a_writer_is_an_io_error() {
 #[test]
 fn open_removes_sessions_of_dead_processes_only() {
     let dir = TestDir::new();
-    fs::create_dir_all(&dir.0).unwrap();
+    dir.create();
     // A crashed process's session: lock file nobody holds, directory with data.
     fs::create_dir_all(dir.0.join("krishiv-spill-123-abc-0/q0")).unwrap();
     fs::write(dir.0.join("krishiv-spill-123-abc-0/q0/0.spill"), b"junk").unwrap();
@@ -599,8 +781,8 @@ fn open_removes_sessions_of_dead_processes_only() {
 fn open_never_follows_planted_symlinks() {
     let dir = TestDir::new();
     let victim = TestDir::new();
-    fs::create_dir_all(&dir.0).unwrap();
-    fs::create_dir_all(&victim.0).unwrap();
+    dir.create();
+    victim.create();
     fs::write(victim.0.join("precious"), b"data").unwrap();
     std::os::unix::fs::symlink(&victim.0, dir.0.join("krishiv-spill-777-a-0")).unwrap();
     fs::write(dir.0.join("krishiv-spill-777-a-0.lock"), b"").unwrap();
@@ -612,26 +794,57 @@ fn open_never_follows_planted_symlinks() {
 
 #[cfg(unix)]
 #[test]
-fn open_refuses_a_directory_others_can_write() {
-    use std::os::unix::fs::PermissionsExt;
+fn open_checks_who_owns_and_can_write_the_directory() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let dir = TestDir::new();
-    fs::create_dir_all(&dir.0).unwrap();
-    fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o777)).unwrap();
-    let err = SpillManager::open(&dir.config(SpillCodec::Lz4)).unwrap_err();
+    dir.create();
+    for (mode, ok) in [
+        (0o777, false),
+        (0o775, false),
+        (0o757, false),
+        (0o755, true),
+    ] {
+        fs::set_permissions(&dir.0, fs::Permissions::from_mode(mode)).unwrap();
+        let opened = SpillManager::open(&dir.config(SpillCodec::Lz4));
+        match (opened, ok) {
+            (Ok(_), true) => {}
+            (Err(e), false) => assert!(is_io(&e, "use"), "{mode:o}: {e:?}"),
+            (other, _) => panic!("mode {mode:o}: {other:?}"),
+        }
+    }
+    // Another owner is refused, whatever the mode.
+    let meta = fs::metadata(&dir.0).unwrap();
+    assert!(dir::validate_owner_and_mode(&meta, meta.uid()).is_ok());
+    assert!(dir::validate_owner_and_mode(&meta, meta.uid() + 1).is_err());
+    // A symlink is refused, not followed.
+    let link = TestDir::new();
+    std::os::unix::fs::symlink(&dir.0, &link.0).unwrap();
+    let err = SpillManager::open(&dir.config(SpillCodec::Lz4).with_dir(&link.0)).unwrap_err();
     assert!(is_io(&err, "use"), "{err:?}");
-    // Sticky (like /tmp) is fine; created directories are private.
-    fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o1777)).unwrap();
+    // What we create is private.
     let manager = SpillManager::open(&dir.config(SpillCodec::Lz4)).unwrap();
-    let mode = fs::metadata(manager.session_dir())
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o700);
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(manager.session_dir()), 0o700);
     let scope = manager.scope().unwrap();
-    let pool = Pool::new(None);
-    let file = write_file(&scope, &pool, &[int_batch(0, 3, Weights::Const(1))]);
-    let mode = fs::metadata(file.path()).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o600);
+    let file = write_file(
+        &scope,
+        &Pool::new(None),
+        &[int_batch(0, 3, Weights::Const(1))],
+    );
+    assert_eq!((mode(scope.dir()), mode(file.path())), (0o700, 0o600));
+    let fresh = TestDir::new();
+    SpillManager::open(&fresh.config(SpillCodec::Lz4)).unwrap();
+    assert_eq!(mode(&fresh.0), 0o700);
+}
+
+#[test]
+fn network_file_systems_are_recognised() {
+    let mounts = "/dev/sda1 / ext4 rw 0 0\nsrv:/x /mnt/nfs nfs4 rw 0 0\nsrv:/y /mnt/nfs/local ext4 rw 0 0\nfuse /home/u/fs fuse.sshfs rw 0 0\n";
+    let at = |p: &str| dir::network_fs_in(mounts, Path::new(p));
+    assert_eq!(at("/mnt/nfs/spill"), Some("nfs4".to_owned()));
+    assert_eq!(at("/home/u/fs/q"), Some("fuse.sshfs".to_owned()));
+    assert_eq!(at("/mnt/nfs/local/q"), None, "the longest mount point wins");
+    assert_eq!(at("/var/tmp"), None);
 }
 
 #[test]
@@ -830,10 +1043,15 @@ fn frames(bytes: &[u8]) -> Vec<(format::FrameHeader, Vec<u8>)> {
 fn reseal(bytes: &[u8], index: usize, payload: &[u8]) -> Vec<u8> {
     let mut out = bytes[..FILE_HEADER_LEN].to_vec();
     for (i, (h, old)) in frames(bytes).into_iter().enumerate() {
-        let mut frame = vec![0u8; FRAME_HEADER_LEN];
-        frame.extend_from_slice(if i == index { payload } else { &old });
-        format::seal_frame(&mut frame, h.kind, h.constant);
-        out.extend_from_slice(&frame);
+        let body: &[u8] = if i == index { payload } else { &old };
+        let header = format::FrameHeader {
+            len: body.len() as u64,
+            ..h
+        };
+        let mut crc = format::Crc32::new();
+        crc.update(body);
+        out.extend_from_slice(&header.seal(crc));
+        out.extend_from_slice(body);
     }
     out
 }
@@ -851,7 +1069,7 @@ fn consistent_but_wrong_content_is_caught_by_the_content_checks() {
     expect(reseal(&s.bytes, 2, &payload(2)[..8]), "malformed footer");
     // A frame that is not an IPC stream, holds none, or two.
     expect(reseal(&s.bytes, 0, b"not arrow"), "undecodable");
-    expect(reseal(&s.bytes, 0, &[]), "undecodable");
+    expect(reseal(&s.bytes, 0, &[]), "no batch");
     expect(
         reseal(&s.bytes, 0, &[payload(0), payload(0)].concat()),
         "undecodable",
@@ -882,64 +1100,85 @@ fn consistent_but_wrong_content_is_caught_by_the_content_checks() {
 
 #[test]
 fn reader_streams_a_file_far_larger_than_its_memory() {
-    let dir = TestDir::new();
-    let manager = SpillManager::open(&dir.config(SpillCodec::Lz4)).unwrap();
-    let scope = manager.scope().unwrap();
-    let writer_pool = Pool::new(None);
-    let batches: Vec<Batch> = (0..40)
-        .map(|i| int_batch(i * 1000, 1000, Weights::Const(1)))
-        .collect();
-    let file = write_file(&scope, &writer_pool, &batches);
-    let one = batches[0].data().get_array_memory_size();
-    let total: usize = batches
-        .iter()
-        .map(|b| b.data().get_array_memory_size())
-        .sum();
+    for codec in [SpillCodec::None, SpillCodec::Lz4] {
+        let (_dir, _manager, scope, writer_pool) = env(codec);
+        let batches: Vec<Batch> = (0..40)
+            .map(|i| int_batch(i * 1000, 1000, Weights::Const(1)))
+            .collect();
+        let file = write_file(&scope, &writer_pool, &batches);
+        let one = batches[0].data().get_array_memory_size();
+        let total: usize = 40 * one;
 
-    // Room for about two batches: 40 batches stream through.
-    let pool = Pool::new(Some(one * 2 + 4096));
-    let mut reader = file.reader(pool.reservation()).unwrap();
-    let mut rows = 0;
-    let mut peak = 0;
-    for b in reader.by_ref() {
-        rows += b.unwrap().num_rows();
-        peak = peak.max(pool.root.reserved());
+        // Room for about two batches' worth: 40 batches stream through.
+        let pool = Pool::new(Some(one * 5));
+        let mut reader = file.reader(pool.reservation()).unwrap();
+        let mut rows = 0;
+        let mut peak = 0;
+        for b in reader.by_ref() {
+            rows += b.unwrap().num_rows();
+            peak = peak.max(pool.root.reserved());
+        }
+        assert_eq!(rows, 40_000);
+        assert!(peak > 0 && peak < total / 4, "{codec:?}: {peak} of {total}");
+        drop(reader);
+        assert_eq!(pool.root.reserved(), 0);
+
+        // Not even one frame fits: a typed, retryable memory error.
+        let blocker_pool = Pool::new(Some(one * 3));
+        let mut blocker = blocker_pool.reservation();
+        blocker.try_grow(one * 3 - 16).unwrap();
+        let mut reader = file.reader(blocker_pool.reservation()).unwrap();
+        for _ in 0..2 {
+            let err = reader.next().unwrap().unwrap_err();
+            assert_eq!(class(&err), ErrorClass::UnableToAcquireMemory);
+        }
+        blocker.shrink(one * 3 - 16);
+        assert_eq!(
+            reader
+                .by_ref()
+                .map(|b| b.unwrap().num_rows())
+                .sum::<usize>(),
+            40_000
+        );
+        drop(reader);
+        assert_eq!(blocker_pool.root.reserved(), 0);
     }
-    assert_eq!(rows, 40_000);
-    assert!(peak > 0 && peak < total / 4, "peak {peak}, total {total}");
-    drop(reader);
-    assert_eq!(pool.root.reserved(), 0);
-
-    // Not even one frame fits: a typed memory error, nothing read, nothing leaked.
-    let tiny = Pool::new(Some(16));
-    let mut reader = file.reader(tiny.reservation()).unwrap();
-    let err = reader.next().unwrap().unwrap_err();
-    assert!(matches!(err, SpillError::Memory(_)), "{err:?}");
-    assert_eq!(class(&err), ErrorClass::UnableToAcquireMemory);
-    assert!(reader.next().is_none());
-    drop(reader);
-    assert_eq!(tiny.root.reserved(), 0);
 }
 
 #[test]
-fn writer_uses_pre_reserved_scratch_and_returns_what_it_borrowed() {
-    let dir = TestDir::new();
-    let manager = SpillManager::open(&dir.config(SpillCodec::Lz4)).unwrap();
-    let scope = manager.scope().unwrap();
+fn reader_reservation_matches_what_decoding_really_holds() {
+    for codec in [SpillCodec::None, SpillCodec::Lz4, SpillCodec::Zstd] {
+        let (_dir, _manager, scope, pool) = env(codec);
+        let batch = int_batch(0, 8192, Weights::Column(Int64Array::from(vec![1; 8192])));
+        let file = write_file(&scope, &pool, std::slice::from_ref(&batch));
+        let mut reader = file.reader(pool.reservation()).unwrap();
+        let got = reader.next().unwrap().unwrap();
+        // The real data: 8192 values of 8 bytes, plus the weights.
+        let actual = 2 * 8192 * 8;
+        let reserved = pool.root.reserved();
+        assert_eq!(got, batch);
+        assert!(
+            (actual..=3 * actual).contains(&reserved),
+            "{codec:?}: reserved {reserved}, data {actual}"
+        );
+    }
+}
+
+#[test]
+fn writer_scratch_is_reserved_in_full_and_returned() {
+    let (_dir, manager, scope, _) = env(SpillCodec::Lz4);
     let batch = int_batch(0, 1000, Weights::Column(Int64Array::from(vec![1; 1000])));
 
     // No room: refused with a memory error, nothing written, and the call can
     // be repeated once memory is free.
-    let pool = Pool::new(Some(64 << 10));
+    let pool = Pool::new(Some(150 << 10));
     let mut blocker = pool.reservation();
-    blocker.try_grow(60 << 10).unwrap();
+    blocker.try_grow(140 << 10).unwrap();
     let mut w = scope.writer(schema_i64(), pool.reservation()).unwrap();
     let err = w.write(&batch).unwrap_err();
-    assert!(matches!(err, SpillError::Memory(_)), "{err:?}");
     assert_eq!(class(&err), ErrorClass::UnableToAcquireMemory);
-    let header_only = manager.used_bytes();
-    assert_eq!(header_only, w.bytes_written());
-    blocker.shrink(60 << 10);
+    assert_eq!(manager.used_bytes(), w.bytes_written());
+    blocker.shrink(140 << 10);
     w.write(&batch).unwrap();
     assert_eq!((w.num_batches(), w.num_rows()), (1, 1000));
     assert_eq!(
@@ -950,16 +1189,75 @@ fn writer_uses_pre_reserved_scratch_and_returns_what_it_borrowed() {
     drop(w);
     assert_eq!(manager.used_bytes(), 0);
 
-    // Scratch reserved up front is enough, and is not given back.
+    // Memory the reservation already holds is the operator's state, not scratch.
     let pool = Pool::new(Some(1 << 20));
     let mut reservation = pool.reservation();
-    reservation.try_grow(256 << 10).unwrap();
+    reservation.try_grow(1 << 20).unwrap();
     let mut w = scope.writer(schema_i64(), reservation).unwrap();
-    w.write(&batch).unwrap();
-    assert_eq!(pool.root.reserved(), 256 << 10);
-    let file = w.finish().unwrap();
-    assert_eq!(pool.root.reserved(), 0);
-    assert_eq!(read_all(&file, &pool).unwrap(), vec![batch]);
+    let err = w.write(&batch).unwrap_err();
+    assert_eq!(class(&err), ErrorClass::UnableToAcquireMemory);
+}
+
+#[test]
+fn concurrent_writers_never_exceed_the_cap() {
+    let dir = TestDir::new();
+    let manager = SpillManager::open(&SpillConfig {
+        max_bytes: 200_000,
+        ..dir.config(SpillCodec::None)
+    })
+    .unwrap();
+    let peak = Arc::new(AtomicUsize::new(0));
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let (manager, peak) = (manager.clone(), Arc::clone(&peak));
+            std::thread::spawn(move || {
+                let scope = manager.scope().unwrap();
+                let pool = Pool::new(None);
+                let mut w = scope.writer(schema_i64(), pool.reservation()).unwrap();
+                let batch = int_batch(0, 500, Weights::Const(1));
+                let mut hit = false;
+                for _ in 0..200 {
+                    if let Err(e) = w.write(&batch) {
+                        assert!(matches!(e, SpillError::CapExceeded { .. }), "{e:?}");
+                        hit = true;
+                        break;
+                    }
+                    let used = usize::try_from(manager.used_bytes()).unwrap();
+                    peak.fetch_max(used, Ordering::Relaxed);
+                }
+                hit
+            })
+        })
+        .collect();
+    let hits = threads
+        .into_iter()
+        .map(|t| t.join().unwrap())
+        .filter(|h| *h)
+        .count();
+    assert!(hits >= 1, "no writer reached the cap");
+    assert!(peak.load(Ordering::Relaxed) <= 200_000);
+    assert_eq!(manager.used_bytes(), 0);
+}
+
+#[test]
+fn concurrent_starts_on_one_directory_all_succeed() {
+    let dir = TestDir::new();
+    dir.create();
+    let threads: Vec<_> = (0..6)
+        .map(|_| {
+            let config = dir.config(SpillCodec::Lz4);
+            std::thread::spawn(move || {
+                for _ in 0..40 {
+                    let m = SpillManager::open(&config).unwrap();
+                    drop(m.scope().unwrap());
+                }
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    assert_eq!(entries(&dir.0), Vec::<String>::new());
 }
 
 #[test]
@@ -968,7 +1266,7 @@ fn config_keys_drive_the_spill_config() {
     assert_eq!(defaults.codec, SpillCodec::Lz4);
     assert_eq!(defaults.max_bytes, 64 << 30);
     assert_eq!(defaults.zstd_level, 1);
-    assert!(defaults.dir.ends_with("krishiv-spill"));
+    assert!(defaults.dir.to_string_lossy().contains("krishiv-spill"));
 
     let (config, _) = Config::from_pairs([
         ("krishiv.spill.dir", "/var/tmp/krishiv-x"),
@@ -1003,6 +1301,12 @@ fn the_zstd_level_is_validated_when_the_directory_opens() {
         "{err}"
     );
     assert!(!dir.0.exists() || entries(&dir.0).is_empty());
+    let huge = SpillConfig {
+        zstd_level: 1 << 40,
+        ..bad
+    };
+    let err = SpillManager::open(&huge).unwrap_err();
+    assert!(err.to_string().contains("1099511627776"), "{err}");
     // Levels are only checked for the codec that uses them.
     SpillManager::open(&SpillConfig {
         codec: SpillCodec::Lz4,
@@ -1034,6 +1338,15 @@ fn error_classes_and_messages() {
         io.to_string(),
         "[KRISHIV_SPILL_IO_ERROR] Spill I/O failed while trying to write to /x/0.spill.tmp: \
          No space left on device. SQLSTATE: 58030"
+    );
+    let full = SpillError::io(
+        "write to",
+        Path::new("/x/0.spill.tmp"),
+        std::io::ErrorKind::StorageFull.into(),
+    );
+    assert!(
+        full.to_string().contains("the spill disk is full"),
+        "{full}"
     );
     let corrupt = SpillError::corrupt(Path::new("/x/1.spill"), "truncated in a frame");
     assert_eq!(corrupt.error_class(), ErrorClass::KrishivSpillFileCorrupt);

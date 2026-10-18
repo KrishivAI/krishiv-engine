@@ -13,7 +13,7 @@
   },
   "KRISHIV_SPILL_CAP_EXCEEDED" : {
     "message" : [
-      "Spilling <requestedBytes> more bytes would exceed the spill limit of <capBytes> bytes (<usedBytes> bytes are in use). Increase \"krishiv.spill.maxBytes\" or free disk space for \"krishiv.spill.dir\"."
+      "Spilling <requestedBytes> more bytes would exceed the spill limit of <capBytes> bytes (<usedBytes> bytes are in use). Increase \"krishiv.spill.maxBytes\" or run fewer spilling queries at once."
     ],
     "sqlState" : "53100"
   },

@@ -4,7 +4,7 @@
 //! ```text
 //! file   = header frame* footer
 //! header = "KSPL" version:u32le                          (8 bytes)
-//! frame  = kind:u8 constant:i64le len:u64le crc:u32le payload[len]
+//! frame  = kind:u8 constant:i64le len:u64le decoded:u64le crc:u32le payload[len]
 //! ```
 //! A data frame holds one [`Batch`](krishiv_types::batch::Batch) as a
 //! complete Arrow IPC stream (schema, optional dictionaries, one record
@@ -18,7 +18,10 @@
 //!
 //! The footer frame ([`KIND_FOOTER`]) holds the number of batches and rows
 //! written, so a file cut at a frame boundary is detected. `crc` is the
-//! CRC-32 (IEEE) of the first 17 header bytes followed by the payload: a
+//! CRC-32 (IEEE) of the payload followed by the first 25 header bytes (the writer
+//! streams the payload before it knows `len`, then patches the header). `decoded` is
+//! an upper bound of the memory the decoded batch needs, so a reader reserves
+//! `len + decoded` before it reads or decodes anything: a
 //! flipped bit or a lying length is an error, never wrong data. Version 1 is
 //! the only version; a reader refuses any other.
 
@@ -29,7 +32,7 @@ pub(crate) const VERSION: u32 = 1;
 /// Length of the file header.
 pub(crate) const FILE_HEADER_LEN: usize = 8;
 /// Length of a frame header.
-pub(crate) const FRAME_HEADER_LEN: usize = 21;
+pub(crate) const FRAME_HEADER_LEN: usize = 29;
 /// Frame kind: data, `Weights::Const`.
 pub(crate) const KIND_PLAIN: u8 = 0;
 /// Frame kind: data, `Weights::Column` in the trailing column.
@@ -65,58 +68,61 @@ pub(crate) fn check_file_header(h: &[u8; FILE_HEADER_LEN]) -> Result<(), String>
     }
 }
 
-/// A decoded frame header.
+/// A frame header: the fields the checksum covers, plus the checksum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FrameHeader {
     pub(crate) kind: u8,
     pub(crate) constant: i64,
     pub(crate) len: u64,
+    /// Upper bound of the memory the decoded batch needs beyond the payload.
+    pub(crate) decoded: u64,
     pub(crate) crc: u32,
 }
 
 impl FrameHeader {
     pub(crate) fn parse(b: &[u8; FRAME_HEADER_LEN]) -> Self {
-        let mut c = [0u8; 8];
-        c.copy_from_slice(&b[1..9]);
-        let mut l = [0u8; 8];
-        l.copy_from_slice(&b[9..17]);
+        let u64_at = |i: usize| {
+            let mut v = [0u8; 8];
+            v.copy_from_slice(&b[i..i + 8]);
+            u64::from_le_bytes(v)
+        };
         let mut r = [0u8; 4];
-        r.copy_from_slice(&b[17..21]);
+        r.copy_from_slice(&b[25..29]);
         Self {
             kind: b[0],
-            constant: i64::from_le_bytes(c),
-            len: u64::from_le_bytes(l),
+            constant: i64::from_le_bytes(u64_at(1).to_le_bytes()),
+            len: u64_at(9),
+            decoded: u64_at(17),
             crc: u32::from_le_bytes(r),
         }
     }
 
-    /// The checksum that covers this header's first 17 bytes and `payload`.
+    /// The 25 bytes before the checksum.
+    fn fixed(&self) -> [u8; 25] {
+        let mut h = [0u8; 25];
+        h[0] = self.kind;
+        h[1..9].copy_from_slice(&self.constant.to_le_bytes());
+        h[9..17].copy_from_slice(&self.len.to_le_bytes());
+        h[17..25].copy_from_slice(&self.decoded.to_le_bytes());
+        h
+    }
+
+    /// Seals a header whose payload (`len` bytes) has been fed to `payload_crc`.
+    pub(crate) fn seal(mut self, mut payload_crc: Crc32) -> [u8; FRAME_HEADER_LEN] {
+        payload_crc.update(&self.fixed());
+        self.crc = payload_crc.finish();
+        let mut h = [0u8; FRAME_HEADER_LEN];
+        h[..25].copy_from_slice(&self.fixed());
+        h[25..].copy_from_slice(&self.crc.to_le_bytes());
+        h
+    }
+
+    /// The checksum this header should carry for `payload`.
     pub(crate) fn checksum(&self, payload: &[u8]) -> u32 {
         let mut crc = Crc32::new();
-        crc.update(&[self.kind]);
-        crc.update(&self.constant.to_le_bytes());
-        crc.update(&self.len.to_le_bytes());
         crc.update(payload);
+        crc.update(&self.fixed());
         crc.finish()
-    }
-}
-
-/// Fills in the header at the front of `frame`, whose bytes after
-/// [`FRAME_HEADER_LEN`] are the payload.
-pub(crate) fn seal_frame(frame: &mut [u8], kind: u8, constant: i64) {
-    let payload_len = frame.len().saturating_sub(FRAME_HEADER_LEN);
-    let header = FrameHeader {
-        kind,
-        constant,
-        len: payload_len as u64,
-        crc: 0,
-    };
-    let crc = header.checksum(frame.get(FRAME_HEADER_LEN..).unwrap_or_default());
-    if let Some(h) = frame.get_mut(..FRAME_HEADER_LEN) {
-        h[0] = kind;
-        h[1..9].copy_from_slice(&constant.to_le_bytes());
-        h[9..17].copy_from_slice(&header.len.to_le_bytes());
-        h[17..21].copy_from_slice(&crc.to_le_bytes());
     }
 }
 

@@ -104,14 +104,18 @@ impl SpillCodec {
     }
 
     /// The Arrow IPC write options for this codec.
-    pub(crate) fn write_options(self, zstd_level: i32) -> Result<IpcWriteOptions, ArrowError> {
+    pub(crate) fn write_options(self, zstd_level: i64) -> Result<IpcWriteOptions, ArrowError> {
         let options = IpcWriteOptions::default();
         match self {
             Self::None => Ok(options),
             Self::Lz4 => options.try_with_compression(Some(CompressionType::LZ4_FRAME)),
             Self::Zstd => options
                 .try_with_compression(Some(CompressionType::ZSTD))?
-                .try_with_compression_level(Some(zstd_level)),
+                .try_with_compression_level(Some(i32::try_from(zstd_level).map_err(|_| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "ZSTD compression level {zstd_level} is out of range"
+                    ))
+                })?)),
         }
     }
 }
