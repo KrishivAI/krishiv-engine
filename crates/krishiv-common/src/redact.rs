@@ -16,6 +16,11 @@
 //!
 //! It is a pattern match: it may hide too much and cannot find a secret
 //! that nothing marks.
+//!
+//! Query text is not redacted by pattern: the SQL front end marks the
+//! secret ranges from lexer tokens and builds a [`RedactedSql`], the only
+//! form of query text that sinks accept (ADR 0038 update); only comments,
+//! which are free text, go through [`redact`].
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -51,6 +56,123 @@ pub fn redact(text: &str) -> Cow<'_, str> {
     }
     out.push_str(&text[at..]);
     Cow::Owned(out)
+}
+
+/// What to do with a byte range of query text, for [`RedactedSql`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Mark {
+    /// A secret: replaced by [`REDACTED`].
+    Secret(Range<usize>),
+    /// Free text (a comment): passed through [`redact`].
+    FreeText(Range<usize>),
+}
+
+/// Query text with its secrets replaced, built by a front end that knows
+/// where they are (`krishiv_sql::redact_sql`). `Display`, `Debug` and
+/// [`Self::as_str`] give the redacted text; [`Self::fragment`] the
+/// redacted text of a byte range of the original, for error contexts.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RedactedSql {
+    text: String,
+    /// Each replaced region: (original range, redacted range), in order.
+    regions: Vec<(Range<usize>, Range<usize>)>,
+}
+
+impl RedactedSql {
+    /// `sql` with every [`Mark`] applied. Marks out of range, inside an
+    /// earlier mark or not on character boundaries are widened or skipped
+    /// so that no part of a marked range survives.
+    #[must_use]
+    pub fn from_marks(sql: &str, mut marks: Vec<Mark>) -> Self {
+        let range = |m: &Mark| match m {
+            Mark::Secret(r) | Mark::FreeText(r) => r.clone(),
+        };
+        marks.sort_by_key(|m| range(m).start);
+        let mut text = String::with_capacity(sql.len());
+        let mut regions = Vec::new();
+        let mut at = 0;
+        for mark in marks {
+            let r = range(&mark);
+            let (start, end) = (floor(sql, r.start.max(at)), ceil(sql, r.end));
+            if start >= end {
+                continue;
+            }
+            let replaced = match mark {
+                Mark::Secret(_) => Cow::Borrowed(REDACTED),
+                Mark::FreeText(_) => redact(&sql[start..end]),
+            };
+            if let Cow::Borrowed(same) = replaced
+                && same == &sql[start..end]
+            {
+                continue;
+            }
+            text.push_str(&sql[at..start]);
+            let new_start = text.len();
+            text.push_str(&replaced);
+            regions.push((start..end, new_start..text.len()));
+            at = end;
+        }
+        text.push_str(&sql[at..]);
+        Self { text, regions }
+    }
+
+    /// The redacted text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// The redacted text of the original byte range `range` (a span of the
+    /// query): a secret it touches shows as [`REDACTED`].
+    #[must_use]
+    pub fn fragment(&self, range: Range<usize>) -> &str {
+        let start = self.position(range.start, false);
+        let end = self.position(range.end, true).max(start);
+        self.text.get(start..end).unwrap_or_default()
+    }
+
+    /// Where original byte `pos` lands; inside a region, at its start (or
+    /// end, for the end of a range).
+    fn position(&self, pos: usize, end: bool) -> usize {
+        let mut shift = (0_usize, 0_usize);
+        for (old, new) in &self.regions {
+            if pos <= old.start {
+                break;
+            }
+            if pos < old.end {
+                return if end { new.end } else { new.start };
+            }
+            shift = (old.end, new.end);
+        }
+        (pos - shift.0 + shift.1).min(self.text.len())
+    }
+}
+
+/// The char boundary at or before `i`.
+fn floor(s: &str, i: usize) -> usize {
+    (0..=i.min(s.len()))
+        .rev()
+        .find(|&j| s.is_char_boundary(j))
+        .unwrap_or(0)
+}
+
+/// The char boundary at or after `i`.
+fn ceil(s: &str, i: usize) -> usize {
+    (i.min(s.len())..=s.len())
+        .find(|&j| s.is_char_boundary(j))
+        .unwrap_or(s.len())
+}
+
+impl std::fmt::Display for RedactedSql {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::fmt::Debug for RedactedSql {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RedactedSql({:?})", self.text)
+    }
 }
 
 /// Characters that end an unquoted value or a URL.
@@ -269,7 +391,34 @@ fn schemes(text: &str, out: &mut Vec<Range<usize>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::redact;
+    use super::{Mark, RedactedSql, redact};
+
+    #[test]
+    fn marks_replace_secrets_and_fragments_follow() {
+        let sql = "SELECT 'Canary-7f3a9c' /* token=Canary-7f3a9c */ FROM t é";
+        let r = RedactedSql::from_marks(
+            sql,
+            vec![
+                Mark::FreeText(23..48),
+                Mark::Secret(8..21),
+                Mark::Secret(9..12),
+                Mark::FreeText(0..6),
+            ],
+        );
+        let want = "SELECT '*********(redacted)' /* token=*********(redacted) */ FROM t é";
+        assert_eq!(r.as_str(), want);
+        assert_eq!(r.to_string(), want);
+        assert!(!format!("{r:?}").contains(CANARY));
+        assert_eq!(r.fragment(0..6), "SELECT");
+        assert_eq!(r.fragment(7..22), "'*********(redacted)'");
+        assert_eq!(r.fragment(10..12), REDACTED_MARK);
+        assert_eq!(r.fragment(49..55), "FROM t");
+        assert_eq!(r.fragment(56..99), "é");
+        let plain = RedactedSql::from_marks("SELECT 1", Vec::new());
+        assert_eq!(plain.fragment(7..8), "1");
+    }
+
+    const REDACTED_MARK: &str = super::REDACTED;
 
     const CANARY: &str = "Canary-7f3a9c";
 
