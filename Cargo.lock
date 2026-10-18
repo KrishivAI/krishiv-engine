@@ -1370,7 +1370,13 @@ dependencies = [
 name = "krishiv"
 version = "0.1.0-dev"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "futures",
+ "krishiv-common",
  "krishiv-server",
+ "krishiv-session",
+ "krishiv-types",
 ]
 
 [[package]]
@@ -1581,6 +1587,27 @@ version = "0.1.0-dev"
 dependencies = [
  "axum",
  "krishiv-ui-assets",
+ "tokio",
+]
+
+[[package]]
+name = "krishiv-session"
+version = "0.1.0-dev"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "futures",
+ "krishiv-common",
+ "krishiv-exec",
+ "krishiv-io",
+ "krishiv-memory",
+ "krishiv-optimizer",
+ "krishiv-plan",
+ "krishiv-sql",
+ "krishiv-types",
+ "object_store",
+ "parquet",
+ "tempfile",
  "tokio",
 ]
 

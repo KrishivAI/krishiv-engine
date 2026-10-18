@@ -1,0 +1,42 @@
+[package]
+name = "krishiv-session"
+description = "Krishiv sessions: SQL and DataFrames over the engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+arrow-array.workspace = true
+arrow-schema.workspace = true
+futures = { workspace = true, features = ["alloc"] }
+krishiv-common = { path = "../krishiv-common" }
+krishiv-exec = { path = "../krishiv-exec" }
+krishiv-io = { path = "../krishiv-io" }
+krishiv-memory = { path = "../krishiv-memory" }
+krishiv-optimizer = { path = "../krishiv-optimizer" }
+krishiv-plan = { path = "../krishiv-plan" }
+krishiv-sql = { path = "../krishiv-sql" }
+krishiv-types = { path = "../krishiv-types" }
+# A oneshot channel back from tasks on the session's executor.
+tokio = { workspace = true, features = ["sync"] }
+# The local file system as a store (`fs`); no other store features.
+object_store = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+futures = { workspace = true, features = ["alloc", "executor"] }
+# The analyzer's test registry, until the built-in one lands (P2-T153).
+krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
+parquet = { workspace = true, features = ["arrow"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+
+[features]
+# Access to the logical-plan IR (`Session::from_plan`, `DataFrame::plan`):
+# for the Python facade and tests; not covered by semver.
+unstable-ir = []
+
+[lints]
+workspace = true
