@@ -7,10 +7,10 @@
 # within WAIT_SECS. A cancelled run is superseded by a newer one on the same
 # head (re-opened PR, re-run), so it keeps waiting.
 # Read-only, so it also works for fork pull requests.
-# Env: GH_TOKEN, REPO, HEAD_SHA, OUT_DIR, WAIT_SECS (default 3600),
+# Env: GH_TOKEN, REPO, HEAD_SHA, OUT_DIR, WAIT_SECS (default 4500),
 #      POLL_SECS (default 30).
 set -euo pipefail
-wait_secs="${WAIT_SECS:-3600}"
+wait_secs="${WAIT_SECS:-4500}"
 poll_secs="${POLL_SECS:-30}"
 deadline=$((SECONDS + wait_secs))
 while :; do

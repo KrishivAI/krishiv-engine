@@ -319,6 +319,9 @@ jobs:
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    # The gate in pr-policy.yml waits up to 75 minutes for this job (queueing
+    # included); keep this limit below that.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

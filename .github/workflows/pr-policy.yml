@@ -86,7 +86,9 @@ jobs:
   budgets:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    # Longer than the wait below, which covers CI queueing plus the
+    # 45-minute limit of budgets-measure.
+    timeout-minutes: 90
     permissions:
       contents: read
       pull-requests: read
@@ -103,6 +105,7 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           OUT_DIR: ${{ runner.temp }}/budgets
+          WAIT_SECS: 4500
         # Assign first: a failing command substitution inside `echo` would not
         # fail the step.
         run: |
