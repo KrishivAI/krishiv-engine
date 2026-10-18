@@ -438,6 +438,7 @@ impl Resolver<'_> {
             extra: None,
             agg_scope: None,
             lenient: false,
+            outer: true,
             env,
             op,
         }

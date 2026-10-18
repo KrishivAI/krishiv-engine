@@ -3677,6 +3677,39 @@
    }
   },
   {
+   "sql": "SELECT * FROM (SELECT a, d AS b FROM u) o WHERE EXISTS (SELECT a FROM t ORDER BY b LIMIT 1)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT a, d AS b FROM u) o WHERE EXISTS (SELECT a AS k, a AS k FROM t ORDER BY k LIMIT 1)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`k`",
+    "proposal": "`k`, `k`"
+   },
+   "context": {
+    "start": 94,
+    "stop": 94,
+    "fragment": "k"
+   }
+  },
+  {
    "sql": "SELECT max(c) FROM t GROUP BY a, b HAVING count(*) > 1 ORDER BY b",
    "conf": {},
    "ok": true,

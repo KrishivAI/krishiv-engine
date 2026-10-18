@@ -1493,6 +1493,32 @@ fn missing_references_reach_grouping_attributes() {
     assert!(again.plan.structurally_eq(&a.plan));
 }
 
+/// In a subquery, a column a projection dropped hides an outer column of
+/// its name (Spark resolves missing references before outer ones); a name
+/// only the enclosing query has still resolves there.
+#[test]
+fn missing_references_come_before_outer_ones() {
+    let ctx = ctx();
+    let inner = |name: &str| {
+        LogicalPlan::table(["u"])
+            .project(vec![c("a")])
+            .filter(eq(c(name), c("a")))
+    };
+    let query = |name: &str| {
+        LogicalPlan::table(["t"])
+            .project(vec![c("a").alias("d"), c("b")])
+            .filter(Expr::subquery(crate::SubqueryKind::Exists, inner(name)))
+    };
+    let shown = |name: &str| run(query(name), &ctx).unwrap().plan.root().to_string();
+    // `d` is u's own column, dropped below the filter, not the outer alias.
+    let own = shown("d");
+    assert!(own.contains("Filter (d#"), "{own}");
+    assert!(!own.contains("outer("), "{own}");
+    // `b` exists only in the enclosing query.
+    let outer = shown("b");
+    assert!(outer.contains("Filter (outer(b#"), "{outer}");
+}
+
 /// A subexpression shared through `Arc` inside a lateral alias item and a
 /// sort key over a dropped column is bound and walked once.
 #[test]

@@ -247,6 +247,9 @@ CORPUS = [
     ("SELECT a AS b, c AS b FROM t ORDER BY b", {}),
     ("SELECT a AS k, b AS k FROM t ORDER BY k", {}),
     ("SELECT a FROM t GROUP BY a HAVING count(*) > 1 ORDER BY b", {}),
+    # a dropped column hides an outer one of its name
+    ("SELECT * FROM (SELECT a, d AS b FROM u) o WHERE EXISTS (SELECT a FROM t ORDER BY b LIMIT 1)", {}),
+    ("SELECT * FROM (SELECT a, d AS b FROM u) o WHERE EXISTS (SELECT a AS k, a AS k FROM t ORDER BY k LIMIT 1)", {}),
     ("SELECT max(c) FROM t GROUP BY a, b HAVING count(*) > 1 ORDER BY b", {}),
     ("SELECT max(c) AS m FROM t GROUP BY a HAVING count(*) > 1 ORDER BY a", {}),
 ]

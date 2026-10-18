@@ -15,7 +15,7 @@ use krishiv_common::error::{
 
 use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
-use super::exprs::{Bound, names, pretty, semantic_key};
+use super::exprs::{Bound, Cx, names, pretty, semantic_key};
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, TableKind};
 use crate::{
@@ -430,9 +430,11 @@ impl Resolver<'_> {
     /// `c` does not output, but a relation below it dropped (through
     /// projections, filters, sorts and limits, down to an aggregate's
     /// grouping attributes), are Spark's missing references: they are
-    /// added back up to `c` and resolve. Returns the bound expressions and
-    /// the relation they read, wider than `c` when something was added.
-    /// `lenient`: a name `c` outputs several times is looked up below.
+    /// added back up to `c` and resolve. Enclosing queries come last, as
+    /// in Spark: a dropped column hides an outer one of its name. Returns
+    /// the bound expressions and the relation they read, wider than `c`
+    /// when something was added. `lenient`: a name `c` outputs several
+    /// times is looked up below.
     fn bind_missing(
         &mut self,
         c: &Rel,
@@ -444,34 +446,28 @@ impl Resolver<'_> {
         let rels = [c];
         let mut cx = Self::cx(&c.out, &rels, env, op);
         cx.lenient = lenient;
-        let mut first = Vec::new();
-        let mut failed = None;
-        for e in exprs {
-            match self.bind(e, &cx) {
-                Ok(b) => first.push(b),
-                Err(err) => {
-                    failed = Some(err);
-                    break;
-                }
-            }
-        }
-        let Some(err) = failed else {
-            return Ok((first, c.clone()));
-        };
+        // Without the enclosing queries when there is something below.
         let below = Self::below(c);
-        let unresolved = err
-            .error
-            .error_class()
-            .name()
-            .starts_with("UNRESOLVED_COLUMN");
-        if !unresolved || below.is_empty() {
-            return Err(err);
+        cx.outer = below.is_empty();
+        let unresolved = |e: &AnalysisError| {
+            e.error
+                .error_class()
+                .name()
+                .starts_with("UNRESOLVED_COLUMN")
+        };
+        match self.bind_all(exprs, &cx) {
+            Ok(bounds) => return Ok((bounds, c.clone())),
+            Err(e) if !unresolved(&e) || below.is_empty() => return Err(e),
+            Err(_) => {}
         }
         cx.extra = Some(&below);
-        let mut bounds = Vec::new();
-        for e in exprs {
-            bounds.push(self.bind(e, &cx)?);
-        }
+        let bounds = match self.bind_all(exprs, &cx) {
+            Err(e) if unresolved(&e) => {
+                cx.outer = true;
+                self.bind_all(exprs, &cx)?
+            }
+            other => other?,
+        };
         let have: HashSet<AttrId> = c.out.iter().map(|a| a.col.id).collect();
         let mut missing: Vec<Attr> = Vec::new();
         let mut seen = HashSet::new();
@@ -494,6 +490,11 @@ impl Resolver<'_> {
         // The retry resolved a name only `below` holds: `missing` is not
         // empty.
         Ok((bounds, self.widened(c, &missing)))
+    }
+
+    /// Binds each of `exprs` in `cx`.
+    fn bind_all(&mut self, exprs: &[Arc<Expr>], cx: &Cx<'_>) -> Result<Vec<Bound>, AnalysisError> {
+        exprs.iter().map(|e| self.bind(e, cx)).collect()
     }
 
     /// The attributes relations below `r` dropped and could add back

@@ -45,6 +45,8 @@ pub(super) struct Cx<'s> {
     /// A name `scope` holds several times is looked up further rather
     /// than ambiguous (Spark's `ORDER BY` over a select list).
     pub(super) lenient: bool,
+    /// Whether names may resolve in enclosing queries.
+    pub(super) outer: bool,
     pub(super) env: &'s Arc<Env>,
     /// The operator, as Spark names it in errors.
     pub(super) op: &'static str,
@@ -522,7 +524,8 @@ impl Resolver<'_> {
             };
             return self.expr(alias, &inner);
         }
-        for (level, outer) in cx.env.outer.iter().enumerate().rev() {
+        let levels = cx.env.outer.iter().enumerate().rev();
+        for (level, outer) in levels.filter(|_| cx.outer) {
             if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
                 let col = renamed(&a, &c.name, used);
