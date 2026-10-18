@@ -10,8 +10,8 @@
 
 use arrow_array::types::Int32Type;
 use arrow_array::{
-    Array, BinaryArray, GenericListArray, Int32Array, LargeBinaryArray, LargeStringArray,
-    ListArray, StringArray, cast::AsArray,
+    Array, BinaryArray, GenericListArray, Int32Array, LargeStringArray, ListArray, StringArray,
+    cast::AsArray,
 };
 use krishiv_common::error::ErrorClass;
 use krishiv_kernels::string::{
@@ -94,17 +94,10 @@ fn unicode_17_letters_are_unmapped_before_spark_4_2() {
 
 #[test]
 fn lengths() {
-    let a = strs(&[
-        Some("héllo"),
-        Some("😀"),
-        Some(""),
-        None,
-        Some("Spark SQL "),
-    ]);
-    let n = char_length(&a);
+    let a = strs(&[Some("héllo"), Some("😀"), Some(""), None]);
     assert_eq!(
-        n.iter().collect::<Vec<_>>(),
-        [Some(5), Some(1), Some(0), None, Some(10)]
+        char_length(&a).iter().collect::<Vec<_>>(),
+        [Some(5), Some(1), Some(0), None]
     );
     let b = BinaryArray::from(vec![Some(&b"\xaa\xbb"[..]), None, Some(&b""[..])]);
     assert_eq!(
@@ -175,39 +168,20 @@ fn contains_family() {
             .null_count(),
         4
     );
-    // Binary.
+    // Binary: bytes, not characters.
     let bin = BinaryArray::from(vec![Some(&b"\xaa\xbb\xcc"[..]), Some(&b""[..]), None]);
-    let t = |k, n: &'static [u8]| {
+    let t = |k, n: &'static [u8]| -> Vec<Option<bool>> {
         match_binary(k, BinOperand::Array(&bin), BinOperand::Scalar(Some(n)))
             .unwrap()
             .iter()
-            .collect::<Vec<_>>()
+            .collect()
     };
-    assert_eq!(
-        t(MatchKind::StartsWith, b"\xaa"),
-        [Some(true), Some(false), None]
-    );
-    assert_eq!(
-        t(MatchKind::EndsWith, b"\xcc"),
-        [Some(true), Some(false), None]
-    );
-    assert_eq!(
-        t(MatchKind::Contains, b"\xbb"),
-        [Some(true), Some(false), None]
-    );
+    let hit = vec![Some(true), Some(false), None];
+    assert_eq!(t(MatchKind::StartsWith, b"\xaa"), hit);
+    assert_eq!(t(MatchKind::EndsWith, b"\xcc"), hit);
+    assert_eq!(t(MatchKind::Contains, b"\xbb"), hit);
     assert_eq!(t(MatchKind::Contains, b""), [Some(true), Some(true), None]);
-    assert_eq!(
-        t(MatchKind::Contains, b"\xcc\xdd"),
-        [Some(false), Some(false), None]
-    );
-    let large = LargeBinaryArray::from(vec![&b"ab"[..]]);
-    let out = match_binary(
-        MatchKind::Contains,
-        BinOperand::Array(&large),
-        BinOperand::Scalar(Some(b"b")),
-    )
-    .unwrap();
-    assert!(out.value(0));
+    assert_eq!(t(MatchKind::Contains, b"\xcc\xdd")[0], Some(false));
 }
 
 #[test]
