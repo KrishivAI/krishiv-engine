@@ -1,0 +1,33 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [numwait#68 DESC NULLS LAST, s_name#1 ASC NULLS FIRST], true
+   +- Aggregate [s_name#1], [s_name#1, count(1) AS numwait#68]
+      +- Project [s_name#1]
+         +- Join LeftAnti, ((l_orderkey#52 == l_orderkey#7) and (NOT (l_suppkey#54 == l_suppkey#9)))
+            :- Join LeftSemi, ((l_orderkey#36 == l_orderkey#7) and (NOT (l_suppkey#38 == l_suppkey#9)))
+            :  :- Project [l_orderkey#7, l_suppkey#9, s_name#1]
+            :  :  +- Join Inner, (o_orderkey#23 == l_orderkey#7)
+            :  :     :- Project [o_orderkey#23]
+            :  :     :  +- Filter (o_orderstatus#25 == 'F')
+            :  :     :     +- Scan spark_catalog.default.orders [o_orderkey#23, o_orderstatus#25]
+            :  :     +- Project [l_orderkey#7, l_suppkey#9, s_name#1]
+            :  :        +- Join Inner, (s_suppkey#0 == l_suppkey#9)
+            :  :           :- Project [l_orderkey#7, l_suppkey#9]
+            :  :           :  +- Filter (l_receiptdate#19 > l_commitdate#18)
+            :  :           :     +- Scan spark_catalog.default.lineitem [l_orderkey#7, l_suppkey#9, l_commitdate#18, l_receiptdate#19] (shared #1)
+            :  :           +- Project [s_suppkey#0, s_name#1]
+            :  :              +- Join Inner, (s_nationkey#3 == n_nationkey#32)
+            :  :                 :- Scan spark_catalog.default.supplier [s_suppkey#0, s_name#1, s_nationkey#3]
+            :  :                 +- Project [n_nationkey#32]
+            :  :                    +- Filter (n_name#33 == 'SAUDI ARABIA')
+            :  :                       +- Scan spark_catalog.default.nation [n_nationkey#32, n_name#33]
+            :  +- Project [l_orderkey#36, l_suppkey#38]
+            :     +- Shift +29
+            :        +- Shared #1, printed above
+            +- Project [l_orderkey#52, l_suppkey#54]
+               +- Shift +45
+                  +- Filter (l_receiptdate#19 > l_commitdate#18)
+                     +- Shared #1, printed above

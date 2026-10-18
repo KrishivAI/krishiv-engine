@@ -16,6 +16,7 @@ arrow-array.workspace = true
 arrow-buffer.workspace = true
 arrow-schema.workspace = true
 krishiv-common = { path = "../krishiv-common" }
+libm.workspace = true
 md5.workspace = true
 sha1.workspace = true
 sha2.workspace = true

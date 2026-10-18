@@ -17,11 +17,16 @@ krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }
 
 [dev-dependencies]
+criterion.workspace = true
 insta.workspace = true
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }
 proptest = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
+
+[[bench]]
+name = "optimize"
+harness = false
 
 [lints]
 workspace = true

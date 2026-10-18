@@ -7,14 +7,14 @@ Sort [value#16 DESC NULLS LAST], true
    :  +- Aggregate [], [(sum((ps_supplycost#20 * CAST(ps_availqty#19 AS DECIMAL(10,0)))) * 0.0001000000) AS (sum((ps_supplycost * ps_availqty)) * 0.0001000000)#33]
    :     +- Project [ps_availqty#19, ps_supplycost#20]
    :        +- Shift +17
-   :           +- Join Inner, (s_nationkey#8 == n_nationkey#12) (shared #1)
-   :              :- Project [ps_partkey#0, ps_availqty#2, ps_supplycost#3, s_nationkey#8]
-   :              :  +- Join Inner, (ps_suppkey#1 == s_suppkey#5)
-   :              :     :- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1, ps_availqty#2, ps_supplycost#3]
-   :              :     +- Scan spark_catalog.default.supplier [s_suppkey#5, s_nationkey#8]
-   :              +- Project [n_nationkey#12]
-   :                 +- Filter (n_name#13 == 'GERMANY')
-   :                    +- Scan spark_catalog.default.nation [n_nationkey#12, n_name#13]
+   :           +- Join Inner, (ps_suppkey#1 == s_suppkey#5) (shared #1)
+   :              :- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1, ps_availqty#2, ps_supplycost#3]
+   :              +- Project [s_suppkey#5]
+   :                 +- Join Inner, (s_nationkey#8 == n_nationkey#12)
+   :                    :- Scan spark_catalog.default.supplier [s_suppkey#5, s_nationkey#8]
+   :                    +- Project [n_nationkey#12]
+   :                       +- Filter (n_name#13 == 'GERMANY')
+   :                          +- Scan spark_catalog.default.nation [n_nationkey#12, n_name#13]
    +- Aggregate [ps_partkey#0], [ps_partkey#0, sum((ps_supplycost#3 * CAST(ps_availqty#2 AS DECIMAL(10,0)))) AS value#16]
       +- Project [ps_partkey#0, ps_availqty#2, ps_supplycost#3]
          +- Shared #1, printed above

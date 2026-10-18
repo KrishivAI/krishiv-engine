@@ -27,8 +27,8 @@ use krishiv_common::error::{
     ArithmeticOverflow, BinaryArithmeticOverflow, CastInvalidInput, CastOverflow, DatetimeOverflow,
     DivideByZero, ErrorClass, InternalError, InvalidFormatEscAtTheEnd, InvalidFormatEscInTheMiddle,
     InvalidUtf8String, KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
-    NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion, RemainderByZero,
-    UnableToAcquireMemory,
+    NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion,
+    NumericValueOutOfRangeWithoutSuggestion, RemainderByZero, UnableToAcquireMemory,
 };
 
 use crate::policy::Fault;
@@ -299,6 +299,28 @@ impl KernelError {
                 precision: precision.to_string(),
                 scale: scale.to_string(),
                 config: ANSI_CONF.to_owned(),
+            }
+            .into(),
+        }
+    }
+
+    /// `NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION` of `round` / `ceil` /
+    /// `floor` on a decimal: `rounded` is the plain text of the result,
+    /// `original` Java's `BigDecimal.toString` of the rounded quotient.
+    pub(crate) fn decimal_round_out_of_range(
+        row: usize,
+        rounded: String,
+        original: String,
+        precision: u8,
+        scale: i8,
+    ) -> Self {
+        Self {
+            row: Some(row),
+            error: NumericValueOutOfRangeWithoutSuggestion {
+                rounded_value: rounded,
+                original_value: original,
+                precision: precision.to_string(),
+                scale: scale.to_string(),
             }
             .into(),
         }

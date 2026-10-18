@@ -1,0 +1,14 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: optimized.root().to_string()
+---
+Project [a#0, d#4, b#6]
++- Join Inner
+   :- Project [a#0, b#6]
+   :  +- Join Inner, ((a#0 == a#5) and (c#7 > c#2))
+   :     :- Project [a#0, c#2]
+   :     :  +- Scan spark_catalog.default.t [a#0, b#1, c#2] (shared #1)
+   :     +- Shift +5
+   :        +- Shared #1, printed above
+   +- Filter (d#4 == 'y')
+      +- Scan spark_catalog.default.u [d#4]

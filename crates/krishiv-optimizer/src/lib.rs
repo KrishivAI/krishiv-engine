@@ -11,9 +11,13 @@
 //!    outer joins inner where a filter rejects their NULL rows), join
 //!    conditions into the side they read, projection collapse and removal,
 //!    limit pushdown.
-//! 2. **Prune**: column pruning over the whole plan (projection pushdown
+//! 2. **Join order**: each tree of inner joins is re-planned from
+//!    cardinality estimates ([`Statistics`]): exact dynamic programming up
+//!    to [`DP_LIMIT`] inputs, greedy above, never a cross product the query
+//!    does not have.
+//! 3. **Prune**: column pruning over the whole plan (projection pushdown
 //!    into scans), once.
-//! 3. **Tidy**: the rewrite batch again over the pruned plan.
+//! 4. **Tidy**: the rewrite batch again over the pruned plan.
 //!
 //! Every rule applies inside subquery plans too, and rewrites a subtree
 //! shared through `Arc` once, so the plan stays a DAG. A rule that changes
@@ -29,17 +33,23 @@
 mod dag;
 mod expr;
 mod fold;
+mod join_order;
 mod limit;
 mod project;
 mod prune;
 mod pushdown;
+mod stats;
 
 use std::sync::Arc;
 
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{Expr, ExprNode, Grouping, LogicalPlan, Plan, PlanNode, ResolvedExpr};
 
+pub use join_order::DP_LIMIT;
 pub use limit::TopN;
+pub use stats::{
+    ColumnStats, DEFAULT_ROWS, DEFAULT_SELECTIVITY, NoStatistics, Statistics, TableStats,
+};
 
 /// The most rounds a rule batch runs before its result is taken as is.
 pub const MAX_ITERATIONS: usize = 100;
@@ -57,13 +67,21 @@ const REWRITE: [Rule; 6] = [
     limit::push_limit,
 ];
 
-/// Optimises a resolved plan.
+/// Optimises a resolved plan without statistics; see [`optimize_with`].
+///
+/// # Errors
+/// As [`optimize_with`].
+pub fn optimize(plan: &Plan) -> Result<Plan, KrishivError> {
+    optimize_with(plan, &NoStatistics)
+}
+
+/// Optimises a resolved plan, ordering joins by `stats`.
 ///
 /// # Errors
 /// `INTERNAL_ERROR` when `plan` is not resolved or no optimizer thread can
 /// be started. A rewrite nesting deeper than [`krishiv_plan::MAX_DEPTH`] is
 /// not an error: the input plan is returned unoptimised.
-pub fn optimize(plan: &Plan) -> Result<Plan, KrishivError> {
+pub fn optimize_with(plan: &Plan, stats: &dyn Statistics) -> Result<Plan, KrishivError> {
     if !plan.root().is_resolved() {
         return Err(InternalError {
             message: "the optimizer needs a resolved plan".to_owned(),
@@ -73,6 +91,7 @@ pub fn optimize(plan: &Plan) -> Result<Plan, KrishivError> {
     let root = Arc::clone(plan.root());
     let run = move || -> Result<Arc<LogicalPlan>, KrishivError> {
         let root = batch(root)?;
+        let root = join_order::reorder(&root, stats);
         let root = prune::prune(&root);
         batch(root)
     };

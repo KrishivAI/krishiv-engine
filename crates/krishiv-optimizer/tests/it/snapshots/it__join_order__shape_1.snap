@@ -1,0 +1,13 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: "SELECT n_name FROM nation, supplier, (SELECT c_nationkey FROM customer GROUP BY c_nationkey) c WHERE 5 > n_nationkey AND n_nationkey = s_nationkey AND c.c_nationkey = n_nationkey"
+---
+Project [n_name#1]
++- Join Inner, (n_nationkey#0 == s_nationkey#7)
+   :- Scan spark_catalog.default.supplier [s_nationkey#7]
+   +- Project [n_nationkey#0, n_name#1]
+      +- Join Inner, (c_nationkey#14 == n_nationkey#0)
+         :- Aggregate [c_nationkey#14], [c_nationkey#14]
+         :  +- Scan spark_catalog.default.customer [c_nationkey#14]
+         +- Filter (5L > n_nationkey#0)
+            +- Scan spark_catalog.default.nation [n_nationkey#0, n_name#1]

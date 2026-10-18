@@ -1,0 +1,15 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: optimized.root().to_string()
+---
+Sort [supplier_cnt#21 DESC NULLS LAST, p_brand#8 ASC NULLS FIRST, p_type#9 ASC NULLS FIRST, p_size#10 ASC NULLS FIRST], true
++- Aggregate [p_brand#8, p_type#9, p_size#10], [p_brand#8, p_type#9, p_size#10, count(DISTINCT ps_suppkey#1) AS supplier_cnt#21]
+   +- Join LeftAnti, ((ps_suppkey#1 == s_suppkey#14) or isnull((ps_suppkey#1 == s_suppkey#14)))
+      :- Project [ps_suppkey#1, p_brand#8, p_type#9, p_size#10]
+      :  +- Join Inner, (p_partkey#5 == ps_partkey#0)
+      :     :- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1]
+      :     +- Filter (((NOT (p_brand#8 == 'Brand#45')) and (NOT (p_type#9 like 'MEDIUM POLISHED%'))) and (p_size#10 IN (49, 14, 23, 45, 19, 3, 36, 9)))
+      :        +- Scan spark_catalog.default.part [p_partkey#5, p_brand#8, p_type#9, p_size#10]
+      +- Project [s_suppkey#14]
+         +- Filter (s_comment#20 like '%Customer%Complaints%')
+            +- Scan spark_catalog.default.supplier [s_suppkey#14, s_comment#20]
