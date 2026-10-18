@@ -1541,3 +1541,53 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
     }
     memo.get(&addr(e)).copied().unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn folded(v: Literal, to: &DataType) -> Option<Constant> {
+        folded_cast(&Expr::new(ExprNode::Literal(v)), to)
+    }
+
+    /// Spark folds `CAST(literal AS integral)` for the scale of `round`.
+    #[test]
+    fn integral_casts_of_literals_fold() {
+        let n = |v: i64| Some(Constant::Integral(v));
+        assert_eq!(folded(Literal::Integer(7), &DataType::Byte), n(7));
+        assert_eq!(folded(Literal::Byte(-3), &DataType::Long), n(-3));
+        assert_eq!(folded(Literal::Short(9), &DataType::Short), n(9));
+        assert_eq!(folded(Literal::Long(5), &DataType::Integer), n(5));
+        // Out of the target's range: not a constant.
+        assert_eq!(folded(Literal::Integer(300), &DataType::Byte), None);
+        assert_eq!(folded(Literal::Long(i64::MAX), &DataType::Integer), None);
+        // Fractions truncate toward zero.
+        assert_eq!(folded(Literal::Double(1.9), &DataType::Integer), n(1));
+        assert_eq!(folded(Literal::Float(-1.9), &DataType::Integer), n(-1));
+        assert_eq!(folded(Literal::Double(f64::NAN), &DataType::Integer), None);
+        assert_eq!(folded(Literal::Double(1e30), &DataType::Long), None);
+        let dec = |unscaled, p, s| Literal::Decimal {
+            unscaled,
+            data_type: krishiv_types::DecimalType::try_new(p, s).unwrap(),
+        };
+        assert_eq!(folded(dec(-250, 4, 2), &DataType::Integer), n(-2));
+        assert_eq!(
+            folded(Literal::String(" 12 ".to_owned()), &DataType::Integer),
+            n(12)
+        );
+        assert_eq!(
+            folded(Literal::String("1.5".to_owned()), &DataType::Integer),
+            None
+        );
+        assert_eq!(
+            folded(Literal::Null(None), &DataType::Integer),
+            Some(Constant::Null)
+        );
+        // Other targets and sources are not folded.
+        assert_eq!(folded(Literal::Integer(1), &DataType::Double), None);
+        assert_eq!(folded(Literal::Boolean(true), &DataType::Integer), None);
+        assert_eq!(truncated(&Literal::Boolean(true)), None);
+        assert_eq!(truncated(&Literal::Double(-2.5)), Some(-2));
+        assert_eq!(truncated(&dec(15, 2, 1)), Some(1));
+    }
+}

@@ -339,3 +339,238 @@ fn hash_arguments_are_checked() {
     .unwrap_err();
     assert_eq!(class(&err), ErrorClass::KrishivUnsupportedFeature);
 }
+
+fn floats(v: &[Option<f32>]) -> ArrayRef {
+    Arc::new(arrow_array::Float32Array::from(v.to_vec()))
+}
+
+fn small(v: &[Option<i8>]) -> ArrayRef {
+    Arc::new(arrow_array::Int8Array::from(v.to_vec()))
+}
+
+fn shorts(v: &[Option<i16>]) -> ArrayRef {
+    Arc::new(arrow_array::Int16Array::from(v.to_vec()))
+}
+
+#[test]
+fn float_arithmetic() {
+    let (a, b) = (
+        doubles(&[Some(1.5), Some(7.0)]),
+        doubles(&[Some(0.5), Some(0.0)]),
+    );
+    assert_eq!(f64s(&run("try_add", &[&a, &b])), [Some(2.0), Some(7.0)]);
+    assert_eq!(
+        f64s(&run("try_subtract", &[&a, &b])),
+        [Some(1.0), Some(7.0)]
+    );
+    assert_eq!(
+        f64s(&run("try_multiply", &[&a, &b])),
+        [Some(0.75), Some(0.0)]
+    );
+    assert_eq!(f64s(&run("try_divide", &[&a, &b])), [Some(3.0), None]);
+    assert_eq!(f64s(&run("try_mod", &[&a, &b])), [Some(0.0), None]);
+    // `mod` raises under ANSI and is NULL without.
+    let err = bind("mod", &[&a, &b])
+        .invoke(&[col(&a), col(&b)], 2)
+        .unwrap_err();
+    assert_eq!(class(&err), ErrorClass::RemainderByZero);
+    let r = bind_with("mod", &[&a, &b], &legacy())
+        .invoke(&[col(&a), col(&b)], 2)
+        .unwrap();
+    assert_eq!(f64s(&r), [Some(0.0), None]);
+    let (x, y) = (floats(&[Some(1.5)]), floats(&[Some(0.5)]));
+    let r = run("try_add", &[&x, &y]);
+    assert_eq!(r.data_type(), &DataType::Float32);
+    assert_eq!(
+        r.as_primitive::<arrow_array::types::Float32Type>().value(0),
+        2.0
+    );
+}
+
+#[test]
+fn other_integral_widths() {
+    let (a, b) = (small(&[Some(100), Some(3)]), small(&[Some(100), Some(2)]));
+    let r = run("try_add", &[&a, &b]);
+    assert_eq!(
+        r.as_primitive::<arrow_array::types::Int8Type>()
+            .iter()
+            .collect::<Vec<_>>(),
+        [None, Some(5)]
+    );
+    let (a, b) = (
+        shorts(&[Some(i16::MAX), Some(3)]),
+        shorts(&[Some(1), Some(2)]),
+    );
+    let r = run("try_add", &[&a, &b]);
+    assert_eq!(
+        r.as_primitive::<arrow_array::types::Int16Type>()
+            .iter()
+            .collect::<Vec<_>>(),
+        [None, Some(5)]
+    );
+    let (a, b) = (
+        longs(&[Some(i64::MAX), Some(3)]),
+        longs(&[Some(1), Some(2)]),
+    );
+    assert_eq!(i64s(&run("try_add", &[&a, &b])), [None, Some(5)]);
+    assert_eq!(i64s(&run("try_mod", &[&a, &b])), [Some(0), Some(1)]);
+    // abs and pmod on every width.
+    assert_eq!(
+        i64s(&run("abs", &[&longs(&[Some(-4), None])])),
+        [Some(4), None]
+    );
+    let s = run("abs", &[&small(&[Some(-4)])]);
+    assert_eq!(s.as_primitive::<arrow_array::types::Int8Type>().value(0), 4);
+    let s = run("abs", &[&shorts(&[Some(-4)])]);
+    assert_eq!(
+        s.as_primitive::<arrow_array::types::Int16Type>().value(0),
+        4
+    );
+    let f = run("abs", &[&floats(&[Some(-1.5)])]);
+    assert_eq!(
+        f.as_primitive::<arrow_array::types::Float32Type>().value(0),
+        1.5
+    );
+    let p = run("pmod", &[&longs(&[Some(-7)]), &longs(&[Some(3)])]);
+    assert_eq!(i64s(&p), [Some(2)]);
+    let p = run("pmod", &[&small(&[Some(-7)]), &small(&[Some(3)])]);
+    assert_eq!(p.as_primitive::<arrow_array::types::Int8Type>().value(0), 2);
+    let p = run("pmod", &[&shorts(&[Some(-7)]), &shorts(&[Some(3)])]);
+    assert_eq!(
+        p.as_primitive::<arrow_array::types::Int16Type>().value(0),
+        2
+    );
+    let p = run("pmod", &[&floats(&[Some(-7.5)]), &floats(&[Some(2.0)])]);
+    assert_eq!(
+        p.as_primitive::<arrow_array::types::Float32Type>().value(0),
+        0.5
+    );
+}
+
+#[test]
+fn rounding_every_type() {
+    let scale = |s| ints(&[Some(s)]);
+    let null = arrow_array::new_null_array(&DataType::Int32, 1);
+    let r = run_lit("round", &[&small(&[Some(127)])], &scale(0));
+    assert_eq!(
+        r.as_primitive::<arrow_array::types::Int8Type>().value(0),
+        127
+    );
+    let r = run_lit("round", &[&shorts(&[Some(15)])], &scale(-1));
+    assert_eq!(
+        r.as_primitive::<arrow_array::types::Int16Type>().value(0),
+        20
+    );
+    assert_eq!(
+        i64s(&run_lit("bround", &[&longs(&[Some(25)])], &scale(-1))),
+        [Some(20)]
+    );
+    let r = run_lit("round", &[&floats(&[Some(2.5), None])], &scale(0));
+    assert_eq!(
+        r.as_primitive::<arrow_array::types::Float32Type>()
+            .iter()
+            .collect::<Vec<_>>(),
+        [Some(3.0), None]
+    );
+    // A NULL scale gives NULLs of every type.
+    for a in [
+        small(&[Some(1)]),
+        shorts(&[Some(1)]),
+        ints(&[Some(1)]),
+        longs(&[Some(1)]),
+        floats(&[Some(1.0)]),
+        doubles(&[Some(1.0)]),
+        decimals(&[Some(15)], 2, 1),
+    ] {
+        let r = run_lit("round", &[&a], &null);
+        assert_eq!((r.len(), r.null_count()), (1, 1), "{}", a.data_type());
+    }
+    let r = run_lit("ceil", &[&decimals(&[Some(15)], 2, 1)], &null);
+    assert_eq!(r.null_count(), 1);
+    // `bigint` literals pass through `ceil` untouched.
+    let r = bind("ceil", &[&longs(&[Some(3)])])
+        .invoke(&[lit(&longs(&[Some(3)]))], 2)
+        .unwrap();
+    assert_eq!(i64s(&r), [Some(3), Some(3)]);
+}
+
+#[test]
+fn greatest_and_least_of_every_type() {
+    let both = |name: &str, a: &ArrayRef, b: &ArrayRef| run(name, &[a, b]);
+    let r = both("greatest", &small(&[Some(1)]), &small(&[Some(2)]));
+    assert_eq!(r.as_primitive::<arrow_array::types::Int8Type>().value(0), 2);
+    let r = both("least", &shorts(&[Some(1)]), &shorts(&[Some(2)]));
+    assert_eq!(
+        r.as_primitive::<arrow_array::types::Int16Type>().value(0),
+        1
+    );
+    assert_eq!(
+        i64s(&both("greatest", &longs(&[Some(1)]), &longs(&[Some(2)]))),
+        [Some(2)]
+    );
+    let r = both("greatest", &floats(&[Some(1.0)]), &floats(&[Some(2.0)]));
+    assert_eq!(
+        r.as_primitive::<arrow_array::types::Float32Type>().value(0),
+        2.0
+    );
+    let r = both(
+        "least",
+        &decimals(&[Some(15)], 2, 1),
+        &decimals(&[Some(12)], 2, 1),
+    );
+    assert_eq!(dec_values(&r), [Some(12)]);
+    let d = |v: i32| -> ArrayRef { Arc::new(arrow_array::Date32Array::from(vec![Some(v)])) };
+    let r = both("greatest", &d(1), &d(2));
+    assert_eq!(
+        r.as_primitive::<arrow_array::types::Date32Type>().value(0),
+        2
+    );
+    let t = |v: i64| -> ArrayRef {
+        Arc::new(arrow_array::TimestampMicrosecondArray::from(vec![Some(v)]).with_timezone("UTC"))
+    };
+    let r = both("least", &t(5), &t(3));
+    assert_eq!(
+        r.as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+            .value(0),
+        3
+    );
+    // Arguments of different types do not bind.
+    let err = bind_scalar(
+        "greatest",
+        &[
+            BindArg::from(DataType::Int32),
+            BindArg::from(DataType::Int64),
+        ],
+        &BindOptions::new(),
+    )
+    .unwrap_err();
+    assert_eq!(class(&err), ErrorClass::KrishivUnsupportedFeature);
+}
+
+#[test]
+fn unsupported_shapes_are_reported() {
+    for (name, args) in [
+        ("sqrt", vec![DataType::Int32]),
+        ("pmod", vec![DataType::Int32, DataType::Int64]),
+        ("try_add", vec![DataType::Int32, DataType::Int64]),
+        ("try_divide", vec![DataType::Int32, DataType::Int32]),
+        ("positive", vec![DataType::Utf8]),
+        ("round", vec![DataType::Utf8]),
+        ("ceil", vec![DataType::Int32]),
+        ("greatest", vec![DataType::Int32]),
+        ("md5", vec![DataType::Int32]),
+    ] {
+        let bound: Vec<BindArg> = args.into_iter().map(BindArg::from).collect();
+        let err = bind_scalar(name, &bound, &BindOptions::new()).unwrap_err();
+        assert_eq!(class(&err), ErrorClass::KrishivUnsupportedFeature, "{name}");
+    }
+    // A scale that is not an `int` literal is an internal error.
+    let bad = BindArg::Literal(longs(&[Some(1)]));
+    let err = bind_scalar(
+        "round",
+        &[BindArg::from(DataType::Float64), bad],
+        &BindOptions::new(),
+    )
+    .unwrap_err();
+    assert_eq!(class(&err), ErrorClass::InternalError);
+}

@@ -108,7 +108,7 @@ where
         Op::Add => float::binary(ArithOp::Add, l, r, ctx),
         Op::Sub => float::binary(ArithOp::Subtract, l, r, ctx),
         Op::Mul => float::binary(ArithOp::Multiply, l, r, ctx),
-        Op::Div if raise => float::divide::<T, AnsiError>(l, r, ctx),
+        // Only `try_divide` divides: a zero divisor is NULL.
         Op::Div => float::divide::<T, JavaWrap>(l, r, ctx),
         Op::Rem if raise => float::remainder::<T, AnsiError>(l, r, ctx),
         Op::Rem => float::remainder::<T, JavaWrap>(l, r, ctx),
