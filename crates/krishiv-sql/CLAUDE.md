@@ -9,7 +9,8 @@ Spark SQL dialect parser and analyzer (resolution, type coercion).
 classes `keywords.rs`, recursive descent `parser.rs` + precedence climbing `parser/expr.rs`,
 `types.rs` resolves written types through `krishiv_types::parse_data_type`.
 `lower` / `parse_and_lower` turn a query into an unresolved `krishiv_plan::Plan` (`lower.rs`, purely
-syntactic, origins = spans).
+syntactic, origins = spans); `redact_sql` turns query text into a `RedactedSql` from lexer tokens
+(`redact.rs`).
 
 ## Invariants
 - Own parser (no sqlparser-rs): hand-written lexer + recursive descent.
@@ -30,12 +31,14 @@ syntactic, origins = spans).
   plans. Constructs the IR lacks fail with `KRISHIV_UNSUPPORTED_FEATURE` naming the construct, never silently.
   Recursion follows the tree (bounded by the parser) and hops to a fresh stack every `STEP` levels; join lists
   and dotted names are loops; the plan is checked against `MAX_DEPTH`.
+- Query text reaches sinks only as `RedactedSql` (ADR 0038 update): option values of sensitive keys, URL
+  credentials in literals and quoted identifiers, and comments (pattern redaction) are masked; nothing else.
 - Error messages/classes match Spark; `insta` snapshots for errors.
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)
-0003, 0008, 0012
+0003, 0008, 0012, 0038
 
 ## Test
 `cargo nextest run -p krishiv-sql --no-tests=pass` · `cargo clippy -p krishiv-sql --all-targets -- -D warnings`

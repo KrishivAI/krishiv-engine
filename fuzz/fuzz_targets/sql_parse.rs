@@ -4,11 +4,13 @@
 //! error (never panic, overflow the stack or take super-linear time or
 //! memory: run with `-timeout` and `-rss_limit_mb`); an error's span must
 //! lie within the input; and a tree must pass the span checks and parse to
-//! an equal tree with other whitespace and comments.
+//! an equal tree with other whitespace and comments. A tree is then
+//! lowered (a plan or an error, never a panic), and the text is redacted.
 #![no_main]
 
 use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
-use krishiv_sql::{ParserOptions, parse_query};
+use krishiv_plan::SourceId;
+use krishiv_sql::{ParserOptions, lower, parse_query, redact_sql};
 use krishiv_testkit::golden::sql_spans::{check_spans, respaced};
 use libfuzzer_sys::fuzz_target;
 
@@ -37,21 +39,32 @@ fuzz_target!(|data: &[u8]| {
             }
             let again = parse_query(&respaced(&sql), &options);
             assert!(matches!(again, Ok(r) if r == q), "differential mismatch");
+            if let Ok(plan) = lower(&q, SourceId(0)) {
+                assert!(!plan.root().is_resolved(), "a lowered plan is unresolved");
+            }
         }
         Err(e) => assert!(e.span.end <= sql.len()),
     }
+    let _ = redact_sql(&sql).fragment(0..sql.len());
 });
 
-/// The deepest parenthesis nesting of `sql`.
+/// The deepest parenthesis nesting of `sql`, plus its longest run of
+/// prefix operators (each nests the expression after it).
 fn nesting(sql: &str) -> usize {
-    let (mut depth, mut max) = (0_usize, 0_usize);
-    for t in tokenize(sql) {
+    let (mut depth, mut max, mut run, mut longest) = (0_usize, 0_usize, 0_usize, 0_usize);
+    for t in tokenize(sql).iter().filter(|t| !t.kind.is_trivia()) {
         match t.kind {
             TokenKind::Sym(Sym::LParen) => depth += 1,
             TokenKind::Sym(Sym::RParen) => depth = depth.saturating_sub(1),
             _ => {}
         }
+        let prefix = matches!(
+            t.kind,
+            TokenKind::Sym(Sym::Plus | Sym::Minus | Sym::Tilde | Sym::Bang)
+        ) || (t.kind == TokenKind::Word && t.span.text(sql).eq_ignore_ascii_case("NOT"));
+        run = if prefix { run + 1 } else { 0 };
+        longest = longest.max(run);
         max = max.max(depth);
     }
-    max
+    max + longest
 }
