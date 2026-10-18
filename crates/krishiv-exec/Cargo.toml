@@ -13,7 +13,12 @@ workspace = true
 
 [dependencies]
 arrow-array.workspace = true
+arrow-buffer.workspace = true
+arrow-row.workspace = true
 arrow-schema.workspace = true
+arrow-select.workspace = true
+foldhash.workspace = true
+hashbrown.workspace = true
 futures = { workspace = true, features = ["alloc"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-memory = { path = "../krishiv-memory" }
@@ -21,7 +26,9 @@ krishiv-types = { path = "../krishiv-types" }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
+arrow-ipc = { workspace = true, features = ["zstd"] }
 criterion.workspace = true
+proptest = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
 
 [target.'cfg(loom)'.dev-dependencies]

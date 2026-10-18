@@ -72,6 +72,7 @@ mod reader;
 mod writer;
 
 #[cfg(test)]
+#[cfg(not(loom))]
 mod tests;
 
 pub use dir::{SpillConfig, SpillManager, SpillScope};

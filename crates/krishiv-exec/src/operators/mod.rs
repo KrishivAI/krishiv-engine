@@ -35,7 +35,7 @@ pub use filter::Filter;
 pub use limit::Limit;
 pub use project::{Project, ProjectItem};
 pub use scan::{FilterPushdown, MemoryScan, ScanPushdown};
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 use scan::{ScanGlobal, ScanLocal};
 pub use union::UnionAlign;
 

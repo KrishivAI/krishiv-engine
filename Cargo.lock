@@ -176,6 +176,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-row"
+version = "60.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "758b87e9648d80001e0916c083334ed93074c677a81a96144d5c84bd2d8eab2a"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "half",
+]
+
+[[package]]
 name = "arrow-schema"
 version = "60.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -720,6 +733,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "fs-err"
 version = "3.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1214,13 +1233,20 @@ name = "krishiv-exec"
 version = "0.1.0-dev"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
+ "arrow-ipc",
+ "arrow-row",
  "arrow-schema",
+ "arrow-select",
  "codspeed-criterion-compat",
+ "foldhash",
  "futures",
+ "hashbrown",
  "krishiv-common",
  "krishiv-memory",
  "krishiv-types",
  "loom",
+ "proptest",
  "tokio",
 ]
 

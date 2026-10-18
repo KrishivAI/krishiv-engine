@@ -116,6 +116,25 @@ impl Reservation {
     pub fn size(&self) -> usize {
         self.bytes
     }
+
+    /// Re-charges this reservation to `to` (a consumer of the same pool),
+    /// for state handed over to another operator instance (a breaker's
+    /// combined tables): the pool's total is unchanged, and `to`'s spill
+    /// hook now covers these bytes.
+    ///
+    /// # Errors
+    /// [`MemoryError::UnknownConsumer`] if `to` is not registered with this
+    /// reservation's pool; the reservation is unchanged.
+    pub fn transfer_to(&mut self, to: &Arc<ConsumerHandle>) -> Result<(), MemoryError> {
+        self.pool.transfer(self.id, to.id(), self.bytes)?;
+        if let Some(h) = &self.handle {
+            h.shrank(self.bytes);
+        }
+        to.grew(self.bytes);
+        self.id = to.id();
+        self.handle = Some(Arc::clone(to));
+        Ok(())
+    }
 }
 
 /// Credit taken by a pending [`Reservation::grow`]; refunded unless used.

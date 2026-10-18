@@ -71,6 +71,7 @@ mod context;
 mod driver;
 mod error;
 mod executor;
+pub mod hash;
 mod metrics;
 mod morsel;
 mod operator;

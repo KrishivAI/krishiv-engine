@@ -136,6 +136,25 @@ pub trait Operator: Send + Sync {
         let _ = (local, target, ctx);
         Box::pin(async { Ok(0) })
     }
+    /// Called once no more input will arrive (the driver's source is
+    /// exhausted, or an operator upstream returned `Finished`; not when one
+    /// downstream did), repeatedly until it returns `None`: one buffered
+    /// output batch per call, pushed on through the operators after it
+    /// (DuckDB's `FinalExecute`; a partial aggregate flushes its table).
+    /// Sync and bounded like `execute`; it cannot ask for memory, so
+    /// buffered output must already be reserved. Default: nothing buffered.
+    ///
+    /// # Errors
+    /// Any error fails the query.
+    fn finish(&self, local: &mut LocalState) -> Result<Option<Batch>> {
+        let _ = local;
+        Ok(None)
+    }
+    /// Operator-specific `EXPLAIN ANALYZE` counters (name, value), read
+    /// once when the query ends. Default: none.
+    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+        Vec::new()
+    }
 }
 
 /// What [`Sink::sink`] did with its input.
@@ -243,5 +262,9 @@ pub trait Sink: Send + Sync {
     ) -> BoxFuture<'a, Result<usize>> {
         let _ = (global, target, ctx);
         Box::pin(async { Ok(0) })
+    }
+    /// As [`Operator::extra_metrics`].
+    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+        Vec::new()
     }
 }
