@@ -2,7 +2,8 @@
 //! The stateless operators over the executor traits (P2-T051): an in-memory
 //! scan with projection and filter pushdown ([`MemoryScan`]), [`Filter`],
 //! [`Project`], [`Limit`] and the per-branch alignment of a union
-//! ([`UnionAlign`]).
+//! ([`UnionAlign`]); and the sort breakers (P2-T054, [`sort`]): [`Sort`]
+//! and [`TopN`].
 //!
 //! # Contracts shared by all of them
 //! - **Weights** ([`Weights`](krishiv_types::batch::Weights)) are carried
@@ -28,6 +29,7 @@ mod filter;
 mod limit;
 mod project;
 mod scan;
+mod sort;
 mod union;
 
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
@@ -37,6 +39,7 @@ pub use project::{Project, ProjectItem};
 pub use scan::{FilterPushdown, MemoryScan, ScanPushdown};
 #[cfg(all(test, not(loom)))]
 use scan::{ScanGlobal, ScanLocal};
+pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};
 pub use union::UnionAlign;
 
 use crate::error::{Result, internal};
