@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Spill write + read-back throughput of 1M rows (an `Int64` key, a decimal,
+//! Spill write and read-back throughput of 1M rows (an `Int64` key, a decimal,
 //! a timestamp, a low-cardinality string and a float, with unit weights) for
 //! LZ4, Zstandard and no compression; run under CodSpeed in CI.
 
@@ -99,24 +99,30 @@ fn bench_spill(c: &mut Criterion) {
             ..SpillConfig::default()
         })
         .expect("spill dir");
-        group.bench_function(format!("write_read_{name}"), |b| {
+        let scope = manager.scope().expect("scope");
+        let spill = || {
+            let mut writer = scope
+                .writer(schema(), Reservation::new(Arc::clone(&pool), id))
+                .expect("writer");
+            for batch in &input {
+                writer.write(batch).expect("write");
+            }
+            writer.finish().expect("finish")
+        };
+        group.bench_function(format!("write_{name}"), |b| {
+            b.iter(|| black_box(spill().bytes()));
+        });
+        let file = spill();
+        group.bench_function(format!("read_{name}"), |b| {
             b.iter(|| {
-                let scope = manager.scope().expect("scope");
-                let mut writer = scope
-                    .writer(schema(), Reservation::new(Arc::clone(&pool), id))
-                    .expect("writer");
-                for batch in &input {
-                    writer.write(batch).expect("write");
-                }
-                let file = writer.finish().expect("finish");
                 let reader = file
                     .reader(Reservation::new(Arc::clone(&pool), id))
                     .expect("reader");
-                let mut rows = 0;
-                for batch in reader {
-                    rows += batch.expect("read").num_rows();
-                }
-                black_box((rows, file.bytes()))
+                black_box(
+                    reader
+                        .map(|batch| batch.expect("read").num_rows())
+                        .sum::<usize>(),
+                )
             });
         });
     }
