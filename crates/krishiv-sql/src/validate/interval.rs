@@ -376,10 +376,14 @@ fn string_to_interval(input: &str) -> Result<Calendar, KrishivError> {
     }
     // The whitespace-separated word at byte `i`, as Spark's errors cite it.
     let word = |i: usize| -> String {
-        let start = s[..i.min(s.len())]
-            .rfind(char::is_whitespace)
+        // `i` is always on a character boundary; `get` keeps a slip from
+        // panicking.
+        let start = s
+            .get(..i.min(s.len()))
+            .and_then(|head| head.rfind(char::is_whitespace))
             .map_or(0, |p| p + 1);
-        s[start..]
+        s.get(start..)
+            .unwrap_or_default()
             .split(char::is_whitespace)
             .next()
             .unwrap_or_default()
@@ -523,7 +527,7 @@ fn string_to_interval(input: &str) -> Result<Calendar, KrishivError> {
                     value = -value;
                     fraction = -fraction;
                 }
-                let rest = &s[i..];
+                let rest = s.get(i..).unwrap_or_default();
                 let invalid_unit = || -> KrishivError {
                     InvalidIntervalFormatInvalidUnit {
                         input: input.to_owned(),
