@@ -350,6 +350,30 @@ fn nullable(t: DataType) -> ArgType {
     ArgType::new(t, true)
 }
 
+/// Spark 4.2 (`df.schema` over `spark.range(1)`, a non-nullable column):
+/// every unary math function is nullable, `pow`/`atan2`/`hypot` are
+/// nullable only with their inputs, `log(base, x)` is always nullable.
+#[test]
+fn unary_math_nullability_matches_spark() {
+    let d = ty(DataType::Double);
+    for name in [
+        "sqrt", "cbrt", "exp", "expm1", "ln", "log10", "log2", "log1p", "sin", "cos", "tan",
+        "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "cot", "csc",
+        "sec", "degrees", "radians", "rint", "sign", "signum", "log",
+    ] {
+        let r = result(name, std::slice::from_ref(&d), &[]).unwrap();
+        assert_eq!(r, nullable(DataType::Double), "{name}");
+    }
+    for name in ["pow", "power", "atan2", "hypot"] {
+        assert_eq!(
+            result(name, &[d.clone(), d.clone()], &[]).unwrap(),
+            d,
+            "{name}"
+        );
+    }
+    assert_eq!(result("pi", &[], &[]).unwrap(), d);
+}
+
 #[test]
 fn math_signatures() {
     let (d, i, l) = (

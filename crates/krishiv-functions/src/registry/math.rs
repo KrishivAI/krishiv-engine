@@ -14,8 +14,10 @@ use crate::signature::{ArgType, CallTypes, Constant, InputBuilder, InputType, In
 
 // ---- the `double` functions ----
 
-/// A function of one `double`: NULL for arguments outside its domain, so
-/// always nullable.
+/// A function of one `double`: always nullable. Spark 4.2's
+/// `UnaryMathExpression` declares `nullable = true` for every one of them
+/// (not only the logarithms), so `sqrt(id)` over a non-nullable column is
+/// still nullable in the result schema.
 fn unary(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Double, true))
 }
