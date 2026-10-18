@@ -120,18 +120,24 @@ impl ArrowStream {
             }
             let schema_capsule = pair.get_item(0)?;
             let array_capsule = pair.get_item(1)?;
-            let schema = capsule_pointer(&schema_capsule, SCHEMA_CAPSULE)?;
-            let array = capsule_pointer(&array_capsule, ARRAY_CAPSULE)?;
-            // SAFETY: the pointers of live capsules named `arrow_schema` and
-            // `arrow_array` (kept alive by `pair`): an initialized schema,
-            // borrowed, and an initialized array the consumer moves out of.
-            let batch = unsafe {
-                ffi::import_array(
-                    schema.cast::<FFI_ArrowSchema>(),
-                    array.cast::<FFI_ArrowArray>(),
-                )
-            }
-            .map_err(|e| value_error(&e))?;
+            // As for streams: the array is moved out in a critical section
+            // on its capsule, so threads sharing one cached capsule take it
+            // once.
+            let batch = with_critical_section(&array_capsule, || {
+                let schema = capsule_pointer(&schema_capsule, SCHEMA_CAPSULE)?;
+                let array = capsule_pointer(&array_capsule, ARRAY_CAPSULE)?;
+                // SAFETY: the pointers of live capsules named `arrow_schema`
+                // and `arrow_array` (kept alive by `pair`): an initialized
+                // schema, borrowed, and an initialized array the consumer
+                // moves out of.
+                unsafe {
+                    ffi::import_array(
+                        schema.cast::<FFI_ArrowSchema>(),
+                        array.cast::<FFI_ArrowArray>(),
+                    )
+                }
+                .map_err(|e| value_error(&e))
+            })?;
             return Ok(Self::new(Box::new(MemoryReader::new(
                 batch.schema(),
                 vec![batch],

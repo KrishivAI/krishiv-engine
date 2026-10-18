@@ -5,11 +5,10 @@
 //! module, so coverage tools see `src/stream/ffi.rs` by its own path.
 //! Runs under Miri on pull requests and AddressSanitizer nightly (P2-T098a).
 
-#![allow(
+#![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     clippy::panic,
-    reason = "test code: a failed unwrap is a failed test"
+    reason = "test code: a failed unwrap or a panicking test producer is a failed test"
 )]
 
 #[path = "ffi.rs"]

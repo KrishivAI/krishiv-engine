@@ -247,3 +247,28 @@ def test_one_cached_capsule_is_imported_once_across_threads() -> None:
     for t in threads:
         t.join()
     assert sorted(results) == ["consumed"] * 7 + ["ok"]
+
+
+def test_one_cached_array_capsule_is_imported_once_across_threads() -> None:
+    # As above, for a producer whose __arrow_c_array__ returns one cached pair.
+    import threading
+
+    batch = table().to_batches()[0]
+    producer = FakeArray(batch.__arrow_c_array__())
+    results: list[str] = []
+    barrier = threading.Barrier(8)
+
+    def take() -> None:
+        barrier.wait()
+        try:
+            stream = ArrowStream.from_arrow(producer)
+            results.append("ok" if pa.table(stream).to_batches()[0].equals(batch) else "wrong data")
+        except ValueError as e:
+            results.append("consumed" if "already consumed" in str(e) else str(e))
+
+    threads = [threading.Thread(target=take) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == ["consumed"] * 7 + ["ok"]
