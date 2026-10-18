@@ -465,14 +465,15 @@ fn create_private_dir(path: &Path, recursive: bool) -> io::Result<()> {
 /// The default directory: per user (one user cannot occupy or read
 /// another's) and disk-backed, because spilling to a RAM file system
 /// (`tmpfs`, as `/run/user/<uid>` and often `/tmp` are) uses the very memory
-/// spilling must free, out of the pool's sight. The first candidate not on a
-/// RAM file system wins, in this order: the user's cache directory
+/// spilling must free, out of the pool's sight; network and FUSE file
+/// systems are refused by `open`. The first candidate on neither wins, in
+/// this order: the user's cache directory
 /// (`$XDG_CACHE_HOME`, else `~/.cache`) `/krishiv/spill`, then
 /// `/var/tmp/krishiv-spill-<uid>` (disk-backed by convention), then
 /// `krishiv-spill-<uid>` under the temporary directory. An explicitly
 /// configured directory is used as given.
 fn default_dir() -> PathBuf {
-    choose_default(&default_candidates(), |p| ram_fs(p).is_some())
+    choose_default(&default_candidates(), |p| unsuitable_fs(p).is_some())
 }
 
 /// The default-directory candidates, in order of preference.
@@ -514,14 +515,20 @@ pub(crate) fn choose_default(candidates: &[PathBuf], on_ram: impl Fn(&Path) -> b
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// The RAM file system type (`tmpfs`, `ramfs`) holding `path` or its nearest
-/// existing ancestor. Linux only; elsewhere `None`.
-fn ram_fs(path: &Path) -> Option<String> {
+/// The file system type holding `path` (or its nearest existing ancestor)
+/// when it is unsuitable for spilling by default: a RAM file system (`tmpfs`,
+/// `ramfs`), or a network or FUSE file system, which `SpillManager::open`
+/// refuses. Linux only; elsewhere `None`.
+fn unsuitable_fs(path: &Path) -> Option<String> {
     #[cfg(target_os = "linux")]
     {
         let existing = path.ancestors().find(|p| p.exists())?;
         let mounts = fs::read_to_string("/proc/self/mounts").ok()?;
-        let ty = mount_type_in(&mounts, &fs::canonicalize(existing).ok()?)?;
+        let at = fs::canonicalize(existing).ok()?;
+        if let Some(network) = network_fs_in(&mounts, &at) {
+            return Some(network);
+        }
+        let ty = mount_type_in(&mounts, &at)?;
         matches!(ty.as_str(), "tmpfs" | "ramfs").then_some(ty)
     }
     #[cfg(not(target_os = "linux"))]

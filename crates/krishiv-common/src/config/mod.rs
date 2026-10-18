@@ -370,25 +370,13 @@ impl ConfigEntry {
     }
 }
 
-/// Finds the entry for a `krishiv.*` key or a Spark alias, in constant time
-/// whatever the registry size (an index built once on first use).
+/// Finds the entry for a `krishiv.*` key or a Spark alias: a binary search
+/// of the sorted [`registry::INDEX`], with no initialisation or allocation.
 pub fn lookup(key: &str) -> Option<&'static ConfigEntry> {
-    static INDEX: std::sync::OnceLock<
-        std::collections::HashMap<&'static str, &'static ConfigEntry>,
-    > = std::sync::OnceLock::new();
-    INDEX
-        .get_or_init(|| {
-            let mut index = std::collections::HashMap::with_capacity(REGISTRY.len() * 2);
-            for &e in REGISTRY {
-                index.insert(e.key, e);
-                if let Some(alias) = e.spark_alias {
-                    index.insert(alias, e);
-                }
-            }
-            index
-        })
-        .get(key)
-        .copied()
+    registry::INDEX
+        .binary_search_by(|(name, _)| (*name).cmp(key))
+        .ok()
+        .map(|i| registry::INDEX[i].1)
 }
 
 /// A non-fatal problem found while setting config.

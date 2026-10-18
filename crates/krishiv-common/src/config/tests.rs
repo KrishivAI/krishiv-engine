@@ -370,3 +370,19 @@ fn unknown_spark_key_logs_exactly_one_warning_per_key() {
     assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert_eq!(c.get_unregistered("spark.unknown.a"), Some("2"));
 }
+
+#[test]
+fn the_lookup_index_is_sorted_and_complete() {
+    use super::registry::{INDEX, REGISTRY};
+    assert!(
+        INDEX.windows(2).all(|w| w[0].0 < w[1].0),
+        "INDEX must be strictly sorted by name"
+    );
+    let mut want: Vec<(&str, &str)> = REGISTRY
+        .iter()
+        .flat_map(|e| std::iter::once((e.key, e.key)).chain(e.spark_alias.map(|a| (a, e.key))))
+        .collect();
+    want.sort_unstable();
+    let got: Vec<(&str, &str)> = INDEX.iter().map(|(n, e)| (*n, e.key)).collect();
+    assert_eq!(got, want, "INDEX must hold exactly every key and alias");
+}

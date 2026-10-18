@@ -28,6 +28,52 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
 ];
 
+/// Every key and Spark alias with its entry, sorted by name for binary
+/// search: lookup is O(log n) with no initialisation or allocation. A test
+/// checks it is sorted and holds exactly the keys and aliases of
+/// [`REGISTRY`]; add new entries here in order.
+pub static INDEX: &[(&str, &ConfigEntry)] = &[
+    ("krishiv.exec.targetPartitionBytes", &TARGET_PARTITION_BYTES),
+    ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
+    (
+        "krishiv.experimental.unalignedCheckpoints",
+        &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    ),
+    (
+        "krishiv.memory.abortReleaseTimeout",
+        &MEMORY_ABORT_RELEASE_TIMEOUT,
+    ),
+    ("krishiv.memory.limit", &MEMORY_LIMIT),
+    (
+        "krishiv.memory.reservationQuantum",
+        &MEMORY_RESERVATION_QUANTUM,
+    ),
+    (
+        "krishiv.memory.spillWaitTimeout",
+        &MEMORY_SPILL_WAIT_TIMEOUT,
+    ),
+    ("krishiv.network.timeout", &NETWORK_TIMEOUT),
+    ("krishiv.spill.compression", &SPILL_COMPRESSION),
+    ("krishiv.spill.dir", &SPILL_DIR),
+    ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
+    ("krishiv.spill.zstd.level", &SPILL_ZSTD_LEVEL),
+    ("krishiv.sql.ansi.enabled", &ANSI_ENABLED),
+    ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
+    (
+        "krishiv.sql.shuffle.partitionsHint",
+        &SHUFFLE_PARTITIONS_HINT,
+    ),
+    (
+        "krishiv.sql.storeAssignmentPolicy",
+        &STORE_ASSIGNMENT_POLICY,
+    ),
+    ("spark.network.timeout", &NETWORK_TIMEOUT),
+    ("spark.sql.ansi.enabled", &ANSI_ENABLED),
+    ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
+    ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
+    ("spark.sql.storeAssignmentPolicy", &STORE_ASSIGNMENT_POLICY),
+];
+
 /// ANSI SQL mode (Spark 4 default: on).
 pub static ANSI_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.ansi.enabled",
