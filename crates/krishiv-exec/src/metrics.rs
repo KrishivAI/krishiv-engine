@@ -18,11 +18,13 @@ pub struct OperatorMetrics {
     pub rows_out: u64,
     /// Batches produced.
     pub batches_out: u64,
-    /// Time in `execute` / `sink`; for a source, in `get_data` including
-    /// I/O waits.
+    /// Time in `execute` / `sink` / `finalize`; for a source, in
+    /// `get_data` while it was not waiting.
     pub compute_time: Duration,
+    /// Time a source's `get_data` was pending (I/O).
+    pub blocked_on_io: Duration,
     /// Peak bytes reserved through the operator's memory consumer, summed
-    /// over its drivers.
+    /// over its drivers (an upper bound of the true peak).
     pub peak_reserved: u64,
     /// Spills serviced.
     pub spills: u64,
@@ -41,6 +43,7 @@ impl OperatorMetrics {
         self.rows_out += o.rows_out;
         self.batches_out += o.batches_out;
         self.compute_time += o.compute_time;
+        self.blocked_on_io += o.blocked_on_io;
         self.peak_reserved += o.peak_reserved;
         self.spills += o.spills;
         self.spilled_bytes += o.spilled_bytes;

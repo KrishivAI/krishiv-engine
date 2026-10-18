@@ -25,33 +25,12 @@ use krishiv_exec::testing::{Break, Buffer, Count, Filter, Limit, Pipe, RangeSour
 use krishiv_exec::{
     DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, Executor, ExecutorConfig, LocalState, Operator,
     OperatorOutput, PipelineBuilder, QueryContext, QueryId, QueryRunner, Result, Scheduler,
-    TaskContext, TokioExecutor, WorkloadClass,
+    TaskContext, TokioClock, TokioExecutor, WorkloadClass,
 };
-use krishiv_memory::{
-    BoxFuture, Clock, MemoryConfig, MemoryError, MemoryPool, Spillable, TreePool,
-};
+use krishiv_memory::{BoxFuture, MemoryConfig, MemoryError, MemoryPool, Spillable, TreePool};
 use krishiv_types::batch::Batch;
 
 const MIB: usize = 1 << 20;
-
-/// Arbitration deadlines on Tokio's (pausable) clock.
-#[derive(Debug)]
-struct TokioClock;
-
-impl Clock for TokioClock {
-    fn now(&self) -> std::time::Instant {
-        tokio::time::Instant::now().into_std()
-    }
-
-    fn sleep_until(
-        &self,
-        deadline: std::time::Instant,
-    ) -> Result<BoxFuture<'static, ()>, MemoryError> {
-        Ok(Box::pin(tokio::time::sleep_until(
-            tokio::time::Instant::from_std(deadline),
-        )))
-    }
-}
 
 fn root(limit: usize) -> Arc<TreePool> {
     TreePool::with_clock(
@@ -65,7 +44,14 @@ fn root(limit: usize) -> Arc<TreePool> {
     )
 }
 
-fn query(root: &TreePool, id: u64, config: ExecConfig) -> Arc<QueryContext> {
+/// Every test runs with the stall detector failing the query, with a
+/// threshold generous enough for unoptimised and instrumented builds; a
+/// test that sets its own threshold keeps it.
+fn query(root: &TreePool, id: u64, mut config: ExecConfig) -> Arc<QueryContext> {
+    if !config.fail_on_stall {
+        config.fail_on_stall = true;
+        config.stall_threshold = Duration::from_millis(500);
+    }
     QueryContext::new(
         QueryId(id),
         WorkloadClass::Interactive,
@@ -502,16 +488,6 @@ async fn two_queries_one_limit_spill_while_allocating() {
     assert!(taker.spilled_at().is_empty());
     let stats = root.stats();
     assert!(stats.spill_requests >= 1 && stats.aborts == 0, "{stats:?}");
-    let m = q2.metrics();
-    let sink = m
-        .operators
-        .values()
-        .find(|e| e.name.ends_with("Buffer"))
-        .unwrap();
-    assert!(
-        sink.metrics.blocked_on_memory > Duration::ZERO,
-        "q2 waited for memory"
-    );
     assert_released(&root);
 }
 
@@ -652,6 +628,34 @@ async fn planning_and_setup_errors() {
             .unwrap();
         assert_eq!(e.error_class(), ErrorClass::InternalError);
     }
+    // A breaker source that names no child pipeline.
+    struct BadBreaker;
+    impl ExecNode for BadBreaker {
+        fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+            let count = Count::new();
+            b.set_breaker_source(count, krishiv_exec::OperatorId(0))
+                .map(drop)
+        }
+    }
+    let e = runner
+        .submit(Arc::new(BadBreaker), query(&root, 1, ExecConfig::default()))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    // A query id that is already running is refused.
+    let running = query(&root, 5, ExecConfig::default());
+    let (_, scan5) = scan(u64::MAX >> 8);
+    let stream = runner.submit(scan5, Arc::clone(&running)).await.unwrap();
+    let (_, again) = scan(1);
+    let e = runner
+        .submit(again, query(&root, 5, ExecConfig::default()))
+        .await
+        .err()
+        .unwrap();
+    assert!(e.to_string().contains("already running"), "{e}");
+    drop(stream);
+    running.finished().await;
     // A breaker read before it was built (its source used alone).
     let buffer = Buffer::new(true, None);
     let q = query(&root, 2, ExecConfig::default());
@@ -884,7 +888,9 @@ async fn need_memory_self_spills_and_retries() {
         .values()
         .find(|e| e.name.ends_with("Greedy"))
         .unwrap();
-    assert!(greedy.metrics.spills > 0 && greedy.metrics.blocked_on_memory > Duration::ZERO);
+    // Deterministic mode times on the paused clock: a wait that needs no
+    // timer costs no time, so check the spills, not the wait time.
+    assert!(greedy.metrics.spills > 0);
     assert!(
         greedy.metrics.peak_reserved <= MIB as u64,
         "never double-reserved"
@@ -936,6 +942,10 @@ impl krishiv_exec::Sink for First {
 impl krishiv_exec::Source for First {
     fn schema(&self) -> SchemaRef {
         schema()
+    }
+
+    fn max_parallelism(&self, _g: &krishiv_exec::GlobalState) -> usize {
+        1
     }
 
     fn global_state(&self, _ctx: &TaskContext) -> Result<krishiv_exec::GlobalState> {
@@ -1005,4 +1015,94 @@ fn shutting_down_the_executor_ends_running_queries() {
         q.finished().await;
     });
     assert_released(&root);
+}
+
+/// A breaker's `finalize` runs while another query needs memory: the
+/// arbitrator's request reaches the finalizing driver, which spills the
+/// global state through `Sink::spill_global`.
+#[tokio::test(start_paused = true)]
+async fn finalize_spills_global_state_under_memory_pressure() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(4 * MIB);
+    let q1 = query(&root, 1, ExecConfig::default());
+    let (_, scan) = scan(80 * DEFAULT_BATCH_SIZE as u64); // ~2.5 MiB
+    let buffer = Buffer::with_finalize_yields(true, None, 10_000);
+    let plan = Arc::new(Break(scan, Arc::clone(&buffer), false));
+    let mut stream = runner.submit(plan, Arc::clone(&q1)).await.unwrap();
+    while !buffer.finalizing.load(Ordering::Acquire) {
+        tokio::task::yield_now().await;
+    }
+    assert!(buffer.spilled_at().is_empty());
+    let q2 = root.child("q2", None);
+    let id = q2.register("want", None);
+    q2.reserve(id, 3 * MIB).await.unwrap();
+    assert_eq!(buffer.spilled_at(), [80], "spilled during finalize");
+    assert_eq!(root.stats().aborts, 0);
+    let mut n = 0;
+    while let Some(b) = stream.next().await {
+        n += b.unwrap().num_rows();
+    }
+    assert_eq!(n, 80 * DEFAULT_BATCH_SIZE);
+    q1.finished().await;
+    q2.unregister(id);
+    assert_released(&root);
+}
+
+/// Two child pipelines feed the root: a build side that finalizes and a
+/// sibling that fails. The executor owns the finalized build state and drops
+/// it at query end, so the pool is empty while the caller still holds the
+/// plan.
+#[tokio::test(start_paused = true)]
+async fn breaker_state_is_released_when_a_sibling_fails() {
+    struct Join(
+        Arc<dyn ExecNode>,
+        Arc<dyn ExecNode>,
+        Arc<Buffer>,
+        Arc<Count>,
+    );
+    impl ExecNode for Join {
+        fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+            let build = b.child_pipeline(
+                Arc::clone(&self.2) as Arc<dyn krishiv_exec::Sink>,
+                Arc::clone(&self.0),
+            )?;
+            b.child_pipeline(
+                Arc::clone(&self.3) as Arc<dyn krishiv_exec::Sink>,
+                Arc::clone(&self.1),
+            )?;
+            b.set_breaker_source(Arc::clone(&self.2) as Arc<dyn krishiv_exec::Source>, build)
+                .map(drop)
+        }
+    }
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(1 << 30);
+    let q = query(&root, 1, ExecConfig::default());
+    let (_, build_scan) = scan(2 * DEFAULT_BATCH_SIZE as u64);
+    let (_, probe_scan) = scan(64 * DEFAULT_BATCH_SIZE as u64);
+    let fail = hook(|i| {
+        if i == 32 {
+            return Err(DivideByZero {
+                config: String::new(),
+            }
+            .into());
+        }
+        Ok(())
+    });
+    let buffer = Buffer::new(true, None);
+    let plan = Arc::new(Join(
+        build_scan,
+        pipe(probe_scan, fail),
+        Arc::clone(&buffer),
+        Count::new(),
+    ));
+    let held: Arc<dyn ExecNode> = Arc::clone(&plan) as Arc<dyn ExecNode>;
+    let e = run(&runner, plan, &q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert_eq!(
+        buffer.sunk.load(Ordering::Relaxed),
+        2,
+        "the build side finished"
+    );
+    assert_released(&root);
+    drop(held);
 }

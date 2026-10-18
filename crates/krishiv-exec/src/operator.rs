@@ -14,8 +14,17 @@
 //!
 //! **Spill.** Operators that hold memory publish spillable bytes on their
 //! [`MemoryHandle::signal`](crate::MemoryHandle::signal). The driver calls
-//! `spill` on its own task at a batch boundary when the arbitrator asks;
-//! only the owning driver ever touches operator state (ADR 0007).
+//! `spill` on its own task when the arbitrator asks; only the owning driver
+//! ever touches operator state (ADR 0007). `spill` runs between calls, not
+//! only between inputs: at the boundary every 8 `HaveMoreOutput` calls for
+//! one input, and while the driver waits for its source or a blocked sink.
+//! State kept across `HaveMoreOutput` calls (a probe iterator) must survive
+//! a spill. During `finalize` requests go to [`Sink::spill_global`].
+//!
+//! **Memory in global state.** Reserve in local state (through
+//! `ctx.consumer()`), not in `global_state`: a consumer registered there is
+//! never asked to spill. State moved into the global state by `combine`
+//! stays accounted and is spillable during `finalize` via `spill_global`.
 
 use std::any::Any;
 use std::fmt;
@@ -42,17 +51,17 @@ pub trait Source: Send + Sync {
     }
     /// Output schema.
     fn schema(&self) -> SchemaRef;
-    /// Shared state, made once per pipeline run.
+    /// Shared state, made once per pipeline run. A breaker's source side
+    /// takes its sink side's finalized state from
+    /// [`TaskContext::dependency`].
     ///
     /// # Errors
     /// Any error fails the query.
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState>;
     /// How many drivers can usefully run at once (for example the morsel
-    /// count). The pipeline runs `min(worker slots, this)` drivers.
-    fn max_parallelism(&self, global: &GlobalState) -> usize {
-        let _ = global;
-        1
-    }
+    /// count). The pipeline runs `min(worker slots, this)` drivers. No
+    /// default, so a scan cannot run serially by omission.
+    fn max_parallelism(&self, global: &GlobalState) -> usize;
     /// One driver's state.
     ///
     /// # Errors
@@ -208,6 +217,23 @@ pub trait Sink: Send + Sync {
         ctx: &'a TaskContext,
     ) -> BoxFuture<'a, Result<usize>> {
         let _ = (local, target, ctx);
+        Box::pin(async { Ok(0) })
+    }
+    /// Frees at least `target` bytes of the **global** state if it can,
+    /// while `finalize` runs (the last driver's consumer was asked to spill
+    /// after its local state was combined). Runs on the finalizing driver
+    /// between the polls of `finalize`, so `finalize` must leave the global
+    /// state consistent at every await. Default: not spillable.
+    ///
+    /// # Errors
+    /// Any error fails the query.
+    fn spill_global<'a>(
+        &'a self,
+        global: &'a GlobalState,
+        target: usize,
+        ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<usize>> {
+        let _ = (global, target, ctx);
         Box::pin(async { Ok(0) })
     }
 }

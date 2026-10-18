@@ -21,12 +21,13 @@ use krishiv_memory::SpillOwner;
 use krishiv_types::batch::Batch;
 
 use crate::channel::{Channel, ResultSink, ResultStream};
-use crate::context::{QueryContext, QueryId, TaskContext};
+use crate::context::{OperatorId, QueryContext, QueryId, TaskContext};
 use crate::driver::{PipelineRun, spawn_driver};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::OperatorEntry;
 use crate::morsel::Countdown;
+use crate::operator::GlobalState;
 use crate::pipeline::{ExecNode, Pipeline, PipelineBuilder};
 use crate::sync::{Mutex, lock};
 
@@ -90,7 +91,13 @@ impl QueryRunner {
         });
         {
             let mut running = lock(&self.running);
-            running.retain(|_, q| q.strong_count() > 0);
+            running.retain(|_, q| q.upgrade().is_some_and(|q| !q.is_finished()));
+            if running.contains_key(&query.id()) {
+                return Err(internal(format!(
+                    "query {} is already running",
+                    query.id().0
+                )));
+            }
             running.insert(query.id(), Arc::downgrade(&query));
         }
         let finish = Finish {
@@ -161,8 +168,11 @@ impl Drop for Finish {
     }
 }
 
-/// Runs the pipelines in dependency waves; every pipeline (and its global
-/// state) is dropped when this returns.
+/// Runs the pipelines in dependency waves. The coordinator owns every
+/// breaker's state: a finalized sink's global state is kept here and handed
+/// to the pipeline that reads it, and all of it is dropped when this
+/// returns, on success, error, cancel or panic alike, so the query's pool is
+/// empty even if the caller still holds the plan.
 async fn run_pipelines(
     executor: &Arc<dyn Executor>,
     query: &Arc<QueryContext>,
@@ -171,6 +181,7 @@ async fn run_pipelines(
     let deps: Vec<Vec<usize>> = pipelines.iter().map(|p| p.deps.clone()).collect();
     let mut todo: Vec<Option<Pipeline>> = pipelines.into_iter().map(Some).collect();
     let mut done = vec![false; todo.len()];
+    let mut finalized: HashMap<OperatorId, GlobalState> = HashMap::new();
     while done.iter().any(|d| !d) {
         let ready: Vec<usize> = (0..todo.len())
             .filter(|&i| !done[i] && deps[i].iter().all(|&d| done[d]))
@@ -179,12 +190,16 @@ async fn run_pipelines(
             // Unreachable: dependencies form a tree.
             return Err(internal("pipeline dependencies form a cycle".to_owned()));
         }
-        let mut handles = FuturesUnordered::new();
+        let mut handles = Drivers(FuturesUnordered::new());
+        let mut runs = Vec::new();
         for i in ready {
             done[i] = true;
             if let Some(p) = todo[i].take() {
-                match start_pipeline(executor, query, p) {
-                    Ok(hs) => handles.extend(hs),
+                match start_pipeline(executor, query, p, &finalized) {
+                    Ok((run, hs)) => {
+                        handles.0.extend(hs);
+                        runs.push(run);
+                    }
                     Err(e) => {
                         query.fail(e);
                         break;
@@ -192,8 +207,11 @@ async fn run_pipelines(
                 }
             }
         }
-        await_drivers(query, handles).await;
+        await_drivers(query, &mut handles).await;
         query.check_cancelled()?;
+        for run in runs {
+            finalized.insert(run.pipeline.sink.0, Arc::clone(&run.sink_global));
+        }
     }
     Ok(())
 }
@@ -202,7 +220,10 @@ fn start_pipeline(
     executor: &Arc<dyn Executor>,
     query: &Arc<QueryContext>,
     pipeline: Pipeline,
-) -> Result<Vec<TaskHandle>> {
+    finalized: &HashMap<OperatorId, GlobalState>,
+) -> Result<(Arc<PipelineRun>, Vec<TaskHandle>)> {
+    // Global-state contexts get an owner nobody services: memory reserved
+    // in `global_state` is never asked to spill (see `Sink::global_state`).
     let ctx = |(id, name)| {
         TaskContext::new(
             Arc::clone(query),
@@ -214,7 +235,14 @@ fn start_pipeline(
     };
     let (source_id, source) = &pipeline.source;
     let (sink_id, sink) = &pipeline.sink;
-    let source_global = source.global_state(&ctx((*source_id, source.name())))?;
+    let mut source_ctx = ctx((*source_id, source.name()));
+    if let Some(input) = pipeline.input {
+        let state = finalized.get(&input).cloned();
+        let state =
+            state.ok_or_else(|| internal("a breaker read before it finalized".to_owned()))?;
+        source_ctx = source_ctx.with_dependency(state);
+    }
+    let source_global = source.global_state(&source_ctx)?;
     let sink_global = sink.global_state(&ctx((*sink_id, sink.name())))?;
     let drivers = if pipeline.preserve_order {
         1
@@ -232,27 +260,40 @@ fn start_pipeline(
         query: Arc::clone(query),
         executor: Arc::clone(executor),
     });
-    Ok((0..drivers)
+    let handles = (0..drivers)
         .map(|_| spawn_driver(Arc::clone(&run)))
-        .collect())
+        .collect();
+    Ok((run, handles))
+}
+
+/// A wave's drivers, aborted if the coordinator is dropped mid-wave (so
+/// they are never detached).
+struct Drivers(FuturesUnordered<TaskHandle>);
+
+impl Drop for Drivers {
+    fn drop(&mut self) {
+        for h in &self.0 {
+            h.abort();
+        }
+    }
 }
 
 /// Awaits every driver. A panic fails the query (`INTERNAL_ERROR`); once
 /// the query is cancelled or failed, the remaining drivers are aborted and
 /// still awaited, so they have released everything when this returns.
-async fn await_drivers(query: &QueryContext, mut handles: FuturesUnordered<TaskHandle>) {
+async fn await_drivers(query: &QueryContext, handles: &mut Drivers) {
     let mut aborted = false;
     loop {
         tokio::select! {
             biased;
-            next = handles.next() => match next {
+            next = handles.0.next() => match next {
                 None => return,
                 Some(Err(e)) => query.fail(e),
                 Some(Ok(())) => {}
             },
             () = query.cancelled(), if !aborted => {
                 aborted = true;
-                for h in &handles {
+                for h in &handles.0 {
                     h.abort();
                 }
             }

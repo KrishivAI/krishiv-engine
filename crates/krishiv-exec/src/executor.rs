@@ -10,8 +10,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use futures::future::BoxFuture;
+use krishiv_memory::{Clock, MemoryError};
 use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
 use tokio::sync::{Semaphore, oneshot};
 use tokio::task::{JoinError, JoinHandle};
@@ -55,6 +57,32 @@ pub trait Executor: Send + Sync + fmt::Debug {
     fn io_handle(&self) -> &Handle;
     /// Worker slots: the most drivers one pipeline runs at once.
     fn parallelism(&self) -> usize;
+    /// The time source of the stall detector and the metrics (the paused
+    /// Tokio clock in deterministic mode).
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
+/// Tokio's clock as an arbitration [`Clock`] for the memory pool. A
+/// deterministic run needs it (with the paused clock), so spill-wait and
+/// abort deadlines replay too.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TokioClock;
+
+impl Clock for TokioClock {
+    fn now(&self) -> Instant {
+        tokio::time::Instant::now().into_std()
+    }
+
+    fn sleep_until(
+        &self,
+        deadline: Instant,
+    ) -> std::result::Result<BoxFuture<'static, ()>, MemoryError> {
+        Ok(Box::pin(tokio::time::sleep_until(
+            tokio::time::Instant::from_std(deadline),
+        )))
+    }
 }
 
 /// Runs `f` through [`Executor::spawn_blocking`] and returns its result
@@ -161,6 +189,9 @@ pub struct TokioExecutor {
     io: Handle,
     parallelism: usize,
     blocking: Arc<Semaphore>,
+    /// Deterministic mode: blocking closures run as tasks on the caller's
+    /// runtime and time is Tokio's clock.
+    deterministic: bool,
     _owned: Option<Runtimes>,
 }
 
@@ -203,6 +234,7 @@ impl TokioExecutor {
             io: io.handle().clone(),
             parallelism: compute_threads,
             blocking: Arc::new(Semaphore::new(blocking_threads)),
+            deterministic: false,
             _owned: Some(Runtimes {
                 compute: Some(compute),
                 io: Some(io),
@@ -210,11 +242,14 @@ impl TokioExecutor {
         }))
     }
 
-    /// Deterministic test mode (spec 13 §4, ADR 0029): every task runs on
-    /// the caller's current-thread runtime, so with Tokio's paused clock and
-    /// a seeded [`ExecConfig`](crate::ExecConfig) a run's interleavings,
-    /// morsel order and spill/cancel timing replay exactly. `slots` drivers
-    /// per pipeline interleave at their yields.
+    /// Deterministic test mode (spec 13 §4, ADR 0029): every task, blocking
+    /// closures included, runs on the caller's current-thread runtime, and
+    /// the stall detector and metrics read Tokio's clock. With the paused
+    /// clock, a seeded [`ExecConfig`](crate::ExecConfig) and a memory pool
+    /// built with [`TokioClock`], a run's interleavings, morsel order and
+    /// spill/cancel timing replay exactly (a paused clock never advances
+    /// inside a poll, so no slice counts as a stall). `slots` drivers per
+    /// pipeline interleave at their yields.
     ///
     /// # Errors
     /// `INTERNAL_ERROR` outside a current-thread Tokio runtime.
@@ -230,6 +265,7 @@ impl TokioExecutor {
             io: handle,
             parallelism: slots.max(1),
             blocking: Arc::new(Semaphore::new(1)),
+            deterministic: true,
             _owned: None,
         }))
     }
@@ -246,6 +282,10 @@ impl Executor for TokioExecutor {
     ) -> BoxFuture<'static, Result<()>> {
         let permits = Arc::clone(&self.blocking);
         let compute = self.compute.clone();
+        if self.deterministic {
+            // On the controlled runtime, scheduled like any task.
+            return Box::pin(TaskHandle::new(compute.spawn(async move { f() })));
+        }
         Box::pin(async move {
             // The semaphore is never closed, so `acquire` cannot fail.
             let permit = permits
@@ -266,5 +306,12 @@ impl Executor for TokioExecutor {
 
     fn parallelism(&self) -> usize {
         self.parallelism
+    }
+
+    fn now(&self) -> Instant {
+        if self.deterministic {
+            return tokio::time::Instant::now().into_std();
+        }
+        Instant::now()
     }
 }

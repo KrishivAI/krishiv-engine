@@ -8,14 +8,17 @@
 //!   `child.build_pipelines(b)?; b.push_operator(op)`;
 //! - a pipeline breaker (aggregate, sort) is the sink of a new child pipeline
 //!   and the source of the current one:
-//!   `b.child_pipeline(agg.clone(), child)?; b.set_source(agg)`;
+//!   `let id = b.child_pipeline(agg.clone(), child)?; b.set_breaker_source(agg, id)`;
 //! - a hash join builds its build side as a child pipeline ending in the
 //!   join's build sink, then its probe side into the current pipeline, then
 //!   pushes the probe operator.
 //!
 //! A pipeline starts once every child pipeline it depends on has
-//! finalized. Plan nodes are per-query instances: a breaker hands its
-//! finalized state from its sink side to its source side through itself.
+//! finalized. The executor owns breaker state: it keeps each finalized
+//! sink's global state, hands it to the reading source and drops it when the
+//! query ends. Plan nodes are still per-query instances (an operator may keep
+//! per-query counters in itself, like a streaming `LIMIT`), so a plan runs
+//! once.
 
 use std::sync::Arc;
 
@@ -41,10 +44,13 @@ pub(crate) struct Pipeline {
     pub(crate) deps: Vec<usize>,
     /// Run one driver (the pipeline must keep its input order).
     pub(crate) preserve_order: bool,
+    /// The breaker sink whose finalized global state the source reads.
+    pub(crate) input: Option<OperatorId>,
 }
 
 struct Draft {
     source: Option<(OperatorId, Arc<dyn Source>)>,
+    input: Option<OperatorId>,
     operators: Vec<(OperatorId, Arc<dyn Operator>)>,
     sink: (OperatorId, Arc<dyn Sink>),
     deps: Vec<usize>,
@@ -83,6 +89,7 @@ impl PipelineBuilder {
         let id = b.id(result.name());
         b.drafts.push(Draft {
             source: None,
+            input: None,
             operators: Vec::new(),
             sink: (id, result),
             deps: Vec::new(),
@@ -115,6 +122,32 @@ impl PipelineBuilder {
         Ok(id)
     }
 
+    /// Sets the current pipeline's source to the source side of a breaker
+    /// whose sink side `sink` (the id [`child_pipeline`](Self::child_pipeline)
+    /// returned) ends one of its child pipelines. The executor hands the
+    /// sink's finalized global state to `source` through
+    /// [`TaskContext::dependency`](crate::TaskContext::dependency) and drops
+    /// it when the query ends. A breaker has two ids (sink side, source
+    /// side): `EXPLAIN ANALYZE` maps both to its plan node.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if the pipeline already has a source or `sink` does
+    /// not end a child pipeline of it.
+    pub fn set_breaker_source(
+        &mut self,
+        source: Arc<dyn Source>,
+        sink: OperatorId,
+    ) -> Result<OperatorId> {
+        let deps = &self.drafts[self.current].deps;
+        let child = deps.iter().any(|&d| self.drafts[d].sink.0 == sink);
+        if !child {
+            return Err(internal(format!("{sink:?} does not end a child pipeline")));
+        }
+        let id = self.set_source(source)?;
+        self.draft().input = Some(sink);
+        Ok(id)
+    }
+
     /// Appends a streaming operator to the current pipeline (after its
     /// source and the operators pushed before it).
     pub fn push_operator(&mut self, op: Arc<dyn Operator>) -> OperatorId {
@@ -143,6 +176,7 @@ impl PipelineBuilder {
         let index = self.drafts.len();
         self.drafts.push(Draft {
             source: None,
+            input: None,
             operators: Vec::new(),
             sink: (id, sink),
             deps: Vec::new(),
@@ -171,6 +205,7 @@ impl PipelineBuilder {
                     sink: d.sink,
                     deps: d.deps,
                     preserve_order: d.preserve_order,
+                    input: d.input,
                 })
             })
             .collect::<Result<_>>()?;

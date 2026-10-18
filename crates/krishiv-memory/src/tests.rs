@@ -860,3 +860,20 @@ async fn grow_draws_credit_and_refunds_it_when_cancelled() {
     assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
     assert_eq!(h.credit(), Q);
 }
+
+#[tokio::test(start_paused = true)]
+async fn reserve_for_parks_the_grant_as_credit() {
+    let root = root(Some(4 * Q), 1);
+    let q = root.child_pool("q", None);
+    let owner = SpillOwner::new();
+    let h = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "op",
+        Some(owner.signal() as Arc<dyn Spillable>),
+    );
+    owner.reserve_for(&h, Q, || async {}).await.unwrap();
+    assert_eq!((h.credit(), root.reserved()), (Q, Q));
+    let e = owner.reserve_for(&h, 8 * Q, || async {}).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert_eq!(h.credit(), Q, "a refused request parks nothing");
+}

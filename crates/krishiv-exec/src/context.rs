@@ -16,6 +16,7 @@ use crate::cancel::CancellationToken;
 use crate::error::{Result, cancelled};
 use crate::executor::{Executor, WorkloadClass, run_blocking};
 use crate::metrics::QueryMetrics;
+use crate::operator::GlobalState;
 use crate::sync::{AtomicBool, AtomicUsize, Event, Mutex, Ordering, lock};
 
 /// Rows per batch (`krishiv.exec.batchSize`; ADR 0034, spec 03, E01;
@@ -222,6 +223,12 @@ impl QueryContext {
         }
     }
 
+    /// Counts a blocking closure until the returned guard drops.
+    pub(crate) fn blocking_started(self: &Arc<Self>) -> InFlight {
+        self.blocking.fetch_add(1, Ordering::AcqRel);
+        InFlight(Arc::clone(self))
+    }
+
     pub(crate) fn mark_finished(&self) {
         self.finished.store(true, Ordering::Release);
         self.finished_event.notify();
@@ -254,6 +261,7 @@ pub struct TaskContext {
     op: OperatorId,
     name: &'static str,
     memory: OnceLock<MemoryHandle>,
+    dependency: Option<GlobalState>,
 }
 
 impl fmt::Debug for TaskContext {
@@ -281,7 +289,20 @@ impl TaskContext {
             op,
             name,
             memory: OnceLock::new(),
+            dependency: None,
         }
+    }
+
+    pub(crate) fn with_dependency(mut self, state: GlobalState) -> Self {
+        self.dependency = Some(state);
+        self
+    }
+
+    /// For a breaker's source side (in `Source::global_state`): the
+    /// finalized global state of its sink side (see
+    /// [`PipelineBuilder::set_breaker_source`](crate::PipelineBuilder::set_breaker_source)).
+    pub fn dependency(&self) -> Option<&GlobalState> {
+        self.dependency.as_ref()
     }
 
     /// The query.
@@ -306,8 +327,7 @@ impl TaskContext {
         T: Send + 'static,
         F: FnOnce() -> Result<T> + Send + 'static,
     {
-        self.query.blocking.fetch_add(1, Ordering::AcqRel);
-        let guard = InFlight(Arc::clone(&self.query));
+        let guard = self.query.blocking_started();
         run_blocking(&*self.executor, move || {
             let _guard = guard;
             f()
@@ -343,7 +363,7 @@ impl TaskContext {
 
 /// One blocking closure in flight (dropped with the closure, or with the
 /// waiting future if the closure never started).
-struct InFlight(Arc<QueryContext>);
+pub(crate) struct InFlight(Arc<QueryContext>);
 
 impl Drop for InFlight {
     fn drop(&mut self) {

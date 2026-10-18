@@ -5,7 +5,7 @@
 //! stands in for sort / join build, and plan nodes to wire them.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
 use arrow_array::cast::AsArray;
@@ -167,6 +167,10 @@ impl Source for Repeat {
         schema()
     }
 
+    fn max_parallelism(&self, _global: &GlobalState) -> usize {
+        1
+    }
+
     fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
         Ok(Arc::new(()))
     }
@@ -278,14 +282,18 @@ impl Operator for Limit {
 }
 
 /// A `COUNT(*), SUM(v)` breaker: its sink side keeps per-driver partials
-/// and combines them once per driver; its source side emits one batch
-/// `[count, sum]` (wrapping sum).
+/// and combines them once per driver into its global state; its source side
+/// emits one batch `[count, sum]` (wrapping sum).
 #[derive(Debug, Default)]
 pub struct Count {
-    rows: AtomicU64,
-    sum: AtomicI64,
     /// `finalize` calls (exactly one per run).
     pub finalized: AtomicU64,
+}
+
+#[derive(Debug, Default)]
+struct Totals {
+    rows: AtomicU64,
+    sum: AtomicI64,
 }
 
 impl Count {
@@ -295,9 +303,17 @@ impl Count {
     }
 }
 
+/// A breaker's source-side global state: its sink's finalized state.
+fn finalized<T: Send + Sync + 'static>(ctx: &TaskContext, what: &str) -> Result<GlobalState> {
+    let state = ctx.dependency().cloned();
+    let state = state.ok_or_else(|| internal(format!("{what} read before it was built")))?;
+    downcast_global::<T>(&state, what)?;
+    Ok(state)
+}
+
 impl Sink for Count {
     fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
-        Ok(Arc::new(()))
+        Ok(Arc::new(Totals::default()))
     }
 
     fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
@@ -319,10 +335,11 @@ impl Sink for Count {
         Ok(SinkStatus::NeedMoreInput)
     }
 
-    fn combine(&self, mut local: LocalState, _global: &GlobalState) -> Result<()> {
+    fn combine(&self, mut local: LocalState, global: &GlobalState) -> Result<()> {
         let (rows, sum) = *downcast::<(u64, i64)>(&mut local, "Count")?;
-        self.rows.fetch_add(rows, Ordering::Relaxed);
-        self.sum.fetch_add(sum, Ordering::Relaxed);
+        let totals = downcast_global::<Totals>(global, "Count")?;
+        totals.rows.fetch_add(rows, Ordering::Relaxed);
+        totals.sum.fetch_add(sum, Ordering::Relaxed);
         Ok(())
     }
 
@@ -341,8 +358,12 @@ impl Source for Count {
         schema()
     }
 
-    fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
-        Ok(Arc::new(()))
+    fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
+        finalized::<Totals>(ctx, "Count")
+    }
+
+    fn max_parallelism(&self, _global: &GlobalState) -> usize {
+        1
     }
 
     fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
@@ -352,14 +373,15 @@ impl Source for Count {
     fn get_data<'a>(
         &'a self,
         local: &'a mut LocalState,
-        _global: &'a GlobalState,
+        global: &'a GlobalState,
     ) -> BoxFuture<'a, Result<Option<Batch>>> {
         let out = downcast::<bool>(local, "Count").and_then(|done| {
             if std::mem::replace(done, true) {
                 return Ok(None);
             }
-            let rows = i64::try_from(self.rows.load(Ordering::Relaxed)).unwrap_or(i64::MAX);
-            let values = Int64Array::from(vec![rows, self.sum.load(Ordering::Relaxed)]);
+            let totals = downcast_global::<Totals>(global, "Count")?;
+            let rows = i64::try_from(totals.rows.load(Ordering::Relaxed)).unwrap_or(i64::MAX);
+            let values = Int64Array::from(vec![rows, totals.sum.load(Ordering::Relaxed)]);
             let data = RecordBatch::try_new(schema(), vec![Arc::new(values)])
                 .map_err(|e| internal(e.to_string()))?;
             Ok(Some(Batch::new(data)))
@@ -376,13 +398,15 @@ impl Source for Count {
 pub struct Buffer {
     spillable: bool,
     finalize_work: Option<Duration>,
+    finalize_yields: u32,
     /// Batches sunk so far.
     pub sunk: AtomicU64,
+    /// Set once `finalize` has started.
+    pub finalizing: AtomicBool,
     /// `sunk` at each spill.
     spilled_at: Mutex<Vec<u64>>,
     /// Every driver's spill signal.
     signals: Mutex<Vec<Arc<SpillSignal>>>,
-    state: Mutex<Option<Arc<Buffered>>>,
 }
 
 #[derive(Debug, Default)]
@@ -402,13 +426,25 @@ impl Buffer {
     /// `finalize_work` is blocking work its `finalize` runs on the blocking
     /// pool.
     pub fn new(spillable: bool, finalize_work: Option<Duration>) -> Arc<Self> {
+        Self::with_finalize_yields(spillable, finalize_work, 0)
+    }
+
+    /// As [`new`](Self::new), with a `finalize` that also yields
+    /// `finalize_yields` times while its state stays spillable (a chunked
+    /// merge).
+    pub fn with_finalize_yields(
+        spillable: bool,
+        finalize_work: Option<Duration>,
+        finalize_yields: u32,
+    ) -> Arc<Self> {
         Arc::new(Self {
             spillable,
             finalize_work,
+            finalize_yields,
             sunk: AtomicU64::new(0),
+            finalizing: AtomicBool::new(false),
             spilled_at: Mutex::new(Vec::new()),
             signals: Mutex::new(Vec::new()),
-            state: Mutex::new(None),
         })
     }
 
@@ -425,9 +461,7 @@ impl Buffer {
 
 impl Sink for Buffer {
     fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
-        let state = Arc::new(Buffered::default());
-        *lock(&self.state) = Some(Arc::clone(&state));
-        Ok(state)
+        Ok(Arc::new(Buffered::default()))
     }
 
     fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
@@ -469,9 +503,13 @@ impl Sink for Buffer {
             reservation,
             signal,
         } = *l;
-        signal.set_spillable_bytes(0);
         lock(&g.batches).extend(batches);
-        lock(&g.reservations).push(reservation);
+        let mut reservations = lock(&g.reservations);
+        reservations.push(reservation);
+        // The last driver's signal stays live while it finalizes: offer the
+        // whole global state through `spill_global`.
+        let total = reservations.iter().map(Reservation::size).sum();
+        signal.set_spillable_bytes(if self.spillable { total } else { 0 });
         Ok(())
     }
 
@@ -481,6 +519,10 @@ impl Sink for Buffer {
         ctx: &'a TaskContext,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            self.finalizing.store(true, Ordering::Release);
+            for _ in 0..self.finalize_yields {
+                tokio::task::yield_now().await;
+            }
             if let Some(d) = self.finalize_work {
                 ctx.run_blocking(move || {
                     std::thread::sleep(d);
@@ -507,6 +549,26 @@ impl Sink for Buffer {
             Ok(freed)
         })
     }
+
+    fn spill_global<'a>(
+        &'a self,
+        global: &'a GlobalState,
+        _target: usize,
+        ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<usize>> {
+        Box::pin(async move {
+            let g = downcast_global::<Buffered>(global, "Buffer")?;
+            let mut freed = 0;
+            for r in lock(&g.reservations).iter_mut() {
+                freed += r.size();
+                let size = r.size();
+                r.shrink(size);
+            }
+            ctx.consumer().signal().set_spillable_bytes(0);
+            lock(&self.spilled_at).push(self.sunk.load(Ordering::Relaxed));
+            Ok(freed)
+        })
+    }
 }
 
 impl Source for Buffer {
@@ -514,10 +576,12 @@ impl Source for Buffer {
         schema()
     }
 
-    fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
-        let state = lock(&self.state).take();
-        let state = state.ok_or_else(|| internal("Buffer read before it was built".to_owned()))?;
-        Ok(state)
+    fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
+        finalized::<Buffered>(ctx, "Buffer")
+    }
+
+    fn max_parallelism(&self, _global: &GlobalState) -> usize {
+        1
     }
 
     fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
@@ -566,8 +630,8 @@ pub struct Break<B>(pub Arc<dyn ExecNode>, pub Arc<B>, pub bool);
 
 impl<B: Breaker + 'static> ExecNode for Break<B> {
     fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
-        b.child_pipeline(Arc::clone(&self.1) as Arc<dyn Sink>, Arc::clone(&self.0))?;
-        b.set_source(Arc::clone(&self.1) as Arc<dyn Source>)?;
+        let sink = b.child_pipeline(Arc::clone(&self.1) as Arc<dyn Sink>, Arc::clone(&self.0))?;
+        b.set_breaker_source(Arc::clone(&self.1) as Arc<dyn Source>, sink)?;
         if self.2 {
             b.preserve_order();
         }

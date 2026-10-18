@@ -14,7 +14,7 @@ use std::future::{Future, poll_fn};
 use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
@@ -54,16 +54,18 @@ enum Wake<T> {
 /// costs nothing; while it is pending the driver still answers its query's
 /// cancellation, a memory abort of the query (failing it with the abort
 /// error) and, given `spill`, spill requests for its own consumers.
+/// Returns the output and how long `f` was pending.
 async fn pause<F: Future>(
     run: &PipelineRun,
     spill: Option<(&SpillOwner, &tokio::sync::Mutex<Slots>)>,
     f: F,
-) -> Result<F::Output> {
+) -> Result<(F::Output, Duration)> {
     let mut f = pin!(f);
     let first = poll_fn(|cx| Poll::Ready(f.as_mut().poll(cx))).await;
     if let Poll::Ready(out) = first {
-        return Ok(out);
+        return Ok((out, Duration::ZERO));
     }
+    let pending_since = run.executor.now();
     let query = &run.query;
     let mut cancel = pin!(query.cancelled());
     let mut abort = query.pool().aborted();
@@ -93,7 +95,7 @@ async fn pause<F: Future>(
         })
         .await;
         match wake {
-            Wake::Done(out) => return Ok(out),
+            Wake::Done(out) => return Ok((out, since(&*run.executor, pending_since))),
             Wake::Cancelled => return Err(cancelled()),
             Wake::Aborted(e) => {
                 let e = KrishivError::from(e);
@@ -103,6 +105,11 @@ async fn pause<F: Future>(
             Wake::Spill => {}
         }
     }
+}
+
+/// Time on `executor`'s clock since `start`.
+fn since(executor: &dyn Executor, start: Instant) -> Duration {
+    executor.now().saturating_duration_since(start)
 }
 
 /// Spawns one driver of `run`.
@@ -122,6 +129,7 @@ pub(crate) fn spawn_driver(run: Arc<PipelineRun>) -> TaskHandle {
             ..DriverStats::default()
         },
         query: Arc::clone(&query),
+        executor: Arc::clone(&executor),
     };
     executor.spawn(query.class(), Box::pin(timed))
 }
@@ -136,15 +144,16 @@ struct Timed {
     inner: BoxFuture<'static, ()>,
     stats: DriverStats,
     query: Arc<QueryContext>,
+    executor: Arc<dyn Executor>,
 }
 
 impl Future for Timed {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let start = Instant::now();
+        let start = self.executor.now();
         let out = self.inner.as_mut().poll(cx);
-        let slice = start.elapsed();
+        let slice = since(&*self.executor, start);
         let this = &mut *self;
         this.stats.max_slice = this.stats.max_slice.max(slice);
         let config = this.query.config();
@@ -271,10 +280,11 @@ impl Driver {
     /// Adds the wait in progress, if any, to its slot's metrics.
     fn end_wait(&mut self) {
         if let Some((k, what, start)) = self.waiting.take() {
+            let waited = since(&*self.run.executor, start);
             let m = self.metrics(k);
             match what {
-                Blocked::Sink => m.blocked_on_sink += start.elapsed(),
-                Blocked::Memory => m.blocked_on_memory += start.elapsed(),
+                Blocked::Sink => m.blocked_on_sink += waited,
+                Blocked::Memory => m.blocked_on_memory += waited,
             }
         }
     }
@@ -284,14 +294,17 @@ impl Driver {
         let source = &run.pipeline.source.1;
         loop {
             self.boundary().await?;
-            let start = Instant::now();
-            let next = pause(
+            let start = run.executor.now();
+            let (next, waited) = pause(
                 &run,
                 Some((&self.owner, &self.slots)),
                 source.get_data(&mut self.source_local, &run.source_global),
             )
-            .await??;
-            self.metrics(0).compute_time += start.elapsed();
+            .await?;
+            let m = self.metrics(0);
+            m.blocked_on_io += waited;
+            m.compute_time += since(&*run.executor, start).saturating_sub(waited);
+            let next = next?;
             let Some(batch) = next else { break };
             self.metrics(0).output(batch.num_rows());
             self.batches += 1;
@@ -307,11 +320,13 @@ impl Driver {
         sink.combine(local, &run.sink_global)?;
         if run.countdown.arrive() {
             self.boundary().await?;
-            let start = Instant::now();
+            let start = run.executor.now();
             let ctx = Arc::clone(&self.slots.get_mut().slot(k)?.ctx);
             let finalize = sink.finalize(&run.sink_global, &ctx);
-            pause(&run, Some((&self.owner, &self.slots)), finalize).await??;
-            self.metrics(k).compute_time += start.elapsed();
+            pause(&run, Some((&self.owner, &self.slots)), finalize)
+                .await?
+                .0?;
+            self.metrics(k).compute_time += since(&*run.executor, start);
         }
         Ok(())
     }
@@ -328,7 +343,7 @@ impl Driver {
         run.query.check_cancelled()?;
         if self.owner.pending() {
             let serviced = service(&run, self.slots.get_mut());
-            pause(&run, None, serviced).await??;
+            pause(&run, None, serviced).await?.0?;
         }
         Ok(())
     }
@@ -368,9 +383,9 @@ impl Driver {
                 let slots = self.slots.get_mut();
                 let local = slots.slots[i].local.as_mut();
                 let local = local.ok_or_else(|| internal("operator state missing".to_owned()))?;
-                let start = Instant::now();
+                let start = run.executor.now();
                 let out = ops[i].1.execute(&top.1, local);
-                slots.metrics[i + 1].compute_time += start.elapsed();
+                slots.metrics[i + 1].compute_time += since(&*run.executor, start);
                 out?
             };
             if let OperatorOutput::NeedMemory { bytes } = out {
@@ -424,10 +439,10 @@ impl Driver {
                 let slots = self.slots.get_mut();
                 let local = slots.slot(k)?.local.as_mut();
                 let local = local.ok_or_else(|| internal("sink state missing".to_owned()))?;
-                let start = Instant::now();
+                let start = run.executor.now();
                 // A cheap clone (shared buffers): `NeedMemory` retries the same batch.
                 let status = sink.sink(batch.clone(), local, &run.sink_global);
-                slots.metrics[k].compute_time += start.elapsed();
+                slots.metrics[k].compute_time += since(&*run.executor, start);
                 status?
             };
             if let SinkStatus::NeedMemory { bytes } = status {
@@ -439,7 +454,7 @@ impl Driver {
             return Ok(match status {
                 SinkStatus::Finished => true,
                 SinkStatus::Blocked(space) => {
-                    self.waiting = Some((k, Blocked::Sink, Instant::now()));
+                    self.waiting = Some((k, Blocked::Sink, run.executor.now()));
                     let waited = pause(&run, Some((&self.owner, &self.slots)), space).await;
                     self.end_wait();
                     waited?;
@@ -456,24 +471,24 @@ impl Driver {
     async fn reserve(&mut self, k: usize, bytes: usize) -> Result<()> {
         let run = Arc::clone(&self.run);
         let consumer = Arc::clone(self.slots.get_mut().slot(k)?.ctx.consumer().consumer());
-        self.waiting = Some((k, Blocked::Memory, Instant::now()));
+        self.waiting = Some((k, Blocked::Memory, run.executor.now()));
         let slots = &self.slots;
         let run_ref = &*run;
-        let reserved =
-            self.owner
-                .reserve(&**consumer.pool(), consumer.id(), bytes, || async move {
-                    let mut guard = slots.lock().await;
-                    if let Err(e) = service(run_ref, &mut guard).await {
-                        run_ref.query.fail(e);
-                    }
-                });
+        // Parks the grant as credit in the same step it is granted.
+        let reserved = self.owner.reserve_for(&consumer, bytes, || async move {
+            let mut guard = slots.lock().await;
+            if let Err(e) = service(run_ref, &mut guard).await {
+                run_ref.query.fail(e);
+            }
+        });
         let reserved = pause(run_ref, None, reserved).await;
         self.end_wait();
-        let reserved = reserved?;
+        let granted = reserved?.0;
+        if granted.is_ok() {
+            self.credit = Some(k);
+        }
         run.query.check_cancelled()?;
-        reserved.map_err(KrishivError::from)?;
-        consumer.add_credit(bytes);
-        self.credit = Some(k);
+        granted.map_err(KrishivError::from)?;
         Ok(())
     }
 }
@@ -493,8 +508,12 @@ async fn service(run: &PipelineRun, slots: &mut Slots) -> Result<()> {
         let freed = match (slot.local.as_mut(), run.pipeline.operators.get(k - 1)) {
             (Some(local), Some((_, op))) => op.spill(local, target, &slot.ctx).await?,
             (Some(local), None) => run.pipeline.sink.1.spill(local, target, &slot.ctx).await?,
-            // The sink state already moved into the global state.
-            (None, _) => 0,
+            // Combined (finalize runs): the sink's state is global now.
+            (None, _) => {
+                let sink = &run.pipeline.sink.1;
+                sink.spill_global(&run.sink_global, target, &slot.ctx)
+                    .await?
+            }
         };
         m.signal().complete(freed);
         let metrics = &mut slots.metrics[k];

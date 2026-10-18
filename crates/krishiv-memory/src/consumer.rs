@@ -9,6 +9,11 @@
 //! `try_grow` on a reservation made from the handle takes them from the
 //! credit instead of the pool, so the retry never reserves twice. The driver
 //! returns credit the retry did not use ([`ConsumerHandle::release_credit`]).
+//!
+//! Credit is touched only by the owning driver's task (grant, retry,
+//! release), so it needs no loom model; the atomics only make the handle
+//! `Sync`. A [`Reservation::new`] on a handle's id neither draws credit nor
+//! keeps the consumer registered: use [`ConsumerHandle::reservation`].
 
 use std::fmt;
 use std::sync::Arc;
@@ -63,10 +68,10 @@ impl ConsumerHandle {
         Reservation::with_handle(Arc::clone(self))
     }
 
-    /// Driver side: `bytes` were just reserved for this consumer in the pool
-    /// (by [`crate::SpillOwner::reserve`]); park them for the next
-    /// `try_grow`.
-    pub fn add_credit(&self, bytes: usize) {
+    /// `bytes` were just reserved for this consumer in the pool; park them
+    /// for the next `try_grow`. Only [`crate::SpillOwner::reserve_for`]
+    /// (and refunds) call this, so credit is always backed by pool bytes.
+    pub(crate) fn add_credit(&self, bytes: usize) {
         self.credit.fetch_add(bytes, Ordering::AcqRel);
     }
 
@@ -86,16 +91,17 @@ impl ConsumerHandle {
     /// The most bytes reservations made from this handle held at once
     /// (for `EXPLAIN ANALYZE`).
     pub fn peak(&self) -> usize {
-        self.peak.load(Ordering::Acquire)
+        self.peak.load(Ordering::Relaxed)
     }
 
     pub(crate) fn grew(&self, bytes: usize) {
-        let held = self.held.fetch_add(bytes, Ordering::AcqRel) + bytes;
-        self.peak.fetch_max(held, Ordering::AcqRel);
+        // Statistics only: no other memory is published through these.
+        let held = self.held.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        self.peak.fetch_max(held, Ordering::Relaxed);
     }
 
     pub(crate) fn shrank(&self, bytes: usize) {
-        self.held.fetch_sub(bytes, Ordering::AcqRel);
+        self.held.fetch_sub(bytes, Ordering::Relaxed);
     }
 
     /// Takes up to `max` bytes of credit.

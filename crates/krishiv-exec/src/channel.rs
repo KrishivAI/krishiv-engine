@@ -95,6 +95,10 @@ impl Channel {
         let (out, senders) = {
             let mut s = lock(&self.state);
             if let Some(b) = s.queue.pop_front() {
+                // Wake every blocked sender, not one: a woken sender may
+                // have been cancelled (its waker is stale), and waking only
+                // it would strand the others. There are at most as many
+                // senders as worker slots.
                 (Poll::Ready(Some(Ok(b))), std::mem::take(&mut s.senders))
             } else if let Some(end) = s.end.as_mut() {
                 // An error is reported once, then the stream ends.

@@ -23,7 +23,7 @@ use std::task::{Context, Poll, Waker};
 
 use crate::event::Event;
 use crate::sync::{AtomicUsize, Mutex, Ordering, lock};
-use crate::{ConsumerId, MemoryError, MemoryPool};
+use crate::{ConsumerHandle, ConsumerId, MemoryError, MemoryPool};
 
 /// A memory consumer that can give memory back on request: hash join, hash
 /// aggregate, sort and window, and external consumers such as a UDF worker
@@ -287,6 +287,28 @@ impl SpillOwner {
     /// between is not missed.
     pub fn requested(&self) -> impl Future<Output = ()> + Send + '_ {
         self.requested.listen()
+    }
+
+    /// [`reserve`](Self::reserve) for a [`ConsumerHandle`], parking the
+    /// granted bytes as its grant credit in the same step, so a caller
+    /// cancelled after the grant never leaves bytes untracked.
+    ///
+    /// # Errors
+    /// As [`MemoryPool::reserve`].
+    pub async fn reserve_for<F, Fut>(
+        &self,
+        consumer: &ConsumerHandle,
+        bytes: usize,
+        service: F,
+    ) -> Result<(), MemoryError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        self.reserve(&**consumer.pool(), consumer.id(), bytes, service)
+            .await?;
+        consumer.add_credit(bytes);
+        Ok(())
     }
 
     /// Reserves `bytes` for consumer `id` of `pool` the cooperative way:

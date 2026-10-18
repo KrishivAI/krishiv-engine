@@ -85,7 +85,9 @@ pub use context::{
     QueryId, TaskContext,
 };
 pub use error::Result;
-pub use executor::{Executor, ExecutorConfig, TaskHandle, TokioExecutor, WorkloadClass};
+pub use executor::{
+    Executor, ExecutorConfig, TaskHandle, TokioClock, TokioExecutor, WorkloadClass,
+};
 pub use metrics::{DriverStats, OperatorEntry, OperatorMetrics, QueryMetrics};
 pub use morsel::MorselCursor;
 pub use operator::{GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source};
