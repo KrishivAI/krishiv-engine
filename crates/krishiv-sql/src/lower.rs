@@ -66,6 +66,21 @@ fn err(e: impl Into<KrishivError>, span: Span) -> ParseError {
     }
 }
 
+/// Rejects the query-organization clauses lowering does not support.
+fn reject_organization(q: &Query) -> R<()> {
+    for (present, what) in [
+        (!q.cluster_by.is_empty(), "CLUSTER BY"),
+        (!q.distribute_by.is_empty(), "DISTRIBUTE BY"),
+        (!q.windows.is_empty(), "WINDOW clauses"),
+        (q.offset.is_some(), "OFFSET"),
+    ] {
+        if present {
+            return Err(unsupported(what, q.span));
+        }
+    }
+    Ok(())
+}
+
 fn unsupported(feature: &str, span: Span) -> ParseError {
     err(
         KrishivUnsupportedFeature {
@@ -142,16 +157,7 @@ impl Lowerer {
     }
 
     fn query_inner(&mut self, q: &Query) -> R<LogicalPlan> {
-        for (present, what) in [
-            (!q.cluster_by.is_empty(), "CLUSTER BY"),
-            (!q.distribute_by.is_empty(), "DISTRIBUTE BY"),
-            (!q.windows.is_empty(), "WINDOW clauses"),
-            (q.offset.is_some(), "OFFSET"),
-        ] {
-            if present {
-                return Err(unsupported(what, q.span));
-            }
-        }
+        reject_organization(q)?;
         let mut plan = match &q.body.kind {
             SetExprKind::Select(s) => self.select(s, s.from.as_ref())?,
             SetExprKind::Query(inner) => self.query(inner)?,
@@ -165,6 +171,7 @@ impl Lowerer {
             SetExprKind::FromStatement(f) => match &f.bodies[..] {
                 [body] => match &body.body.kind {
                     SetExprKind::Select(s) => {
+                        reject_organization(body)?;
                         let inner = self.select(s, Some(&f.from))?;
                         self.organize(inner, body)?
                     }
