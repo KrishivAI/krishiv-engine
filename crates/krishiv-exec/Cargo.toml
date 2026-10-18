@@ -41,3 +41,7 @@ harness = false
 [[bench]]
 name = "operators"
 harness = false
+
+[[bench]]
+name = "aggregate"
+harness = false
