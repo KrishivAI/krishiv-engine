@@ -108,6 +108,18 @@ async fn run_with(
     error.map_or(Ok(out), Err)
 }
 
+/// One task's write of the suite store under `dir`.
+fn write_options(dir: &str, task: u32, max_records_per_file: u64) -> WriteOptions {
+    WriteOptions {
+        store: StoreId::new("memory://suite"),
+        dir: Path::from(dir),
+        task,
+        job_uuid: "u".into(),
+        max_records_per_file,
+        target_file_bytes: 0,
+    }
+}
+
 fn total_rows(batches: &[RecordBatch]) -> usize {
     batches.iter().map(RecordBatch::num_rows).sum()
 }
@@ -329,14 +341,7 @@ fn file_write_writes_and_returns_files_through_the_executor() {
             env.io.clone(),
             schema(),
             env.options(&fx, &fx.unit_rows(100)).unwrap(),
-            WriteOptions {
-                store: StoreId::new("memory://suite"),
-                dir: Path::from("out"),
-                task: 3,
-                job_uuid: "u".into(),
-                max_records_per_file: 700,
-                target_file_bytes: 0,
-            },
+            write_options("out", 3, 700),
         )
         .unwrap(),
     );
@@ -396,14 +401,7 @@ fn a_failed_write_reports_the_writer_error_and_leaves_nothing() {
             env.io.clone(),
             schema(),
             env.options(&fx, &[]).unwrap(),
-            WriteOptions {
-                store: StoreId::new("memory://suite"),
-                dir: Path::from("bad"),
-                task: 0,
-                job_uuid: "u".into(),
-                max_records_per_file: 100,
-                target_file_bytes: 0,
-            },
+            write_options("bad", 0, 100),
         )
         .unwrap(),
     );
@@ -431,14 +429,7 @@ fn a_failed_write_reports_the_writer_error_and_leaves_nothing() {
             env.io.clone(),
             schema(),
             env.options(&fx, &[]).unwrap(),
-            WriteOptions {
-                store: StoreId::new("memory://suite"),
-                dir: Path::from("w"),
-                task: 0,
-                job_uuid: "u".into(),
-                max_records_per_file: 0,
-                target_file_bytes: 0,
-            },
+            write_options("w", 0, 0),
         )
         .unwrap(),
     );
@@ -785,14 +776,7 @@ fn unsupported_pushdowns_and_writes_are_refused() {
         env.io,
         schema(),
         o,
-        WriteOptions {
-            store: StoreId::new("memory://suite"),
-            dir: Path::from("x"),
-            task: 0,
-            job_uuid: "u".into(),
-            max_records_per_file: 0,
-            target_file_bytes: 0,
-        },
+        write_options("x", 0, 0),
     )
     .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
@@ -835,14 +819,7 @@ fn a_write_failing_at_finish_leaves_nothing() {
             env.io.clone(),
             schema(),
             env.options(&fx, &[]).unwrap(),
-            WriteOptions {
-                store: StoreId::new("memory://suite"),
-                dir: Path::from("fin"),
-                task: 0,
-                job_uuid: "u".into(),
-                max_records_per_file: 0,
-                target_file_bytes: 0,
-            },
+            write_options("fin", 0, 0),
         )
         .unwrap(),
     );
@@ -883,14 +860,7 @@ fn concurrent_writers_never_share_a_file_name() {
                 env.io.clone(),
                 schema(),
                 env.options(&fx, &[]).unwrap(),
-                WriteOptions {
-                    store: StoreId::new("memory://suite"),
-                    dir: Path::from("same"),
-                    task,
-                    job_uuid: "u".into(),
-                    max_records_per_file: 40,
-                    target_file_bytes: 0,
-                },
+                write_options("same", task, 40),
             )
             .unwrap(),
         );
