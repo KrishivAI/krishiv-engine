@@ -28,6 +28,7 @@ import hashlib
 import json
 import struct
 from pathlib import Path
+from typing import Any
 
 TABLES = ["region", "nation", "supplier", "customer", "part", "partsupp", "orders", "lineitem"]
 SEP = b"\x1f"
@@ -47,7 +48,7 @@ def generate(out: Path, sf: float) -> str:
     return duckdb.__version__
 
 
-def encode(value: object, arrow_type: object) -> bytes:
+def encode(value: Any, arrow_type: Any) -> bytes:
     import pyarrow as pa
 
     if value is None:
@@ -72,7 +73,7 @@ def checksums(path: Path) -> dict[str, object]:
 
     table = pq.read_table(path)
     columns = {}
-    for name, column in zip(table.column_names, table.columns):
+    for name, column in zip(table.column_names, table.columns, strict=True):
         h = hashlib.sha256()
         for chunk in column.chunks:
             h.update(b"".join(encode(v, column.type) + SEP for v in chunk.to_pylist()))

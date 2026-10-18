@@ -124,9 +124,10 @@ impl FileFormat for TestParquet {
             let mut props = WriterProperties::builder().set_max_row_group_row_count(Some(
                 usize::try_from(o.int("rowGroupRows").unwrap_or(1 << 20)).unwrap_or(1 << 20),
             ));
-            if let Some(n) = o.int("statsTruncateLength").filter(|n| *n > 0) {
-                props = props.set_statistics_truncate_length(usize::try_from(n).ok());
-            }
+            // 0 is "never" (arrow-rs would otherwise truncate at 64 bytes).
+            let truncate = o.int("statsTruncateLength").unwrap_or(0);
+            props = props
+                .set_statistics_truncate_length(usize::try_from(truncate).ok().filter(|n| *n > 0));
             if let Some(by) = o.str("createdBy") {
                 props = props.set_created_by(by.to_owned());
             }

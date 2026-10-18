@@ -227,7 +227,7 @@ fn spark_nested_columns() {
 /// values pyarrow reads, per column. Needs the generated data (about 1 GB,
 /// outside the repo).
 #[test]
-#[ignore = "needs TPC-H SF1: run tests/scripts/tpch_parquet_checksums.py, set KRISHIV_TPCH_DIR, run with --ignored"]
+#[ignore = "needs ~1 GB of generated TPC-H SF1 data (tests/scripts/tpch_parquet_checksums.py, KRISHIV_TPCH_DIR); un-ignored by P2-T119, which provides the TPC-H datasets to the nightly benchmark box"]
 fn tpch_sf1_reads_as_pyarrow_reads_it() {
     let dir = PathBuf::from(std::env::var("KRISHIV_TPCH_DIR").unwrap());
     let expected: Value =

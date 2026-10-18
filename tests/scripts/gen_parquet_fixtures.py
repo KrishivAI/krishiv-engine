@@ -35,6 +35,7 @@ import json
 import struct
 import sys
 from pathlib import Path
+from typing import Any
 
 SEP = b"\x1f"
 NULL = b"\x00N"
@@ -42,7 +43,7 @@ EPOCH = datetime.date(1970, 1, 1)
 ROWS = 600
 
 
-def encode(value: object, t: object) -> bytes:
+def encode(value: Any, t: Any) -> bytes:
     import pyarrow as pa
 
     if value is None:
@@ -66,7 +67,7 @@ def encode(value: object, t: object) -> bytes:
     raise TypeError(f"no canonical encoding for {t}")
 
 
-def canonical(column: object) -> tuple[object, list[object]]:
+def canonical(column: Any) -> tuple[Any, list[Any]]:
     """The column's values for `encode`: timestamps as integer microseconds."""
     import pyarrow as pa
     import pyarrow.compute as pc
@@ -79,13 +80,12 @@ def canonical(column: object) -> tuple[object, list[object]]:
 
 
 def describe(path: Path) -> dict[str, object]:
-    import pyarrow.parquet as pq
-
     import pyarrow as pa
+    import pyarrow.parquet as pq
 
     table = pq.read_table(path)
     columns = {}
-    for name, column in zip(table.column_names, table.columns):
+    for name, column in zip(table.column_names, table.columns, strict=True):
         if pa.types.is_nested(column.type):
             # Nested values are checked explicitly by the Rust test.
             columns[name] = {"type": str(column.type), "sha256": None}
@@ -96,7 +96,7 @@ def describe(path: Path) -> dict[str, object]:
     return {"rows": table.num_rows, "columns": columns}
 
 
-def sample() -> object:
+def sample() -> Any:
     import pyarrow as pa
 
     def maybe(i: int, v: object) -> object:
@@ -108,16 +108,12 @@ def sample() -> object:
             "i32": pa.array([maybe(i, i - 1500) for i in rows], pa.int32()),
             "i64": pa.array([maybe(i, i * 1_000_003 - 2**40) for i in rows], pa.int64()),
             "f64": pa.array([maybe(i, i / 7.0 - 100.0) for i in rows], pa.float64()),
-            "dec": pa.array(
-                [maybe(i, decimal.Decimal(i * 37 - 9000).scaleb(-2)) for i in rows], pa.decimal128(15, 2)
-            ),
+            "dec": pa.array([maybe(i, decimal.Decimal(i * 37 - 9000).scaleb(-2)) for i in rows], pa.decimal128(15, 2)),
             "wide": pa.array(
                 [maybe(i, decimal.Decimal(i * 10**20 + 7).scaleb(-6)) for i in rows], pa.decimal128(38, 6)
             ),
             "d": pa.array([maybe(i, EPOCH + datetime.timedelta(days=i * 3 - 4000)) for i in rows], pa.date32()),
-            "ts": pa.array(
-                [maybe(i, i * 86_400_000_123 - 10**15) for i in rows], pa.timestamp("us", tz="UTC")
-            ),
+            "ts": pa.array([maybe(i, i * 86_400_000_123 - 10**15) for i in rows], pa.timestamp("us", tz="UTC")),
             "s": pa.array([maybe(i, f"v{i % 50}-ü{'x' * (i % 13)}") for i in rows], pa.string()),
             "b": pa.array([maybe(i, bytes([i % 256, 0, 255])) for i in rows], pa.binary()),
             "flag": pa.array([maybe(i, i % 3 == 0) for i in rows], pa.bool_()),
