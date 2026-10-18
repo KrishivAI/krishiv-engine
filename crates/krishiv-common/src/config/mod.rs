@@ -51,6 +51,9 @@ pub enum ValueType {
     Bool,
     /// A signed 64-bit integer.
     Int,
+    /// A signed 64-bit integer that must be at least 1 (Spark's
+    /// `checkValue(_ > 0)` settings such as partition counts).
+    PositiveInt,
     /// A byte count: a number with an optional binary unit suffix
     /// `b`, `k`/`kb`, `m`/`mb`, `g`/`gb`, `t`/`tb`, `p`/`pb` (as Spark);
     /// no suffix means bytes.
@@ -87,6 +90,12 @@ impl ValueType {
                 .parse()
                 .map(ConfigValue::Int)
                 .map_err(|_| "expected an integer".to_owned()),
+            ValueType::PositiveInt => s
+                .parse()
+                .ok()
+                .filter(|v: &i64| *v > 0)
+                .map(ConfigValue::Int)
+                .ok_or_else(|| "expected a positive integer".to_owned()),
             ValueType::Size => parse_with_unit(s, SIZE_UNITS, "b")
                 .map(ConfigValue::Size)
                 .ok_or_else(|| "expected a byte size such as `128m` or `1g`".to_owned()),
@@ -119,6 +128,7 @@ impl fmt::Display for ValueType {
         match self {
             ValueType::Bool => f.write_str("bool"),
             ValueType::Int => f.write_str("int"),
+            ValueType::PositiveInt => f.write_str("positive int"),
             ValueType::Size => f.write_str("size"),
             ValueType::Duration => f.write_str("duration"),
             ValueType::String => f.write_str("string"),
@@ -242,7 +252,7 @@ fn parse_with_unit(s: &str, units: &[(&str, u64)], default_unit: &str) -> Option
 pub enum ConfigValue {
     /// A [`ValueType::Bool`] value.
     Bool(bool),
-    /// A [`ValueType::Int`] value.
+    /// A [`ValueType::Int`] or [`ValueType::PositiveInt`] value.
     Int(i64),
     /// A [`ValueType::Size`] value, in bytes.
     Size(u64),

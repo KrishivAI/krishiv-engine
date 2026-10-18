@@ -76,6 +76,12 @@ parquet = { version = "60", default-features = false }
 # object_store is pinned to the version delta_kernel 0.30 builds against (ADR 0028
 # update 2026-10-17); never enable parquet's `object_store` feature (deny.toml).
 object_store = { version = "=0.14.2", default-features = false }
+# Implementing `object_store::ObjectStore` (an `async_trait` trait) for store
+# wrappers; already in the tree through object_store itself.
+async-trait = { version = "0.1.89", default-features = false }
+# Only for object_store's `if_unmodified_since` precondition (chrono 0.4.45 comes
+# with Arrow/object_store, ADR 0028).
+chrono = { version = "0.4.42", default-features = false }
 tokio = { version = "1.53", default-features = false }
 tonic = { version = "0.14.6", default-features = false }
 prost = { version = "0.14.4", default-features = false }
