@@ -31,6 +31,13 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   and `split_literal` (`string/split.rs`: delimiters without regex metacharacters; a regex delimiter is
   `KRISHIV_UNSUPPORTED_FEATURE` until the regex engine). Operands are columns or literals (`StrOperand`, `BinOperand`,
   `Operand<Int32Type>`); NULL rows are skipped, so these kernels have no has-nulls axis. Output offsets are checked.
+- `datetime` (P2-T025a): `date_add`/`date_sub`/`date_diff` (reuse the int kernels with `JavaWrap`: Java `int` wrap),
+  field extraction (`DatePart`: `year`, `month`, `day`, `extract`/`date_part` incl. ISO week and `SECOND` as
+  `decimal(8,6)`), `date`/`timestamp` ± interval (`date_add_months` clamps the day; `timestamp_add_day_time` adds whole
+  days as calendar days in the zone and keeps the start's offset in a DST overlap, like `ZonedDateTime.plusDays`), and
+  `current_date` from the query-start instant. Zones come in as `TimeZoneRules`, never as names. The cast module also
+  parses `string -> TIMESTAMP[_NTZ]` (`cast/timestamp.rs`: the full Spark grammar; a region id in the text and a bare
+  time of day are `KRISHIV_UNSUPPORTED_FEATURE` until the tz database / query clock reach the kernels).
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.
 
 ## Invariants
