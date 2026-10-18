@@ -25,8 +25,9 @@
 //! narrowing (`int` read as `smallint`, as Spark's Parquet reader allows;
 //! a value that does not fit is a `CAST_OVERFLOW` error, where Spark wraps
 //! silently). Anything else is `FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH`.
-//! Case-insensitive resolution matching several fields is Spark's
-//! duplicate-field error (`_LEGACY_ERROR_TEMP_2093`). A stored struct none
+//! Case-insensitive resolution matching several fields is
+//! `FAILED_READ_FILE.NO_HINT` caused by Spark's duplicate-field error
+//! (`_LEGACY_ERROR_TEMP_2093`), as Spark 4.2 reports it. A stored struct none
 //! of whose requested fields exists reads as a struct of nulls (null where
 //! the stored struct is null), as in Spark 4.2.
 
@@ -44,7 +45,9 @@ use arrow_array::{
     StringArray, StringViewArray, StructArray, new_null_array,
 };
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit};
-use krishiv_common::error::{CastOverflow, KrishivError, LegacyErrorTemp2093};
+use krishiv_common::error::{
+    CastOverflow, FailedReadFileNoHint, KrishivError, LegacyErrorTemp2093,
+};
 
 use crate::error::{FormatError, Result, internal};
 use crate::request::{
@@ -109,8 +112,8 @@ impl SchemaMapper {
     ///
     /// # Errors
     /// `FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH` for an illegal
-    /// type change of a projected column; `_LEGACY_ERROR_TEMP_2093` for an
-    /// ambiguous case-insensitive match.
+    /// type change of a projected column; `FAILED_READ_FILE.NO_HINT` caused
+    /// by `_LEGACY_ERROR_TEMP_2093` for an ambiguous case-insensitive match.
     pub fn new(req: &ScanRequest, file_schema: SchemaRef, path: &str) -> Result<Self> {
         let resolver = Arc::new(Resolver {
             table: Arc::clone(&req.table_schema),
@@ -387,11 +390,14 @@ impl Resolver {
                 if hits.len() > 1 {
                     let names: Vec<&str> =
                         hits.iter().map(|&i| children[i].name().as_str()).collect();
-                    return Err(LegacyErrorTemp2093 {
+                    let duplicate = LegacyErrorTemp2093 {
                         required_field_name: table_field.name().clone(),
                         matched_orc_fields: format!("[{}]", names.join(", ")),
-                    }
-                    .into());
+                    };
+                    return Err(KrishivError::from(FailedReadFileNoHint {
+                        path: self.path.clone(),
+                    })
+                    .with_cause(duplicate.into()));
                 }
                 hits.first().copied()
             }

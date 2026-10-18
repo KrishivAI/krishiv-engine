@@ -40,18 +40,28 @@ mod template;
 
 include!(concat!(env!("OUT_DIR"), "/error_classes.rs"));
 
+use std::sync::Arc;
+
 /// An error with a Spark error class, SQLSTATE and message parameters.
 ///
 /// `Display` matches Spark 4's `getMessage` without query context:
 /// `[ERROR_CLASS] message SQLSTATE: xxxxx` (no suffix for the Spark classes
 /// that have no SQLSTATE). Like Spark, every `_LEGACY_ERROR_*` class omits
 /// the `[ERROR_CLASS]` prefix.
+///
+/// An error may have a classified cause, as a Spark exception has a Java
+/// cause: Spark wraps a reader failure as `FAILED_READ_FILE.NO_HINT` caused
+/// by the specific condition. [`Self::cause`] and
+/// [`std::error::Error::source`] expose it; like Spark's `getMessage`,
+/// `Display` leaves it out.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{}{message}{}", class_prefix(*class), sql_state_suffix(*class))]
 pub struct KrishivError {
     class: ErrorClass,
     parameters: Vec<(&'static str, String)>,
     message: String,
+    #[source]
+    cause: Option<Arc<KrishivError>>,
 }
 
 fn class_prefix(class: ErrorClass) -> String {
@@ -77,7 +87,25 @@ impl KrishivError {
             class,
             parameters,
             message,
+            cause: None,
         }
+    }
+
+    /// The same error caused by `cause` (replacing any earlier cause).
+    #[must_use]
+    pub fn with_cause(mut self, cause: KrishivError) -> Self {
+        self.cause = Some(Arc::new(cause));
+        self
+    }
+
+    /// The direct cause, if any; [`Self::causes`] walks the whole chain.
+    pub fn cause(&self) -> Option<&KrishivError> {
+        self.cause.as_deref()
+    }
+
+    /// The causes, nearest first (not including `self`).
+    pub fn causes(&self) -> impl Iterator<Item = &KrishivError> {
+        std::iter::successors(self.cause(), |e| e.cause())
     }
 
     /// The error class.
@@ -102,7 +130,8 @@ impl KrishivError {
 
     /// The same error with every message parameter replaced by
     /// [`crate::secret::REDACTED`], for an error raised at a secret (a
-    /// syntax error at a password in query text).
+    /// syntax error at a password in query text). Its causes are redacted
+    /// the same way.
     #[must_use]
     pub fn redacted(&self) -> Self {
         let parameters = self
@@ -110,7 +139,9 @@ impl KrishivError {
             .iter()
             .map(|(k, _)| (*k, crate::secret::REDACTED.to_owned()))
             .collect();
-        Self::from_parts(self.class, parameters)
+        let mut out = Self::from_parts(self.class, parameters);
+        out.cause = self.cause.as_ref().map(|c| Arc::new(c.redacted()));
+        out
     }
 }
 

@@ -1064,10 +1064,13 @@ pub fn schema_evolution(fx: &dyn FormatFixture) -> SuiteResult {
         .scan(fx, &dfile, &req, None, ScanOptions::default())
         .err()
         .ok_or("ambiguous match did not fail")?;
+    // Spark 4.2: FAILED_READ_FILE.NO_HINT caused by _LEGACY_ERROR_TEMP_2093.
     ensure!(
-        e.error_class() == ErrorClass::LegacyErrorTemp2093,
-        "ambiguity class {}",
-        class(&e)
+        e.error_class() == ErrorClass::FailedReadFileNoHint
+            && e.cause().map(KrishivError::error_class) == Some(ErrorClass::LegacyErrorTemp2093),
+        "ambiguity class {} (cause {:?})",
+        class(&e),
+        e.cause().map(KrishivError::error_class)
     );
     Ok(())
 }
