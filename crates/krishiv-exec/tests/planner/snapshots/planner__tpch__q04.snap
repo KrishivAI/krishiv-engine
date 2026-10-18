@@ -1,0 +1,15 @@
+---
+source: crates/krishiv-exec/tests/planner/tpch.rs
+expression: tpch.plan(q).to_string()
+---
+Sort [o_orderpriority#5 ASC NULLS FIRST]
++- Project [o_orderpriority#5, count(1)#4611686018427387923 AS order_count#25]
+   +- HashAggregate keys=[o_orderpriority#5], functions=[count(1)]
+      +- Project [o_orderpriority#5]
+         +- HashJoin LeftSemi, [o_orderkey#0] = [l_orderkey#9]
+            :- Project [o_orderkey#0, o_orderpriority#5]
+            :  +- Filter ((o_orderdate#4 >= DATE '1993-07-01') and (o_orderdate#4 < DATE '1993-10-01'))
+            :     +- Scan spark_catalog.default.orders [o_orderkey#0, o_orderdate#4, o_orderpriority#5], PushedFilters: [((o_orderdate#4 >= DATE '1993-07-01') and (o_orderdate#4 < DATE '1993-10-01'))]
+            +- Project [l_orderkey#9]
+               +- Filter (l_commitdate#20 < l_receiptdate#21)
+                  +- Scan spark_catalog.default.lineitem [l_orderkey#9, l_commitdate#20, l_receiptdate#21], PushedFilters: [(l_commitdate#20 < l_receiptdate#21)]

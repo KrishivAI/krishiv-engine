@@ -584,15 +584,19 @@ impl Accumulator {
         let ansi = self.ansi;
         let bound = self.sum_bound;
         let fits = |s: &i128| bound.is_none_or(|b| s.unsigned_abs() < b);
-        // Validity bitmaps, read once per batch (no virtual call per row).
-        let nulls: Vec<Option<&arrow_buffer::NullBuffer>> =
-            args.iter().map(|a| a.nulls()).collect();
-        let first = nulls.first().copied().flatten();
+        // Validity bitmaps, read once per batch (no virtual call per row);
+        // logical, so an untyped NULL column (`count(NULL)`) counts nothing.
+        let nulls: Vec<Option<arrow_buffer::NullBuffer>> =
+            args.iter().map(arrow_array::Array::logical_nulls).collect();
+        let first = nulls.first().and_then(Option::as_ref);
         let valid = |i: usize| first.is_none_or(|n| n.is_valid(i));
         match (&mut self.kind, state) {
             (Kind::Count(c), false) => {
                 for (i, &g) in groups.iter().enumerate() {
-                    if nulls.iter().all(|n| n.is_none_or(|n| n.is_valid(i))) {
+                    if nulls
+                        .iter()
+                        .all(|n| n.as_ref().is_none_or(|n| n.is_valid(i)))
+                    {
                         let x = &mut c[g as usize];
                         *x = x.wrapping_add(weight(w, i));
                     }

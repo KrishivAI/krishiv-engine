@@ -23,9 +23,15 @@
 //! the unit of parallelism, and breakers (join builds, aggregates, sorts)
 //! merge their drivers' states at `finalize`.
 
+mod aggregate;
 mod build;
+mod eval;
 mod explain;
+mod file_table;
+mod join;
 mod nodes;
+mod pushdown;
+mod subquery;
 mod table;
 
 use std::fmt;
@@ -38,11 +44,13 @@ use krishiv_plan::Plan;
 
 pub use build::DefaultPlanner;
 pub use explain::ExplainNode;
+pub use file_table::FileTable;
 pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, TableProvider, TableProviderResolver,
 };
 
 use crate::error::Result;
+use crate::operators::{FileWrite, FileWriteSink};
 use crate::pipeline::ExecNode;
 
 /// Turns an optimized, resolved logical plan into an executable plan.
@@ -138,6 +146,32 @@ impl PhysicalPlan {
     /// Warnings planning produced (an ignored hint, as Spark logs it).
     pub fn warnings(&self) -> &[String] {
         &self.warnings
+    }
+
+    /// The plan writing this plan's rows through `sink` (`df.write`): its
+    /// result is one row per file written (`path`, `size`, `rows`). The
+    /// caller starts the write before (`DirectoryWrite::begin`, whose
+    /// write options built `sink` over [`Self::schema`]) and commits it
+    /// with [`FileWriteSink::files`] once the plan has run.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if `sink` writes another schema.
+    pub fn into_write(self, sink: Arc<FileWriteSink>) -> Result<Self> {
+        if sink.input_schema().fields() != self.schema.fields() {
+            return Err(crate::error::internal(
+                "a write sink of another schema than its plan".to_owned(),
+            ));
+        }
+        let explain = ExplainNode::new("WriteFiles", sink.describe(), vec![self.explain]);
+        Ok(Self {
+            schema: crate::operator::Source::schema(sink.as_ref()),
+            root: Arc::new(FileWrite {
+                input: self.root,
+                sink,
+            }),
+            explain,
+            warnings: self.warnings,
+        })
     }
 
     /// The same plan with `warnings` added.
