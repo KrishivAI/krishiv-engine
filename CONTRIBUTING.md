@@ -63,6 +63,7 @@ into `fuzz/regressions/<target>/` and uploads it as the `fuzz-regression-<target
 
 ```text
 gh run download <run> -n fuzz-regression-<target> -D /tmp/fz    # or reproduce locally with cargo fuzz
+mkdir -p fuzz/regressions
 cp -r /tmp/fz/regressions/<target> fuzz/regressions/            # commit these with the fix
 python3 tests/scripts/fuzz_triage.py replay <target>            # every run replays this directory first
 ```
