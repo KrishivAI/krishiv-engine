@@ -38,6 +38,7 @@ use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
 use arrow_schema::{DataType, TimeUnit};
 
 pub use datetime::{FixedOffset, TimeZoneRules};
+pub use timestamp::{TimestampText, timestamp_text};
 
 use crate::error::{KernelError, with_capacity};
 use crate::integer::SparkIntegral;

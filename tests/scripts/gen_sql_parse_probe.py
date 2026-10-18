@@ -7,7 +7,8 @@ container (`sqlparse/parse_probe.scala`, run through `spark-shell`) with the cas
 fixture records whether it parsed or the error condition, SQLSTATE, message parameters and query-context
 indexes Spark raised. The cases are the places where Spark's ANTLR grammar resolves keyword/identifier
 ambiguity by prediction (keywords as columns and aliases, trailing keywords), error positions and
-`extra input` / `missing` hints, the keyword configs, and lexer edge cases. Output is deterministic and
+`extra input` / `missing` hints, the keyword configs, and lexer edge cases; type strings go through the
+data-type, table-schema and `DataType.fromDDL` entry points (P2-T078). Output is deterministic and
 contains no local paths or hostnames.
 
 Usage (from repo root; take the bench lock, start Spark, stop it afterwards; see bench/README.md):
@@ -164,6 +165,59 @@ DEFAULT = [
     "SELECT $$x$$",
     "SELECT 1 'secret'",
     "FROM t SELECT 1 SELECT 2",
+    # hints (P2-T078)
+    "SELECT /*+ IDENTIFIER('BROADCAST')(hint_test) */ * FROM hint_test",
+    "SELECT /*+ BROADCAST(t) REPARTITION(3) */ * FROM t",
+    "SELECT /*+ BROADCAST(t),, */ * FROM t",
+    "SELECT /*+ */ * FROM t",
+    "SELECT /*+ BROADCAST( */ * FROM t",
+    "SELECT /*+ 1 */ * FROM t",
+    "SELECT /*+ a.b */ * FROM t",
+    "SELECT /*+ COALESCE(1+1) */ * FROM t",
+    "SELECT /*+ BROADCAST(t) */ /*+ MERGE(t) */ * FROM t",
+    "SELECT /*+ x('a', 1, t.c) */ * FROM t",
+    "SELECT /*+ x(-1) */ * FROM t",
+    "SELECT /*+ x(a b) */ * FROM t",
+    "SELECT /*+ x() */ * FROM t",
+    "SELECT /*+ x(a, */ * FROM t",
+    "SELECT /*+ x(a)) */ * FROM t",
+    "SELECT /*+ x y */ * FROM t",
+    "SELECT /*+ x(1) 2 */ 1",
+    "SELECT /*+ x(f(1)) */ 1",
+    "SELECT /*+ x(INTERVAL 1 DAY) */ 1",
+    "SELECT /*+ x(@a) */ 1",
+    "SELECT /*+ x(?) */ 1",
+    "SELECT /*+ select */ 1",
+    "SELECT /*+ x(a[0]) */ 1",
+    "SELECT /*+ x(CAST(1 AS INT)) */ 1",
+    "SELECT /*+ x((1)) */ 1",
+    "SELECT DISTINCT /*+ x */ 1",
+    "SELECT /*+ x */ DISTINCT 1",
+    "SELECT /*+ IDENTIFIER('x') */ 1",
+    # data types inside statements (P2-T078)
+    "SELECT CAST(x AS array<int)",
+    "SELECT CAST(x AS struct<a int,>)",
+    "SELECT CAST(x AS map<int>)",
+    "SELECT CAST(x AS array<int>>)",
+    "SELECT CAST(x AS decimal(10,2)",
+    "SELECT CAST(x AS int x)",
+    "SELECT CAST(x AS foo x)",
+    "SELECT CAST(x AS string x y)",
+    "SELECT CAST(x AS int",
+    "SELECT x::array<int",
+    "SELECT x::array<int> y z",
+    "SELECT CAST(x AS `int`)",
+    "SELECT CAST(x AS array<foo>)",
+    "SELECT CAST(x AS struct)",
+    "SELECT CAST(x AS varchar)",
+    "SELECT CAST(x AS int(1))",
+    "SELECT CAST(x AS decimal(5,6))",
+    "SELECT CAST(x AS time(10))",
+    "SELECT x::foo",
+    "SELECT CAST(CAST(x AS foo) AS bar)",
+    "SELECT CAST(x AS struct<a:foo, b:bar>)",
+    # nesting deeper than the parser's stack (P2-T076): Spark reports the whole statement
+    "SELECT 1" + " + 1" * 1000,
     # EXPLAIN (P2-T093a)
     "EXPLAIN SELECT 1",
     "explain extended SELECT a FROM t WHERE a > 0",
@@ -202,7 +256,193 @@ DEFAULT = [
     "EXPLAIN ANALYZE",
     "EXPLAIN ANALYZE TABLE t COMPUTE STATISTICS",
 ]
-CASES = (
+# Data type strings (P2-T078): `CatalystSqlParser.parseDataType` and `DataType.fromDDL`.
+TYPE_STRINGS = [
+    "a InvalidType",
+    "InvalidType",
+    "int",
+    "a int",
+    "a int, b string",
+    "struct<a:int>",
+    "STRUCT<a: INT, b: ARRAY<STRING>>",
+    "Array < Int >",
+    "array<int>/*c*/",
+    "array/**/<int>",
+    "int\n",
+    "",
+    "/* x",
+    # syntax errors: the `<` of a complex type that does not parse, hints after a type
+    "array<int",
+    "array<int>>",
+    "array<>",
+    "array<int,int>",
+    "array<array<int>",
+    "array<struct<a:int>",
+    "array<int NOT NULL>",
+    "map<int>",
+    "map<int,>",
+    "map<,int>",
+    "map<int, string x>",
+    "struct<a int,>",
+    "struct<a:int b:int>",
+    "struct<a.b:int>",
+    "struct<a:int COMMENT 1>",
+    "struct<a: int NOT NULL, b: int COMMENT 1>",
+    "struct<a: int COMMENT 'x', b: int COMMENT 1>",
+    "struct<a int NOT NULL x>",
+    "struct<a: decimal(10, 2) x>",
+    "struct<:int>",
+    "array<int> x",
+    "array<int>> x",
+    "array<int> > 1",
+    "array<int>)",
+    "struct<a:int> x",
+    "int x",
+    "int x y",
+    "int (",
+    "int )",
+    "int ,",
+    "int;",
+    "int(1) x",
+    "string x",
+    "date x",
+    "timestamp x",
+    "timestamp without",
+    "timestamp with local",
+    "timestamp with time zone x",
+    "time(6) without",
+    "time(6) with time zone",
+    "boolean (",
+    "double precision",
+    "decimal x",
+    "decimal (",
+    "decimal(10,2) x",
+    "decimal(10,2",
+    "decimal(any)",
+    "char (",
+    "char(3) x",
+    "foo x",
+    "foo (",
+    "foo )",
+    "foo(1) x",
+    "foo(any)",
+    "int(any)",
+    "`int` x",
+    "`array`<int>",
+    "geometry x",
+    "geometry(x)",
+    "interval x y",
+    "interval (",
+    "interval day x",
+    "interval day to",
+    "interval day(1)",
+    "interval second to year",
+    "interval hour to day",
+    "interval day to day",
+    "interval month to year",
+    "string collate",
+    # checks on the type built (`AstBuilder`)
+    "foo",
+    "foo(1)",
+    "`int`",
+    "`a`(1)",
+    "int(1)",
+    "int(1,2)",
+    "string(3)",
+    "timestamp_ntz(3)",
+    "binary(1)",
+    "void(1)",
+    "interval(1)",
+    "array(1)",
+    "array",
+    "map",
+    "struct",
+    "struct<>",
+    "array<array>",
+    "map<int,map>",
+    "struct<a:struct>",
+    "array<foo>",
+    "map<foo,int>",
+    "struct<a:foo>",
+    "array<char>",
+    "char",
+    "character",
+    "varchar",
+    "char(3)",
+    "char(3,4)",
+    "varchar(0)",
+    "decimal(40,0)",
+    "array<decimal(40,0)>",
+    "numeric(5,6)",
+    "decimal(0)",
+    "decimal(38,38)",
+    "time",
+    "time(0)",
+    "time(7)",
+    "geometry",
+    "geometry(any)",
+    "geography(4326)",
+    "interval",
+    "interval year",
+    "interval day to second",
+    "void",
+    "variant",
+    "timestamp_ltz",
+    "map<array<int>,int>",
+    "struct<a:void>",
+    "struct<`a b`:int>",
+    "struct<a:int NOT NULL>",
+    "struct<a:int COMMENT 'x'>",
+    "a decimal(40,0)",
+    "a char",
+    "a foo",
+    "`a b` int",
+]
+# Table schemas (P2-T078): `CatalystSqlParser.parseTableSchema` and `DataType.fromDDL`.
+TABLE_SCHEMAS = [
+    "a int",
+    "a int, b string",
+    "a InvalidType",
+    "a array<int>, b map<int,string>",
+    "a INT NOT NULL",
+    "a int NOT NULL COMMENT 'x', b string",
+    "a int COMMENT 'x'",
+    "a int, a string",
+    "`a b` int",
+    "select int",
+    "a interval day",
+    "a struct<b: int>",
+    "int",
+    "int x",
+    "struct<a:int>",
+    "a int x",
+    "a int b string",
+    "a int, b",
+    "a int,",
+    "a int, ",
+    "a int,,b int",
+    "a,b int",
+    "a:int",
+    "a.b int",
+    "`a`.b int",
+    "a-b int",
+    "\u00e9 int",
+    "a int COMMENT",
+    "a int NOT",
+    "a int NOT, b int",
+    "a int COMMENT 'x' NOT NULL",
+    "a int default 1",
+    "a foo x",
+    "a foo x, b int",
+    "a char",
+    "a foo",
+    "a foo, b bar",
+    "a struct<b:foo>",
+    "a decimal(40,0)",
+    "a int /* x",
+]
+
+PLAN_CASES = (
     [(sql, {}) for sql in DEFAULT]
     + [
         (sql, ANSI_KEYWORDS)
@@ -230,6 +470,12 @@ CASES = (
     + [(sql, DOUBLE_QUOTED) for sql in ['SELECT "a""b" FROM t', "SELECT \"a\" 'b'", 'SELECT 1 "x y" z']]
     + [(sql, LEGACY_SETOPS) for sql in ["SELECT 1 UNION SELECT 2 INTERSECT SELECT 3"]]
 )
+CASES = [(sql, conf, "plan") for sql, conf in PLAN_CASES] + [
+    (sql, {}, mode)
+    for sqls, modes in [(TYPE_STRINGS, ["datatype", "fromddl"]), (TABLE_SCHEMAS, ["tableschema", "fromddl"])]
+    for sql in sqls
+    for mode in modes
+]
 
 
 def main() -> None:
@@ -238,22 +484,26 @@ def main() -> None:
     ap.add_argument("--out", default="tests/fixtures/spark-4.2.0/sql-parse-probe.json")
     args = ap.parse_args()
 
-    data = "".join(json.dumps({"sql": sql, "conf": conf}) + "\n" for sql, conf in CASES)
+    data = "".join(json.dumps({"sql": sql, "conf": conf, "mode": mode}) + "\n" for sql, conf, mode in CASES)
     script = (Path(__file__).parent / "sqlparse" / "parse_probe.scala").read_text(encoding="utf-8")
     lines = spark_shell(args.container, script, data)
     version = next(line.split(" ", 1)[1] for line in lines if line.startswith("@@VERSION "))
     results = [json.loads(line[4:]) for line in lines if line.startswith("@@P ")]
-    if [r["sql"] for r in results] != [sql for sql, _ in CASES]:
+    if [r["sql"] for r in results] != [sql for sql, _, _ in CASES]:
         raise SystemExit("spark-shell output does not match the inputs")
-    for r, (_, conf) in zip(results, CASES, strict=True):
+    for r, (_, conf, mode) in zip(results, CASES, strict=True):
         r["conf"] = conf
+        if mode != "plan":
+            r["mode"] = mode
     doc = {
         "format_version": FORMAT_VERSION,
         "spark_version": version,
         "image": container_image(args.container),
         "generator": GENERATOR,
-        "notes": "Statements parsed by Spark's session SQL parser with each case's configs; errors carry "
-        "Spark's condition, SQLSTATE, message parameters and query-context start/stop indexes.",
+        "notes": "Statements parsed by Spark's session SQL parser with each case's configs (a `mode` case "
+        "uses the data-type, table-schema or DataType.fromDDL entry point instead); errors carry Spark's "
+        "condition, SQLSTATE, message parameters, query-context start/stop indexes, and a ParseException's "
+        "line and position.",
         "cases": results,
     }
     text = json.dumps(doc, indent=1, ensure_ascii=False) + "\n"

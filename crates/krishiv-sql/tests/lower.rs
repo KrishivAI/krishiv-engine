@@ -100,7 +100,7 @@ fn constructs_lower_or_are_named_as_unsupported() {
         "TABLE t",
         "(SELECT a FROM t) ORDER BY a",
         "FROM t SELECT a UNION SELECT b",
-        "WITH c MAX RECURSION LEVEL 3 AS (SELECT a FROM t) SELECT a FROM c",
+        "WITH RECURSIVE c MAX RECURSION LEVEL 3 AS (SELECT a FROM t) SELECT a FROM c",
         "SELECT explode(a) AS (x, y) FROM t",
         "SELECT a FROM t, u PIVOT (sum(a) FOR b IN (1))",
         "SELECT * FROM t JOIN LATERAL (SELECT a) s",

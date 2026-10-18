@@ -913,6 +913,14 @@ pub enum DataTypeKind {
     Map(Option<Box<(DataTypeSpec, DataTypeSpec)>>),
     /// `STRUCT<fields>`, `STRUCT<>`, or bare `STRUCT` (`None`).
     Struct(Option<Vec<StructField>>),
+    /// A quoted identifier as a type name (`` `int` ``), which Spark parses
+    /// and then rejects as `UNSUPPORTED_DATATYPE`.
+    Quoted {
+        /// The name, unquoted.
+        name: String,
+        /// Its arguments as written.
+        args: Vec<String>,
+    },
 }
 
 /// `name [:] type [NOT NULL] [COMMENT '...']` in a `STRUCT`.

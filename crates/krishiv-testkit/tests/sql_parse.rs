@@ -4,10 +4,9 @@
 //!
 //! * acceptance against Spark: statements Spark parsed must parse (≥ 99.9%,
 //!   every failure listed); every statement Spark rejects while parsing must
-//!   be rejected with Spark's error class; a statement Spark rejects only
-//!   when building the plan (`AstBuilder`) parses here when its class is one
-//!   the post-parse validation (P2-T079) owes, and is otherwise rejected
-//!   with Spark's class;
+//!   be rejected with Spark's error class; so is a statement Spark rejects
+//!   when building the plan (`AstBuilder`), by the post-parse checks
+//!   (P2-T079), except the classes they do not raise;
 //! * the differential `==` check: each statement re-lexed with comments
 //!   between all tokens parses to an `==` tree (equality ignores spans);
 //! * spans (`sql_spans::check_spans`): every node's span lies on token
@@ -36,39 +35,13 @@ const PARSER_CLASSES: &[&str] = &[
     "SYNTAX_DISCONTINUED.BANG_EQUALS_NOT",
 ];
 
-/// Error classes Spark raises in `AstBuilder` that the tree keeps enough
-/// facts for, with the number of corpus statements (per session run): the
-/// post-parse validation (P2-T079) raises them.
-const OWED_TO_VALIDATION: &[(&str, u64)] = &[
-    ("DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION", 2),
-    ("DUPLICATED_CTE_NAMES", 2),
-    ("INCOMPATIBLE_JOIN_TYPES", 1),
-    ("INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION", 3),
-    ("INVALID_INLINE_TABLE.NUM_COLUMNS_MISMATCH", 4),
-    ("INVALID_INTERVAL_FORMAT.INTERVAL_PARSING", 2),
-    ("INVALID_INTERVAL_FORMAT.UNMATCHED_FORMAT_STRING", 2),
-    (
-        "INVALID_INTERVAL_FORMAT.UNMATCHED_FORMAT_STRING_WITH_NOTICE",
-        24,
-    ),
-    ("INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION", 2),
-    ("INVALID_NUMERIC_LITERAL_RANGE", 10),
-    ("INVALID_PARAMETER_VALUE.DATETIME_UNIT", 42),
-    ("INVALID_SQL_SYNTAX.EMPTY_IN_PREDICATE", 2),
-    ("INVALID_SQL_SYNTAX.REPETITIVE_WINDOW_DEFINITION", 6),
-    ("INVALID_TYPED_LITERAL", 76),
-    ("UNSUPPORTED_DATATYPE", 4),
-    ("UNSUPPORTED_FEATURE.LATERAL_JOIN_USING", 1),
-    ("UNSUPPORTED_TYPED_LITERAL", 2),
-    ("_LEGACY_ERROR_TEMP_0024", 14),
-    ("_LEGACY_ERROR_TEMP_0026", 4),
-    ("_LEGACY_ERROR_TEMP_0027", 2),
-    ("_LEGACY_ERROR_TEMP_0029", 16),
-    ("_LEGACY_ERROR_TEMP_0035", 1),
-    ("_LEGACY_ERROR_TEMP_0051", 4),
-    ("_LEGACY_ERROR_TEMP_0063", 12),
-    ("_LEGACY_ERROR_TEMP_0064", 11),
-];
+/// Error classes Spark raises in `AstBuilder` that the post-parse checks
+/// (P2-T079) do not raise, with the number of corpus statements (per session
+/// run): an inline table whose expressions fail when Spark evaluates them
+/// while parsing needs expression evaluation. Every other `AstBuilder`
+/// error is raised with Spark's class.
+const OWED_TO_VALIDATION: &[(&str, u64)] =
+    &[("INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION", 3)];
 
 #[test]
 fn dql_corpus_parses_with_spans_and_differential_equality() -> R {

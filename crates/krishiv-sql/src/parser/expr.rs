@@ -8,10 +8,9 @@
 
 use super::{Fail, PR, Parser};
 use crate::ast::{
-    BinaryOp, DataTypeKind, DataTypeSpec, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits,
-    Function, FunctionArg, Ident, Interval, IntervalValue, LikeQuantifier, Literal, NullTreatment,
-    NumKind, ObjectName, Partitioning, SelectItem, Span, StructField, Truth, UnaryOp, WhenClause,
-    WindowFrame, WindowRef, WindowSpec,
+    BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, Function, FunctionArg, Ident,
+    Interval, IntervalValue, LikeQuantifier, Literal, NullTreatment, NumKind, ObjectName,
+    Partitioning, SelectItem, Span, Truth, UnaryOp, WhenClause, WindowFrame, WindowRef, WindowSpec,
 };
 use crate::keywords::{NOT_FUNCTION_WORD, PRIMARY_WORD, RESERVED_WORD};
 use crate::lexer::{Sym, TokenKind, unescape_string};
@@ -639,7 +638,11 @@ impl Parser<'_> {
                 self.bump();
                 ExprKind::Field(boxed(e), self.any_ident()?)
             } else if self.eat_sym(Sym::DoubleColon) {
+                let keyword = self.pos;
                 let (data_type, h) = self.measured(Self::data_type)?;
+                if data_type.is_complex() {
+                    self.cast_types.push(keyword);
+                }
                 height = height.max(h);
                 ExprKind::Cast {
                     expr: boxed(e),
@@ -1383,142 +1386,6 @@ impl Parser<'_> {
             kind,
             span: self.span_from(start),
         })
-    }
-
-    // ---- data types ---------------------------------------------------------
-
-    /// `dataType`.
-    pub(crate) fn data_type(&mut self) -> PR<DataTypeSpec> {
-        self.nested(|p| {
-            let start = p.start();
-            if p.kind(0) != Some(TokenKind::Word) {
-                return p.fail();
-            }
-            let word = p.text(0);
-            p.bump();
-            let is = |kw: &str| crate::keywords::is_kw(word, kw);
-            let kind = if is("ARRAY") {
-                let element = if p.eat_sym(Sym::Lt) {
-                    let t = p.data_type()?;
-                    p.expect_sym(Sym::Gt)?;
-                    Some(Box::new(t))
-                } else {
-                    None
-                };
-                DataTypeKind::Array(element)
-            } else if is("MAP") {
-                let entry = if p.eat_sym(Sym::Lt) {
-                    let k = p.data_type()?;
-                    p.expect_sym(Sym::Comma)?;
-                    let v = p.data_type()?;
-                    p.expect_sym(Sym::Gt)?;
-                    Some(Box::new((k, v)))
-                } else {
-                    None
-                };
-                DataTypeKind::Map(entry)
-            } else if is("STRUCT") {
-                DataTypeKind::Struct(if p.eat_sym(Sym::Neq) {
-                    Some(vec![])
-                } else if p.eat_sym(Sym::Lt) {
-                    let fields = if p.sym_at(0, Sym::Gt) {
-                        vec![]
-                    } else {
-                        p.comma_sep(Self::struct_field)?
-                    };
-                    p.expect_sym(Sym::Gt)?;
-                    Some(fields)
-                } else {
-                    None
-                })
-            } else {
-                p.primitive_type(word)?
-            };
-            Ok(DataTypeSpec {
-                kind,
-                span: p.span_from(start),
-            })
-        })
-    }
-
-    #[inline(never)]
-    fn struct_field(&mut self) -> PR<StructField> {
-        let start = self.start();
-        let name = self.name_part(true)?;
-        self.eat_sym(Sym::Colon);
-        let data_type = self.data_type()?;
-        let not_null = self.kw_at(0, "NOT") && self.kw_at(1, "NULL");
-        self.pos += 2 * usize::from(not_null);
-        let comment = if self.eat_kw("COMMENT") {
-            match self.string_lit() {
-                Some(s) => Some(s),
-                None => return self.fail(),
-            }
-        } else {
-            None
-        };
-        Ok(StructField {
-            name,
-            data_type,
-            not_null,
-            comment,
-            span: self.span_from(start),
-        })
-    }
-
-    /// `primitiveType` after its first word.
-    #[inline(never)]
-    fn primitive_type(&mut self, word: &str) -> PR<DataTypeKind> {
-        let is = |kw: &str| crate::keywords::is_kw(word, kw);
-        let mut name = word.to_ascii_lowercase();
-        let mut push = |p: &mut Self, words: &[&str]| -> PR<()> {
-            for w in words {
-                p.expect_kw(w)?;
-                name.push(' ');
-                name.push_str(&w.to_ascii_lowercase());
-            }
-            Ok(())
-        };
-        let mut args = vec![];
-        if is("INTERVAL") {
-            let units: &[&str] = &["YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND"];
-            if let Some(from) = units.iter().position(|u| self.kw_at(0, u)) {
-                push(self, &units[from..=from])?;
-                let to: &[&str] = if from < 2 {
-                    &["MONTH"]
-                } else {
-                    &["HOUR", "MINUTE", "SECOND"]
-                };
-                if self.kw_at(0, "TO") && to.iter().any(|u| self.kw_at(1, u)) {
-                    push(self, &["TO"])?;
-                    let unit = self.text(0).to_ascii_uppercase();
-                    push(self, &[unit.as_str()])?;
-                }
-            }
-            return Ok(DataTypeKind::Primitive { name, args });
-        }
-        if self.sym_at(0, Sym::LParen)
-            && (matches!(self.kind(1), Some(TokenKind::Number(NumKind::Int)))
-                || self.kw_at(1, "ANY"))
-        {
-            self.bump();
-            args = self.comma_sep(|p| {
-                if !matches!(p.kind(0), Some(TokenKind::Number(NumKind::Int))) && !p.kw_at(0, "ANY")
-                {
-                    return p.fail();
-                }
-                let a = p.text(0).to_owned();
-                p.bump();
-                Ok(a)
-            })?;
-            self.expect_sym(Sym::RParen)?;
-        }
-        if (is("TIMESTAMP") || is("TIME")) && self.kw_at(0, "WITHOUT") {
-            push(self, &["WITHOUT", "TIME", "ZONE"])?;
-        } else if is("TIMESTAMP") && self.kw_at(0, "WITH") && self.kw_at(1, "LOCAL") {
-            push(self, &["WITH", "LOCAL", "TIME", "ZONE"])?;
-        }
-        Ok(DataTypeKind::Primitive { name, args })
     }
 
     // ---- intervals ----------------------------------------------------------
