@@ -3,7 +3,8 @@
 //!
 //! [`parse_query`] parses a Spark 4.2 query statement (`SELECT`, `WITH`,
 //! `VALUES`, `TABLE`, `FROM ... SELECT`, set operations) into the syntax tree
-//! of [`ast`], whose nodes carry source spans. The parser is hand-written:
+//! of [`ast`], whose nodes carry source spans; [`parse_statement`] also
+//! accepts `EXPLAIN`. The parser is hand-written:
 //! a lexer ([`lexer`]) and a recursive-descent parser with precedence
 //! climbing for expressions. Errors are Spark's error classes
 //! ([`ParseError`]).
@@ -96,6 +97,28 @@ impl ParserOptions {
 /// `SYNTAX_DISCONTINUED.BANG_EQUALS_NOT`.
 pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, ParseError> {
     parser::parse_query(sql, *options).map_err(|e| e.redacted_in(sql))
+}
+
+/// Parses one statement, optionally followed by `;`: a query, or
+/// `EXPLAIN [EXTENDED | FORMATTED | CODEGEN | COST]` of a statement.
+///
+/// ```
+/// use krishiv_sql::ast::{ExplainMode, Statement};
+/// use krishiv_sql::{parse_statement, ParserOptions};
+///
+/// let sql = "EXPLAIN EXTENDED SELECT a FROM t";
+/// let Statement::Explain(e) = parse_statement(sql, &ParserOptions::default()).unwrap() else {
+///     unreachable!()
+/// };
+/// assert_eq!(e.mode, ExplainMode::Extended);
+/// assert!(matches!(*e.statement, Statement::Query(_)));
+/// ```
+///
+/// # Errors
+/// The errors of [`parse_query`], and `INVALID_STATEMENT_OR_CLAUSE` for
+/// `EXPLAIN LOGICAL`, which Spark parses and then rejects.
+pub fn parse_statement(sql: &str, options: &ParserOptions) -> Result<ast::Statement, ParseError> {
+    parser::parse_statement(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
 #[cfg(test)]

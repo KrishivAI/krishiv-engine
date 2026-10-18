@@ -27,6 +27,7 @@ use crate::ast::{
     TableAlias, TableFactor, TableFactorKind, TableOption, TemporalClause, TemporalKind, Unpivot,
     UnpivotColumns, Values, With,
 };
+use crate::ast::{Explain, ExplainMode, Statement};
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
 use crate::lexer::{Sym, Token, TokenKind, tokenize, unquote_ident};
@@ -71,6 +72,43 @@ pub(crate) struct Parser<'s> {
 
 /// Parses one query statement (`query ;* EOF`).
 pub(crate) fn parse_query(src: &str, opts: ParserOptions) -> Result<Query, ParseError> {
+    parse_with::<QueryRule>(src, opts)
+}
+
+/// Parses one statement: a query, or `EXPLAIN` of a statement.
+pub(crate) fn parse_statement(src: &str, opts: ParserOptions) -> Result<Statement, ParseError> {
+    parse_with::<StatementRule>(src, opts)
+}
+
+/// The top rule of a statement.
+trait TopRule {
+    /// What it parses.
+    type Out: Send;
+    /// Parses it.
+    fn parse(p: &mut Parser<'_>) -> PR<Self::Out>;
+}
+
+/// [`Parser::statement`].
+struct QueryRule;
+
+impl TopRule for QueryRule {
+    type Out = Query;
+    fn parse(p: &mut Parser<'_>) -> PR<Query> {
+        p.statement()
+    }
+}
+
+/// [`Parser::explainable`].
+struct StatementRule;
+
+impl TopRule for StatementRule {
+    type Out = Statement;
+    fn parse(p: &mut Parser<'_>) -> PR<Statement> {
+        p.explainable()
+    }
+}
+
+fn parse_with<R: TopRule>(src: &str, opts: ParserOptions) -> Result<R::Out, ParseError> {
     // Java's `String.trim`: Spark reports an empty statement only for these.
     if src.trim_matches(|c| c <= ' ').is_empty() {
         return Err(error::empty_statement(Span::new(0, src.len())));
@@ -83,17 +121,40 @@ pub(crate) fn parse_query(src: &str, opts: ParserOptions) -> Result<Query, Parse
         .find(|t| t.kind == TokenKind::UnclosedComment)
         .map(|t| t.span);
     toks.retain(|t| !t.kind.is_trivia() && t.kind != TokenKind::UnclosedComment);
-    let parsed = parse_tokens(src, toks, opts)?;
-    match unclosed {
-        Some(span) => Err(error::unclosed_comment(span)),
-        None => Ok(parsed),
+    let parsed = parse_tokens::<R>(src, toks, opts);
+    // Spark raises its post-parse (`AstBuilder`) errors only after the
+    // unclosed-comment check, so that error wins over them.
+    match (parsed, unclosed) {
+        (Err(e), Some(span)) if e.deferred => Err(error::unclosed_comment(span)),
+        (Err(e), _) => Err(e.error),
+        (Ok(_), Some(span)) => Err(error::unclosed_comment(span)),
+        (Ok(parsed), None) => Ok(parsed),
     }
 }
 
-/// Parses the non-trivia tokens of one query statement.
-fn parse_tokens(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<Query, ParseError> {
+/// A failed parse, and whether Spark raises it after parsing.
+struct Failed {
+    error: ParseError,
+    deferred: bool,
+}
+
+impl From<ParseError> for Failed {
+    fn from(error: ParseError) -> Self {
+        Self {
+            error,
+            deferred: false,
+        }
+    }
+}
+
+/// Parses the non-trivia tokens of one statement.
+fn parse_tokens<R: TopRule>(
+    src: &str,
+    toks: Vec<Token>,
+    opts: ParserOptions,
+) -> Result<R::Out, Failed> {
     if nesting_bound(src, &toks) <= INLINE_NESTING {
-        return run(src, toks, opts);
+        return run::<R>(src, toks, opts);
     }
     // A deeply nested statement parses on its own thread, whose stack fits
     // `MAX_DEPTH` levels whatever the caller's stack is.
@@ -107,9 +168,9 @@ fn parse_tokens(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<Quer
         std::thread::Builder::new()
             .name("krishiv-sql-parse".to_owned())
             .stack_size(stack)
-            .spawn_scoped(scope, || run(src, toks, opts))
+            .spawn_scoped(scope, || run::<R>(src, toks, opts))
             .map_or_else(
-                |_| Err(error::too_complex(at)),
+                |_| Err(error::too_complex(at).into()),
                 |h| {
                     h.join()
                         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
@@ -151,7 +212,7 @@ fn nesting_bound(src: &str, toks: &[Token]) -> usize {
     max + arrows
 }
 
-fn run(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<Query, ParseError> {
+fn run<R: TopRule>(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<R::Out, Failed> {
     let classes = toks
         .iter()
         .map(|t| {
@@ -188,13 +249,16 @@ fn run(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<Query, ParseE
         markers,
         deferred: None,
     };
-    match p.statement() {
+    match R::parse(&mut p) {
         Ok(q) => match p.deferred {
-            Some(e) => Err(e),
+            Some(error) => Err(Failed {
+                error,
+                deferred: true,
+            }),
             None => Ok(q),
         },
-        Err(Fail::Fatal(e)) => Err(*e),
-        Err(Fail::Syntax) => Err(p.syntax_error()),
+        Err(Fail::Fatal(e)) => Err((*e).into()),
+        Err(Fail::Syntax) => Err(p.syntax_error().into()),
     }
 }
 
@@ -586,6 +650,64 @@ impl<'s> Parser<'s> {
             return self.fail();
         }
         Ok(q)
+    }
+
+    /// `(EXPLAIN [mode])* query ;* EOF`. The `EXPLAIN` prefixes are read
+    /// in a loop and the tree is built from the inside out, so a long
+    /// chain neither recurses nor nests deeper than [`MAX_DEPTH`].
+    fn explainable(&mut self) -> PR<Statement> {
+        let mut explains = Vec::new();
+        while self.kw_at(0, "EXPLAIN") {
+            let start = self.start();
+            self.bump();
+            if explains.len() == MAX_DEPTH {
+                return Self::fatal(error::too_complex(Span::new(start, start)));
+            }
+            let word = if self.kind(0) == Some(TokenKind::Word) {
+                self.text(0).to_ascii_uppercase()
+            } else {
+                String::new()
+            };
+            let mode = match word.as_str() {
+                "EXTENDED" => Some(ExplainMode::Extended),
+                "FORMATTED" => Some(ExplainMode::Formatted),
+                "CODEGEN" => Some(ExplainMode::Codegen),
+                "COST" => Some(ExplainMode::Cost),
+                // Spark parses `LOGICAL`, then rejects it after parsing.
+                "LOGICAL" => Some(ExplainMode::Simple),
+                // Spark reads `EXPLAIN ANALYZE` as the start of `ANALYZE
+                // TABLE`, so its syntax error is at the next token.
+                "ANALYZE" => {
+                    self.bump();
+                    return self.fail();
+                }
+                _ => None,
+            };
+            let logical = word == "LOGICAL";
+            if mode.is_some() {
+                self.bump();
+            }
+            explains.push((start, mode.unwrap_or(ExplainMode::Simple), logical));
+        }
+        let query = self.statement()?;
+        let end = query.span.end;
+        // The outermost `EXPLAIN LOGICAL` is reported first, before any
+        // error Spark raises while building the explained query.
+        if let Some(&(start, ..)) = explains.iter().find(|e| e.2) {
+            self.deferred = Some(error::invalid_statement(
+                "EXPLAIN LOGICAL",
+                Span::new(start, end),
+            ));
+        }
+        let mut statement = Statement::Query(Box::new(query));
+        for (start, mode, _) in explains.into_iter().rev() {
+            statement = Statement::Explain(Explain {
+                mode,
+                statement: Box::new(statement),
+                span: Span::new(start, end),
+            });
+        }
+        Ok(statement)
     }
 
     /// A query; a failure at a position is remembered, so the subquery

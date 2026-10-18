@@ -570,6 +570,10 @@ const SPARK_DEVIATIONS: &[(&str, &str)] = &[
         "SELECT * FROM t end",
         "with enforced keywords ANTLR adds no `extra input` hint here (P2-T077)",
     ),
+    (
+        "EXPLAIN ANALYZE TABLE t COMPUTE STATISTICS",
+        "`ANALYZE TABLE` is not a supported statement",
+    ),
 ];
 
 /// Error classes Spark raises while parsing a statement (not in
@@ -581,6 +585,7 @@ const PARSER_CLASSES: &[&str] = &[
     "INVALID_IDENTIFIER",
     "SYNTAX_DISCONTINUED.BANG_EQUALS_NOT",
     "FAILED_TO_PARSE_TOO_COMPLEX",
+    "INVALID_STATEMENT_OR_CLAUSE",
 ];
 
 /// The probe recorded from a real Spark 4.2 run: statements Spark parses
@@ -602,7 +607,7 @@ fn agrees_with_spark_on_the_parse_probe() {
         let sql = case["sql"].as_str().unwrap();
         let conf = case["conf"].as_object().unwrap();
         let options = ParserOptions::from_conf(|k| conf.get(k).and_then(|v| v.as_str()));
-        let ours = parse_query(sql, &options);
+        let ours = parse_statement(sql, &options);
         let agrees = if case["parses"].as_bool().unwrap() {
             ours.is_ok()
         } else {
@@ -818,5 +823,94 @@ fn from_statement_shares_its_from_clause() {
         started.elapsed() < std::time::Duration::from_secs(10),
         "{:?}",
         started.elapsed()
+    );
+}
+
+#[test]
+fn explain_statements() {
+    use ast::{ExplainMode, Statement};
+    let d = ParserOptions::default();
+    let explain = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::Explain(e) => e,
+        Statement::Query(_) => panic!("{sql} is a query"),
+    };
+    for (sql, mode) in [
+        ("EXPLAIN SELECT 1", ExplainMode::Simple),
+        ("explain Extended SELECT 1", ExplainMode::Extended),
+        ("EXPLAIN FORMATTED SELECT 1", ExplainMode::Formatted),
+        ("EXPLAIN CODEGEN SELECT 1", ExplainMode::Codegen),
+        ("EXPLAIN COST SELECT 1;", ExplainMode::Cost),
+    ] {
+        let e = explain(sql);
+        assert_eq!(e.mode, mode, "{sql}");
+        assert_eq!(e.span.text(sql), sql.trim_end_matches(';'), "{sql}");
+        let Statement::Query(q) = *e.statement else {
+            panic!("{sql}")
+        };
+        assert_eq!(*q, ok("SELECT 1"), "{sql}");
+    }
+    // An EXPLAIN of an EXPLAIN: each spans from its keyword to the end.
+    let sql = "EXPLAIN EXTENDED EXPLAIN SELECT a FROM t";
+    let outer = explain(sql);
+    let Statement::Explain(inner) = *outer.statement else {
+        panic!("not nested")
+    };
+    assert_eq!(inner.mode, ExplainMode::Simple);
+    assert_eq!(inner.span.text(sql), "EXPLAIN SELECT a FROM t");
+    // A query is a statement too; EXPLAIN is still a name elsewhere.
+    assert!(matches!(
+        parse_statement("SELECT explain FROM explain", &d),
+        Ok(Statement::Query(_))
+    ));
+    // `parse_query` takes queries only.
+    assert_eq!(
+        err("EXPLAIN SELECT 1", &d).error.error_class(),
+        ErrorClass::ParseSyntaxError
+    );
+}
+
+#[test]
+fn explain_errors_follow_spark() {
+    let d = ParserOptions::default();
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    // LOGICAL parses, then the outermost one is rejected over its statement.
+    let sql = "EXPLAIN EXPLAIN LOGICAL SELECT a ! IN (1);";
+    let e = fail(sql);
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidStatementOrClause);
+    assert_eq!(
+        e.error.message_parameters(),
+        [("operation", "EXPLAIN LOGICAL".to_owned())]
+    );
+    assert_eq!(e.span.range(), 8..41);
+    // A syntax error or an unclosed comment is raised before it.
+    let e = fail("EXPLAIN LOGICAL SELECT (");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    let e = fail("EXPLAIN LOGICAL SELECT 1 /* x");
+    assert_eq!(e.error.error_class(), ErrorClass::UnclosedBracketedComment);
+    // `EXPLAIN ANALYZE` reads as `ANALYZE TABLE`: the error is after it.
+    let e = fail("EXPLAIN ANALYZE SELECT 1");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 16..22);
+    assert_eq!(fail("EXPLAIN ANALYZE").span.range(), 15..15);
+    let e = fail("EXPLAIN EXTENDED EXTENDED SELECT 1");
+    assert_eq!(e.span.range(), 17..25);
+}
+
+#[test]
+fn explain_chains_are_capped_without_recursion() {
+    let d = ParserOptions::default();
+    let deepest = format!("{}SELECT 1", "EXPLAIN ".repeat(MAX_DEPTH));
+    let mut s = parse_statement(&deepest, &d).unwrap();
+    let mut levels = 0;
+    while let ast::Statement::Explain(e) = s {
+        levels += 1;
+        s = *e.statement;
+    }
+    assert_eq!(levels, MAX_DEPTH);
+    let deeper = format!("{}SELECT 1", "EXPLAIN ".repeat(100_000));
+    let e = on_small_stack(move || parse_statement(&deeper, &ParserOptions::default()));
+    assert_eq!(
+        e.unwrap_err().error.error_class(),
+        ErrorClass::FailedToParseTooComplex
     );
 }

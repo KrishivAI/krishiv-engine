@@ -10,14 +10,16 @@
 //! | unquoted identifier with non-ASCII characters, or `a-b` as a name | `INVALID_IDENTIFIER` |
 //! | nesting deeper than [`crate::MAX_DEPTH`] | `FAILED_TO_PARSE_TOO_COMPLEX` |
 //! | `!` for `NOT` in `a ! IN (...)` and similar | `SYNTAX_DISCONTINUED.BANG_EQUALS_NOT` |
+//! | `EXPLAIN LOGICAL` | `INVALID_STATEMENT_OR_CLAUSE` |
 //!
 //! A syntax error never echoes the text of a string literal (it may be a
 //! secret): the token is described instead. An error at a secret that is
 //! not a string (an unquoted password value) has its parameters redacted.
 
 use krishiv_common::error::{
-    FailedToParseTooComplex, InvalidIdentifier, KrishivError, ParseEmptyStatement,
-    ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
+    FailedToParseTooComplex, InvalidIdentifier, InvalidStatementOrClause, KrishivError,
+    ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
+    UnclosedBracketedComment,
 };
 
 use crate::ast::Span;
@@ -103,6 +105,15 @@ pub(crate) fn bang_equals_not(span: Span) -> ParseError {
     at(
         SyntaxDiscontinuedBangEqualsNot {
             clause: "!".to_owned(),
+        },
+        span,
+    )
+}
+
+pub(crate) fn invalid_statement(operation: &str, span: Span) -> ParseError {
+    at(
+        InvalidStatementOrClause {
+            operation: operation.to_owned(),
         },
         span,
     )

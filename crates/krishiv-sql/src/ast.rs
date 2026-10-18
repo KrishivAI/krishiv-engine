@@ -92,6 +92,43 @@ pub struct ObjectName {
     pub span: Span,
 }
 
+/// A statement: what [`crate::parse_statement`] accepts.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Statement {
+    /// A query.
+    Query(Box<Query>),
+    /// `EXPLAIN [mode] statement`.
+    Explain(Explain),
+}
+
+/// `EXPLAIN [EXTENDED | FORMATTED | CODEGEN | COST] statement`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Explain {
+    /// The mode keyword.
+    pub mode: ExplainMode,
+    /// The statement explained (an `EXPLAIN` may explain an `EXPLAIN`).
+    pub statement: Box<Statement>,
+    /// Source text, from `EXPLAIN` to the end of the statement.
+    pub span: Span,
+}
+
+/// The mode of an [`Explain`], as Spark names them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ExplainMode {
+    /// No keyword: the physical plan.
+    Simple,
+    /// `EXTENDED`: the parsed, analyzed, optimized and physical plans.
+    Extended,
+    /// `FORMATTED`: the physical plan outline and node details.
+    Formatted,
+    /// `CODEGEN`: the physical plan and its generated code.
+    Codegen,
+    /// `COST`: the optimized plan with statistics.
+    Cost,
+}
+
 /// A query: `[WITH ...] body [ORDER BY ...] [LIMIT ...] [OFFSET ...]`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Query {
