@@ -153,6 +153,11 @@ fn tpch_resolves_as_spark_does() {
         }
         let a = got.unwrap();
         assert!(a.plan.root().is_resolved(), "{id}");
+        assert_eq!(
+            a.plan.root().resolved_output(),
+            Some(a.output.clone()),
+            "{id}"
+        );
         insta::assert_snapshot!(
             format!("tpch_{}", id.to_lowercase()),
             a.plan.root().to_string()
@@ -209,4 +214,46 @@ fn resolution_corpus_matches_spark() {
         failures.len(),
         failures.join("\n")
     );
+}
+
+/// SQL text inside a plan resolves through the front end, which keeps it
+/// redacted; its parse errors keep their span and never echo a secret.
+#[test]
+fn sql_text_in_plans_goes_through_the_front_end() {
+    use std::sync::Arc;
+
+    use krishiv_plan::analyzer::SqlFrontend as _;
+    use krishiv_plan::{LogicalPlan, Plan, PlanNode, SqlArgs};
+    use krishiv_sql::Frontend;
+
+    let g = goldens();
+    let mut ctx = context(catalog(&g), ResolutionConf::default());
+    ctx.sql = Some(Arc::new(Frontend::default()));
+    let sql = |q: &str| {
+        Plan::try_new(LogicalPlan::new(PlanNode::Sql {
+            query: q.to_owned(),
+            args: SqlArgs::None,
+        }))
+        .unwrap()
+    };
+    let text = "SELECT a FROM t WITH ('password' = 'Canary7f3a9c')";
+    let a = block_on(DefaultAnalyzer.analyze(&sql(text), &ctx)).unwrap();
+    assert_eq!(a.output[0].name, "a");
+    let shown = a.query_text.unwrap().to_string();
+    assert!(!shown.contains("Canary7f3a9c"), "{shown}");
+    assert_eq!(a.plan.root().resolved_output(), Some(a.output));
+    let e = block_on(DefaultAnalyzer.analyze(
+        &sql("SELECT a FROM t WITH (password = Canary7f3a9c x)"),
+        &ctx,
+    ))
+    .unwrap_err();
+    assert!(e.origin.sql.is_some());
+    assert!(!format!("{e} {e:?}").contains("Canary7f3a9c"));
+    let ansi = Frontend {
+        options: ParserOptions {
+            enforce_reserved_keywords: true,
+            ..ParserOptions::default()
+        },
+    };
+    assert_ne!(ansi.fingerprint(), Frontend::default().fingerprint());
 }

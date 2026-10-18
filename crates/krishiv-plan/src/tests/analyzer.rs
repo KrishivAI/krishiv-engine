@@ -1523,3 +1523,79 @@ fn types_follow_the_catalog() {
     let types: Vec<_> = a.output.iter().map(|c| c.data_type.clone()).collect();
     assert_eq!(types, [DataType::Long, DataType::String]);
 }
+
+/// `resolved_output` on hand-written resolved shapes.
+#[test]
+fn resolved_output_follows_the_contract() {
+    let col = |id: u64, name: &str| crate::BoundColumn {
+        id: crate::AttrId(id),
+        name: name.to_owned(),
+        data_type: DataType::Integer,
+        nullable: false,
+    };
+    let scan = |ids: &[u64]| {
+        Arc::new(LogicalPlan::new(PlanNode::Scan(crate::Scan {
+            source: ReadSource::Table {
+                name: vec!["t".to_owned()],
+                options: std::collections::BTreeMap::new(),
+            },
+            output: ids.iter().map(|i| col(*i, "a")).collect(),
+            version: None,
+        })))
+    };
+    let join = |kind| {
+        LogicalPlan::new(PlanNode::Join {
+            left: scan(&[1]),
+            right: scan(&[2]),
+            kind,
+            condition: JoinCondition::None,
+        })
+    };
+    let nullable = |p: LogicalPlan| -> Vec<bool> {
+        p.resolved_output()
+            .unwrap()
+            .iter()
+            .map(|c| c.nullable)
+            .collect()
+    };
+    assert_eq!(nullable(join(JoinKind::LeftOuter)), [false, true]);
+    assert_eq!(nullable(join(JoinKind::RightOuter)), [true, false]);
+    assert_eq!(nullable(join(JoinKind::FullOuter)), [true, true]);
+    assert_eq!(nullable(join(JoinKind::LeftSemi)), [false]);
+    let alias = |columns: Vec<String>| {
+        LogicalPlan::new(PlanNode::SubqueryAlias {
+            input: scan(&[1]),
+            alias: "x".to_owned(),
+            columns,
+        })
+    };
+    assert_eq!(
+        alias(vec!["z".to_owned()]).resolved_output().unwrap()[0].name,
+        "z"
+    );
+    assert!(
+        alias(vec!["y".to_owned(), "z".to_owned()])
+            .resolved_output()
+            .is_none()
+    );
+    let shift = |offset| {
+        LogicalPlan::new(PlanNode::Shift {
+            input: scan(&[3]),
+            offset,
+        })
+    };
+    assert_eq!(shift(4).resolved_output().unwrap()[0].id, crate::AttrId(7));
+    assert!(shift(u64::MAX).resolved_output().is_none());
+    let filtered = LogicalPlan::new(PlanNode::Filter {
+        input: scan(&[1]),
+        predicate: Arc::new(Literal::Boolean(true).into()),
+    });
+    assert_eq!(filtered.resolved_output().unwrap().len(), 1);
+    assert!(LogicalPlan::table(["t"]).resolved_output().is_none());
+    assert!(
+        LogicalPlan::table(["t"])
+            .project(vec![c("a")])
+            .resolved_output()
+            .is_none()
+    );
+}
