@@ -271,16 +271,51 @@ impl KeyTable {
     ) -> Result<usize> {
         ids.clear();
         let before = self.len();
+        if self.offsets.is_empty() {
+            self.offsets.push(0);
+        }
+        let Self {
+            data,
+            offsets,
+            hashes,
+            index,
+        } = self;
         for key in keys {
             let bytes = key.data();
-            ids.push(self.insert_hashed(bytes, seed.hash(bytes))?.0);
+            let h = seed.hash(bytes);
+            let entry = index.entry(
+                h,
+                |&id| {
+                    let id = id as usize;
+                    hashes[id] == h
+                        && data
+                            .get(offsets[id]..offsets[id + 1])
+                            .is_some_and(|k| eq_bytes(k, bytes))
+                },
+                |&id| hashes[id as usize],
+            );
+            let id = match entry {
+                Entry::Occupied(o) => *o.get(),
+                Entry::Vacant(v) => {
+                    let id = u32::try_from(hashes.len())
+                        .map_err(|_| internal("more than 2^32 keys in one table".to_owned()))?;
+                    data.extend_from_slice(bytes);
+                    offsets.push(data.len());
+                    hashes.push(h);
+                    v.insert(id);
+                    id
+                }
+            };
+            ids.push(id);
         }
         Ok(self.len() - before)
     }
 
     /// The id of key row `bytes` whose hash is `hash`, inserting it if new;
     /// `true` if it was new. For callers that keep the hashes (a join's
-    /// build rows carry theirs).
+    /// build rows carry theirs). [`find_or_insert`](Self::find_or_insert)
+    /// keeps its own loop on purpose: it is the aggregate's hot path, and
+    /// routing it through this call cost about 15% in its benchmarks.
     ///
     /// # Errors
     /// `INTERNAL_ERROR` past `u32::MAX` keys.
