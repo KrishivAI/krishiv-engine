@@ -187,6 +187,8 @@ fn dataframes(base: i64) -> Vec<(&'static str, LogicalPlan)> {
         )
     };
     let added = Expr::builtin(crate::Builtin::Add, vec![col("a", base + 1), int(1)]);
+    let a = || t.clone().project(vec![c("a")]);
+    let asc = |name: &str| vec![crate::SortOrder::asc(c(name))];
     vec![
         ("same_df", t.clone().project(vec![col("a", base + 1)])),
         ("other_df", t.clone().project(vec![col("a", base + 2)])),
@@ -239,14 +241,52 @@ fn dataframes(base: i64) -> Vec<(&'static str, LogicalPlan)> {
         ("missing", t.clone().project(vec![col("x", base + 1)])),
         (
             "outer",
-            t.filter(Expr::subquery(
-                crate::SubqueryKind::Exists,
-                with_id(
-                    u.filter(eq(col("a", base + 2), col("a", base + 1))),
-                    base + 3,
-                ),
-            ))
-            .project(vec![col("b", base + 1)]),
+            t.clone()
+                .filter(Expr::subquery(
+                    crate::SubqueryKind::Exists,
+                    with_id(
+                        u.filter(eq(col("a", base + 2), col("a", base + 1))),
+                        base + 3,
+                    ),
+                ))
+                .project(vec![col("b", base + 1)]),
+        ),
+        (
+            "missing_through_filter",
+            a().filter(gt(c("a"), int(1))).sort(asc("b")),
+        ),
+        ("missing_through_limit", a().limit(int(1)).sort(asc("b"))),
+        ("missing_two_sorts", a().sort(asc("b")).sort(asc("c"))),
+        (
+            "missing_two_projects",
+            t.clone()
+                .project(vec![c("a"), c("b")])
+                .project(vec![c("a")])
+                .sort(asc("c")),
+        ),
+        (
+            "missing_in_filter",
+            t.clone()
+                .project(vec![c("a"), c("c")])
+                .filter(eq(c("b"), s("x"))),
+        ),
+        (
+            "missing_grouping",
+            t.clone()
+                .aggregate(
+                    vec![c("a")],
+                    vec![c("a"), f("max", vec![c("c")]).alias("m")],
+                )
+                .project(vec![c("m")])
+                .sort(asc("a")),
+        ),
+        ("missing_after_alias", a().alias("x").sort(asc("b"))),
+        (
+            "lateral_alias",
+            t.project(vec![
+                add(col("a", base + 1), int(1)).alias("k"),
+                add(c("k"), int(1)).alias("m"),
+            ]),
         ),
     ]
 }
@@ -1390,22 +1430,7 @@ fn unsupported_inputs_fail_explicitly() {
     });
     let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("sha2", vec![c("b")])]);
     let null = LogicalPlan::table(["t"]).project(vec![Literal::Null(None).into()]);
-    let group_ordinal = LogicalPlan::table(["t"]).aggregate(vec![int(1)], vec![c("a")]);
-    let order_ordinal = LogicalPlan::table(["t"])
-        .project(vec![c("a")])
-        .sort(vec![crate::SortOrder::asc(int(1))]);
-    let order_missing = LogicalPlan::table(["t"])
-        .project(vec![c("a")])
-        .sort(vec![crate::SortOrder::asc(c("b"))]);
-    for plan in [
-        files,
-        rollup,
-        sha,
-        null,
-        group_ordinal,
-        order_ordinal,
-        order_missing,
-    ] {
+    for plan in [files, rollup, sha, null] {
         assert_eq!(class(&run(plan, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
     }
     // With ordinals off, an integer key is a constant.
@@ -1439,6 +1464,68 @@ fn unsupported_inputs_fail_explicitly() {
     let randstr = LogicalPlan::table(["t"]).project(vec![Expr::function("randstr", vec![int(3)])]);
     assert_eq!(class(&run(randstr.clone(), &old)), "UNRESOLVED_ROUTINE");
     assert_eq!(class(&run(randstr, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+/// A column a projection dropped comes back from below it, as Spark's
+/// missing references do, down to an aggregate's grouping attributes
+/// (which the aggregate then outputs); the result resolves to itself.
+#[test]
+fn missing_references_reach_grouping_attributes() {
+    let ctx = ctx();
+    let plan = LogicalPlan::table(["t"])
+        .aggregate(vec![c("a")], vec![f("max", vec![c("c")]).alias("m")])
+        .project(vec![c("m")])
+        .sort(vec![crate::SortOrder::asc(c("a"))]);
+    let a = run(plan, &ctx).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        ["m"]
+    );
+    assert_eq!(
+        a.plan.root().to_string(),
+        "Project [m#3]\n\
+         +- Sort [a#0 ASC NULLS FIRST], true\n   \
+         +- Project [m#3, a#0]\n      \
+         +- Aggregate [a#0], [max(c#2) AS m#3, a#0]\n         \
+         +- Scan spark_catalog.default.t [a#0, b#1, c#2]\n"
+    );
+    let again = block_on(DefaultAnalyzer.analyze(&a.plan, &ctx)).unwrap();
+    assert!(again.plan.structurally_eq(&a.plan));
+}
+
+/// A subexpression shared through `Arc` inside a lateral alias item and a
+/// sort key over a dropped column is bound and walked once.
+#[test]
+fn shared_subexpressions_in_rewrites() {
+    let ctx = ctx();
+    let twice = |name: &str| {
+        let x = Arc::new(c(name));
+        Expr::new(ExprNode::Function(crate::FunctionCall {
+            name: "+".to_owned(),
+            args: vec![Arc::clone(&x), x],
+            distinct: false,
+            filter: None,
+        }))
+    };
+    let lateral =
+        LogicalPlan::table(["t"]).project(vec![f("max", vec![c("a")]).alias("m"), twice("m")]);
+    let a = run(lateral, &ctx).unwrap();
+    assert_eq!(
+        a.output[1].name,
+        "(lateralAliasReference(m) + lateralAliasReference(m))"
+    );
+    let sorted = LogicalPlan::table(["t"])
+        .project(vec![c("a")])
+        .sort(vec![crate::SortOrder::asc(twice("c"))]);
+    let a = run(sorted, &ctx).unwrap();
+    assert!(
+        a.plan
+            .root()
+            .to_string()
+            .contains("Sort [(c#2 + c#2) ASC NULLS FIRST]"),
+        "{}",
+        a.plan.root()
+    );
 }
 
 #[test]

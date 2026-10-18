@@ -30,9 +30,28 @@ pub(super) struct Attr {
 pub(super) struct AggInfo {
     pub(super) input: Rel,
     pub(super) grouping: Vec<Arc<Expr>>,
+    /// The aggregate's own expressions and output, aligned.
     pub(super) aggregates: Vec<Arc<Expr>>,
+    pub(super) out: Vec<Attr>,
     /// The grouping attributes, as attributes of the input.
     pub(super) keys: Vec<Attr>,
+    /// Select items that use lateral column aliases make projections
+    /// above the aggregate: every select item, over the aggregate's output
+    /// (`None` when no item does).
+    pub(super) top: Option<Arc<[Bound]>>,
+}
+
+/// How a relation gets back columns it dropped: Spark adds the attributes
+/// an `ORDER BY` or a DataFrame filter names, but a projection below
+/// dropped, to that projection (`ResolveMissingReferences`).
+pub(super) enum Widen {
+    /// A projection of `exprs` over `input`.
+    Project { input: Rel, exprs: Vec<Arc<Expr>> },
+    /// A filter, sort or limit over `child`: its columns pass through.
+    Through { child: Rel },
+    /// An aggregate (under the projections of its lateral aliases): it
+    /// adds grouping attributes to its output.
+    Aggregate(Arc<AggInfo>),
 }
 
 /// A resolved relation and its output scope.
@@ -47,8 +66,8 @@ pub(super) struct Rel {
     /// The outputs of the relations carrying each `plan_id` below.
     pub(super) carriers: Arc<BTreeMap<PlanId, Vec<Arc<[Attr]>>>>,
     pub(super) agg: Option<Arc<AggInfo>>,
-    /// For a projection: its input.
-    pub(super) proj: Option<Arc<Rel>>,
+    /// Where dropped columns come back from, if anywhere.
+    pub(super) widen: Option<Arc<Widen>>,
 }
 
 /// An enclosing query's operator, as a subquery sees it.
@@ -360,7 +379,7 @@ impl Resolver<'_> {
         self.wrap(plan, origin.plan_id, out, kids)
     }
 
-    fn wrap(
+    pub(super) fn wrap(
         &self,
         plan: Arc<LogicalPlan>,
         id: Option<PlanId>,
@@ -394,7 +413,7 @@ impl Resolver<'_> {
             outer: kids.iter().filter_map(|k| k.outer).min(),
             carriers,
             agg: None,
-            proj: None,
+            widen: None,
         }
     }
 
@@ -414,9 +433,11 @@ impl Resolver<'_> {
         Cx {
             scope,
             rels,
+            lateral: None,
             aliases: &[],
             extra: None,
             agg_scope: None,
+            lenient: false,
             env,
             op,
         }
@@ -549,7 +570,9 @@ impl Resolver<'_> {
                     input: Arc::clone(&c.plan),
                     limit: b.expr,
                 };
-                Ok(self.make(o, node, c.out.to_vec(), &[&c]))
+                let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
+                r.widen = Some(Arc::new(Widen::Through { child: c }));
+                Ok(r)
             }
             PlanNode::SubqueryAlias {
                 input,
