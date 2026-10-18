@@ -199,6 +199,7 @@ mod tests {
                 filter: None,
                 data_type: DataType::Boolean,
                 nullable: true,
+                deterministic: true,
             },
         )))
     }

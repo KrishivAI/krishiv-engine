@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, RecordBatch, StringArray,
-    StringViewArray,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, LargeStringArray, RecordBatch,
+    StringArray, StringViewArray,
 };
-use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::DataType as ArrowType;
 use krishiv_kernels::string::{self, LikePattern, StrOperand};
 
@@ -24,20 +24,31 @@ use crate::planner::build::{internal, unsupported};
 pub(super) fn from_view(a: &ArrayRef) -> Result<ArrayRef> {
     Ok(match a.data_type() {
         ArrowType::Utf8View => Arc::new(a.as_string_view().iter().collect::<StringArray>()),
-        ArrowType::LargeUtf8 => {
-            let large = a.as_string::<i64>();
-            let offsets = large.value_offsets();
-            let bytes = offsets[offsets.len() - 1] - offsets[0];
-            if i32::try_from(bytes).is_err() {
-                return Err(unsupported(
-                    "a string column of more than 2 GiB in one batch",
-                ));
-            }
-            Arc::new(large.iter().collect::<StringArray>())
-        }
+        ArrowType::LargeUtf8 => Arc::new(large_to_utf8(a.as_string::<i64>())?),
         ArrowType::BinaryView => Arc::new(a.as_binary_view().iter().collect::<BinaryArray>()),
         _ => Arc::clone(a),
     })
+}
+
+/// `large` with 32-bit offsets, sharing its value bytes and validity: only
+/// the offsets are rebased.
+fn large_to_utf8(large: &LargeStringArray) -> Result<StringArray> {
+    let offsets = large.value_offsets();
+    let first = offsets[0];
+    let too_large = || unsupported("a string column of more than 2 GiB in one batch");
+    let rebased = offsets
+        .iter()
+        .map(|o| i32::try_from(o - first).map_err(|_| too_large()))
+        .collect::<Result<Vec<i32>>>()?;
+    let start = usize::try_from(first).map_err(|_| too_large())?;
+    let len = usize::try_from(rebased[rebased.len() - 1]).map_err(|_| too_large())?;
+    let values = large.values().slice_with_length(start, len);
+    StringArray::try_new(
+        OffsetBuffer::new(ScalarBuffer::from(rebased)),
+        values,
+        large.nulls().cloned(),
+    )
+    .map_err(|e| internal(&e.to_string()))
 }
 
 /// `a` with offset arrays converted to views (Spark's carriers).
@@ -202,7 +213,6 @@ impl PhysExpr for Concat {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::LargeStringArray;
     use arrow_schema::{Field, Schema};
 
     use super::*;
@@ -250,5 +260,19 @@ mod tests {
         };
         let out: Vec<_> = out.as_string_view().iter().collect();
         assert_eq!(out, vec![Some("ax"), None, Some("cz")]);
+    }
+
+    #[test]
+    fn large_utf8_shares_its_value_bytes() {
+        let large = LargeStringArray::from(vec![Some("ab"), None, Some("cde"), Some("f")]);
+        let sliced = large.slice(1, 2);
+        let utf8 = large_to_utf8(&sliced).unwrap();
+        assert_eq!(utf8.iter().collect::<Vec<_>>(), vec![None, Some("cde")]);
+        assert_eq!(utf8.value_offsets(), &[0, 0, 3]);
+        assert_eq!(
+            utf8.values().as_ptr(),
+            large.values().as_ptr().wrapping_add(2),
+            "the value bytes are not copied"
+        );
     }
 }

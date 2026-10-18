@@ -72,10 +72,10 @@ def main() -> None:
         root = os.path.join(os.path.dirname(__file__), "..", "..", "bench", "queries", "tpch")
         named = {}
         for q in range(1, 23):
-            with open(os.path.join(root, f"q{q:02}.sql")) as f:
+            with open(os.path.join(root, f"q{q:02}.sql"), encoding="utf-8") as f:
                 named[f"q{q:02}"] = f.read()
     else:
-        with open(queries) as f:
+        with open(queries, encoding="utf-8") as f:
             named = json.load(f)
     out = {}
     for name, sql in named.items():
