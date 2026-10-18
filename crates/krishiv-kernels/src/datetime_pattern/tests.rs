@@ -194,12 +194,23 @@ fn legacy_formatter_decides_the_error_class() {
     );
     assert_eq!(class("QQQQQ"), "INVALID_DATETIME_PATTERN.LENGTH");
     assert_eq!(
+        class("e"),
+        "INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_WEEK_BASED_PATTERN"
+    );
+    assert_eq!(class("A"), "INVALID_DATETIME_PATTERN.ILLEGAL_CHARACTER");
+    assert_eq!(
         class("yyyy-MM ]"),
         "INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_PATTERN_RECOGNITION"
     );
 }
 
 proptest::proptest! {
+    // No failure persistence: it needs the working directory (not under Miri).
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        failure_persistence: None,
+        cases: if cfg!(miri) { 4 } else { 256 },
+        ..proptest::prelude::ProptestConfig::default()
+    })]
     /// Untrusted strings never panic, whatever the pattern.
     #[test]
     fn parsing_never_panics(

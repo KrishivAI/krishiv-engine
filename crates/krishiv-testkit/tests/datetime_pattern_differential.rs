@@ -48,7 +48,7 @@ fn formatting_matches_spark() -> R {
         .collect::<Result<_, _>>()?;
     let zones = [
         ("utc", "UTC", FixedOffset(0)),
-        ("ist", "+05:30", FixedOffset(19_800)),
+        ("plus0530", "+05:30", FixedOffset(19_800)),
     ];
     let (mut failures, mut checked) = (Vec::new(), 0);
     for case in f["format"].as_array().ok_or("format")? {
@@ -100,7 +100,7 @@ fn parsing_matches_spark() -> R {
     let f = fixture()?;
     let (mut failures, mut checked, mut regions) = (Vec::new(), 0, 0);
     let utc = FixedOffset(0);
-    let ist = FixedOffset(19_800);
+    let plus0530 = FixedOffset(19_800);
     for case in f["parse"].as_array().ok_or("parse")? {
         let pattern = case["pattern"].as_str().ok_or("pattern")?;
         let compiled = DateTimePattern::new(pattern, Purpose::Parse);
@@ -124,7 +124,7 @@ fn parsing_matches_spark() -> R {
             let s = s.as_str().ok_or("string")?;
             let runs: [(&str, Result<Option<i64>, KrishivError>); 5] = [
                 ("ts_utc", p.parse_timestamp(s, &utc)),
-                ("ts_ist", p.parse_timestamp(s, &ist)),
+                ("ts_plus0530", p.parse_timestamp(s, &plus0530)),
                 ("ntz", p.parse_local(s, true)),
                 ("ntz_strict", p.parse_local(s, false)),
                 ("date", p.parse_date(s).map(|d| d.map(i64::from))),

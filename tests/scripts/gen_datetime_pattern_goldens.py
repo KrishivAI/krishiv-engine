@@ -25,7 +25,7 @@ import sys
 from pyspark.sql import SparkSession
 
 SEED = 20261019
-ZONES = {"utc": "UTC", "ist": "+05:30"}
+ZONES = {"utc": "UTC", "plus0530": "+05:30"}
 # Epoch microseconds of the instants formatted (UTC wall clock in the comment).
 INSTANTS = [
     0,  # 1970-01-01 00:00:00
@@ -481,7 +481,7 @@ def main() -> None:
         for key, expr in exprs.items():
             case[key] = evaluate(spark, df, seen, expr)
         spark.conf.set("spark.sql.session.timeZone", "+05:30")
-        case["ts_ist"] = evaluate(spark, df, seen, exprs["ts_utc"])
+        case["ts_plus0530"] = evaluate(spark, df, seen, exprs["ts_utc"])
         spark.conf.set("spark.sql.session.timeZone", "UTC")
         parses.append(case)
     json.dump(
