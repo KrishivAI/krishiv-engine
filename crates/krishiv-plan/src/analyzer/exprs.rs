@@ -886,8 +886,8 @@ impl Resolver<'_> {
     }
 
     /// A column reference, in Spark's order: the input, lateral column
-    /// aliases (a select list), select-list aliases (a `GROUP BY`),
-    /// enclosing queries.
+    /// aliases (a select list), select-list aliases (a `GROUP BY`), the
+    /// enclosing query (only the immediately enclosing one).
     fn column(
         &mut self,
         c: &ColumnRef,
@@ -978,7 +978,8 @@ impl Resolver<'_> {
             };
             return self.expr(alias, &inner);
         }
-        let levels = cx.env.outer.iter().enumerate().rev();
+        // Only the immediately enclosing query, as Spark 4.2 resolves.
+        let levels = cx.env.outer.iter().enumerate().rev().take(1);
         for (level, outer) in levels.filter(|_| cx.outer) {
             if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
@@ -1107,8 +1108,13 @@ impl Resolver<'_> {
 
     pub(super) fn sub_env(&mut self, cx: &Cx<'_>) -> Arc<Env> {
         let mut outer = cx.env.outer.clone();
+        // Over an aggregate, a subquery also sees its grouping attributes.
+        let mut scope = cx.scope.to_vec();
+        if cx.agg_scope.is_some() {
+            scope.extend(cx.extra.unwrap_or_default().iter().cloned());
+        }
         outer.push(super::resolve::Level {
-            scope: cx.scope.to_vec().into(),
+            scope: scope.into(),
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }
@@ -1143,7 +1149,8 @@ pub(super) fn unresolved(parts: &[String], scope: &[Attr], origin: Origin) -> An
             (levenshtein(&p.join("."), &target), p)
         })
         .collect();
-    ranked.sort_by_key(|(d, _)| *d);
+    // Closest first; ties in name order, as Spark orders them.
+    ranked.sort();
     let object_name = quoted(parts);
     if ranked.is_empty() {
         return AnalysisError::new(UnresolvedColumnWithoutSuggestion { object_name }, origin);
@@ -1227,6 +1234,27 @@ pub(super) fn pretty(e: &Expr) -> String {
     done.remove(&addr(e)).unwrap_or_default()
 }
 
+/// The names of the outer references of a subquery plan, in order, each
+/// once.
+fn outer_names(plan: &crate::LogicalPlan) -> String {
+    use crate::walk::{Node, visit_distinct};
+    let mut names: Vec<(AttrId, String)> = Vec::new();
+    let _ = visit_distinct(Node::Plan(plan), |n| {
+        if let Node::Expr(e) = n
+            && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+            && !names.iter().any(|(id, _)| *id == c.id)
+        {
+            names.push((c.id, c.name.clone()));
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    names
+        .into_iter()
+        .map(|(_, n)| n)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn pretty_node(x: &Expr, k: &[&str]) -> String {
     match &x.node {
         ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
@@ -1243,15 +1271,24 @@ fn pretty_node(x: &Expr, k: &[&str]) -> String {
             format!("{cast}({} AS {})", k[0], to.sql())
         }
         ExprNode::Alias { .. } | ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
-        ExprNode::Subquery { kind, .. } => match kind {
-            SubqueryKind::Scalar => "scalarsubquery()".to_owned(),
-            SubqueryKind::Exists => "exists()".to_owned(),
-            SubqueryKind::In(_) if k.len() == 1 => format!("({} IN (listquery()))", k[0]),
-            SubqueryKind::In(_) => {
-                let fields: Vec<String> = k.iter().map(|v| format!("'{v}', {v}")).collect();
-                format!("(named_struct({}) IN (listquery()))", fields.join(", "))
+        ExprNode::Subquery { kind, plan } => {
+            // Spark lists the outer references.
+            let outer = outer_names(plan);
+            match kind {
+                SubqueryKind::Scalar => format!("scalarsubquery({outer})"),
+                SubqueryKind::Exists => format!("exists({outer})"),
+                SubqueryKind::In(_) if k.len() == 1 => {
+                    format!("({} IN (listquery({outer})))", k[0])
+                }
+                SubqueryKind::In(_) => {
+                    let fields: Vec<String> = k.iter().map(|v| format!("'{v}', {v}")).collect();
+                    format!(
+                        "(named_struct({}) IN (listquery({outer})))",
+                        fields.join(", ")
+                    )
+                }
             }
-        },
+        }
         ExprNode::Star(_) => "*".to_owned(),
         ExprNode::Function(FunctionCall { name, distinct, .. }) => call(name, None, *distinct, k),
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {

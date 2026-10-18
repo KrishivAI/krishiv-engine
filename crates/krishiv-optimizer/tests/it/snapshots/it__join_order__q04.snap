@@ -5,7 +5,10 @@ expression: optimized.root().to_string()
 Sort [o_orderpriority#5 ASC NULLS FIRST], true
 +- Aggregate [o_orderpriority#5], [o_orderpriority#5, count(1) AS order_count#25]
    +- Project [o_orderpriority#5]
-      +- Filter (((o_orderdate#4 >= DATE '1993-07-01') and (o_orderdate#4 < DATE '1993-10-01')) and exists)
-         :  +- Filter ((l_orderkey#9 == outer(o_orderkey#0)) and (l_commitdate#20 < l_receiptdate#21))
-         :     +- Scan spark_catalog.default.lineitem [l_orderkey#9, l_commitdate#20, l_receiptdate#21]
-         +- Scan spark_catalog.default.orders [o_orderkey#0, o_orderdate#4, o_orderpriority#5]
+      +- Join LeftSemi, (l_orderkey#9 == o_orderkey#0)
+         :- Project [o_orderkey#0, o_orderpriority#5]
+         :  +- Filter ((o_orderdate#4 >= DATE '1993-07-01') and (o_orderdate#4 < DATE '1993-10-01'))
+         :     +- Scan spark_catalog.default.orders [o_orderkey#0, o_orderdate#4, o_orderpriority#5]
+         +- Project [l_orderkey#9]
+            +- Filter (l_commitdate#20 < l_receiptdate#21)
+               +- Scan spark_catalog.default.lineitem [l_orderkey#9, l_commitdate#20, l_receiptdate#21]

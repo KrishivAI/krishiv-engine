@@ -134,6 +134,8 @@ pub(super) fn resolve(
     let env = r.env(Vec::new(), 0, Vec::new());
     r.root_env = Some(Arc::clone(&env));
     let rel = r.rel(plan.root(), &env)?;
+    // Subqueries to joins, after everything resolved (P2-T071c).
+    let root = super::subquery::rewrite(&rel.plan, &mut r.next_id)?;
     let output = rel.out.iter().map(|a| a.col.clone()).collect();
     let uses = b
         .securables
@@ -145,7 +147,7 @@ pub(super) fn resolve(
             columns,
         })
         .collect();
-    Ok((rel.plan, output, uses))
+    Ok((root, output, uses))
 }
 
 /// One past the largest attribute id in `root` (a `Shift` counted at its

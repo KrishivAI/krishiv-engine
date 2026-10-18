@@ -64,6 +64,7 @@ mod coerce;
 mod exprs;
 mod ops;
 mod resolve;
+mod subquery;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 

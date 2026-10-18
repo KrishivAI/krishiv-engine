@@ -2,9 +2,8 @@
 source: crates/krishiv-optimizer/tests/it/rules.rs
 expression: SELECT a FROM t WHERE CAST(c AS INT) = a AND CAST(c AS INT) = a AND EXISTS (SELECT 1 FROM u WHERE u.a = t.a AND u.a = t.a)
 ---
-Project [a#0]
-+- Filter ((CAST(c#2 AS INT) == a#0) and exists)
-   :  +- Project [1 AS 1#5]
-   :     +- Filter (a#3 == outer(a#0))
-   :        +- Scan spark_catalog.default.u [a#3]
-   +- Scan spark_catalog.default.t [a#0, c#2]
+Join LeftSemi, (a#3 == a#0)
+:- Project [a#0]
+:  +- Filter (CAST(c#2 AS INT) == a#0)
+:     +- Scan spark_catalog.default.t [a#0, c#2]
++- Scan spark_catalog.default.u [a#3]
