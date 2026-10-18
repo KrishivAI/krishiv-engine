@@ -11,6 +11,7 @@ use arrow_array::types::Int32Type;
 use arrow_array::{Array, ArrayRef, ListArray, MapArray, StructArray, cast::AsArray};
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::{DataType, Field, Fields};
+use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::hash as kh;
 use krishiv_kernels::{KernelCtx, Operand};
 use krishiv_sql::ast::{self, ExprKind, Literal};
@@ -37,7 +38,7 @@ const MAP_CONF: &str = "spark.sql.legacy.allowHashOnMapType";
 /// `NULL` rows of `hash`/`xxhash64` hash to the seed.
 pub(super) const SEED: i64 = 42;
 
-impl Binder {
+impl Binder<'_> {
     /// The hash function `name` applied to `args`, or `None` for another name.
     pub(super) fn hash_function(
         self,
@@ -103,7 +104,7 @@ impl Binder {
     }
 }
 
-impl Evaluator {
+impl Evaluator<'_> {
     /// Evaluates hash function `f` over `args`.
     pub(super) fn hash_fn(&self, f: HashFn, args: &[Node]) -> Result<ArrayRef, EvalError> {
         let v = args
@@ -212,17 +213,24 @@ fn build_args(args: &str, conf: &BTreeMap<String, String>) -> Result<Vec<ArrayRe
 }
 
 fn leaf(e: &ast::Expr) -> Result<ArrayRef, Skip> {
+    // The fixture's session zone is UTC.
+    let zone = FixedOffset(0);
     let binder = Binder {
         ansi: true,
         allow_loss: true,
         try_: false,
+        zone: &zone,
+        clock: None,
     };
     let node = binder.bind(e)?;
     let ev = Evaluator {
         ctx: KernelCtx::new(),
+        zone: &zone,
+        now: super::datetime::NOW,
         ansi: true,
         shape: Shape::Arrays,
         invalid_utf8: std::cell::Cell::new(false),
+        day_overflow: std::cell::Cell::new(false),
     };
     ev.eval(&node).map_err(|e| match e {
         EvalError::Kernel(k) => k.to_string(),
@@ -247,16 +255,6 @@ fn build(e: &ast::Expr) -> Result<ArrayRef, Skip> {
                 "named_struct" => struct_of(&args),
                 "map" => map_of(&args),
                 _ => leaf(e),
-            }
-        }
-        ExprKind::Literal(Literal::Typed { type_name, value })
-            if type_name.value.eq_ignore_ascii_case("timestamp") && value.ends_with("+00:00") =>
-        {
-            // A UTC offset is the session zone (UTC): drop it.
-            let local = value.trim_end_matches("+00:00");
-            match super::timestamp_lit(local, super::ltz())? {
-                Node::Lit(a) => Ok(a),
-                _ => Err("timestamp literal".to_owned()),
             }
         }
         ExprKind::Cast {

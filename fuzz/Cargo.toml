@@ -15,10 +15,14 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4.10"
 prost = "0.14.4"
 krishiv-connect = { path = "../crates/krishiv-connect" }
+krishiv-io = { path = "../crates/krishiv-io" }
+krishiv-memory = { path = "../crates/krishiv-memory" }
 krishiv-plan = { path = "../crates/krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../crates/krishiv-sql" }
 krishiv-types = { path = "../crates/krishiv-types" }
 krishiv-testkit = { path = "../crates/krishiv-testkit" }
+object_store = { version = "=0.14.2", default-features = false }
+tokio = { version = "1.53", default-features = false, features = ["rt", "time"] }
 
 [[bin]]
 name = "sql_parse"
@@ -30,6 +34,13 @@ bench = false
 [[bin]]
 name = "connect_decode"
 path = "fuzz_targets/connect_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parquet_read"
+path = "fuzz_targets/parquet_read.rs"
 test = false
 doc = false
 bench = false

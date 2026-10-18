@@ -1,0 +1,14 @@
+{
+  "columns": {
+    "i32": {
+      "sha256": "57af03d7f2847c61b87b9d0ef0acea1abbe719493bc9ef2382c08fce23cf751e",
+      "type": "int32"
+    },
+    "ts": {
+      "sha256": "be9179a2c44f27a554908f2bab024a8c3547c2ee0dda173df539750907bdbaa5",
+      "type": "timestamp[ns]"
+    }
+  },
+  "rows": 600,
+  "writer": "parquet-cpp-arrow version 21.0.0"
+}

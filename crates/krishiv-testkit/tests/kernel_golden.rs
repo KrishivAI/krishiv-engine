@@ -27,6 +27,12 @@ fn literal_statements_match_spark() -> R {
         ("nonansi/try_arithmetic.sql.out.java21", false),
         ("string-functions.sql.out", true),
         ("nonansi/string-functions.sql.out", false),
+        ("date.sql.out", true),
+        ("nonansi/date.sql.out", false),
+        ("timestamp.sql.out", true),
+        ("nonansi/timestamp.sql.out", false),
+        ("datetime-special.sql.out", true),
+        ("datetime-legacy.sql.out", true),
     ] {
         let t = run_golden(&std::fs::read_to_string(dir.join(file))?, ansi)?;
         writeln!(

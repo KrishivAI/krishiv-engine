@@ -1,0 +1,18 @@
+{
+  "columns": {
+    "u16": {
+      "sha256": "c8967fa7aecc813567fe0c77336067dd6ea3b75cfbc6e1bd7a2b40cdca297f08",
+      "type": "uint16"
+    },
+    "u32": {
+      "sha256": "e8f5164dbe9d91e7e7a6d5ad1c957978679d257e653441547a610e01f3d042c7",
+      "type": "uint32"
+    },
+    "u8": {
+      "sha256": "ade900b40ba848b6d1f3403773c0ba6f3ed66678242a68a5c4a9c5518d416651",
+      "type": "uint8"
+    }
+  },
+  "rows": 500,
+  "writer": "parquet-cpp-arrow version 21.0.0"
+}

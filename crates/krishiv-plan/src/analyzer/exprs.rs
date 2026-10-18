@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    AmbiguousColumnReference, AmbiguousReference, CannotResolveDataframeColumn,
-    CannotResolveStarExpand, InvalidExtractBaseFieldType,
+    AmbiguousColumnReference, AmbiguousLateralColumnAlias, AmbiguousReference,
+    CannotResolveDataframeColumn, CannotResolveStarExpand, InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, NestedAggregateFunction, UnresolvedColumnWithSuggestion,
     UnresolvedColumnWithoutSuggestion, UnresolvedRoutine,
@@ -20,7 +20,7 @@ use super::catalog::quoted;
 use super::resolve::{Attr, Env, Rel, Resolver};
 use super::{AnalysisError, ArgType, FunctionLookup};
 use crate::{
-    BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, FunctionId,
+    AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, FunctionId,
     FunctionKind, Literal, Origin, ResolvedExpr, ResolvedFunction, Star, SubqueryKind,
 };
 
@@ -31,6 +31,9 @@ pub(super) struct Cx<'s> {
     pub(super) scope: &'s [Attr],
     /// The operator's children, whose `plan_id` carriers `df["a"]` uses.
     pub(super) rels: &'s [&'s Rel],
+    /// Aliases defined earlier in the same select list (lateral column
+    /// aliases), searched after the input; `None` where Spark has none.
+    pub(super) lateral: Option<&'s [Attr]>,
     /// Select-list aliases a `GROUP BY` may name: (name, unresolved expr).
     pub(super) aliases: &'s [(String, Arc<Expr>)],
     /// Attributes searched after `scope`: an aggregate's grouping
@@ -39,6 +42,11 @@ pub(super) struct Cx<'s> {
     /// Over an aggregate: its input, where aggregate-function arguments
     /// resolve.
     pub(super) agg_scope: Option<&'s [Attr]>,
+    /// A name `scope` holds several times is looked up further rather
+    /// than ambiguous (Spark's `ORDER BY` over a select list).
+    pub(super) lenient: bool,
+    /// Whether names may resolve in enclosing queries.
+    pub(super) outer: bool,
     pub(super) env: &'s Arc<Env>,
     /// The operator, as Spark names it in errors.
     pub(super) op: &'static str,
@@ -53,6 +61,8 @@ pub(super) struct Bound {
     pub(super) agg: Option<Origin>,
     /// The outermost query level referenced, for outer references.
     pub(super) outer: Option<usize>,
+    /// The lateral column aliases referenced (their attribute ids).
+    pub(super) lateral: Vec<AttrId>,
 }
 
 fn column(c: &BoundColumn) -> ArgType {
@@ -241,11 +251,18 @@ impl Resolver<'_> {
     ) -> Result<Bound, AnalysisError> {
         let outer = kids.iter().filter_map(|k| k.outer).min();
         let agg = kids.iter().find_map(|k| k.agg);
+        let mut lateral: Vec<AttrId> = Vec::new();
+        for id in kids.iter().flat_map(|k| k.lateral.iter()) {
+            if !lateral.contains(id) {
+                lateral.push(*id);
+            }
+        }
         let keep = |ty| Bound {
             expr: Arc::clone(e),
             ty,
             agg,
             outer,
+            lateral: lateral.clone(),
         };
         let rebuilt = |node: ExprNode| Arc::new(Expr::new(node).with_origin(e.origin));
         let args: Vec<Arc<Expr>> = kids.iter().map(|k| Arc::clone(&k.expr)).collect();
@@ -415,8 +432,9 @@ impl Resolver<'_> {
         })
     }
 
-    /// A column reference, in Spark's order: the input, select-list aliases
-    /// (a `GROUP BY`), enclosing queries.
+    /// A column reference, in Spark's order: the input, lateral column
+    /// aliases (a select list), select-list aliases (a `GROUP BY`),
+    /// enclosing queries.
     fn column(
         &mut self,
         c: &ColumnRef,
@@ -429,6 +447,7 @@ impl Resolver<'_> {
             ty: column(col),
             agg: None,
             outer,
+            lateral: Vec::new(),
         };
         let renamed = |a: &Attr, parts: &[String], used: usize| {
             // A reference keeps the spelling it was written with.
@@ -450,8 +469,10 @@ impl Resolver<'_> {
             Some(input) if in_agg => (input, None),
             _ => (cx.scope, cx.extra),
         };
-        for level in [Some(scope), extra].into_iter().flatten() {
-            if let Some((a, used)) = self.find(level, &c.name, origin)? {
+        for (i, level) in [Some(scope), extra].into_iter().enumerate() {
+            let Some(level) = level else { continue };
+            let lenient = cx.lenient && i == 0;
+            if let Some((a, used)) = self.find(level, &c.name, origin, lenient)? {
                 self.used(&a);
                 let col = renamed(&a, &c.name, used);
                 return Ok(bound(
@@ -459,6 +480,36 @@ impl Resolver<'_> {
                     &col,
                     None,
                 ));
+            }
+        }
+        if let ([name], Some(lateral)) = (&c.name[..], cx.lateral) {
+            let cs = self.ctx.conf.case_sensitive;
+            let hits: Vec<&Attr> = lateral
+                .iter()
+                .filter(|a| same(&a.col.name, name, cs))
+                .collect();
+            match hits[..] {
+                [] => {}
+                [a] => {
+                    let mut col = a.col.clone();
+                    col.name.clone_from(name);
+                    let mut b = bound(
+                        ExprNode::Resolved(ResolvedExpr::Column(col.clone())),
+                        &col,
+                        None,
+                    );
+                    b.lateral.push(col.id);
+                    return Ok(b);
+                }
+                _ => {
+                    return Err(AnalysisError::new(
+                        AmbiguousLateralColumnAlias {
+                            name: quoted(std::slice::from_ref(name)),
+                            n: hits.len().to_string(),
+                        },
+                        Origin::UNKNOWN,
+                    ));
+                }
             }
         }
         if let [name] = &c.name[..]
@@ -473,8 +524,9 @@ impl Resolver<'_> {
             };
             return self.expr(alias, &inner);
         }
-        for (level, outer) in cx.env.outer.iter().enumerate().rev() {
-            if let Some((a, used)) = self.find(&outer.scope, &c.name, origin)? {
+        let levels = cx.env.outer.iter().enumerate().rev();
+        for (level, outer) in levels.filter(|_| cx.outer) {
+            if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
                 let col = renamed(&a, &c.name, used);
                 return Ok(bound(
@@ -536,12 +588,14 @@ impl Resolver<'_> {
 
     /// The attribute `parts` names in `scope` and how many parts it used:
     /// with a qualifier of 3, 2 or 1 parts (a suffix of the attribute's),
-    /// then by name alone; the first form with any match decides.
+    /// then by name alone; the first form with any match decides. Several
+    /// matches are `AMBIGUOUS_REFERENCE`, or no match when `lenient`.
     fn find(
         &self,
         scope: &[Attr],
         parts: &[String],
         origin: Origin,
+        lenient: bool,
     ) -> Result<Option<(Attr, usize)>, AnalysisError> {
         let cs = self.ctx.conf.case_sensitive;
         for q in (0..parts.len().min(4)).rev() {
@@ -573,6 +627,7 @@ impl Resolver<'_> {
                     ));
                 }
                 [a] => return Ok(Some((a.clone(), q + 1))),
+                _ if lenient => return Ok(None),
                 _ => {
                     let mut names: Vec<String> = hits
                         .iter()

@@ -13,10 +13,14 @@
 //! and constructs this evaluator does not type, are reported as not run with
 //! the reason.
 
+mod datetime;
 pub mod hash;
 mod strings;
+mod zone;
 
 use std::sync::Arc;
+
+pub use zone::JiffZone;
 
 use arrow_array::types::{
     Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
@@ -25,11 +29,11 @@ use arrow_array::types::{
 use arrow_array::{
     Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, Decimal128Array, Float32Array,
     Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, NullArray, PrimitiveArray,
-    StringArray, TimestampMicrosecondArray, cast::AsArray,
+    StringArray, cast::AsArray,
 };
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, TimeUnit};
-use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, cast};
+use krishiv_kernels::cast::{CastMode, CastOptions, TimeZoneRules, cast};
 use krishiv_kernels::compare::{
     self, BoolOperand, BytesOperand, CompareKind, Equal, Greater, GreaterEq, Less, LessEq,
     NotEqual, Validity,
@@ -117,6 +121,24 @@ pub const FUNCTIONS: &[&str] = &[
     "sha1",
     "sha2",
     "crc32",
+    // P2-T025a: datetime functions.
+    "date_add",
+    "dateadd",
+    "date_sub",
+    "datediff",
+    "date_diff",
+    "year",
+    "month",
+    "day",
+    "dayofmonth",
+    "extract",
+    "date_part",
+    "current_date",
+    "curdate",
+    "current_timestamp",
+    "now",
+    "to_date",
+    "to_timestamp",
 ];
 
 /// The outcome of one cell.
@@ -157,6 +179,10 @@ enum Node {
     Str(strings::StrFn, Vec<Node>, DataType),
     /// A hash function (`hash`) with its result type.
     Hash(hash::HashFn, Vec<Node>, DataType),
+    /// An ANSI interval literal.
+    Interval(datetime::IntervalVal),
+    /// A datetime function (`datetime`) with its result type.
+    Dt(datetime::DtFn, Vec<Node>, DataType),
 }
 
 /// Binary arithmetic operators.
@@ -177,7 +203,14 @@ impl Node {
             Self::Cast(_, t, _)
             | Self::Arith { ty: t, .. }
             | Self::Str(_, _, t)
+            | Self::Dt(_, _, t)
             | Self::Hash(_, _, t) => t.clone(),
+            Self::Interval(datetime::IntervalVal::YearMonth(_)) => {
+                DataType::Interval(arrow_schema::IntervalUnit::YearMonth)
+            }
+            Self::Interval(datetime::IntervalVal::DayTime { .. }) => {
+                DataType::Duration(TimeUnit::Microsecond)
+            }
             Self::Cmp(..) => DataType::Boolean,
             Self::Unary(_, c) => c.ty(),
         }
@@ -214,6 +247,8 @@ pub fn simple_string(t: &DataType) -> String {
         DataType::Binary => "binary".to_owned(),
         DataType::List(f) => format!("array<{}>", simple_string(f.data_type())),
         DataType::Date32 => "date".to_owned(),
+        DataType::Interval(_) => "interval year to month".to_owned(),
+        DataType::Duration(_) => "interval day to second".to_owned(),
         DataType::Timestamp(_, Some(_)) => "timestamp".to_owned(),
         DataType::Timestamp(_, None) => "timestamp_ntz".to_owned(),
         other => other.to_string(),
@@ -252,16 +287,21 @@ fn ltz() -> DataType {
 
 /// Typing context.
 #[derive(Debug, Clone, Copy)]
-struct Binder {
+struct Binder<'z> {
     ansi: bool,
     /// `spark.sql.decimalOperations.allowPrecisionLoss`.
     allow_loss: bool,
     /// Typing a `try_*` operator: its implicit casts and arithmetic return
     /// NULL instead of raising.
     try_: bool,
+    /// The session time zone.
+    zone: &'z dyn TimeZoneRules,
+    /// The query-start instant (UTC microseconds) when clock functions may
+    /// be bound; `None` where a recorded result would depend on it.
+    clock: Option<i64>,
 }
 
-impl Binder {
+impl Binder<'_> {
     fn cast_mode(self) -> CastMode {
         match (self.try_, self.ansi) {
             (true, _) => CastMode::Try,
@@ -285,7 +325,7 @@ impl Binder {
     fn bind(self, e: &ast::Expr) -> Result<Node, Skip> {
         match &e.kind {
             ExprKind::Nested(inner) => self.bind(inner),
-            ExprKind::Literal(l) => literal(l),
+            ExprKind::Literal(l) => literal(l, self.zone),
             ExprKind::Cast {
                 expr,
                 data_type,
@@ -350,6 +390,9 @@ impl Binder {
         if let Some(node) = self.string_function(&name, &args) {
             return node;
         }
+        if let Some(node) = self.datetime_function(&name, &args) {
+            return node;
+        }
         if let Some(node) = self.hash_function(&name, &args) {
             return node;
         }
@@ -362,7 +405,7 @@ impl Binder {
             "float" => Some(DataType::Float32),
             "decimal" => Some(DataType::Decimal128(10, 0)),
             "date" | "to_date" => Some(DataType::Date32),
-            "timestamp" => Some(ltz()),
+            "timestamp" | "to_timestamp" => Some(ltz()),
             "string" => Some(DataType::Utf8),
             _ => None,
         };
@@ -377,7 +420,24 @@ impl Binder {
         };
         match (name.as_str(), args.as_slice()) {
             (_, [a]) if cast_to.is_some() => {
-                let child = self.bind(a)?;
+                let mut child = self.bind(a)?;
+                // `to_timestamp` reads a boolean or binary as its string; `to_date`
+                // reads anything but a string, date or timestamp so (`to_date(1)`
+                // is the malformed date `'1'`).
+                let via_string = match (name.as_str(), child.ty()) {
+                    ("to_timestamp", t) => matches!(t, DataType::Boolean | DataType::Binary),
+                    ("to_date", t) => !matches!(
+                        t,
+                        DataType::Null
+                            | DataType::Utf8
+                            | DataType::Date32
+                            | DataType::Timestamp(..)
+                    ),
+                    _ => false,
+                };
+                if via_string {
+                    child = self.implicit(child, &DataType::Utf8);
+                }
                 let to = cast_to.unwrap_or(DataType::Null);
                 Ok(self.explicit_cast(child, &to, self.cast_mode()))
             }
@@ -507,6 +567,9 @@ impl Binder {
     }
 
     fn arith(self, op: AOp, l: Node, r: Node) -> Result<Node, Skip> {
+        if let Some(node) = self.temporal_arith(op, &l, &r) {
+            return node;
+        }
         let (l, r) = self.numeric_operands(Some(op), l, r)?;
         let (lt, rt) = (l.ty(), r.ty());
         let any_float = |a: &DataType, b: &DataType| {
@@ -606,7 +669,7 @@ impl Binder {
 }
 
 /// A literal's type and one-row value (Spark's `Literal` typing).
-fn literal(l: &Literal) -> Result<Node, Skip> {
+fn literal(l: &Literal, zone: &dyn TimeZoneRules) -> Result<Node, Skip> {
     let one = |a: ArrayRef| Ok(Node::Lit(a));
     match l {
         Literal::Null => one(Arc::new(NullArray::new(1))),
@@ -615,7 +678,7 @@ fn literal(l: &Literal) -> Result<Node, Skip> {
         Literal::Number { text, kind } => number(text, *kind),
         Literal::Typed { type_name, value } => {
             match type_name.value.to_ascii_lowercase().as_str() {
-                "date" => cast_lit(value, &DataType::Date32),
+                "date" => cast_lit(value, &DataType::Date32, zone),
                 "x" => {
                     let bytes = (0..value.len())
                         .step_by(2)
@@ -624,62 +687,25 @@ fn literal(l: &Literal) -> Result<Node, Skip> {
                         .map_err(|_| "hex literal".to_owned())?;
                     one(Arc::new(BinaryArray::from(vec![bytes.as_slice()])))
                 }
-                "timestamp" | "timestamp_ltz" => timestamp_lit(value, ltz()),
-                "timestamp_ntz" => timestamp_lit(value, LTZ),
+                "timestamp" | "timestamp_ltz" => cast_lit(value, &ltz(), zone),
+                "timestamp_ntz" => cast_lit(value, &LTZ, zone),
                 other => Err(format!("{other} literal")),
             }
         }
-        _ => Err("interval literal".to_owned()),
+        Literal::Interval(iv) => datetime::interval_literal(iv),
+        _ => Err("literal outside this task".to_owned()),
     }
 }
 
-fn cast_lit(value: &str, to: &DataType) -> Result<Node, Skip> {
+fn cast_lit(value: &str, to: &DataType, zone: &dyn TimeZoneRules) -> Result<Node, Skip> {
     let s = StringArray::from(vec![value]);
     let opts = CastOptions {
         mode: CastMode::Ansi,
-        time_zone: &FixedOffset(0),
+        time_zone: zone,
     };
     cast(&s, to, &opts)
         .map(Node::Lit)
         .map_err(|e| format!("literal: {e}"))
-}
-
-/// `yyyy-MM-dd HH:mm:ss[.ffffff]` in UTC (the matrix's session zone).
-fn timestamp_lit(value: &str, ty: DataType) -> Result<Node, Skip> {
-    let (date, time) = value.split_once(' ').ok_or("timestamp literal shape")?;
-    let day = cast_lit(date, &DataType::Date32)?;
-    let Node::Lit(day) = day else {
-        return Err("timestamp literal".into());
-    };
-    let days = i64::from(day.as_primitive::<Date32Type>().value(0));
-    let (hms, frac) = time.split_once('.').unwrap_or((time, "0"));
-    let parts: Vec<u8> = hms
-        .split(':')
-        .map(str::parse)
-        .collect::<Result<_, _>>()
-        .map_err(|_| "timestamp time")?;
-    let [h, m, s] = parts.as_slice() else {
-        return Err("timestamp time".into());
-    };
-    if *h > 23 || *m > 59 || *s > 59 || frac.len() > 6 || !frac.bytes().all(|b| b.is_ascii_digit())
-    {
-        return Err(format!("timestamp literal {value}"));
-    }
-    let frac: i64 = format!("{frac:0<6}").parse().map_err(|_| "fraction")?;
-    let secs = (i64::from(*h) * 60 + i64::from(*m)) * 60 + i64::from(*s);
-    // Beyond the microsecond range Spark rejects the literal.
-    let micros = days
-        .checked_mul(86_400)
-        .and_then(|d| d.checked_add(secs))
-        .and_then(|d| d.checked_mul(1_000_000))
-        .and_then(|d| d.checked_add(frac))
-        .ok_or_else(|| format!("timestamp literal {value}"))?;
-    let a = TimestampMicrosecondArray::from(vec![micros]);
-    let a: ArrayRef = match ty {
-        DataType::Timestamp(_, Some(z)) => Arc::new(a.with_timezone(z)),
-        _ => Arc::new(a),
-    };
-    Ok(Node::Lit(a))
 }
 
 fn number(text: &str, kind: NumKind) -> Result<Node, Skip> {
@@ -818,13 +844,20 @@ impl From<KernelError> for EvalError {
     }
 }
 
-struct Evaluator {
+struct Evaluator<'z> {
     ctx: KernelCtx,
+    /// The session time zone.
+    zone: &'z dyn TimeZoneRules,
+    /// The query-start instant (UTC microseconds) for clock functions.
+    now: i64,
     ansi: bool,
     shape: Shape,
     /// Set when a `BINARY` -> `STRING` cast met bytes that are not UTF-8:
     /// Krishiv's STRING is valid UTF-8 (documented divergence, ADR 0023).
     invalid_utf8: std::cell::Cell<bool>,
+    /// Set when ANSI day arithmetic on dates overflowed: Spark wraps there,
+    /// Krishiv raises (documented divergence, ADR 0023).
+    day_overflow: std::cell::Cell<bool>,
 }
 
 /// A scalar of a one-row primitive array.
@@ -833,7 +866,7 @@ fn scalar<T: ArrowPrimitiveType>(a: &dyn Array) -> Option<T::Native> {
     a.is_valid(0).then(|| a.value(0))
 }
 
-impl Evaluator {
+impl Evaluator<'_> {
     fn leaf(&self, a: &ArrayRef) -> Result<ArrayRef, EvalError> {
         if self.shape != Shape::Padded {
             return Ok(Arc::clone(a));
@@ -872,7 +905,7 @@ impl Evaluator {
                     to,
                     &CastOptions {
                         mode: *mode,
-                        time_zone: &FixedOffset(0),
+                        time_zone: self.zone,
                     },
                 )?)
             }
@@ -890,6 +923,8 @@ impl Evaluator {
                 let (a, b) = (self.eval(l)?, self.eval(r)?);
                 self.compare(*kind, &a, &b)
             }
+            Node::Interval(v) => self.interval_array(*v),
+            Node::Dt(f, args, _) => self.datetime_fn(*f, args),
         }
     }
 
@@ -1246,17 +1281,17 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
         Expected::Rows {
             schema, typed_rows, ..
         } => (Some(schema), typed_rows.as_ref(), None),
-        Expected::Nondeterministic { .. } => {
-            return CellOutcome::NotRun("nondeterministic".to_owned());
-        }
+        // The clock functions: only the result type is recorded.
+        Expected::Nondeterministic { schema } => (Some(schema), None, None),
     };
-    if case
+    let schema_only = matches!(case.expected, Expected::Nondeterministic { .. });
+    let zone_name = case
         .conf
         .get("spark.sql.session.timeZone")
-        .is_some_and(|z| z != "UTC")
-    {
-        return CellOutcome::NotRun("session time zone other than UTC".to_owned());
-    }
+        .map_or("UTC", String::as_str);
+    let Some(zone) = JiffZone::new(zone_name) else {
+        return CellOutcome::NotRun(format!("time zone {zone_name}"));
+    };
     let opts = krishiv_sql::ParserOptions::from_conf(|k| case.conf.get(k).map(String::as_str));
     let Ok(q) = krishiv_sql::parse_query(&case.sql, &opts) else {
         return CellOutcome::NotRun("does not parse".to_owned());
@@ -1269,12 +1304,17 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
         ansi,
         allow_loss: true,
         try_: false,
+        zone: &zone,
+        clock: schema_only.then_some(datetime::NOW),
     })
     .bind(expr)
     {
         Ok(n) => n,
         Err(why) => return CellOutcome::NotRun(why),
     };
+    if matches!(node.ty(), DataType::Interval(_) | DataType::Duration(_)) {
+        return CellOutcome::NotRun("interval result".to_owned());
+    }
     if let Some(field) = schema.and_then(|s| s.first())
         && field.data_type != simple_string(&node.ty())
     {
@@ -1284,6 +1324,9 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
             field.data_type
         ));
     }
+    if schema_only {
+        return CellOutcome::Pass;
+    }
     for shape in [
         Shape::Arrays,
         Shape::LeftScalar,
@@ -1292,9 +1335,12 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
     ] {
         let ev = Evaluator {
             ctx: KernelCtx::new(),
+            zone: &zone,
+            now: datetime::NOW,
             ansi,
             shape,
             invalid_utf8: std::cell::Cell::new(false),
+            day_overflow: std::cell::Cell::new(false),
         };
         let got = ev.eval(&node);
         let outcome = match (got, expected_rows, expected_error) {
@@ -1360,6 +1406,12 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
                     "documented divergence (ADR 0023): STRING holds valid UTF-8 only".to_owned(),
                 );
             }
+            if ev.day_overflow.get() && expected_rows.is_some() {
+                return CellOutcome::NotRun(
+                    "documented divergence (ADR 0023): ANSI date day arithmetic raises where Spark wraps"
+                        .to_owned(),
+                );
+            }
             return CellOutcome::Fail(why);
         }
     }
@@ -1384,7 +1436,7 @@ pub struct GoldenTally {
 }
 
 /// One rendered cell (`HiveResult.toHiveString` for these types).
-fn render(a: &ArrayRef) -> Result<String, EvalError> {
+fn render(a: &ArrayRef, zone: &dyn TimeZoneRules) -> Result<String, EvalError> {
     if a.is_null(0) || a.data_type() == &DataType::Null {
         return Ok("NULL".to_owned());
     }
@@ -1400,7 +1452,7 @@ fn render(a: &ArrayRef) -> Result<String, EvalError> {
     }
     let opts = CastOptions {
         mode: CastMode::Ansi,
-        time_zone: &FixedOffset(0),
+        time_zone: zone,
     };
     let s = cast(a.as_ref(), &DataType::Utf8, &opts)?;
     Ok(s.as_string::<i32>().value(0).to_owned())
@@ -1418,15 +1470,27 @@ pub fn run_golden(text: &str, ansi: bool) -> Result<GoldenTally, crate::golden::
     use crate::golden::parse::{Expected as GoldenExpected, parse_results};
     let mut t = GoldenTally::default();
     let (mut ansi, mut allow_loss) = (ansi, true);
+    // SQLQueryTestSuite runs in America/Los_Angeles; `None` is a zone
+    // this harness cannot resolve (an offset, `LOCAL`, an unknown name).
+    let mut zone = JiffZone::new("America/Los_Angeles");
     for st in parse_results(text)? {
         t.statements += 1;
         let q = st.query.trim();
         if let Some(rest) = q.strip_prefix("set ").or_else(|| q.strip_prefix("SET ")) {
+            if let Some(name) = rest
+                .trim()
+                .strip_prefix("time zone ")
+                .or_else(|| rest.trim().strip_prefix("TIME ZONE "))
+            {
+                zone = JiffZone::new(name.trim().trim_matches('\''));
+                continue;
+            }
             let (k, v) = rest.split_once('=').unwrap_or((rest, ""));
             let on = v.trim().eq_ignore_ascii_case("true");
             match k.trim() {
                 "spark.sql.ansi.enabled" => ansi = on,
                 "spark.sql.decimalOperations.allowPrecisionLoss" => allow_loss = on,
+                "spark.sql.session.timeZone" => zone = JiffZone::new(v.trim()),
                 _ => {}
             }
             continue;
@@ -1456,10 +1520,28 @@ pub fn run_golden(text: &str, ansi: bool) -> Result<GoldenTally, crate::golden::
                 continue;
             }
         };
+        // Errors Spark raises while analyzing (or parsing) the query are the
+        // analyzer's to reproduce, as in the matrix.
+        if let GoldenExpected::Error(want) = &st.expected
+            && (want.exception.ends_with("AnalysisException") || want.is_parse_error())
+        {
+            t.needs_engine
+                .push((q.to_owned(), "analysis error (analyzer)".to_owned()));
+            continue;
+        }
+        let Some(zone) = zone.as_ref() else {
+            t.needs_engine.push((
+                q.to_owned(),
+                "a session time zone this harness cannot resolve".to_owned(),
+            ));
+            continue;
+        };
         let binder = Binder {
             ansi,
             allow_loss,
             try_: false,
+            zone,
+            clock: None,
         };
         let nodes: Result<Vec<Node>, Skip> = items.iter().map(|i| binder.bind(&i.expr)).collect();
         let nodes = match nodes {
@@ -1469,13 +1551,32 @@ pub fn run_golden(text: &str, ansi: bool) -> Result<GoldenTally, crate::golden::
                 continue;
             }
         };
+        if nodes
+            .iter()
+            .any(|n| matches!(n.ty(), DataType::Interval(_) | DataType::Duration(_)))
+        {
+            t.needs_engine
+                .push((q.to_owned(), "an interval result".to_owned()));
+            continue;
+        }
         let ev = Evaluator {
             ctx: KernelCtx::new(),
+            zone,
+            now: datetime::NOW,
             ansi,
             shape: Shape::Arrays,
             invalid_utf8: std::cell::Cell::new(false),
+            day_overflow: std::cell::Cell::new(false),
         };
         let values: Result<Vec<ArrayRef>, EvalError> = nodes.iter().map(|n| ev.eval(n)).collect();
+        if ev.day_overflow.get() && matches!(&st.expected, GoldenExpected::Rows(_)) {
+            t.needs_engine.push((
+                q.to_owned(),
+                "documented divergence (ADR 0023): ANSI date day arithmetic raises where Spark wraps"
+                    .to_owned(),
+            ));
+            continue;
+        }
         let types: Vec<String> = nodes.iter().map(|n| simple_string(&n.ty())).collect();
         let verdict = match (values, &st.expected) {
             (Err(EvalError::Other(why)), _) => {
@@ -1507,7 +1608,8 @@ pub fn run_golden(text: &str, ansi: bool) -> Result<GoldenTally, crate::golden::
                 Err(format!("no error, Spark raised {:?}", want.error_class))
             }
             (Ok(vals), GoldenExpected::Rows(out)) => {
-                let row: Result<Vec<String>, EvalError> = vals.iter().map(render).collect();
+                let row: Result<Vec<String>, EvalError> =
+                    vals.iter().map(|v| render(v, zone)).collect();
                 let row = row.map_err(|_| "render".to_owned()).map(|r| r.join("\t"));
                 let typed = schema_types_match(&st.schema, &types);
                 match row {
@@ -1714,7 +1816,7 @@ mod tests {
         not_run(cell("+", "SELECT 1 + true", on, error("X", "", "analysis")));
         not_run(cell(
             "+",
-            "SELECT 1 + 1",
+            "SELECT 1 + rand()",
             on,
             Expected::Nondeterministic { schema: vec![] },
         ));
@@ -1848,7 +1950,7 @@ mod tests {
         };
         tz.conf.insert(
             "spark.sql.session.timeZone".to_owned(),
-            "America/Los_Angeles".to_owned(),
+            "Mars/Olympus".to_owned(),
         );
         not_run(run_cell(&tz));
     }
@@ -1972,6 +2074,168 @@ mod tests {
             ("substr", "SELECT substr('a', ARRAY(1))"),
         ] {
             let outcome = cell(f, sql, on, rows("string", json!("a")));
+            assert!(
+                matches!(outcome, CellOutcome::NotRun(_)),
+                "{sql}: {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn datetime_functions_run_in_every_shape() {
+        let on = Mode::AnsiOn;
+        let day = |d: i64| json!({ "days": d });
+        let micros = |m: i64| json!({ "ts_us": m, "tz": "UTC" });
+        for (f, sql, ty, want) in [
+            (
+                "date_add",
+                "SELECT date_add('2016-07-30', 1)",
+                "date",
+                day(17_013),
+            ),
+            (
+                "date_sub",
+                "SELECT date_sub(DATE'2016-07-30', 1S)",
+                "date",
+                day(17_011),
+            ),
+            (
+                "datediff",
+                "SELECT datediff(DATE'2024-02-29', '2009-07-30')",
+                "int",
+                json!(5_327),
+            ),
+            (
+                "year",
+                "SELECT year(TIMESTAMP'2024-02-29 12:34:56')",
+                "int",
+                json!(2024),
+            ),
+            (
+                "extract",
+                "SELECT extract(DOY FROM DATE'2024-03-10')",
+                "int",
+                json!(70),
+            ),
+            (
+                "date_part",
+                "SELECT date_part('week', DATE'2024-03-10')",
+                "int",
+                json!(10),
+            ),
+            (
+                "extract",
+                "SELECT extract(SECOND FROM TIMESTAMP'2024-03-10 13:45:56.789012')",
+                "decimal(8,6)",
+                json!({"unscaled": "56789012", "scale": 6}),
+            ),
+            (
+                "+",
+                "SELECT DATE'2020-01-31' + INTERVAL '1' MONTH",
+                "date",
+                day(18_321),
+            ),
+            (
+                "-",
+                "SELECT DATE'2020-01-01' - interval 90 days",
+                "date",
+                day(18_262 - 90),
+            ),
+            (
+                "+",
+                "SELECT INTERVAL 14 MONTHS + DATE'2020-01-01'",
+                "date",
+                day(18_687),
+            ),
+            ("+", "SELECT DATE'2020-01-01' + 2", "date", day(18_264)),
+            (
+                "+",
+                "SELECT DATE'2020-01-01' + INTERVAL 1 DAY 2 HOURS 3 MINUTES 4.5 SECONDS",
+                "timestamp",
+                micros(1_577_930_584_500_000),
+            ),
+            (
+                "to_date",
+                "SELECT to_date(' 2020-01-01 10:00:00')",
+                "date",
+                day(18_262),
+            ),
+            (
+                "to_timestamp",
+                "SELECT to_timestamp('2020-01-01 10:00:00+02:00')",
+                "timestamp",
+                micros(1_577_865_600_000_000),
+            ),
+            (
+                "try_add",
+                "SELECT try_add(DATE'9999-12-31', INTERVAL 2147483647 MONTH)",
+                "date",
+                Value::Null,
+            ),
+        ] {
+            let outcome = cell(f, sql, on, rows(ty, want));
+            assert_eq!(outcome, CellOutcome::Pass, "{sql}");
+        }
+        // Day arithmetic past the `int` range: Spark wraps; Krishiv wraps with
+        // ANSI off and raises with ANSI on (reported as a documented divergence).
+        let sql = "SELECT date_add('2016-07-30', 2147483647)";
+        let wrapped = rows("date", day(-2_147_466_637));
+        assert_eq!(
+            cell("date_add", sql, Mode::AnsiOff, wrapped.clone()),
+            CellOutcome::Pass
+        );
+        let ansi = cell("date_add", sql, on, wrapped);
+        assert!(
+            matches!(&ansi, CellOutcome::NotRun(w) if w.contains("ADR 0023")),
+            "{ansi:?}"
+        );
+        // The clock functions only check the result type.
+        let nd = |ty: &str| Expected::Nondeterministic {
+            schema: vec![Field {
+                name: "c".to_owned(),
+                data_type: ty.to_owned(),
+                nullable: false,
+            }],
+        };
+        for (f, sql, ty, pass) in [
+            ("current_date", "SELECT current_date()", "date", true),
+            ("now", "SELECT now()", "timestamp", true),
+            ("current_date", "SELECT current_date()", "timestamp", false),
+        ] {
+            let outcome = cell(f, sql, on, nd(ty));
+            assert_eq!(outcome == CellOutcome::Pass, pass, "{sql}: {outcome:?}");
+        }
+        let fail = |o: CellOutcome| assert!(matches!(o, CellOutcome::Fail(_)), "{o:?}");
+        fail(cell(
+            "date_add",
+            "SELECT date_add(DATE'2020-01-01', 1)",
+            on,
+            rows("date", day(0)),
+        ));
+        let v = rows("date", day(0));
+        for (f, sql) in [
+            ("to_date", "SELECT to_date('2020', 'yyyy')"),
+            ("extract", "SELECT extract(century FROM DATE'2020-01-01')"),
+            ("extract", "SELECT extract(YEAR FROM INTERVAL '1' MONTH)"),
+            ("+", "SELECT DATE'2020-01-01' * INTERVAL '1' DAY"),
+            ("+", "SELECT INTERVAL '1' DAY - DATE'2020-01-01'"),
+            ("+", "SELECT INTERVAL '1' DAY + INTERVAL '1' DAY"),
+            ("+", "SELECT DATE'2020-01-01' + INTERVAL '1' YEAR '1' DAY"),
+            ("+", "SELECT DATE'2020-01-01' + INTERVAL '1.5' DAY"),
+            (
+                "+",
+                "SELECT DATE'2020-01-01' + INTERVAL '99999999999999999999999999999999' DAY",
+            ),
+            ("+", "SELECT DATE'2020-01-01' + INTERVAL '2147483648' MONTH"),
+            (
+                "+",
+                "SELECT DATE'2020-01-01' + INTERVAL '1 2' DAY TO MINUTE",
+            ),
+            ("date_add", "SELECT date_add(1.5D, 1)"),
+            ("date_add", "SELECT date_add(DATE'2020-01-01', 1L)"),
+            ("current_date", "SELECT current_date(1)"),
+        ] {
+            let outcome = cell(f, sql, on, v.clone());
             assert!(
                 matches!(outcome, CellOutcome::NotRun(_)),
                 "{sql}: {outcome:?}"
