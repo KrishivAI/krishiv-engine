@@ -21,7 +21,12 @@ krishiv-types = { path = "../krishiv-types" }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }
 
 [dev-dependencies]
+criterion.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
 
 [target.'cfg(loom)'.dev-dependencies]
 loom = { workspace = true, features = ["futures"] }
+
+[[bench]]
+name = "pipeline"
+harness = false
