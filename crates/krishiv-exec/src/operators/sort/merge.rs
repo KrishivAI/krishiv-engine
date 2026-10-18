@@ -352,7 +352,9 @@ impl Merger {
         used.dedup();
         let sources: Vec<Batch> = used.iter().map(|&s| self.sources[s].clone()).collect();
         for o in &mut out {
-            o.0 = used.binary_search(&o.0).unwrap_or_default();
+            o.0 = used
+                .binary_search(&o.0)
+                .map_err(|_| internal(format!("merge source {} is not in use", o.0)))?;
         }
         let batch = interleave_batches(&self.schema, &sources, &out)?;
         if self.retired {
