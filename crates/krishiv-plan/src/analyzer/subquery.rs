@@ -738,6 +738,15 @@ impl Rewriter {
                 plan.origin,
             ));
         }
+        // Spark rejects outer references in the value
+        // (`AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES`, or an outer
+        // aggregate's `CORRELATED_REFERENCE`); the join could not bind them.
+        if has_outer(Node::Expr(item)) {
+            return Err(unsupported(
+                "outer references in a correlated scalar subquery's value",
+                item.origin,
+            ));
+        }
         let empty = on_no_rows(expr).ok_or_else(|| {
             unsupported(
                 "a correlated scalar subquery whose value over no rows is not NULL or a count",
@@ -773,11 +782,17 @@ impl Rewriter {
         }
         // The aggregate outputs its value and its keys.
         let mut aggregates = vec![Arc::clone(item)];
-        let mut key_cols = Vec::new();
+        let mut key_cols: Vec<BoundColumn> = Vec::new();
+        let mut grouping: Vec<Arc<Expr>> = Vec::new();
         for k in &inner_keys {
             let col = match &k.node {
+                // A column met again (`u.a = t.a AND u.a = t.x`) is one key:
+                // the aggregate outputs each attribute once.
                 ExprNode::Resolved(ResolvedExpr::Column(c)) => {
-                    aggregates.push(Arc::clone(k));
+                    if !key_cols.iter().any(|o| o.id == c.id) {
+                        aggregates.push(Arc::clone(k));
+                        grouping.push(Arc::clone(k));
+                    }
                     c.clone()
                 }
                 _ => {
@@ -796,6 +811,7 @@ impl Rewriter {
                             output: output.clone(),
                         },
                     ))));
+                    grouping.push(Arc::clone(k));
                     output
                 }
             };
@@ -804,7 +820,7 @@ impl Rewriter {
         let agg = node(
             PlanNode::Aggregate {
                 input: inner,
-                grouping: Grouping::GroupBy(inner_keys),
+                grouping: Grouping::GroupBy(grouping),
                 aggregates,
             },
             plan.origin,

@@ -274,7 +274,7 @@ fn tpch_subqueries_become_equi_joins() {
 /// owner: P2-T025a), operators' string coercions with
 /// `spark.sql.ansi.enabled` off (owner: P2-T071d), and correlated
 /// subqueries beyond TPC-H's shapes (owner: P2-T115, general unnesting).
-const GAPS: [&str; 11] = [
+const GAPS: [&str; 12] = [
     "date and timestamp arithmetic",
     "implicit string casts with spark.sql.ansi.enabled off",
     "correlated EXISTS and IN subqueries inside OR, NOT or other expressions",
@@ -283,6 +283,7 @@ const GAPS: [&str; 11] = [
     "a correlated scalar subquery whose value over no rows is not NULL or a count",
     "correlated scalar subqueries whose correlation is not an equality",
     "correlated predicates with subqueries",
+    "outer references in a correlated scalar subquery's value",
     "outer references in a subquery's select list",
     "outer references below a join, aggregate, limit or set operation",
     "correlated subqueries outside a filter or a projection",
@@ -348,7 +349,7 @@ fn resolution_corpus_matches_spark() {
         failures.join("\n")
     );
     // The gaps stay the statements they are now.
-    assert_eq!(gaps, 129, "statements in documented gaps");
+    assert_eq!(gaps, 132, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.
@@ -421,4 +422,21 @@ fn sql_text_in_plans_goes_through_the_front_end() {
         },
     };
     assert_ne!(ansi.fingerprint(), Frontend::default().fingerprint());
+}
+
+/// A correlation key column met twice is one grouping key: every
+/// relation of the rewritten plan outputs each attribute once.
+#[test]
+fn repeated_correlation_keys_stay_unique() {
+    fn check(p: &Arc<LogicalPlan>) {
+        let out = p.resolved_output().unwrap();
+        let ids: BTreeSet<AttrId> = out.iter().map(|c| c.id).collect();
+        assert_eq!(ids.len(), out.len(), "{p}");
+        p.for_each_child(&mut |c| check(c));
+    }
+    let g = goldens();
+    let sql = "SELECT a FROM t WHERE (SELECT max(u.a) FROM u WHERE u.a = t.a AND u.a = CAST(t.c AS INT)) > 1";
+    let a = analyze(&g, sql, ResolutionConf::default()).unwrap();
+    check(a.plan.root());
+    assert!(a.plan.root().to_string().contains("Aggregate [a#3], "));
 }

@@ -5910,7 +5910,7 @@
    "error_class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.UNSUPPORTED_CORRELATED_SCALAR_SUBQUERY",
    "sql_state": "0A000",
    "message_parameters": {
-    "treeNode": "Join Inner, (a#104991 = scalar-subquery#107494 [a#104995])\n:  +- Aggregate [max(i#105012) AS max(i)#107496]\n:     +- Filter (i#105012 = outer(a#104995))\n:        +- SubqueryAlias spark_catalog.default.n\n:           +- Relation spark_catalog.default.n[ti#105010,si#105011,i#105012,l#105013L,f#105014,d#105015,dc#105016,dw#105017,s#105018,bo#105019,dt#105020,ts#105021,tn#105022,bi#105023] parquet\n:- SubqueryAlias spark_catalog.default.t\n:  +- Relation spark_catalog.default.t[a#104991,b#104992,c#104993L] parquet\n+- SubqueryAlias spark_catalog.default.u\n   +- Relation spark_catalog.default.u[a#104995,d#104996] parquet\n"
+    "treeNode": "Join Inner, (a#114323 = scalar-subquery#116826 [a#114327])\n:  +- Aggregate [max(i#114344) AS max(i)#116828]\n:     +- Filter (i#114344 = outer(a#114327))\n:        +- SubqueryAlias spark_catalog.default.n\n:           +- Relation spark_catalog.default.n[ti#114342,si#114343,i#114344,l#114345L,f#114346,d#114347,dc#114348,dw#114349,s#114350,bo#114351,dt#114352,ts#114353,tn#114354,bi#114355] parquet\n:- SubqueryAlias spark_catalog.default.t\n:  +- Relation spark_catalog.default.t[a#114323,b#114324,c#114325L] parquet\n+- SubqueryAlias spark_catalog.default.u\n   +- Relation spark_catalog.default.u[a#114327,d#114328] parquet\n"
    },
    "context": {
     "start": 16,
@@ -5958,6 +5958,63 @@
     "stop": 63,
     "fragment": "t.b"
    }
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(u.a + t.a) FROM u WHERE u.a = t.a) > 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "function": "max((spark_catalog.default.u.a + outer(spark_catalog.default.t.a)))"
+   },
+   "context": {
+    "start": 30,
+    "stop": 43,
+    "fragment": "max(u.a + t.a)"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(t.a) FROM u) > 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "sqlExprs": "\"max(a) AS `max(outer(spark_catalog.default.t.a))`\""
+   },
+   "context": {
+    "start": 23,
+    "stop": 44,
+    "fragment": "SELECT max(t.a) FROM u"
+   }
+  },
+  {
+   "sql": "SELECT a, (SELECT max(u.a) + t.a FROM u WHERE u.a = t.a) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "sqlExprs": "\"(max(a) + a) AS `(max(a) + outer(spark_catalog.default.t.a))`\""
+   },
+   "context": {
+    "start": 11,
+    "stop": 54,
+    "fragment": "SELECT max(u.a) + t.a FROM u WHERE u.a = t.a"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(u.a) FROM u WHERE u.a = t.a AND u.a = CAST(t.c AS INT)) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
   },
   {
    "sql": "SELECT a FROM t WHERE (SELECT max(a > 0) FROM u WHERE u.a = t.a)",
