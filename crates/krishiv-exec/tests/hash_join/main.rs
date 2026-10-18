@@ -173,7 +173,7 @@ async fn run_case(
         scan(&schema(), batches(&data(build), batch_rows)),
         scan(&schema(), batches(&data(probe), batch_rows)),
     );
-    let out = run(&runner(threads), plan, &q).await.unwrap();
+    let out = run(&runner_for(threads, limit), plan, &q).await.unwrap();
     assert_released(&root);
     assert_eq!(spill_files(&scope), 0, "spill files are deleted");
     (render(&out), q)
@@ -346,7 +346,11 @@ proptest! {
         }
         c.keys = 2;
         c.null_safe.resize(2, false);
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap();
         let (expect, _) = rt.block_on(run_case(&c, &probe, &build, batch_rows, threads, 256 * MIB));
         let (got, q) = rt.block_on(run_case(&c, &probe, &build, batch_rows, threads, MIB));
         prop_assert!(got == expect, "grace result differs");
@@ -424,7 +428,7 @@ fn skewed(rows: usize, keys: i64) -> Vec<Row> {
 /// A tiny budget forces build partitions, probe rows and (one level down)
 /// repartitioned partitions to disk; the answer equals the in-memory one
 /// and `EXPLAIN ANALYZE` shows the spill.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn grace_spill_with_recursion_equals_the_in_memory_join() {
     let build = skewed(30_000, 20_000);
     let probe = skewed(40_000, 25_000);
@@ -450,7 +454,7 @@ async fn grace_spill_with_recursion_equals_the_in_memory_join() {
 
 /// Keys that cannot be split: a partition still too large at the depth
 /// limit fails with a typed error, releasing memory and files.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_partition_skewed_on_one_key_fails_at_the_depth_limit() {
     let build: Vec<Row> = (0..60_000).map(|i| r(Some(7), Some("a"), i)).collect();
     let probe = vec![r(Some(7), Some("a"), 1); 10];
@@ -462,7 +466,7 @@ async fn a_partition_skewed_on_one_key_fails_at_the_depth_limit() {
         scan(&schema(), batches(&data(&build), 2048)),
         scan(&schema(), batches(&data(&probe), 2048)),
     );
-    let e = run(&runner(2), plan, &q).await.unwrap_err();
+    let e = run(&runner_for(2, 1 << 20), plan, &q).await.unwrap_err();
     assert_eq!(
         e.error_class(),
         ErrorClass::KrishivJoinPartitionTooLarge,
@@ -556,7 +560,7 @@ async fn without_a_spill_scope_memory_pressure_is_an_error() {
 
 /// A `LIMIT` above a spilling join stops its flush; a `LIMIT` below it
 /// (on the probe side) still lets the spilled partitions be joined.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn limits_above_and_below_a_spilling_join() {
     use krishiv_exec::testing::{Limit, Pipe};
     let unique: Vec<Row> = (0..40_000).map(|i| r(Some(i), Some("k"), i % 50)).collect();
@@ -576,7 +580,7 @@ async fn limits_above_and_below_a_spilling_join() {
         if !below {
             plan = Arc::new(Pipe(plan, Limit::new(5_000)));
         }
-        let out = run(&runner(3), plan, &q).await.unwrap();
+        let out = run(&runner_for(3, 1536 << 10), plan, &q).await.unwrap();
         assert_eq!(
             out.iter().map(Batch::num_rows).sum::<usize>(),
             5_000,

@@ -444,7 +444,7 @@ fn decimal(v: i128, scale: u32) -> String {
 async fn exec(plan: Node, limit: usize) -> (RecordBatch, Arc<QueryContext>) {
     let root = root(limit);
     let q = query(&root, 1, ExecConfig::default());
-    let out = run(&runner(4), plan.0, &q).await.unwrap();
+    let out = run(&runner_for(4, limit), plan.0, &q).await.unwrap();
     assert_released(&root);
     let data: Vec<RecordBatch> = out.iter().map(|b| b.data().clone()).collect();
     let all = arrow_select::concat::concat_batches(&Arc::new(plan.1), &data).unwrap();
@@ -798,7 +798,7 @@ async fn tpch_join_shapes_match_duckdb() {
 
 /// Q9 matches DuckDB in memory and under a budget that forces the builds
 /// to spill; the `EXPLAIN ANALYZE` metrics record the spill.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn tpch_q9_completes_under_a_tiny_budget_with_spill_recorded() {
     let t = generate();
     let (_m, s) = spill();

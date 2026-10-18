@@ -52,6 +52,24 @@ pub(crate) fn runner(threads: usize) -> QueryRunner {
     QueryRunner::new(executor.unwrap())
 }
 
+/// Budgets below this do not hold the tests' joins: they spill.
+pub(crate) const SPILL_FREE: usize = 64 * MIB;
+
+/// The runner for a query under a `limit`-byte budget. A spilling run uses
+/// the deterministic executor (`slots` drivers on the test's
+/// current-thread runtime, blocking work scheduled like any task), whose
+/// paused clock also times the pool's spill and abort waits: a deadline
+/// then passes only while every task waits, never because the machine is
+/// busy, so a run's outcome does not depend on machine load (and replays).
+/// Unbudgeted runs use real threads.
+pub(crate) fn runner_for(slots: usize, limit: usize) -> QueryRunner {
+    if limit < SPILL_FREE {
+        QueryRunner::new(TokioExecutor::deterministic(slots).unwrap())
+    } else {
+        runner(slots)
+    }
+}
+
 /// Runs `plan` to the end; returns every batch or the query's error, once
 /// every task has ended.
 pub(crate) async fn run(
