@@ -25,6 +25,8 @@ fn literal_statements_match_spark() -> R {
         ("operators.sql.out", true),
         ("try_arithmetic.sql.out", true),
         ("nonansi/try_arithmetic.sql.out.java21", false),
+        ("string-functions.sql.out", true),
+        ("nonansi/string-functions.sql.out", false),
     ] {
         let t = run_golden(&std::fs::read_to_string(dir.join(file))?, ansi)?;
         writeln!(

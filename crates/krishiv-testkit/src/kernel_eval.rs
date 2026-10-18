@@ -13,6 +13,8 @@
 //! and constructs this evaluator does not type, are reported as not run with
 //! the reason.
 
+mod strings;
+
 use std::sync::Arc;
 
 use arrow_array::types::{
@@ -81,6 +83,30 @@ pub const FUNCTIONS: &[&str] = &[
     "date",
     "timestamp",
     "string",
+    // P2-T023a: string functions.
+    "upper",
+    "ucase",
+    "lower",
+    "lcase",
+    "length",
+    "char_length",
+    "character_length",
+    "trim",
+    "ltrim",
+    "rtrim",
+    "btrim",
+    "startswith",
+    "endswith",
+    "contains",
+    "replace",
+    "lpad",
+    "rpad",
+    "substring",
+    "substr",
+    "concat",
+    "||",
+    "like",
+    "split",
 ];
 
 /// The outcome of one cell.
@@ -117,6 +143,8 @@ enum Node {
     Cmp(Option<CompareKind>, Box<Node>, Box<Node>),
     /// Unary minus or `abs`.
     Unary(UnaryOp, Box<Node>),
+    /// A string function (`strings`) with its result type.
+    Str(strings::StrFn, Vec<Node>, DataType),
 }
 
 /// Binary arithmetic operators.
@@ -134,7 +162,7 @@ impl Node {
     fn ty(&self) -> DataType {
         match self {
             Self::Lit(a) => a.data_type().clone(),
-            Self::Cast(_, t, _) | Self::Arith { ty: t, .. } => t.clone(),
+            Self::Cast(_, t, _) | Self::Arith { ty: t, .. } | Self::Str(_, _, t) => t.clone(),
             Self::Cmp(..) => DataType::Boolean,
             Self::Unary(_, c) => c.ty(),
         }
@@ -169,6 +197,7 @@ pub fn simple_string(t: &DataType) -> String {
         DataType::Decimal128(p, s) => format!("decimal({p},{s})"),
         DataType::Utf8 => "string".to_owned(),
         DataType::Binary => "binary".to_owned(),
+        DataType::List(f) => format!("array<{}>", simple_string(f.data_type())),
         DataType::Date32 => "date".to_owned(),
         DataType::Timestamp(_, Some(_)) => "timestamp".to_owned(),
         DataType::Timestamp(_, None) => "timestamp_ntz".to_owned(),
@@ -269,6 +298,19 @@ impl Binder {
                 self.binary(*op, l, r)
             }
             ExprKind::Function(f) => self.function(f),
+            ExprKind::Like {
+                expr,
+                pattern,
+                escape,
+                negated,
+                case_insensitive,
+            } => self.like_expr(
+                expr,
+                pattern,
+                escape.as_deref(),
+                *negated,
+                *case_insensitive,
+            ),
             _ => Err("expression kind outside this task".to_owned()),
         }
     }
@@ -290,6 +332,9 @@ impl Binder {
             .map(|p| p.value.to_ascii_lowercase())
             .unwrap_or_default();
         let args: Vec<&ast::Expr> = f.args.iter().map(|a| &a.expr).collect();
+        if let Some(node) = self.string_function(&name, &args) {
+            return node;
+        }
         let cast_to = match name.as_str() {
             "int" => Some(DataType::Int32),
             "bigint" => Some(DataType::Int64),
@@ -364,6 +409,7 @@ impl Binder {
             Bop::Gt => c(CompareKind::Greater),
             Bop::GtEq => c(CompareKind::GreaterEq),
             Bop::NullSafeEq => self.compare(None, l, r),
+            Bop::Concat => self.concat(vec![l, r]),
             _ => Err("binary operator outside this task".to_owned()),
         }
     }
@@ -816,6 +862,7 @@ impl Evaluator {
                 let v = self.eval(c)?;
                 self.unary(*op, &v)
             }
+            Node::Str(f, args, _) => self.string_fn(f, args),
             Node::Arith { op, l, r, ty, try_ } => {
                 let (a, b) = (self.eval(l)?, self.eval(r)?);
                 self.arith(*op, &a, &b, ty, *try_)
@@ -1141,6 +1188,16 @@ fn cell_matches(a: &dyn Array, i: usize, cell: &Value) -> bool {
                 == Some(a.as_primitive::<TimestampMicrosecondType>().value(i))
         }
         DataType::Utf8 => cell.as_str() == Some(a.as_string::<i32>().value(i)),
+        DataType::List(_) => {
+            let list = a.as_list::<i32>().value(i);
+            cell.as_array().is_some_and(|cells| {
+                cells.len() == list.len()
+                    && cells
+                        .iter()
+                        .enumerate()
+                        .all(|(j, c)| cell_matches(list.as_ref(), j, c))
+            })
+        }
         DataType::Binary => {
             let hex: String = a
                 .as_binary::<i32>()
@@ -1307,6 +1364,16 @@ pub struct GoldenTally {
 fn render(a: &ArrayRef) -> Result<String, EvalError> {
     if a.is_null(0) || a.data_type() == &DataType::Null {
         return Ok("NULL".to_owned());
+    }
+    if let DataType::List(_) = a.data_type() {
+        // `HiveResult`: `["a","b"]`.
+        let items = a.as_list::<i32>().value(0);
+        let items: Vec<String> = items
+            .as_string::<i32>()
+            .iter()
+            .map(|s| s.map_or_else(|| "null".to_owned(), |s| format!("\"{s}\"")))
+            .collect();
+        return Ok(format!("[{}]", items.join(",")));
     }
     let opts = CastOptions {
         mode: CastMode::Ansi,
@@ -1761,6 +1828,132 @@ mod tests {
             "America/Los_Angeles".to_owned(),
         );
         not_run(run_cell(&tz));
+    }
+
+    #[test]
+    fn string_functions_run_in_every_shape() {
+        let on = Mode::AnsiOn;
+        let hex = |h: &str| json!({ "hex": h });
+        for (f, sql, ty, want) in [
+            ("upper", "SELECT upper('abc')", "string", json!("ABC")),
+            ("length", "SELECT length(X'0102')", "int", json!(2)),
+            (
+                "trim",
+                "SELECT trim(LEADING 'x' FROM 'xxa')",
+                "string",
+                json!("a"),
+            ),
+            ("||", "SELECT 'a' || 1 || 'b'", "string", json!("a1b")),
+            ("concat", "SELECT concat()", "string", json!("")),
+            (
+                "concat",
+                "SELECT concat(X'01', X'02')",
+                "binary",
+                hex("0102"),
+            ),
+            (
+                "lpad",
+                "SELECT lpad(X'01', 3, X'02')",
+                "binary",
+                hex("020201"),
+            ),
+            (
+                "substr",
+                "SELECT substr(X'AABBCC', 2)",
+                "binary",
+                hex("BBCC"),
+            ),
+            (
+                "substring",
+                "SELECT substring('Spark SQL' FROM 5 FOR 1)",
+                "string",
+                json!("k"),
+            ),
+            (
+                "replace",
+                "SELECT replace('abc', 'b')",
+                "string",
+                json!("ac"),
+            ),
+            (
+                "startswith",
+                "SELECT startswith(X'AB01', X'AB')",
+                "boolean",
+                json!(true),
+            ),
+            (
+                "like",
+                "SELECT 'abc' NOT LIKE 'a%'",
+                "boolean",
+                json!(false),
+            ),
+            (
+                "like",
+                "SELECT like('a%c', 'a$%c', '$')",
+                "boolean",
+                json!(true),
+            ),
+            (
+                "split",
+                "SELECT split('a,b', ',', 1)",
+                "array<string>",
+                json!(["a,b"]),
+            ),
+            (
+                "split",
+                "SELECT split('a.b', '\\\\.')",
+                "array<string>",
+                json!(["a", "b"]),
+            ),
+            (
+                "split",
+                "SELECT split('a', NULL)",
+                "array<string>",
+                Value::Null,
+            ),
+        ] {
+            let outcome = cell(f, sql, on, rows(ty, want));
+            assert_eq!(outcome, CellOutcome::Pass, "{sql}");
+        }
+        let escape = error("INVALID_FORMAT.ESC_AT_THE_END", "other text", "execution");
+        let fails = [
+            ("upper", "SELECT upper('a')", rows("string", json!("a"))),
+            ("like", "SELECT 'a' LIKE 'a'", rows("boolean", json!(false))),
+            (
+                "split",
+                "SELECT split('a,b', ',')",
+                rows("array<string>", json!(["a"])),
+            ),
+            ("like", "SELECT 'a' LIKE 'a\\\\'", escape),
+        ];
+        for (f, sql, want) in fails {
+            let outcome = cell(f, sql, on, want);
+            assert!(
+                matches!(outcome, CellOutcome::Fail(_)),
+                "{sql}: {outcome:?}"
+            );
+        }
+        for (f, sql) in [
+            ("split", "SELECT split('a', '[ab]')"),
+            ("like", "SELECT 'a' ILIKE 'A'"),
+            ("like", "SELECT 'a' LIKE 'a' ESCAPE 'ab'"),
+            ("upper", "SELECT upper()"),
+            ("upper", "SELECT upper(INTERVAL '1' DAY)"),
+            ("upper", "SELECT upper(array(1))"),
+            ("upper", "SELECT upper(split('a', ','))"),
+            ("substr", "SELECT substr('a', split('a', ','))"),
+            ("split", "SELECT split('a', CAST(1 / 0 AS STRING))"),
+            ("replace", "SELECT replace('a')"),
+            ("like", "SELECT like('a', 'a', NULL)"),
+            ("split", "SELECT split('a')"),
+            ("substr", "SELECT substr('a', ARRAY(1))"),
+        ] {
+            let outcome = cell(f, sql, on, rows("string", json!("a")));
+            assert!(
+                matches!(outcome, CellOutcome::NotRun(_)),
+                "{sql}: {outcome:?}"
+            );
+        }
     }
 
     #[test]

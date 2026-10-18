@@ -49,6 +49,7 @@ pub mod ops;
 pub mod policy;
 pub mod reference;
 pub mod specialize;
+pub mod string;
 mod unsafe_dispatch;
 pub mod version;
 
