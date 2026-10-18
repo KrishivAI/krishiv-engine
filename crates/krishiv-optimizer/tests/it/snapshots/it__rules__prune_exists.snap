@@ -2,7 +2,6 @@
 source: crates/krishiv-optimizer/tests/it/rules.rs
 expression: SELECT a FROM t WHERE EXISTS (SELECT * FROM u WHERE u.a = t.a)
 ---
-Filter exists
-:  +- Filter (a#3 == outer(a#0))
-:     +- Scan spark_catalog.default.u [a#3]
-+- Scan spark_catalog.default.t [a#0]
+Join LeftSemi, (a#3 == a#0)
+:- Scan spark_catalog.default.t [a#0]
++- Scan spark_catalog.default.u [a#3]

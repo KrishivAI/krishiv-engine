@@ -138,6 +138,8 @@ pub struct Query {
     pub body: SetExpr,
     /// `ORDER BY`.
     pub order_by: Vec<SortItem>,
+    /// The `ORDER BY` clause, as Spark's errors cite the sort.
+    pub order_span: Option<Span>,
     /// `CLUSTER BY`.
     pub cluster_by: Vec<Expr>,
     /// `DISTRIBUTE BY`.

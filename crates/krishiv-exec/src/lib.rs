@@ -79,6 +79,7 @@ mod morsel;
 mod operator;
 mod operators;
 mod pipeline;
+pub mod planner;
 mod runner;
 mod sync;
 pub mod testing;

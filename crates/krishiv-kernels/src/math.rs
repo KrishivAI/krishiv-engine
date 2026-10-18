@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Spark's math functions: the `double` functions (`sqrt`, `exp`, `ln`,
 //! the trigonometric family, `pow`, `atan2`, `hypot`, `log`, ...), `round` /
-//! `bround` / `ceil` / `floor` on every numeric type.
+//! `bround` / `ceil` / `floor` on every numeric type, `pmod`, and
+//! `greatest` / `least`.
 //!
 //! # Floating-point bits
 //!
@@ -25,12 +26,16 @@
 //! `asinh` and `acosh` follow the context's [`SparkVersion`]
 //! (see [`UnaryFn::apply`]).
 
+mod extremum;
 mod fdlibm;
+mod pmod;
 mod round;
 
 use arrow_array::types::Float64Type;
 use arrow_array::{Array, Float64Array};
 
+pub use extremum::{Extremum, extremum_bool, extremum_bytes, extremum_float, extremum_primitive};
+pub use pmod::{pmod_decimal, pmod_float, pmod_integral};
 pub use round::{
     DecimalRounding, RoundMode, ceil_floor_to_long, round_decimal, round_decimal_type, round_f32,
     round_f64, round_integral,

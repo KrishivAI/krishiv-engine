@@ -7,13 +7,16 @@
     reason = "test helpers outside #[test] fns fail loudly"
 )]
 
+use arrow_array::types::{Int8Type, Int32Type, Int64Type};
 use arrow_array::{
-    Array, Decimal128Array, Float32Array, Float64Array, Int8Array, Int32Array, Int64Array,
+    Array, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array, Int32Array,
+    Int64Array, StringArray,
 };
 use krishiv_common::error::ErrorClass;
 use krishiv_kernels::math::{
-    BinaryFn, DecimalRounding, RoundMode, UnaryFn, binary, ceil_floor_to_long, round_decimal,
-    round_decimal_type, round_f32, round_f64, round_integral, unary,
+    BinaryFn, DecimalRounding, Extremum, RoundMode, UnaryFn, binary, ceil_floor_to_long,
+    extremum_bool, extremum_bytes, extremum_float, extremum_primitive, pmod_decimal, pmod_float,
+    pmod_integral, round_decimal, round_decimal_type, round_f32, round_f64, round_integral, unary,
 };
 use krishiv_kernels::{KernelCtx, Operand, OverflowMode, SparkVersion};
 use proptest::prelude::*;
@@ -620,6 +623,267 @@ fn ceil_and_floor_of_doubles_saturate() {
     assert_eq!(c.iter().collect::<Vec<_>>(), want);
 }
 
+#[test]
+fn pmod_integral_and_errors() {
+    let c = ctx(SparkVersion::V4_2);
+    let ansi = OverflowMode::AnsiError;
+    let wrap = OverflowMode::JavaWrap;
+    let a = Int32Array::from(vec![-7, 7, -7, 7, 5, i32::MIN]);
+    let n = Int32Array::from(vec![3, -3, -3, 3, 0, -1]);
+    let r = pmod_integral(Operand::Array(&a), Operand::Array(&n), wrap, &c).unwrap();
+    // Spark: pmod(-7, 3) = 2, pmod(7, -3) = 1, pmod(-7, -3) = -1; a zero divisor is NULL.
+    assert_eq!(
+        r.iter().collect::<Vec<_>>(),
+        [Some(2), Some(1), Some(-1), Some(1), None, Some(0)]
+    );
+    // tinyint widens to int for the sum, int wraps at 32 bits.
+    let t = pmod_integral(
+        Operand::<Int8Type>::Scalar(Some(-1)),
+        Operand::Scalar(Some(-128)),
+        wrap,
+        &c,
+    )
+    .unwrap();
+    assert_eq!(t.value(0), -1);
+    let i = pmod_integral(
+        Operand::<Int32Type>::Scalar(Some(-1_480_219_044)),
+        Operand::Scalar(Some(-1_809_645_482)),
+        wrap,
+        &c,
+    )
+    .unwrap();
+    assert_eq!(i.value(0), 1_005_102_770);
+    let l = pmod_integral(
+        Operand::<Int64Type>::Scalar(Some(-5_918_665_066_597_882_114)),
+        Operand::Scalar(Some(-6_883_477_426_611_541_145)),
+        wrap,
+        &c,
+    )
+    .unwrap();
+    assert_eq!(l.value(0), 5_644_601_580_500_128_357);
+    // ANSI: REMAINDER_BY_ZERO since 4.1, DIVIDE_BY_ZERO in 4.0; NULL rows never raise.
+    for (v, class) in [
+        (SparkVersion::V4_0, ErrorClass::DivideByZero),
+        (SparkVersion::V4_1, ErrorClass::RemainderByZero),
+        (SparkVersion::V4_2, ErrorClass::RemainderByZero),
+    ] {
+        let e = pmod_integral(Operand::Array(&a), Operand::Array(&n), ansi, &ctx(v)).unwrap_err();
+        assert_eq!((e.error_class(), e.row()), (class, Some(4)));
+    }
+    let nulls = Int32Array::from(vec![None, Some(1)]);
+    let zero = Int32Array::from(vec![Some(0), Some(1)]);
+    assert!(pmod_integral(Operand::Array(&nulls), Operand::Array(&zero), ansi, &c).is_ok());
+    let short = Int32Array::from(vec![1]);
+    assert!(pmod_integral(Operand::Array(&a), Operand::Array(&short), wrap, &c).is_err());
+    assert_eq!(
+        pmod_integral(
+            Operand::<Int32Type>::Scalar(None),
+            Operand::Scalar(Some(1)),
+            wrap,
+            &c
+        )
+        .unwrap()
+        .null_count(),
+        1
+    );
+}
+
+#[test]
+fn pmod_float_matches_spark() {
+    let c = ctx(SparkVersion::V4_2);
+    let a = f64s(&[
+        Some(-7.5),
+        Some(7.5),
+        Some(f64::NAN),
+        Some(-0.0),
+        Some(-3.0),
+        Some(f64::INFINITY),
+        Some(5.0),
+        Some(-5.0),
+        Some(5.5),
+    ]);
+    let n = f64s(&[
+        Some(2.0),
+        Some(-2.0),
+        Some(2.0),
+        Some(3.0),
+        Some(3.0),
+        Some(2.0),
+        Some(f64::INFINITY),
+        Some(f64::INFINITY),
+        Some(0.0),
+    ]);
+    let r = pmod_float(
+        Operand::Array(&a),
+        Operand::Array(&n),
+        OverflowMode::JavaWrap,
+        &c,
+    )
+    .unwrap();
+    assert_eq!(r.value(0), 0.5);
+    assert_eq!(r.value(1), 1.5);
+    assert!(r.value(2).is_nan() && r.value(5).is_nan() && r.value(7).is_nan());
+    assert_eq!(
+        (r.value(3).to_bits(), r.value(4).to_bits(), r.value(6)),
+        ((-0.0_f64).to_bits(), (-0.0_f64).to_bits(), 5.0)
+    );
+    assert!(r.is_null(8));
+    let e = pmod_float(
+        Operand::Array(&a),
+        Operand::Array(&n),
+        OverflowMode::AnsiError,
+        &c,
+    )
+    .unwrap_err();
+    assert_eq!(
+        (e.error_class(), e.row()),
+        (ErrorClass::RemainderByZero, Some(8))
+    );
+    let f = pmod_float(
+        Operand::Scalar(Some(-7.0_f32)),
+        Operand::Array(&Float32Array::from(vec![3.0])),
+        OverflowMode::JavaWrap,
+        &c,
+    )
+    .unwrap();
+    assert_eq!(f.value(0), 2.0);
+}
+
+#[test]
+fn pmod_decimal_matches_spark() {
+    let c = ctx(SparkVersion::V4_2);
+    let l = dec(&[Some(-75), Some(75), Some(-1), None, Some(5)], 3, 1);
+    let r = dec(&[Some(20), Some(-20), Some(30), Some(10), Some(0)], 3, 1);
+    let out = pmod_decimal(
+        Operand::Array(&l),
+        Operand::Array(&r),
+        (3, 1),
+        (3, 1),
+        true,
+        OverflowMode::JavaWrap,
+        &c,
+    )
+    .unwrap();
+    // pmod(-7.5, 2.0) = 0.5; pmod(7.5, -2.0) = 1.5; pmod(-0.1, 3.0) = 2.9; zero divisor is NULL.
+    assert_eq!(
+        out.iter().collect::<Vec<_>>(),
+        [Some(5), Some(15), Some(29), None, None]
+    );
+    assert_eq!((out.precision(), out.scale()), (3, 1));
+    let e = pmod_decimal(
+        Operand::Array(&l),
+        Operand::Array(&r),
+        (3, 1),
+        (3, 1),
+        true,
+        OverflowMode::AnsiError,
+        &c,
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::RemainderByZero);
+    // pmod(-1, 100) = 99 does not fit decimal(1, 0): ANSI raises, legacy gives NULL.
+    let a = dec(&[Some(-1)], 1, 0);
+    let b = dec(&[Some(100)], 3, 0);
+    let e = pmod_decimal(
+        Operand::Array(&a),
+        Operand::Array(&b),
+        (1, 0),
+        (3, 0),
+        true,
+        OverflowMode::AnsiError,
+        &c,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::NumericValueOutOfRangeWithSuggestion
+    );
+    assert!(
+        e.to_string()
+            .contains("99 cannot be represented as Decimal(1, 0)"),
+        "{e}"
+    );
+    let n = pmod_decimal(
+        Operand::Array(&a),
+        Operand::Array(&b),
+        (1, 0),
+        (3, 0),
+        true,
+        OverflowMode::JavaWrap,
+        &c,
+    )
+    .unwrap();
+    assert!(n.is_null(0));
+    // Wide operands.
+    let a = dec(&[Some(-1)], 38, 0);
+    let b = dec(&[Some(100)], 38, 0);
+    let ok = pmod_decimal(
+        Operand::Array(&a),
+        Operand::Array(&b),
+        (38, 0),
+        (38, 0),
+        true,
+        OverflowMode::AnsiError,
+        &c,
+    )
+    .unwrap();
+    assert_eq!(ok.value(0), 99);
+}
+
+#[test]
+fn greatest_and_least() {
+    let a = f64s(&[Some(-0.0), Some(f64::NAN), None, Some(1.0)]);
+    let b = f64s(&[Some(0.0), Some(1.0), None, Some(f64::NAN)]);
+    let g = extremum_float(Extremum::Greatest, &[&a, &b]).unwrap();
+    // -0.0 and 0.0 are equal: the first argument stays.
+    assert_eq!(g.value(0).to_bits(), (-0.0_f64).to_bits());
+    assert!(g.value(1).is_nan() && g.is_null(2) && g.value(3).is_nan());
+    let l = extremum_float(Extremum::Least, &[&b, &a]).unwrap();
+    assert_eq!(l.value(0).to_bits(), 0.0_f64.to_bits());
+    assert_eq!((l.value(1), l.value(3)), (1.0, 1.0));
+    let ints = Int32Array::from(vec![Some(1), None, Some(3)]);
+    let other = Int32Array::from(vec![None, None, Some(2)]);
+    let m = extremum_primitive(Extremum::Least, &[&ints, &other], |x: &i32, y: &i32| {
+        x.cmp(y)
+    })
+    .unwrap();
+    assert_eq!(m.iter().collect::<Vec<_>>(), [Some(1), None, Some(2)]);
+    let s1 = StringArray::from(vec![Some("a"), Some("é"), None]);
+    let s2 = StringArray::from(vec![Some("b"), Some("z"), Some("x")]);
+    let g = extremum_bytes(Extremum::Greatest, &[&s1, &s2]).unwrap();
+    assert_eq!(
+        g.iter().collect::<Vec<_>>(),
+        [Some("b"), Some("é"), Some("x")]
+    );
+    let t = BooleanArray::from(vec![Some(false), None, Some(true)]);
+    let u = BooleanArray::from(vec![Some(true), None, Some(false)]);
+    let g = extremum_bool(Extremum::Greatest, &[&t, &u]).unwrap();
+    assert_eq!(g.iter().collect::<Vec<_>>(), [Some(true), None, Some(true)]);
+    let l = extremum_bool(Extremum::Least, &[&t, &u]).unwrap();
+    assert_eq!(
+        l.iter().collect::<Vec<_>>(),
+        [Some(false), None, Some(false)]
+    );
+    // Decimals keep their type; no columns and unequal lengths are engine errors.
+    let d1 = dec(&[Some(10), None], 5, 2);
+    let d2 = dec(&[Some(20), None], 5, 2);
+    let m = extremum_primitive(Extremum::Greatest, &[&d1, &d2], |x: &i128, y: &i128| {
+        x.cmp(y)
+    })
+    .unwrap();
+    assert_eq!(
+        (m.value(0), m.precision(), m.scale(), m.is_null(1)),
+        (20, 5, 2, true)
+    );
+    assert!(extremum_primitive::<Int32Type>(Extremum::Greatest, &[], i32::cmp).is_err());
+    let short = Int32Array::from(vec![1]);
+    assert!(
+        extremum_primitive(Extremum::Greatest, &[&ints, &short], |x: &i32, y: &i32| x
+            .cmp(y))
+        .is_err()
+    );
+}
+
 /// An independent oracle: rounds `u / 10^drop` using floor division.
 fn oracle(u: i128, drop: u32, mode: DecimalRounding) -> i128 {
     let unit = 10_i128.pow(drop);
@@ -669,6 +933,13 @@ proptest! {
             let want = oracle(i128::from(units), drop, mode) * 10_i128.pow(u32::try_from(d).unwrap());
             prop_assert_eq!(got, want);
         }
+    }
+
+    #[test]
+    fn pmod_is_never_negative_for_a_positive_divisor(a in any::<i64>(), n in 1_i64..=i64::MAX) {
+        let c = ctx(SparkVersion::V4_2);
+        let r = pmod_integral(Operand::<Int64Type>::Scalar(Some(a)), Operand::Scalar(Some(n)), OverflowMode::AnsiError, &c).unwrap();
+        prop_assert!((0..n).contains(&r.value(0)));
     }
 
     #[test]

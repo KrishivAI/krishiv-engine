@@ -1514,9 +1514,10 @@ fn missing_references_come_before_outer_ones() {
     let own = shown("d");
     assert!(own.contains("Filter (CAST(d#"), "{own}");
     assert!(!own.contains("outer("), "{own}");
-    // `b` exists only in the enclosing query.
+    // `b` exists only in the enclosing query: the subquery is correlated,
+    // a semi join on it.
     let outer = shown("b");
-    assert!(outer.contains("Filter (CAST(outer(b#"), "{outer}");
+    assert!(outer.contains("Join LeftSemi, (CAST(b#1 "), "{outer}");
 }
 
 /// A subexpression shared through `Arc` inside a lateral alias item and a

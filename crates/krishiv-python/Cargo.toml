@@ -15,8 +15,14 @@ workspace = true
 name = "_native"
 crate-type = ["cdylib"]
 # An extension module has unresolved libpython symbols; it cannot be linked
-# into a Rust test binary. Python-side tests live in python/tests.
+# into a Rust test binary. Python-side tests live in python/tests; the
+# pyo3-free Arrow C stream code is compiled into the `stream_ffi` test.
 test = false
+
+# The pyo3-free Arrow C stream code on its own (Miri, ASan, coverage).
+[[test]]
+name = "stream_ffi"
+path = "src/stream/tests.rs"
 doctest = false
 
 [features]
@@ -29,6 +35,10 @@ abi3-py311 = ["pyo3/abi3-py311"]
 mimalloc = ["dep:mimalloc"]
 
 [dependencies]
+arrow-array = { workspace = true, features = ["ffi"] }
+arrow-data = { workspace = true, features = ["ffi"] }
+arrow-schema = { workspace = true, features = ["ffi"] }
+krishiv-common = { path = "../krishiv-common" }
 # `extension-module` is deprecated: maturin sets PYO3_BUILD_EXTENSION_MODULE.
 pyo3 = { workspace = true, features = ["macros"] }
 mimalloc = { workspace = true, optional = true }
@@ -38,3 +48,6 @@ mimalloc = { workspace = true, optional = true }
 # use the local-dynamic model there.
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = { workspace = true, optional = true, features = ["local_dynamic_tls"] }
+
+[dev-dependencies]
+arrow-buffer.workspace = true

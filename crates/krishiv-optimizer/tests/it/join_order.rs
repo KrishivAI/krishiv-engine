@@ -224,11 +224,14 @@ fn greedy_ordering_scales() {
     no_cross_product(optimized.root(), "the chain");
 }
 
+/// A join condition holding a subquery stays on its join. (A correlated
+/// scalar subquery in a join condition is rejected at analysis, as Spark
+/// rejects it, so the subquery here is uncorrelated.)
 #[test]
 fn subquery_conditions_keep_their_join() {
     let optimized = same_rows(
-        "SELECT t.a, u.d FROM t JOIN u ON t.a = (SELECT max(x.a) FROM t x WHERE x.b = u.d) \
-         JOIN t y ON y.c = t.c",
+        "SELECT t.a, u.d FROM t JOIN u ON t.a = (SELECT max(x.a) FROM t x WHERE x.b = 'x') \
+         AND t.b = u.d JOIN t y ON y.c = t.c",
     );
     no_cross_product(optimized.root(), "a subquery join condition");
 }
