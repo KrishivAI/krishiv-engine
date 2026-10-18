@@ -81,7 +81,11 @@ def test_duckdb_consumes_and_produces() -> None:
     relation = con.from_arrow(ArrowStream.from_arrow(source))
     rows = relation.project("id, name").order("id").fetchall()
     assert rows == [(1, "a"), (2, None), (3, "ccc")]
-    result = con.execute("SELECT 41 + 1 AS answer").to_arrow_reader()
+    cursor = con.execute("SELECT 41 + 1 AS answer")
+    # `to_arrow_reader` replaced `fetch_record_batch` in DuckDB 1.4; musllinux
+    # has wheels only up to 1.3.
+    reader = getattr(cursor, "to_arrow_reader", None) or cursor.fetch_record_batch
+    result = reader()
     got = pa.table(ArrowStream.from_arrow(result))
     assert got.to_pydict() == {"answer": [42]}
 
@@ -91,7 +95,8 @@ def test_duckdb_reads_buffers_in_place() -> None:
     source = pa.table({"id": pa.array(range(100_000), pa.int64())})
     # DuckDB scans the stream without materialising a copy first; the sum
     # proves it read every row of the original buffers.
-    relation = duckdb.connect().from_arrow(ArrowStream.from_arrow(source))
+    con = duckdb.connect()  # kept alive while the relation is read
+    relation = con.from_arrow(ArrowStream.from_arrow(source))
     total = relation.aggregate("sum(id)").fetchone()
     assert total == (sum(range(100_000)),)
 
