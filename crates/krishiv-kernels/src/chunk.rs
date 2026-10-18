@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The generic 64-row chunk engine behind every elementwise binary kernel.
 //!
-//! [`compute`] inspects the operands once, picks the
-//! `<NULLS, L_SCALAR, R_SCALAR>` monomorph and the CPU target, and runs the
-//! loop. Each chunk is computed branch-free straight into the output (no
+//! [`compute`] inspects the operands once, picks the `<L_SCALAR, R_SCALAR>`
+//! monomorph and the CPU target, and runs the loop. There is no
+//! has-nulls axis here: values are computed through NULL slots, so the loop
+//! is the same with or without NULLs (measured: ~1.0x on the same data), and
+//! the validity is read only when a checked chunk faults. Kernels whose work
+//! does depend on NULLs opt into [`crate::specialize`]. Each chunk is computed branch-free straight into the output (no
 //! pre-zeroing); a checking policy ORs a cheap "may fault" flag over the
 //! chunk and, only if it is set, re-scans the chunk with the exact
 //! [`LaneOp::fault`] verdict. Each fault kind maps to an [`Action`] of the
@@ -140,10 +143,10 @@ where
     let mut null_words = with_capacity::<u64>(if may_null { n_words } else { 0 })?;
     let n = nulls.as_ref();
     macro_rules! go {
-        ($nulls:literal, $ls:literal, $rs:literal) => {
+        ($ls:literal, $rs:literal) => {
             run(
                 ctx,
-                Chunks::<'_, T, L, O, $nulls, $ls, $rs> {
+                Chunks::<'_, T, L, O, $ls, $rs> {
                     l,
                     r,
                     validity: n,
@@ -156,13 +159,10 @@ where
             )
         };
     }
-    let raised = match (n.is_some(), l, r) {
-        (false, Side::Array(_), Side::Array(_)) => go!(false, false, false),
-        (false, Side::Array(_), Side::Scalar(_)) => go!(false, false, true),
-        (false, Side::Scalar(_), _) => go!(false, true, false),
-        (true, Side::Array(_), Side::Array(_)) => go!(true, false, false),
-        (true, Side::Array(_), Side::Scalar(_)) => go!(true, false, true),
-        (true, Side::Scalar(_), _) => go!(true, true, false),
+    let raised = match (l, r) {
+        (Side::Array(_), Side::Array(_)) => go!(false, false),
+        (Side::Array(_), Side::Scalar(_)) => go!(false, true),
+        (Side::Scalar(_), _) => go!(true, false),
     };
     if let Some((row, fault)) = raised {
         return Err(raise(row, fault));
@@ -197,7 +197,7 @@ fn low_bits(n: usize) -> u64 {
 }
 
 /// The chunk loop for one monomorph; `run` compiles it per CPU target.
-struct Chunks<'a, T, L, O, const NULLS: bool, const L_SCALAR: bool, const R_SCALAR: bool> {
+struct Chunks<'a, T, L, O, const L_SCALAR: bool, const R_SCALAR: bool> {
     l: Side<'a, T>,
     r: Side<'a, T>,
     validity: Option<&'a NullBuffer>,
@@ -230,8 +230,8 @@ struct ChunkFaults {
     raise: Option<(u32, Fault)>,
 }
 
-impl<T, L, O, const NULLS: bool, const L_SCALAR: bool, const R_SCALAR: bool> Kernel
-    for Chunks<'_, T, L, O, NULLS, L_SCALAR, R_SCALAR>
+impl<T, L, O, const L_SCALAR: bool, const R_SCALAR: bool> Kernel
+    for Chunks<'_, T, L, O, L_SCALAR, R_SCALAR>
 where
     T: Copy + Default,
     L: LaneOp<T>,
@@ -247,10 +247,7 @@ where
         let (rc, rt, rs) = split(self.r);
         let zero = [T::default(); CHUNK];
         let full = self.len / CHUNK;
-        let chunks = self
-            .validity
-            .filter(|_| NULLS)
-            .map(|v| v.inner().bit_chunks());
+        let chunks = self.validity.map(|v| v.inner().bit_chunks());
         let mut valid = chunks.as_ref().map(BitChunks::iter_padded);
         let mut next_valid = || valid.as_mut().map_or(u64::MAX, |it| it.next().unwrap_or(0));
         let null_words = self.null_words;

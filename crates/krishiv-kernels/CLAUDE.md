@@ -8,7 +8,9 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
 
 ## Layout (kernel specialization framework, P2-T020)
 - `policy` (4 overflow policies as ZSTs), `ops` (`Operand`, `BinaryOp`), `dispatch` (`Target`, `KernelCtx`).
-- `chunk`: the generic 64-row chunk engine; monomorphs `<NULLS, L_SCALAR, R_SCALAR>` × policy, chosen once per batch.
+- `chunk`: the generic 64-row chunk engine; monomorphs `<L_SCALAR, R_SCALAR>` × policy, chosen once per batch. No
+  has-nulls axis (compute-through-nulls makes it ~1.0x); `specialize` is the opt-in `const NULLS` axis for kernels
+  whose work changes with NULLs (division, strings).
   A `LaneOp` reports a `Fault` (overflow, divide-by-zero); the policy maps each fault to wrap / NULL / raise.
 - `unsafe_dispatch`: the only `unsafe` (calling `#[target_feature]` clones); `xtask source-guard` rejects `unsafe`
   in any other file here and `xtask budgets` counts unsafe sites.

@@ -105,9 +105,10 @@ where
     binary_impl::<T, Op, O>(l, r, ctx, false)
 }
 
-/// [`binary`] forced onto the nulls-aware specialization even when no row
-/// is NULL (an all-valid bitmap), so benchmarks can compare the `NULLS`
-/// axis on the same data. Not for production use.
+/// [`binary`] with an all-valid bitmap attached even when no row is NULL,
+/// so benchmarks can show that carrying validity costs nothing measurable
+/// (the reason elementwise kernels have no has-nulls axis). Not for
+/// production use.
 #[doc(hidden)]
 pub fn binary_nulls_path<T, Op, O>(
     l: Operand<'_, T>,

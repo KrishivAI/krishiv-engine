@@ -5,9 +5,9 @@
 //! Design goals: the no-null fast path is at least 1.2x the generic
 //! (row-at-a-time reference) path; `Unchecked`/`JavaWrap` cost the same;
 //! `AnsiError` stays close to them; the decimal 64-bit hook beats the
-//! 128-bit path. `.../nulls_path` runs the nulls-aware specialization on the
-//! same no-null data, isolating the `NULLS` axis (informational: with
-//! compute-through-nulls the two are expected to be close).
+//! 128-bit path. `.../nulls_path` runs the same no-null data with an
+//! all-valid bitmap attached: parity with the plain path is why elementwise
+//! kernels have no has-nulls axis (keeps that decision measurable).
 
 #![expect(
     missing_docs,
@@ -100,8 +100,7 @@ fn integer(c: &mut Criterion) {
     add::<Unchecked>(c, "i64_add/nulls_10pct/unchecked", &an, &bn, &ctx);
     add::<JavaWrap>(c, "i64_add/nulls_10pct/java_wrap", &an, &bn, &ctx);
     add::<AnsiError>(c, "i64_add/nulls_10pct/ansi", &an, &bn, &ctx);
-    // Same no-null data through the nulls-aware specialization: isolates
-    // the `NULLS` axis.
+    // Same no-null data with an all-valid bitmap: should match the plain path.
     nulls_path::<Unchecked>(c, "i64_add/no_nulls/unchecked/nulls_path", &a, &b, &ctx);
     nulls_path::<AnsiError>(c, "i64_add/no_nulls/ansi/nulls_path", &a, &b, &ctx);
     let base = KernelCtx::with_target(Target::Baseline).unwrap();

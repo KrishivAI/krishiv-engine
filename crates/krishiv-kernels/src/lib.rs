@@ -4,15 +4,18 @@
 //! # The specialization framework
 //!
 //! Every kernel is written once as a generic chunk loop and instantiated
-//! along three compile-time axes, chosen **once per batch** (never per row):
+//! along compile-time axes, chosen **once per batch** (never per row):
 //!
-//! - **nulls** — a `const NULLS: bool` parameter: without nulls no validity
-//!   bitmap is read or written;
 //! - **operand shape** — `const L_SCALAR` / `const R_SCALAR` parameters: a
 //!   scalar operand is a register, not a broadcast array;
 //! - **overflow policy** — a zero-sized [`policy::Overflow`] type:
 //!   [`policy::Unchecked`], [`policy::JavaWrap`], [`policy::NullOnOverflow`]
 //!   or [`policy::AnsiError`].
+//!
+//! Elementwise kernels compute through NULL slots, so they have **no**
+//! has-nulls axis: the loop is identical either way (measured ~1.0x on the
+//! same data). Kernels whose work changes with NULLs (division, strings)
+//! opt into a `const NULLS: bool` axis with [`specialize`].
 //!
 //! Loops run over 64-row chunks aligned with validity words, so LLVM can
 //! autovectorize them. Values under NULL slots are computed and discarded
@@ -43,6 +46,7 @@ pub mod integer;
 pub mod ops;
 pub mod policy;
 pub mod reference;
+pub mod specialize;
 mod unsafe_dispatch;
 
 pub use dispatch::{KernelCtx, Target};
