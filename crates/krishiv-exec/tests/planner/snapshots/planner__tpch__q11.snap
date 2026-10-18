@@ -3,7 +3,7 @@ source: crates/krishiv-exec/tests/planner/tpch.rs
 expression: tpch.plan(q).to_string()
 ---
 Sort [value#16 DESC NULLS LAST]
-+- Filter (CAST(value#16 AS DECIMAL(38,6)) > scalar-subquery)
++- Filter (value#16 > CAST(scalar-subquery AS DECIMAL(38,2)))
    :- Project [ps_partkey#0, sum((ps_supplycost#3 * CAST(ps_availqty#2 AS DECIMAL(20,0))))#4611686018427387906 AS value#16]
    :  +- HashAggregate keys=[ps_partkey#0], functions=[sum((ps_supplycost#3 * CAST(ps_availqty#2 AS DECIMAL(20,0))))]
    :     +- Project [ps_partkey#0, (ps_supplycost#3 * CAST(ps_availqty#2 AS DECIMAL(20,0)))]

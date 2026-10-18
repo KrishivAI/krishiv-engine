@@ -86,9 +86,9 @@ pub use builtins::BuiltinFunctions;
 pub use catalog::{
     AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, CallTypes, Catalog,
     CatalogResolver, Constant, FileSchemaResolver, FunctionEntry, FunctionLookup, FunctionRegistry,
-    InputBuilder, InputType, Inputs, MemoryCatalog, PolicyVersion, Principal, PrincipalKind,
-    Privilege, ResultType, RowColumnPolicy, Securable, SourceKind, SqlFrontend, TableColumn,
-    TableIdent, TableKind, TableMeta,
+    InputBuilder, InputType, Inputs, MemoryCatalog, Operator, PolicyVersion, Principal,
+    PrincipalKind, Privilege, ResultType, RowColumnPolicy, Securable, SourceKind, SqlFrontend,
+    TableColumn, TableIdent, TableKind, TableMeta,
 };
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};

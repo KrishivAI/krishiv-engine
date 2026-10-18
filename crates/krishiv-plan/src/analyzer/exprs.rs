@@ -25,7 +25,7 @@ use super::bind::{addr, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
 use super::resolve::{Attr, Env, Rel, Resolver};
-use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup};
+use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, Inputs};
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, FunctionId,
     FunctionKind, Literal, LogicalPlan, Origin, ResolvedExpr, ResolvedFunction, Star, SubqueryKind,
@@ -205,10 +205,14 @@ fn arg_of(b: &Bound) -> Arg<'_> {
 /// Spark's documentation root, as its errors cite it.
 const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
 
-/// The value of a literal argument, for functions whose typing reads it.
+/// The value of a literal argument, for functions whose typing reads it: a
+/// literal, or an integral literal cast to an integral type (Spark folds
+/// those before it types `round(x, CAST(2 AS TINYINT))`).
 fn constant(b: &Bound) -> Option<Constant> {
-    let ExprNode::Literal(v) = &b.expr.node else {
-        return None;
+    let v = match &b.expr.node {
+        ExprNode::Literal(v) => v,
+        ExprNode::Cast { expr, to, .. } => return folded_cast(expr, to),
+        _ => return None,
     };
     Some(match v {
         Literal::Null(_) => Constant::Null,
@@ -218,8 +222,59 @@ fn constant(b: &Bound) -> Option<Constant> {
         Literal::Integer(v) => Constant::Integral(i64::from(*v)),
         Literal::Long(v) => Constant::Integral(*v),
         Literal::String(v) => Constant::String(v.clone()),
+        Literal::Float(_) | Literal::Double(_) | Literal::Decimal { .. } => {
+            Constant::Fractional(truncated(v)?)
+        }
         _ => return None,
     })
+}
+
+/// A fractional literal truncated toward zero, when it fits a `bigint`.
+fn truncated(v: &Literal) -> Option<i64> {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "bounded by the range check"
+    )]
+    let float = |f: f64| (f.is_finite() && f.abs() < 9.0e18).then(|| f.trunc() as i64);
+    match v {
+        Literal::Float(f) => float(f64::from(*f)),
+        Literal::Double(f) => float(*f),
+        Literal::Decimal {
+            unscaled,
+            data_type,
+        } => i64::try_from(unscaled / 10_i128.checked_pow(u32::from(data_type.scale()))?).ok(),
+        _ => None,
+    }
+}
+
+/// `CAST(literal AS integral type)` as its value: a number truncated toward
+/// zero, `None` when it does not fit or the cast is not a plain numeric one.
+fn folded_cast(inner: &Expr, to: &DataType) -> Option<Constant> {
+    let ExprNode::Literal(v) = &inner.node else {
+        return None;
+    };
+    let (lo, hi) = match to {
+        DataType::Byte => (i128::from(i8::MIN), i128::from(i8::MAX)),
+        DataType::Short => (i128::from(i16::MIN), i128::from(i16::MAX)),
+        DataType::Integer => (i128::from(i32::MIN), i128::from(i32::MAX)),
+        DataType::Long => (i128::from(i64::MIN), i128::from(i64::MAX)),
+        _ => return None,
+    };
+    let n: i128 = match v {
+        Literal::Null(_) => return Some(Constant::Null),
+        Literal::Byte(v) => i128::from(*v),
+        Literal::Short(v) => i128::from(*v),
+        Literal::Integer(v) => i128::from(*v),
+        Literal::Long(v) => i128::from(*v),
+        Literal::Float(_) | Literal::Double(_) | Literal::Decimal { .. } => {
+            i128::from(truncated(v)?)
+        }
+        Literal::String(s) => s.trim().parse().ok()?,
+        _ => return None,
+    };
+    (lo..=hi)
+        .contains(&n)
+        .then(|| i64::try_from(n).ok().map(Constant::Integral))?
 }
 
 fn column(c: &BoundColumn) -> ArgType {
@@ -637,33 +692,50 @@ impl Resolver<'_> {
         let sql = |i: usize| kids.get(i).map(|k| pretty(&k.shown()));
         let given: Vec<ArgType> = kids.iter().map(|k| k.ty.clone()).collect();
         let ansi = self.ctx.conf.ansi;
+        let loss = self.ctx.conf.decimal_precision_loss;
         let call = CallTypes::new(&given, &constants)
             .with_sql(&sql)
-            .with_ansi(ansi);
+            .with_ansi(ansi)
+            .with_decimal_loss(loss);
         let coerced: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
         let casts = coerce::inputs(&entry.inputs, &coerced, &call)
             .map_err(|m| self.mismatch(m, e, kids, entry.id.name(), e.origin))?;
+        // `try_add('x', 1)` casts its arguments in TRY mode: NULL, not an error.
+        let try_casts = matches!(entry.inputs, Inputs::TryOperator(_));
         let call_kids: Vec<Bound> = kids
             .iter()
             .zip(casts)
-            .map(|(k, to)| self.implicit_cast(k, to))
+            .map(|(k, to)| self.implicit_cast_as(k, to, try_casts))
             .collect();
         let types: Vec<ArgType> = call_kids.iter().map(|k| k.ty.clone()).collect();
         let call = CallTypes::new(&types, &constants)
             .with_sql(&sql)
-            .with_ansi(ansi);
+            .with_ansi(ansi)
+            .with_decimal_loss(loss);
         let ty = (entry.result)(&call).map_err(|err| AnalysisError::new(err, e.origin))?;
         Ok((call_kids, ty))
     }
 
     pub(super) fn implicit_cast(&self, b: &Bound, to: Option<DataType>) -> Bound {
+        self.implicit_cast_as(b, to, false)
+    }
+
+    /// [`Self::implicit_cast`], as a `TRY_CAST` when `try_cast`.
+    fn implicit_cast_as(&self, b: &Bound, to: Option<DataType>, try_cast: bool) -> Bound {
         let Some(to) = to else {
             return b.clone();
         };
-        let mode = if self.ctx.conf.ansi {
-            CastMode::Ansi
-        } else {
-            CastMode::Legacy
+        let mode = match (try_cast, self.ctx.conf.ansi) {
+            (true, _) => CastMode::Try,
+            (false, true) => CastMode::Ansi,
+            (false, false) => CastMode::Legacy,
+        };
+        let may_null = |f: &DataType| {
+            if try_cast {
+                coerce::try_nullable(f, &to)
+            } else {
+                coerce::force_nullable(f, &to)
+            }
         };
         let cast = ExprNode::Cast {
             expr: Arc::clone(&b.expr),
@@ -672,14 +744,10 @@ impl Resolver<'_> {
         };
         Bound {
             expr: Arc::new(Expr::new(cast).with_origin(b.expr.origin)),
-            ty: arg_type(
-                to.clone(),
-                b.ty.nullable
-                    || b.ty
-                        .data_type
-                        .as_ref()
-                        .is_some_and(|f| coerce::force_nullable(f, &to)),
-            ),
+            ty: ArgType {
+                nullable: b.ty.nullable || b.ty.data_type.as_ref().is_some_and(may_null),
+                data_type: Some(to.clone()),
+            },
             shown: Some(b.shown()),
             ..b.clone()
         }
@@ -1469,6 +1537,12 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
             }
             s + " END"
         }
+        // Spark's own spellings of `if`, `positive` and `mod`.
+        _ if name.eq_ignore_ascii_case("if") && k.len() == 3 => {
+            format!("(IF({}, {}, {}))", k[0], k[1], k[2])
+        }
+        _ if name.eq_ignore_ascii_case("positive") && k.len() == 1 => format!("(+ {})", k[0]),
+        _ if name.eq_ignore_ascii_case("mod") && k.len() == 2 => infix("%"),
         _ if name.eq_ignore_ascii_case("extract") && k.len() == 2 => {
             format!("extract({} FROM {})", k[0], k[1])
         }
@@ -1534,4 +1608,54 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
         memo.insert(addr(x), XxHash3_128::oneshot(&b));
     }
     memo.get(&addr(e)).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn folded(v: Literal, to: &DataType) -> Option<Constant> {
+        folded_cast(&Expr::new(ExprNode::Literal(v)), to)
+    }
+
+    /// Spark folds `CAST(literal AS integral)` for the scale of `round`.
+    #[test]
+    fn integral_casts_of_literals_fold() {
+        let n = |v: i64| Some(Constant::Integral(v));
+        assert_eq!(folded(Literal::Integer(7), &DataType::Byte), n(7));
+        assert_eq!(folded(Literal::Byte(-3), &DataType::Long), n(-3));
+        assert_eq!(folded(Literal::Short(9), &DataType::Short), n(9));
+        assert_eq!(folded(Literal::Long(5), &DataType::Integer), n(5));
+        // Out of the target's range: not a constant.
+        assert_eq!(folded(Literal::Integer(300), &DataType::Byte), None);
+        assert_eq!(folded(Literal::Long(i64::MAX), &DataType::Integer), None);
+        // Fractions truncate toward zero.
+        assert_eq!(folded(Literal::Double(1.9), &DataType::Integer), n(1));
+        assert_eq!(folded(Literal::Float(-1.9), &DataType::Integer), n(-1));
+        assert_eq!(folded(Literal::Double(f64::NAN), &DataType::Integer), None);
+        assert_eq!(folded(Literal::Double(1e30), &DataType::Long), None);
+        let dec = |unscaled, p, s| Literal::Decimal {
+            unscaled,
+            data_type: krishiv_types::DecimalType::try_new(p, s).unwrap(),
+        };
+        assert_eq!(folded(dec(-250, 4, 2), &DataType::Integer), n(-2));
+        assert_eq!(
+            folded(Literal::String(" 12 ".to_owned()), &DataType::Integer),
+            n(12)
+        );
+        assert_eq!(
+            folded(Literal::String("1.5".to_owned()), &DataType::Integer),
+            None
+        );
+        assert_eq!(
+            folded(Literal::Null(None), &DataType::Integer),
+            Some(Constant::Null)
+        );
+        // Other targets and sources are not folded.
+        assert_eq!(folded(Literal::Integer(1), &DataType::Double), None);
+        assert_eq!(folded(Literal::Boolean(true), &DataType::Integer), None);
+        assert_eq!(truncated(&Literal::Boolean(true)), None);
+        assert_eq!(truncated(&Literal::Double(-2.5)), Some(-2));
+        assert_eq!(truncated(&dec(15, 2, 1)), Some(1));
+    }
 }
