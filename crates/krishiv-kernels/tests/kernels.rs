@@ -6,15 +6,18 @@
     reason = "test helpers outside #[test] fns fail loudly"
 )]
 
-use arrow_array::types::{Int32Type, Int64Type};
-use arrow_array::{Array, BooleanArray, Decimal128Array, Float64Array, Int32Array, Int64Array};
+use arrow_array::types::{Int8Type, Int16Type, Int32Type, Int64Type};
+use arrow_array::{
+    Array, BooleanArray, Decimal128Array, Float64Array, Int8Array, Int16Array, Int32Array,
+    Int64Array,
+};
 use krishiv_common::error::ErrorClass;
 use krishiv_kernels::decimal::{DecimalPlan, DecimalStorage, decimal_binary};
 use krishiv_kernels::float::{Equal, Less, compare};
-use krishiv_kernels::integer::binary;
+use krishiv_kernels::integer::{UnaryOp, binary, integral_divide, remainder, unary};
 use krishiv_kernels::{
-    Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Operand, Sub, Target,
-    Unchecked,
+    Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Operand, SparkVersion, Sub,
+    Target, Unchecked,
 };
 
 fn ctx() -> KernelCtx {
@@ -250,4 +253,130 @@ fn dispatch_baseline_and_best_agree() {
     let best = run(Target::best());
     assert_eq!(base, best);
     assert!(base.0.null_count() > a.null_count());
+}
+
+/// Spark's ANSI suffix of every `ARITHMETIC_OVERFLOW` message.
+const BYPASS: &str = "If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22003";
+
+/// Values and messages recorded from Spark 4.0, 4.1 and 4.2.
+#[test]
+fn integral_arithmetic_matches_spark() {
+    let v40 = ctx().with_spark_version(SparkVersion::V4_0);
+    let v41 = ctx().with_spark_version(SparkVersion::V4_1);
+    // tinyint/smallint raise BINARY_ARITHMETIC_OVERFLOW in every version.
+    let b = Int8Array::from(vec![127_i8, -128]);
+    let e = binary::<Int8Type, Add, AnsiError>(Operand::Array(&b), Operand::Scalar(Some(1)), &v40);
+    assert_eq!(
+        e.unwrap_err().to_string(),
+        "[BINARY_ARITHMETIC_OVERFLOW] 127S + 1S caused overflow. Use `try_add` to ignore overflow \
+         problem and return NULL. SQLSTATE: 22003"
+    );
+    let e =
+        binary::<Int8Type, Mul, AnsiError>(Operand::Array(&b), Operand::Scalar(Some(-1)), &ctx());
+    assert!(
+        e.unwrap_err()
+            .to_string()
+            .contains("-128S * -1S caused overflow")
+    );
+    let s = Int16Array::from(vec![32767_i16]);
+    let w =
+        binary::<Int16Type, Add, JavaWrap>(Operand::Array(&s), Operand::Scalar(Some(1)), &ctx());
+    assert_eq!(w.unwrap(), Int16Array::from(vec![i16::MIN]));
+    // int/bigint: the JDK's text before 4.2.
+    let i = Int32Array::from(vec![i32::MAX]);
+    let add = |c: &KernelCtx| {
+        binary::<Int32Type, Add, AnsiError>(Operand::Array(&i), Operand::Scalar(Some(1)), c)
+            .unwrap_err()
+            .to_string()
+    };
+    let tail = format!("Use 'try_add' to tolerate overflow and return NULL instead. {BYPASS}");
+    assert_eq!(
+        add(&v40),
+        format!("[ARITHMETIC_OVERFLOW] integer overflow. {tail}")
+    );
+    assert_eq!(
+        add(&ctx()),
+        format!("[ARITHMETIC_OVERFLOW] overflow. {tail}")
+    );
+    let l = Int64Array::from(vec![i64::MAX]);
+    let e = binary::<Int64Type, Mul, AnsiError>(Operand::Array(&l), Operand::Scalar(Some(2)), &v41);
+    assert!(
+        e.unwrap_err()
+            .to_string()
+            .starts_with("[ARITHMETIC_OVERFLOW] long overflow. Use 'try_multiply'")
+    );
+}
+
+#[test]
+fn remainder_and_div_match_spark() {
+    let a = Int32Array::from(vec![-7, 7, i32::MIN, 1]);
+    let b = Int32Array::from(vec![3, -3, -1, 0]);
+    let wrap = remainder::<Int32Type, JavaWrap>(Operand::Array(&a), Operand::Array(&b), &ctx());
+    assert_eq!(
+        wrap.unwrap(),
+        Int32Array::from(vec![Some(-1), Some(1), Some(0), None])
+    );
+    let e = remainder::<Int32Type, AnsiError>(Operand::Array(&a), Operand::Array(&b), &ctx())
+        .unwrap_err();
+    assert_eq!(
+        (e.row(), e.error_class()),
+        (Some(3), ErrorClass::RemainderByZero)
+    );
+    assert!(
+        e.to_string()
+            .contains("Use `try_mod` to tolerate divisor being 0")
+    );
+    let v40 = ctx().with_spark_version(SparkVersion::V4_0);
+    let e = remainder::<Int32Type, AnsiError>(Operand::Array(&a), Operand::Array(&b), &v40);
+    assert_eq!(e.unwrap_err().error_class(), ErrorClass::DivideByZero);
+    let x = Int64Array::from(vec![7, -7, i64::MIN, 1]);
+    let y = Int64Array::from(vec![-2, 2, -1, 0]);
+    let wrap = integral_divide::<JavaWrap>(Operand::Array(&x), Operand::Array(&y), &ctx());
+    assert_eq!(
+        wrap.unwrap(),
+        Int64Array::from(vec![Some(-3), Some(-3), Some(i64::MIN), None])
+    );
+    let e =
+        integral_divide::<AnsiError>(Operand::Array(&x), Operand::Array(&y), &ctx()).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        format!(
+            "[ARITHMETIC_OVERFLOW] Overflow in integral divide. Use 'try_divide' to tolerate \
+             overflow and return NULL instead. {BYPASS}"
+        )
+    );
+    let e = integral_divide::<AnsiError>(Operand::Array(&x), Operand::Scalar(Some(0)), &ctx());
+    assert_eq!(e.unwrap_err().error_class(), ErrorClass::DivideByZero);
+    let n = integral_divide::<NullOnOverflow>(Operand::Scalar(None), Operand::Array(&y), &ctx());
+    assert_eq!(n.unwrap().null_count(), 4);
+    let n = remainder::<Int32Type, AnsiError>(Operand::Array(&a), Operand::Scalar(None), &ctx());
+    assert_eq!(n.unwrap().null_count(), 4);
+}
+
+#[test]
+fn unary_minus_and_abs_match_spark() {
+    let b = Int8Array::from(vec![Some(5), None, Some(i8::MIN)]);
+    let v40 = ctx().with_spark_version(SparkVersion::V4_0);
+    let e = unary::<Int8Type, AnsiError>(UnaryOp::Negate, &b, &v40).unwrap_err();
+    assert_eq!(e.row(), Some(2));
+    assert_eq!(
+        e.to_string(),
+        format!("[ARITHMETIC_OVERFLOW] byte overflow. {BYPASS}")
+    );
+    let e = unary::<Int8Type, AnsiError>(UnaryOp::Abs, &b, &ctx()).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        format!("[ARITHMETIC_OVERFLOW] overflow. {BYPASS}")
+    );
+    let w = unary::<Int8Type, JavaWrap>(UnaryOp::Negate, &b, &ctx()).unwrap();
+    assert_eq!(w, Int8Array::from(vec![Some(-5), None, Some(i8::MIN)]));
+    let s = Int16Array::from(vec![i16::MIN]);
+    let e = unary::<Int16Type, AnsiError>(UnaryOp::Abs, &s, &v40).unwrap_err();
+    assert!(
+        e.to_string()
+            .starts_with("[ARITHMETIC_OVERFLOW] short overflow.")
+    );
+    let l = Int64Array::from(vec![-3, 4]);
+    let a = unary::<Int64Type, AnsiError>(UnaryOp::Abs, &l, &ctx()).unwrap();
+    assert_eq!(a, Int64Array::from(vec![3, 4]));
 }

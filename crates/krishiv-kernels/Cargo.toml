@@ -26,3 +26,7 @@ proptest = { workspace = true, features = ["std"] }
 [[bench]]
 name = "binary_add"
 harness = false
+
+[[bench]]
+name = "arith"
+harness = false

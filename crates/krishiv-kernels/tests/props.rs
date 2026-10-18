@@ -20,17 +20,19 @@
 
 use std::fmt::Debug;
 
-use arrow_array::types::{Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type};
+use arrow_array::types::{
+    Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+};
 use arrow_array::{ArrowPrimitiveType, PrimitiveArray};
 use arrow_buffer::{NullBuffer, ScalarBuffer};
 use krishiv_kernels::decimal::{DecimalPlan, DecimalStorage, decimal_binary};
 use krishiv_kernels::float::{self, CompareOp, Equal, Greater, GreaterEq, Less, LessEq};
-use krishiv_kernels::integer::{SparkIntegral, binary};
+use krishiv_kernels::integer::{SparkIntegral, UnaryOp, binary, integral_divide, remainder, unary};
 use krishiv_kernels::ops::BinaryOp;
 use krishiv_kernels::reference::{self, CompareKind};
 use krishiv_kernels::{
     Add, AnsiError, ArithOp, JavaWrap, KernelCtx, KernelError, Mul, NullOnOverflow, Operand,
-    Overflow, OverflowMode, Sub, Target, Unchecked,
+    Overflow, OverflowMode, SparkVersion, Sub, Target, Unchecked,
 };
 use proptest::prelude::*;
 
@@ -180,15 +182,48 @@ fn assert_same<A: PartialEq + Debug>(fast: &Result<A, KernelError>, slow: &Resul
     }
 }
 
+/// Every available target, under every Spark version (errors differ by
+/// version; values do not); under Miri, one version.
+fn version_contexts() -> Vec<KernelCtx> {
+    // Miri interprets every case: there one older version stands for all.
+    let versions: &[SparkVersion] = if cfg!(miri) {
+        &[SparkVersion::V4_0]
+    } else {
+        &SparkVersion::ALL
+    };
+    contexts()
+        .into_iter()
+        .flat_map(|c| versions.iter().map(move |&v| c.with_spark_version(v)))
+        .collect()
+}
+
 fn check_int<P, Op, O>(c: &Case<P::Native>)
 where
     P: SparkIntegral,
     Op: BinaryOp,
     O: Overflow,
 {
-    let slow = c.with::<P, _>(|l, r| reference::integer_binary::<P>(Op::OP, O::MODE, l, r));
-    for ctx in contexts() {
+    for ctx in version_contexts() {
+        let v = ctx.spark_version();
+        let slow = c.with::<P, _>(|l, r| reference::integer_binary::<P>(Op::OP, O::MODE, v, l, r));
         let fast = c.with::<P, _>(|l, r| binary::<P, Op, O>(l, r, &ctx));
+        assert_same(&fast, &slow);
+        let slow = c.with::<P, _>(|l, r| reference::integer_remainder::<P>(O::MODE, v, l, r));
+        let fast = c.with::<P, _>(|l, r| remainder::<P, O>(l, r, &ctx));
+        assert_same(&fast, &slow);
+        let left = c.l.array::<P>();
+        for op in [UnaryOp::Negate, UnaryOp::Abs] {
+            let slow = reference::integer_unary::<P>(op, O::MODE, v, &left);
+            assert_same(&unary::<P, O>(op, &left, &ctx), &slow);
+        }
+    }
+}
+
+/// `div` is defined on `bigint` only (Spark widens its operands first).
+fn check_div<O: Overflow>(c: &Case<i64>) {
+    let slow = c.with::<Int64Type, _>(|l, r| reference::integer_divide(O::MODE, l, r));
+    for ctx in contexts() {
+        let fast = c.with::<Int64Type, _>(|l, r| integral_divide::<O>(l, r, &ctx));
         assert_same(&fast, &slow);
     }
 }
@@ -198,6 +233,14 @@ fn check_int_all<P: SparkIntegral, Op: BinaryOp>(c: &Case<P::Native>) {
     check_int::<P, Op, JavaWrap>(c);
     check_int::<P, Op, NullOnOverflow>(c);
     check_int::<P, Op, AnsiError>(c);
+}
+
+fn i8_value() -> impl Strategy<Value = i8> + Clone {
+    int_value(&[i8::MIN, i8::MAX, -1, 0, 1], -10..10_i8, any::<i8>())
+}
+
+fn i16_value() -> impl Strategy<Value = i16> + Clone {
+    int_value(&[i16::MIN, i16::MAX, -1, 0, 1], -100..100_i16, any::<i16>())
 }
 
 fn i32_value() -> impl Strategy<Value = i32> + Clone {
@@ -231,12 +274,28 @@ macro_rules! int_props {
 }
 
 int_props! {
+    i8_add: Int8Type, Add, i8_value();
+    i8_mul: Int8Type, Mul, i8_value();
+    i16_sub: Int16Type, Sub, i16_value();
+    i16_mul: Int16Type, Mul, i16_value();
     i32_add: Int32Type, Add, i32_value();
     i32_sub: Int32Type, Sub, i32_value();
     i32_mul: Int32Type, Mul, i32_value();
     i64_add: Int64Type, Add, i64_value();
     i64_sub: Int64Type, Sub, i64_value();
     i64_mul: Int64Type, Mul, i64_value();
+}
+
+proptest! {
+    #![proptest_config(config())]
+
+    #[test]
+    fn i64_div(c in case(i64_value())) {
+        check_div::<JavaWrap>(&c);
+        check_div::<NullOnOverflow>(&c);
+        check_div::<AnsiError>(&c);
+        check_div::<Unchecked>(&c);
+    }
 }
 
 fn f64_value() -> impl Strategy<Value = f64> + Clone {

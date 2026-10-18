@@ -15,8 +15,8 @@ use krishiv_kernels::integer::{SparkIntegral, binary};
 use krishiv_kernels::ops::BinaryOp;
 use krishiv_kernels::reference::{self, CompareKind};
 use krishiv_kernels::{
-    Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Operand, Overflow, Sub,
-    Target, Unchecked,
+    Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Operand, Overflow,
+    SparkVersion, Sub, Target, Unchecked,
 };
 use libfuzzer_sys::arbitrary::{Result, Unstructured};
 use libfuzzer_sys::fuzz_target;
@@ -101,7 +101,7 @@ fn ctxs() -> impl Iterator<Item = KernelCtx> {
 
 fn int<P: SparkIntegral, Op: BinaryOp, O: Overflow>(i: &Input<P::Native>) {
     let slow = i.run::<P, _>(
-        |l, r| reference::integer_binary::<P>(Op::OP, O::MODE, l, r),
+        |l, r| reference::integer_binary::<P>(Op::OP, O::MODE, SparkVersion::V4_2, l, r),
         |a| a,
     );
     for ctx in ctxs() {

@@ -11,16 +11,18 @@
 
 use std::cmp::Ordering;
 
-use arrow_array::types::Decimal128Type;
+use arrow_array::types::{Decimal128Type, Int64Type};
 use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, Decimal128Array, PrimitiveArray};
 use arrow_buffer::i256;
 
 use crate::decimal::DecimalPlan;
+use crate::dispatch::KernelCtx;
 use crate::error::KernelError;
 use crate::float::SparkFloat;
-use crate::integer::SparkIntegral;
+use crate::integer::{SparkIntegral, UnaryOp};
 use crate::ops::{ArithOp, Operand};
-use crate::policy::OverflowMode;
+use crate::policy::{Action, Fault, OverflowMode};
+use crate::version::SparkVersion;
 
 /// Row `i` of an operand (`None` for NULL).
 fn value<T: ArrowPrimitiveType>(o: Operand<'_, T>, i: usize) -> Option<T::Native> {
@@ -51,6 +53,38 @@ fn exact_i128(op: ArithOp, a: i128, b: i128) -> Option<i128> {
     }
 }
 
+/// What policy `mode` makes of a faulting row: the wrapped value, NULL or
+/// the error.
+fn settle<T>(
+    mode: OverflowMode,
+    fault: Fault,
+    wrapped: T,
+    error: impl FnOnce() -> KernelError,
+) -> Result<Option<T>, KernelError> {
+    match mode.action(fault) {
+        Action::Wrap => Ok(Some(wrapped)),
+        Action::Null => Ok(None),
+        Action::Raise => Err(error()),
+    }
+}
+
+/// Row-at-a-time loop over two operands; `f` maps each non-NULL pair.
+fn rows<T: ArrowPrimitiveType, U: ArrowPrimitiveType>(
+    l: Operand<'_, T>,
+    r: Operand<'_, T>,
+    mut f: impl FnMut(usize, T::Native, T::Native) -> Result<Option<U::Native>, KernelError>,
+) -> Result<PrimitiveArray<U>, KernelError> {
+    let len = length(l, r)?;
+    let mut out = Vec::with_capacity(len);
+    for i in 0..len {
+        out.push(match (value(l, i), value(r, i)) {
+            (Some(a), Some(b)) => f(i, a, b)?,
+            _ => None,
+        });
+    }
+    Ok(out.into_iter().collect())
+}
+
 /// Reference for [`crate::integer::binary`].
 ///
 /// # Errors
@@ -58,25 +92,102 @@ fn exact_i128(op: ArithOp, a: i128, b: i128) -> Option<i128> {
 pub fn integer_binary<T: SparkIntegral>(
     op: ArithOp,
     mode: OverflowMode,
+    version: SparkVersion,
     l: Operand<'_, T>,
     r: Operand<'_, T>,
 ) -> Result<PrimitiveArray<T>, KernelError> {
-    let len = length(l, r)?;
-    let mut out = Vec::with_capacity(len);
-    for i in 0..len {
-        let (Some(a), Some(b)) = (value(l, i), value(r, i)) else {
+    let ctx = KernelCtx::new().with_spark_version(version);
+    rows(l, r, |i, a, b| {
+        // Every Spark integral fits an i128 with room for + - *.
+        let exact = exact_i128(op, T::widen(a), T::widen(b)).unwrap_or_default();
+        match T::narrow(exact) {
+            (v, false) => Ok(Some(v)),
+            (v, true) => settle(mode, Fault::Overflow, v, || {
+                crate::integer::overflow_error::<T>(&ctx, i, op, a, b)
+            }),
+        }
+    })
+}
+
+/// Reference for [`crate::integer::remainder`].
+///
+/// # Errors
+/// As the fast path.
+pub fn integer_remainder<T: SparkIntegral>(
+    mode: OverflowMode,
+    version: SparkVersion,
+    l: Operand<'_, T>,
+    r: Operand<'_, T>,
+) -> Result<PrimitiveArray<T>, KernelError> {
+    rows(l, r, |i, a, b| {
+        let (a, b) = (T::widen(a), T::widen(b));
+        if b == 0 {
+            return settle(mode, Fault::DivideByZero, T::Native::default(), || {
+                KernelError::remainder_by_zero(i, version)
+            });
+        }
+        // Truncated remainder: the sign of the dividend, |result| < |b|.
+        Ok(Some(T::narrow(a.checked_rem(b).unwrap_or_default()).0))
+    })
+}
+
+/// Reference for [`crate::integer::integral_divide`].
+///
+/// # Errors
+/// As the fast path.
+pub fn integer_divide(
+    mode: OverflowMode,
+    l: Operand<'_, Int64Type>,
+    r: Operand<'_, Int64Type>,
+) -> Result<PrimitiveArray<Int64Type>, KernelError> {
+    rows(l, r, |i, a, b| {
+        if b == 0 {
+            return settle(mode, Fault::DivideByZero, 0, || {
+                KernelError::divide_by_zero(i)
+            });
+        }
+        // b != 0 and i64 operands: exact in i128.
+        let q = i128::from(a).checked_div(i128::from(b)).unwrap_or_default();
+        match Int64Type::narrow(q) {
+            (v, false) => Ok(Some(v)),
+            (v, true) => settle(mode, Fault::Overflow, v, || {
+                KernelError::arithmetic_overflow(
+                    i,
+                    "Overflow in integral divide",
+                    Some("try_divide"),
+                )
+            }),
+        }
+    })
+}
+
+/// Reference for [`crate::integer::unary`].
+///
+/// # Errors
+/// As the fast path.
+pub fn integer_unary<T: SparkIntegral>(
+    op: UnaryOp,
+    mode: OverflowMode,
+    version: SparkVersion,
+    a: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>, KernelError> {
+    let mut out = Vec::with_capacity(a.len());
+    for i in 0..a.len() {
+        if a.is_null(i) {
             out.push(None);
             continue;
+        }
+        let v = T::widen(a.value(i));
+        let exact = match op {
+            UnaryOp::Negate => v.checked_neg(),
+            UnaryOp::Abs => v.checked_abs(),
         };
-        // i32/i64 operands never overflow i128.
-        let exact = exact_i128(op, T::widen(a), T::widen(b)).unwrap_or_default();
-        let (wrapped, overflow) = T::narrow(exact);
-        out.push(match (mode, overflow) {
-            (_, false) | (OverflowMode::Unchecked | OverflowMode::JavaWrap, true) => Some(wrapped),
-            (OverflowMode::NullOnOverflow, true) => None,
-            (OverflowMode::AnsiError, true) => {
-                return Err(KernelError::arithmetic_overflow(i, Some(op.try_function())));
-            }
+        // Integral values never reach i128::MIN.
+        out.push(match T::narrow(exact.unwrap_or_default()) {
+            (n, false) => Some(n),
+            (n, true) => settle(mode, Fault::Overflow, n, || {
+                KernelError::arithmetic_overflow(i, version.overflow_message(T::WIDTH), None)
+            })?,
         });
     }
     Ok(out.into_iter().collect())
@@ -190,7 +301,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::types::Int64Type;
     use arrow_array::{Float32Array, Int64Array};
 
     use super::*;
@@ -199,7 +309,15 @@ mod tests {
     fn engine_errors() {
         let a = Int64Array::from(vec![1, 2]);
         let b = Int64Array::from(vec![1]);
-        let add = |l, r| integer_binary::<Int64Type>(ArithOp::Add, OverflowMode::AnsiError, l, r);
+        let add = |l, r| {
+            integer_binary::<Int64Type>(
+                ArithOp::Add,
+                OverflowMode::AnsiError,
+                SparkVersion::V4_2,
+                l,
+                r,
+            )
+        };
         assert!(add(Operand::Array(&a), Operand::Array(&b)).is_err());
         assert!(add(Operand::Scalar(Some(1)), Operand::Scalar(Some(1))).is_err());
         assert_eq!(

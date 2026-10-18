@@ -14,7 +14,10 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   A `LaneOp` reports a `Fault` (overflow, divide-by-zero); the policy maps each fault to wrap / NULL / raise.
 - `unsafe_dispatch`: the only `unsafe` (calling `#[target_feature]` clones); `xtask source-guard` rejects `unsafe`
   in any other file here and `xtask budgets` counts unsafe sites.
-- Kernels: `integer` (int/bigint `+ - *`), `decimal` (`+ - *`, 64-bit hook), `float` (Spark comparisons).
+- `version`: the Spark version profile (`KernelCtx::with_spark_version`); error classes/messages differ by version.
+- Kernels: `integer` (tinyint..bigint `+ - * %`, bigint `div`, unary `-`/`abs`), `decimal` (`+ - *`, 64-bit hook),
+  `float` (Spark comparisons). Dividing lanes keep a per-row flag word so NULL slots with a zero divisor never take
+  the slow path (measured: `div` with 10% NULLs 302 -> 262 µs, = the no-NULL time; so no `by_nulls` axis).
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.
 
 ## Invariants

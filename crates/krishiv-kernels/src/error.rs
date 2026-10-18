@@ -3,21 +3,27 @@
 //!
 //! | Situation | Error class |
 //! |---|---|
-//! | ANSI integral overflow (`int`, `bigint`) | `ARITHMETIC_OVERFLOW` |
-//! | ANSI division or remainder by zero (kernels that divide) | `DIVIDE_BY_ZERO` |
+//! | ANSI integral overflow (`int`, `bigint`; unary `-`, `abs`; `div`) | `ARITHMETIC_OVERFLOW` |
+//! | ANSI `tinyint`/`smallint` `+ - *` overflow | `BINARY_ARITHMETIC_OVERFLOW` |
+//! | ANSI division by zero (`/`, `div`) | `DIVIDE_BY_ZERO` |
+//! | ANSI remainder by zero (`%`) | `REMAINDER_BY_ZERO` (Spark 4.0: `DIVIDE_BY_ZERO`) |
 //! | ANSI decimal result out of range | `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION` |
 //! | output buffer cannot be reserved | `UNABLE_TO_ACQUIRE_MEMORY` |
 //! | decimal plan Krishiv does not support yet | `KRISHIV_UNSUPPORTED_FEATURE` |
 //! | caller broke a kernel precondition (an engine bug) | `INTERNAL_ERROR` |
 //!
-//! Messages follow Spark 4.2 (the vendored registry's version).
+//! Messages follow Spark 4.2 (the vendored registry's version); kernels
+//! choose the version-specific classes and texts of
+//! [`crate::version::SparkVersion`].
 
 use krishiv_common::error::{
-    ArithmeticOverflow, DivideByZero, ErrorClass, InternalError, KrishivError,
-    KrishivUnsupportedFeature, NumericValueOutOfRangeWithSuggestion, UnableToAcquireMemory,
+    ArithmeticOverflow, BinaryArithmeticOverflow, DivideByZero, ErrorClass, InternalError,
+    KrishivError, KrishivUnsupportedFeature, NumericValueOutOfRangeWithSuggestion, RemainderByZero,
+    UnableToAcquireMemory,
 };
 
 use crate::policy::Fault;
+use crate::version::SparkVersion;
 
 /// Spark's `toSQLConf(spark.sql.ansi.enabled)`.
 const ANSI_CONF: &str = "\"spark.sql.ansi.enabled\"";
@@ -84,19 +90,44 @@ impl KernelError {
         }
     }
 
-    /// `ARITHMETIC_OVERFLOW` from Spark's `MathUtils.*Exact` for `int` and
-    /// `bigint`: Spark 4.2 canonicalizes the JDK's `"long overflow"` /
-    /// `"integer overflow"` to `"overflow"`. `try_function` is the suggested
-    /// `try_*` function; Spark's hint-less overloads pass `None`.
-    pub(crate) fn arithmetic_overflow(row: usize, try_function: Option<&str>) -> Self {
+    /// `ARITHMETIC_OVERFLOW` from Spark's `MathUtils.*Exact`; `message` is
+    /// [`SparkVersion::overflow_message`] (or Spark's own text, e.g. for
+    /// `div`). `try_function` is the suggested `try_*` function; Spark's
+    /// hint-less overloads pass `None`.
+    pub(crate) fn arithmetic_overflow(
+        row: usize,
+        message: &str,
+        try_function: Option<&str>,
+    ) -> Self {
         Self {
             row: Some(row),
             error: ArithmeticOverflow {
-                message: "overflow".to_owned(),
+                message: message.to_owned(),
                 alternative: try_function.map_or_else(String::new, |f| {
                     format!(" Use '{f}' to tolerate overflow and return NULL instead.")
                 }),
                 config: ANSI_CONF.to_owned(),
+            }
+            .into(),
+        }
+    }
+
+    /// `BINARY_ARITHMETIC_OVERFLOW` of `tinyint`/`smallint` `+ - *`: Spark
+    /// renders both operands with an `S` suffix (`127S + 1S`).
+    pub(crate) fn binary_arithmetic_overflow(
+        row: usize,
+        left: i64,
+        symbol: &str,
+        right: i64,
+        try_function: &str,
+    ) -> Self {
+        Self {
+            row: Some(row),
+            error: BinaryArithmeticOverflow {
+                value1: format!("{left}S"),
+                symbol: symbol.to_owned(),
+                value2: format!("{right}S"),
+                function_name: format!("`{try_function}`"),
             }
             .into(),
         }
@@ -107,6 +138,21 @@ impl KernelError {
         Self {
             row: Some(row),
             error: DivideByZero {
+                config: ANSI_CONF.to_owned(),
+            }
+            .into(),
+        }
+    }
+
+    /// A remainder by zero: `REMAINDER_BY_ZERO`, or `DIVIDE_BY_ZERO` in
+    /// Spark 4.0.
+    pub(crate) fn remainder_by_zero(row: usize, version: SparkVersion) -> Self {
+        if !version.has_remainder_by_zero() {
+            return Self::divide_by_zero(row);
+        }
+        Self {
+            row: Some(row),
+            error: RemainderByZero {
                 config: ANSI_CONF.to_owned(),
             }
             .into(),
@@ -168,7 +214,7 @@ mod tests {
 
     #[test]
     fn overflow_message_matches_spark_4_2() {
-        let e = KernelError::arithmetic_overflow(7, Some("try_add"));
+        let e = KernelError::arithmetic_overflow(7, "overflow", Some("try_add"));
         assert_eq!(e.row(), Some(7));
         assert_eq!(e.error_class(), ErrorClass::ArithmeticOverflow);
         assert_eq!(
@@ -182,7 +228,7 @@ mod tests {
     #[test]
     fn faults_map_to_spark_classes() {
         let hintless = KernelError::for_fault(1, Fault::Overflow, |r| {
-            KernelError::arithmetic_overflow(r, None)
+            KernelError::arithmetic_overflow(r, "overflow", None)
         });
         assert_eq!(hintless.row(), Some(1));
         assert!(
@@ -196,6 +242,32 @@ mod tests {
             (Some(2), ErrorClass::DivideByZero)
         );
         assert!(div.to_string().contains("try_divide"));
+    }
+
+    /// Texts recorded from Spark 4.2 (4.0 for the remainder case).
+    #[test]
+    fn messages_match_spark() {
+        let cases = [
+            (
+                KernelError::binary_arithmetic_overflow(0, 127, "+", 1, "try_add"),
+                "[BINARY_ARITHMETIC_OVERFLOW] 127S + 1S caused overflow. Use `try_add` to ignore \
+                 overflow problem and return NULL. SQLSTATE: 22003",
+            ),
+            (
+                KernelError::remainder_by_zero(0, SparkVersion::V4_2),
+                "[REMAINDER_BY_ZERO] Remainder by zero. Use `try_mod` to tolerate divisor being 0 \
+                 and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" \
+                 to bypass this error. SQLSTATE: 22012",
+            ),
+        ];
+        for (e, text) in cases {
+            assert_eq!(e.to_string(), text);
+        }
+        let v40 = KernelError::remainder_by_zero(3, SparkVersion::V4_0);
+        assert_eq!(
+            (v40.row(), v40.error_class()),
+            (Some(3), ErrorClass::DivideByZero)
+        );
     }
 
     #[test]

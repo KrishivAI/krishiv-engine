@@ -34,6 +34,16 @@ pub enum ArithOp {
 }
 
 impl ArithOp {
+    /// The operator as Spark writes it in error messages.
+    #[must_use]
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Subtract => "-",
+            Self::Multiply => "*",
+        }
+    }
+
     /// The `try_*` function Spark suggests in its overflow error.
     #[must_use]
     pub fn try_function(self) -> &'static str {
@@ -63,6 +73,18 @@ pub trait IntNative: sealed::Sealed + ArrowNativeType + Ord + Default {
     fn overflowing_sub(self, rhs: Self) -> (Self, bool);
     /// `self * rhs` and whether it overflowed.
     fn overflowing_mul(self, rhs: Self) -> (Self, bool);
+    /// `self / rhs`, wrapping (`MIN / -1 == MIN`); `rhs` must not be zero.
+    fn wrapping_div(self, rhs: Self) -> Self;
+    /// `self % rhs`, wrapping (`MIN % -1 == 0`); `rhs` must not be zero.
+    fn wrapping_rem(self, rhs: Self) -> Self;
+    /// `-self`, wrapping.
+    fn wrapping_neg(self) -> Self;
+    /// `|self|`, wrapping.
+    fn wrapping_abs(self) -> Self;
+    /// `self`, or 1 where `self` is zero: a divisor that never traps.
+    fn nonzero(self) -> Self;
+    /// The type's minimum.
+    const MIN: Self;
 }
 
 macro_rules! int_native {
@@ -81,6 +103,17 @@ macro_rules! int_native {
             fn overflowing_sub(self, rhs: Self) -> (Self, bool) { <$t>::overflowing_sub(self, rhs) }
             #[inline(always)]
             fn overflowing_mul(self, rhs: Self) -> (Self, bool) { <$t>::overflowing_mul(self, rhs) }
+            #[inline(always)]
+            fn wrapping_div(self, rhs: Self) -> Self { <$t>::wrapping_div(self, rhs.nonzero()) }
+            #[inline(always)]
+            fn wrapping_rem(self, rhs: Self) -> Self { <$t>::wrapping_rem(self, rhs.nonzero()) }
+            #[inline(always)]
+            fn wrapping_neg(self) -> Self { <$t>::wrapping_neg(self) }
+            #[inline(always)]
+            fn wrapping_abs(self) -> Self { <$t>::wrapping_abs(self) }
+            #[inline(always)]
+            fn nonzero(self) -> Self { self | <$t>::from(self == 0) }
+            const MIN: Self = <$t>::MIN;
         }
     )*};
 }
@@ -137,6 +170,22 @@ mod tests {
         assert_eq!(Sub::wrapping(1_i128, 2), -1);
         assert_eq!(Add::wrapping(1_i8, 2), 3);
         assert_eq!(Mul::OP.try_function(), "try_multiply");
+        assert_eq!(
+            [Add::OP, Sub::OP, Mul::OP].map(ArithOp::symbol),
+            ["+", "-", "*"]
+        );
+        assert_eq!(IntNative::wrapping_div(i8::MIN, -1), i8::MIN);
+        assert_eq!(IntNative::wrapping_rem(i64::MIN, -1), 0);
+        assert_eq!(IntNative::wrapping_div(7_i32, 0), 7);
+        assert_eq!(IntNative::wrapping_rem(-7_i16, 0), 0);
+        assert_eq!((0_i128.nonzero(), (-3_i128).nonzero()), (1, -3));
+        assert_eq!(
+            (
+                IntNative::wrapping_neg(i32::MIN),
+                IntNative::wrapping_abs(-5_i64)
+            ),
+            (i32::MIN, 5)
+        );
         assert_eq!(Sub::OP.try_function(), "try_subtract");
         let o: Operand<'_, arrow_array::types::Int64Type> = Operand::Scalar(Some(1));
         let c = o;
