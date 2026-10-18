@@ -23,11 +23,23 @@ krishiv-common = { path = "../krishiv-common" }
 krishiv-memory = { path = "../krishiv-memory" }
 krishiv-types = { path = "../krishiv-types" }
 object_store.workspace = true
+# The Parquet reader (P2-T080a): arrow-rs's push decoder and the codecs files
+# are written with. Never the `object_store` feature (ADR 0014, deny.toml).
+parquet = { workspace = true, features = [
+    "arrow",
+    "brotli",
+    "flate2-zlib-rs",
+    "lz4",
+    "simdutf8",
+    "snap",
+    "zstd",
+] }
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 arrow-buffer.workspace = true
+arrow-select.workspace = true
 criterion.workspace = true
 proptest = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
