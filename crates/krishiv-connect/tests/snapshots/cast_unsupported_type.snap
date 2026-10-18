@@ -1,0 +1,4 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+[KRISHIV_UNSUPPORTED_FEATURE] The feature nested data types ("ARRAY") is not supported by Krishiv yet. SQLSTATE: 0A000

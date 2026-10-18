@@ -6,6 +6,8 @@ extend-exclude = [
     "tests/spark-golden/**",
     "tests/fixtures/**",
     "crates/krishiv-common/vendored/spark-error-conditions.json",
+    "proto/spark-connect/**",
+    "crates/krishiv-connect/src/proto/**",
     "tests/sqllogictest/**",
     "crates/krishiv-ui-assets/assets/**",
     "**/*.lock",

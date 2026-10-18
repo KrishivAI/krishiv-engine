@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Project [CAST(a AS INT), CAST(a AS BIGINT), CAST(a AS DECIMAL(10,2)), CAST(a AS TIMESTAMP_NTZ), CAST(a AS DECIMAL(5,0)), CAST(a AS STRING)]
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Project plan_id=1
+  Read plan_id=0

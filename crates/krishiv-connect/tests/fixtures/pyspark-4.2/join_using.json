@@ -1,0 +1,41 @@
+{
+  "root": {
+    "common": {
+      "planId": "2"
+    },
+    "join": {
+      "joinType": "JOIN_TYPE_INNER",
+      "left": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/l.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      },
+      "right": {
+        "common": {
+          "planId": "1"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/r.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      },
+      "usingColumns": [
+        "id"
+      ]
+    }
+  }
+}

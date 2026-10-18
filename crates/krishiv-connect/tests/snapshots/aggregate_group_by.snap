@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Aggregate [a, b], [a, b, sum(c), count(*), avg(d) AS m]
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Aggregate plan_id=1
+  Read plan_id=0

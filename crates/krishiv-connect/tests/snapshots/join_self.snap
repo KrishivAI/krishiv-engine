@@ -1,0 +1,12 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Join Inner, (id@plan0 == o.id)
+:- Read parquet [/data/t.parquet]
++- SubqueryAlias o
+   +- Read parquet [/data/t.parquet]
+-- plan ids --
+Join plan_id=2
+  Read plan_id=0
+  SubqueryAlias plan_id=1
+    Read plan_id=0

@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Filter ((((((a >= 1) and (b <= 2)) or (NOT (a == b))) or (NOT (a == 3))) or (a <=> b)) or (a < 4))
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Filter plan_id=1
+  Read plan_id=0

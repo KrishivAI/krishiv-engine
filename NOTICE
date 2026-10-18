@@ -23,6 +23,12 @@ Apache Spark
   files postgresql/{agg,onek,tenk}.data and the TPC-DS table schemas of TPCDSSchema.scala, as
   read back from a Spark 4.2.0 session by tests/scripts/gen_golden_fixtures.py (the generator
   records the pinned Spark commit and the SHA-256 of each source file).
+  proto/spark-connect/4.2/spark/connect/*.proto, verbatim
+  copies of the Spark Connect protocol definitions of tag v4.2.0
+  (sql/connect/common/src/main/protobuf/spark/connect/, Apache-2.0, unmodified, each
+  file keeps its license header). The Rust types in crates/krishiv-connect/src/proto/
+  and the descriptor set under crates/krishiv-connect/tests/fixtures/ are generated
+  from them by tools/connect-protogen.
 
 --------------------------------------------------------------------------------
 (Further entries: DataFusion, Feldera and others, if code is copied. Currently

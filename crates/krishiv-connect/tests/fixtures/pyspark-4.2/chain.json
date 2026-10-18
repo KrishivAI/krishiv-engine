@@ -1,0 +1,139 @@
+{
+  "root": {
+    "common": {
+      "planId": "5"
+    },
+    "limit": {
+      "input": {
+        "common": {
+          "planId": "4"
+        },
+        "sort": {
+          "input": {
+            "aggregate": {
+              "aggregateExpressions": [
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "isMetadataColumn": false,
+                              "unparsedIdentifier": "a"
+                            }
+                          }
+                        ],
+                        "functionName": "sum"
+                      }
+                    },
+                    "name": [
+                      "s"
+                    ]
+                  }
+                }
+              ],
+              "groupType": "GROUP_TYPE_GROUPBY",
+              "groupingExpressions": [
+                {
+                  "unresolvedAttribute": {
+                    "isMetadataColumn": false,
+                    "unparsedIdentifier": "x"
+                  }
+                }
+              ],
+              "input": {
+                "common": {
+                  "planId": "2"
+                },
+                "withColumns": {
+                  "aliases": [
+                    {
+                      "expr": {
+                        "unresolvedFunction": {
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "isMetadataColumn": false,
+                                "unparsedIdentifier": "b"
+                              }
+                            },
+                            {
+                              "literal": {
+                                "integer": 2
+                              }
+                            }
+                          ],
+                          "functionName": "*"
+                        }
+                      },
+                      "name": [
+                        "x"
+                      ]
+                    }
+                  ],
+                  "input": {
+                    "common": {
+                      "planId": "1"
+                    },
+                    "filter": {
+                      "condition": {
+                        "unresolvedFunction": {
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "isMetadataColumn": false,
+                                "unparsedIdentifier": "a"
+                              }
+                            },
+                            {
+                              "literal": {
+                                "integer": 1
+                              }
+                            }
+                          ],
+                          "functionName": ">"
+                        }
+                      },
+                      "input": {
+                        "common": {
+                          "planId": "0"
+                        },
+                        "read": {
+                          "dataSource": {
+                            "format": "parquet",
+                            "paths": [
+                              "/data/t.parquet"
+                            ],
+                            "schema": ""
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "common": {
+              "planId": "3"
+            }
+          },
+          "isGlobal": true,
+          "order": [
+            {
+              "child": {
+                "unresolvedAttribute": {
+                  "isMetadataColumn": false,
+                  "unparsedIdentifier": "s"
+                }
+              },
+              "direction": "SORT_DIRECTION_DESCENDING",
+              "nullOrdering": "SORT_NULLS_LAST"
+            }
+          ]
+        }
+      },
+      "limit": 5
+    }
+  }
+}

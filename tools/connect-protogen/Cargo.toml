@@ -1,0 +1,22 @@
+# Generates the Spark Connect Rust types from the vendored protos
+# (proto/spark-connect/<version>/, ADR 0003). A workspace of its
+# own, like fuzz/: protox (a pure-Rust protobuf compiler, so no protoc on any
+# machine or runner) and prost-build stay out of the product dependency graph.
+# Run from the repository root:
+#   cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --write
+#   cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check
+[package]
+name = "connect-protogen"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+heck = "0.5"
+prost = "0.14.4"
+prost-build = "0.14.4"
+prost-types = "0.14.4"
+protox = "0.9"
+
+[workspace]

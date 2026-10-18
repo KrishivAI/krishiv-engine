@@ -1,0 +1,16 @@
+{
+  "root": {
+    "common": {
+      "planId": "0"
+    },
+    "read": {
+      "dataSource": {
+        "format": "parquet",
+        "paths": [
+          "https://host.example/data.parquet?X-Amz-Signature=CANARY-SIGNATURE&X-Amz-Expires=60"
+        ],
+        "schema": ""
+      }
+    }
+  }
+}

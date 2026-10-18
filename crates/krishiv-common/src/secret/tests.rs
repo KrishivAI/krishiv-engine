@@ -201,3 +201,13 @@ fn zeroing_covers_the_whole_allocation() {
     assert_eq!(bytes.len(), capacity);
     assert!(bytes.iter().all(|&b| b == 0));
 }
+
+#[test]
+fn wiping_leaves_plaintext_empty() {
+    let mut text = format!("password={CANARY}");
+    super::wipe(&mut text);
+    assert!(text.is_empty());
+    let mut bytes = CANARY.as_bytes().to_vec();
+    super::wipe_bytes(&mut bytes);
+    assert!(bytes.is_empty());
+}

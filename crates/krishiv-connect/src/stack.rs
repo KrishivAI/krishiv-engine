@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Running deep recursion on a thread with a big stack.
+//!
+//! Decoding, dropping and translating a message nested a thousand levels
+//! deep recurses a thousand levels, about 3 KiB of stack per level in a debug
+//! build: more than the 2 MiB of a test or async-runtime worker thread. A
+//! message deeper than [`INLINE_LEVELS`] therefore runs on a thread of its
+//! own ([`krishiv_common::stack::on_big_stack`], which the SQL lowering uses
+//! too) whose stack fits [`crate::wire::MAX_NESTING`] levels whatever the
+//! caller's stack is. The stack is virtual memory: only the pages a deep
+//! message touches are ever mapped.
+
+use krishiv_common::error::{InternalError, KrishivError};
+
+/// Nesting handled on the caller's stack: 32 levels take about 100 KiB.
+pub(crate) const INLINE_LEVELS: usize = 32;
+
+/// Runs `f` on a thread with a big stack. A panic of `f` is re-raised on the
+/// caller, as it would be had `f` run there.
+///
+/// # Errors
+/// `INTERNAL_ERROR` when the thread cannot be started.
+pub(crate) fn on_deep_stack<R: Send>(f: impl FnOnce() -> R + Send) -> Result<R, KrishivError> {
+    krishiv_common::stack::on_big_stack(f).ok_or_else(|| {
+        KrishivError::from(InternalError {
+            message: "cannot start a thread for a deeply nested plan".to_owned(),
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests;

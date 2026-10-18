@@ -1,0 +1,41 @@
+{
+  "root": {
+    "common": {
+      "planId": "2"
+    },
+    "setOp": {
+      "allowMissingColumns": false,
+      "byName": false,
+      "isAll": true,
+      "leftInput": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/l.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      },
+      "rightInput": {
+        "common": {
+          "planId": "1"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/r.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      },
+      "setOpType": "SET_OP_TYPE_UNION"
+    }
+  }
+}

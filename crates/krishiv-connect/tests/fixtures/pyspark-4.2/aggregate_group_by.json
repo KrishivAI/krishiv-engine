@@ -1,0 +1,83 @@
+{
+  "root": {
+    "aggregate": {
+      "aggregateExpressions": [
+        {
+          "unresolvedFunction": {
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "isMetadataColumn": false,
+                  "unparsedIdentifier": "c"
+                }
+              }
+            ],
+            "functionName": "sum"
+          }
+        },
+        {
+          "unresolvedFunction": {
+            "arguments": [
+              {
+                "unresolvedStar": {}
+              }
+            ],
+            "functionName": "count"
+          }
+        },
+        {
+          "alias": {
+            "expr": {
+              "unresolvedFunction": {
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "isMetadataColumn": false,
+                      "unparsedIdentifier": "d"
+                    }
+                  }
+                ],
+                "functionName": "avg"
+              }
+            },
+            "name": [
+              "m"
+            ]
+          }
+        }
+      ],
+      "groupType": "GROUP_TYPE_GROUPBY",
+      "groupingExpressions": [
+        {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "unparsedIdentifier": "a"
+          }
+        },
+        {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "unparsedIdentifier": "b"
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    },
+    "common": {
+      "planId": "1"
+    }
+  }
+}

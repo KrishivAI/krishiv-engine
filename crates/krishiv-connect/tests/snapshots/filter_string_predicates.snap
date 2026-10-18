@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Filter ((((c like 'a%') or (c rlike '^a')) or (c ilike 'A%')) or (c IN ('x', 'y')))
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Filter plan_id=1
+  Read plan_id=0

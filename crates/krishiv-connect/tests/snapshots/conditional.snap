@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Project [CASE WHEN (a > 1) THEN 'x' WHEN (a > 0) THEN 'y' ELSE 'z' END AS w, concat(c, '-', d) AS cc]
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Project plan_id=1
+  Read plan_id=0

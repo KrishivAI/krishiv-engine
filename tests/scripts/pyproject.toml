@@ -14,4 +14,4 @@ python-version = "3.11"
 [tool.ty.analysis]
 # Heavy third-party dependencies live in the bench environment (`bench/pyproject.toml`);
 # the generator scripts import them lazily and are only run there, not in the lint environment.
-allowed-unresolved-imports = ["pyspark.**", "numpy.**", "pyarrow.**"]
+allowed-unresolved-imports = ["pyspark.**", "numpy.**", "pyarrow.**", "google.**"]

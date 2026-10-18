@@ -21,6 +21,9 @@ const EXCLUDED_NAMES: &[&str] = &[
 const EXCLUDED_PREFIXES: &[&str] = &[
     "tests/spark-golden/",
     "tests/fixtures/",
+    // Upstream Spark Connect protos, verbatim (ADR 0003). Krishiv's own protos
+    // under `proto/` count.
+    "proto/spark-connect/",
     "vendor/",
     "third_party/",
     "crates/krishiv-ui-assets/assets/",

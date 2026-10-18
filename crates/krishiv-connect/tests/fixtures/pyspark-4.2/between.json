@@ -1,0 +1,66 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "filter": {
+      "condition": {
+        "unresolvedFunction": {
+          "arguments": [
+            {
+              "unresolvedFunction": {
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "isMetadataColumn": false,
+                      "unparsedIdentifier": "a"
+                    }
+                  },
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  }
+                ],
+                "functionName": ">="
+              }
+            },
+            {
+              "unresolvedFunction": {
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "isMetadataColumn": false,
+                      "unparsedIdentifier": "a"
+                    }
+                  },
+                  {
+                    "literal": {
+                      "integer": 5
+                    }
+                  }
+                ],
+                "functionName": "<="
+              }
+            }
+          ],
+          "functionName": "and"
+        }
+      },
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

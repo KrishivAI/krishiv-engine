@@ -1,0 +1,64 @@
+{
+  "root": {
+    "aggregate": {
+      "aggregateExpressions": [
+        {
+          "unresolvedFunction": {
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "isMetadataColumn": false,
+                  "unparsedIdentifier": "c"
+                }
+              }
+            ],
+            "functionName": "sum"
+          }
+        }
+      ],
+      "groupType": "GROUP_TYPE_PIVOT",
+      "groupingExpressions": [
+        {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "unparsedIdentifier": "a"
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      },
+      "pivot": {
+        "col": {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "planId": "0",
+            "unparsedIdentifier": "b"
+          }
+        },
+        "values": [
+          {
+            "integer": 1
+          },
+          {
+            "integer": 2
+          }
+        ]
+      }
+    },
+    "common": {
+      "planId": "1"
+    }
+  }
+}

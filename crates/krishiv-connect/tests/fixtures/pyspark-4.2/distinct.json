@@ -1,0 +1,25 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "deduplicate": {
+      "allColumnsAsKeys": true,
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      },
+      "withinWatermark": false
+    }
+  }
+}

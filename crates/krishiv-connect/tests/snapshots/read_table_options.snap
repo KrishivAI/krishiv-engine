@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Read events {versionAsOf=3}
+-- plan ids --
+Read plan_id=0

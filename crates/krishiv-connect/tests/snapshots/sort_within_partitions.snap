@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Sort [a ASC NULLS FIRST], false
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Sort plan_id=1
+  Read plan_id=0

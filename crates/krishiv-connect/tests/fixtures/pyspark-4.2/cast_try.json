@@ -1,0 +1,37 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "project": {
+      "expressions": [
+        {
+          "cast": {
+            "evalMode": "EVAL_MODE_TRY",
+            "expr": {
+              "unresolvedAttribute": {
+                "isMetadataColumn": false,
+                "unparsedIdentifier": "a"
+              }
+            },
+            "typeStr": "int"
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

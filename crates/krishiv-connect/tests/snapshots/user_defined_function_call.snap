@@ -1,0 +1,4 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+[KRISHIV_UNSUPPORTED_FEATURE] The feature Spark Connect expression CallFunction (spark.connect.Expression.call_function) is not supported by Krishiv yet. SQLSTATE: 0A000
