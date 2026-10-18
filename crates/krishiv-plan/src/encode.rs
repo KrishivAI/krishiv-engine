@@ -62,7 +62,7 @@ use std::sync::Arc;
 use krishiv_common::secret::{OptionValue, SecretUrl, SecretValue, UrlPart};
 use twox_hash::XxHash3_128;
 
-use crate::{BoundColumn, Scan};
+use crate::{BoundColumn, CteRef, Scan};
 use crate::{
     CastMode, ColumnRef, DayTimeField, Expr, ExprNode, FunctionCall, FunctionKind, Grouping,
     JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, Plan, PlanId, PlanNode,
@@ -643,6 +643,22 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(12);
                 self.len(ctes.len());
                 ctes.iter().for_each(|c| self.str(&c.name));
+            }
+            PlanNode::CteRef(CteRef {
+                name,
+                source,
+                output,
+            }) => {
+                self.u8(13);
+                self.str(name);
+                self.len(source.len());
+                source.iter().for_each(|id| self.put(&id.0.to_le_bytes()));
+                self.len(output.len());
+                output.iter().for_each(|c| self.bound(c));
+            }
+            PlanNode::Shift { offset, .. } => {
+                self.u8(14);
+                self.put(&offset.to_le_bytes());
             }
         }
     }

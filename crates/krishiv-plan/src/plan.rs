@@ -154,6 +154,33 @@ pub enum PlanNode {
         /// The definitions, in order.
         ctes: Vec<Cte>,
     },
+    /// A resolved reference to a `WITH` definition (see [`CteRef`]).
+    CteRef(CteRef),
+    /// A fresh instance of a resolved subtree: every attribute id inside
+    /// `input` (outputs, references and aliases, subquery plans included;
+    /// not a [`CteRef::source`]) reads as `id + offset`. The analyzer adds
+    /// it where a subtree shared through `Arc` meets itself, as in a
+    /// DataFrame self-join, so the instances need no copy and the plan
+    /// stays linear in its distinct nodes. The subtree has no outer
+    /// references.
+    Shift {
+        /// The shared subtree.
+        input: Arc<LogicalPlan>,
+        /// What each attribute id inside gains.
+        offset: u64,
+    },
+}
+
+/// A resolved reference to a `WITH` definition: the definition is planned
+/// once, and each reference reads its rows under attributes of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CteRef {
+    /// The definition's name.
+    pub name: String,
+    /// The definition's output attributes, which identify it.
+    pub source: Vec<crate::AttrId>,
+    /// This reference's attributes, one per source attribute.
+    pub output: Vec<BoundColumn>,
 }
 
 /// What an unresolved read reads.
@@ -372,14 +399,15 @@ impl LogicalPlan {
     /// the main query. Plans inside subquery expressions are not children.
     pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Arc<Self>)) {
         match &self.node {
-            PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::Scan(_) => {}
+            PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::Scan(_) | PlanNode::CteRef(_) => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
             | PlanNode::Aggregate { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
-            | PlanNode::SubqueryAlias { input, .. } => f(input),
+            | PlanNode::SubqueryAlias { input, .. }
+            | PlanNode::Shift { input, .. } => f(input),
             PlanNode::Join { left, right, .. } => {
                 f(left);
                 f(right);
@@ -393,14 +421,15 @@ impl LogicalPlan {
 
     fn for_each_child_mut(&mut self, f: &mut dyn FnMut(&mut Arc<Self>)) {
         match &mut self.node {
-            PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::Scan(_) => {}
+            PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::Scan(_) | PlanNode::CteRef(_) => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
             | PlanNode::Aggregate { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
-            | PlanNode::SubqueryAlias { input, .. } => f(input),
+            | PlanNode::SubqueryAlias { input, .. }
+            | PlanNode::Shift { input, .. } => f(input),
             PlanNode::Join { left, right, .. } => {
                 f(left);
                 f(right);
@@ -419,7 +448,9 @@ impl LogicalPlan {
             PlanNode::Read(_)
             | PlanNode::Scan(_)
             | PlanNode::SubqueryAlias { .. }
-            | PlanNode::WithCte { .. } => {}
+            | PlanNode::WithCte { .. }
+            | PlanNode::CteRef(_)
+            | PlanNode::Shift { .. } => {}
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter().for_each(f),
@@ -456,7 +487,9 @@ impl LogicalPlan {
             PlanNode::Read(_)
             | PlanNode::Scan(_)
             | PlanNode::SubqueryAlias { .. }
-            | PlanNode::WithCte { .. } => {}
+            | PlanNode::WithCte { .. }
+            | PlanNode::CteRef(_)
+            | PlanNode::Shift { .. } => {}
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter_mut().for_each(f),

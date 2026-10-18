@@ -16,7 +16,7 @@ use proptest::prelude::*;
 use proptest::sample::Index;
 
 use crate::{
-    AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Cte, DayTimeField, Expr, ExprNode,
+    AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Cte, CteRef, DayTimeField, Expr, ExprNode,
     FunctionCall, FunctionId, FunctionKind, Grouping, JoinCondition, JoinKind, Literal,
     LogicalPlan, NullOrdering, Origin, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr,
     ResolvedFunction, Scan, SortDirection, SortOrder, SourceId, Span, SqlArgs, Star, SubqueryKind,
@@ -287,7 +287,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 3 } else { 12 };
+        let kinds = if depth == 0 { 4 } else { 14 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -308,7 +308,16 @@ impl Gen<'_> {
                 output: self.many(0, 2, Gen::bound),
                 version: self.flag().then(|| TableVersion(i64::from(self.pick(9)))),
             }),
-            3 => PlanNode::Project {
+            3 => PlanNode::CteRef(CteRef {
+                name: self.name(),
+                source: self.many(0, 2, |g| AttrId(u64::from(g.pick(9)))),
+                output: self.many(0, 2, Gen::bound),
+            }),
+            12 => PlanNode::Shift {
+                input: self.input(d),
+                offset: u64::from(self.pick(9)),
+            },
+            13 => PlanNode::Project {
                 input: self.input(d),
                 exprs: self.exprs(),
             },
@@ -734,6 +743,27 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
                 }))
             );
             m_source(source, w) || output.iter_mut().any(|c| m_bound(c, w))
+        }
+        PlanNode::CteRef(CteRef {
+            name,
+            source,
+            output,
+        }) => {
+            site!(w, source.push(AttrId(99)));
+            site!(
+                w,
+                output.push(output.first().cloned().unwrap_or(BoundColumn {
+                    id: AttrId(0),
+                    name: "x".to_owned(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                }))
+            );
+            m_string(name, w) || output.iter_mut().any(|c| m_bound(c, w))
+        }
+        PlanNode::Shift { input, offset } => {
+            site!(w, *offset += 1);
+            m_plan(input, w)
         }
         PlanNode::Project { input, exprs } => m_exprs(exprs, w) || m_plan(input, w),
         PlanNode::WithColumns { input, columns } => m_columns(columns, w) || m_plan(input, w),
