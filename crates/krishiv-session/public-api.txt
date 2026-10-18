@@ -130,7 +130,6 @@ pub struct krishiv_session::DataFrame
 impl krishiv_session::DataFrame
 pub fn krishiv_session::DataFrame::agg(&self, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> Self
 pub fn krishiv_session::DataFrame::alias(&self, &str) -> Self
-pub async fn krishiv_session::DataFrame::analyzed(&self) -> core::result::Result<alloc::sync::Arc<krishiv_plan::analyzer::AnalyzedPlan>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::col(&self, &str) -> krishiv_session::Column
 pub async fn krishiv_session::DataFrame::collect(&self) -> core::result::Result<alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::count(&self) -> core::result::Result<u64, krishiv_common::error::KrishivError>
@@ -144,7 +143,6 @@ pub fn krishiv_session::DataFrame::join(&self, &Self, krishiv_session::Column, k
 pub fn krishiv_session::DataFrame::join_using<'a>(&self, &Self, impl core::iter::traits::collect::IntoIterator<Item = &'a str>, krishiv_session::JoinType) -> Self
 pub fn krishiv_session::DataFrame::limit(&self, i32) -> Self
 pub fn krishiv_session::DataFrame::order_by(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
-pub fn krishiv_session::DataFrame::plan(&self) -> &alloc::sync::Arc<krishiv_plan::plan::LogicalPlan>
 pub async fn krishiv_session::DataFrame::schema(&self) -> core::result::Result<arrow_schema::schema::SchemaRef, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::select(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
 pub fn krishiv_session::DataFrame::sort(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
@@ -186,7 +184,6 @@ impl krishiv_session::Session
 pub fn krishiv_session::Session::builder() -> krishiv_session::SessionBuilder
 pub fn krishiv_session::Session::conf(&self) -> krishiv_session::RuntimeConf
 pub fn krishiv_session::Session::drop_temp_view(&self, &str) -> bool
-pub fn krishiv_session::Session::from_plan(&self, &krishiv_plan::plan::Plan) -> krishiv_session::DataFrame
 pub fn krishiv_session::Session::new() -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::read(&self) -> krishiv_session::DataFrameReader
 pub fn krishiv_session::Session::register_batches(&self, &str, arrow_schema::schema::SchemaRef, alloc::vec::Vec<arrow_array::record_batch::RecordBatch>) -> core::result::Result<(), krishiv_common::error::KrishivError>
@@ -204,7 +201,7 @@ pub fn krishiv_session::SessionBuilder::config(self, impl core::convert::Into<al
 pub fn krishiv_session::SessionBuilder::executor(self, alloc::sync::Arc<dyn krishiv_exec::executor::Executor>) -> Self
 pub fn krishiv_session::SessionBuilder::functions(self, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::FunctionRegistry>) -> Self
 pub fn krishiv_session::SessionBuilder::principal(self, krishiv_plan::analyzer::catalog::Principal) -> Self
-pub fn krishiv_session::SessionBuilder::profile(self, krishiv_plan::analyzer::SparkProfile) -> Self
+pub fn krishiv_session::SessionBuilder::profile(self, krishiv_functions::signature::SparkProfile) -> Self
 impl core::fmt::Debug for krishiv_session::SessionBuilder
 pub fn krishiv_session::SessionBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub type krishiv_session::RecordBatchStream = futures_core::stream::BoxStream<'static, core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>>

@@ -14,7 +14,9 @@ use futures::StreamExt;
 use futures::executor::block_on;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_plan::analyzer::BuiltinFunctions;
-use krishiv_session::functions::{col, count_star, lit, sum};
+use krishiv_session::functions::{
+    avg, coalesce, col, count, count_distinct, count_star, lit, max, min, sum,
+};
 use krishiv_session::{ExplainMode, JoinType, Session};
 
 fn people() -> (SchemaRef, RecordBatch) {
@@ -347,4 +349,76 @@ fn plans_go_in_and_out_with_unstable_ir() {
     assert!(df.plan().to_string().contains("people"));
     let analyzed = block_on(df.analyzed()).unwrap();
     assert_eq!(analyzed.output.len(), 2);
+}
+
+#[test]
+fn column_builders_and_functions_resolve_with_spark_types() {
+    use krishiv_types::DataType;
+    let s = session();
+    let id = || col("id");
+    let df = s.table("people").select([
+        id().cast(DataType::Long).alias("long_id"),
+        id().not_eq(1).alias("ne"),
+        id().eq_null_safe(lit(1)).alias("nse"),
+        id().lt(2).and(id().lt_eq(3)).or(id().gt_eq(0)).alias("cmp"),
+        col("name").is_null().alias("missing"),
+        col("name").like("b%").alias("liked"),
+        id().is_in([lit(1), lit(2)]).alias("listed"),
+        id().between(1, 2).alias("ranged"),
+        (-id()).alias("neg"),
+        (!col("name").is_null()).alias("present"),
+        coalesce([col("name"), lit("none")]).alias("named"),
+    ]);
+    let schema = block_on(df.schema()).unwrap();
+    let types: Vec<_> = schema
+        .fields()
+        .iter()
+        .map(|f| (f.name().as_str(), f.data_type().clone()))
+        .collect();
+    assert_eq!(
+        types,
+        [
+            ("long_id", ArrowType::Int64),
+            ("ne", ArrowType::Boolean),
+            ("nse", ArrowType::Boolean),
+            ("cmp", ArrowType::Boolean),
+            ("missing", ArrowType::Boolean),
+            ("liked", ArrowType::Boolean),
+            ("listed", ArrowType::Boolean),
+            ("ranged", ArrowType::Boolean),
+            ("neg", ArrowType::Int32),
+            ("present", ArrowType::Boolean),
+            ("named", ArrowType::Utf8View),
+        ]
+    );
+    // Aggregates from the built-in registry, keyed by name.
+    let df = s.table("people").group_by(["name"]).agg([
+        avg(id()).alias("a"),
+        min(id()).alias("lo"),
+        max(id()).alias("hi"),
+        count(id()).alias("n"),
+        count_distinct([id(), col("name")]).alias("d"),
+    ]);
+    let schema = block_on(df.schema()).unwrap();
+    let types: Vec<_> = schema
+        .fields()
+        .iter()
+        .map(|f| f.data_type().clone())
+        .collect();
+    assert_eq!(
+        types,
+        [
+            ArrowType::Utf8View,
+            ArrowType::Float64,
+            ArrowType::Int32,
+            ArrowType::Int32,
+            ArrowType::Int64,
+            ArrowType::Int64,
+        ]
+    );
+    // `sort` is `order_by`; both sort ascending by default.
+    let sorted = block_on(s.table("people").sort([id().asc()]).collect()).unwrap();
+    let ordered = block_on(s.table("people").order_by(["id"]).collect()).unwrap();
+    assert_eq!(ids(&sorted), [1, 2, 3]);
+    assert_eq!(ids(&sorted), ids(&ordered));
 }

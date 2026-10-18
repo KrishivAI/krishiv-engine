@@ -323,3 +323,33 @@ jobs:
           name: fuzz-kernels-artifacts
           path: crates/krishiv-kernels/fuzz/artifacts
           retention-days: 30
+
+  # P2-T090: the public API of the Rust facade (default features; the
+  # `unstable-ir` feature is outside semver, ADR 0027) must match the
+  # checked-in snapshots; a change updates them in the same PR.
+  public-api:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # rustdoc JSON ships only on nightly; pinning keeps runs reproducible.
+      - name: Nightly toolchain
+        run: rustup toolchain install nightly-2026-08-12 --profile minimal
+      - name: Pinned tools (sccache, cargo-public-api)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: sccache@0.18.0,cargo-public-api@0.52.0
+      - name: Diff against the snapshots
+        run: |
+          for crate in krishiv krishiv-session; do
+            cargo +nightly-2026-08-12 public-api -ss -p "$crate" \
+              > "$RUNNER_TEMP/$crate.txt"
+            diff -u "crates/$crate/public-api.txt" "$RUNNER_TEMP/$crate.txt"
+          done
