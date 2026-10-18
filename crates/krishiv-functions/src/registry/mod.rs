@@ -14,7 +14,10 @@
 //! [`Lookup::NotFound`] in older ones (as for an unknown name).
 
 mod catalog;
+mod conditional;
 mod defs;
+mod hashing;
+mod math;
 
 use std::collections::HashMap;
 use std::fmt;
