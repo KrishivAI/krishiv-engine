@@ -377,6 +377,18 @@ Query {
                                         FunctionArg {
                                             name: None,
                                             expr: Expr {
+                                                kind: Literal(
+                                                    String(
+                                                        "x",
+                                                    ),
+                                                ),
+                                                span: 17..20,
+                                            },
+                                            span: 17..20,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
                                                 kind: Column(
                                                     [
                                                         Ident {
@@ -389,18 +401,6 @@ Query {
                                                 span: 26..27,
                                             },
                                             span: 26..27,
-                                        },
-                                        FunctionArg {
-                                            name: None,
-                                            expr: Expr {
-                                                kind: Literal(
-                                                    String(
-                                                        "x",
-                                                    ),
-                                                ),
-                                                span: 17..20,
-                                            },
-                                            span: 17..20,
                                         },
                                     ],
                                     within_group: [],
@@ -479,6 +479,18 @@ Query {
                                         FunctionArg {
                                             name: None,
                                             expr: Expr {
+                                                kind: Literal(
+                                                    String(
+                                                        "y",
+                                                    ),
+                                                ),
+                                                span: 66..69,
+                                            },
+                                            span: 66..69,
+                                        },
+                                        FunctionArg {
+                                            name: None,
+                                            expr: Expr {
                                                 kind: Column(
                                                     [
                                                         Ident {
@@ -491,18 +503,6 @@ Query {
                                                 span: 75..76,
                                             },
                                             span: 75..76,
-                                        },
-                                        FunctionArg {
-                                            name: None,
-                                            expr: Expr {
-                                                kind: Literal(
-                                                    String(
-                                                        "y",
-                                                    ),
-                                                ),
-                                                span: 66..69,
-                                            },
-                                            span: 66..69,
                                         },
                                     ],
                                     within_group: [],
