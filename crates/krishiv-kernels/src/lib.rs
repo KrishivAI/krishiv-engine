@@ -47,6 +47,7 @@ pub mod error;
 pub mod float;
 pub mod hash;
 pub mod integer;
+pub mod math;
 pub mod ops;
 pub mod policy;
 pub mod reference;
