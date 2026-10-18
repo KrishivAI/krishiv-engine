@@ -31,10 +31,12 @@ mod generated {
 }
 mod keywords;
 pub mod lexer;
+mod lower;
 mod parser;
 mod types;
 
 pub use error::ParseError;
+pub use lower::{lower, parse_and_lower};
 
 /// The deepest tree the parser builds, counted in nested expressions,
 /// queries and relations; deeper statements fail with

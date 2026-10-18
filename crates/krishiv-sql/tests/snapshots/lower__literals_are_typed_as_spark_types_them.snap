@@ -1,0 +1,28 @@
+---
+source: crates/krishiv-sql/tests/lower.rs
+expression: "report(&[\"SELECT 2147483647, 2147483648, 9223372036854775808, 1Y, 1S, 1L, -0.050, .5, 5., 1e3, 1.5D, 1.5F, 1.5BD FROM t\",\n\"SELECT X'1F', X'abc', DATE '2020-2-3', DATE '+2020', DATE '2020-02-29T10:00', DATE '-0044-03-15' FROM t\",\n\"SELECT 300Y FROM t\", \"SELECT 40000S FROM t\",\n\"SELECT 9223372036854775808L FROM t\", \"SELECT 1e400 FROM t\",\n\"SELECT 1e40F FROM t\",\n\"SELECT 123456789012345678901234567890123456789 FROM t\",\n\"SELECT DATE '2021-02-29' FROM t\", \"SELECT DATE '2021-13-01' FROM t\",\n\"SELECT X'zz' FROM t\", \"SELECT CAST(a AS unknown_type) FROM t\",])"
+---
+SELECT 2147483647, 2147483648, 9223372036854775808, 1Y, 1S, 1L, -0.050, .5, 5., 1e3, 1.5D, 1.5F, 1.5BD FROM t
+  => Project [2147483647, 2147483648L, 9223372036854775808, 1Y, 1S, 1L, -0.050, 0.5, 5, 1000.0D, 1.5D, 1.5F, 1.5] | +- Read t | 
+SELECT X'1F', X'abc', DATE '2020-2-3', DATE '+2020', DATE '2020-02-29T10:00', DATE '-0044-03-15' FROM t
+  => Project [X'1F', X'0ABC', DATE '2020-02-03', DATE '2020-01-01', DATE '2020-02-29', DATE '-0044-03-15'] | +- Read t | 
+SELECT 300Y FROM t
+  => [INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 300 is outside the valid range for tinyint with minimum value of -128 and maximum value of 127. Please adjust the value accordingly. SQLSTATE: 22003 @ 7..11
+SELECT 40000S FROM t
+  => [INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 40000 is outside the valid range for smallint with minimum value of -32768 and maximum value of 32767. Please adjust the value accordingly. SQLSTATE: 22003 @ 7..13
+SELECT 9223372036854775808L FROM t
+  => [INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 9223372036854775808 is outside the valid range for bigint with minimum value of -9223372036854775808 and maximum value of 9223372036854775807. Please adjust the value accordingly. SQLSTATE: 22003 @ 7..27
+SELECT 1e400 FROM t
+  => [INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1e400 is outside the valid range for double with minimum value of -1.7976931348623157E308 and maximum value of 1.7976931348623157E308. Please adjust the value accordingly. SQLSTATE: 22003 @ 7..12
+SELECT 1e40F FROM t
+  => [INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1e40 is outside the valid range for float with minimum value of -3.4028235E38 and maximum value of 3.4028235E38. Please adjust the value accordingly. SQLSTATE: 22003 @ 7..12
+SELECT 123456789012345678901234567890123456789 FROM t
+  => [DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION] Decimal precision 39 exceeds max precision 38. SQLSTATE: 22003 @ 7..46
+SELECT DATE '2021-02-29' FROM t
+  => [INVALID_TYPED_LITERAL] The value of the typed literal "DATE" is invalid: '2021-02-29'. SQLSTATE: 42604 @ 7..24
+SELECT DATE '2021-13-01' FROM t
+  => [INVALID_TYPED_LITERAL] The value of the typed literal "DATE" is invalid: '2021-13-01'. SQLSTATE: 42604 @ 7..24
+SELECT X'zz' FROM t
+  => [INVALID_TYPED_LITERAL] The value of the typed literal "X" is invalid: 'zz'. SQLSTATE: 42604 @ 7..12
+SELECT CAST(a AS unknown_type) FROM t
+  => [UNSUPPORTED_DATATYPE] Unsupported data type "UNKNOWN_TYPE". SQLSTATE: 0A000 @ 17..29

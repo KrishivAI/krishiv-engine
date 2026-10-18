@@ -640,7 +640,8 @@ impl Display for Literal {
             }
             Self::Date(days) => {
                 let (y, m, d) = civil_from_days(i64::from(*days));
-                write!(f, "DATE '{y:04}-{m:02}-{d:02}'")
+                let sign = if y < 0 { "-" } else { "" };
+                write!(f, "DATE '{sign}{:04}-{m:02}-{d:02}'", y.unsigned_abs())
             }
             Self::Timestamp(us) => write!(f, "TIMESTAMP_MICROS({us})"),
             Self::TimestampNtz(us) => write!(f, "TIMESTAMP_NTZ_MICROS({us})"),

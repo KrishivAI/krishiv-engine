@@ -13,15 +13,19 @@ workspace = true
 
 [dependencies]
 krishiv-common = { path = "../krishiv-common" }
+krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }
 thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
 insta = { workspace = true }
-krishiv-plan = { path = "../krishiv-plan" }
 serde_json = { workspace = true, features = ["std"] }
 
 [[bench]]
 name = "parse"
+harness = false
+
+[[bench]]
+name = "lower"
 harness = false

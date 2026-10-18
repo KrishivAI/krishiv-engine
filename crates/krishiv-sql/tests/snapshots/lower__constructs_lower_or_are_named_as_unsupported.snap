@@ -1,0 +1,116 @@
+---
+source: crates/krishiv-sql/tests/lower.rs
+expression: "report(&[\"SELECT 1\", \"SELECT DISTINCT a FROM t\",\n\"SELECT /*+ BROADCAST(t) */ a FROM t\",\n\"SELECT a FROM t UNION SELECT a FROM u\", \"VALUES (1)\",\n\"SELECT * FROM VALUES (1) AS v(a)\", \"SELECT * FROM range(3)\",\n\"SELECT a FROM t LATERAL VIEW explode(b) x AS y\",\n\"SELECT row_number() OVER (ORDER BY a) FROM t\",\n\"SELECT a FROM t GROUP BY ROLLUP (a)\", \"SELECT a FROM t GROUP BY a WITH CUBE\",\n\"SELECT * FROM t NATURAL JOIN u\", \"SELECT * FROM t, LATERAL (SELECT a)\",\n\"SELECT * FROM t VERSION AS OF 1\", \"SELECT a FROM t CLUSTER BY a\",\n\"SELECT a FROM t DISTRIBUTE BY a\", \"SELECT a FROM t LIMIT 1 OFFSET 2\",\n\"SELECT a FROM t WINDOW w AS (ORDER BY a)\", \"SELECT a FROM t QUALIFY a > 1\",\n\"WITH RECURSIVE r AS (SELECT a FROM t) SELECT * FROM r\",\n\"SELECT * EXCEPT (a) FROM t\", \"SELECT x[0] FROM t\", \"SELECT (a).b.c FROM t\",\n\"SELECT f(a).b FROM t\", \"SELECT transform(a, x -> x) FROM t\",\n\"SELECT (a, b) FROM t\", \"SELECT a LIKE ANY ('x', 'y') FROM t\",\n\"SELECT ? FROM t\", \"SELECT INTERVAL 1 DAY FROM t\",\n\"SELECT TIMESTAMP '2020-01-01 00:00:00' FROM t\", \"SELECT db.f(a) FROM t\",\n\"SELECT f(x => 1) FROM t\",\n\"SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a) FROM t\",\n\"SELECT first(a) IGNORE NULLS FROM t\",\n\"SELECT a FROM t PIVOT (sum(a) FOR b IN (1))\", \"SELECT * FROM t WITH (k = x)\",\n\"FROM t SELECT a SELECT b\",\n\"SELECT * FROM parquet.`s3a://k:Canary-7f3a9c@b/p` WITH ('password' = 'Canary-7f3a9c')\",\n\"WITH c (x) AS (SELECT a FROM t) SELECT x FROM c ORDER BY x LIMIT ALL\",\n\"FROM t SELECT a SORT BY a\",\n\"SELECT a FROM t WHERE (a, b) IN (SELECT a, d FROM u) AND a NOT BETWEEN 1 AND 2\",\n\"SELECT a <=> 1, a IS DISTINCT FROM 1, a IS NOT DISTINCT FROM 1, a IS TRUE, a IS NOT FALSE, a IS UNKNOWN, a IS NOT UNKNOWN FROM t\",\n\"SELECT +a, ~a, a DIV 2, a & 1, a | 1, a ^ 1, a << 1, a >> 1, a >>> 1, a || b FROM t\",\n\"SELECT CASE a WHEN 1 THEN 'x' END, b ILIKE 'x' ESCAPE '/', b NOT RLIKE 'x', TRY_CAST(a AS INT) FROM t\",\n\"SELECT * FROM (t JOIN u ON true) x CROSS JOIN v LEFT SEMI JOIN w ON true\",\n\"TABLE t\", \"(SELECT a FROM t) ORDER BY a\", \"FROM t SELECT a UNION SELECT b\",\n\"WITH c MAX RECURSION LEVEL 3 AS (SELECT a FROM t) SELECT a FROM c\",\n\"SELECT explode(a) AS (x, y) FROM t\",\n\"SELECT a FROM t, u PIVOT (sum(a) FOR b IN (1))\",\n\"SELECT * FROM t JOIN LATERAL (SELECT a) s\",\n\"SELECT * FROM t WITH (k = true, n = 2) RIGHT JOIN (SELECT a FROM u) USING (a)\",\n\"SELECT -a, a % 2, a IS NULL, NULL FROM t ORDER BY a DESC NULLS FIRST, b NULLS LAST\",\n\"SELECT (t.a).b, ((a)).c.d FROM t\", \"SELECT 1BD, 1e3BD FROM t\",])"
+---
+SELECT 1
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature SELECT without FROM is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..8
+SELECT DISTINCT a FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature SELECT DISTINCT is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..24
+SELECT /*+ BROADCAST(t) */ a FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature hints is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..35
+SELECT a FROM t UNION SELECT a FROM u
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature set operations is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..37
+VALUES (1)
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature VALUES is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..10
+SELECT * FROM VALUES (1) AS v(a)
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature VALUES is not supported by Krishiv yet. SQLSTATE: 0A000 @ 14..32
+SELECT * FROM range(3)
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature table-valued functions is not supported by Krishiv yet. SQLSTATE: 0A000 @ 14..22
+SELECT a FROM t LATERAL VIEW explode(b) x AS y
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature LATERAL VIEW is not supported by Krishiv yet. SQLSTATE: 0A000 @ 9..46
+SELECT row_number() OVER (ORDER BY a) FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature window functions is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..37
+SELECT a FROM t GROUP BY ROLLUP (a)
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature ROLLUP, CUBE and GROUPING SETS is not supported by Krishiv yet. SQLSTATE: 0A000 @ 25..35
+SELECT a FROM t GROUP BY a WITH CUBE
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature ROLLUP, CUBE and GROUPING SETS is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..36
+SELECT * FROM t NATURAL JOIN u
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature NATURAL JOIN is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..30
+SELECT * FROM t, LATERAL (SELECT a)
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature LATERAL subqueries is not supported by Krishiv yet. SQLSTATE: 0A000 @ 17..35
+SELECT * FROM t VERSION AS OF 1
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature time travel is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..31
+SELECT a FROM t CLUSTER BY a
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature CLUSTER BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..28
+SELECT a FROM t DISTRIBUTE BY a
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature DISTRIBUTE BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..31
+SELECT a FROM t LIMIT 1 OFFSET 2
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature OFFSET is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..32
+SELECT a FROM t WINDOW w AS (ORDER BY a)
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature WINDOW clauses is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..40
+SELECT a FROM t QUALIFY a > 1
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature QUALIFY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..29
+WITH RECURSIVE r AS (SELECT a FROM t) SELECT * FROM r
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature recursive CTEs is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..37
+SELECT * EXCEPT (a) FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature SELECT * EXCEPT is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..19
+SELECT x[0] FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature subscripts is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..11
+SELECT (a).b.c FROM t
+  => Project [a.b.c] | +- Read t | 
+SELECT f(a).b FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature field access on an expression is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..13
+SELECT transform(a, x -> x) FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature lambda functions is not supported by Krishiv yet. SQLSTATE: 0A000 @ 20..26
+SELECT (a, b) FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature row and struct constructors is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..13
+SELECT a LIKE ANY ('x', 'y') FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature LIKE ANY, SOME and ALL is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..28
+SELECT ? FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature parameter markers is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..8
+SELECT INTERVAL 1 DAY FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature INTERVAL literals is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..21
+SELECT TIMESTAMP '2020-01-01 00:00:00' FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature TIMESTAMP literals is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..38
+SELECT db.f(a) FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature qualified function names is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..11
+SELECT f(x => 1) FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature named function arguments is not supported by Krishiv yet. SQLSTATE: 0A000 @ 9..15
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a) FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature WITHIN GROUP is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..53
+SELECT first(a) IGNORE NULLS FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature IGNORE NULLS and RESPECT NULLS is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..28
+SELECT a FROM t PIVOT (sum(a) FOR b IN (1))
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature PIVOT and UNPIVOT is not supported by Krishiv yet. SQLSTATE: 0A000 @ 14..43
+SELECT * FROM t WITH (k = x)
+  => [PARSE_SYNTAX_ERROR] Syntax error at or near 'x'. SQLSTATE: 42601 @ 26..27
+FROM t SELECT a SELECT b
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature FROM with several SELECT bodies is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..24
+SELECT * FROM parquet.`s3a://k:Canary-7f3a9c@b/p` WITH ('password' = 'Canary-7f3a9c')
+  => Project [*] | +- Read parquet [s3a://k:*********(redacted)@b/p] {password=*********(redacted)} | 
+WITH c (x) AS (SELECT a FROM t) SELECT x FROM c ORDER BY x LIMIT ALL
+  => WithCte [c] | :- SubqueryAlias c (x) | :  +- Project [a] | :     +- Read t | +- Sort [x ASC NULLS FIRST], true |    +- Project [x] |       +- Read c | 
+FROM t SELECT a SORT BY a
+  => Sort [a ASC NULLS FIRST], false | +- Project [a] |    +- Read t | 
+SELECT a FROM t WHERE (a, b) IN (SELECT a, d FROM u) AND a NOT BETWEEN 1 AND 2
+  => Project [a] | +- Filter (((a, b) IN (list-query)) and (NOT (a BETWEEN 1 AND 2))) |    :  +- Project [a, d] |    :     +- Read u |    +- Read t | 
+SELECT a <=> 1, a IS DISTINCT FROM 1, a IS NOT DISTINCT FROM 1, a IS TRUE, a IS NOT FALSE, a IS UNKNOWN, a IS NOT UNKNOWN FROM t
+  => Project [(a <=> 1), (NOT (a <=> 1)), (a <=> 1), (a <=> true), (NOT (a <=> false)), isnull(a), isnotnull(a)] | +- Read t | 
+SELECT +a, ~a, a DIV 2, a & 1, a | 1, a ^ 1, a << 1, a >> 1, a >>> 1, a || b FROM t
+  => Project [positive(a), ~(a), div(a, 2), &(a, 1), |(a, 1), ^(a, 1), shiftleft(a, 1), shiftright(a, 1), shiftrightunsigned(a, 1), concat(a, b)] | +- Read t | 
+SELECT CASE a WHEN 1 THEN 'x' END, b ILIKE 'x' ESCAPE '/', b NOT RLIKE 'x', TRY_CAST(a AS INT) FROM t
+  => Project [CASE WHEN (a == 1) THEN 'x' END, ilike(b, 'x', '/'), (NOT (b rlike 'x')), TRY_CAST(a AS INT)] | +- Read t | 
+SELECT * FROM (t JOIN u ON true) x CROSS JOIN v LEFT SEMI JOIN w ON true
+  => Project [*] | +- Join LeftSemi, true |    :- Join Cross |    :  :- SubqueryAlias x |    :  :  +- Join Inner, true |    :  :     :- Read t |    :  :     +- Read u |    :  +- Read v |    +- Read w | 
+TABLE t
+  => Read t | 
+(SELECT a FROM t) ORDER BY a
+  => Sort [a ASC NULLS FIRST], true | +- Project [a] |    +- Read t | 
+FROM t SELECT a UNION SELECT b
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature set operations is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..30
+WITH c MAX RECURSION LEVEL 3 AS (SELECT a FROM t) SELECT a FROM c
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature MAX RECURSION LEVEL is not supported by Krishiv yet. SQLSTATE: 0A000 @ 5..49
+SELECT explode(a) AS (x, y) FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature multi-name aliases is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..27
+SELECT a FROM t, u PIVOT (sum(a) FOR b IN (1))
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature PIVOT and UNPIVOT is not supported by Krishiv yet. SQLSTATE: 0A000 @ 17..46
+SELECT * FROM t JOIN LATERAL (SELECT a) s
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature LATERAL joins is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..41
+SELECT * FROM t WITH (k = true, n = 2) RIGHT JOIN (SELECT a FROM u) USING (a)
+  => Project [*] | +- Join RightOuter, USING (a) |    :- Read t {k=true, n=2} |    +- SubqueryAlias __auto_generated_subquery_name |       +- Project [a] |          +- Read u | 
+SELECT -a, a % 2, a IS NULL, NULL FROM t ORDER BY a DESC NULLS FIRST, b NULLS LAST
+  => Sort [a DESC NULLS FIRST, b ASC NULLS LAST], true | +- Project [(- a), (a % 2), isnull(a), NULL] |    +- Read t | 
+SELECT (t.a).b, ((a)).c.d FROM t
+  => Project [t.a.b, a.c.d] | +- Read t | 
+SELECT 1BD, 1e3BD FROM t
+  => [KRISHIV_UNSUPPORTED_FEATURE] The feature this numeric literal is not supported by Krishiv yet. SQLSTATE: 0A000 @ 12..17
