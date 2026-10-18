@@ -43,3 +43,41 @@ fn map_hashing_needs_the_legacy_switch() -> R {
     assert_eq!(default_conf_error("1, 'a'")?, None);
     Ok(())
 }
+
+#[test]
+fn fixture_expressions_that_cannot_be_built_are_reported() {
+    use krishiv_testkit::kernel_eval::hash::default_conf_error;
+    // Spark: NULL_MAP_KEY; arity, mixed element types and unknown casts have no value.
+    for (expr, why) in [
+        ("map('a', 1, CAST(NULL AS STRING), 2)", "NULL_MAP_KEY"),
+        ("map('a')", "map arity"),
+        ("named_struct('a')", "named_struct arity"),
+        ("named_struct(1, 2)", "named_struct field name"),
+        ("array(1, 'a')", "elements of"),
+        (
+            "CAST(array(1) AS ARRAY<STRING>)",
+            "cast array<int> to array<string>",
+        ),
+        ("CAST(1 AS ARRAY<INT>)", "cast int to array<int>"),
+        ("1 +", "does not parse"),
+    ] {
+        let e = default_conf_error(expr).unwrap_err();
+        assert!(e.contains(why), "{expr}: {e}");
+    }
+    // Empty containers cast to their types hash like Spark's.
+    assert_eq!(
+        default_conf_error("CAST(array() AS ARRAY<INT>)").unwrap(),
+        None
+    );
+    assert_eq!(
+        default_conf_error("CAST(map() AS MAP<STRING,INT>)").unwrap(),
+        Some("DATATYPE_MISMATCH.HASH_MAP_TYPE")
+    );
+    assert_eq!(
+        default_conf_error("CAST(NULL AS STRUCT<a:INT>)").unwrap(),
+        None
+    );
+    assert_eq!(default_conf_error("CAST('abc' AS BINARY)").unwrap(), None);
+    assert!(default_conf_error("CAST(1 AS BINARY)").is_err());
+    assert_eq!(default_conf_error("CAST(NULL AS BINARY)").unwrap(), None);
+}

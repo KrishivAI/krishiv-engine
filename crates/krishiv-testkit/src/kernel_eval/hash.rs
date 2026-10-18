@@ -296,12 +296,14 @@ fn retype_empty(inner: &ArrayRef, to: &DataType) -> Result<ArrayRef, Skip> {
     }
     match (inner.data_type(), to) {
         (DataType::List(_), DataType::List(f)) if inner.as_list::<i32>().values().is_empty() => {
-            Ok(Arc::new(ListArray::new(
+            ListArray::try_new(
                 Arc::clone(f),
                 OffsetBuffer::from_lengths([0]),
                 arrow_array::new_empty_array(f.data_type()),
                 None,
-            )))
+            )
+            .map(|a| Arc::new(a) as ArrayRef)
+            .map_err(|e| e.to_string())
         }
         (DataType::Map(..), DataType::Map(f, ordered)) if inner.as_map().entries().is_empty() => {
             let DataType::Struct(kv) = f.data_type() else {
@@ -311,13 +313,17 @@ fn retype_empty(inner: &ArrayRef, to: &DataType) -> Result<ArrayRef, Skip> {
                 .iter()
                 .map(|c| arrow_array::new_empty_array(c.data_type()))
                 .collect();
-            Ok(Arc::new(MapArray::new(
+            let entries =
+                StructArray::try_new(kv.clone(), cols, None).map_err(|e| e.to_string())?;
+            MapArray::try_new(
                 Arc::clone(f),
                 OffsetBuffer::from_lengths([0]),
-                StructArray::new(kv.clone(), cols, None),
+                entries,
                 None,
                 *ordered,
-            )))
+            )
+            .map(|a| Arc::new(a) as ArrayRef)
+            .map_err(|e| e.to_string())
         }
         (a, b) => Err(format!("cast {} to {}", type_string(a), type_string(b))),
     }
@@ -364,12 +370,14 @@ fn array_of(args: &[&ast::Expr]) -> Result<ArrayRef, Skip> {
         .map(|e| build(e))
         .collect::<Result<Vec<_>, _>>()?;
     let (ty, values) = concat_rows(&rows)?;
-    Ok(Arc::new(ListArray::new(
+    ListArray::try_new(
         Arc::new(Field::new("item", ty, true)),
         OffsetBuffer::from_lengths([rows.len()]),
         values,
         None,
-    )))
+    )
+    .map(|a| Arc::new(a) as ArrayRef)
+    .map_err(|e| e.to_string())
 }
 
 fn string_arg(e: &ast::Expr) -> Result<String, Skip> {
@@ -390,7 +398,9 @@ fn struct_of(args: &[&ast::Expr]) -> Result<ArrayRef, Skip> {
         fields.push(Field::new(string_arg(name)?, col.data_type().clone(), true));
         cols.push(col);
     }
-    Ok(Arc::new(StructArray::new(Fields::from(fields), cols, None)))
+    StructArray::try_new(Fields::from(fields), cols, None)
+        .map(|a| Arc::new(a) as ArrayRef)
+        .map_err(|e| e.to_string())
 }
 
 fn map_of(args: &[&ast::Expr]) -> Result<ArrayRef, Skip> {
@@ -404,18 +414,27 @@ fn map_of(args: &[&ast::Expr]) -> Result<ArrayRef, Skip> {
         values.push(build(v)?);
     }
     let (kt, keys) = concat_rows(&keys)?;
+    if keys.null_count() != 0 {
+        // Spark: `NULL_MAP_KEY`.
+        return Err("NULL_MAP_KEY".to_owned());
+    }
     let (vt, values) = concat_rows(&values)?;
     let entries = entries_field(kt, vt);
     let DataType::Struct(kv) = entries.data_type().clone() else {
         return Err("map entries".to_owned());
     };
-    Ok(Arc::new(MapArray::new(
+    let n = keys.len();
+    let entries_array =
+        StructArray::try_new(kv, vec![keys, values], None).map_err(|e| e.to_string())?;
+    MapArray::try_new(
         Arc::new(entries),
-        OffsetBuffer::from_lengths([keys.len()]),
-        StructArray::new(kv, vec![keys, values], None),
+        OffsetBuffer::from_lengths([n]),
+        entries_array,
         None,
         false,
-    )))
+    )
+    .map(|a| Arc::new(a) as ArrayRef)
+    .map_err(|e| e.to_string())
 }
 
 /// Runs one fixture case: the argument types must be Spark's, and `hash` and

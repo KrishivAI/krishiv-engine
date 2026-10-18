@@ -210,7 +210,20 @@ fn digest_inputs_are_checked() {
     assert_eq!(md5(&bin).unwrap().value(0), md5(&ls).unwrap().value(0));
 }
 
+fn config() -> ProptestConfig {
+    // Miri interprets each case, so it runs two; no failure file (Miri's
+    // isolation has no file system).
+    let default = ProptestConfig::default();
+    ProptestConfig {
+        cases: if cfg!(miri) { 2 } else { default.cases },
+        failure_persistence: None,
+        ..default
+    }
+}
+
 proptest! {
+    #![proptest_config(config())]
+
     #[test]
     fn xxhash64_ints_equal_the_byte_stream(v in any::<i32>(), w in any::<i64>()) {
         let i = Int32Array::from(vec![v]);

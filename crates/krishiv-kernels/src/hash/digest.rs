@@ -46,6 +46,15 @@ fn hex(bytes: &[u8], out: &mut String) {
     }
 }
 
+/// The output size after appending `add` bytes to `total`. The builder
+/// panics on an offset past `i32::MAX`, so the kernel checks first.
+fn next_offset(total: usize, add: usize) -> Result<usize, KernelError> {
+    let next = total.saturating_add(add);
+    i32::try_from(next)
+        .map(|_| next)
+        .map_err(|_| KernelError::out_of_memory(next))
+}
+
 fn hex_digests(
     input: &dyn Array,
     mut digest: impl FnMut(usize, &[u8], &mut String) -> bool,
@@ -53,10 +62,14 @@ fn hex_digests(
     check_input(input)?;
     let mut out = GenericStringBuilder::<i32>::with_capacity(input.len(), 0);
     let mut scratch = String::new();
+    let mut bytes = 0_usize;
     for i in 0..input.len() {
         scratch.clear();
         match bytes_at(input, i) {
-            Some(b) if digest(i, b, &mut scratch) => out.append_value(&scratch),
+            Some(b) if digest(i, b, &mut scratch) => {
+                bytes = next_offset(bytes, scratch.len())?;
+                out.append_value(&scratch);
+            }
             _ => out.append_null(),
         }
     }
@@ -164,4 +177,22 @@ pub fn crc32(input: &dyn Array) -> Result<Int64Array, KernelError> {
     Ok((0..input.len())
         .map(|i| bytes_at(input, i).map(|b| i64::from(crc32_of(b))))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_offsets_are_checked() {
+        assert_eq!(next_offset(10, 32).unwrap(), 42);
+        let max = usize::try_from(i32::MAX).unwrap();
+        assert_eq!(next_offset(max - 1, 1).unwrap(), max);
+        let e = next_offset(max, 1).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::UnableToAcquireMemory
+        );
+        assert!(next_offset(usize::MAX, 1).is_err());
+    }
 }
