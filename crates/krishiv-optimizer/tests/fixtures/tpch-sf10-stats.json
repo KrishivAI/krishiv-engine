@@ -1,0 +1,339 @@
+{
+ "note": "TPC-H SF10 row counts and column statistics (distinct values, bounds) as the TPC-H specification defines them; for join-ordering tests.",
+ "tables": {
+  "region": {
+   "rows": 5,
+   "columns": {
+    "r_regionkey": {
+     "distinct": 5,
+     "min": {
+      "number": 0
+     },
+     "max": {
+      "number": 4
+     }
+    },
+    "r_name": {
+     "distinct": 5
+    }
+   }
+  },
+  "nation": {
+   "rows": 25,
+   "columns": {
+    "n_nationkey": {
+     "distinct": 25,
+     "min": {
+      "number": 0
+     },
+     "max": {
+      "number": 24
+     }
+    },
+    "n_name": {
+     "distinct": 25
+    },
+    "n_regionkey": {
+     "distinct": 5,
+     "min": {
+      "number": 0
+     },
+     "max": {
+      "number": 4
+     }
+    }
+   }
+  },
+  "supplier": {
+   "rows": 100000,
+   "columns": {
+    "s_suppkey": {
+     "distinct": 100000,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 100000
+     }
+    },
+    "s_name": {
+     "distinct": 100000
+    },
+    "s_nationkey": {
+     "distinct": 25,
+     "min": {
+      "number": 0
+     },
+     "max": {
+      "number": 24
+     }
+    },
+    "s_acctbal": {
+     "distinct": 99999,
+     "min": {
+      "number": -999.99
+     },
+     "max": {
+      "number": 9999.99
+     }
+    },
+    "s_comment": {
+     "distinct": 100000
+    }
+   }
+  },
+  "customer": {
+   "rows": 1500000,
+   "columns": {
+    "c_custkey": {
+     "distinct": 1500000,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 1500000
+     }
+    },
+    "c_nationkey": {
+     "distinct": 25,
+     "min": {
+      "number": 0
+     },
+     "max": {
+      "number": 24
+     }
+    },
+    "c_mktsegment": {
+     "distinct": 5
+    },
+    "c_acctbal": {
+     "distinct": 999999,
+     "min": {
+      "number": -999.99
+     },
+     "max": {
+      "number": 9999.99
+     }
+    },
+    "c_phone": {
+     "distinct": 1500000
+    }
+   }
+  },
+  "part": {
+   "rows": 2000000,
+   "columns": {
+    "p_partkey": {
+     "distinct": 2000000,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 2000000
+     }
+    },
+    "p_name": {
+     "distinct": 2000000
+    },
+    "p_brand": {
+     "distinct": 25
+    },
+    "p_type": {
+     "distinct": 150
+    },
+    "p_size": {
+     "distinct": 50,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 50
+     }
+    },
+    "p_container": {
+     "distinct": 40
+    }
+   }
+  },
+  "partsupp": {
+   "rows": 8000000,
+   "columns": {
+    "ps_partkey": {
+     "distinct": 2000000,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 2000000
+     }
+    },
+    "ps_suppkey": {
+     "distinct": 100000,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 100000
+     }
+    },
+    "ps_availqty": {
+     "distinct": 9999,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 9999
+     }
+    },
+    "ps_supplycost": {
+     "distinct": 99901,
+     "min": {
+      "number": 1.0
+     },
+     "max": {
+      "number": 1000.0
+     }
+    }
+   }
+  },
+  "orders": {
+   "rows": 15000000,
+   "columns": {
+    "o_orderkey": {
+     "distinct": 15000000,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 60000000
+     }
+    },
+    "o_custkey": {
+     "distinct": 999982,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 1499999
+     }
+    },
+    "o_orderstatus": {
+     "distinct": 3
+    },
+    "o_totalprice": {
+     "distinct": 14000000,
+     "min": {
+      "number": 838.05
+     },
+     "max": {
+      "number": 558822.56
+     }
+    },
+    "o_orderdate": {
+     "distinct": 2406,
+     "min": {
+      "date": "1992-01-01"
+     },
+     "max": {
+      "date": "1998-08-02"
+     }
+    },
+    "o_orderpriority": {
+     "distinct": 5
+    },
+    "o_comment": {
+     "distinct": 15000000
+    }
+   }
+  },
+  "lineitem": {
+   "rows": 59986052,
+   "columns": {
+    "l_orderkey": {
+     "distinct": 15000000,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 60000000
+     }
+    },
+    "l_partkey": {
+     "distinct": 2000000,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 2000000
+     }
+    },
+    "l_suppkey": {
+     "distinct": 100000,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 100000
+     }
+    },
+    "l_quantity": {
+     "distinct": 50,
+     "min": {
+      "number": 1
+     },
+     "max": {
+      "number": 50
+     }
+    },
+    "l_discount": {
+     "distinct": 11,
+     "min": {
+      "number": 0.0
+     },
+     "max": {
+      "number": 0.1
+     }
+    },
+    "l_returnflag": {
+     "distinct": 3
+    },
+    "l_linestatus": {
+     "distinct": 2
+    },
+    "l_shipdate": {
+     "distinct": 2526,
+     "min": {
+      "date": "1992-01-02"
+     },
+     "max": {
+      "date": "1998-12-01"
+     }
+    },
+    "l_commitdate": {
+     "distinct": 2466,
+     "min": {
+      "date": "1992-01-31"
+     },
+     "max": {
+      "date": "1998-10-31"
+     }
+    },
+    "l_receiptdate": {
+     "distinct": 2554,
+     "min": {
+      "date": "1992-01-03"
+     },
+     "max": {
+      "date": "1998-12-31"
+     }
+    },
+    "l_shipinstruct": {
+     "distinct": 4
+    },
+    "l_shipmode": {
+     "distinct": 7
+    }
+   }
+  }
+ }
+}

@@ -12,7 +12,12 @@ Query optimizer: rule- and cost-based rewrites, including the IVM rewrite pass.
   rewrites a shared subtree once (`dag::Rewriter`), subquery plans included; never copy a shared subtree.
 - Only deterministic predicates move; folding never changes what a query returns or raises (no overflow,
   no division, no time-zone-dependent cast; a raising call stays in the plan).
-- Per-rule and TPC-H plan snapshots live in `tests/it/snapshots/`.
+- Join ordering re-plans each inner-join tree (through deterministic filters and column selections) from
+  `Statistics`; it never adds a cross product, places each conjunct at the lowest join that has its inputs
+  (subquery conjuncts as filters), and restores column order only for positional consumers. Inputs are
+  ordered canonically, so `optimize` stays a fixed point.
+- Per-rule and TPC-H plan snapshots live in `tests/it/snapshots/`; differential tests run optimised and
+  unoptimised plans through the reference interpreter in `tests/it/support/eval.rs`.
 - Never changes a user's explicit `repartition(n)`.
 - Rules are plan-snapshot tested; IVM pass satisfies Σ incremental == query(Σ inputs).
 - `#![forbid(unsafe_code)]`.
