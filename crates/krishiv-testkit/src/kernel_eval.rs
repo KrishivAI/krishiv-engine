@@ -40,7 +40,7 @@ use krishiv_kernels::{
     float,
 };
 use krishiv_sql::ast::{self, BinaryOp as Bop, ExprKind, Literal, NumKind};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::fn_matrix::{Expected, MatrixCase, Mode};
 
@@ -210,7 +210,10 @@ fn ltz() -> DataType {
 #[derive(Debug, Clone, Copy)]
 struct Binder {
     ansi: bool,
-    /// Inside `try_*`: casts and arithmetic return NULL instead of raising.
+    /// `spark.sql.decimalOperations.allowPrecisionLoss`.
+    allow_loss: bool,
+    /// Typing a `try_*` operator: its implicit casts and arithmetic return
+    /// NULL instead of raising.
     try_: bool,
 }
 
@@ -304,9 +307,10 @@ impl Binder {
             let [l, r] = args.as_slice() else {
                 return Err("try_* arity".to_owned());
             };
-            let inner = Self { try_: true, ..self };
-            let (l, r) = (inner.bind(l)?, inner.bind(r)?);
-            inner.arith(op, l, r)
+            // Spark 4.2 evaluates the operator itself (and the implicit
+            // casts it adds) in TRY mode; its argument expressions raise.
+            let (l, r) = (self.bind(l)?, self.bind(r)?);
+            Self { try_: true, ..self }.arith(op, l, r)
         };
         match (name.as_str(), args.as_slice()) {
             (_, [a]) if cast_to.is_some() => {
@@ -367,7 +371,9 @@ impl Binder {
     /// An integral operand as a decimal (`DecimalType.fromLiteral` for a
     /// literal, else `forType`).
     fn as_decimal(n: &Node) -> DataType {
-        if let Some(v) = n.integral_literal() {
+        // `DecimalType.fromLiteral` covers short, int and long literals;
+        // a tinyint literal takes `forType`, decimal(3,0).
+        if let Some(v) = n.integral_literal().filter(|_| n.ty() != DataType::Int8) {
             let digits = u8::try_from(v.unsigned_abs().max(1).ilog10() + 1).unwrap_or(19);
             return DataType::Decimal128(digits, 0);
         }
@@ -410,7 +416,12 @@ impl Binder {
         let (lt, rt) = (l.ty(), r.ty());
         let pick = |s: &DataType, other: &DataType| -> Result<DataType, Skip> {
             match (s, other) {
-                (DataType::Null, DataType::Null) => Ok(DataType::Int32),
+                // `NumericType.defaultConcreteType`: double (`div` takes bigint).
+                (DataType::Null, DataType::Null) => Ok(if op == Some(AOp::IntDiv) {
+                    DataType::Int64
+                } else {
+                    DataType::Float64
+                }),
                 (DataType::Null, o) => Ok(o.clone()),
                 (DataType::Utf8, o) if is_numeric(o) => {
                     if op == Some(AOp::IntDiv) && !self.ansi {
@@ -460,7 +471,7 @@ impl Binder {
                     AOp::Div => DecimalOp::Divide,
                     _ => DecimalOp::Remainder,
                 };
-                let (p, s) = result_type(dop, (*p1, *s1), (*p2, *s2), true)
+                let (p, s) = result_type(dop, (*p1, *s1), (*p2, *s2), self.allow_loss)
                     .map_err(|e| format!("decimal result type: {e}"))?;
                 DataType::Decimal128(p, s)
             }
@@ -484,9 +495,11 @@ impl Binder {
                 (self.implicit(l, &t), self.implicit(r, &t))
             }
             (DataType::Utf8, o) | (o, DataType::Utf8) if is_numeric(o) => {
-                let t = if !self.ansi {
+                // Legacy: the string takes the other side's type, except a
+                // decimal (both become double, SPARK-22469).
+                let t = if !self.ansi && !matches!(o, DataType::Decimal128(..)) {
                     o.clone()
-                } else if is_integral(o) {
+                } else if self.ansi && is_integral(o) {
                     DataType::Int64
                 } else {
                     DataType::Float64
@@ -576,7 +589,7 @@ fn timestamp_lit(value: &str, ty: DataType) -> Result<Node, Skip> {
     };
     let days = i64::from(day.as_primitive::<Date32Type>().value(0));
     let (hms, frac) = time.split_once('.').unwrap_or((time, "0"));
-    let parts: Vec<i64> = hms
+    let parts: Vec<u8> = hms
         .split(':')
         .map(str::parse)
         .collect::<Result<_, _>>()
@@ -584,12 +597,19 @@ fn timestamp_lit(value: &str, ty: DataType) -> Result<Node, Skip> {
     let [h, m, s] = parts.as_slice() else {
         return Err("timestamp time".into());
     };
-    let frac: i64 = format!("{frac:0<6}")
-        .get(..6)
-        .unwrap_or("0")
-        .parse()
-        .map_err(|_| "fraction")?;
-    let micros = ((days * 24 + h) * 60 + m) * 60_000_000 + s * 1_000_000 + frac;
+    if *h > 23 || *m > 59 || *s > 59 || frac.len() > 6 || !frac.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err(format!("timestamp literal {value}"));
+    }
+    let frac: i64 = format!("{frac:0<6}").parse().map_err(|_| "fraction")?;
+    let secs = (i64::from(*h) * 60 + i64::from(*m)) * 60 + i64::from(*s);
+    // Beyond the microsecond range Spark rejects the literal.
+    let micros = days
+        .checked_mul(86_400)
+        .and_then(|d| d.checked_add(secs))
+        .and_then(|d| d.checked_mul(1_000_000))
+        .and_then(|d| d.checked_add(frac))
+        .ok_or_else(|| format!("timestamp literal {value}"))?;
     let a = TimestampMicrosecondArray::from(vec![micros]);
     let a: ArrayRef = match ty {
         DataType::Timestamp(_, Some(z)) => Arc::new(a.with_timezone(z)),
@@ -627,29 +647,44 @@ fn number(text: &str, kind: NumKind) -> Result<Node, Skip> {
     }
 }
 
-/// A decimal literal: Java `BigDecimal` precision and scale.
+/// A decimal literal: Java `BigDecimal` precision and scale; a negative
+/// scale (`5e36BD`) becomes scale 0, as Spark does without
+/// `allowNegativeScaleOfDecimal`.
 fn decimal_lit(text: &str) -> Result<Node, Skip> {
-    let (neg, digits) = text.strip_prefix('-').map_or((false, text), |d| (true, d));
-    if digits.contains(['e', 'E']) {
-        return Err(format!("decimal literal {text}"));
+    let bad = || format!("decimal literal {text}");
+    let (neg, body) = text.strip_prefix('-').map_or((false, text), |d| (true, d));
+    let (mant, exp) = match body.split_once(['e', 'E']) {
+        Some((m, e)) => (m, e.parse::<i32>().map_err(|_| bad())?),
+        None => (body, 0),
+    };
+    let (int, frac) = mant.split_once('.').unwrap_or((mant, ""));
+    let mut digits = format!("{int}{frac}").trim_start_matches('0').to_owned();
+    let mut scale = i32::try_from(frac.len())
+        .map_err(|_| bad())?
+        .checked_sub(exp)
+        .ok_or_else(bad)?;
+    if scale < 0 {
+        let pad = usize::try_from(scale.unsigned_abs()).map_err(|_| bad())?;
+        if digits.len().saturating_add(pad) > 38 {
+            return Err(bad());
+        }
+        digits.push_str(&"0".repeat(pad));
+        scale = 0;
     }
-    let (int, frac) = digits.split_once('.').unwrap_or((digits, ""));
-    let all = format!("{int}{frac}");
-    let significant = all.trim_start_matches('0');
-    let scale = u8::try_from(frac.len()).map_err(|_| "scale")?;
-    let precision = u8::try_from(significant.len().max(1))
-        .map_err(|_| "precision")?
+    let scale = u8::try_from(scale).map_err(|_| bad())?;
+    let precision = u8::try_from(digits.len().max(1))
+        .map_err(|_| bad())?
         .max(scale);
     if precision > 38 {
-        return Err(format!("decimal literal {text}"));
+        return Err(bad());
     }
-    let v: i128 = if significant.is_empty() {
+    let v: i128 = if digits.is_empty() {
         0
     } else {
-        significant.parse().map_err(|_| "digits")?
+        digits.parse().map_err(|_| bad())?
     };
     let a = Decimal128Array::from(vec![if neg { -v } else { v }])
-        .with_precision_and_scale(precision, i8::try_from(scale).map_err(|_| "scale")?)
+        .with_precision_and_scale(precision, i8::try_from(scale).map_err(|_| bad())?)
         .map_err(|e| e.to_string())?;
     Ok(Node::Lit(Arc::new(a)))
 }
@@ -723,6 +758,9 @@ struct Evaluator {
     ctx: KernelCtx,
     ansi: bool,
     shape: Shape,
+    /// Set when a `BINARY` -> `STRING` cast met bytes that are not UTF-8:
+    /// Krishiv's STRING is valid UTF-8 (documented divergence, ADR 0023).
+    invalid_utf8: std::cell::Cell<bool>,
 }
 
 /// A scalar of a one-row primitive array.
@@ -757,6 +795,14 @@ impl Evaluator {
             Node::Lit(a) => self.leaf(a),
             Node::Cast(c, to, mode) => {
                 let v = self.eval(c)?;
+                if v.data_type() == &DataType::Binary
+                    && v.as_binary::<i32>()
+                        .iter()
+                        .flatten()
+                        .any(|b| std::str::from_utf8(b).is_err())
+                {
+                    self.invalid_utf8.set(true);
+                }
                 Ok(cast(
                     &v,
                     to,
@@ -1095,6 +1141,17 @@ fn cell_matches(a: &dyn Array, i: usize, cell: &Value) -> bool {
                 == Some(a.as_primitive::<TimestampMicrosecondType>().value(i))
         }
         DataType::Utf8 => cell.as_str() == Some(a.as_string::<i32>().value(i)),
+        DataType::Binary => {
+            let hex: String = a
+                .as_binary::<i32>()
+                .value(i)
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect();
+            cell.get("hex")
+                .and_then(Value::as_str)
+                .is_some_and(|h| h.eq_ignore_ascii_case(&hex))
+        }
         _ => false,
     }
 }
@@ -1132,7 +1189,13 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
         return CellOutcome::NotRun("not a single-expression SELECT".to_owned());
     };
     let ansi = case.mode == Mode::AnsiOn;
-    let node = match (Binder { ansi, try_: false }).bind(expr) {
+    let node = match (Binder {
+        ansi,
+        allow_loss: true,
+        try_: false,
+    })
+    .bind(expr)
+    {
         Ok(n) => n,
         Err(why) => return CellOutcome::NotRun(why),
     };
@@ -1155,6 +1218,7 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
             ctx: KernelCtx::new(),
             ansi,
             shape,
+            invalid_utf8: std::cell::Cell::new(false),
         };
         let got = ev.eval(&node);
         let outcome = match (got, expected_rows, expected_error) {
@@ -1166,9 +1230,12 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
                 return CellOutcome::NotRun(format!("kernel: {}", e.error().message()));
             }
             (Err(EvalError::Kernel(e)), _, Some(want)) => {
-                let same = e.error_class().name() == want.error_class
-                    && e.to_string() == want.message
-                    && e.row() == Some(0);
+                // Unstable Spark errors (unclassified, legacy) only need to
+                // fail on the same row.
+                let same = e.row() == Some(0)
+                    && (!want.stable
+                        || (e.error_class().name() == want.error_class
+                            && e.to_string() == want.message));
                 if same {
                     None
                 } else {
@@ -1182,9 +1249,22 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
             )),
             (Ok(a), Some(rows), None) => {
                 let cell = rows.first().and_then(|r| r.first()).unwrap_or(&Value::Null);
-                let rows_ok = (0..a.len())
-                    .step_by(2)
-                    .all(|i| cell_matches(a.as_ref(), i, cell));
+                // Padded rows: every even row is the value; every odd row
+                // (NULL inputs) is NULL, or true for `<=>` (NULL <=> NULL).
+                let want_len = if shape == Shape::Padded {
+                    PADDED_ROWS
+                } else {
+                    1
+                };
+                let null_safe = matches!(node, Node::Cmp(None, ..));
+                let odd = if null_safe { json!(true) } else { Value::Null };
+                let is_null = |i| a.data_type() == &DataType::Null || a.is_null(i);
+                let rows_ok = a.len() == want_len
+                    && (0..a.len()).all(|i| match (i % 2, odd.is_null()) {
+                        (0, _) => cell_matches(a.as_ref(), i, cell),
+                        (_, true) => is_null(i),
+                        _ => cell_matches(a.as_ref(), i, &odd),
+                    });
                 (!rows_ok).then(|| {
                     format!(
                         "{shape:?}: value {:?} vs Spark {cell}",
@@ -1195,8 +1275,525 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
             (Ok(_), None, None) => return CellOutcome::NotRun("no typed rows".to_owned()),
         };
         if let Some(why) = outcome {
+            if ev.invalid_utf8.get() {
+                return CellOutcome::NotRun(
+                    "documented divergence (ADR 0023): STRING holds valid UTF-8 only".to_owned(),
+                );
+            }
             return CellOutcome::Fail(why);
         }
     }
     CellOutcome::Pass
+}
+
+/// Expression-level results of one golden file (see [`run_golden`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GoldenTally {
+    /// Statements in the file (`SET` included).
+    pub statements: usize,
+    /// Literal-only `SELECT`s every expression of which was evaluated.
+    pub evaluated: usize,
+    /// Of those, matched Spark's recorded rows (types and rendered values)
+    /// or error class.
+    pub passed: usize,
+    /// Mismatches: `(query, why)`.
+    pub failed: Vec<(String, String)>,
+    /// Statements that need the SQL engine (tables, DDL, other operators),
+    /// with the reason.
+    pub needs_engine: Vec<(String, String)>,
+}
+
+/// One rendered cell (`HiveResult.toHiveString` for these types).
+fn render(a: &ArrayRef) -> Result<String, EvalError> {
+    if a.is_null(0) || a.data_type() == &DataType::Null {
+        return Ok("NULL".to_owned());
+    }
+    let opts = CastOptions {
+        mode: CastMode::Ansi,
+        time_zone: &FixedOffset(0),
+    };
+    let s = cast(a.as_ref(), &DataType::Utf8, &opts)?;
+    Ok(s.as_string::<i32>().value(0).to_owned())
+}
+
+/// Evaluates the literal-only `SELECT`s of a golden result file on the
+/// kernels and compares them with Spark's recorded output: rendered rows
+/// and column types, or the error class. `SET` statements update the
+/// session (`spark.sql.ansi.enabled`, `allowPrecisionLoss`); everything
+/// else needs the SQL engine and is listed.
+///
+/// # Errors
+/// A malformed result file.
+pub fn run_golden(text: &str, ansi: bool) -> Result<GoldenTally, crate::golden::parse::ParseError> {
+    use crate::golden::parse::{Expected as GoldenExpected, parse_results};
+    let mut t = GoldenTally::default();
+    let (mut ansi, mut allow_loss) = (ansi, true);
+    for st in parse_results(text)? {
+        t.statements += 1;
+        let q = st.query.trim();
+        if let Some(rest) = q.strip_prefix("set ").or_else(|| q.strip_prefix("SET ")) {
+            let (k, v) = rest.split_once('=').unwrap_or((rest, ""));
+            let on = v.trim().eq_ignore_ascii_case("true");
+            match k.trim() {
+                "spark.sql.ansi.enabled" => ansi = on,
+                "spark.sql.decimalOperations.allowPrecisionLoss" => allow_loss = on,
+                _ => {}
+            }
+            continue;
+        }
+        let parsed = krishiv_sql::parse_query(q, &krishiv_sql::ParserOptions::default());
+        let items = match &parsed {
+            Ok(query) => match &query.body.kind {
+                ast::SetExprKind::Select(s)
+                    if s.from.is_none()
+                        && s.selection.is_none()
+                        && query.order_by.is_empty()
+                        && query.limit.is_none() =>
+                {
+                    &s.projection
+                }
+                _ => {
+                    t.needs_engine
+                        .push((q.to_owned(), "not a FROM-less SELECT".to_owned()));
+                    continue;
+                }
+            },
+            Err(_) => {
+                t.needs_engine.push((
+                    q.to_owned(),
+                    "statement outside the query parser".to_owned(),
+                ));
+                continue;
+            }
+        };
+        let binder = Binder {
+            ansi,
+            allow_loss,
+            try_: false,
+        };
+        let nodes: Result<Vec<Node>, Skip> = items.iter().map(|i| binder.bind(&i.expr)).collect();
+        let nodes = match nodes {
+            Ok(n) => n,
+            Err(why) => {
+                t.needs_engine.push((q.to_owned(), why));
+                continue;
+            }
+        };
+        let ev = Evaluator {
+            ctx: KernelCtx::new(),
+            ansi,
+            shape: Shape::Arrays,
+            invalid_utf8: std::cell::Cell::new(false),
+        };
+        let values: Result<Vec<ArrayRef>, EvalError> = nodes.iter().map(|n| ev.eval(n)).collect();
+        let types: Vec<String> = nodes.iter().map(|n| simple_string(&n.ty())).collect();
+        let verdict = match (values, &st.expected) {
+            (Err(EvalError::Other(why)), _) => {
+                t.needs_engine.push((q.to_owned(), why));
+                continue;
+            }
+            (Err(EvalError::Kernel(e)), _)
+                if e.error_class()
+                    == krishiv_common::error::ErrorClass::KrishivUnsupportedFeature =>
+            {
+                t.needs_engine.push((q.to_owned(), e.to_string()));
+                continue;
+            }
+            (Err(EvalError::Kernel(e)), GoldenExpected::Error(want)) => {
+                (want.error_class.as_deref() == Some(e.error_class().name()))
+                    .then_some(())
+                    .ok_or_else(|| {
+                        format!(
+                            "error {} vs Spark {:?}",
+                            e.error_class().name(),
+                            want.error_class
+                        )
+                    })
+            }
+            (Err(EvalError::Kernel(e)), GoldenExpected::Rows(_)) => {
+                Err(format!("unexpected error {e}"))
+            }
+            (Ok(_), GoldenExpected::Error(want)) => {
+                Err(format!("no error, Spark raised {:?}", want.error_class))
+            }
+            (Ok(vals), GoldenExpected::Rows(out)) => {
+                let row: Result<Vec<String>, EvalError> = vals.iter().map(render).collect();
+                let row = row.map_err(|_| "render".to_owned()).map(|r| r.join("\t"));
+                let typed = schema_types_match(&st.schema, &types);
+                match row {
+                    Ok(r) if r == *out && typed => Ok(()),
+                    Ok(r) => Err(format!(
+                        "row `{r}` types {types:?} vs Spark `{out}` {}",
+                        st.schema
+                    )),
+                    Err(e) => Err(e),
+                }
+            }
+        };
+        t.evaluated += 1;
+        match verdict {
+            Ok(()) => t.passed += 1,
+            Err(why) => t.failed.push((q.to_owned(), why)),
+        }
+    }
+    Ok(t)
+}
+
+/// Whether Spark's `struct<name:type,...>` has the column types `types`
+/// (names may contain any character, so the types are found as `:type,`
+/// separators in order, the last one at the end).
+fn schema_types_match(schema: &str, types: &[String]) -> bool {
+    let Some(body) = schema
+        .strip_prefix("struct<")
+        .and_then(|s| s.strip_suffix('>'))
+    else {
+        return false;
+    };
+    let mut pos = 0_usize;
+    for (i, t) in types.iter().enumerate() {
+        if i.saturating_add(1) == types.len() {
+            let tail = format!(":{t}");
+            return body.ends_with(&tail) && body.len().saturating_sub(tail.len()) >= pos;
+        }
+        let sep = format!(":{t},");
+        match body.get(pos..).and_then(|b| b.find(&sep)) {
+            Some(p) => pos = pos.saturating_add(p).saturating_add(sep.len()),
+            None => return false,
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::fn_matrix::{Field, SparkError};
+
+    fn rows(ty: &str, cell: Value) -> Expected {
+        Expected::Rows {
+            schema: vec![Field {
+                name: "c".to_owned(),
+                data_type: ty.to_owned(),
+                nullable: true,
+            }],
+            rows: vec![],
+            render: vec![],
+            ordered: false,
+            truncated: false,
+            typed_rows: Some(vec![vec![cell]]),
+            typed_unavailable: None,
+        }
+    }
+
+    fn error(class: &str, message: &str, phase: &str) -> Expected {
+        Expected::Error {
+            schema: None,
+            error: SparkError {
+                error_class: class.to_owned(),
+                sqlstate: None,
+                message: message.to_owned(),
+                message_parameters: BTreeMap::new(),
+                phase: phase.to_owned(),
+                stable: true,
+            },
+        }
+    }
+
+    fn cell(function: &str, sql: &str, mode: Mode, expected: Expected) -> CellOutcome {
+        run_cell(&MatrixCase {
+            id: "x#1/ansi_on".to_owned(),
+            base_id: "x#1".to_owned(),
+            function: function.to_owned(),
+            family: "predicate".to_owned(),
+            kind: "seed0".to_owned(),
+            mode,
+            sql: sql.to_owned(),
+            conf: BTreeMap::new(),
+            expected,
+        })
+    }
+
+    #[test]
+    fn shapes_cover_every_operand_kind() {
+        let on = Mode::AnsiOn;
+        let pass = |f, sql, e| assert_eq!(cell(f, sql, on, e), CellOutcome::Pass, "{sql}");
+        pass("<", "SELECT 'a' < 'b'", rows("boolean", json!(true)));
+        pass("=", "SELECT X'01' = X'02'", rows("boolean", json!(false)));
+        pass("<=", "SELECT true <= false", rows("boolean", json!(false)));
+        pass(
+            ">",
+            "SELECT TIMESTAMP'2024-01-02 00:00:00.5' > TIMESTAMP'2024-01-01 00:00:00'",
+            rows("boolean", json!(true)),
+        );
+        pass(
+            "=",
+            "SELECT TIMESTAMP_NTZ'2024-01-01 00:00:00' = TIMESTAMP_NTZ'2024-01-01 00:00:00'",
+            rows("boolean", json!(true)),
+        );
+        pass("<=>", "SELECT 2 <=> NULL", rows("boolean", json!(false)));
+        pass(
+            "string",
+            "SELECT string(TIMESTAMP_NTZ'2024-01-01 00:00:00')",
+            rows("string", json!("2024-01-01 00:00:00")),
+        );
+        pass(
+            "timestamp",
+            "SELECT timestamp(DATE'2024-01-01')",
+            rows(
+                "timestamp",
+                json!({"ts_us": 1_704_067_200_000_000_i64, "tz": "UTC"}),
+            ),
+        );
+        pass("+", "SELECT 1Y + 2S", rows("smallint", json!(3)));
+        pass(
+            "+",
+            "SELECT 1Y + 1.5BD",
+            rows("decimal(5,1)", json!({"unscaled": "25", "scale": 1})),
+        );
+        pass(
+            "-",
+            "SELECT -(1.5F)",
+            rows("float", json!({"f32": "bfc00000"})),
+        );
+        pass(
+            "*",
+            "SELECT 99999999999999999999 * 1",
+            rows(
+                "decimal(22,0)",
+                json!({"unscaled": "99999999999999999999", "scale": 0}),
+            ),
+        );
+        pass(
+            "cast",
+            "SELECT CAST('1' AS BIGINT) + CAST(1 AS DECIMAL)",
+            rows("decimal(21,0)", json!({"unscaled": "2", "scale": 0})),
+        );
+        pass(
+            "cast",
+            "SELECT CAST(1 AS NUMERIC(5, 2))",
+            rows("decimal(5,2)", json!({"unscaled": "100", "scale": 2})),
+        );
+        pass(
+            "cast",
+            "SELECT CAST(1 AS REAL) = 1L",
+            rows("boolean", json!(true)),
+        );
+        pass("=", "SELECT 1.5 = 1", rows("boolean", json!(false)));
+        pass(
+            "abs",
+            "SELECT abs(1L) + 1e0",
+            rows("double", json!({"f64": "4000000000000000"})),
+        );
+    }
+
+    #[test]
+    fn failures_and_reasons() {
+        let (on, off) = (Mode::AnsiOn, Mode::AnsiOff);
+        let fail = |o: CellOutcome| assert!(matches!(o, CellOutcome::Fail(_)), "{o:?}");
+        let not_run = |o: CellOutcome| assert!(matches!(o, CellOutcome::NotRun(_)), "{o:?}");
+        fail(cell("+", "SELECT 1 + 1", on, rows("bigint", json!(2))));
+        fail(cell("+", "SELECT 1 + 1", on, rows("int", json!(3))));
+        fail(cell(
+            "+",
+            "SELECT 1 + 1",
+            on,
+            error("DIVIDE_BY_ZERO", "x", "execution"),
+        ));
+        fail(cell(
+            "div",
+            "SELECT 1 div 0",
+            on,
+            rows("bigint", Value::Null),
+        ));
+        fail(cell(
+            "div",
+            "SELECT 1 div 0",
+            on,
+            error("DIVIDE_BY_ZERO", "other text", "execution"),
+        ));
+        not_run(cell(
+            "sin",
+            "SELECT sin(1)",
+            on,
+            rows("double", Value::Null),
+        ));
+        not_run(cell("+", "SELECT 1 + true", on, error("X", "", "analysis")));
+        not_run(cell(
+            "+",
+            "SELECT 1 + 1",
+            on,
+            Expected::Nondeterministic { schema: vec![] },
+        ));
+        not_run(cell("+", "SELECT 1 +", on, rows("int", json!(1))));
+        not_run(cell("+", "SELECT a + 1 FROM t", on, rows("int", json!(1))));
+        not_run(cell("+", "SELECT 1 + sin(1)", on, rows("double", json!(1))));
+        not_run(cell("+", "SELECT 1 + rand()", on, rows("double", json!(1))));
+        not_run(cell("+", "SELECT '1' div 2", off, rows("bigint", json!(0))));
+        not_run(cell("+", "SELECT 1.5D div 2", on, rows("bigint", json!(0))));
+        not_run(cell("+", "SELECT ~1", on, rows("int", json!(-2))));
+        not_run(cell("+", "SELECT 1 | 2", on, rows("int", json!(3))));
+        not_run(cell("+", "SELECT X'01' + 1", on, rows("int", json!(3))));
+        not_run(cell("-", "SELECT -X'01'", on, rows("int", json!(3))));
+        not_run(cell(
+            "cast",
+            "SELECT CAST(1 AS ARRAY<INT>)",
+            on,
+            rows("int", json!(3)),
+        ));
+        not_run(cell(
+            "cast",
+            "SELECT CAST(1 AS INTERVAL DAY)",
+            on,
+            rows("int", json!(3)),
+        ));
+        not_run(cell(
+            "cast",
+            "SELECT CAST(1 AS DECIMAL(x))",
+            on,
+            rows("int", json!(3)),
+        ));
+        not_run(cell(
+            "cast",
+            "SELECT CAST(X'01' AS INT)",
+            on,
+            rows("int", json!(3)),
+        ));
+        not_run(cell(
+            "try_add",
+            "SELECT try_add(1)",
+            on,
+            rows("int", json!(3)),
+        ));
+        not_run(cell(
+            "=",
+            "SELECT DATE'2024-01-01' = X'01'",
+            on,
+            rows("boolean", json!(3)),
+        ));
+        not_run(cell(
+            "=",
+            "SELECT TIME'01:00:00' = 1",
+            on,
+            rows("boolean", json!(3)),
+        ));
+        not_run(cell(
+            "=",
+            "SELECT TIMESTAMP'2024-01-01' = 1",
+            on,
+            rows("boolean", json!(3)),
+        ));
+        not_run(cell(
+            "=",
+            "SELECT 1e400BD = 1",
+            on,
+            rows("boolean", json!(3)),
+        ));
+        not_run(cell(
+            "=",
+            "SELECT 1S = 99999S",
+            on,
+            rows("boolean", json!(3)),
+        ));
+        for sql in [
+            "SELECT 1e2000000000BD = 1",
+            "SELECT 1e-2147483648BD = 1",
+            "SELECT TIMESTAMP'2024-01-01 99999999999999:00:00' = 1",
+            "SELECT TIMESTAMP'2024-01-01 25:00:00' = 1",
+            "SELECT TIMESTAMP'1000000-01-01 00:00:00' = 1",
+        ] {
+            not_run(cell("=", sql, on, rows("boolean", json!(3))));
+        }
+        not_run(cell(
+            "cast",
+            "SELECT CAST('a' AS BINARY)",
+            on,
+            rows("binary", json!({"hex": "61"})),
+        ));
+        let pass = |f, sql, m, e| assert_eq!(cell(f, sql, m, e), CellOutcome::Pass, "{sql}");
+        pass("+", "SELECT NULL + NULL", on, rows("double", Value::Null));
+        pass(
+            "div",
+            "SELECT NULL div NULL",
+            on,
+            rows("bigint", Value::Null),
+        );
+        pass(
+            "=",
+            "SELECT '1.21' = 1.2",
+            off,
+            rows("boolean", json!(false)),
+        );
+        pass(
+            "=",
+            "SELECT X'0A' = X'0A'",
+            on,
+            rows("boolean", json!(true)),
+        );
+        pass(
+            "+",
+            "SELECT 1Y + 1.5BD",
+            on,
+            rows("decimal(5,1)", json!({"unscaled": "25", "scale": 1})),
+        );
+        // An unstable Spark error only needs to fail on the same row.
+        let mut unstable = error("UNCLASSIFIED.ArithmeticException", "x", "execution");
+        if let Expected::Error { error, .. } = &mut unstable {
+            error.stable = false;
+        }
+        pass("div", "SELECT 1 div 0", on, unstable);
+        let mut tz = MatrixCase {
+            id: "x#2/ansi_on".to_owned(),
+            base_id: "x#2".to_owned(),
+            function: "+".to_owned(),
+            family: "math".to_owned(),
+            kind: "seed0".to_owned(),
+            mode: on,
+            sql: "SELECT 1 + 1".to_owned(),
+            conf: BTreeMap::new(),
+            expected: rows("int", json!(2)),
+        };
+        tz.conf.insert(
+            "spark.sql.session.timeZone".to_owned(),
+            "America/Los_Angeles".to_owned(),
+        );
+        not_run(run_cell(&tz));
+    }
+
+    #[test]
+    fn golden_statements() {
+        let text = "-- Automatically generated by SQLQueryTestSuite\n\
+                    -- !query\nset spark.sql.ansi.enabled=false\n-- !query schema\nstruct<key:string,value:string>\n-- !query output\nspark.sql.ansi.enabled\tfalse\n\n\n\
+                    -- !query\nselect 1 div 0\n-- !query schema\nstruct<(1 div 0):bigint>\n-- !query output\nNULL\n\n\n\
+                    -- !query\nset spark.sql.ansi.enabled=true\n-- !query schema\nstruct<>\n-- !query output\n\n\n\n\
+                    -- !query\nselect 1 div 0\n-- !query schema\nstruct<>\n-- !query output\norg.apache.spark.SparkArithmeticException\n{\"errorClass\" : \"DIVIDE_BY_ZERO\", \"sqlState\" : \"22012\"}\n\n\n\
+                    -- !query\nselect 1, 2.5D\n-- !query schema\nstruct<1:int,2.5:double>\n-- !query output\n1\t2.5\n\n\n\
+                    -- !query\nselect 1 + 1\n-- !query schema\nstruct<(1 + 1):int>\n-- !query output\n3\n\n\n\
+                    -- !query\nselect 1 div 0\n-- !query schema\nstruct<>\n-- !query output\norg.apache.spark.SparkArithmeticException\n{\"errorClass\" : \"ARITHMETIC_OVERFLOW\"}\n\n\n\
+                    -- !query\nselect 1 + 1\n-- !query schema\nstruct<>\n-- !query output\norg.apache.spark.SparkArithmeticException\n{\"errorClass\" : \"ARITHMETIC_OVERFLOW\"}\n\n\n\
+                    -- !query\nselect 1 + 2147483647\n-- !query schema\nstruct<>\n-- !query output\n3\n\n\n\
+                    -- !query\nselect sin(1)\n-- !query schema\nstruct<>\n-- !query output\n1\n\n\n\
+                    -- !query\nselect CAST(X'01' AS INT)\n-- !query schema\nstruct<>\n-- !query output\n1\n\n\n\
+                    -- !query\nselect 1 + rand()\n-- !query schema\nstruct<>\n-- !query output\n1\n\n\n\
+                    -- !query\nselect 1 limit 0\n-- !query schema\nstruct<1:int>\n-- !query output\n\n\n\n\
+                    -- !query\nselect * from t\n-- !query schema\nstruct<>\n-- !query output\n1\n\n\n\
+                    -- !query\nshow tables\n-- !query schema\nstruct<>\n-- !query output\n1\n";
+        let t = run_golden(text, true).unwrap();
+        assert_eq!((t.statements, t.evaluated, t.passed), (15, 7, 3), "{t:?}");
+        assert_eq!(t.failed.len(), 4, "{t:?}");
+        assert_eq!(t.needs_engine.len(), 6, "{t:?}");
+        assert!(schema_types_match(
+            "struct<a,b:int,c:double>",
+            &["int".to_owned(), "double".to_owned()]
+        ));
+        assert!(!schema_types_match("struct<a:int>", &[]));
+        assert!(!schema_types_match("nope", &["int".to_owned()]));
+        assert!(!schema_types_match(
+            "struct<a:int,b:int>",
+            &["bigint".to_owned(), "int".to_owned()]
+        ));
+    }
 }
