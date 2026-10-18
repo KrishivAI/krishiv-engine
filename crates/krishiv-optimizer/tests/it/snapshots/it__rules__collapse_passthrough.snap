@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT x + 1 AS y, b FROM (SELECT a + 1 AS x, b FROM t)"
+---
+Project [((a#0 + 1) + 1) AS y#4, b#1]
++- Scan spark_catalog.default.t [a#0, b#1]

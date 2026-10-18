@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT count(*) AS n FROM t
+---
+Aggregate [], [count(1) AS n#3]
++- Scan spark_catalog.default.t [a#0]

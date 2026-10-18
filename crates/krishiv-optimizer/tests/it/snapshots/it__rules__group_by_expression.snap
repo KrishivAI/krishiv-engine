@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT NOT (a < 1) AS x FROM t GROUP BY a < 1
+---
+Aggregate [(a#0 < 1)], [(NOT (a#0 < 1)) AS x#3]
++- Scan spark_catalog.default.t [a#0]

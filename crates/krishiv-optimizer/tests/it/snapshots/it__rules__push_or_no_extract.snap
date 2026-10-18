@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE t.b = 'x' OR u.d = 'y'"
+---
+Project [a#0]
++- Join Inner, ((a#0 == a#3) and ((b#1 == 'x') or (d#4 == 'y')))
+   :- Scan spark_catalog.default.t [a#0, b#1]
+   +- Scan spark_catalog.default.u [a#3, d#4]

@@ -1,0 +1,9 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT t.a FROM t LEFT JOIN u ON t.a = u.a WHERE u.d IS NULL OR t.b = 'x'"
+---
+Project [a#0]
++- Filter (isnull(d#4) or (b#1 == 'x'))
+   +- Join LeftOuter, (a#0 == a#3)
+      :- Scan spark_catalog.default.t [a#0, b#1]
+      +- Scan spark_catalog.default.u [a#3, d#4]

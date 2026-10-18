@@ -1,0 +1,10 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT t.a FROM t FULL JOIN u ON t.a = u.a WHERE u.d = 'y'"
+---
+Project [a#0]
++- Join RightOuter, (a#0 == a#3)
+   :- Scan spark_catalog.default.t [a#0]
+   +- Project [a#3]
+      +- Filter (d#4 == 'y')
+         +- Scan spark_catalog.default.u [a#3, d#4]

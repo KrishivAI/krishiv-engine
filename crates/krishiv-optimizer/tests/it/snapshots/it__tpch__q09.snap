@@ -1,0 +1,23 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpch.rs
+expression: optimized.root().to_string()
+---
+Sort [nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST], true
++- Aggregate [nation#50, o_year#51], [nation#50, o_year#51, sum(amount#52) AS sum_profit#53]
+   +- Project [n_name#47 AS nation#50, extract('year', o_orderdate#41) AS o_year#51, ((l_extendedprice#21 * (1 - l_discount#22)) - (ps_supplycost#35 * l_quantity#20)) AS amount#52]
+      +- Join Inner, (s_nationkey#12 == n_nationkey#46)
+         :- Project [s_nationkey#12, l_quantity#20, l_extendedprice#21, l_discount#22, ps_supplycost#35, o_orderdate#41]
+         :  +- Join Inner, (o_orderkey#37 == l_orderkey#16)
+         :     :- Project [s_nationkey#12, l_orderkey#16, l_quantity#20, l_extendedprice#21, l_discount#22, ps_supplycost#35]
+         :     :  +- Join Inner, ((ps_suppkey#33 == l_suppkey#18) and (ps_partkey#32 == l_partkey#17))
+         :     :     :- Project [s_nationkey#12, l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22]
+         :     :     :  +- Join Inner, ((s_suppkey#9 == l_suppkey#18) and (p_partkey#0 == l_partkey#17))
+         :     :     :     :- Join Inner
+         :     :     :     :  :- Project [p_partkey#0]
+         :     :     :     :  :  +- Filter (p_name#1 like '%green%')
+         :     :     :     :  :     +- Scan spark_catalog.default.part [p_partkey#0, p_name#1]
+         :     :     :     :  +- Scan spark_catalog.default.supplier [s_suppkey#9, s_nationkey#12]
+         :     :     :     +- Scan spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22]
+         :     :     +- Scan spark_catalog.default.partsupp [ps_partkey#32, ps_suppkey#33, ps_supplycost#35]
+         :     +- Scan spark_catalog.default.orders [o_orderkey#37, o_orderdate#41]
+         +- Scan spark_catalog.default.nation [n_nationkey#46, n_name#47]

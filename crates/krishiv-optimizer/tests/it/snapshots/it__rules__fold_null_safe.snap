@@ -1,0 +1,5 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT a FROM t WHERE CAST(NULL AS INT) <=> CAST(NULL AS INT) AND NOT (1 <=> CAST(NULL AS INT)) AND 1 <=> 1
+---
+Scan spark_catalog.default.t [a#0]

@@ -1,0 +1,5 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM t WHERE 2 IN (1, 2) AND NOT 3 IN (1, 2) AND (3 IN (1, CAST(NULL AS INT))) IS NULL"
+---
+Scan spark_catalog.default.t [a#0]

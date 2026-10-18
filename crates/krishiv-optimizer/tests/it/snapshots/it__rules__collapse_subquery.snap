@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT x, (SELECT max(a) FROM u) AS m FROM (SELECT a + 1 AS x FROM t)"
+---
+Project [(a#0 + 1) AS x#3, scalar-subquery AS m#7]
+:  +- Aggregate [], [max(a#4) AS max(a)#6]
+:     +- Scan spark_catalog.default.u [a#4]
++- Scan spark_catalog.default.t [a#0]

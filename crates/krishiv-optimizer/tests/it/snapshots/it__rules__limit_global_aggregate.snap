@@ -1,0 +1,10 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT x.n FROM (SELECT count(*) AS n FROM t) x LEFT JOIN u ON x.n = u.a LIMIT 2
+---
+Project [n#3]
++- Limit 2
+   +- Join LeftOuter, (n#3 == a#4)
+      :- Aggregate [], [count(1) AS n#3]
+      :  +- Scan spark_catalog.default.t [a#0]
+      +- Scan spark_catalog.default.u [a#4]

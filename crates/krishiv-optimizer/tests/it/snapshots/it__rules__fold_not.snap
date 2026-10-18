@@ -1,0 +1,7 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM t WHERE NOT a < 1 AND NOT a <= 2 AND NOT a > 3 AND NOT a >= 4 AND NOT NOT b = 'x' AND NOT b = 'y'"
+---
+Project [a#0]
++- Filter ((((a#0 >= 1) and (a#0 > 2)) and (a#0 <= 3)) and (((a#0 < 4) and (b#1 == 'x')) and (NOT (b#1 == 'y'))))
+   +- Scan spark_catalog.default.t [a#0, b#1]

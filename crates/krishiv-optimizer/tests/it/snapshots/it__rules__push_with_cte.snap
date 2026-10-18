@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT * FROM (WITH v AS (SELECT a FROM t) SELECT a FROM v) WHERE a = 1
+---
+WithCte [v]
+:- Scan spark_catalog.default.t [a#0]
++- Filter (a#3 == 1)
+   +- CteRef v [a#3]

@@ -1,0 +1,5 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT a FROM t WHERE (CAST(NULL AS BOOLEAN) AND CAST(NULL AS BOOLEAN)) IS NULL AND (CAST(NULL AS BOOLEAN) OR CAST(NULL AS BOOLEAN)) IS NULL
+---
+Scan spark_catalog.default.t [a#0]
