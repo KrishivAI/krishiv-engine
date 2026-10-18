@@ -279,10 +279,10 @@ fn kernel(name: &str, extra: &[i32], cols: &[ArrayRef], ctx: &KernelCtx) -> Resu
                 DataType::Int32 => int!(Int32Type),
                 DataType::Int64 => int!(Int64Type),
                 DataType::Float64 => {
-                    Arc::new(round_f64(c0.as_primitive::<Float64Type>(), scale, mode))
+                    Arc::new(round_f64(c0.as_primitive::<Float64Type>(), scale, mode)?)
                 }
                 DataType::Float32 => {
-                    Arc::new(round_f32(c0.as_primitive::<Float32Type>(), scale, mode))
+                    Arc::new(round_f32(c0.as_primitive::<Float32Type>(), scale, mode)?)
                 }
                 _ => Arc::new(round_decimal(
                     c0.as_primitive::<Decimal128Type>(),

@@ -315,12 +315,12 @@ impl Evaluator<'_> {
                         a.as_primitive::<Float32Type>(),
                         scale,
                         mode,
-                    )),
+                    )?),
                     DataType::Float64 => Arc::new(math::round_f64(
                         a.as_primitive::<Float64Type>(),
                         scale,
                         mode,
-                    )),
+                    )?),
                     _ => Arc::new(math::round_decimal(
                         a.as_primitive::<Decimal128Type>(),
                         scale,

@@ -98,6 +98,28 @@ fn round_units(value: i128, drop: u32, mode: DecimalRounding) -> i128 {
     if away { q.wrapping_add(sign) } else { q }
 }
 
+/// `BigDecimal.setScale` fails for a scale so far below the value's that the
+/// scale difference overflows an `int` ("Underflow") or `10^difference` is
+/// too big for a `BigInteger` (its size check). Spark raises these as
+/// unclassified `ArithmeticException`s for decimals and floating point, and
+/// as `ARITHMETIC_OVERFLOW` for integral types; a zero never does.
+fn extreme_scale(value_scale: i64, scale: i32) -> Option<&'static str> {
+    /// `BigInteger.pow(10, n)` refuses `n` whose result needs more than
+    /// `MAX_MAG_LENGTH` (2^26 + 1) words of 32 bits at 4 bits per digit.
+    const BIGINT_LIMIT: i64 = 536_870_920;
+    if scale >= 0 {
+        return None;
+    }
+    let diff = value_scale.saturating_sub(i64::from(scale));
+    if diff > i64::from(i32::MAX) {
+        Some("Underflow")
+    } else if diff >= BIGINT_LIMIT {
+        Some("BigInteger would overflow supported range")
+    } else {
+        None
+    }
+}
+
 /// `round` / `bround` of an integral column to `scale` digits.
 ///
 /// # Errors
@@ -113,9 +135,16 @@ pub fn round_integral<T: SparkIntegral>(
         return Ok(input.clone());
     }
     let drop = scale.unsigned_abs();
+    let extreme = extreme_scale(0, scale);
     let mut out = crate::error::with_capacity::<T::Native>(input.len())?;
     for (row, v) in input.values().iter().enumerate() {
         let valid = input.is_valid(row);
+        if let Some(message) = extreme
+            && valid
+            && T::widen(*v) != 0
+        {
+            return Err(KernelError::arithmetic_overflow(row, message, None));
+        }
         let units = round_units(T::widen(*v), drop, mode.into());
         // The rounded value, in units of 10^drop; drop <= 38 or the unit is 0.
         let rounded = pow10(drop).map_or(0, |u| units.wrapping_mul(u));
@@ -132,24 +161,50 @@ pub fn round_integral<T: SparkIntegral>(
 }
 
 /// `round` / `bround` of a `double` to `scale` digits.
-#[must_use]
+///
+/// # Errors
+/// `ARITHMETIC_OVERFLOW` for a scale so far below the value's that Spark's
+/// `BigDecimal` rounding fails (see [`round_integral`]).
 pub fn round_f64(
     input: &arrow_array::Float64Array,
     scale: i32,
     mode: RoundMode,
-) -> arrow_array::Float64Array {
-    input.unary(|v| round_double(v, scale, mode))
+) -> Result<arrow_array::Float64Array, KernelError> {
+    input
+        .iter()
+        .enumerate()
+        .map(|(row, v)| {
+            v.map(|v| {
+                round_double(v, scale, mode)
+                    .map_err(|m| KernelError::arithmetic_overflow(row, m, None))
+            })
+            .transpose()
+        })
+        .collect()
 }
 
 /// `round` / `bround` of a `float`: the exact `double` value is rounded and
 /// converted back.
-#[must_use]
+///
+/// # Errors
+/// As [`round_f64`].
 pub fn round_f32(
     input: &arrow_array::Float32Array,
     scale: i32,
     mode: RoundMode,
-) -> arrow_array::Float32Array {
-    input.unary(|v| narrow_f32(round_double(f64::from(v), scale, mode)))
+) -> Result<arrow_array::Float32Array, KernelError> {
+    input
+        .iter()
+        .enumerate()
+        .map(|(row, v)| {
+            v.map(|v| {
+                round_double(f64::from(v), scale, mode)
+                    .map(narrow_f32)
+                    .map_err(|m| KernelError::arithmetic_overflow(row, m, None))
+            })
+            .transpose()
+        })
+        .collect()
 }
 
 #[expect(
@@ -161,18 +216,18 @@ fn narrow_f32(v: f64) -> f32 {
 }
 
 /// `BigDecimal.valueOf(v).setScale(scale, mode).doubleValue()`.
-fn round_double(v: f64, scale: i32, mode: RoundMode) -> f64 {
+fn round_double(v: f64, scale: i32, mode: RoundMode) -> Result<f64, &'static str> {
     if v == 0.0 {
         // BigDecimal has no negative zero.
-        return 0.0;
+        return Ok(0.0);
     }
     if !v.is_finite() {
-        return v;
+        return Ok(v);
     }
     // Shortest round-trip digits: "d.ddde<exp>".
     let text = format!("{:e}", v.abs());
     let Some((mantissa, exp)) = text.split_once('e') else {
-        return v;
+        return Ok(v);
     };
     let digits: Vec<u8> = mantissa
         .bytes()
@@ -180,14 +235,18 @@ fn round_double(v: f64, scale: i32, mode: RoundMode) -> f64 {
         .map(|b| b.wrapping_sub(b'0'))
         .collect();
     let Ok(exp) = exp.parse::<i64>() else {
-        return v;
+        return Ok(v);
     };
     // The value is 0.d1d2...dn * 10^point.
     let point = exp.saturating_add(1);
     let keep = point.saturating_add(i64::from(scale));
     let n = i64::try_from(digits.len()).unwrap_or(i64::MAX);
+    // `BigDecimal.valueOf(v)` has this many digits after the point.
+    if let Some(message) = extreme_scale(n.saturating_sub(point), scale) {
+        return Err(message);
+    }
     if keep >= n {
-        return v;
+        return Ok(v);
     }
     let (mut kept, mut point) = if keep < 0 {
         (Vec::new(), point)
@@ -229,14 +288,14 @@ fn round_double(v: f64, scale: i32, mode: RoundMode) -> f64 {
         }
     }
     if kept.iter().all(|&d| d == 0) {
-        return 0.0;
+        return Ok(0.0);
     }
     let mut text = String::from("0.");
     text.extend(kept.iter().map(|d| char::from(b'0'.wrapping_add(*d))));
     text.push('e');
     text.push_str(&point.to_string());
     let rounded: f64 = text.parse().unwrap_or(v);
-    if v < 0.0 { -rounded } else { rounded }
+    Ok(if v < 0.0 { -rounded } else { rounded })
 }
 
 /// The result type of rounding a `decimal(p, s)` to `scale` digits: scale
@@ -325,6 +384,11 @@ pub fn round_decimal(
         if input.is_null(row) {
             out.push(0);
             continue;
+        }
+        if *u != 0
+            && let Some(message) = extreme_scale(i64::from(*s), scale)
+        {
+            return Err(KernelError::arithmetic_overflow(row, message, None));
         }
         // The rounded value in units of 10^-bd_scale (a BigDecimal whose scale
         // is negative when rounding to tens, hundreds, ...).

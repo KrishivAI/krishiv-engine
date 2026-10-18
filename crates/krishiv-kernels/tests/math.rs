@@ -26,6 +26,14 @@ fn f64s(v: &[Option<f64>]) -> Float64Array {
     Float64Array::from(v.to_vec())
 }
 
+fn rf64(x: &Float64Array, scale: i32, mode: RoundMode) -> Float64Array {
+    round_f64(x, scale, mode).unwrap()
+}
+
+fn rf32(x: &Float32Array, scale: i32, mode: RoundMode) -> Float32Array {
+    round_f32(x, scale, mode).unwrap()
+}
+
 fn dec(values: &[Option<i128>], p: u8, s: i8) -> Decimal128Array {
     Decimal128Array::from(values.to_vec())
         .with_precision_and_scale(p, s)
@@ -292,25 +300,25 @@ fn floating_point_rounding_rounds_the_decimal_text() {
         Some(-2.5),
         None,
     ]);
-    let up = round_f64(&x, 2, RoundMode::HalfUp);
+    let up = rf64(&x, 2, RoundMode::HalfUp);
     assert_eq!(
         up.iter().take(4).collect::<Vec<_>>(),
         [Some(2.68), Some(1.01), Some(8.35), Some(0.29)]
     );
-    let up0 = round_f64(&x, 0, RoundMode::HalfUp);
+    let up0 = rf64(&x, 0, RoundMode::HalfUp);
     assert_eq!(
         up0.iter().skip(4).take(4).collect::<Vec<_>>(),
         [Some(-1.0), Some(1.0), Some(3.0), Some(-3.0)]
     );
-    let even0 = round_f64(&x, 0, RoundMode::HalfEven);
+    let even0 = rf64(&x, 0, RoundMode::HalfEven);
     assert_eq!(
         even0.iter().skip(4).take(4).collect::<Vec<_>>(),
         [Some(0.0), Some(0.0), Some(2.0), Some(-2.0)]
     );
-    assert_eq!(round_f64(&x, 2, RoundMode::HalfEven).value(2), 8.34);
+    assert_eq!(rf64(&x, 2, RoundMode::HalfEven).value(2), 8.34);
     assert!(up0.is_null(8));
     // A zero result is +0.0 whatever the sign of the input (BigDecimal).
-    let z = round_f64(&f64s(&[Some(-0.4), Some(-0.0)]), 0, RoundMode::HalfUp);
+    let z = rf64(&f64s(&[Some(-0.4), Some(-0.0)]), 0, RoundMode::HalfUp);
     assert!(z.values().iter().all(|v| v.to_bits() == 0));
     let odd = f64s(&[
         Some(f64::NAN),
@@ -322,18 +330,18 @@ fn floating_point_rounding_rounds_the_decimal_text() {
         Some(1e-10),
         Some(9.99e22),
     ]);
-    let r = round_f64(&odd, 2, RoundMode::HalfUp);
+    let r = rf64(&odd, 2, RoundMode::HalfUp);
     assert!(r.value(0).is_nan() && r.value(1) == f64::INFINITY);
     assert_eq!(
         (r.value(2), r.value(3), r.value(4), r.value(6)),
         (1e300, 1.5, 123.46, 0.0)
     );
-    assert_eq!(round_f64(&odd, 400, RoundMode::HalfUp).value(3), 1.5);
-    assert_eq!(round_f64(&odd, -1, RoundMode::HalfUp).value(4), 120.0);
-    assert_eq!(round_f64(&odd, -3, RoundMode::HalfUp).value(5), 1_235_000.0);
+    assert_eq!(rf64(&odd, 400, RoundMode::HalfUp).value(3), 1.5);
+    assert_eq!(rf64(&odd, -1, RoundMode::HalfUp).value(4), 120.0);
+    assert_eq!(rf64(&odd, -3, RoundMode::HalfUp).value(5), 1_235_000.0);
     // Carrying: 9.99 rounds to 10.0 at one digit.
     assert_eq!(
-        round_f64(
+        rf64(
             &f64s(&[Some(9.99), Some(99.5), Some(0.96)]),
             1,
             RoundMode::HalfUp
@@ -343,16 +351,98 @@ fn floating_point_rounding_rounds_the_decimal_text() {
         [10.0, 99.5, 1.0]
     );
     assert_eq!(
-        round_f64(&f64s(&[Some(0.04), Some(5e-324)]), 1, RoundMode::HalfUp)
+        rf64(&f64s(&[Some(0.04), Some(5e-324)]), 1, RoundMode::HalfUp)
             .values()
             .to_vec(),
         [0.0, 0.0]
     );
     // A float is rounded through its exact double value.
     let f = Float32Array::from(vec![2.675_f32, 8.345, f32::NAN]);
-    let r = round_f32(&f, 2, RoundMode::HalfUp);
+    let r = rf32(&f, 2, RoundMode::HalfUp);
     assert_eq!((r.value(0), r.value(1)), (2.67_f32, 8.35_f32));
     assert!(r.value(2).is_nan());
+}
+
+#[test]
+fn a_scale_far_below_the_value_fails_like_big_decimal() {
+    let up = RoundMode::HalfUp;
+    let msg = |e: krishiv_kernels::KernelError| (e.error_class(), e.row(), e.to_string());
+    let overflow = ErrorClass::ArithmeticOverflow;
+    // Recorded from Spark 4.0-4.2. An integral value: scale difference past int, or past BigInteger.
+    let ints = Int32Array::from(vec![Some(25), None, Some(0)]);
+    for (scale, text) in [
+        (i32::MIN, "Underflow"),
+        (-1_000_000_000, "BigInteger would overflow supported range"),
+    ] {
+        let (class, row, shown) =
+            msg(round_integral(&ints, scale, up, OverflowMode::JavaWrap).unwrap_err());
+        assert_eq!((class, row), (overflow, Some(0)));
+        assert!(shown.contains(text), "{shown}");
+    }
+    // Zeros and NULLs never raise; a scale just inside the limit is a plain 0.
+    let zeros = Int32Array::from(vec![Some(0), None]);
+    assert_eq!(
+        round_integral(&zeros, i32::MIN, up, OverflowMode::AnsiError)
+            .unwrap()
+            .value(0),
+        0
+    );
+    assert_eq!(
+        round_integral(&ints, -536_870_919, up, OverflowMode::JavaWrap)
+            .unwrap()
+            .value(0),
+        0
+    );
+    // Doubles: BigDecimal.valueOf(2.5) has scale 1, so INT_MIN + 1 already underflows.
+    let x = f64s(&[
+        Some(2.5),
+        None,
+        Some(0.0),
+        Some(f64::NAN),
+        Some(f64::INFINITY),
+        Some(1e10),
+    ]);
+    let e = round_f64(&x, i32::MIN, up).unwrap_err();
+    assert_eq!(msg(e).1, Some(0));
+    let only_special = f64s(&[Some(0.0), Some(f64::NAN), Some(f64::INFINITY), None]);
+    assert!(round_f64(&only_special, i32::MIN, up).is_ok());
+    // 1e10 prints as 1.0E10: scale -9, so the difference still fits an int.
+    let big = f64s(&[Some(1e10)]);
+    let e = msg(round_f64(&big, i32::MIN, up).unwrap_err());
+    assert!(e.2.contains("BigInteger would overflow"), "{}", e.2);
+    let tiny = f64s(&[Some(1e-300)]);
+    assert!(
+        msg(round_f64(&tiny, -5, up)
+            .and(round_f64(&tiny, i32::MIN, up))
+            .unwrap_err())
+        .2
+        .contains("Underflow")
+    );
+    let floats = Float32Array::from(vec![1.5_f32]);
+    assert!(round_f32(&floats, i32::MIN, up).is_err());
+    // Decimals: the scale of the column counts.
+    let d = dec(&[Some(125), None], 5, 2);
+    for (scale, text) in [
+        (-2_147_483_646, "Underflow"),
+        (-2_147_483_645, "BigInteger would overflow supported range"),
+        (-600_000_000, "BigInteger would overflow supported range"),
+    ] {
+        let shown = msg(round_decimal(&d, scale, DecimalRounding::HalfUp).unwrap_err()).2;
+        assert!(shown.contains(text), "{scale}: {shown}");
+    }
+    let whole = dec(&[Some(125)], 5, 0);
+    assert!(
+        msg(round_decimal(&whole, -2_147_483_647, DecimalRounding::Floor).unwrap_err())
+            .2
+            .contains("BigInteger")
+    );
+    assert!(round_decimal(&dec(&[Some(0)], 5, 2), i32::MIN, DecimalRounding::Ceiling).is_ok());
+    assert_eq!(
+        round_decimal(&whole, -300, DecimalRounding::HalfUp)
+            .unwrap()
+            .value(0),
+        0
+    );
 }
 
 #[test]
@@ -653,9 +743,9 @@ proptest! {
     #[test]
     fn rounding_a_double_to_its_own_digits_is_the_identity(v in -1.0e15_f64..1.0e15, d in 0_i32..=15) {
         let x = f64s(&[Some(v)]);
-        let r = round_f64(&x, d, RoundMode::HalfUp).value(0);
+        let r = rf64(&x, d, RoundMode::HalfUp).value(0);
         // Rounding to d digits twice changes nothing, and moves the value by at most half a unit.
-        let again = round_f64(&f64s(&[Some(r)]), d, RoundMode::HalfUp).value(0);
+        let again = rf64(&f64s(&[Some(r)]), d, RoundMode::HalfUp).value(0);
         prop_assert_eq!(r.to_bits(), again.to_bits());
         prop_assert!((r - v).abs() <= 0.5 * 10_f64.powi(-d) * (1.0 + 1e-9) + v.abs() * 1e-15);
     }

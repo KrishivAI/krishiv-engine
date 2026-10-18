@@ -8,7 +8,7 @@
 //! Spark runs the `double` functions on the JVM, whose `Math.*` calls are
 //! JIT intrinsics on some CPUs and fdlibm's `StrictMath` elsewhere. These
 //! kernels use pure-Rust implementations (the `libm` crate, plus the fdlibm
-//! ports of [`fdlibm`] where `libm` differs), so a result is the same on
+//! ports of `math/fdlibm.rs` where `libm` differs), so a result is the same on
 //! every worker and CPU. Measured against Spark 4.0-4.2 on 280 random inputs
 //! per function, the results are bit-identical for `sqrt`, `cbrt`, `exp`,
 //! `expm1`, `log2`, `log1p`, `log10` (one input in 145 differs), `asin`,
