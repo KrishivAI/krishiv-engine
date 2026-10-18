@@ -10,6 +10,7 @@
 //! never a rename.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -78,7 +79,9 @@ pub struct FileWriter {
     options: WriteOptions,
     suffix: String,
     current: Option<OpenFile>,
-    next_file: u32,
+    /// The next file number (`c000`, `c001`, ...), shared by every writer
+    /// of one task.
+    next_file: Arc<AtomicU32>,
     written: Vec<WrittenFileInfo>,
     mem: Reservation,
 }
@@ -117,20 +120,29 @@ impl FileWriter {
             options,
             suffix,
             current: None,
-            next_file: 0,
+            next_file: Arc::new(AtomicU32::new(0)),
             written: Vec::new(),
             mem,
         })
+    }
+
+    /// This writer numbering its files from `counter`, shared with the other
+    /// writers of the same task: several writers (one per executor driver)
+    /// then write one task's files under distinct names
+    /// (`part-<task>-<uuid>-c<n>`, `n` unique within the task).
+    #[must_use]
+    pub fn sharing_file_numbers(mut self, counter: Arc<AtomicU32>) -> Self {
+        self.next_file = counter;
+        self
     }
 
     async fn open_file(&mut self) -> Result<()> {
         let name = spark_file_name(
             self.options.task,
             &self.options.job_uuid,
-            self.next_file,
+            self.next_file.fetch_add(1, Ordering::Relaxed),
             &self.suffix,
         );
-        self.next_file += 1;
         let path = self.options.dir.clone().join(name);
         let display = format!("{}/{}", self.options.store, path);
         let encoder = self

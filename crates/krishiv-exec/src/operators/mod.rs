@@ -2,8 +2,9 @@
 //! The stateless operators over the executor traits (P2-T051): an in-memory
 //! scan with projection and filter pushdown ([`MemoryScan`]), [`Filter`],
 //! [`Project`], [`Limit`] and the per-branch alignment of a union
-//! ([`UnionAlign`]); and the sort breakers (P2-T054, [`sort`]): [`Sort`]
-//! and [`TopN`].
+//! ([`UnionAlign`]); the sort breakers (P2-T054, [`sort`]): [`Sort`] and
+//! [`TopN`]; and the file scan and write over any file format (P2-T117b):
+//! [`FileScan`] / [`FileScanSource`] and [`FileWriteSink`].
 //!
 //! # Contracts shared by all of them
 //! - **Weights** ([`Weights`](krishiv_types::batch::Weights)) are carried
@@ -25,6 +26,8 @@
 //!   (distinct) breaker are split between tasks.
 
 mod expr;
+mod file_scan;
+mod file_write;
 mod filter;
 mod limit;
 mod project;
@@ -33,10 +36,14 @@ mod sort;
 mod union;
 
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
+pub use file_scan::{FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN};
+pub use file_write::{FileWrite, FileWriteSink};
 pub use filter::Filter;
 pub use limit::Limit;
 pub use project::{Project, ProjectItem};
-pub use scan::{FilterPushdown, MemoryScan, ScanPushdown};
+pub use scan::{
+    FileSelections, FilterPushdown, MemoryScan, PushedFilter, ScanPushdown, ScanPushdowns,
+};
 #[cfg(all(test, not(loom)))]
 use scan::{ScanGlobal, ScanLocal};
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};

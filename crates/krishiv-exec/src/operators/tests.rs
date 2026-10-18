@@ -560,11 +560,9 @@ fn scan_slices_to_batch_size_and_groups_morsels() {
 }
 
 #[test]
-fn scan_pushdown_filters_before_projecting_and_projections_compose() {
+fn scan_pushdown_filters_before_projecting_once_built() {
     let (_root, ctx) = ctx();
-    let mut scan = scan_of(&[2, 3, 3]);
-    // The first batch (0, 1) is emptied by `a > 1`, which skips the second filter.
-    assert_eq!(scan.push_filter(gt1()), FilterPushdown::Exact);
+    let base = scan_of(&[2, 3, 3]);
     // `a > 3` evaluated on the full schema although only `s` is read.
     let gt3: Arc<dyn Predicate> = Arc::new(FnPredicate(|b: &RecordBatch| {
         Ok(b.column(0)
@@ -573,12 +571,25 @@ fn scan_pushdown_filters_before_projecting_and_projections_compose() {
             .map(|v| v.map(|v| v > 3))
             .collect::<BooleanArray>())
     }));
-    assert_eq!(scan.push_filter(gt3), FilterPushdown::Exact);
-    scan.push_projection(&[1, 0])
+    let f1 = PushedFilter::opaque(gt1());
+    assert_eq!(base.filter_pushdown(&f1), FilterPushdown::Exact);
+    assert!(!base.supports_selection());
+    assert_eq!(base.table_schema(), schema());
+    let pushed = ScanPushdowns {
+        projection: Some(vec![krishiv_io::ColumnPath::new("s")]),
+        // The first batch (0, 1) is emptied by `a > 1`, which skips the second filter.
+        filters: vec![f1, PushedFilter::opaque(gt3)],
+        // Ignored: filters may drop rows.
+        limit: Some(1),
+        ..ScanPushdowns::default()
+    };
+    let scan = base
+        .with_pushdowns(pushed.clone())
         .unwrap_or_else(|e| unreachable!("{e}"));
-    scan.push_projection(&[0])
-        .unwrap_or_else(|e| unreachable!("{e}")); // composes to `s`
+    assert_eq!(scan.schema().fields().len(), 1);
     assert_eq!(scan.schema().field(0).name(), "s");
+    // The base scan is unchanged (pushdowns are not cumulative).
+    assert_eq!(base.schema(), schema());
     let (out, _) = drain(&scan, &ctx);
     assert_eq!(
         out.len(),
@@ -593,8 +604,80 @@ fn scan_pushdown_filters_before_projecting_and_projections_compose() {
         [Some("s4"), Some("s5"), Some("s6"), Some("s7")]
     );
     assert_eq!(scan.rows_read(), 8);
-    assert!(scan.push_projection(&[1]).is_err());
-    assert!(scan.push_projection(&[5]).is_err());
+    assert!(base.build(pushed).is_ok());
+    // Unknown columns and selections are refused.
+    let bad = ScanPushdowns {
+        projection: Some(vec![krishiv_io::ColumnPath::new("zz")]),
+        ..ScanPushdowns::default()
+    };
+    assert!(base.with_pushdowns(bad).is_err());
+    #[derive(Debug)]
+    struct All;
+    impl FileSelections for All {
+        fn selection(&self, _file: &krishiv_io::FileRef) -> Option<krishiv_io::RowSelection> {
+            None
+        }
+    }
+    let sel = ScanPushdowns {
+        selection: Some(Arc::new(All)),
+        ..ScanPushdowns::default()
+    };
+    assert!(base.with_pushdowns(sel).is_err());
+    let meta = ScanPushdowns {
+        metadata: krishiv_io::MetadataCols {
+            file_name: true,
+            ..krishiv_io::MetadataCols::default()
+        },
+        ..ScanPushdowns::default()
+    };
+    assert!(base.with_pushdowns(meta).is_err());
+}
+
+#[test]
+fn scan_limit_and_nested_projection() {
+    let (_root, ctx) = ctx();
+    // A limit without filters stops claiming once enough rows were returned.
+    let base = scan_of(&[3, 3, 3]);
+    let limited = base
+        .with_pushdowns(ScanPushdowns {
+            limit: Some(4),
+            ..ScanPushdowns::default()
+        })
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let (out, _) = drain(&limited, &ctx);
+    assert_eq!(out.iter().map(Batch::num_rows).sum::<usize>(), 6);
+    // A nested path prunes struct fields, zero-copy.
+    let inner = arrow_schema::Fields::from(vec![
+        Field::new("x", DataType::Int64, true),
+        Field::new("y", DataType::Int64, true),
+    ]);
+    let table = Arc::new(Schema::new(vec![Field::new(
+        "st",
+        DataType::Struct(inner.clone()),
+        true,
+    )]));
+    let st = arrow_array::StructArray::new(
+        inner,
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![3, 4])) as ArrayRef,
+        ],
+        None,
+    );
+    let data = RecordBatch::try_new(Arc::clone(&table), vec![Arc::new(st)])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let scan = MemoryScan::try_new(table, vec![Batch::new(data)])
+        .and_then(|s| {
+            s.with_pushdowns(ScanPushdowns {
+                projection: Some(vec![krishiv_io::ColumnPath::nested(["st", "y"])]),
+                ..ScanPushdowns::default()
+            })
+        })
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let (out, _) = drain(&scan, &ctx);
+    let st = out[0].data().column(0).as_struct();
+    assert_eq!(st.num_columns(), 1);
+    assert_eq!(st.column(0).as_primitive::<Int64Type>().values(), &[3, 4]);
 }
 
 #[test]
@@ -625,6 +708,7 @@ fn scan_reports_inconsistent_state_as_internal_errors() {
         cursor: crate::MorselCursor::new(1, None),
         morsels: vec![],
         batch_rows: 4,
+        returned: std::sync::atomic::AtomicU64::new(0),
     });
     let mut local = scan
         .local_state(&ctx, &global)
