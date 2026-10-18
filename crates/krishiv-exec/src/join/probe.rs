@@ -435,7 +435,7 @@ impl Operator for ProbeOp {
                 &self.0.probe_schema,
                 scope,
                 ctx,
-                true,
+                false,
             )
             .await?;
             l.file_bytes += written;

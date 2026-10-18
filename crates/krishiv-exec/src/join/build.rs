@@ -418,7 +418,7 @@ impl Sink for BuildSink {
             for &p in &chosen {
                 l.spilled.fetch_or(1 << p, Ordering::AcqRel);
             }
-            let (freed, written) = self.spill_parts(&mut l.parts, &chosen, ctx, true).await?;
+            let (freed, written) = self.spill_parts(&mut l.parts, &chosen, ctx, false).await?;
             l.file_bytes += written;
             l.signal.set_spillable_bytes(mem_bytes(&l.parts));
             Ok(freed)
@@ -436,7 +436,7 @@ impl Sink for BuildSink {
         ctx: &'a TaskContext,
     ) -> BoxFuture<'a, Result<usize>> {
         Box::pin(async move {
-            self.spill_collected(state(global)?, target, ctx, true)
+            self.spill_collected(state(global)?, target, ctx, false)
                 .await
         })
     }
