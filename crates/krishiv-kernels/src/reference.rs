@@ -61,19 +61,11 @@ fn settle<T>(
     fault: Fault,
     wrapped: T,
     error: impl FnOnce() -> KernelError,
-) -> Result<Option<T>, Box<KernelError>> {
+) -> Result<Option<T>, KernelError> {
     match mode.action(fault) {
         Action::Wrap => Ok(Some(wrapped)),
         Action::Null => Ok(None),
-        Action::Raise => Err(Box::new(error())),
-    }
-}
-
-/// The reference loops carry a boxed error, so the per-row result stays
-/// small (the oracle doubles as the benchmarks' "generic path").
-impl From<Box<KernelError>> for KernelError {
-    fn from(e: Box<KernelError>) -> Self {
-        *e
+        Action::Raise => Err(error()),
     }
 }
 
@@ -81,7 +73,7 @@ impl From<Box<KernelError>> for KernelError {
 fn rows<T: ArrowPrimitiveType, U: ArrowPrimitiveType>(
     l: Operand<'_, T>,
     r: Operand<'_, T>,
-    mut f: impl FnMut(usize, T::Native, T::Native) -> Result<Option<U::Native>, Box<KernelError>>,
+    mut f: impl FnMut(usize, T::Native, T::Native) -> Result<Option<U::Native>, KernelError>,
 ) -> Result<PrimitiveArray<U>, KernelError> {
     let len = length(l, r)?;
     let mut out = Vec::with_capacity(len);
@@ -105,17 +97,27 @@ pub fn integer_binary<T: SparkIntegral>(
     l: Operand<'_, T>,
     r: Operand<'_, T>,
 ) -> Result<PrimitiveArray<T>, KernelError> {
-    let ctx = KernelCtx::new().with_spark_version(version);
-    rows(l, r, |i, a, b| {
+    // A plain loop: this oracle is also the benchmarks' "generic path".
+    let len = length(l, r)?;
+    let mut out = Vec::with_capacity(len);
+    for i in 0..len {
+        let (Some(a), Some(b)) = (value(l, i), value(r, i)) else {
+            out.push(None);
+            continue;
+        };
         // Every Spark integral fits an i128 with room for + - *.
         let exact = exact_i128(op, T::widen(a), T::widen(b)).unwrap_or_default();
-        match T::narrow(exact) {
-            (v, false) => Ok(Some(v)),
-            (v, true) => settle(mode, Fault::Overflow, v, || {
-                crate::integer::overflow_error::<T>(&ctx, i, op, a, b)
-            }),
-        }
-    })
+        let (wrapped, overflow) = T::narrow(exact);
+        out.push(match (mode, overflow) {
+            (_, false) | (OverflowMode::Unchecked | OverflowMode::JavaWrap, true) => Some(wrapped),
+            (OverflowMode::NullOnOverflow, true) => None,
+            (OverflowMode::AnsiError, true) => {
+                let ctx = KernelCtx::new().with_spark_version(version);
+                return Err(crate::integer::overflow_error::<T>(&ctx, i, op, a, b));
+            }
+        });
+    }
+    Ok(out.into_iter().collect())
 }
 
 /// Reference for [`crate::integer::remainder`].
