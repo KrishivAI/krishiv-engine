@@ -118,12 +118,9 @@ fn errors_surface_where_spark_raises_them() {
     assert_eq!(block_on(df.schema()).unwrap().field(0).name(), "total");
     let df = s.table("people").select([(col("id") + 1).alias("next")]);
     assert_eq!(block_on(df.schema()).unwrap().field(0).name(), "next");
-    // Relations the physical planner does not have yet fail clearly.
+    // Filters run now that the physical planner has them.
     let df = s.table("people").filter(col("id").gt(lit(1)));
-    assert_eq!(
-        class(block_on(df.collect())),
-        ErrorClass::KrishivUnsupportedFeature
-    );
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), [3, 2]);
 }
 
 #[test]
@@ -364,9 +361,10 @@ fn table_names_parse_as_multipart_identifiers() {
         ids(&block_on(s.table("`a``b`").collect()).unwrap()),
         [3, 1, 2]
     );
+    // A qualified name does not reach a temporary view (Spark 4.2.0).
     assert_eq!(
-        ids(&block_on(s.table(" default.`x.y` ").collect()).unwrap()),
-        [3, 1, 2]
+        class(block_on(s.table(" default.`x.y` ").schema())),
+        ErrorClass::TableOrViewNotFound
     );
     assert_eq!(
         class(block_on(s.table("x.y").schema())),
@@ -518,4 +516,49 @@ fn column_builders_and_functions_resolve_with_spark_types() {
     let ordered = block_on(s.table("people").order_by(["id"]).collect()).unwrap();
     assert_eq!(ids(&sorted), [1, 2, 3]);
     assert_eq!(ids(&sorted), ids(&ordered));
+}
+
+#[test]
+fn temp_views_resolve_for_unqualified_names_only() {
+    // Spark 4.2.0 with a temp view `v`: `v` and `V` resolve; `default.v`,
+    // `spark_catalog.default.v` and `global_temp.v` fail with
+    // TABLE_OR_VIEW_NOT_FOUND; `spark_catalog.v` fails with
+    // REQUIRES_SINGLE_PART_NAMESPACE (not modelled here: it also fails).
+    let s = session();
+    let (schema, batch) = people();
+    s.register_batches("v", schema, vec![batch]).unwrap();
+    for ok in ["v", "V"] {
+        assert_eq!(
+            ids(&block_on(
+                block_on(s.sql(&format!("SELECT * FROM {ok}")))
+                    .unwrap()
+                    .collect()
+            )
+            .unwrap()),
+            [3, 1, 2],
+            "{ok}"
+        );
+    }
+    for bad in [
+        "default.v",
+        "DEFAULT.v",
+        "spark_catalog.default.v",
+        "global_temp.v",
+        "spark_catalog.global_temp.v",
+    ] {
+        let sql = block_on(s.sql(&format!("SELECT * FROM {bad}")));
+        assert_eq!(
+            class(match sql {
+                Ok(df) => block_on(df.schema()).map(|_| ()),
+                Err(e) => Err(e),
+            }),
+            ErrorClass::TableOrViewNotFound,
+            "{bad}"
+        );
+        assert_eq!(
+            class(block_on(s.table(bad).schema())),
+            ErrorClass::TableOrViewNotFound,
+            "{bad}"
+        );
+    }
 }

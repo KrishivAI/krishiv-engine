@@ -20,7 +20,7 @@ use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeatu
 use krishiv_exec::files::FileReads;
 use krishiv_exec::planner::{MemoryTable, TableProvider, TableProviderResolver};
 use krishiv_plan::analyzer::{
-    BoxFuture, Catalog, CatalogResolver, TableColumn, TableIdent, TableKind, TableMeta,
+    BoxFuture, Catalog, CatalogResolver, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
 };
 use krishiv_plan::{ReadSource, Scan, TableVersion};
 
@@ -165,16 +165,13 @@ impl Catalog for QueryCatalog {
         &'a self,
         id: &'a TableIdent,
         _: Option<TableVersion>,
-        case_sensitive: bool,
+        form: NameForm,
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
         Box::pin(async move {
-            let in_default = match id.namespace.as_slice() {
-                [ns] if case_sensitive => ns == NAMESPACE,
-                [ns] => ns.eq_ignore_ascii_case(NAMESPACE),
-                _ => false,
-            };
-            let found = if in_default {
-                self.session.get(&id.name, case_sensitive)
+            // Temporary views resolve for unqualified names only: Spark
+            // finds `v` but not `default.v` or `spark_catalog.default.v`.
+            let found = if !form.qualified {
+                self.session.get(&id.name, form.case_sensitive)
             } else {
                 None
             };

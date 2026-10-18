@@ -17,6 +17,17 @@ use krishiv_types::DataType;
 use super::{AnalysisError, SparkProfile};
 use crate::{Expr, FunctionId, FunctionKind, Plan, SourceId, TableVersion};
 
+/// How a relation name was written, for the catalog that loads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NameForm {
+    /// Names match as written; otherwise case-insensitively, as Spark's
+    /// catalogs do.
+    pub case_sensitive: bool,
+    /// The name carried a namespace or catalog part. Spark resolves
+    /// temporary views only for names that did not.
+    pub qualified: bool,
+}
+
 /// A boxed `Send` future, as trait methods that may do I/O return.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -97,14 +108,14 @@ pub trait Catalog: Send + Sync {
     /// Bumped on every change made through Krishiv; part of the context
     /// fingerprint.
     fn epoch(&self) -> u64;
-    /// The table `id` (as written; the catalog applies `case_sensitive`, as
-    /// Spark's catalogs do) at `version`, or the current one; `None` when
-    /// it does not exist.
+    /// The table `id` (as written; the catalog applies `form`, as Spark's
+    /// catalogs do) at `version`, or the current one; `None` when it does
+    /// not exist.
     fn load_table<'a>(
         &'a self,
         id: &'a TableIdent,
         version: Option<TableVersion>,
-        case_sensitive: bool,
+        form: NameForm,
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>>;
 }
 
@@ -497,10 +508,10 @@ impl Catalog for MemoryCatalog {
         &'a self,
         id: &'a TableIdent,
         version: Option<TableVersion>,
-        case_sensitive: bool,
+        form: NameForm,
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
         let fold = |s: &String| {
-            if case_sensitive {
+            if form.case_sensitive {
                 s.clone()
             } else {
                 s.to_lowercase()
