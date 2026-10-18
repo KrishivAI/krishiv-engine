@@ -1064,19 +1064,23 @@ fn no_relation_bypasses_the_policy() {
     for plan in [
         LogicalPlan::table(["t"]),
         LogicalPlan::table(["nosuch"]),
-        files(path()),
         scan(&["t"], &[("a", DataType::Integer)]),
-        LogicalPlan::new(PlanNode::Scan(crate::Scan {
-            source: ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: path(),
-                options: std::collections::BTreeMap::new(),
-            },
-            output: Vec::new(),
-            version: None,
-        })),
     ] {
         assert_eq!(class(&run(plan, &all)), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    }
+    // Without a file resolver nothing is read by path; with one, every path
+    // is asked about first (`tests::files`).
+    let file_scan = LogicalPlan::new(PlanNode::Scan(crate::Scan {
+        source: ReadSource::Files {
+            format: "parquet".to_owned(),
+            paths: path(),
+            options: std::collections::BTreeMap::new(),
+        },
+        output: Vec::new(),
+        version: None,
+    }));
+    for plan in [files(path()), file_scan] {
+        assert_eq!(class(&run(plan, &all)), "KRISHIV_UNSUPPORTED_FEATURE");
     }
     // Scans that name no table, a missing one, or invent columns fail closed.
     let ctx = ctx();
@@ -1089,11 +1093,6 @@ fn no_relation_bypasses_the_policy() {
     assert_eq!(class(&run(invented, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
     let retyped = scan(&["t"], &[("a", DataType::Long)]);
     assert_eq!(class(&run(retyped, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
-    // Repeated paths are asked about once.
-    let (allow, calls) = with_policy(Ok(AccessDecision::Allow));
-    let twice = files(path()).join(files(path()), JoinKind::Cross, JoinCondition::None);
-    let _ = run(twice, &allow);
-    assert_eq!(calls.calls.lock().unwrap().len(), 1);
 }
 
 /// Every scan of a table is checked, not only the first; a spelling of a
@@ -1444,7 +1443,9 @@ fn unsupported_inputs_fail_explicitly() {
     let constant =
         LogicalPlan::table(["t"]).aggregate(vec![int(1)], vec![f("count", vec![star()])]);
     assert_eq!(class(&run(constant, &off)), "OK");
-    // A crafted, already resolved scan of files is checked like a read.
+    // A crafted, already resolved scan of files is checked like a read: with
+    // no file resolver, it is not read at all (`tests::files` covers the
+    // policy).
     let (deny, _) = with_policy(Ok(AccessDecision::Deny {
         reason: String::new(),
     }));
@@ -1457,7 +1458,7 @@ fn unsupported_inputs_fail_explicitly() {
         output: Vec::new(),
         version: None,
     }));
-    assert_eq!(class(&run(scan, &deny)), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    assert_eq!(class(&run(scan, &deny)), "KRISHIV_UNSUPPORTED_FEATURE");
     // A function newer than the session's Spark version does not exist.
     let mut old = ctx.clone();
     old.profile = SparkProfile::V3_5;

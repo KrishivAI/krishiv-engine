@@ -451,11 +451,25 @@ pub enum SourceKind {
 /// A plan that reads files depends on what the files hold when they are
 /// listed, which no context input captures: [`super::AnalyzedPlan::reads_files`]
 /// marks such plans, and a resolved-plan cache must list them again
-/// (ADR 0037). An implementation should list each read once per query and
-/// let execution read the same files.
+/// (ADR 0037). An implementation serves one query: it lists each read once
+/// and lets execution read the same files, and a new query gets a new
+/// resolver (so it lists the files again).
+///
+/// The analyzer asks the access policy about each path in the form
+/// [`Self::qualify`] gives, which is also the form the scan reads, so a
+/// policy never sees one path while the query reads another.
 pub trait FileSchemaResolver: Send + Sync {
     /// What the data source `name` is (case-insensitive).
     fn source_kind(&self, name: &str) -> SourceKind;
+    /// `path` in the form the read uses: relative paths made absolute,
+    /// `.` and `..` resolved, URLs in one spelling. The default keeps it
+    /// as written.
+    ///
+    /// # Errors
+    /// For a path the session cannot place (`KRISHIV_UNSUPPORTED_FEATURE`).
+    fn qualify(&self, path: &OptionValue) -> Result<OptionValue, KrishivError> {
+        Ok(path.clone())
+    }
     /// The columns of reading `paths` as `format` with `options`, as the
     /// format infers them (the analyzer makes them nullable, as Spark does
     /// for every file source).

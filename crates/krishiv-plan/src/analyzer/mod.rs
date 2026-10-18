@@ -208,7 +208,8 @@ pub struct AnalysisContext {
     pub functions: Arc<dyn FunctionRegistry>,
     /// The SQL front end, for SQL text inside plans.
     pub sql: Option<Arc<dyn SqlFrontend>>,
-    /// Files read by path; without it such reads are
+    /// Files read by path, for this query only (see
+    /// [`FileSchemaResolver`]); without it such reads are
     /// `KRISHIV_UNSUPPORTED_FEATURE`.
     pub files: Option<Arc<dyn FileSchemaResolver>>,
 }

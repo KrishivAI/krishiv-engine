@@ -38,6 +38,8 @@ struct MemPaths(AtomicUsize);
 impl PathLocator for MemPaths {
     fn locate(&self, path: &str) -> krishiv_exec::Result<LocatedPath> {
         self.0.fetch_add(1, Ordering::Relaxed);
+        // Its own display form places the same path again.
+        let path = path.strip_prefix("memory:").unwrap_or(path);
         Ok(LocatedPath {
             store: StoreId::new("memory://suite"),
             path: Path::from(path),

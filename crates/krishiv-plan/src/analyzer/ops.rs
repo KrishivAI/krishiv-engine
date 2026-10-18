@@ -154,12 +154,8 @@ impl Resolver<'_> {
                 source: None,
             })
             .collect();
-        let mut source = bound.source.clone();
-        if let ReadSource::Files { format, .. } = &mut source {
-            *format = format.to_lowercase();
-        }
         let node = PlanNode::Scan(Scan {
-            source,
+            source: bound.read.clone(),
             output: out.iter().map(|a| a.col.clone()).collect(),
             version: None,
         });
