@@ -550,6 +550,8 @@ fn listings_and_deletes_are_retried() {
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::TaskWriteFailed);
     fault.fail_next_deletes(0);
+    // The failed delete left the object in place.
+    assert!(env.names("t").contains(&"t/_SUCCESS".to_owned()));
     // Deleting what is gone succeeds.
     env.rt
         .block_on(env.io.delete(&env.store, &Path::from("t/nothing")))

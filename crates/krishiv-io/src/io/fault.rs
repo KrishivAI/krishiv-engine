@@ -238,15 +238,24 @@ impl ObjectStore for FaultStore {
         &self,
         locations: BoxStream<'static, StoreResult<Path>>,
     ) -> BoxStream<'static, StoreResult<Path>> {
+        // A failure is injected before the path reaches the inner store, so a
+        // delete reported as failed leaves the object in place.
         let state = Arc::clone(&self.state);
-        let inner = self.inner.delete_stream(locations);
-        Box::pin(futures::StreamExt::map(inner, move |r| {
-            let mut st = lock(&state);
-            if st.fail_deletes > 0 {
-                st.fail_deletes -= 1;
-                return Err(transient(None));
+        let inner = Arc::clone(&self.inner);
+        Box::pin(futures::StreamExt::flat_map(locations, move |location| {
+            let fail = {
+                let mut st = lock(&state);
+                let fail = st.fail_deletes > 0;
+                st.fail_deletes = st.fail_deletes.saturating_sub(1);
+                fail
+            };
+            if fail {
+                futures::StreamExt::boxed(futures::stream::once(async { Err(transient(None)) }))
+            } else {
+                inner.delete_stream(futures::StreamExt::boxed(futures::stream::once(async {
+                    location
+                })))
             }
-            r
         }))
     }
 
