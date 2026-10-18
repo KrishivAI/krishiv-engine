@@ -262,53 +262,58 @@ impl Keys {
         found
     }
 
-    /// Whether the subtree of `p` holds a `plan_id` reference, memoised per
-    /// relation, without recursion.
+    /// Whether the subtree of `root` holds a `plan_id` reference, memoised
+    /// per relation, without recursion. The walk stops at the first
+    /// reference (a hit marks the relations on the path to it), so a chain
+    /// of operators that each reference the previous one costs one step per
+    /// operator; a subtree without a reference is scanned once.
     fn has_refs(&mut self, root: &LogicalPlan) -> bool {
         use crate::walk::{Node, children};
         if let Some(&known) = self.refs.get(&std::ptr::from_ref(root)) {
             return known;
         }
-        // Post-order over relations and expressions; an expression's answer
-        // is folded into its relation's.
         let mut stack = vec![(Node::Plan(root), false)];
-        let mut exprs: HashMap<*const Expr, bool> = HashMap::new();
         let mut next = Vec::new();
+        // Expressions finished without a reference (shared ones once).
+        let mut clean: HashSet<*const Expr> = HashSet::new();
         while let Some((node, expanded)) = stack.pop() {
-            let known = match node {
-                Node::Plan(p) => self.refs.contains_key(&std::ptr::from_ref(p)),
-                Node::Expr(e) => exprs.contains_key(&std::ptr::from_ref(e)),
-            };
-            if known {
+            if expanded {
+                // Everything below finished without a reference.
+                match node {
+                    Node::Plan(p) => {
+                        self.refs.entry(std::ptr::from_ref(p)).or_insert(false);
+                    }
+                    Node::Expr(e) => {
+                        clean.insert(std::ptr::from_ref(e));
+                    }
+                }
                 continue;
+            }
+            let hit = match node {
+                Node::Plan(p) => self.refs.get(&std::ptr::from_ref(p)).copied(),
+                Node::Expr(e) if clean.contains(&std::ptr::from_ref(e)) => Some(false),
+                Node::Expr(e) => match &e.node {
+                    ExprNode::Column(c) => c.plan_id.is_some().then_some(true),
+                    ExprNode::Star(s) => s.plan_id.is_some().then_some(true),
+                    _ => None,
+                },
+            };
+            match hit {
+                Some(true) => {
+                    // The relations being scanned all contain this one.
+                    for (n, done) in &stack {
+                        if let (Node::Plan(p), true) = (n, done) {
+                            self.refs.insert(std::ptr::from_ref(*p), true);
+                        }
+                    }
+                    return true;
+                }
+                Some(false) => continue,
+                None => {}
             }
             children(node, &mut next);
-            if !expanded {
-                stack.push((node, true));
-                stack.extend(next.drain(..).map(|c| (c, false)));
-                continue;
-            }
-            let below = next.drain(..).any(|c| match c {
-                Node::Plan(p) => self
-                    .refs
-                    .get(&std::ptr::from_ref(p))
-                    .copied()
-                    .unwrap_or(false),
-                Node::Expr(e) => exprs.get(&std::ptr::from_ref(e)).copied().unwrap_or(false),
-            });
-            match node {
-                Node::Plan(p) => {
-                    self.refs.insert(std::ptr::from_ref(p), below);
-                }
-                Node::Expr(e) => {
-                    let own = match &e.node {
-                        ExprNode::Column(c) => c.plan_id.is_some(),
-                        ExprNode::Star(s) => s.plan_id.is_some(),
-                        _ => false,
-                    };
-                    exprs.insert(std::ptr::from_ref(e), own || below);
-                }
-            }
+            stack.push((node, true));
+            stack.extend(next.drain(..).map(|c| (c, false)));
         }
         self.refs
             .get(&std::ptr::from_ref(root))
