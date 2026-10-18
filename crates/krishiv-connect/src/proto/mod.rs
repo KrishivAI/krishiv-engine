@@ -38,9 +38,12 @@ pub(crate) struct Layout {
 pub(crate) enum Field {
     /// A message of the package, by id: the walk descends into it.
     Message(u16),
-    /// A string, bytes, or a message from outside the package
-    /// (`google.protobuf.Any`, `Timestamp`), which prost decodes as a leaf.
+    /// A string or bytes: prost decodes it as a leaf.
     Bytes,
+    /// A message from outside the package (`google.protobuf.Any`): prost
+    /// decodes its few scalar fields, and would recurse into a group in it,
+    /// so the walk checks its wire format flatly.
+    External,
     /// A varint scalar (integer, bool or enum) that decodes to this many
     /// bytes.
     Varint(u8),

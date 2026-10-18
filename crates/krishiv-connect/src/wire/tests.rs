@@ -404,7 +404,7 @@ fn layout_table_matches_the_generated_types() {
     assert!(matches!(kind(RELATION, 4), Some(Field::Message(_))));
     assert!(matches!(kind(EXPRESSION, 1), Some(Field::Message(_))));
     assert_eq!(kind(RELATION, 5000), None);
-    assert_eq!(kind(EXPRESSION, 999), Some(Field::Bytes), "an Any");
+    assert_eq!(kind(EXPRESSION, 999), Some(Field::External), "an Any");
     assert_eq!(MESSAGES[usize::from(PLAN)].name, "Plan");
     assert_eq!(MESSAGES[usize::from(RELATION)].name, "Relation");
     assert_eq!(MESSAGES[usize::from(EXPRESSION)].name, "Expression");
@@ -421,4 +421,22 @@ fn layout_table_matches_the_generated_types() {
             }
         }
     }
+}
+
+#[test]
+fn an_any_extension_is_checked_flatly() {
+    // Relation.extension (998) is a google.protobuf.Any: prost would recurse
+    // into a group inside it, so the walk refuses one.
+    let any = |body: &[u8]| decode_relation(&field(998, body));
+    let group = [0x0b, 0x0b, 0x0b, 0x0c, 0x0c, 0x0c];
+    let e = any(&group).expect_err("a group in an Any");
+    assert_eq!(class(&e), ErrorClass::ConnectInvalidPlanCannotParse);
+    // Overrunning lengths and invalid wire types too.
+    assert!(any(&[0x12, 0x09, 1]).is_err());
+    assert!(any(&[0x0e]).is_err());
+    // A real envelope: type_url (1), value (2), a varint, fixed32 and fixed64.
+    let mut ok = field(1, b"type.example/x");
+    ok.extend(field(2, &[1, 2, 3]));
+    ok.extend([0x18, 0x05, 0x25, 1, 2, 3, 4, 0x29, 1, 2, 3, 4, 5, 6, 7, 8]);
+    assert!(any(&ok).is_ok());
 }

@@ -345,6 +345,11 @@ fn scan(table: &[Layout], root: u16, buf: &[u8], limits: &Limits) -> Result<usiz
                         pos = body_end;
                         LEAF_SIZE.saturating_add(len.saturating_mul(usize::from(width)))
                     }
+                    Field::External => {
+                        flat(&buf[pos..body_end])?;
+                        pos = body_end;
+                        LEAF_SIZE.saturating_add(len)
+                    }
                     Field::Bytes | Field::Fixed => {
                         pos = body_end;
                         LEAF_SIZE.saturating_add(len)
@@ -358,6 +363,30 @@ fn scan(table: &[Layout], root: u16, buf: &[u8], limits: &Limits) -> Result<usiz
         }
     }
     Ok(deepest)
+}
+
+/// Checks the wire format of a message whose fields hold no messages
+/// (`google.protobuf.Any`): no groups and no overrunning lengths. Nothing
+/// is entered, so it cannot recurse.
+fn flat(body: &[u8]) -> Result<(), Reject> {
+    let mut pos = 0;
+    while pos < body.len() {
+        let key = varint(body, &mut pos)?;
+        match key & 7 {
+            0 => {
+                varint(body, &mut pos)?;
+            }
+            1 => pos = skip(body, pos, 8)?,
+            5 => pos = skip(body, pos, 4)?,
+            2 => {
+                let len = varint(body, &mut pos)?;
+                let len = usize::try_from(len).map_err(|_| Reject::Malformed("invalid length"))?;
+                pos = skip(body, pos, len)?;
+            }
+            _ => return Err(Reject::Malformed("group or invalid wire type in an Any")),
+        }
+    }
+    Ok(())
 }
 
 /// The position `n` bytes after `pos`, which must lie within `buf`.

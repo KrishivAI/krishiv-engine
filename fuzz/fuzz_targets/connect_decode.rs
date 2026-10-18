@@ -18,6 +18,18 @@ use libfuzzer_sys::fuzz_target;
 use prost::Message;
 
 fuzz_target!(|data: &[u8]| {
+    // Decoding, printing, encoding and dropping a message nested a thousand
+    // levels deep recurse that deep: run them where the stack fits.
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn_scoped(scope, || run(data))
+            .expect("a thread");
+        worker.join().expect("the case does not panic");
+    });
+});
+
+fn run(data: &[u8]) {
     let Some((&which, bytes)) = data.split_first() else {
         return;
     };
@@ -55,7 +67,7 @@ fuzz_target!(|data: &[u8]| {
             }
         }
     }
-});
+}
 
 /// `encoded`, decoded and encoded again, is `encoded`.
 fn reencodes<E>(encoded: Vec<u8>, again: impl Fn(&[u8]) -> Result<Vec<u8>, E>) {
