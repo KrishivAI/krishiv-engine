@@ -24,7 +24,6 @@ import sys
 
 from pyspark.sql import SparkSession
 
-
 MARK = "KRISHIV-GOLDEN "
 
 
@@ -51,7 +50,7 @@ def error_class(e: Exception) -> str:
     while java is not None:
         try:
             cond = java.getCondition()
-        except Exception:  # noqa: BLE001 - a Java exception without conditions
+        except Exception:  # a Java exception without conditions
             cond = None
         if cond:
             return cond
@@ -71,7 +70,10 @@ def main() -> None:
             spark.read.parquet(os.path.join(data, f)).createOrReplaceTempView(f[: -len(".parquet")])
     if queries == "tpch":
         root = os.path.join(os.path.dirname(__file__), "..", "..", "bench", "queries", "tpch")
-        named = {f"q{q:02}": open(os.path.join(root, f"q{q:02}.sql")).read() for q in range(1, 23)}
+        named = {}
+        for q in range(1, 23):
+            with open(os.path.join(root, f"q{q:02}.sql")) as f:
+                named[f"q{q:02}"] = f.read()
     else:
         with open(queries) as f:
             named = json.load(f)
@@ -80,7 +82,7 @@ def main() -> None:
         try:
             rows = spark.sql(sql).collect()
             out[name] = {"rows": ["|".join(render(v) for v in r) for r in rows]}
-        except Exception as e:  # noqa: BLE001 - Spark's error class is the expectation
+        except Exception as e:  # Spark's error class is the expectation
             cls = error_class(e)
             out[name] = {"error": cls}
     # Spark logs query errors to stdout too: the fixture is the one marked line.

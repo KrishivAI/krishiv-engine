@@ -44,14 +44,18 @@ fn tr(e: &Expr, scan: &[BoundColumn], exact: bool) -> Option<PushdownExpr> {
         }
         (Builtin::In, [x, list @ ..]) => {
             let c = column(x, scan)?;
-            // A NULL element never makes a row match.
-            let values: Vec<ScalarValue> = list
+            let values = list
                 .iter()
                 .map(|v| value_or_null(v))
-                .collect::<Option<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .collect();
+                .collect::<Option<Vec<_>>>()?;
+            // A NULL element never makes a row match, so dropping it keeps
+            // the rows `x IN (...)` keeps. But a non-matching row is then
+            // NULL rather than false, so `NOT (x IN (1, NULL))` keeps no
+            // row: under a negation the list is not translatable.
+            if exact && values.iter().any(Option::is_none) {
+                return None;
+            }
+            let values: Vec<ScalarValue> = values.into_iter().flatten().collect();
             Some(PushdownExpr::In {
                 column: c,
                 values,
@@ -161,4 +165,67 @@ fn value_or_null(e: &Expr) -> Option<Option<ScalarValue>> {
         Literal::Timestamp(v) | Literal::TimestampNtz(v) => ScalarValue::TimestampMicros(*v),
         _ => return None,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use krishiv_plan::{AttrId, FunctionKind};
+    use krishiv_types::DataType;
+
+    use super::*;
+
+    fn col() -> (Expr, Vec<BoundColumn>) {
+        let c = BoundColumn {
+            id: AttrId(1),
+            name: "a".to_owned(),
+            data_type: DataType::Integer,
+            nullable: true,
+        };
+        (
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Column(c.clone()))),
+            vec![c],
+        )
+    }
+
+    fn call(b: Builtin, args: Vec<Expr>) -> Expr {
+        Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Builtin(b),
+                kind: FunctionKind::Scalar,
+                args: args.into_iter().map(Arc::new).collect(),
+                distinct: false,
+                filter: None,
+                data_type: DataType::Boolean,
+                nullable: true,
+            },
+        )))
+    }
+
+    fn in_list(with_null: bool) -> (Expr, Vec<BoundColumn>) {
+        let (a, scan) = col();
+        let mut args = vec![a, Expr::new(ExprNode::Literal(Literal::Integer(1)))];
+        if with_null {
+            args.push(Expr::new(ExprNode::Literal(Literal::Null(None))));
+        }
+        (call(Builtin::In, args), scan)
+    }
+
+    #[test]
+    fn in_with_a_null_element_is_translatable_only_outside_a_negation() {
+        let (e, scan) = in_list(true);
+        let Some(PushdownExpr::In { values, .. }) = translate(&e, &scan) else {
+            panic!("a IN (1, NULL) keeps a subset of a IN (1)");
+        };
+        assert_eq!(values, vec![ScalarValue::Int32(1)]);
+        // Spark keeps no row for NOT (a IN (1, NULL)); NOT (a IN (1)) keeps
+        // every non-null a <> 1.
+        assert_eq!(translate(&call(Builtin::Not, vec![e]), &scan), None);
+        let (e, scan) = in_list(false);
+        assert!(matches!(
+            translate(&call(Builtin::Not, vec![e]), &scan),
+            Some(PushdownExpr::Not(_))
+        ));
+    }
 }

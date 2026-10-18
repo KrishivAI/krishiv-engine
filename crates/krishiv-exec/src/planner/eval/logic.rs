@@ -83,8 +83,8 @@ impl PhysExpr for AndOr {
         let l = l_all
             .as_boolean_opt()
             .ok_or_else(|| internal("AND of a non-boolean"))?;
-        let (lb, lok) = parts(l);
-        let decided = if self.and { &lok & &!&lb } else { &lok & &lb };
+        let (lb, l_ok) = parts(l);
+        let decided = if self.and { &l_ok & &!&lb } else { &l_ok & &lb };
         let open = !&decided;
         let rv = if open.count_set_bits() == rows {
             self.r.eval(batch)?
@@ -94,18 +94,18 @@ impl PhysExpr for AndOr {
         let scalar = lv.is_scalar() && rv.is_scalar();
         let rows = if scalar { 1 } else { rows };
         let (l, r) = both(&lv, &rv, rows)?;
-        let ((lb, lok), (rb, rok)) = (parts(&l), parts(&r));
+        let ((lb, l_ok), (rb, rok)) = (parts(&l), parts(&r));
         // AND: false wins over NULL; OR: true wins over NULL.
         let (values, valid) = if self.and {
-            let l_false = &lok & &!&lb;
+            let l_false = &l_ok & &!&lb;
             let r_false = &rok & &!&rb;
-            let decided = &(&l_false | &r_false) | &(&lok & &rok);
+            let decided = &(&l_false | &r_false) | &(&l_ok & &rok);
             (&lb & &rb, decided)
         } else {
-            let l_true = &lok & &lb;
+            let l_true = &l_ok & &lb;
             let r_true = &rok & &rb;
-            let decided = &(&l_true | &r_true) | &(&lok & &rok);
-            (&(&lb & &lok) | &(&rb & &rok), decided)
+            let decided = &(&l_true | &r_true) | &(&l_ok & &rok);
+            (&(&lb & &l_ok) | &(&rb & &rok), decided)
         };
         let out: ArrayRef = Arc::new(BooleanArray::new(values, Some(NullBuffer::new(valid))));
         Ok(if scalar {
@@ -265,7 +265,10 @@ impl PhysExpr for Compare {
 /// The validity of a `<=>` operand.
 fn validity(v: &Value) -> Validity<'_> {
     match v {
-        Value::Scalar(s) => Validity::Scalar { null: s.is_null(0) },
+        // An untyped NULL is a `NullArray`, whose nulls are logical only.
+        Value::Scalar(s) => Validity::Scalar {
+            null: s.logical_null_count() > 0,
+        },
         Value::Array(a) if a.data_type() == &ArrowType::Null => Validity::Scalar { null: true },
         Value::Array(a) => Validity::Array(a.nulls()),
     }
@@ -396,4 +399,25 @@ fn bytes(
         BooleanBuffer::from(values),
         Some(NullBuffer::from(nulls)),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::{Int32Array, NullArray};
+
+    use super::*;
+
+    fn is_null_scalar(v: &Value) -> bool {
+        matches!(validity(v), Validity::Scalar { null: true })
+    }
+
+    #[test]
+    fn an_untyped_null_operand_of_null_safe_equality_is_null() {
+        assert!(is_null_scalar(&Value::Scalar(Arc::new(NullArray::new(1)))));
+        assert!(is_null_scalar(&Value::Array(Arc::new(NullArray::new(3)))));
+        let typed: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+        assert!(is_null_scalar(&Value::Scalar(typed)));
+        let one: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        assert!(!is_null_scalar(&Value::Scalar(one)));
+    }
 }

@@ -18,11 +18,23 @@ use super::{PhysExpr, Value};
 use crate::error::Result;
 use crate::planner::build::{internal, unsupported};
 
-/// `a` with views converted to the kernels' offset arrays (`Utf8View` to
-/// `Utf8`, `BinaryView` to `Binary`); other arrays as they are.
+/// `a` with views and 64-bit offsets converted to the kernels' offset arrays
+/// (`Utf8View` and `LargeUtf8` to `Utf8`, `BinaryView` to `Binary`); other
+/// arrays as they are.
 pub(super) fn from_view(a: &ArrayRef) -> Result<ArrayRef> {
     Ok(match a.data_type() {
         ArrowType::Utf8View => Arc::new(a.as_string_view().iter().collect::<StringArray>()),
+        ArrowType::LargeUtf8 => {
+            let large = a.as_string::<i64>();
+            let offsets = large.value_offsets();
+            let bytes = offsets[offsets.len() - 1] - offsets[0];
+            if i32::try_from(bytes).is_err() {
+                return Err(unsupported(
+                    "a string column of more than 2 GiB in one batch",
+                ));
+            }
+            Arc::new(large.iter().collect::<StringArray>())
+        }
         ArrowType::BinaryView => Arc::new(a.as_binary_view().iter().collect::<BinaryArray>()),
         _ => Arc::clone(a),
     })
@@ -185,5 +197,58 @@ impl PhysExpr for Concat {
         } else {
             Value::Array(out)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::LargeStringArray;
+    use arrow_schema::{Field, Schema};
+
+    use super::*;
+
+    /// A column of the test batch.
+    #[derive(Debug)]
+    struct Col(usize, ArrowType);
+
+    impl PhysExpr for Col {
+        fn data_type(&self) -> &ArrowType {
+            &self.1
+        }
+
+        fn nullable(&self) -> bool {
+            true
+        }
+
+        fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+            Ok(Value::Array(Arc::clone(batch.column(self.0))))
+        }
+    }
+
+    #[test]
+    fn concat_reads_large_utf8() {
+        let large: ArrayRef = Arc::new(LargeStringArray::from(vec![Some("a"), None, Some("c")]));
+        let view: ArrayRef = Arc::new(StringViewArray::from(vec!["x", "y", "z"]));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("l", ArrowType::LargeUtf8, true),
+                Field::new("v", ArrowType::Utf8View, false),
+            ])),
+            vec![large, view],
+        )
+        .unwrap();
+        let e = concat(
+            vec![
+                Arc::new(Col(0, ArrowType::LargeUtf8)),
+                Arc::new(Col(1, ArrowType::Utf8View)),
+            ],
+            true,
+        )
+        .unwrap();
+        let Value::Array(out) = e.eval(&batch).unwrap() else {
+            panic!("a column in, a column out");
+        };
+        let out: Vec<_> = out.as_string_view().iter().collect();
+        assert_eq!(out, vec![Some("ax"), None, Some("cz")]);
     }
 }

@@ -129,6 +129,7 @@ impl Sink for SubquerySink {
 /// An expression node reading a subquery's value.
 #[derive(Debug)]
 pub(crate) struct SubqueryValue {
+    pub(crate) kind: Kind,
     pub(crate) slot: Arc<Slot>,
     pub(crate) data_type: ArrowType,
 }
@@ -139,7 +140,9 @@ impl PhysExpr for SubqueryValue {
     }
 
     fn nullable(&self) -> bool {
-        self.data_type != ArrowType::Boolean
+        // Spark: `EXISTS` is never null; a scalar subquery is NULL when it
+        // returns no row or a NULL, whatever its type.
+        self.kind == Kind::Scalar
     }
 
     fn eval(&self, _batch: &RecordBatch) -> Result<Value> {

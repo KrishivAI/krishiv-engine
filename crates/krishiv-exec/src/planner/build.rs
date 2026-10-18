@@ -289,7 +289,14 @@ impl<'a> Planner<'a> {
                 vec![planned.explain],
             ));
             plans.push((planned.node, sink));
-            slots.push((key, Arc::new(SubqueryValue { slot, data_type })));
+            slots.push((
+                key,
+                Arc::new(SubqueryValue {
+                    kind,
+                    slot,
+                    data_type,
+                }),
+            ));
         }
         let at = Input {
             layout: &input.layout,

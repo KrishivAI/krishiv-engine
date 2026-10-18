@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Write the TPC-H tables at a scale factor as Parquet files, one per table (P2-T074 test data).
+r"""Write the TPC-H tables at a scale factor as Parquet files, one per table (P2-T074 test data).
 
 DuckDB's `tpch` extension is dbgen, so the rows are the specification's. Usage (from repo root):
 
-    uv run --project bench python -I tests/scripts/gen_tpch_parquet.py 0.01 crates/krishiv-exec/tests/fixtures/tpch-sf0.01-parquet
+    uv run --project bench python -I tests/scripts/gen_tpch_parquet.py \
+        0.01 crates/krishiv-exec/tests/fixtures/tpch-sf0.01-parquet
 """
 
 import os

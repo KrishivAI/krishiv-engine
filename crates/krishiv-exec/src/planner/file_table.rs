@@ -6,6 +6,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
+use futures::{StreamExt as _, TryStreamExt as _, stream};
 use krishiv_common::config::Config;
 use krishiv_io::split::SplitConfig;
 use krishiv_io::{
@@ -47,12 +48,18 @@ impl FileTable {
         config: &Config,
         worker_slots: u64,
     ) -> Result<Self> {
+        // The footers are read concurrently, up to the stores' request
+        // limit (the scheduler bounds requests per store too); `buffered`
+        // keeps file order, so the merged statistics do not depend on
+        // which read finishes first.
+        let width = io.config().max_concurrent_requests.max(1);
+        let (fmt, opts) = (format.as_ref(), &options);
+        let mut footers = stream::iter(&files)
+            .map(|f| io.read_metadata(fmt, f, MetadataNeeds::default(), opts))
+            .buffered(width);
         let mut stats: Option<FileStatistics> = None;
         let mut known = true;
-        for f in &files {
-            let meta = io
-                .read_metadata(format.as_ref(), f, MetadataNeeds::default(), &options)
-                .await?;
+        while let Some(meta) = footers.try_next().await? {
             let s = meta.statistics();
             known &= s.rows.exact().is_some();
             stats = Some(match stats {
@@ -60,6 +67,7 @@ impl FileTable {
                 Some(acc) => merge(acc, &s),
             });
         }
+        drop(footers);
         let statistics = known
             .then(|| stats.map(|s| table_stats(&s, &table)))
             .flatten();

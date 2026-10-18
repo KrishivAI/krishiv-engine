@@ -373,7 +373,8 @@ impl PhysExpr for Lit {
     }
 
     fn nullable(&self) -> bool {
-        self.value.is_null(0)
+        // An untyped NULL is a `NullArray`, whose nulls are logical only.
+        self.value.logical_null_count() > 0
     }
 
     fn eval(&self, _batch: &RecordBatch) -> Result<Value> {
@@ -470,5 +471,24 @@ impl ScalarExpr for Compiled {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         self.values(batch)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use krishiv_plan::Literal;
+    use krishiv_types::DataType;
+
+    use super::{Lit, PhysExpr as _};
+
+    #[test]
+    fn a_null_literal_is_nullable_typed_or_not() {
+        assert!(Lit::new(&Literal::Null(None)).unwrap().nullable());
+        assert!(
+            Lit::new(&Literal::Null(Some(DataType::Integer)))
+                .unwrap()
+                .nullable()
+        );
+        assert!(!Lit::new(&Literal::Integer(1)).unwrap().nullable());
     }
 }

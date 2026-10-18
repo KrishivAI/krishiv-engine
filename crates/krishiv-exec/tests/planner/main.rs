@@ -158,13 +158,14 @@ fn run(plan: &PhysicalPlan) -> Result<Vec<RecordBatch>, KrishivError> {
 fn cell(a: &dyn Array, row: usize) -> String {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, Int64Type};
-    if a.is_null(row) {
+    if a.is_null(row) || a.data_type() == &ArrowType::Null {
         return "NULL".to_owned();
     }
     match a.data_type() {
         ArrowType::Int32 => a.as_primitive::<Int32Type>().value(row).to_string(),
         ArrowType::Int64 => a.as_primitive::<Int64Type>().value(row).to_string(),
         ArrowType::Utf8View => a.as_string_view().value(row).to_owned(),
+        ArrowType::Boolean => a.as_boolean().value(row).to_string(),
         other => panic!("no test formatting for {other}"),
     }
 }
@@ -333,6 +334,49 @@ fn unsupported_and_inconsistent_plans_fail_clearly() {
         "{e}"
     );
     assert!(format!("{cx:?}").contains("spill: false"));
+}
+
+#[test]
+fn nullability_follows_spark() {
+    let env = env();
+    // Spark 4.2: `SELECT CAST(NULL AS INT), (SELECT a > 0 FROM t WHERE
+    // false), (SELECT max(a > 100) FROM t), EXISTS (SELECT 1 FROM t)` has
+    // nullable fields but the last (over one row of `t`: Krishiv has no
+    // SELECT without FROM, nor NULL-typed result columns, yet).
+    let (schema, rows) = env.rows(
+        "SELECT CAST(NULL AS INT) AS c, \
+         (SELECT a > 0 FROM t WHERE false) AS s, \
+         (SELECT max(a > 100) FROM t) AS m, \
+         EXISTS (SELECT 1 FROM t) AS e FROM t WHERE b = 0",
+    );
+    let nullable: Vec<bool> = schema.fields().iter().map(|f| f.is_nullable()).collect();
+    assert_eq!(nullable, [true, true, true, false]);
+    assert_eq!(rows, ["NULL|NULL|false|true"]);
+    // `<=>` with an untyped NULL side: true exactly for the NULL rows.
+    let (schema, rows) = env.rows("SELECT a, a <=> NULL, NULL <=> NULL FROM t WHERE b < 50");
+    assert!(!schema.field(1).is_nullable() && !schema.field(2).is_nullable());
+    assert_eq!(
+        rows,
+        [
+            "0|false|true",
+            "1|false|true",
+            "2|false|true",
+            "NULL|true|true",
+            "4|false|true"
+        ]
+    );
+}
+
+#[test]
+fn a_scalar_subquery_of_several_rows_fails_like_spark() {
+    let env = env();
+    let plan = env.plan("SELECT (SELECT a FROM t) AS x FROM t").unwrap();
+    let e = run(&plan).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ScalarSubqueryTooManyRows,
+        "{e}"
+    );
 }
 
 #[test]
