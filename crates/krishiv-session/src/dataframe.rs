@@ -16,7 +16,7 @@ use arrow_schema::{Schema, SchemaRef};
 use futures::StreamExt;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_common::secret::OptionValue;
-use krishiv_plan::analyzer::AnalyzedPlan;
+use krishiv_plan::analyzer::{AnalyzedPlan, TableColumn};
 use krishiv_plan::{
     Expr, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode,
     ReadSource,
@@ -97,6 +97,9 @@ pub struct DataFrame {
     session: Session,
     plan: Arc<LogicalPlan>,
     analysis: Arc<Mutex<Option<Arc<Analysis>>>>,
+    /// An error found while building the frame (an invalid table name),
+    /// raised by its first action, as Spark Connect raises it.
+    invalid: Option<KrishivError>,
 }
 
 impl fmt::Debug for DataFrame {
@@ -122,6 +125,16 @@ impl DataFrame {
             session,
             plan,
             analysis: Arc::default(),
+            invalid: None,
+        }
+    }
+
+    /// A DataFrame that fails with `error` at its first action; `plan`
+    /// stands in for the plan it could not build.
+    pub(crate) fn invalid(session: Session, plan: Arc<LogicalPlan>, error: KrishivError) -> Self {
+        Self {
+            invalid: Some(error),
+            ..Self::new(session, plan)
         }
     }
 
@@ -137,6 +150,7 @@ impl DataFrame {
             session: self.session.clone(),
             plan: Arc::new(plan),
             analysis: Arc::default(),
+            invalid: self.invalid.clone(),
         }
     }
 
@@ -305,12 +319,16 @@ impl DataFrame {
     }
 
     fn join_with(&self, right: &Self, kind: JoinKind, condition: JoinCondition) -> Self {
-        self.derive(PlanNode::Join {
+        let mut joined = self.derive(PlanNode::Join {
             left: Arc::clone(&self.plan),
             right: Arc::clone(&right.plan),
             kind,
             condition,
-        })
+        });
+        if joined.invalid.is_none() {
+            joined.invalid.clone_from(&right.invalid);
+        }
+        joined
     }
 
     /// Rows sorted by `keys`, ascending unless a key says
@@ -436,6 +454,9 @@ impl DataFrame {
 
     /// Analyzes the plan in `env` and keeps the result.
     pub(crate) async fn analyzed_in(&self, env: QueryEnv) -> Result<Arc<Analysis>, KrishivError> {
+        if let Some(e) = &self.invalid {
+            return Err(e.clone());
+        }
         let analyzed = self.session.analyze_in(&self.plan, &env).await?;
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
@@ -627,17 +648,29 @@ impl DataFrame {
 
     async fn temp_view_here(&self, name: &str) -> Result<(), KrishivError> {
         // Spark analyzes the view's plan first: its errors come first.
-        self.analysis().await?;
+        let analysis = self.analysis().await?;
         let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node else {
             return Err(KrishivUnsupportedFeature {
                 feature: "temporary views other than reads by path".to_owned(),
             }
             .into());
         };
-        self.session
-            .state
-            .catalog
-            .put(name, TempTable::Files(source.clone()));
+        self.session.state.catalog.put(
+            name,
+            TempTable::Files {
+                source: source.clone(),
+                columns: analysis
+                    .analyzed
+                    .output
+                    .iter()
+                    .map(|c| TableColumn {
+                        name: c.name.clone(),
+                        data_type: c.data_type.clone(),
+                        nullable: c.nullable,
+                    })
+                    .collect(),
+            },
+        );
         Ok(())
     }
 }

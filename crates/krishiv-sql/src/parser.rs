@@ -201,6 +201,29 @@ impl TopRule for TableSchemaRule {
     }
 }
 
+/// Parses a multipart identifier (`multipartIdentifier`).
+pub(crate) fn parse_multipart_identifier(
+    src: &str,
+    opts: ParserOptions,
+) -> Result<ObjectName, ParseError> {
+    parse_with::<MultipartIdentifierRule>(src, opts)
+}
+
+/// [`Parser::single_multipart_identifier`].
+struct MultipartIdentifierRule;
+
+impl TopRule for MultipartIdentifierRule {
+    type Out = ObjectName;
+    /// A dotted name.
+    fn parse(p: &mut Parser<'_>) -> PR<ObjectName> {
+        p.single_multipart_identifier()
+    }
+
+    fn validate(_: &Self::Out, _src: &str, _opts: ParserOptions) -> Result<(), ParseError> {
+        Ok(())
+    }
+}
+
 /// Lexes `src` and parses it with the top rule `R`.
 fn parse_with<R: TopRule>(src: &str, opts: ParserOptions) -> Result<R::Out, ParseError> {
     // Java's `String.trim`: Spark reports an empty statement only for these.
@@ -790,6 +813,27 @@ impl<'s> Parser<'s> {
             parts,
             span: self.span_from(start),
         })
+    }
+
+    /// `singleMultipartIdentifier`: a dotted name and the end of the input.
+    fn single_multipart_identifier(&mut self) -> PR<ObjectName> {
+        let name = self.table_name()?;
+        if self.pos < self.toks.len() {
+            // ANTLR drops one extraneous token before the end, as "extra
+            // input"; an unterminated quote with text after it is several
+            // tokens to Spark.
+            let one_token = self
+                .tok(0)
+                .filter(|_| self.pos + 1 == self.toks.len())
+                .is_some_and(|t| {
+                    t.kind != TokenKind::Unterminated || t.span.text(self.src).chars().count() == 1
+                });
+            if one_token {
+                self.extra = Some(self.pos);
+            }
+            return self.fail();
+        }
+        Ok(name)
     }
 
     fn ident_list(&mut self) -> PR<Vec<Ident>> {

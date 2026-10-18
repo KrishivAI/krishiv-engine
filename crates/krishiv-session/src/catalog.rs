@@ -5,10 +5,11 @@
 //!
 //! A temporary table holds batches in memory ([`Session::register_batches`](crate::Session::register_batches));
 //! a temporary view over files is a read by path
-//! ([`DataFrame::create_or_replace_temp_view`](crate::DataFrame::create_or_replace_temp_view)),
-//! listed again by every query that reads it. Each query loads an entry
-//! once and keeps it ([`QueryCatalog`]), so a view replaced while the query
-//! runs does not change what it reads.
+//! ([`DataFrame::create_or_replace_temp_view`](crate::DataFrame::create_or_replace_temp_view))
+//! with the columns it had when it was created: as in Spark, files changed
+//! later do not change the view's schema, so analysing a query over it reads
+//! no files. Each query loads an entry once and keeps it ([`QueryCatalog`]),
+//! so a view replaced while the query runs does not change what it reads.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -19,8 +20,7 @@ use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeatu
 use krishiv_exec::files::FileReads;
 use krishiv_exec::planner::{MemoryTable, TableProvider, TableProviderResolver};
 use krishiv_plan::analyzer::{
-    BoxFuture, Catalog, CatalogResolver, FileSchemaResolver, TableColumn, TableIdent, TableKind,
-    TableMeta,
+    BoxFuture, Catalog, CatalogResolver, TableColumn, TableIdent, TableKind, TableMeta,
 };
 use krishiv_plan::{ReadSource, Scan, TableVersion};
 
@@ -37,8 +37,11 @@ pub(crate) enum TempTable {
         columns: Vec<TableColumn>,
         table: Arc<MemoryTable>,
     },
-    /// A read by path.
-    Files(ReadSource),
+    /// A read by path, with the columns inferred when the view was created.
+    Files {
+        source: ReadSource,
+        columns: Vec<TableColumn>,
+    },
 }
 
 /// The temporary tables and views of a session, by lower-case name.
@@ -132,11 +135,12 @@ impl QueryCatalog {
             .cloned()
     }
 
-    /// The provider of a read by path this query listed.
-    fn files_provider(&self) -> Result<Arc<dyn TableProvider>, KrishivError> {
+    /// The provider of the read by path `source`, which lists its files
+    /// when the query runs.
+    fn files_provider(&self, source: &ReadSource) -> Result<Arc<dyn TableProvider>, KrishivError> {
         // Scans of listed files arrive with the file table provider of
         // the physical planner's next part (P2-T074).
-        let _ = &self.files;
+        let _ = (&self.files, source);
         Err(unsupported("running queries that read files"))
     }
 }
@@ -178,13 +182,9 @@ impl Catalog for QueryCatalog {
                 return Ok(None);
             };
             let columns = match &*table {
-                TempTable::Memory { columns, .. } => columns.clone(),
-                TempTable::Files(ReadSource::Files {
-                    format,
-                    paths,
-                    options,
-                }) => self.files.infer(format, paths, options).await?,
-                TempTable::Files(_) => return Err(unsupported("this temporary view")),
+                TempTable::Memory { columns, .. } | TempTable::Files { columns, .. } => {
+                    columns.clone()
+                }
             };
             self.loaded
                 .lock()
@@ -244,10 +244,10 @@ impl TableProviderResolver for QueryCatalog {
                     TempTable::Memory { table, .. } => {
                         Ok(Arc::clone(table) as Arc<dyn TableProvider>)
                     }
-                    TempTable::Files(_) => self.files_provider(),
+                    TempTable::Files { source, .. } => self.files_provider(source),
                 }
             }
-            ReadSource::Files { .. } => self.files_provider(),
+            source @ ReadSource::Files { .. } => self.files_provider(source),
             _ => Err(unsupported("this scan")),
         }
     }

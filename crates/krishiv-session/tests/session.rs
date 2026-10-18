@@ -104,10 +104,9 @@ fn errors_surface_where_spark_raises_them() {
         class(block_on(s.sql("SELECT nope FROM people"))),
         ErrorClass::UnresolvedColumnWithSuggestion
     );
-    assert_eq!(
-        class(block_on(s.sql("EXPLAIN SELECT 1"))),
-        ErrorClass::KrishivUnsupportedFeature
-    );
+    let e = block_on(s.sql("EXPLAIN SELECT 1")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(e.to_string().contains("EXPLAIN statements"), "{e}");
     // DataFrames fail at their first action.
     let df = s.table("people").select([col("nope")]);
     assert_eq!(
@@ -297,6 +296,104 @@ fn reads_by_path_and_their_views() {
     assert_eq!(
         class(block_on(df.collect())),
         ErrorClass::KrishivUnsupportedFeature
+    );
+}
+
+#[test]
+fn file_views_keep_the_schema_they_were_created_with() {
+    // Spark 4.2.0: `spark.read.parquet(p).createOrReplaceTempView("v")`,
+    // then overwriting `p` with a wider schema: both the DataFrame built
+    // before and a new `SELECT * FROM v` still have the columns `[id]`.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("part-0.parquet");
+    parquet_file(&file);
+    let root = dir.path().to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    block_on(
+        s.read()
+            .parquet([root.as_str()])
+            .create_or_replace_temp_view("v"),
+    )
+    .unwrap();
+    let before = block_on(s.sql("SELECT * FROM v")).unwrap();
+    let names = |schema: SchemaRef| -> Vec<String> {
+        schema.fields().iter().map(|f| f.name().clone()).collect()
+    };
+    assert_eq!(names(block_on(before.schema()).unwrap()), ["id"]);
+    let wider = Arc::new(Schema::new(vec![
+        Field::new("id", ArrowType::Int32, false),
+        Field::new("name", ArrowType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&wider),
+        vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(StringArray::from(vec!["x"])),
+        ],
+    )
+    .unwrap();
+    let mut w =
+        parquet::arrow::ArrowWriter::try_new(std::fs::File::create(&file).unwrap(), wider, None)
+            .unwrap();
+    w.write(&batch).unwrap();
+    w.close().unwrap();
+    assert_eq!(names(block_on(before.schema()).unwrap()), ["id"]);
+    let after = block_on(s.sql("SELECT * FROM v")).unwrap();
+    assert_eq!(names(block_on(after.schema()).unwrap()), ["id"]);
+    assert_eq!(names(block_on(s.table("v").schema()).unwrap()), ["id"]);
+    // A read by path lists the files again: it sees the new column.
+    let read = s.read().parquet([root.as_str()]);
+    assert_eq!(names(block_on(read.schema()).unwrap()), ["id", "name"]);
+}
+
+#[test]
+fn table_names_parse_as_multipart_identifiers() {
+    // Spark 4.2.0's `spark.table(name)`: backquotes quote a dot, a doubled
+    // backquote is one, and a name that does not parse fails at the first
+    // action with the parser's error.
+    let s = session();
+    let (schema, batch) = people();
+    s.register_batches("x.y", Arc::clone(&schema), vec![batch.clone()])
+        .unwrap();
+    s.register_batches("a`b", schema, vec![batch]).unwrap();
+    assert_eq!(
+        ids(&block_on(s.table("`x.y`").collect()).unwrap()),
+        [3, 1, 2]
+    );
+    assert_eq!(
+        ids(&block_on(s.table("`a``b`").collect()).unwrap()),
+        [3, 1, 2]
+    );
+    assert_eq!(
+        ids(&block_on(s.table(" default.`x.y` ").collect()).unwrap()),
+        [3, 1, 2]
+    );
+    assert_eq!(
+        class(block_on(s.table("x.y").schema())),
+        ErrorClass::TableOrViewNotFound
+    );
+    for bad in ["`unclosed", "a..b", "a b", "`x.y`."] {
+        let df = s.table(bad);
+        assert_eq!(
+            class(block_on(df.schema())),
+            ErrorClass::ParseSyntaxError,
+            "{bad}"
+        );
+        // Derived frames and joins keep the error.
+        let derived = df.select([col("id")]).limit(1);
+        assert_eq!(
+            class(block_on(derived.collect())),
+            ErrorClass::ParseSyntaxError
+        );
+        let joined = s.table("people").cross_join(&df);
+        assert_eq!(
+            class(block_on(joined.count())),
+            ErrorClass::ParseSyntaxError
+        );
+    }
+    assert_eq!(
+        class(block_on(s.table("").schema())),
+        ErrorClass::ParseEmptyStatement
     );
 }
 

@@ -1,7 +1,7 @@
 # krishiv-session
 
 **Layer:** L5 (may depend only on crates in L5 or lower; `cargo xtask layering`).
-**Real code arrives:** P2 (T090).
+**Real code since:** P2-T090 (session, configuration, catalog, DataFrame actions).
 
 ## Purpose
 The session every API surface shares: configuration, the session catalog (temporary tables and views),
@@ -15,7 +15,7 @@ re-exports it; the Python facade and the Connect and Flight SQL servers (L6) wra
   any runtime. Dropping an action's future or result stream cancels its query.
 - The IR is reachable only behind the `unstable-ir` feature (not covered by semver).
 - `#![forbid(unsafe_code)]`; no `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class
-  + SQLSTATE.
+  and SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)
 0003, 0005, 0026, 0027, 0037, 0038

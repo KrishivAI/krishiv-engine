@@ -142,6 +142,31 @@ pub fn parse_statement(sql: &str, options: &ParserOptions) -> Result<ast::Statem
     parser::parse_statement(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
+/// Parses a multipart identifier, as Spark's
+/// `CatalystSqlParser.parseMultipartIdentifier` does for `spark.table(name)`:
+/// dots separate parts outside backquotes.
+///
+/// ```
+/// use krishiv_sql::{parse_multipart_identifier, ParserOptions};
+///
+/// let d = ParserOptions::default();
+/// let name = parse_multipart_identifier("db.`my.table`", &d).unwrap();
+/// let parts: Vec<&str> = name.parts.iter().map(|p| p.value.as_str()).collect();
+/// assert_eq!(parts, ["db", "my.table"]);
+/// let e = parse_multipart_identifier("a..b", &d).unwrap_err();
+/// assert_eq!(e.error.error_class().name(), "PARSE_SYNTAX_ERROR");
+/// ```
+///
+/// # Errors
+/// The syntax errors of [`parse_query`] (`PARSE_EMPTY_STATEMENT` for an
+/// empty name).
+pub fn parse_multipart_identifier(
+    sql: &str,
+    options: &ParserOptions,
+) -> Result<ast::ObjectName, ParseError> {
+    parser::parse_multipart_identifier(sql, *options).map_err(|e| e.redacted_in(sql))
+}
+
 /// Parses a data type string, as Spark's `CatalystSqlParser.parseDataType`
 /// does (`int`, `decimal(10, 2)`, `array<struct<a: int>>`), with the checks
 /// Spark makes on the type it builds.

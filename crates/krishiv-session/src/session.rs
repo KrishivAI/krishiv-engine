@@ -315,11 +315,10 @@ impl Session {
     async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let statement = krishiv_sql::parse_statement(query, &env.parser).map_err(|e| e.error)?;
-        let Statement::Query(q) = statement else {
-            return Err(KrishivUnsupportedFeature {
-                feature: "EXPLAIN statements in sessions".to_owned(),
-            }
-            .into());
+        let q = match statement {
+            Statement::Query(q) => q,
+            Statement::Explain(_) => return Err(unsupported_statement("EXPLAIN statements")),
+            _ => return Err(unsupported_statement("statements other than queries")),
         };
         let plan = krishiv_sql::lower(&q, SourceId(0)).map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
@@ -339,8 +338,21 @@ impl Session {
     /// ```
     #[must_use]
     pub fn table(&self, name: &str) -> DataFrame {
-        let parts: Vec<String> = name.split('.').map(str::to_owned).collect();
-        DataFrame::new(self.clone(), Arc::new(LogicalPlan::table(parts)))
+        // Spark parses the name as SQL (`parseMultipartIdentifier`): dots
+        // separate parts outside backquotes, and a syntax error is the
+        // first action's error.
+        match krishiv_sql::parse_multipart_identifier(
+            name,
+            &parser_options(&self.state.conf.snapshot()),
+        ) {
+            Ok(id) => {
+                let parts = id.parts.into_iter().map(|p| p.value);
+                DataFrame::new(self.clone(), Arc::new(LogicalPlan::table(parts)))
+            }
+            Err(e) => {
+                DataFrame::invalid(self.clone(), Arc::new(LogicalPlan::table([name])), e.error)
+            }
+        }
     }
 
     /// Reads files (Spark's `spark.read`).
@@ -476,7 +488,7 @@ impl Session {
 
     /// The analysis inputs of one query.
     pub(crate) fn query_env(&self) -> QueryEnv {
-        let config = self.state.conf.snapshot();
+        let (config, conf_version) = self.state.conf.versioned_snapshot();
         let files = Arc::new(FileReads::new(
             self.state.io.context(),
             self.state.formats.clone(),
@@ -494,10 +506,7 @@ impl Session {
             let values = conf_values(&config, &ResolutionConf::KEYS);
             ResolutionConf::from_conf(|k| values.get(k).map(String::as_str))
         };
-        let parser = {
-            let values = conf_values(&config, &PARSER_KEYS);
-            ParserOptions::from_conf(|k| values.get(k).map(String::as_str))
-        };
+        let parser = parser_options(&config);
         let analysis = AnalysisContext {
             profile: self.state.profile,
             conf: resolution,
@@ -508,13 +517,16 @@ impl Session {
             sql: Some(Arc::new(Frontend { options: parser })),
             files: Some(files),
         };
+        // The epoch the query's catalog reads at: entries it loads are at
+        // least as new.
+        let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
         QueryEnv {
             config,
             parser,
             analysis,
             catalog,
-            conf_version: self.state.conf.version(),
-            catalog_epoch: self.state.catalog.epoch(),
+            conf_version,
+            catalog_epoch,
         }
     }
 
@@ -580,6 +592,20 @@ const PARSER_KEYS: [&str; 6] = [
     "spark.sql.parser.escapedStringLiterals",
     "spark.sql.legacy.bangEqualsNot",
 ];
+
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
+fn unsupported_statement(what: &str) -> KrishivError {
+    KrishivUnsupportedFeature {
+        feature: format!("{what} in sessions"),
+    }
+    .into()
+}
+
+/// The parser options `config` sets.
+fn parser_options(config: &Config) -> ParserOptions {
+    let values = conf_values(config, &PARSER_KEYS);
+    ParserOptions::from_conf(|k| values.get(k).map(String::as_str))
+}
 
 /// The values of `keys` that are set or have a default.
 fn conf_values<'k>(config: &Config, keys: &[&'k str]) -> BTreeMap<&'k str, String> {

@@ -15,26 +15,27 @@ const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."
 /// immutable snapshot ([`Self::snapshot`]).
 #[derive(Debug, Default)]
 pub(crate) struct ConfStore {
-    current: RwLock<Arc<Config>>,
-    /// Bumped on every change: analysis results are reused only within one
-    /// version.
-    version: std::sync::atomic::AtomicU64,
+    /// The configuration and its version, bumped on every change: analysis
+    /// results are reused only within one version. One lock holds both, so
+    /// a snapshot never pairs a configuration with another one's version.
+    current: RwLock<(Arc<Config>, u64)>,
 }
 
 impl ConfStore {
     pub(crate) fn new(config: Config) -> Self {
         Self {
-            current: RwLock::new(Arc::new(config)),
-            version: std::sync::atomic::AtomicU64::new(0),
+            current: RwLock::new((Arc::new(config), 0)),
         }
     }
 
     pub(crate) fn snapshot(&self) -> Arc<Config> {
-        Arc::clone(&self.current.read().unwrap_or_else(PoisonError::into_inner))
+        self.versioned_snapshot().0
     }
 
-    pub(crate) fn version(&self) -> u64 {
-        self.version.load(std::sync::atomic::Ordering::Acquire)
+    /// The configuration and its version, read together.
+    pub(crate) fn versioned_snapshot(&self) -> (Arc<Config>, u64) {
+        let current = self.current.read().unwrap_or_else(PoisonError::into_inner);
+        (Arc::clone(&current.0), current.1)
     }
 
     fn update(
@@ -42,11 +43,9 @@ impl ConfStore {
         f: impl FnOnce(&mut Config) -> Result<(), KrishivError>,
     ) -> Result<(), KrishivError> {
         let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
-        let mut next = Config::clone(&current);
+        let mut next = Config::clone(&current.0);
         f(&mut next)?;
-        *current = Arc::new(next);
-        self.version
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        *current = (Arc::new(next), current.1.wrapping_add(1));
         Ok(())
     }
 }
@@ -165,5 +164,38 @@ impl RuntimeConf {
     #[must_use]
     pub fn is_modifiable(&self, key: &str) -> bool {
         is_modifiable(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use krishiv_common::config::Config;
+
+    use super::{ConfStore, get};
+
+    #[test]
+    fn a_snapshot_pairs_a_configuration_with_its_own_version() {
+        // Each change sets `test.n` to the version it creates, so a snapshot
+        // whose value and version differ read them across a change.
+        let store = Arc::new(ConfStore::new(Config::default()));
+        let writer = {
+            let store = Arc::clone(&store);
+            std::thread::spawn(move || {
+                for n in 1..=2_000_u64 {
+                    store
+                        .update(|c| c.set("test.n", &n.to_string()).map(drop))
+                        .unwrap();
+                }
+            })
+        };
+        while !writer.is_finished() {
+            let (config, version) = store.versioned_snapshot();
+            let value = get(&config, "test.n").map_or(0, |v| v.parse().unwrap());
+            assert_eq!(value, version);
+        }
+        writer.join().unwrap();
+        assert_eq!(store.versioned_snapshot().1, 2_000);
     }
 }
