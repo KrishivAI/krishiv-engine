@@ -192,8 +192,8 @@ fn order_by_sorts_and_limits() {
     let env = env();
     let (_, rows) = env.rows("SELECT a, b FROM t ORDER BY a DESC");
     assert_eq!(rows.first().map(String::as_str), Some("9|90"));
-    // DESC puts NULLs last.
-    assert_eq!(rows.last().map(String::as_str), Some("NULL|70"));
+    // DESC puts NULLs last; the two NULL rows tie, so their order is free.
+    assert!(rows[8..].iter().all(|r| r.starts_with("NULL|")), "{rows:?}");
     let (_, rows) = env.rows("SELECT a, b FROM t ORDER BY a ASC NULLS LAST, b DESC");
     assert_eq!(rows[..2], ["0|0", "1|10"]);
     assert_eq!(rows[8..], ["NULL|70", "NULL|30"]);
