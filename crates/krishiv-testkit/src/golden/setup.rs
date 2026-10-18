@@ -14,6 +14,8 @@
 
 use std::collections::BTreeMap;
 
+use super::cell::SUITE_TIME_ZONE;
+
 /// Folder-derived kind of a golden file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TestKind {
@@ -59,11 +61,17 @@ impl TestKind {
         }
     }
 
-    /// Session configs the kind implies.
+    /// Session configs the kind implies: the suite's session time zone
+    /// ([`SUITE_TIME_ZONE`]), which the formatter of [`super::cell`] applies to timestamps, and
+    /// the kind's own.
     #[must_use]
     pub fn configs(self) -> Vec<(String, String)> {
+        let zone = (
+            "spark.sql.session.timeZone".to_owned(),
+            SUITE_TIME_ZONE.to_owned(),
+        );
         let ansi = |v: &str| ("spark.sql.ansi.enabled".to_owned(), v.to_owned());
-        match self {
+        let own = match self {
             Self::NonAnsi => vec![ansi("false")],
             Self::PgSql | Self::UdfPgSql => vec![
                 ansi("true"),
@@ -78,7 +86,8 @@ impl TestKind {
                 "TIMESTAMP_NTZ".to_owned(),
             )],
             Self::Regular | Self::Udf | Self::Udaf | Self::Udtf => vec![ansi("true")],
-        }
+        };
+        std::iter::once(zone).chain(own).collect()
     }
 
     /// Test functions Spark registers in the session: the identity-cast `udf` (`udaf` for
@@ -262,16 +271,26 @@ mod tests {
         assert_eq!(TestKind::of("udf/udf-union"), TestKind::Udf);
         assert_eq!(TestKind::of("nonansi/cast"), TestKind::NonAnsi);
         assert_eq!(TestKind::of("cast"), TestKind::Regular);
+        let zone = (
+            "spark.sql.session.timeZone".to_owned(),
+            "America/Los_Angeles".to_owned(),
+        );
         let off = SessionSetup::plain(TestKind::NonAnsi);
         assert_eq!(
             off.configs,
-            vec![("spark.sql.ansi.enabled".into(), "false".into())]
+            vec![
+                zone.clone(),
+                ("spark.sql.ansi.enabled".into(), "false".into())
+            ]
         );
-        assert_eq!(SessionSetup::plain(TestKind::Regular).configs[0].1, "true");
+        assert_eq!(SessionSetup::plain(TestKind::Regular).configs[1].1, "true");
         let ntz = SessionSetup::plain(TestKind::TimestampNtz).configs;
         assert_eq!(
             ntz,
-            vec![("spark.sql.timestampType".into(), "TIMESTAMP_NTZ".into())]
+            vec![
+                zone,
+                ("spark.sql.timestampType".into(), "TIMESTAMP_NTZ".into())
+            ]
         );
         let pg = SessionSetup::plain(TestKind::PgSql);
         assert_eq!(pg.udfs, ["booleq", "boolne", "vol"]);
@@ -291,10 +310,10 @@ mod tests {
         let sessions = setup.sessions();
         assert_eq!(sessions.len(), 4);
         let last = &sessions[3].configs;
-        assert_eq!(last[1], ("spark.a".into(), "1".into()));
-        assert_eq!(last[2], ("spark.b".into(), "2".into()));
+        assert_eq!(last[2], ("spark.a".into(), "1".into()));
+        assert_eq!(last[3], ("spark.b".into(), "2".into()));
         assert_eq!(
-            &last[3..],
+            &last[4..],
             &[
                 ("spark.x".into(), "false".into()),
                 ("spark.y".into(), "z".into()),
