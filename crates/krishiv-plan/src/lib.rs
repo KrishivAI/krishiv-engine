@@ -93,6 +93,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod analyzer;
 mod dag;
 mod display;
 mod encode;

@@ -1,0 +1,2725 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_analyzer_goldens.py",
+ "notes": "Output columns or error (condition, SQLSTATE, message parameters, query context) of Spark's analyzer per case, over empty parquet tables in spark_catalog.default whose schemas are `tables`.",
+ "tables": {
+  "part": [
+   {
+    "name": "p_partkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "p_name",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "p_mfgr",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "p_brand",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "p_type",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "p_size",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "p_container",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "p_retailprice",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "p_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "supplier": [
+   {
+    "name": "s_suppkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "s_name",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "s_address",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "s_nationkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "s_phone",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "s_acctbal",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "s_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "partsupp": [
+   {
+    "name": "ps_partkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "ps_suppkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "ps_availqty",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "ps_supplycost",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "ps_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "customer": [
+   {
+    "name": "c_custkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "c_name",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "c_address",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "c_nationkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "c_phone",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "c_acctbal",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "c_mktsegment",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "c_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "orders": [
+   {
+    "name": "o_orderkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "o_custkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "o_orderstatus",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "o_totalprice",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "o_orderdate",
+    "type": "date",
+    "nullable": true
+   },
+   {
+    "name": "o_orderpriority",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "o_clerk",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "o_shippriority",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "o_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "lineitem": [
+   {
+    "name": "l_orderkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "l_partkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "l_suppkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "l_linenumber",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "l_quantity",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "l_extendedprice",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "l_discount",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "l_tax",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "l_returnflag",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "l_linestatus",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "l_shipdate",
+    "type": "date",
+    "nullable": true
+   },
+   {
+    "name": "l_commitdate",
+    "type": "date",
+    "nullable": true
+   },
+   {
+    "name": "l_receiptdate",
+    "type": "date",
+    "nullable": true
+   },
+   {
+    "name": "l_shipinstruct",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "l_shipmode",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "l_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "nation": [
+   {
+    "name": "n_nationkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "n_name",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "n_regionkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "n_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "region": [
+   {
+    "name": "r_regionkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "r_name",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "r_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "t": [
+   {
+    "name": "a",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "b",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "c",
+    "type": "bigint",
+    "nullable": true
+   }
+  ],
+  "u": [
+   {
+    "name": "a",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "d",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "wide": [
+   {
+    "name": "col1",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col2",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col3",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col4",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col5",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col6",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col7",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "colx",
+    "type": "int",
+    "nullable": true
+   }
+  ],
+  "MixedCase": [
+   {
+    "name": "Id",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "Name",
+    "type": "string",
+    "nullable": true
+   }
+  ]
+ },
+ "tpch": [
+  {
+   "id": "q01",
+   "ok": true,
+   "output": [
+    {
+     "name": "l_returnflag",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "l_linestatus",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum_qty",
+     "type": "decimal(25,2)",
+     "nullable": true
+    },
+    {
+     "name": "sum_base_price",
+     "type": "decimal(25,2)",
+     "nullable": true
+    },
+    {
+     "name": "sum_disc_price",
+     "type": "decimal(38,4)",
+     "nullable": true
+    },
+    {
+     "name": "sum_charge",
+     "type": "decimal(38,6)",
+     "nullable": true
+    },
+    {
+     "name": "avg_qty",
+     "type": "decimal(19,6)",
+     "nullable": true
+    },
+    {
+     "name": "avg_price",
+     "type": "decimal(19,6)",
+     "nullable": true
+    },
+    {
+     "name": "avg_disc",
+     "type": "decimal(19,6)",
+     "nullable": true
+    },
+    {
+     "name": "count_order",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "id": "q02",
+   "ok": true,
+   "output": [
+    {
+     "name": "s_acctbal",
+     "type": "decimal(15,2)",
+     "nullable": true
+    },
+    {
+     "name": "s_name",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "n_name",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "p_partkey",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "p_mfgr",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s_address",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s_phone",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s_comment",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q03",
+   "ok": true,
+   "output": [
+    {
+     "name": "l_orderkey",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "revenue",
+     "type": "decimal(38,4)",
+     "nullable": true
+    },
+    {
+     "name": "o_orderdate",
+     "type": "date",
+     "nullable": true
+    },
+    {
+     "name": "o_shippriority",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q04",
+   "ok": true,
+   "output": [
+    {
+     "name": "o_orderpriority",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "order_count",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "id": "q05",
+   "ok": true,
+   "output": [
+    {
+     "name": "n_name",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "revenue",
+     "type": "decimal(38,4)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q06",
+   "ok": true,
+   "output": [
+    {
+     "name": "revenue",
+     "type": "decimal(38,4)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q07",
+   "ok": true,
+   "output": [
+    {
+     "name": "supp_nation",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "cust_nation",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "l_year",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "revenue",
+     "type": "decimal(38,4)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q08",
+   "ok": true,
+   "output": [
+    {
+     "name": "o_year",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "mkt_share",
+     "type": "decimal(38,6)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q09",
+   "ok": true,
+   "output": [
+    {
+     "name": "nation",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "o_year",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "sum_profit",
+     "type": "decimal(38,4)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q10",
+   "ok": true,
+   "output": [
+    {
+     "name": "c_custkey",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "c_name",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "revenue",
+     "type": "decimal(38,4)",
+     "nullable": true
+    },
+    {
+     "name": "c_acctbal",
+     "type": "decimal(15,2)",
+     "nullable": true
+    },
+    {
+     "name": "n_name",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c_address",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c_phone",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c_comment",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q11",
+   "ok": true,
+   "output": [
+    {
+     "name": "ps_partkey",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "value",
+     "type": "decimal(36,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q12",
+   "ok": true,
+   "output": [
+    {
+     "name": "l_shipmode",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "high_line_count",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "low_line_count",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q13",
+   "ok": true,
+   "output": [
+    {
+     "name": "c_count",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "custdist",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "id": "q14",
+   "ok": true,
+   "output": [
+    {
+     "name": "promo_revenue",
+     "type": "decimal(38,6)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q15",
+   "ok": true,
+   "output": [
+    {
+     "name": "s_suppkey",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "s_name",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s_address",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s_phone",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "total_revenue",
+     "type": "decimal(38,4)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q16",
+   "ok": true,
+   "output": [
+    {
+     "name": "p_brand",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "p_type",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "p_size",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "supplier_cnt",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "id": "q17",
+   "ok": true,
+   "output": [
+    {
+     "name": "avg_yearly",
+     "type": "decimal(30,6)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q18",
+   "ok": true,
+   "output": [
+    {
+     "name": "c_name",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c_custkey",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "o_orderkey",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "o_orderdate",
+     "type": "date",
+     "nullable": true
+    },
+    {
+     "name": "o_totalprice",
+     "type": "decimal(15,2)",
+     "nullable": true
+    },
+    {
+     "name": "sum(l_quantity)",
+     "type": "decimal(25,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q19",
+   "ok": true,
+   "output": [
+    {
+     "name": "revenue",
+     "type": "decimal(38,4)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q20",
+   "ok": true,
+   "output": [
+    {
+     "name": "s_name",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s_address",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "q21",
+   "ok": true,
+   "output": [
+    {
+     "name": "s_name",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "numwait",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "id": "q22",
+   "ok": true,
+   "output": [
+    {
+     "name": "cntrycode",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "numcust",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "totacctbal",
+     "type": "decimal(25,2)",
+     "nullable": true
+    }
+   ]
+  }
+ ],
+ "corpus": [
+  {
+   "sql": "SELECT x FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`a`, `b`, `c`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 7,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT colz FROM wide",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`colz`",
+    "proposal": "`col1`, `col2`, `col3`, `col4`, `col5`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 10,
+    "fragment": "colz"
+   }
+  },
+  {
+   "sql": "SELECT t.x FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`t`.`x`",
+    "proposal": "`t`.`a`, `t`.`b`, `t`.`c`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 9,
+    "fragment": "t.x"
+   }
+  },
+  {
+   "sql": "SELECT v.a FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`v`.`a`",
+    "proposal": "`t`.`a`, `t`.`b`, `t`.`c`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 9,
+    "fragment": "v.a"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t JOIN u ON t.a = u.a",
+   "conf": {},
+   "ok": false,
+   "error_class": "AMBIGUOUS_REFERENCE",
+   "sql_state": "42704",
+   "message_parameters": {
+    "name": "`a`",
+    "referenceNames": "[`spark_catalog`.`default`.`t`.`a`, `spark_catalog`.`default`.`u`.`a`]"
+   },
+   "context": {
+    "start": 7,
+    "stop": 7,
+    "fragment": "a"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t, u",
+   "conf": {},
+   "ok": false,
+   "error_class": "AMBIGUOUS_REFERENCE",
+   "sql_state": "42704",
+   "message_parameters": {
+    "name": "`a`",
+    "referenceNames": "[`spark_catalog`.`default`.`t`.`a`, `spark_catalog`.`default`.`u`.`a`]"
+   },
+   "context": {
+    "start": 7,
+    "stop": 7,
+    "fragment": "a"
+   }
+  },
+  {
+   "sql": "SELECT t.a, u.a FROM t JOIN u ON t.a = u.a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT default.t.a, spark_catalog.default.t.b FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a.b FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_EXTRACT_BASE_FIELD_TYPE",
+   "sql_state": "42000",
+   "message_parameters": {
+    "base": "\"a\"",
+    "other": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 9,
+    "fragment": "a.b"
+   }
+  },
+  {
+   "sql": "SELECT t.a.b FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_EXTRACT_BASE_FIELD_TYPE",
+   "sql_state": "42000",
+   "message_parameters": {
+    "base": "\"a\"",
+    "other": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 11,
+    "fragment": "t.a.b"
+   }
+  },
+  {
+   "sql": "SELECT x FROM t WHERE a = 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`a`, `b`, `c`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 7,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t WHERE x = 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`a`, `b`, `c`"
+   },
+   "context": {
+    "start": 22,
+    "stop": 22,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t ORDER BY x",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`a`"
+   },
+   "context": {
+    "start": 25,
+    "stop": 25,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT A, T.B FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "A",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "B",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT A FROM t",
+   "conf": {
+    "spark.sql.caseSensitive": "true"
+   },
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`A`",
+    "proposal": "`a`, `b`, `c`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 7,
+    "fragment": "A"
+   }
+  },
+  {
+   "sql": "SELECT id, NAME FROM mixedcase",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "id",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "NAME",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT id FROM MixedCase",
+   "conf": {
+    "spark.sql.caseSensitive": "true"
+   },
+   "ok": false,
+   "error_class": "TABLE_OR_VIEW_NOT_FOUND",
+   "sql_state": "42P01",
+   "message_parameters": {
+    "relationName": "`MixedCase`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   },
+   "context": {
+    "start": 15,
+    "stop": 23,
+    "fragment": "MixedCase"
+   }
+  },
+  {
+   "sql": "SELECT Id FROM MixedCase",
+   "conf": {
+    "spark.sql.caseSensitive": "true"
+   },
+   "ok": false,
+   "error_class": "TABLE_OR_VIEW_NOT_FOUND",
+   "sql_state": "42P01",
+   "message_parameters": {
+    "relationName": "`MixedCase`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   },
+   "context": {
+    "start": 15,
+    "stop": 23,
+    "fragment": "MixedCase"
+   }
+  },
+  {
+   "sql": "WITH Q AS (SELECT 1 AS z FROM u) SELECT z FROM q",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "z",
+     "type": "int",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT nosuch(a) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_ROUTINE",
+   "sql_state": "42883",
+   "message_parameters": {
+    "routineName": "`nosuch`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   },
+   "context": {
+    "start": 7,
+    "stop": 15,
+    "fragment": "nosuch(a)"
+   }
+  },
+  {
+   "sql": "SELECT nosuch(x) FROM missing_table",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_ROUTINE",
+   "sql_state": "42883",
+   "message_parameters": {
+    "routineName": "`nosuch`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   },
+   "context": {
+    "start": 7,
+    "stop": 15,
+    "fragment": "nosuch(x)"
+   }
+  },
+  {
+   "sql": "SELECT * FROM missing_table",
+   "conf": {},
+   "ok": false,
+   "error_class": "TABLE_OR_VIEW_NOT_FOUND",
+   "sql_state": "42P01",
+   "message_parameters": {
+    "relationName": "`missing_table`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   },
+   "context": {
+    "start": 14,
+    "stop": 26,
+    "fragment": "missing_table"
+   }
+  },
+  {
+   "sql": "SELECT * FROM default.missing_table",
+   "conf": {},
+   "ok": false,
+   "error_class": "TABLE_OR_VIEW_NOT_FOUND",
+   "sql_state": "42P01",
+   "message_parameters": {
+    "relationName": "`default`.`missing_table`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   },
+   "context": {
+    "start": 14,
+    "stop": 34,
+    "fragment": "default.missing_table"
+   }
+  },
+  {
+   "sql": "SELECT * FROM t JOIN missing_table ON true",
+   "conf": {},
+   "ok": false,
+   "error_class": "TABLE_OR_VIEW_NOT_FOUND",
+   "sql_state": "42P01",
+   "message_parameters": {
+    "relationName": "`missing_table`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   },
+   "context": {
+    "start": 21,
+    "stop": 33,
+    "fragment": "missing_table"
+   }
+  },
+  {
+   "sql": "WITH t AS (SELECT 1 AS z FROM u) SELECT z FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "z",
+     "type": "int",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "WITH t AS (SELECT 1 AS z FROM u) SELECT a FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`a`",
+    "proposal": "`z`"
+   },
+   "context": {
+    "start": 40,
+    "stop": 40,
+    "fragment": "a"
+   }
+  },
+  {
+   "sql": "WITH x AS (SELECT 1 AS p FROM u) SELECT * FROM (WITH x AS (SELECT 2 AS q FROM u) SELECT * FROM x)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "q",
+     "type": "int",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "WITH x AS (SELECT a FROM t) SELECT * FROM x a JOIN x b ON a.a = b.a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "WITH x AS (SELECT a FROM t), y AS (SELECT a + 1 AS b FROM x) SELECT b FROM y JOIN x ON y.b = x.a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "b",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT s.a FROM (SELECT a FROM t) s",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT t.a FROM (SELECT a FROM t) s",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`t`.`a`",
+    "proposal": "`s`.`a`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 9,
+    "fragment": "t.a"
+   }
+  },
+  {
+   "sql": "SELECT a FROM (SELECT a FROM t)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT p, q FROM t AS x (p, q, r)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "p",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "q",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM t AS x (p, q)",
+   "conf": {},
+   "ok": false,
+   "error_class": "ASSIGNMENT_ARITY_MISMATCH",
+   "sql_state": "42802",
+   "message_parameters": {
+    "numExpr": "2",
+    "numTarget": "3"
+   },
+   "context": {
+    "start": 14,
+    "stop": 26,
+    "fragment": "t AS x (p, q)"
+   }
+  },
+  {
+   "sql": "SELECT x.a FROM t x JOIN t y ON x.a = y.a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT t.* FROM t JOIN u ON t.a = u.a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT u.*, t.a FROM t JOIN u ON t.a = u.a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x.* FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "CANNOT_RESOLVE_STAR_EXPAND",
+   "sql_state": "42704",
+   "message_parameters": {
+    "columns": "`a`, `b`, `c`",
+    "targetString": "`x`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 9,
+    "fragment": "x.*"
+   }
+  },
+  {
+   "sql": "SELECT count(*) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "count(1)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM t JOIN u USING (a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM t LEFT JOIN u USING (a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM t RIGHT JOIN u USING (a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM t FULL JOIN u USING (a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM t JOIN u USING (z)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_USING_COLUMN_FOR_JOIN",
+   "sql_state": "42703",
+   "message_parameters": {
+    "colName": "`z`",
+    "side": "left",
+    "suggestion": "`a`, `b`, `c`"
+   }
+  },
+  {
+   "sql": "SELECT * FROM t JOIN u USING (b)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_USING_COLUMN_FOR_JOIN",
+   "sql_state": "42703",
+   "message_parameters": {
+    "colName": "`b`",
+    "side": "right",
+    "suggestion": "`a`, `d`"
+   }
+  },
+  {
+   "sql": "SELECT a + 1 AS k, count(*) FROM t GROUP BY k",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "count(1)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a + 1 AS k, count(*) FROM t GROUP BY k",
+   "conf": {
+    "spark.sql.groupByAliases": "false"
+   },
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`k`",
+    "proposal": "`a`, `b`, `c`"
+   },
+   "context": {
+    "start": 44,
+    "stop": 44,
+    "fragment": "k"
+   }
+  },
+  {
+   "sql": "SELECT a, b FROM t GROUP BY a",
+   "conf": {},
+   "ok": false,
+   "error_class": "MISSING_AGGREGATION",
+   "sql_state": "42803",
+   "message_parameters": {
+    "expression": "\"b\"",
+    "expressionAnyValue": "\"any_value(b)\""
+   }
+  },
+  {
+   "sql": "SELECT a + 1, sum(c) FROM t GROUP BY a + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "(a + 1)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "sum(c)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t GROUP BY a HAVING max(c) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, max(c) AS m FROM t GROUP BY a HAVING m > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "m",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t GROUP BY a HAVING b = 'x'",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`b`",
+    "proposal": "`a`"
+   },
+   "context": {
+    "start": 34,
+    "stop": 34,
+    "fragment": "b"
+   }
+  },
+  {
+   "sql": "SELECT sum(max(a)) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "NESTED_AGGREGATE_FUNCTION",
+   "sql_state": "42607",
+   "message_parameters": {},
+   "context": {
+    "start": 11,
+    "stop": 16,
+    "fragment": "max(a)"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t WHERE sum(a) > 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_WHERE_CONDITION",
+   "sql_state": "42903",
+   "message_parameters": {
+    "condition": "\"(sum(a) > 1)\"",
+    "expressionList": "sum(spark_catalog.default.t.a)"
+   },
+   "context": {
+    "start": 0,
+    "stop": 31,
+    "fragment": "SELECT a FROM t WHERE sum(a) > 1"
+   }
+  },
+  {
+   "sql": "SELECT sum(a), b FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "MISSING_GROUP_BY",
+   "sql_state": "42803",
+   "message_parameters": {},
+   "context": {
+    "start": 0,
+    "stop": 22,
+    "fragment": "SELECT sum(a), b FROM t"
+   }
+  },
+  {
+   "sql": "SELECT count(DISTINCT a), max(b) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "count(DISTINCT a)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "max(b)",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, count(*) FROM t GROUP BY 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "count(1)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, count(*) FROM t GROUP BY 3",
+   "conf": {},
+   "ok": false,
+   "error_class": "GROUP_BY_POS_OUT_OF_RANGE",
+   "sql_state": "42805",
+   "message_parameters": {
+    "index": "3",
+    "size": "2"
+   },
+   "context": {
+    "start": 35,
+    "stop": 35,
+    "fragment": "3"
+   }
+  },
+  {
+   "sql": "SELECT a, count(*) FROM t GROUP BY 2",
+   "conf": {},
+   "ok": false,
+   "error_class": "GROUP_BY_POS_AGGREGATE",
+   "sql_state": "42903",
+   "message_parameters": {
+    "aggExpr": "count(1) AS `count(1)`",
+    "index": "2"
+   },
+   "context": {
+    "start": 35,
+    "stop": 35,
+    "fragment": "2"
+   }
+  },
+  {
+   "sql": "SELECT *, 1 FROM t GROUP BY 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "STAR_GROUP_BY_POS",
+   "sql_state": "0A000",
+   "message_parameters": {}
+  },
+  {
+   "sql": "SELECT a, count(*) FROM t GROUP BY 1",
+   "conf": {
+    "spark.sql.groupByOrdinal": "false",
+    "spark.sql.orderByOrdinal": "false"
+   },
+   "ok": false,
+   "error_class": "MISSING_AGGREGATION",
+   "sql_state": "42803",
+   "message_parameters": {
+    "expression": "\"a\"",
+    "expressionAnyValue": "\"any_value(a)\""
+   }
+  },
+  {
+   "sql": "SELECT a, b FROM t ORDER BY 2",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, b FROM t ORDER BY 3",
+   "conf": {},
+   "ok": false,
+   "error_class": "ORDER_BY_POS_OUT_OF_RANGE",
+   "sql_state": "42805",
+   "message_parameters": {
+    "index": "3",
+    "size": "2"
+   },
+   "context": {
+    "start": 28,
+    "stop": 28,
+    "fragment": "3"
+   }
+  },
+  {
+   "sql": "SELECT a AS k FROM t ORDER BY k",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t ORDER BY b",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, count(*) FROM t GROUP BY a ORDER BY count(*) DESC",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "count(1)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t GROUP BY a ORDER BY max(c)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a + 1 AS k, k + 1 AS m FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a + 1 AS k, k + 1 AS m FROM t",
+   "conf": {
+    "spark.sql.lateralColumnAlias.enableImplicitResolution": "false"
+   },
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`k`",
+    "proposal": "`a`, `b`, `c`"
+   },
+   "context": {
+    "start": 19,
+    "stop": 19,
+    "fragment": "k"
+   }
+  },
+  {
+   "sql": "SELECT 1 AS k, 2 AS k, k + 1 FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "AMBIGUOUS_LATERAL_COLUMN_ALIAS",
+   "sql_state": "42702",
+   "message_parameters": {
+    "n": "2",
+    "name": "`k`"
+   }
+  },
+  {
+   "sql": "SELECT a AS b, b FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "b",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT max(a) AS m, m + 1 FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(m) + 1)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a + 1 AS k, k + 1 FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(k) + 1)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a + 1 AS k, k + 1 AS m, m * 2 AS n FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "n",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, max(c) AS m, m + a FROM t GROUP BY a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "m",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(m) + a)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE a IN (SELECT a FROM u WHERE d = b)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (SELECT max(a) FROM u) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "scalarsubquery()",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (SELECT a, d FROM u) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_SUBQUERY_EXPRESSION.SCALAR_SUBQUERY_RETURN_MORE_THAN_ONE_OUTPUT_COLUMN",
+   "sql_state": "42823",
+   "message_parameters": {
+    "number": "2"
+   },
+   "context": {
+    "start": 7,
+    "stop": 26,
+    "fragment": "(SELECT a, d FROM u)"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT x FROM u) = 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`a`, `d`"
+   },
+   "context": {
+    "start": 30,
+    "stop": 30,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT a + 1, -a, a = 1, NOT (a = 1), a <> 1, CAST(a AS STRING), 'x', 1.5, 2, 10L, a IS NULL, a IS NOT NULL, a IN (1, 2), a BETWEEN 1 AND 2, CASE WHEN a = 1 THEN 'y' ELSE 'z' END, substring(b, 1, 2), a * 2 - c / 3, b LIKE 'x%', a % 2, TRUE, DATE '2020-01-02', a <=> 1, a >= 1 AND a < 2 OR c > 3, extract(year FROM DATE '2020-01-02') FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "(a + 1)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(- a)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(a = 1)",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "(NOT (a = 1))",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "(NOT (a = 1))",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "a",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "x",
+     "type": "string",
+     "nullable": false
+    },
+    {
+     "name": "1.5",
+     "type": "decimal(2,1)",
+     "nullable": false
+    },
+    {
+     "name": "2",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "10",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "(a IS NULL)",
+     "type": "boolean",
+     "nullable": false
+    },
+    {
+     "name": "(a IS NOT NULL)",
+     "type": "boolean",
+     "nullable": false
+    },
+    {
+     "name": "(a IN (1, 2))",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "between(a, 1, 2)",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "CASE WHEN (a = 1) THEN y ELSE z END",
+     "type": "string",
+     "nullable": false
+    },
+    {
+     "name": "substring(b, 1, 2)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "((a * 2) - (c / 3))",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "b LIKE x%",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "(a % 2)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "true",
+     "type": "boolean",
+     "nullable": false
+    },
+    {
+     "name": "DATE '2020-01-02'",
+     "type": "date",
+     "nullable": false
+    },
+    {
+     "name": "(a <=> 1)",
+     "type": "boolean",
+     "nullable": false
+    },
+    {
+     "name": "(((a >= 1) AND (a < 2)) OR (c > 3))",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "extract(year FROM DATE '2020-01-02')",
+     "type": "int",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT count(*), count(a), sum(a), avg(c), min(b), max(b), count(DISTINCT a) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "count(1)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "count(a)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "sum(a)",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "avg(c)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "min(b)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "max(b)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "count(DISTINCT a)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM t WHERE a = 1 AND b = 'x' OR c = 3",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t LIMIT 10",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE b LIKE 'x%' AND c IS NOT NULL ORDER BY a DESC NULLS FIRST",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT t.a, d FROM t LEFT JOIN u ON t.a = u.a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT u.a, b FROM t RIGHT JOIN u ON t.a = u.a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT u.a, t.b FROM t FULL JOIN u ON t.a = u.a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t LEFT SEMI JOIN u ON t.a = u.a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT d FROM t LEFT ANTI JOIN u ON t.a = u.a",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`d`",
+    "proposal": "`a`, `b`, `c`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 7,
+    "fragment": "d"
+   }
+  },
+  {
+   "sql": "SELECT * FROM t CROSS JOIN u",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT CAST(a AS BIGINT) + 1 AS x, TRY_CAST(b AS INT) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "x",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT count(a) FILTER (WHERE b = 'x') FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "count(a) FILTER (WHERE (b = x))",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  }
+ ],
+ "plan_ids": [
+  {
+   "id": "same_df",
+   "dataframe": "t.select(t[\"a\"])",
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "other_df",
+   "dataframe": "t.select(u[\"a\"])",
+   "ok": false,
+   "error_class": "CANNOT_RESOLVE_DATAFRAME_COLUMN",
+   "sql_state": "42704",
+   "message_parameters": {
+    "name": "\"a\""
+   }
+  },
+  {
+   "id": "through_filter",
+   "dataframe": "t.filter(t[\"a\"] > 1).select(t[\"b\"])",
+   "ok": true,
+   "output": [
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "projected_away",
+   "dataframe": "t.select(\"a\").select(t[\"b\"])",
+   "ok": false,
+   "error_class": "CANNOT_RESOLVE_DATAFRAME_COLUMN",
+   "sql_state": "42704",
+   "message_parameters": {
+    "name": "\"b\""
+   }
+  },
+  {
+   "id": "join_two",
+   "dataframe": "t.join(u, t[\"a\"] == u[\"a\"]).select(t[\"b\"], u[\"d\"])",
+   "ok": true,
+   "output": [
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "self_join",
+   "dataframe": "t.join(t, \"a\").select(t[\"b\"])",
+   "ok": false,
+   "error_class": "AMBIGUOUS_COLUMN_REFERENCE",
+   "sql_state": "42702",
+   "message_parameters": {
+    "name": "\"b\""
+   }
+  },
+  {
+   "id": "self_join_cond",
+   "dataframe": "t.join(t, t[\"a\"] == t[\"a\"])",
+   "ok": false,
+   "error_class": "AMBIGUOUS_COLUMN_REFERENCE",
+   "sql_state": "42702",
+   "message_parameters": {
+    "name": "\"a\""
+   },
+   "context": {
+    "fragment": "__eq__"
+   }
+  },
+  {
+   "id": "star",
+   "dataframe": "t.join(u, t[\"a\"] == u[\"a\"]).select(u[\"*\"])",
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "with_column",
+   "dataframe": "t.withColumn(\"a\", t[\"a\"] + 1).withColumn(\"e\", F.lit(1))",
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "e",
+     "type": "int",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "id": "missing",
+   "dataframe": "t.select(t[\"x\"])",
+   "ok": false,
+   "error_class": "CANNOT_RESOLVE_DATAFRAME_COLUMN",
+   "sql_state": "42704",
+   "message_parameters": {
+    "name": "\"x\""
+   }
+  }
+ ]
+}
