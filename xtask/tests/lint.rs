@@ -153,10 +153,29 @@ fn unsafe_keyword_lines_only() {
     );
     // A '"' char literal does not hide a later unsafe.
     assert_eq!(unsafe_lines("let q = '\"'; unsafe { f() }"), vec![1]);
-    // Block comments and raw strings over-count, never hide (documented).
-    assert_eq!(unsafe_lines("/* unsafe */"), vec![1]);
-    // A quote after `'` that is not a char literal is an ordinary string.
+    assert_eq!(unsafe_lines("let q = b'\"'; unsafe { f() }"), vec![1]);
+    assert_eq!(unsafe_lines("let q = '\\''; unsafe { f() }"), vec![1]);
+    // A lifetime is not a char literal.
+    assert_eq!(
+        unsafe_lines("fn f<'a>(x: &'a str) { unsafe { g() } }"),
+        vec![1]
+    );
     assert_eq!(unsafe_lines("x('\"abc\" unsafe"), vec![1]);
+    // An escaped backslash closes the string (review finding).
+    assert_eq!(unsafe_lines("let p = \"\\\\\"; unsafe { f() }"), vec![1]);
+    // Raw strings have no escapes; hashes delimit them.
+    assert_eq!(unsafe_lines("let p = r\"C:\\\"; unsafe { f() }"), vec![1]);
+    assert_eq!(
+        unsafe_lines("let p = r#\"a \" unsafe\"#; f()"),
+        Vec::<usize>::new()
+    );
+    assert_eq!(unsafe_lines("let p = br#\"unsafe\"#;\nunsafe {}"), vec![2]);
+    // Strings and nested block comments span lines.
+    assert_eq!(unsafe_lines("let s = \"a\nunsafe\";\nunsafe {}"), vec![3]);
+    assert_eq!(unsafe_lines("/* a /* b */\nunsafe */ unsafe {}"), vec![2]);
+    // An unterminated raw string is scanned as code (over-count, never hide).
+    assert_eq!(unsafe_lines("r\"x unsafe"), vec![1]);
+    assert_eq!(unsafe_lines("unsafe"), vec![1]);
 }
 
 #[test]
@@ -185,7 +204,31 @@ fn unsafe_sites_are_counted_per_crate() {
     .unwrap();
     std::fs::write(root.join("crates/k/src/c.txt"), "unsafe\n").unwrap();
     std::fs::write(root.join("crates/clean/src/lib.rs"), "fn f() {}\n").unwrap();
-    let sites = unsafe_sites_per_crate(&root);
+    // Symlinks are not followed: no loop, no double count.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&src, src.join("loop")).unwrap();
+        std::os::unix::fs::symlink(src.join("a.rs"), root.join("crates/k/src/d.rs")).unwrap();
+    }
+    let sites = unsafe_sites_per_crate(&root).unwrap();
     assert_eq!(sites.into_iter().collect::<Vec<_>>(), [("k".to_owned(), 3)]);
+    // Unreadable input is an error, not a lower count (fails closed).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let bad = root.join("crates/k/src/bad.rs");
+        std::fs::write(&bad, "unsafe {}\n").unwrap();
+        std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root can read anything; only check when the permission bites.
+        if std::fs::read_to_string(&bad).is_err() {
+            assert!(
+                unsafe_sites_per_crate(&root)
+                    .unwrap_err()
+                    .contains("bad.rs")
+            );
+        }
+        std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    assert!(unsafe_sites_per_crate(&root.join("missing")).is_err());
     let _ = std::fs::remove_dir_all(&root);
 }
