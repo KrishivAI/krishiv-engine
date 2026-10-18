@@ -73,6 +73,7 @@ mod driver;
 mod error;
 mod executor;
 pub mod hash;
+mod join;
 mod metrics;
 mod morsel;
 mod operator;
@@ -91,6 +92,7 @@ pub use error::Result;
 pub use executor::{
     Executor, ExecutorConfig, TaskHandle, TokioClock, TokioExecutor, WorkloadClass,
 };
+pub use join::{HashJoin, HashJoinNode, JoinSpec, JoinType};
 pub use metrics::{DriverStats, OperatorEntry, OperatorMetrics, QueryMetrics};
 pub use morsel::MorselCursor;
 pub use operator::{

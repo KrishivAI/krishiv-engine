@@ -271,6 +271,20 @@ impl KeyTable {
     ) -> Result<usize> {
         ids.clear();
         let before = self.len();
+        for key in keys {
+            let bytes = key.data();
+            ids.push(self.insert_hashed(bytes, seed.hash(bytes))?.0);
+        }
+        Ok(self.len() - before)
+    }
+
+    /// The id of key row `bytes` whose hash is `hash`, inserting it if new;
+    /// `true` if it was new. For callers that keep the hashes (a join's
+    /// build rows carry theirs).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` past `u32::MAX` keys.
+    pub fn insert_hashed(&mut self, bytes: &[u8], hash: u64) -> Result<(u32, bool)> {
         if self.offsets.is_empty() {
             self.offsets.push(0);
         }
@@ -280,36 +294,45 @@ impl KeyTable {
             hashes,
             index,
         } = self;
-        for key in keys {
-            let bytes = key.data();
-            let h = seed.hash(bytes);
-            let entry = index.entry(
-                h,
-                |&id| {
-                    let id = id as usize;
-                    hashes[id] == h
-                        && data
-                            .get(offsets[id]..offsets[id + 1])
-                            .is_some_and(|k| eq_bytes(k, bytes))
-                },
-                |&id| hashes[id as usize],
-            );
-            let id = match entry {
-                Entry::Occupied(o) => *o.get(),
-                Entry::Vacant(v) => {
-                    let id = u32::try_from(hashes.len())
-                        .map_err(|_| internal("more than 2^32 keys in one table".to_owned()))?;
-                    data.extend_from_slice(bytes);
-                    offsets.push(data.len());
-                    hashes.push(h);
-                    v.insert(id);
-                    id
-                }
-            };
-            ids.push(id);
+        let eq = |&id: &u32| key_eq(data, offsets, hashes, id, bytes, hash);
+        match index.entry(hash, eq, |&id| hashes[id as usize]) {
+            Entry::Occupied(o) => Ok((*o.get(), false)),
+            Entry::Vacant(v) => {
+                let id = u32::try_from(hashes.len())
+                    .map_err(|_| internal("more than 2^32 keys in one table".to_owned()))?;
+                data.extend_from_slice(bytes);
+                offsets.push(data.len());
+                hashes.push(hash);
+                v.insert(id);
+                Ok((id, true))
+            }
         }
-        Ok(self.len() - before)
     }
+
+    /// The id of key row `bytes` whose hash is `hash`, if present (a join
+    /// probe).
+    pub fn find(&self, bytes: &[u8], hash: u64) -> Option<u32> {
+        let eq = |&id: &u32| key_eq(&self.data, &self.offsets, &self.hashes, id, bytes, hash);
+        self.index.find(hash, eq).copied()
+    }
+}
+
+/// Whether key `id` is `bytes` with hash `hash`.
+#[inline]
+fn key_eq(
+    data: &[u8],
+    offsets: &[usize],
+    hashes: &[u64],
+    id: u32,
+    bytes: &[u8],
+    hash: u64,
+) -> bool {
+    let id = id as usize;
+    hashes.get(id) == Some(&hash)
+        && match (offsets.get(id), offsets.get(id + 1)) {
+            (Some(&s), Some(&e)) => data.get(s..e).is_some_and(|k| eq_bytes(k, bytes)),
+            _ => false,
+        }
 }
 
 /// Byte-slice equality without a `memcmp` call for short keys (most

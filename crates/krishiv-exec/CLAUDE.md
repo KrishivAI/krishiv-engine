@@ -19,6 +19,10 @@ TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.r
 partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mod.rs` spec + Spark result types,
 `accumulator.rs` per-group states, `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
 `spill_global`), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION.
+`join/` hash join (P2-T052a): `mod.rs` API + Spark semantics · `keys.rs` row-format keys, seeded foldhash,
+radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
+sink · `probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join.
+Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
 
 ## Invariants
 - All memory through krishiv-memory reservations; every spill path tested with tiny-memory tests.
