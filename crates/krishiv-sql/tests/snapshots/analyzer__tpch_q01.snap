@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-sql/tests/analyzer.rs
+expression: a.plan.root().to_string()
+---
+Sort [l_returnflag#8 ASC NULLS FIRST, l_linestatus#9 ASC NULLS FIRST], true
++- Aggregate [l_returnflag#8, l_linestatus#9], [l_returnflag#8, l_linestatus#9, sum(l_quantity#4) AS sum_qty#16, sum(l_extendedprice#5) AS sum_base_price#17, sum((l_extendedprice#5 * (1 - l_discount#6))) AS sum_disc_price#18, sum(((l_extendedprice#5 * (1 - l_discount#6)) * (1 + l_tax#7))) AS sum_charge#19, avg(l_quantity#4) AS avg_qty#20, avg(l_extendedprice#5) AS avg_price#21, avg(l_discount#6) AS avg_disc#22, count(1) AS count_order#23]
+   +- Filter (l_shipdate#10 <= CAST('1998-09-02' AS DATE))
+      +- Scan spark_catalog.default.lineitem [l_orderkey#0, l_partkey#1, l_suppkey#2, l_linenumber#3, l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10, l_commitdate#11, l_receiptdate#12, l_shipinstruct#13, l_shipmode#14, l_comment#15]

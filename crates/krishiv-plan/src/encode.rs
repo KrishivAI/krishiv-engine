@@ -62,7 +62,7 @@ use std::sync::Arc;
 use krishiv_common::secret::{OptionValue, SecretUrl, SecretValue, UrlPart};
 use twox_hash::XxHash3_128;
 
-use crate::{BoundColumn, Scan};
+use crate::{BoundColumn, CteRef, Scan};
 use crate::{
     CastMode, ColumnRef, DayTimeField, Expr, ExprNode, FunctionCall, FunctionKind, Grouping,
     JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, Plan, PlanId, PlanNode,
@@ -153,6 +153,23 @@ impl Plan {
     }
 }
 
+/// A 128-bit identity of every distinct relation under `root` (subquery
+/// plans included), by address: relations that are equal field by field,
+/// `plan_id`s included (as values) and origins otherwise excluded, get one
+/// identity. The analyzer resolves equal relations once, whether or not
+/// they share an `Arc`, so equal input keys give equal resolved plans.
+pub(crate) fn identity_keys(root: &LogicalPlan) -> HashMap<*const LogicalPlan, u128> {
+    let mut keys = Keys {
+        absolute: true,
+        ..Keys::default()
+    };
+    keys.plan(root, &[], 0);
+    keys.plans
+        .into_iter()
+        .map(|((p, _), (_, digest))| (p, digest))
+        .collect()
+}
+
 /// A record's index and digest.
 type Key = (u64, u128);
 
@@ -175,6 +192,13 @@ struct Keys {
     exprs: HashMap<(*const Expr, usize), Key>,
     /// Contexts and operator passes handed out so far.
     counter: usize,
+    /// Identity mode (see [`identity_keys`]): `plan_id`s are encoded as
+    /// themselves, not by where their carriers are.
+    absolute: bool,
+    /// Whether a relation's subtree (subquery plans included) holds a
+    /// `plan_id` reference: only then does its key depend on the enclosing
+    /// operators, so a subtree without one is encoded once.
+    refs: HashMap<*const LogicalPlan, bool>,
 }
 
 /// The operator whose expressions are being encoded.
@@ -236,6 +260,65 @@ impl Keys {
         let found = Some(self.intern(rec, &dig));
         self.carriers.insert(key, found);
         found
+    }
+
+    /// Whether the subtree of `root` holds a `plan_id` reference, memoised
+    /// per relation, without recursion. The walk stops at the first
+    /// reference (a hit marks the relations on the path to it), so a chain
+    /// of operators that each reference the previous one costs one step per
+    /// operator; a subtree without a reference is scanned once.
+    fn has_refs(&mut self, root: &LogicalPlan) -> bool {
+        use crate::walk::{Node, children};
+        if let Some(&known) = self.refs.get(&std::ptr::from_ref(root)) {
+            return known;
+        }
+        let mut stack = vec![(Node::Plan(root), false)];
+        let mut next = Vec::new();
+        // Expressions finished without a reference (shared ones once).
+        let mut clean: HashSet<*const Expr> = HashSet::new();
+        while let Some((node, expanded)) = stack.pop() {
+            if expanded {
+                // Everything below finished without a reference.
+                match node {
+                    Node::Plan(p) => {
+                        self.refs.entry(std::ptr::from_ref(p)).or_insert(false);
+                    }
+                    Node::Expr(e) => {
+                        clean.insert(std::ptr::from_ref(e));
+                    }
+                }
+                continue;
+            }
+            let hit = match node {
+                Node::Plan(p) => self.refs.get(&std::ptr::from_ref(p)).copied(),
+                Node::Expr(e) if clean.contains(&std::ptr::from_ref(e)) => Some(false),
+                Node::Expr(e) => match &e.node {
+                    ExprNode::Column(c) => c.plan_id.is_some().then_some(true),
+                    ExprNode::Star(s) => s.plan_id.is_some().then_some(true),
+                    _ => None,
+                },
+            };
+            match hit {
+                Some(true) => {
+                    // The relations being scanned all contain this one.
+                    for (n, done) in &stack {
+                        if let (Node::Plan(p), true) = (n, done) {
+                            self.refs.insert(std::ptr::from_ref(*p), true);
+                        }
+                    }
+                    return true;
+                }
+                Some(false) => continue,
+                None => {}
+            }
+            children(node, &mut next);
+            stack.push((node, true));
+            stack.extend(next.drain(..).map(|c| (c, false)));
+        }
+        self.refs
+            .get(&std::ptr::from_ref(root))
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Whether any relation in the subtree of `p` carries `id`.
@@ -338,17 +421,33 @@ impl Keys {
     /// The key of relation `p` under the enclosing operators `outer`
     /// (context `ctx`).
     fn plan<'a>(&mut self, p: &'a LogicalPlan, outer: &[&'a LogicalPlan], ctx: usize) -> Key {
+        let ctx = if self.has_refs(p) { ctx } else { 0 };
         if let Some(&key) = self.plans.get(&(std::ptr::from_ref(p), ctx)) {
             return key;
         }
+        let unbound = if self.absolute {
+            Vec::new()
+        } else {
+            self.unbound(p, outer)
+        };
         let op = Op {
             node: p,
             outer: outer.to_vec(),
-            unbound: self.unbound(p, outer),
+            unbound,
             pass: self.next_id(),
         };
         let mut enc = Encoder::new(self, &op, b'P');
         enc.plan_fields(p);
+        if enc.keys.absolute {
+            // The relation's own `plan_id` is part of its identity.
+            match p.origin.plan_id {
+                None => enc.u8(0),
+                Some(id) => {
+                    enc.u8(1);
+                    enc.i64(id.0);
+                }
+            }
+        }
         let mut children = Vec::new();
         p.for_each_child(&mut |c| children.push(&**c));
         for c in children {
@@ -644,6 +743,22 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.len(ctes.len());
                 ctes.iter().for_each(|c| self.str(&c.name));
             }
+            PlanNode::CteRef(CteRef {
+                name,
+                source,
+                output,
+            }) => {
+                self.u8(13);
+                self.str(name);
+                self.len(source.len());
+                source.iter().for_each(|id| self.put(&id.0.to_le_bytes()));
+                self.len(output.len());
+                output.iter().for_each(|c| self.bound(c));
+            }
+            PlanNode::Shift { offset, .. } => {
+                self.u8(14);
+                self.put(&offset.to_le_bytes());
+            }
         }
     }
 
@@ -680,6 +795,10 @@ impl<'k, 'a> Encoder<'k, 'a> {
         let Some(id) = id else {
             return self.u8(0);
         };
+        if self.keys.absolute {
+            self.u8(4);
+            return self.i64(id.0);
+        }
         match self.keys.locate(id, self.op.node, &self.op.outer) {
             Some((0, carriers)) => {
                 self.u8(1);
@@ -769,7 +888,11 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 let mut outer = self.op.outer.clone();
                 outer.push(self.op.node);
-                let ctx = self.keys.next_id();
+                let ctx = if self.keys.absolute {
+                    0
+                } else {
+                    self.keys.next_id()
+                };
                 let key = self.keys.plan(plan, &outer, ctx);
                 self.child(key);
             }

@@ -154,6 +154,33 @@ pub enum PlanNode {
         /// The definitions, in order.
         ctes: Vec<Cte>,
     },
+    /// A resolved reference to a `WITH` definition (see [`CteRef`]).
+    CteRef(CteRef),
+    /// A fresh instance of a resolved subtree: every attribute id inside
+    /// `input` (outputs, references and aliases, subquery plans included;
+    /// not a [`CteRef::source`]) reads as `id + offset`. The analyzer adds
+    /// it where a subtree shared through `Arc` meets itself, as in a
+    /// DataFrame self-join, so the instances need no copy and the plan
+    /// stays linear in its distinct nodes. The subtree has no outer
+    /// references.
+    Shift {
+        /// The shared subtree.
+        input: Arc<LogicalPlan>,
+        /// What each attribute id inside gains.
+        offset: u64,
+    },
+}
+
+/// A resolved reference to a `WITH` definition: the definition is planned
+/// once, and each reference reads its rows under attributes of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CteRef {
+    /// The definition's name.
+    pub name: String,
+    /// The definition's output attributes, which identify it.
+    pub source: Vec<crate::AttrId>,
+    /// This reference's attributes, one per source attribute.
+    pub output: Vec<BoundColumn>,
 }
 
 /// What an unresolved read reads.
@@ -372,14 +399,15 @@ impl LogicalPlan {
     /// the main query. Plans inside subquery expressions are not children.
     pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Arc<Self>)) {
         match &self.node {
-            PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::Scan(_) => {}
+            PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::Scan(_) | PlanNode::CteRef(_) => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
             | PlanNode::Aggregate { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
-            | PlanNode::SubqueryAlias { input, .. } => f(input),
+            | PlanNode::SubqueryAlias { input, .. }
+            | PlanNode::Shift { input, .. } => f(input),
             PlanNode::Join { left, right, .. } => {
                 f(left);
                 f(right);
@@ -393,14 +421,15 @@ impl LogicalPlan {
 
     fn for_each_child_mut(&mut self, f: &mut dyn FnMut(&mut Arc<Self>)) {
         match &mut self.node {
-            PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::Scan(_) => {}
+            PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::Scan(_) | PlanNode::CteRef(_) => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
             | PlanNode::Aggregate { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
-            | PlanNode::SubqueryAlias { input, .. } => f(input),
+            | PlanNode::SubqueryAlias { input, .. }
+            | PlanNode::Shift { input, .. } => f(input),
             PlanNode::Join { left, right, .. } => {
                 f(left);
                 f(right);
@@ -419,7 +448,9 @@ impl LogicalPlan {
             PlanNode::Read(_)
             | PlanNode::Scan(_)
             | PlanNode::SubqueryAlias { .. }
-            | PlanNode::WithCte { .. } => {}
+            | PlanNode::WithCte { .. }
+            | PlanNode::CteRef(_)
+            | PlanNode::Shift { .. } => {}
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter().for_each(f),
@@ -456,7 +487,9 @@ impl LogicalPlan {
             PlanNode::Read(_)
             | PlanNode::Scan(_)
             | PlanNode::SubqueryAlias { .. }
-            | PlanNode::WithCte { .. } => {}
+            | PlanNode::WithCte { .. }
+            | PlanNode::CteRef(_)
+            | PlanNode::Shift { .. } => {}
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter_mut().for_each(f),
@@ -488,6 +521,100 @@ impl LogicalPlan {
                 JoinCondition::None | JoinCondition::Using(_) => {}
             },
             PlanNode::Sort { order, .. } => order.iter_mut().for_each(|o| f(&mut o.expr)),
+        }
+    }
+
+    /// The output attributes of a resolved relation, as the analyzer
+    /// produced them; `None` when the relation (or a relation it reads) is
+    /// unresolved. Later passes use it rather than re-deriving outputs:
+    /// inside a [`PlanNode::Shift`], every attribute id reads `id +
+    /// offset`; a [`PlanNode::CteRef`] outputs its own attributes, one per
+    /// attribute of the definition its `source` names; outer joins make the
+    /// other side nullable. Attribute ids are unique within a plan but not
+    /// dense: never index by them.
+    #[must_use]
+    pub fn resolved_output(&self) -> Option<Vec<BoundColumn>> {
+        let mut p = self;
+        loop {
+            match &p.node {
+                PlanNode::Filter { input, .. }
+                | PlanNode::Sort { input, .. }
+                | PlanNode::Limit { input, .. }
+                | PlanNode::WithCte { input, .. } => p = input,
+                PlanNode::SubqueryAlias { input, columns, .. } => {
+                    let out = input.resolved_output()?;
+                    if columns.is_empty() {
+                        return Some(out);
+                    }
+                    if columns.len() != out.len() {
+                        return None;
+                    }
+                    let renamed = out.into_iter().zip(columns);
+                    return Some(
+                        renamed
+                            .map(|(c, name)| BoundColumn {
+                                name: name.clone(),
+                                ..c
+                            })
+                            .collect(),
+                    );
+                }
+                PlanNode::Scan(s) => return Some(s.output.clone()),
+                PlanNode::CteRef(r) => return Some(r.output.clone()),
+                PlanNode::Shift { input, offset } => {
+                    let out = input.resolved_output()?;
+                    return out
+                        .into_iter()
+                        .map(|c| {
+                            Some(BoundColumn {
+                                id: crate::AttrId(c.id.0.checked_add(*offset)?),
+                                ..c
+                            })
+                        })
+                        .collect();
+                }
+                PlanNode::Project { exprs, .. }
+                | PlanNode::Aggregate {
+                    aggregates: exprs, ..
+                } => {
+                    return exprs
+                        .iter()
+                        .map(|e| match &e.node {
+                            crate::ExprNode::Resolved(
+                                crate::ResolvedExpr::Column(c)
+                                | crate::ResolvedExpr::Alias { output: c, .. },
+                            ) => Some(c.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                }
+                PlanNode::Join {
+                    left, right, kind, ..
+                } => {
+                    let nullable = |v: Vec<BoundColumn>, yes: bool| {
+                        v.into_iter()
+                            .map(|c| BoundColumn {
+                                nullable: c.nullable || yes,
+                                ..c
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let (l, r) = (left.resolved_output()?, right.resolved_output()?);
+                    let mut out = nullable(
+                        l,
+                        matches!(kind, JoinKind::RightOuter | JoinKind::FullOuter),
+                    );
+                    if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                        let r =
+                            nullable(r, matches!(kind, JoinKind::LeftOuter | JoinKind::FullOuter));
+                        out.extend(r);
+                    }
+                    return Some(out);
+                }
+                PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::WithColumns { .. } => {
+                    return None;
+                }
+            }
         }
     }
 

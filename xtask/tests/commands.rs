@@ -270,3 +270,44 @@ fn diff_coverage_gate_passes_and_fails_on_a_real_repo() {
     }
     assert!(!run(&nine, &["--fail-under"]).status.success());
 }
+
+#[test]
+fn diff_coverage_ignores_what_the_base_gained_after_the_branch_point() {
+    let dir = init_repo("diffcov-behind");
+    let repo = dir.to_str().unwrap();
+    git(&dir, &["switch", "-q", "-c", "feature"]);
+    write(&dir, "crates/x/src/lib.rs", "let a = 1;\nlet b = 2;\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "feature"]);
+    // `main` moves on with uncovered lines the branch never touched.
+    git(&dir, &["switch", "-q", "main"]);
+    let other: String = (1..=20).map(|i| format!("let y{i} = {i};\n")).collect();
+    write(&dir, "crates/y/src/lib.rs", &other);
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "main moves on"]);
+    git(&dir, &["switch", "-q", "feature"]);
+    let lcov = dir.join("lcov.info");
+    std::fs::write(
+        &lcov,
+        "SF:crates/x/src/lib.rs\nDA:1,1\nDA:2,1\nend_of_record\n\
+         SF:crates/y/src/lib.rs\nDA:1,0\nend_of_record\n",
+    )
+    .unwrap();
+    let out = xtask(&[
+        "diff-coverage",
+        "--repo",
+        repo,
+        "--base",
+        "main",
+        "--lcov",
+        lcov.to_str().unwrap(),
+        "--fail-under",
+        "90",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("2 of 2"));
+}

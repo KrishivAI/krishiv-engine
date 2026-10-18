@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// A thread with a 2 MiB stack, the size of a tokio worker's.
-fn on_small_stack(f: impl FnOnce() + Send + 'static) {
+pub(super) fn on_small_stack(f: impl FnOnce() + Send + 'static) {
     thread::Builder::new()
         .stack_size(2 << 20)
         .spawn(f)

@@ -20,6 +20,7 @@ thiserror.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 insta = { workspace = true }
+krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 serde_json = { workspace = true, features = ["std"] }
 
 [[bench]]
@@ -28,4 +29,8 @@ harness = false
 
 [[bench]]
 name = "lower"
+harness = false
+
+[[bench]]
+name = "plan"
 harness = false

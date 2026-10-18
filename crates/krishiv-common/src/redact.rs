@@ -121,6 +121,13 @@ impl RedactedSql {
         Self { text, regions }
     }
 
+    /// `sql` hidden whole: for text no lexer has read (it reveals only that
+    /// there was text).
+    #[must_use]
+    pub fn opaque(sql: &str) -> Self {
+        Self::from_marks_unchecked(sql, vec![Mark::Secret(0..sql.len())])
+    }
+
     /// The redacted text.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -421,6 +428,7 @@ mod tests {
         assert_eq!(r.fragment(56..99), "é");
         let plain = RedactedSql::from_marks_unchecked("SELECT 1", Vec::new());
         assert_eq!(plain.fragment(7..8), "1");
+        assert_eq!(RedactedSql::opaque("SELECT 1").as_str(), REDACTED_MARK);
     }
 
     const REDACTED_MARK: &str = super::REDACTED;
