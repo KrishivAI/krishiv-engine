@@ -14,6 +14,7 @@
 //! the reason.
 
 mod datetime;
+pub mod hash;
 mod strings;
 mod zone;
 
@@ -49,6 +50,7 @@ use krishiv_sql::ast::{self, BinaryOp as Bop, ExprKind, Literal, NumKind};
 use serde_json::{Value, json};
 
 use crate::fn_matrix::{Expected, MatrixCase, Mode};
+use hash::HashFn;
 
 /// Functions (`SHOW FUNCTIONS` names) whose matrix cells this evaluator runs.
 pub const FUNCTIONS: &[&str] = &[
@@ -111,6 +113,14 @@ pub const FUNCTIONS: &[&str] = &[
     "||",
     "like",
     "split",
+    // P2-T027: hash functions.
+    "hash",
+    "xxhash64",
+    "md5",
+    "sha",
+    "sha1",
+    "sha2",
+    "crc32",
     // P2-T025a: datetime functions.
     "date_add",
     "dateadd",
@@ -167,6 +177,8 @@ enum Node {
     Unary(UnaryOp, Box<Node>),
     /// A string function (`strings`) with its result type.
     Str(strings::StrFn, Vec<Node>, DataType),
+    /// A hash function (`hash`) with its result type.
+    Hash(hash::HashFn, Vec<Node>, DataType),
     /// An ANSI interval literal.
     Interval(datetime::IntervalVal),
     /// A datetime function (`datetime`) with its result type.
@@ -191,7 +203,8 @@ impl Node {
             Self::Cast(_, t, _)
             | Self::Arith { ty: t, .. }
             | Self::Str(_, _, t)
-            | Self::Dt(_, _, t) => t.clone(),
+            | Self::Dt(_, _, t)
+            | Self::Hash(_, _, t) => t.clone(),
             Self::Interval(datetime::IntervalVal::YearMonth(_)) => {
                 DataType::Interval(arrow_schema::IntervalUnit::YearMonth)
             }
@@ -378,6 +391,9 @@ impl Binder<'_> {
             return node;
         }
         if let Some(node) = self.datetime_function(&name, &args) {
+            return node;
+        }
+        if let Some(node) = self.hash_function(&name, &args) {
             return node;
         }
         let cast_to = match name.as_str() {
@@ -898,6 +914,7 @@ impl Evaluator<'_> {
                 self.unary(*op, &v)
             }
             Node::Str(f, args, _) => self.string_fn(f, args),
+            Node::Hash(f, args, _) => self.hash_fn(*f, args),
             Node::Arith { op, l, r, ty, try_ } => {
                 let (a, b) = (self.eval(l)?, self.eval(r)?);
                 self.arith(*op, &a, &b, ty, *try_)
@@ -1361,8 +1378,12 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
                 } else {
                     1
                 };
-                let null_safe = matches!(node, Node::Cmp(None, ..));
-                let odd = if null_safe { json!(true) } else { Value::Null };
+                // `<=>` of two NULLs is true; `hash` of NULLs is its seed.
+                let odd = match node {
+                    Node::Cmp(None, ..) => json!(true),
+                    Node::Hash(HashFn::Hash | HashFn::Xxhash64, ..) => json!(hash::SEED),
+                    _ => Value::Null,
+                };
                 let is_null = |i| a.data_type() == &DataType::Null || a.is_null(i);
                 let rows_ok = a.len() == want_len
                     && (0..a.len()).all(|i| match (i % 2, odd.is_null()) {
