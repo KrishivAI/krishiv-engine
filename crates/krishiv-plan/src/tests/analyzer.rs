@@ -1428,7 +1428,7 @@ fn unsupported_inputs_fail_explicitly() {
         grouping: Grouping::Rollup(vec![Arc::new(c("a"))]),
         aggregates: vec![Arc::new(c("a"))],
     });
-    let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("sha2", vec![c("b")])]);
+    let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("factorial", vec![c("b")])]);
     let null = LogicalPlan::table(["t"]).project(vec![Literal::Null(None).into()]);
     for plan in [files, rollup, sha, null] {
         assert_eq!(class(&run(plan, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
@@ -1857,4 +1857,24 @@ fn resolved_output_follows_the_contract() {
             .resolved_output()
             .is_none()
     );
+}
+
+#[test]
+fn try_arithmetic_casts_its_arguments_in_try_mode() {
+    let ctx = ctx();
+    let project = |name: &str| {
+        let call = Expr::function(name, vec![s("x"), int(1)]);
+        run(LogicalPlan::table(["t"]).project(vec![call]), &ctx).unwrap()
+    };
+    let try_add = project("try_add");
+    let text = format!("{:?}", try_add.plan);
+    assert!(text.contains("mode: Try"), "{text}");
+    // `mod` casts as the operator does (ANSI here).
+    let text = format!("{:?}", project("mod").plan);
+    assert!(
+        text.contains("mode: Ansi") && !text.contains("mode: Try"),
+        "{text}"
+    );
+    // A TRY cast of a string may be NULL; `try_*` results are nullable anyway.
+    assert!(try_add.output[0].nullable);
 }

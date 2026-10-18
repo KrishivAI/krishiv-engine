@@ -86,7 +86,7 @@ pub use builtins::BuiltinFunctions;
 pub use catalog::{
     AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, CallTypes, Catalog,
     CatalogResolver, Constant, FileSchemaResolver, FunctionEntry, FunctionLookup, FunctionRegistry,
-    InputBuilder, InputType, Inputs, MemoryCatalog, NameForm, PolicyVersion, Principal,
+    InputBuilder, InputType, Inputs, MemoryCatalog, NameForm, Operator, PolicyVersion, Principal,
     PrincipalKind, Privilege, ResultType, RowColumnPolicy, Securable, SourceKind, SqlFrontend,
     TableColumn, TableIdent, TableKind, TableMeta,
 };

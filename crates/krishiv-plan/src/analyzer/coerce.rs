@@ -24,7 +24,7 @@
 
 use krishiv_types::{DataType, DecimalType};
 
-use super::catalog::{CallTypes, InputType, Inputs};
+use super::catalog::{CallTypes, InputType, Inputs, Operator};
 use crate::{Builtin, CastMode};
 
 /// An argument as coercion sees it.
@@ -139,6 +139,12 @@ fn wider_decimal(a: DecimalType, b: DecimalType) -> DecimalType {
 /// promotion, as comparisons and `IN` use it); integral literals size as
 /// their digits against a decimal when `literal`.
 fn common(a: &Arg<'_>, b: &Arg<'_>, literal: bool) -> Option<Option<DataType>> {
+    common_in(a, b, literal, true)
+}
+
+/// [`common`] under `spark.sql.ansi.enabled = ansi`: without ANSI a `float`
+/// meeting an integral type stays `float`.
+fn common_in(a: &Arg<'_>, b: &Arg<'_>, literal: bool, ansi: bool) -> Option<Option<DataType>> {
     use DataType as T;
     let (x, y) = match (a.ty, b.ty) {
         (None, None) => return Some(None),
@@ -166,6 +172,7 @@ fn common(a: &Arg<'_>, b: &Arg<'_>, literal: bool) -> Option<Option<DataType>> {
                 y.clone()
             }
         }
+        (T::Float, n) | (n, T::Float) if !ansi && integral_digits(n).is_some() => T::Float,
         _ if is_numeric(x) && is_numeric(y) => T::Double,
         (T::String, n) | (n, T::String) if integral_digits(n).is_some() => T::Long,
         (T::String, n) | (n, T::String) if is_numeric(n) => T::Double,
@@ -183,7 +190,10 @@ fn common(a: &Arg<'_>, b: &Arg<'_>, literal: bool) -> Option<Option<DataType>> {
 
 /// The common type of all of `args` (`findWiderCommonType`: strings
 /// first), `Some(None)` when every one is an untyped `NULL`.
-fn common_all(args: &[Arg<'_>]) -> Option<Option<DataType>> {
+fn common_all(args: &[Arg<'_>], ansi: bool) -> Option<Option<DataType>> {
+    if !ansi && let Some(t) = legacy_string_type(args) {
+        return t;
+    }
     let strings = args
         .iter()
         .filter(|a| matches!(a.ty, Some(DataType::String)));
@@ -197,9 +207,24 @@ fn common_all(args: &[Arg<'_>]) -> Option<Option<DataType>> {
             nullable: false,
             literal: None,
         };
-        acc = common(&cur, a, false)?;
+        acc = common_in(&cur, a, false, ansi)?;
     }
     Some(acc)
+}
+
+/// Without ANSI a string meets numbers, dates and timestamps as a string
+/// (and no other type): `Some(Some(string))` or `Some(None)` for no common
+/// type; `None` when no argument is a string.
+fn legacy_string_type(args: &[Arg<'_>]) -> Option<Option<Option<DataType>>> {
+    use DataType as T;
+    let typed: Vec<&DataType> = args.iter().filter_map(|a| a.ty).collect();
+    if !typed.contains(&&T::String) {
+        return None;
+    }
+    let promotes = |t: &&DataType| {
+        is_numeric(t) || matches!(t, T::String | T::Date | T::Timestamp | T::TimestampNtz)
+    };
+    Some(typed.iter().all(promotes).then_some(Some(T::String)))
 }
 
 /// The type a value and a subquery column of `(values) IN (subquery)`
@@ -340,7 +365,7 @@ fn operator_types(
         (B::IsNull | B::IsNotNull, [_]) => Ok(boolean(vec![None], false)),
         (B::In, [_, ..]) => {
             legacy_strings(args, ansi)?;
-            let t = common_all(args).ok_or_else(|| {
+            let t = common_all(args, ansi).ok_or_else(|| {
                 Mismatch::DataDiff(args.iter().map(|a| a.ty.cloned()).collect(), true)
             })?;
             let casts = args.iter().map(|a| cast_to(a.ty, t.as_ref())).collect();
@@ -397,7 +422,7 @@ fn when(args: &[Arg<'_>], ansi: bool) -> Result<Typed, Mismatch> {
         })
         .collect();
     legacy_strings(&vals, ansi)?;
-    let t = common_all(&vals)
+    let t = common_all(&vals, ansi)
         .ok_or_else(|| Mismatch::DataDiff(vals.iter().map(|a| a.ty.cloned()).collect(), true))?
         .ok_or(Mismatch::Unsupported("values of the NULL type"))?;
     for (i, v) in &values {
@@ -494,6 +519,10 @@ fn arithmetic(
         }
         _ if op == Builtin::Divide => Ok(numeric(T::Double, true)),
         (T::Float, T::Float) => Ok(numeric(T::Float, nullable)),
+        // Without ANSI a `float` meeting an integral type stays `float`.
+        (T::Float, n) | (n, T::Float) if !ansi && integral_digits(n).is_some() => {
+            Ok(numeric(T::Float, nullable))
+        }
         _ if integral_digits(x).is_some() && integral_digits(y).is_some() => {
             let t = if integral_digits(x) >= integral_digits(y) {
                 x.clone()
@@ -514,15 +543,91 @@ pub(super) fn inputs(
     args: &[Arg<'_>],
     call: &CallTypes<'_>,
 ) -> Result<Vec<Option<DataType>>, Mismatch> {
-    if *inputs == Inputs::Common {
-        let t = common_all(args).ok_or_else(|| {
-            Mismatch::DataDiff(args.iter().map(|a| a.ty.cloned()).collect(), false)
-        })?;
-        return Ok(args.iter().map(|a| cast_to(a.ty, t.as_ref())).collect());
+    match inputs {
+        Inputs::Common => common_casts(args, args, call.ansi()),
+        Inputs::CommonNoStrings => {
+            let typed = args.iter().filter(|a| a.ty.is_some());
+            let strings = typed
+                .clone()
+                .filter(|a| a.ty == Some(&DataType::String))
+                .count();
+            if strings > 0 && strings < typed.count() {
+                return Err(Mismatch::DataDiff(
+                    args.iter().map(|a| a.ty.cloned()).collect(),
+                    false,
+                ));
+            }
+            common_casts(args, args, call.ansi())
+        }
+        Inputs::CommonWithZero => {
+            let all: Vec<Arg<'_>> = args.iter().copied().chain([hidden_zero()]).collect();
+            common_casts(args, &all, call.ansi())
+        }
+        Inputs::Leading(types) => {
+            let n = types.len().min(args.len());
+            let mut casts = declared(types, &args[..n])?;
+            casts.extend(common_casts(&args[n..], &args[n..], call.ansi())?);
+            Ok(casts)
+        }
+        Inputs::Comparable { zero } => {
+            let hidden = hidden_zero();
+            let other = if *zero { Some(&hidden) } else { args.get(1) };
+            if let (Some(a), Some(b)) = (args.first(), other) {
+                // Without ANSI a boolean compares with a number.
+                let legacy_boolean = !call.ansi()
+                    && matches!(
+                        (a.ty, b.ty),
+                        (Some(DataType::Boolean), Some(n)) | (Some(n), Some(DataType::Boolean))
+                            if is_numeric(n)
+                    );
+                if !legacy_boolean {
+                    common_in(a, b, true, call.ansi())
+                        .ok_or_else(|| Mismatch::DiffTypes(a.ty.cloned(), b.ty.cloned()))?;
+                }
+            }
+            Ok(vec![None; args.len()])
+        }
+        Inputs::Operator(op) | Inputs::TryOperator(op) => {
+            let builtin = match op {
+                Operator::Add => Builtin::Add,
+                Operator::Subtract => Builtin::Subtract,
+                Operator::Multiply => Builtin::Multiply,
+                Operator::Divide => Builtin::Divide,
+                Operator::Remainder => Builtin::Remainder,
+            };
+            operator_types(builtin, args, call.ansi(), call.decimal_loss()).map(|t| t.casts)
+        }
+        _ => match inputs.expected(call) {
+            Some(types) => declared(&types, args),
+            None => Ok(vec![None; args.len()]),
+        },
     }
-    let Some(types) = inputs.expected(call) else {
-        return Ok(vec![None; args.len()]);
-    };
+}
+
+/// The casts of `args` to the type all of `meet` (which includes `args`)
+/// share.
+fn common_casts(
+    args: &[Arg<'_>],
+    meet: &[Arg<'_>],
+    ansi: bool,
+) -> Result<Vec<Option<DataType>>, Mismatch> {
+    let t = common_all(meet, ansi)
+        .ok_or_else(|| Mismatch::DataDiff(meet.iter().map(|a| a.ty.cloned()).collect(), false))?;
+    Ok(args.iter().map(|a| cast_to(a.ty, t.as_ref())).collect())
+}
+
+/// The literal `0` of `zeroifnull` and `nullifzero`.
+fn hidden_zero() -> Arg<'static> {
+    Arg {
+        ty: Some(&DataType::Integer),
+        nullable: false,
+        literal: Some(0),
+    }
+}
+
+/// The casts for arguments with declared input types (the last type
+/// repeats for further arguments).
+fn declared(types: &[InputType], args: &[Arg<'_>]) -> Result<Vec<Option<DataType>>, Mismatch> {
     let mut casts = Vec::new();
     for (i, a) in args.iter().enumerate() {
         let want = types.get(i).or(types.last()).unwrap_or(&InputType::Any);
@@ -555,7 +660,8 @@ fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType
             }
             implicit(from, &InputType::Exact(t.clone()))
         }),
-        (None, InputType::Exact(t)) => Some(Some(t.clone())),
+        (None, InputType::Exact(t) | InputType::Strict(t)) => Some(Some(t.clone())),
+        (Some(f), InputType::Strict(t)) => (f == t).then(|| Some(t.clone())),
         (Some(f), InputType::Exact(t)) => {
             let from_string = is_numeric(t)
                 || matches!(
@@ -719,6 +825,7 @@ pub(super) fn quoted_type(t: Option<&DataType>) -> String {
 mod tests {
     use krishiv_types::DataType as T;
 
+    use super::super::catalog::ArgType;
     use super::*;
 
     /// ANSI implicit casts of function arguments (`AnsiTypeCoercion
@@ -793,5 +900,146 @@ mod tests {
             Some(Mismatch::Unsupported("this operator's arguments"))
         );
         assert_eq!(ordinal(3), "4th");
+    }
+
+    fn arg(t: Option<&T>) -> Arg<'_> {
+        Arg {
+            ty: t,
+            nullable: false,
+            literal: None,
+        }
+    }
+
+    /// The casts a registry function's `Inputs` ask for.
+    fn casts(inputs: &Inputs, args: &[Arg<'_>], ansi: bool) -> Result<Vec<Option<T>>, Mismatch> {
+        let types: Vec<ArgType> = args
+            .iter()
+            .map(|a| ArgType {
+                data_type: a.ty.cloned(),
+                nullable: a.nullable,
+            })
+            .collect();
+        super::inputs(inputs, args, &CallTypes::new(&types, &[]).with_ansi(ansi))
+    }
+
+    #[test]
+    fn conditional_inputs_meet_at_a_common_type() {
+        let (int, long, string, boolean) = (T::Integer, T::Long, T::String, T::Boolean);
+        let leading = Inputs::Leading(vec![InputType::Strict(T::Boolean)]);
+        // `if(cond, 1, 2L)`: the branches meet at `bigint`, the condition
+        // stays.
+        let args = [arg(Some(&boolean)), arg(Some(&int)), arg(Some(&long))];
+        assert_eq!(
+            casts(&leading, &args, true),
+            Ok(vec![None, Some(T::Long), None])
+        );
+        // An untyped NULL condition is a boolean; a string is no condition.
+        assert_eq!(
+            casts(
+                &leading,
+                &[arg(None), arg(Some(&int)), arg(Some(&int))],
+                true
+            ),
+            Ok(vec![Some(T::Boolean), None, None])
+        );
+        let bad = casts(
+            &leading,
+            &[arg(Some(&string)), arg(Some(&int)), arg(None)],
+            true,
+        );
+        assert!(
+            matches!(bad, Err(Mismatch::Unexpected { arg: 0, .. })),
+            "{bad:?}"
+        );
+        // `coalesce('a', 1)`: ANSI promotes the string to `bigint`, legacy
+        // makes both strings; a boolean and a string never meet in legacy.
+        let mixed = [arg(Some(&string)), arg(Some(&int))];
+        assert_eq!(
+            casts(&Inputs::Common, &mixed, true),
+            Ok(vec![Some(T::Long), Some(T::Long)])
+        );
+        assert_eq!(
+            casts(&Inputs::Common, &mixed, false),
+            Ok(vec![None, Some(T::String)])
+        );
+        let flag = [arg(Some(&string)), arg(Some(&boolean))];
+        assert!(casts(&Inputs::Common, &flag, false).is_err());
+        // `greatest('a', 1)` is an error in both modes.
+        for ansi in [true, false] {
+            assert!(casts(&Inputs::CommonNoStrings, &mixed, ansi).is_err());
+        }
+        assert!(
+            casts(
+                &Inputs::CommonNoStrings,
+                &[arg(Some(&string)), arg(None)],
+                true
+            )
+            .is_ok()
+        );
+        // `zeroifnull(x)` meets `x` with `0`: a decimal(10,2) grows to (12,2).
+        let dec = T::Decimal(DecimalType::try_new(10, 2).unwrap());
+        assert_eq!(
+            casts(&Inputs::CommonWithZero, &[arg(Some(&dec))], true),
+            Ok(vec![Some(T::Decimal(DecimalType::try_new(12, 2).unwrap()))])
+        );
+        assert_eq!(
+            casts(&Inputs::CommonWithZero, &[arg(None)], true),
+            Ok(vec![Some(T::Integer)])
+        );
+    }
+
+    #[test]
+    fn comparable_inputs_are_checked_not_cast() {
+        let (int, boolean, string) = (T::Integer, T::Boolean, T::String);
+        let eq = Inputs::Comparable { zero: false };
+        assert_eq!(
+            casts(&eq, &[arg(Some(&int)), arg(Some(&T::Float))], true),
+            Ok(vec![None, None])
+        );
+        let bad = casts(&eq, &[arg(Some(&boolean)), arg(Some(&int))], true);
+        assert!(matches!(bad, Err(Mismatch::DiffTypes(..))), "{bad:?}");
+        // Without ANSI a boolean compares with a number.
+        assert!(casts(&eq, &[arg(Some(&boolean)), arg(Some(&int))], false).is_ok());
+        assert!(casts(&eq, &[arg(Some(&string)), arg(Some(&int))], true).is_ok());
+        let zero = Inputs::Comparable { zero: true };
+        assert!(casts(&zero, &[arg(Some(&int))], true).is_ok());
+        assert!(casts(&zero, &[arg(Some(&boolean))], true).is_err());
+    }
+
+    #[test]
+    fn operator_inputs_cast_as_the_operator_does() {
+        let (int, long, float, string) = (T::Integer, T::Long, T::Float, T::String);
+        let rem = Inputs::Operator(Operator::Remainder);
+        assert_eq!(
+            casts(&rem, &[arg(Some(&int)), arg(Some(&long))], true),
+            Ok(vec![Some(T::Long), None])
+        );
+        // `try_divide` of integers divides doubles.
+        let div = Inputs::Operator(Operator::Divide);
+        assert_eq!(
+            casts(&div, &[arg(Some(&int)), arg(Some(&int))], true),
+            Ok(vec![Some(T::Double), Some(T::Double)])
+        );
+        // A `float` meeting an integral type is `double`, or `float` without
+        // ANSI.
+        let add = Inputs::Operator(Operator::Add);
+        let args = [arg(Some(&float)), arg(Some(&int))];
+        assert_eq!(
+            casts(&add, &args, true),
+            Ok(vec![Some(T::Double), Some(T::Double)])
+        );
+        assert_eq!(casts(&add, &args, false), Ok(vec![None, Some(T::Float)]));
+        let bad = casts(&add, &[arg(Some(&T::Boolean)), arg(Some(&string))], true);
+        assert!(bad.is_err());
+    }
+
+    #[test]
+    fn strict_inputs_take_the_exact_type_only() {
+        let strict = InputType::Strict(T::Boolean);
+        assert_eq!(implicit(Some(&T::Boolean), &strict), Some(Some(T::Boolean)));
+        assert_eq!(implicit(None, &strict), Some(Some(T::Boolean)));
+        assert_eq!(implicit(Some(&T::String), &strict), None);
+        assert_eq!(implicit(Some(&T::Integer), &strict), None);
+        assert_eq!(strict.sql(), r#""BOOLEAN""#);
     }
 }

@@ -15,11 +15,11 @@ use krishiv_kernels::{KernelCtx, SparkVersion};
 
 use super::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar, scalar_names};
 
-fn strs(v: &[Option<&str>]) -> ArrayRef {
+pub(super) fn strs(v: &[Option<&str>]) -> ArrayRef {
     Arc::new(StringArray::from(v.to_vec()))
 }
 
-fn ints(v: &[Option<i32>]) -> ArrayRef {
+pub(super) fn ints(v: &[Option<i32>]) -> ArrayRef {
     Arc::new(Int32Array::from(v.to_vec()))
 }
 
@@ -27,7 +27,7 @@ fn dates(v: &[Option<i32>]) -> ArrayRef {
     Arc::new(Date32Array::from(v.to_vec()))
 }
 
-fn bytes(v: &[Option<&[u8]>]) -> ArrayRef {
+pub(super) fn bytes(v: &[Option<&[u8]>]) -> ArrayRef {
     Arc::new(BinaryArray::from(v.to_vec()))
 }
 
@@ -39,46 +39,50 @@ fn ntz(v: &[Option<i64>]) -> ArrayRef {
     Arc::new(TimestampMicrosecondArray::from(v.to_vec()))
 }
 
-fn col(a: &ArrayRef) -> Arg {
+pub(super) fn col(a: &ArrayRef) -> Arg {
     Arg::Array(Arc::clone(a))
 }
 
-fn lit(a: &ArrayRef) -> Arg {
+pub(super) fn lit(a: &ArrayRef) -> Arg {
     Arg::Scalar(Arc::clone(a))
 }
 
-fn types(args: &[&ArrayRef]) -> Vec<BindArg> {
+pub(super) fn types(args: &[&ArrayRef]) -> Vec<BindArg> {
     args.iter().map(|a| a.data_type().clone().into()).collect()
 }
 
-fn bind_with(name: &str, args: &[&ArrayRef], opts: &BindOptions) -> Arc<dyn ScalarFunction> {
+pub(super) fn bind_with(
+    name: &str,
+    args: &[&ArrayRef],
+    opts: &BindOptions,
+) -> Arc<dyn ScalarFunction> {
     bind_scalar(name, &types(args), opts).unwrap()
 }
 
-fn bind(name: &str, args: &[&ArrayRef]) -> Arc<dyn ScalarFunction> {
+pub(super) fn bind(name: &str, args: &[&ArrayRef]) -> Arc<dyn ScalarFunction> {
     bind_with(name, args, &BindOptions::new())
 }
 
 /// `name` over columns `args`.
-fn run(name: &str, args: &[&ArrayRef]) -> ArrayRef {
+pub(super) fn run(name: &str, args: &[&ArrayRef]) -> ArrayRef {
     let rows = args.first().map_or(1, |a| Array::len(a.as_ref()));
     let f = bind(name, args);
     f.invoke(&args.iter().map(|a| col(a)).collect::<Vec<_>>(), rows)
         .unwrap()
 }
 
-fn text(a: &ArrayRef) -> Vec<Option<String>> {
+pub(super) fn text(a: &ArrayRef) -> Vec<Option<String>> {
     a.as_string::<i32>()
         .iter()
         .map(|s| s.map(str::to_owned))
         .collect()
 }
 
-fn owned(v: &[Option<&str>]) -> Vec<Option<String>> {
+pub(super) fn owned(v: &[Option<&str>]) -> Vec<Option<String>> {
     v.iter().map(|s| s.map(str::to_owned)).collect()
 }
 
-fn int_values(a: &ArrayRef) -> Vec<Option<i32>> {
+pub(super) fn int_values(a: &ArrayRef) -> Vec<Option<i32>> {
     a.as_primitive::<Int32Type>().iter().collect()
 }
 
@@ -86,7 +90,7 @@ fn bools(a: &ArrayRef) -> Vec<Option<bool>> {
     a.as_boolean().iter().collect()
 }
 
-fn class(e: &KrishivError) -> ErrorClass {
+pub(super) fn class(e: &KrishivError) -> ErrorClass {
     e.error_class()
 }
 
@@ -556,3 +560,5 @@ fn results_are_checked_against_the_binding() {
     assert_eq!(class(&err), ErrorClass::InternalError);
     assert!(err.to_string().contains("returned 1 rows of Utf8"), "{err}");
 }
+
+mod families;

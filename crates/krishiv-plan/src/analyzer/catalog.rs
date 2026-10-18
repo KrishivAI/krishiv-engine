@@ -134,7 +134,7 @@ pub trait CatalogResolver: Send + Sync {
 }
 
 pub use krishiv_functions::signature::{
-    ArgType, Arity, CallTypes, Constant, InputBuilder, InputType, Inputs, ResultType,
+    ArgType, Arity, CallTypes, Constant, InputBuilder, InputType, Inputs, Operator, ResultType,
 };
 
 /// A function the registry knows. The canonical operators

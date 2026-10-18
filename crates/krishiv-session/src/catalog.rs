@@ -145,6 +145,26 @@ impl QueryCatalog {
     }
 }
 
+/// The table `name`: the one this query already loaded, so every spelling
+/// of a name binds one table even if another thread replaces it meanwhile,
+/// else the session's.
+fn resolve(
+    loaded: &Mutex<HashMap<String, Arc<TempTable>>>,
+    session: &SessionCatalog,
+    name: &str,
+    form: NameForm,
+) -> Option<Arc<TempTable>> {
+    let first = loaded
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&name.to_lowercase())
+        .cloned();
+    match first {
+        Some(t) if !form.case_sensitive || session.get(name, true).is_some() => Some(t),
+        _ => session.get(name, form.case_sensitive),
+    }
+}
+
 fn unsupported(feature: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: feature.to_owned(),
@@ -170,10 +190,10 @@ impl Catalog for QueryCatalog {
         Box::pin(async move {
             // Temporary views resolve for unqualified names only: Spark
             // finds `v` but not `default.v` or `spark_catalog.default.v`.
-            let found = if !form.qualified {
-                self.session.get(&id.name, form.case_sensitive)
-            } else {
+            let found = if form.qualified {
                 None
+            } else {
+                resolve(&self.loaded, &self.session, &id.name, form)
             };
             let Some(table) = found else {
                 return Ok(None);
@@ -247,5 +267,58 @@ impl TableProviderResolver for QueryCatalog {
             source @ ReadSource::Files { .. } => self.files_provider(source),
             _ => Err(unsupported("this scan")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use krishiv_types::DataType;
+
+    fn files(col: &str) -> TempTable {
+        TempTable::Files {
+            source: ReadSource::Files {
+                format: "parquet".to_owned(),
+                paths: vec![],
+                options: Default::default(),
+            },
+            columns: vec![TableColumn {
+                name: col.to_owned(),
+                data_type: DataType::Integer,
+                nullable: false,
+            }],
+        }
+    }
+
+    fn first_column(t: &TempTable) -> &str {
+        match t {
+            TempTable::Files { columns, .. } | TempTable::Memory { columns, .. } => {
+                &columns[0].name
+            }
+        }
+    }
+
+    #[test]
+    fn every_spelling_binds_the_table_loaded_first() {
+        let session = SessionCatalog::default();
+        session.put("people", files("a"));
+        let loaded = Mutex::new(HashMap::new());
+        let form = NameForm {
+            case_sensitive: false,
+            qualified: false,
+        };
+        let t = resolve(&loaded, &session, "people", form).unwrap();
+        loaded.lock().unwrap().insert("people".to_owned(), t);
+        // Another thread replaces the table.
+        session.put("people", files("b"));
+        let again = resolve(&loaded, &session, "PEOPLE", form).unwrap();
+        assert_eq!(first_column(&again), "a");
+        // A case-sensitive spelling that is not registered does not resolve
+        // through the loaded entry.
+        let cs = NameForm {
+            case_sensitive: true,
+            ..form
+        };
+        assert!(resolve(&loaded, &session, "PEOPLE", cs).is_none());
     }
 }
