@@ -5,8 +5,10 @@
 //! on the live registry, whose size grows whenever a config key is added: a
 //! benchmark of the live registry would report every new key as a
 //! regression and say nothing about the algorithm. A slower algorithm (for
-//! example a linear scan) shows up here at once. One real lookup keeps the
-//! production entry point covered.
+//! example a linear scan) shows up here at once. `lookup` on the live
+//! registry is covered by unit tests, not benchmarked: a single real key's
+//! cost moves with the registry's contents and code layout, not the
+//! algorithm.
 
 #![expect(
     missing_docs,
@@ -16,7 +18,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use krishiv_common::config::{lookup, search};
+use krishiv_common::config::search;
 
 /// 256 dotted keys shaped like real ones, ordered by (length, name).
 fn synthetic_index() -> Vec<(String, u32)> {
@@ -43,9 +45,6 @@ fn bench_lookup(c: &mut Criterion) {
     });
     group.bench_function("search_miss_256", |b| {
         b.iter(|| search(black_box(&index), black_box("krishiv.sql.does.not.exist")));
-    });
-    group.bench_function("lookup_registry", |b| {
-        b.iter(|| lookup(black_box("krishiv.spill.compression")));
     });
     group.finish();
 }

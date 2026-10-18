@@ -1398,6 +1398,7 @@ dependencies = [
  "loom",
  "object_store",
  "proptest",
+ "serde_json",
  "tokio",
  "tracing",
 ]
@@ -1438,6 +1439,7 @@ version = "0.1.0-dev"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
+ "arrow-schema",
  "codspeed-criterion-compat",
  "krishiv-common",
  "mimalloc",
@@ -1550,6 +1552,7 @@ dependencies = [
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
+ "krishiv-kernels",
  "krishiv-memory",
  "krishiv-plan",
  "krishiv-sql",

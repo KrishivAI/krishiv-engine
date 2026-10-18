@@ -3,8 +3,9 @@
 //!
 //! `cargo run -p krishiv-testkit --bin fn-matrix-report -- [--fixtures DIR] [--results FILE] [--out FILE]`
 //!
-//! `--results` is engine output `{"engine": "...", "passed": [ids], "failed": [ids]}`; without it every
-//! case counts as not run, so the matrix reports 0% green.
+//! `--results` is engine output `{"engine": "...", "passed": [ids], "failed": [ids]}`; `--kernel-eval`
+//! runs the arithmetic/comparison/cast cells on `krishiv-kernels` instead (P2-T021a); without either
+//! every case counts as not run, so the matrix reports 0% green.
 #![forbid(unsafe_code)]
 
 use std::io::Write as _;
@@ -12,15 +13,22 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use krishiv_testkit::fn_matrix::{CoverageReport, EngineResults, FnMatrix};
+use krishiv_testkit::kernel_eval::{CellOutcome, run_cell};
 
-const USAGE: &str = "usage: fn-matrix-report [--fixtures DIR] [--results FILE] [--out FILE]";
+const USAGE: &str =
+    "usage: fn-matrix-report [--fixtures DIR] [--results FILE | --kernel-eval] [--out FILE]";
 
 fn run() -> Result<(), String> {
     let mut fixtures = FnMatrix::default_dir();
     let mut results = None;
     let mut out = None;
+    let mut kernel_eval = false;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
+        if flag == "--kernel-eval" {
+            kernel_eval = true;
+            continue;
+        }
         let mut value = || {
             args.next()
                 .map(PathBuf::from)
@@ -35,6 +43,20 @@ fn run() -> Result<(), String> {
     }
     let matrix = FnMatrix::load(&fixtures).map_err(|e| e.to_string())?;
     let results = match results {
+        None if kernel_eval => {
+            let mut r = EngineResults {
+                engine: "krishiv-kernels (kernel evaluator)".to_owned(),
+                ..EngineResults::default()
+            };
+            for c in &matrix.cases {
+                match run_cell(c) {
+                    CellOutcome::Pass => r.passed.insert(c.id.clone()),
+                    CellOutcome::Fail(_) => r.failed.insert(c.id.clone()),
+                    CellOutcome::NotRun(_) => false,
+                };
+            }
+            r
+        }
         Some(p) => EngineResults::parse(
             &std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?,
         )

@@ -16,6 +16,9 @@ pub struct Reservation {
     /// Set when made by [`ConsumerHandle::reservation`]: growth draws the
     /// handle's grant credit first, and the handle stays registered.
     handle: Option<Arc<ConsumerHandle>>,
+    /// Shrinking parks the bytes as the handle's credit instead of
+    /// returning them to the pool ([`Reservation::releasing_to_credit`]).
+    to_credit: bool,
 }
 
 impl Reservation {
@@ -26,6 +29,7 @@ impl Reservation {
             id,
             bytes: 0,
             handle: None,
+            to_credit: false,
         }
     }
 
@@ -35,7 +39,23 @@ impl Reservation {
             id: handle.id(),
             bytes: 0,
             handle: Some(handle),
+            to_credit: false,
         }
+    }
+
+    /// Makes every later shrink, and the drop, park the bytes as the
+    /// consumer's grant credit instead of returning them to the pool (see
+    /// [`shrink_to_credit`](Self::shrink_to_credit)). For scratch memory
+    /// that is reserved and freed repeatedly while its owner lends it bytes
+    /// as credit (a spill writer's or reader's working memory): what it
+    /// frees stays with the consumer for its next growth, so another
+    /// consumer cannot take it in between. The owner takes the credit back
+    /// afterwards (a `try_grow` draws it) or returns it with
+    /// [`ConsumerHandle::release_credit`]. No effect without a handle.
+    #[must_use]
+    pub fn releasing_to_credit(mut self) -> Self {
+        self.to_credit = self.handle.is_some();
+        self
     }
 
     /// Takes grant credit for up to `bytes`; returns the bytes still needed
@@ -105,10 +125,38 @@ impl Reservation {
     /// Returns up to `bytes` to the pool.
     pub fn shrink(&mut self, bytes: usize) {
         let bytes = bytes.min(self.bytes);
-        self.pool.release(self.id, bytes);
         self.bytes -= bytes;
-        if let Some(h) = &self.handle {
-            h.shrank(bytes);
+        self.release(bytes, self.to_credit);
+    }
+
+    /// Moves up to `bytes` of this reservation to its consumer's grant
+    /// credit without returning them to the pool, so the next `try_grow` of
+    /// any reservation made from the same [`ConsumerHandle`] takes them
+    /// without touching the pool: a race-free hand-over of reserved bytes,
+    /// such as pre-reserved headroom lent to a spill writer's scratch
+    /// reservation. Unused credit goes back with
+    /// [`ConsumerHandle::release_credit`] or the consumer's unregistration.
+    /// A reservation made by [`Reservation::new`] has no handle and shrinks
+    /// instead.
+    pub fn shrink_to_credit(&mut self, bytes: usize) {
+        let bytes = bytes.min(self.bytes);
+        self.bytes -= bytes;
+        self.release(bytes, true);
+    }
+
+    /// Returns `bytes` the reservation no longer counts: to the handle's
+    /// credit when asked to (and it has a handle), else to the pool.
+    fn release(&self, bytes: usize, to_credit: bool) {
+        match &self.handle {
+            Some(h) if to_credit => {
+                h.shrank(bytes);
+                h.add_credit(bytes);
+            }
+            Some(h) => {
+                self.pool.release(self.id, bytes);
+                h.shrank(bytes);
+            }
+            None => self.pool.release(self.id, bytes),
         }
     }
 
@@ -163,10 +211,7 @@ impl fmt::Debug for Reservation {
 impl Drop for Reservation {
     fn drop(&mut self) {
         if self.bytes > 0 {
-            self.pool.release(self.id, self.bytes);
-            if let Some(h) = &self.handle {
-                h.shrank(self.bytes);
-            }
+            self.release(self.bytes, self.to_credit);
         }
     }
 }

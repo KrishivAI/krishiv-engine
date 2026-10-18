@@ -261,16 +261,21 @@ where
         for i in 0..full {
             let a = lc.get(i).unwrap_or(&zero);
             let b = rc.get(i).unwrap_or(&zero);
-            let any =
+            let flags =
                 chunk::<T, L, L_SCALAR, R_SCALAR>(a, ls, b, rs, self.out, CHUNK, self.op, checks);
-            if any {
-                let f = faults::<T, L, O, L_SCALAR, R_SCALAR>(a, ls, b, rs, self.op, next_valid());
-                if let Some(raised) = record(i, f) {
-                    return Some(raised);
-                }
-            } else if checks {
-                let _ = next_valid();
-                record(i, ChunkFaults::default());
+            if !checks {
+                continue;
+            }
+            // Only a flagged non-NULL row needs the slow scan: garbage under
+            // a NULL slot (often a zeroed divisor) costs nothing.
+            let valid = next_valid();
+            let f = if flags & valid == 0 {
+                ChunkFaults::default()
+            } else {
+                faults::<T, L, O, L_SCALAR, R_SCALAR>(a, ls, b, rs, self.op, valid)
+            };
+            if let Some(raised) = record(i, f) {
+                return Some(raised);
             }
         }
         let rem = self.len.wrapping_sub(full.wrapping_mul(CHUNK));
@@ -278,12 +283,16 @@ where
             let (mut a, mut b) = (zero, zero);
             copy_prefix(&mut a, lt);
             copy_prefix(&mut b, rt);
-            if chunk::<T, L, L_SCALAR, R_SCALAR>(&a, ls, &b, rs, self.out, rem, self.op, checks) {
+            let flags =
+                chunk::<T, L, L_SCALAR, R_SCALAR>(&a, ls, &b, rs, self.out, rem, self.op, checks);
+            if checks {
                 let valid = next_valid() & low_bits(rem);
-                let f = faults::<T, L, O, L_SCALAR, R_SCALAR>(&a, ls, &b, rs, self.op, valid);
+                let f = if flags & valid == 0 {
+                    ChunkFaults::default()
+                } else {
+                    faults::<T, L, O, L_SCALAR, R_SCALAR>(&a, ls, &b, rs, self.op, valid)
+                };
                 return record(full, f);
-            } else if checks {
-                record(full, ChunkFaults::default());
             }
         }
         None
@@ -298,8 +307,9 @@ fn copy_prefix<T: Copy>(dst: &mut [T; CHUNK], src: &[T]) {
 }
 
 /// One chunk: appends the first `take` results to `out` (whose capacity
-/// was reserved) and returns whether any row may fault (always `false` when
-/// the policy does not check).
+/// was reserved) and returns the "may fault" flags: one bit per row for
+/// dividing lanes, all bits for any flagged row otherwise, and zero when the
+/// policy does not check.
 #[expect(
     clippy::too_many_arguments,
     reason = "the hot loop takes its operands unpacked so it inlines into each clone"
@@ -314,7 +324,7 @@ fn chunk<T, L, const L_SCALAR: bool, const R_SCALAR: bool>(
     take: usize,
     op: L,
     checks: bool,
-) -> bool
+) -> u64
 where
     T: Copy,
     L: LaneOp<T>,
@@ -326,8 +336,23 @@ where
             let (x, y) = pick(x, y);
             op.wrapping(x, y)
         }));
-        return false;
+        return 0;
     }
+    if L::MAY_DIVIDE_BY_ZERO {
+        // Dividing lanes never vectorize, and a zeroed divisor under a NULL
+        // slot is common: keep one flag bit per row so the caller can mask
+        // NULL rows out before deciding on the slow scan.
+        let mut flags = 0_u64;
+        out.extend(lanes.zip(0_u32..).map(|((&x, &y), bit)| {
+            let (x, y) = pick(x, y);
+            let (v, flag) = op.checked(x, y);
+            flags |= u64::from(flag).wrapping_shl(bit);
+            v
+        }));
+        return flags;
+    }
+    // Vectorizable lanes: one OR-reduced flag (a per-row word measured
+    // ~2x slower on `i32 +`); it marks the whole chunk.
     let mut any = false;
     out.extend(lanes.map(|(&x, &y)| {
         let (x, y) = pick(x, y);
@@ -335,7 +360,7 @@ where
         any |= flag;
         v
     }));
-    any
+    if any { u64::MAX } else { 0 }
 }
 
 /// The slow scan of a flagged chunk: classifies each row with the exact
@@ -435,7 +460,11 @@ mod tests {
             nulls,
             a.len(),
             Div,
-            |row, f| KernelError::for_fault(row, f, |r| KernelError::arithmetic_overflow(r, None)),
+            |row, f| {
+                KernelError::for_fault(row, f, |r| {
+                    KernelError::arithmetic_overflow(r, "overflow", None)
+                })
+            },
         )
     }
 

@@ -20,17 +20,25 @@
 
 use std::fmt::Debug;
 
-use arrow_array::types::{Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type};
-use arrow_array::{ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::{NullBuffer, ScalarBuffer};
-use krishiv_kernels::decimal::{DecimalPlan, DecimalStorage, decimal_binary};
-use krishiv_kernels::float::{self, CompareOp, Equal, Greater, GreaterEq, Less, LessEq};
-use krishiv_kernels::integer::{SparkIntegral, binary};
+use arrow_array::types::{
+    Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+};
+use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, PrimitiveArray};
+use arrow_buffer::{NullBuffer, ScalarBuffer, ToByteSlice};
+use krishiv_kernels::compare::{
+    self, BoolOperand, BytesOperand, CompareKind, CompareOp, Equal, Greater, GreaterEq, Less,
+    LessEq, NotEqual, SparkOrd, Validity,
+};
+use krishiv_kernels::decimal::{
+    DecimalOp, DecimalPlan, DecimalStorage, decimal_arith, decimal_integral_divide, result_type,
+};
+use krishiv_kernels::float::{self, SparkFloat};
+use krishiv_kernels::integer::{SparkIntegral, UnaryOp, binary, integral_divide, remainder, unary};
 use krishiv_kernels::ops::BinaryOp;
-use krishiv_kernels::reference::{self, CompareKind};
+use krishiv_kernels::reference;
 use krishiv_kernels::{
     Add, AnsiError, ArithOp, JavaWrap, KernelCtx, KernelError, Mul, NullOnOverflow, Operand,
-    Overflow, OverflowMode, Sub, Target, Unchecked,
+    Overflow, OverflowMode, SparkVersion, Sub, Target, Unchecked,
 };
 use proptest::prelude::*;
 
@@ -180,15 +188,48 @@ fn assert_same<A: PartialEq + Debug>(fast: &Result<A, KernelError>, slow: &Resul
     }
 }
 
+/// Every available target, under every Spark version (errors differ by
+/// version; values do not); under Miri, one version.
+fn version_contexts() -> Vec<KernelCtx> {
+    // Miri interprets every case: there one older version stands for all.
+    let versions: &[SparkVersion] = if cfg!(miri) {
+        &[SparkVersion::V4_0]
+    } else {
+        &SparkVersion::ALL
+    };
+    contexts()
+        .into_iter()
+        .flat_map(|c| versions.iter().map(move |&v| c.with_spark_version(v)))
+        .collect()
+}
+
 fn check_int<P, Op, O>(c: &Case<P::Native>)
 where
     P: SparkIntegral,
     Op: BinaryOp,
     O: Overflow,
 {
-    let slow = c.with::<P, _>(|l, r| reference::integer_binary::<P>(Op::OP, O::MODE, l, r));
-    for ctx in contexts() {
+    for ctx in version_contexts() {
+        let v = ctx.spark_version();
+        let slow = c.with::<P, _>(|l, r| reference::integer_binary::<P>(Op::OP, O::MODE, v, l, r));
         let fast = c.with::<P, _>(|l, r| binary::<P, Op, O>(l, r, &ctx));
+        assert_same(&fast, &slow);
+        let slow = c.with::<P, _>(|l, r| reference::integer_remainder::<P>(O::MODE, v, l, r));
+        let fast = c.with::<P, _>(|l, r| remainder::<P, O>(l, r, &ctx));
+        assert_same(&fast, &slow);
+        let left = c.l.array::<P>();
+        for op in [UnaryOp::Negate, UnaryOp::Abs] {
+            let slow = reference::integer_unary::<P>(op, O::MODE, v, &left);
+            assert_same(&unary::<P, O>(op, &left, &ctx), &slow);
+        }
+    }
+}
+
+/// `div` is defined on `bigint` only (Spark widens its operands first).
+fn check_div<O: Overflow>(c: &Case<i64>) {
+    let slow = c.with::<Int64Type, _>(|l, r| reference::integer_divide(O::MODE, l, r));
+    for ctx in contexts() {
+        let fast = c.with::<Int64Type, _>(|l, r| integral_divide::<O>(l, r, &ctx));
         assert_same(&fast, &slow);
     }
 }
@@ -198,6 +239,14 @@ fn check_int_all<P: SparkIntegral, Op: BinaryOp>(c: &Case<P::Native>) {
     check_int::<P, Op, JavaWrap>(c);
     check_int::<P, Op, NullOnOverflow>(c);
     check_int::<P, Op, AnsiError>(c);
+}
+
+fn i8_value() -> impl Strategy<Value = i8> + Clone {
+    int_value(&[i8::MIN, i8::MAX, -1, 0, 1], -10..10_i8, any::<i8>())
+}
+
+fn i16_value() -> impl Strategy<Value = i16> + Clone {
+    int_value(&[i16::MIN, i16::MAX, -1, 0, 1], -100..100_i16, any::<i16>())
 }
 
 fn i32_value() -> impl Strategy<Value = i32> + Clone {
@@ -231,12 +280,28 @@ macro_rules! int_props {
 }
 
 int_props! {
+    i8_add: Int8Type, Add, i8_value();
+    i8_mul: Int8Type, Mul, i8_value();
+    i16_sub: Int16Type, Sub, i16_value();
+    i16_mul: Int16Type, Mul, i16_value();
     i32_add: Int32Type, Add, i32_value();
     i32_sub: Int32Type, Sub, i32_value();
     i32_mul: Int32Type, Mul, i32_value();
     i64_add: Int64Type, Add, i64_value();
     i64_sub: Int64Type, Sub, i64_value();
     i64_mul: Int64Type, Mul, i64_value();
+}
+
+proptest! {
+    #![proptest_config(config())]
+
+    #[test]
+    fn i64_div(c in case(i64_value())) {
+        check_div::<JavaWrap>(&c);
+        check_div::<NullOnOverflow>(&c);
+        check_div::<AnsiError>(&c);
+        check_div::<Unchecked>(&c);
+    }
 }
 
 fn f64_value() -> impl Strategy<Value = f64> + Clone {
@@ -280,39 +345,142 @@ fn f32_value() -> impl Strategy<Value = f32> + Clone {
     ]
 }
 
-fn check_cmp<P, Op>(kind: CompareKind, c: &Case<P::Native>)
+/// A reference comparison.
+type CmpRef<P> =
+    dyn Fn(CompareKind, Operand<'_, P>, Operand<'_, P>) -> Result<BooleanArray, KernelError>;
+
+/// Two optional byte strings.
+type BytesRow = (Option<Vec<u8>>, Option<Vec<u8>>);
+
+/// Checks one comparison and, for `=`, the null-safe `<=>` built on it.
+fn check_cmp<P, Op>(c: &Case<P::Native>, slow: &CmpRef<P>)
 where
-    P: ArrowPrimitiveType<Native: float::SparkFloat>,
+    P: ArrowPrimitiveType<Native: SparkOrd>,
     Op: CompareOp,
 {
-    let slow = c.with::<P, _>(|l, r| reference::compare::<P>(kind, l, r));
+    let expect = c.with::<P, _>(|l, r| slow(Op::KIND, l, r)).unwrap();
     for ctx in contexts() {
-        let fast = c.with::<P, _>(|l, r| float::compare::<P, Op>(l, r, &ctx));
-        assert_eq!(fast.unwrap(), *slow.as_ref().unwrap());
+        let fast = c.with::<P, _>(|l, r| compare::compare::<P, Op>(l, r, &ctx));
+        assert_eq!(fast.unwrap(), expect);
+    }
+    if Op::KIND == CompareKind::Equal {
+        let (la, ra) = (c.l.array::<P>(), c.r.array::<P>());
+        let eq = c.with::<P, _>(|l, r| compare::compare::<P, Equal>(l, r, &KernelCtx::new()));
+        let rows = |a: &PrimitiveArray<P>| {
+            (0..a.len())
+                .map(|i| a.is_valid(i).then(|| a.value(i)))
+                .collect::<Vec<_>>()
+        };
+        let (lv, rv, ls, rs) = match c.shape {
+            Shape::ArrayArray => (
+                rows(&la),
+                rows(&ra),
+                Validity::Array(la.nulls()),
+                Validity::Array(ra.nulls()),
+            ),
+            Shape::ArrayScalar(v) => (
+                rows(&la),
+                vec![v; la.len()],
+                Validity::Array(la.nulls()),
+                Validity::Scalar { null: v.is_none() },
+            ),
+            Shape::ScalarArray(v) => (
+                vec![v; ra.len()],
+                rows(&ra),
+                Validity::Scalar { null: v.is_none() },
+                Validity::Array(ra.nulls()),
+            ),
+        };
+        // `<=>` equality of present values follows Spark's order too.
+        let expect: BooleanArray = lv
+            .iter()
+            .zip(&rv)
+            .map(|(a, b)| {
+                Some(match (a, b) {
+                    (Some(a), Some(b)) => P::Native::spark_eq(*a, *b),
+                    (None, None) => true,
+                    _ => false,
+                })
+            })
+            .collect();
+        assert_eq!(compare::null_safe(&eq.unwrap(), ls, rs).unwrap(), expect);
     }
 }
 
-fn check_cmp_all<P: ArrowPrimitiveType<Native: float::SparkFloat>>(c: &Case<P::Native>) {
-    check_cmp::<P, Equal>(CompareKind::Equal, c);
-    check_cmp::<P, Less>(CompareKind::Less, c);
-    check_cmp::<P, LessEq>(CompareKind::LessEq, c);
-    check_cmp::<P, Greater>(CompareKind::Greater, c);
-    check_cmp::<P, GreaterEq>(CompareKind::GreaterEq, c);
+fn check_cmp_all<P: ArrowPrimitiveType<Native: SparkOrd>>(c: &Case<P::Native>, slow: &CmpRef<P>) {
+    check_cmp::<P, Equal>(c, slow);
+    check_cmp::<P, NotEqual>(c, slow);
+    check_cmp::<P, Less>(c, slow);
+    check_cmp::<P, LessEq>(c, slow);
+    check_cmp::<P, Greater>(c, slow);
+    check_cmp::<P, GreaterEq>(c, slow);
+}
+
+fn check_float_arith<P: ArrowPrimitiveType<Native: SparkFloat>>(c: &Case<P::Native>) {
+    let same = |fast: Result<PrimitiveArray<P>, KernelError>,
+                slow: Result<PrimitiveArray<P>, KernelError>| {
+        match (fast, slow) {
+            // Compare bit patterns (-0.0 included); any NaN equals any NaN
+            // (IEEE leaves NaN payloads unspecified and Spark never shows them).
+            (Ok(f), Ok(s)) => {
+                let nulls =
+                    |a: &PrimitiveArray<P>| (0..a.len()).map(|i| a.is_null(i)).collect::<Vec<_>>();
+                assert_eq!(nulls(&f), nulls(&s));
+                for i in (0..f.len()).filter(|&i| f.is_valid(i)) {
+                    let (a, b) = (f.value(i), s.value(i));
+                    if !(a.is_nan() && b.is_nan()) {
+                        assert_eq!(a.to_byte_slice(), b.to_byte_slice(), "row {i}");
+                    }
+                }
+            }
+            (f, s) => assert_same(&f, &s),
+        }
+    };
+    for ctx in version_contexts() {
+        let v = ctx.spark_version();
+        for op in [ArithOp::Add, ArithOp::Subtract, ArithOp::Multiply] {
+            let slow = c.with::<P, _>(|l, r| {
+                reference::float_arith(Some(op), false, OverflowMode::AnsiError, v, l, r)
+            });
+            same(c.with::<P, _>(|l, r| float::binary(op, l, r, &ctx)), slow);
+        }
+        for rem in [false, true] {
+            for mode in [OverflowMode::JavaWrap, OverflowMode::AnsiError] {
+                let slow = c.with::<P, _>(|l, r| reference::float_arith(None, rem, mode, v, l, r));
+                let fast = c.with::<P, _>(|l, r| match (rem, mode) {
+                    (false, OverflowMode::JavaWrap) => float::divide::<P, JavaWrap>(l, r, &ctx),
+                    (false, _) => float::divide::<P, AnsiError>(l, r, &ctx),
+                    (true, OverflowMode::JavaWrap) => float::remainder::<P, JavaWrap>(l, r, &ctx),
+                    (true, _) => float::remainder::<P, AnsiError>(l, r, &ctx),
+                });
+                same(fast, slow);
+            }
+        }
+    }
 }
 
 /// A decimal type, its values and a result precision.
-/// `(op, left type, right type, result precision, values)`.
-type DecimalCase = (ArithOp, (u8, i8), (u8, i8), u8, Case<i128>);
+/// `(op, left type, right type, (result type choice, precision, scale), values)`.
+type DecimalCase = (DecimalOp, (u8, i8), (u8, i8), (u8, u8, u8), Case<i128>);
 
 type DecOperand<'a> = Operand<'a, Decimal128Type>;
 type DecResult = Result<PrimitiveArray<Decimal128Type>, KernelError>;
 
 fn decimal_case() -> impl Strategy<Value = DecimalCase> {
     let ty = (1..=38_u8)
-        .prop_flat_map(|p| (Just(p), 0..=p.min(20)))
+        .prop_flat_map(|p| (Just(p), prop_oneof![0..=p.min(20), 0..=p]))
         .prop_map(|(p, s)| (p, i8::try_from(s).unwrap()));
-    let op = proptest::sample::select(&[ArithOp::Add, ArithOp::Subtract, ArithOp::Multiply][..]);
-    (op, ty.clone(), ty, 1..=38_u8).prop_flat_map(|(op, l, r, out_p)| {
+    let op = proptest::sample::select(
+        &[
+            DecimalOp::Add,
+            DecimalOp::Subtract,
+            DecimalOp::Multiply,
+            DecimalOp::Divide,
+            DecimalOp::Remainder,
+        ][..],
+    );
+    let out = (0..3_u8, 1..=38_u8, 0..=38_u8);
+    (op, ty.clone(), ty, out).prop_flat_map(|(op, l, r, out)| {
         let max = |p: u8| 10_i128.pow(u32::from(p)) - 1;
         let (ml, mr) = (max(l.0), max(r.0));
         // One value strategy covering both sides' precisions. Valid values
@@ -344,7 +512,7 @@ fn decimal_case() -> impl Strategy<Value = DecimalCase> {
                 Shape::ScalarArray(s) => Shape::ScalarArray(s.map(|x| x.clamp(-ml, ml))),
                 s => s,
             };
-            (op, l, r, out_p, c)
+            (op, l, r, out, c)
         })
     })
 }
@@ -355,7 +523,7 @@ fn decimal_array(c: &Column<i128>, t: (u8, i8)) -> PrimitiveArray<Decimal128Type
         .unwrap()
 }
 
-fn check_decimal<Op: BinaryOp, O: krishiv_kernels::decimal::DecimalOverflow>(
+fn check_decimal<O: krishiv_kernels::decimal::DecimalOverflow>(
     plan: &DecimalPlan,
     l: (u8, i8),
     r: (u8, i8),
@@ -367,29 +535,56 @@ fn check_decimal<Op: BinaryOp, O: krishiv_kernels::decimal::DecimalOverflow>(
         Shape::ArrayScalar(s) => f(Operand::Array(&la), Operand::Scalar(s)),
         Shape::ScalarArray(s) => f(Operand::Scalar(s), Operand::Array(&ra)),
     };
-    let slow = run(&|a, b| reference::decimal_binary(plan, O::MODE, a, b));
-    let mut storages = vec![DecimalStorage::I128];
-    if plan.storage() == DecimalStorage::I64 {
-        storages.push(DecimalStorage::I64);
-    }
-    for s in storages {
-        let p = plan.with_storage(s).unwrap();
-        for ctx in contexts() {
-            let fast = run(&|a, b| decimal_binary::<Op, O>(a, b, &p, &ctx));
-            if O::MODE == OverflowMode::Unchecked {
+    for ctx in version_contexts() {
+        let v = ctx.spark_version();
+        let slow = run(&|a, b| reference::decimal_arith(plan, O::MODE, v, a, b));
+        let mut storages = vec![DecimalStorage::I128];
+        if plan.storage() == DecimalStorage::I64 {
+            storages.push(DecimalStorage::I64);
+        }
+        for s in storages {
+            let p = plan.with_storage(s).unwrap();
+            let fast = run(&|a, b| decimal_arith::<O>(a, b, &p, &ctx));
+            if O::MODE == OverflowMode::Unchecked && slow.is_ok() {
                 assert_eq!(fast.unwrap(), slow.clone().unwrap());
             } else {
                 assert_same(&fast, &slow);
             }
         }
     }
+    if plan.types_op() == DecimalOp::Divide {
+        let slow = c.with_decimal(&la, &ra, |a, b| {
+            reference::decimal_integral_divide(l, r, O::MODE, a, b)
+        });
+        for ctx in contexts() {
+            let fast = c.with_decimal(&la, &ra, |a, b| {
+                decimal_integral_divide::<O>(a, b, l, r, &ctx)
+            });
+            assert_same(&fast, &slow);
+        }
+    }
 }
 
-fn check_decimal_op<Op: BinaryOp>(plan: &DecimalPlan, l: (u8, i8), r: (u8, i8), c: &Case<i128>) {
-    check_decimal::<Op, NullOnOverflow>(plan, l, r, c);
-    check_decimal::<Op, AnsiError>(plan, l, r, c);
+impl Case<i128> {
+    fn with_decimal<R>(
+        &self,
+        la: &PrimitiveArray<Decimal128Type>,
+        ra: &PrimitiveArray<Decimal128Type>,
+        f: impl Fn(DecOperand<'_>, DecOperand<'_>) -> R,
+    ) -> R {
+        match self.shape {
+            Shape::ArrayArray => f(Operand::Array(la), Operand::Array(ra)),
+            Shape::ArrayScalar(s) => f(Operand::Array(la), Operand::Scalar(s)),
+            Shape::ScalarArray(s) => f(Operand::Scalar(s), Operand::Array(ra)),
+        }
+    }
+}
+
+fn check_decimal_op(plan: &DecimalPlan, l: (u8, i8), r: (u8, i8), c: &Case<i128>) {
+    check_decimal::<NullOnOverflow>(plan, l, r, c);
+    check_decimal::<AnsiError>(plan, l, r, c);
     if plan.overflow_impossible() {
-        check_decimal::<Op, Unchecked>(plan, l, r, c);
+        check_decimal::<Unchecked>(plan, l, r, c);
     }
 }
 
@@ -398,28 +593,174 @@ proptest! {
 
     #[test]
     fn f64_compare(c in case(f64_value())) {
-        check_cmp_all::<Float64Type>(&c);
+        check_cmp_all::<Float64Type>(&c, &reference::compare);
+        check_float_arith::<Float64Type>(&c);
+    }
+
+    #[test]
+    fn i32_compare(c in case(i32_value())) {
+        check_cmp_all::<Int32Type>(&c, &reference::compare_ord);
+    }
+
+    #[test]
+    fn i64_compare(c in case(i64_value())) {
+        check_cmp_all::<Int64Type>(&c, &reference::compare_ord);
+    }
+
+    #[test]
+    fn i128_compare(c in case(any::<i128>())) {
+        check_cmp_all::<Decimal128Type>(&c, &reference::compare_ord);
+    }
+
+    #[test]
+    fn bytes_compare(
+        rows in proptest::collection::vec(
+            (proptest::option::weighted(0.8, proptest::collection::vec(any::<u8>(), 0..4)),
+             proptest::option::weighted(0.8, proptest::collection::vec(any::<u8>(), 0..4))),
+            0..150,
+        ),
+        scalar in proptest::option::weighted(0.9, proptest::collection::vec(any::<u8>(), 0..4)),
+    ) {
+        check_bytes(&rows, scalar.as_deref());
+    }
+
+    #[test]
+    fn bool_compare(
+        rows in proptest::collection::vec(
+            (proptest::option::weighted(0.8, any::<bool>()), proptest::option::weighted(0.8, any::<bool>())),
+            0..150,
+        ),
+        scalar in proptest::option::weighted(0.9, any::<bool>()),
+    ) {
+        check_bool(&rows, scalar);
     }
 
     #[test]
     fn f32_compare(c in case(f32_value())) {
-        check_cmp_all::<Float32Type>(&c);
+        check_cmp_all::<Float32Type>(&c, &reference::compare);
+        check_float_arith::<Float32Type>(&c);
     }
 
     #[test]
-    fn decimal_arith((op, l, r, out_p, c) in decimal_case()) {
-        let (ls, rs) = (l.1, r.1);
-        let os = match op {
-            ArithOp::Multiply => ls + rs,
+    fn decimal_ops((op, l, r, (choice, out_p, out_s), c) in decimal_case()) {
+        let (ls, rs) = (l.1.unsigned_abs(), r.1.unsigned_abs());
+        let exact = match op {
+            DecimalOp::Multiply => ls + rs,
+            DecimalOp::Divide => 38,
             _ => ls.max(rs),
         };
-        prop_assume!(os <= 38);
-        let out = (out_p.max(u8::try_from(os).unwrap()).max(1), os);
+        let out = match choice {
+            0 | 1 => result_type(op, l, r, choice == 0).unwrap(),
+            _ => {
+                prop_assume!(exact <= 38);
+                let s = if op == DecimalOp::Remainder { exact } else { out_s.min(exact) };
+                (out_p.max(s).max(1), i8::try_from(s).unwrap())
+            }
+        };
         let plan = DecimalPlan::new(op, l, r, out).unwrap();
-        match op {
-            ArithOp::Add => check_decimal_op::<Add>(&plan, l, r, &c),
-            ArithOp::Subtract => check_decimal_op::<Sub>(&plan, l, r, &c),
-            ArithOp::Multiply => check_decimal_op::<Mul>(&plan, l, r, &c),
+        check_decimal_op(&plan, l, r, &c);
+    }
+}
+
+const KINDS: [CompareKind; 6] = [
+    CompareKind::Equal,
+    CompareKind::NotEqual,
+    CompareKind::Less,
+    CompareKind::LessEq,
+    CompareKind::Greater,
+    CompareKind::GreaterEq,
+];
+
+/// Strings and binary against byte-slice order, array/array and
+/// array/scalar, plus `<=>`.
+fn check_bytes(rows: &[BytesRow], scalar: Option<&[u8]>) {
+    use arrow_array::BinaryArray;
+    let l: Vec<Option<&[u8]>> = rows.iter().map(|r| r.0.as_deref()).collect();
+    let r: Vec<Option<&[u8]>> = rows.iter().map(|r| r.1.as_deref()).collect();
+    let (la, ra) = (BinaryArray::from(l.clone()), BinaryArray::from(r.clone()));
+    let s = vec![scalar; l.len()];
+    for kind in KINDS {
+        macro_rules! run {
+            ($op:ty) => {
+                (
+                    compare::compare_bytes::<_, $op>(
+                        BytesOperand::Array(&la),
+                        BytesOperand::Array(&ra),
+                    )
+                    .unwrap(),
+                    compare::compare_bytes::<_, $op>(
+                        BytesOperand::Array(&la),
+                        BytesOperand::Scalar(scalar),
+                    )
+                    .unwrap(),
+                )
+            };
         }
+        let (aa, asc) = match kind {
+            CompareKind::Equal => run!(Equal),
+            CompareKind::NotEqual => run!(NotEqual),
+            CompareKind::Less => run!(Less),
+            CompareKind::LessEq => run!(LessEq),
+            CompareKind::Greater => run!(Greater),
+            CompareKind::GreaterEq => run!(GreaterEq),
+        };
+        assert_eq!(aa, reference::compare_bytes(kind, &l, &r));
+        assert_eq!(asc, reference::compare_bytes(kind, &l, &s));
+    }
+    let eq = compare::compare_bytes::<_, Equal>(BytesOperand::Array(&la), BytesOperand::Array(&ra))
+        .unwrap();
+    let ns = compare::null_safe(
+        &eq,
+        Validity::Array(la.nulls()),
+        Validity::Array(ra.nulls()),
+    );
+    assert_eq!(ns.unwrap(), reference::null_safe_equal(&l, &r));
+}
+
+/// Booleans against `false < true`, array/array and array/scalar.
+fn check_bool(rows: &[(Option<bool>, Option<bool>)], scalar: Option<bool>) {
+    let l: Vec<Option<bool>> = rows.iter().map(|r| r.0).collect();
+    let r: Vec<Option<bool>> = rows.iter().map(|r| r.1).collect();
+    let (la, ra) = (BooleanArray::from(l.clone()), BooleanArray::from(r.clone()));
+    let expect = |kind: CompareKind, rhs: &[Option<bool>]| -> BooleanArray {
+        l.iter()
+            .zip(rhs)
+            .map(|(a, b)| Some(kind.holds((*a)?.cmp(&(*b)?))))
+            .collect()
+    };
+    for kind in KINDS {
+        macro_rules! run {
+            ($op:ty) => {
+                (
+                    compare::compare_bool::<$op>(BoolOperand::Array(&la), BoolOperand::Array(&ra))
+                        .unwrap(),
+                    compare::compare_bool::<$op>(
+                        BoolOperand::Array(&la),
+                        BoolOperand::Scalar(scalar),
+                    )
+                    .unwrap(),
+                    compare::compare_bool::<$op>(
+                        BoolOperand::Scalar(scalar),
+                        BoolOperand::Array(&ra),
+                    )
+                    .unwrap(),
+                )
+            };
+        }
+        let (aa, asc, sca) = match kind {
+            CompareKind::Equal => run!(Equal),
+            CompareKind::NotEqual => run!(NotEqual),
+            CompareKind::Less => run!(Less),
+            CompareKind::LessEq => run!(LessEq),
+            CompareKind::Greater => run!(Greater),
+            CompareKind::GreaterEq => run!(GreaterEq),
+        };
+        assert_eq!(aa, expect(kind, &r));
+        assert_eq!(asc, expect(kind, &vec![scalar; l.len()]));
+        let flipped: BooleanArray = r
+            .iter()
+            .map(|b| Some(kind.holds(scalar?.cmp(&(*b)?))))
+            .collect();
+        assert_eq!(sca, flipped);
     }
 }

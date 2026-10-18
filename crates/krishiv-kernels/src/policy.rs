@@ -28,6 +28,9 @@ pub enum Fault {
     Overflow,
     /// A division or remainder by zero.
     DivideByZero,
+    /// No result in any mode (a decimal remainder whose integral quotient
+    /// exceeds 39 significant digits: Spark's "Division impossible").
+    Impossible,
 }
 
 /// What a policy does with a faulting row.
@@ -45,13 +48,17 @@ impl OverflowMode {
     /// The action this policy takes for `fault`. Overflow follows the policy
     /// name. Division by zero has no wrapped value: Spark's legacy mode makes
     /// it NULL (`JavaWrap`, `NullOnOverflow`), ANSI raises, and `Unchecked`
-    /// (a proof about overflow only) raises rather than guess.
+    /// (a proof about overflow only) raises rather than guess. An impossible
+    /// row raises under every policy.
     #[must_use]
     pub const fn action(self, fault: Fault) -> Action {
         match (self, fault) {
             (Self::Unchecked | Self::JavaWrap, Fault::Overflow) => Action::Wrap,
-            (Self::NullOnOverflow, _) | (Self::JavaWrap, Fault::DivideByZero) => Action::Null,
-            (Self::AnsiError, _) | (Self::Unchecked, Fault::DivideByZero) => Action::Raise,
+            (Self::NullOnOverflow | Self::JavaWrap, Fault::DivideByZero)
+            | (Self::NullOnOverflow, Fault::Overflow) => Action::Null,
+            (Self::AnsiError, _)
+            | (Self::Unchecked, Fault::DivideByZero)
+            | (_, Fault::Impossible) => Action::Raise,
         }
     }
 }
@@ -108,6 +115,7 @@ mod tests {
         ];
         for (mode, ovf, div) in table {
             assert_eq!((mode.action(Ovf), mode.action(Div)), (ovf, div), "{mode:?}");
+            assert_eq!(mode.action(Fault::Impossible), Raise);
         }
     }
 }

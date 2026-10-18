@@ -774,6 +774,60 @@ fn consumer_handles_unregister_after_their_last_reservation() {
 }
 
 #[test]
+fn shrink_to_credit_hands_bytes_over_without_the_pool() {
+    let root = root(Some(1000), 1);
+    let q: Arc<dyn MemoryPool> = root.child("q", None);
+    let h = ConsumerHandle::register(Arc::clone(&q), "op", None);
+    let mut headroom = h.reservation();
+    headroom.try_grow(600).unwrap();
+    headroom.shrink_to_credit(400);
+    assert_eq!(
+        (headroom.size(), h.credit(), root.reserved()),
+        (200, 400, 600)
+    );
+    // Another reservation of the same consumer takes the credit first.
+    let mut scratch = h.reservation();
+    scratch.try_grow(500).unwrap(); // 400 credit + 100 from the pool
+    assert_eq!((h.credit(), root.reserved()), (0, 700));
+    // Clamped to the size; a plain reservation just shrinks.
+    headroom.shrink_to_credit(10_000);
+    assert_eq!((headroom.size(), h.credit()), (0, 200));
+    h.release_credit();
+    let mut plain = Reservation::new(Arc::clone(&q), h.id());
+    plain.try_grow(50).unwrap();
+    plain.shrink_to_credit(50);
+    assert_eq!((plain.size(), h.credit(), root.reserved()), (0, 0, 500));
+    drop((scratch, headroom, plain, h));
+    assert_eq!(root.reserved(), 0);
+}
+
+#[test]
+fn a_reservation_releasing_to_credit_keeps_its_bytes_with_the_consumer() {
+    let root = root(Some(1000), 1);
+    let q: Arc<dyn MemoryPool> = root.child("q", None);
+    let h = ConsumerHandle::register(Arc::clone(&q), "op", None);
+    let mut scratch = h.reservation().releasing_to_credit();
+    scratch.try_grow(300).unwrap();
+    scratch.shrink(100);
+    assert_eq!(
+        (scratch.size(), h.credit(), root.reserved()),
+        (200, 100, 300)
+    );
+    // Another consumer cannot take what was freed; this one regrows from it.
+    scratch.try_grow(100).unwrap();
+    assert_eq!((h.credit(), root.reserved()), (0, 300));
+    drop(scratch);
+    assert_eq!((h.credit(), root.reserved()), (300, 300));
+    h.release_credit();
+    assert_eq!(root.reserved(), 0);
+    // Without a handle it releases to the pool as usual.
+    let mut plain = Reservation::new(Arc::clone(&q), h.id()).releasing_to_credit();
+    plain.try_grow(10).unwrap();
+    drop(plain);
+    assert_eq!((h.credit(), root.reserved()), (0, 0));
+}
+
+#[test]
 fn grant_credit_is_taken_once_and_refunded_on_failure() {
     let root = root(Some(1000), 1);
     let q: Arc<dyn MemoryPool> = root.child("q", None);

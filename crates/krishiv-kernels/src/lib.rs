@@ -37,7 +37,9 @@
 
 #![deny(clippy::arithmetic_side_effects)]
 
+pub mod cast;
 mod chunk;
+pub mod compare;
 pub mod decimal;
 pub mod dispatch;
 pub mod error;
@@ -48,8 +50,10 @@ pub mod policy;
 pub mod reference;
 pub mod specialize;
 mod unsafe_dispatch;
+pub mod version;
 
 pub use dispatch::{KernelCtx, Target};
 pub use error::KernelError;
 pub use ops::{Add, ArithOp, Mul, Operand, Sub};
 pub use policy::{AnsiError, JavaWrap, NullOnOverflow, Overflow, OverflowMode, Unchecked};
+pub use version::SparkVersion;
