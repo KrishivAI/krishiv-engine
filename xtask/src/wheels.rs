@@ -6,7 +6,10 @@
 //! one entry per target and flavour. A wheel more than
 //! [`crate::budgets::MAX_GROWTH_PERCENT`] larger than its entry, or a wheel
 //! with no entry, needs the `budget-approved` label (`BUDGET_APPROVED=1`);
-//! `--write` records the measured sizes.
+//! `--write` records the measured sizes (merged into the recorded map). On
+//! a pull request the gate reads the *base* branch's `budgets.json`, so a PR
+//! cannot raise its own budget. While no size is recorded at all (the gate's
+//! first run) the comparison only reports.
 
 use std::collections::BTreeMap;
 
@@ -43,6 +46,13 @@ pub fn compare(
         markdown: String::from("| wheel | recorded | current | change |\n|---|---|---|---|\n"),
         ..WheelComparison::default()
     };
+    if recorded.is_empty() {
+        for (key, now) in measured {
+            out.markdown
+                .push_str(&format!("| {key} | — | {now} | no baseline yet |\n"));
+        }
+        return out;
+    }
     for (key, &now) in measured {
         match recorded.get(key) {
             Some(&base) => {
@@ -124,6 +134,17 @@ mod tests {
         assert!(cmp.violations[0].contains("grew from 1000 to 1051"));
         assert!(cmp.violations[1].contains("no recorded size"));
         assert!(cmp.markdown.contains("| b | — | 7 | new |"));
+    }
+
+    #[test]
+    fn without_any_baseline_the_gate_only_reports() {
+        let cmp = compare(&BTreeMap::new(), &map(&[("a", 1)]));
+        assert!(cmp.violations.is_empty());
+        assert!(
+            cmp.markdown.contains("| a | — | 1 | no baseline yet |"),
+            "{}",
+            cmp.markdown
+        );
     }
 
     #[test]

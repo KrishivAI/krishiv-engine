@@ -245,7 +245,10 @@ fn run_wheel_sizes(dir: &Path, flags: &[&str]) -> Result<(), String> {
     }
     let mut base = read_budgets(&path)?;
     if write {
-        base.wheel_bytes = Some(measured);
+        // Merge: recording a subset of the targets keeps the others.
+        base.wheel_bytes
+            .get_or_insert_with(Default::default)
+            .extend(measured);
         let json = serde_json::to_string_pretty(&base).map_err(|e| e.to_string())? + "\n";
         std::fs::write(&path, &json).map_err(|e| format!("cannot write budgets.json: {e}"))?;
         println!("wrote {}", path.display());

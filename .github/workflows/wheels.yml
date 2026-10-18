@@ -9,8 +9,10 @@ name: Wheels
 #
 # Called by ci.yml for pull requests that touch the Python package, the
 # extension crate or the packaging, and by nightly.yml; runnable by hand.
-# The size of every wheel is gated against budgets.json (`wheel_bytes`) by
-# `cargo xtask wheel-sizes`; the `budget-approved` label approves growth.
+# The size of every wheel is gated against budgets.json (`wheel_bytes`; on a
+# pull request the base branch's) by `cargo xtask wheel-sizes`; the
+# `budget-approved` label approves growth (labels do not re-run CI: re-run the
+# `sizes` job after labelling).
 on:
   workflow_call:
   workflow_dispatch:
@@ -204,5 +206,18 @@ jobs:
           APPROVER: ${{ vars.SIZE_APPROVER }}
           HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'budget-approved') }}
         run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
+      # On a pull request the budget is the base branch's (a PR cannot raise
+      # its own); otherwise this commit's.
+      - name: Budget file
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            git fetch --quiet --depth=1 origin "$BASE_SHA"
+            git show "$BASE_SHA:budgets.json" > "$RUNNER_TEMP/budgets.json"
+          else
+            cp budgets.json "$RUNNER_TEMP/budgets.json"
+          fi
       - name: Wheel sizes
-        run: cargo xtask wheel-sizes dist
+        run: cargo xtask wheel-sizes dist --budgets "$RUNNER_TEMP/budgets.json"

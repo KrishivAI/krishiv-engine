@@ -488,14 +488,13 @@ fn wheel_sizes_record_and_gate() {
         }
         c.output().unwrap()
     };
-    // No recorded size yet: a violation, approvable.
+    // No baseline at all yet: the gate only reports.
     let out = run(&[], false);
-    assert!(!out.status.success());
+    assert!(out.status.success(), "{out:?}");
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("no recorded size"),
+        String::from_utf8_lossy(&out.stdout).contains("no baseline yet"),
         "{out:?}"
     );
-    assert!(run(&[], true).status.success());
     // Record, then the same wheel passes.
     assert!(run(&["--write"], false).status.success());
     let recorded: serde_json::Value =
@@ -505,6 +504,30 @@ fn wheel_sizes_record_and_gate() {
         1000
     );
     assert_eq!(recorded["transitive_crates"], 1);
+    // Recording a subset keeps the other targets' entries.
+    let other = dir.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(
+        other.join("krishiv-0.1.0-cp314-cp314t-macosx_11_0_arm64.whl"),
+        vec![0_u8; 7],
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .arg("wheel-sizes")
+        .arg(&other)
+        .arg("--budgets")
+        .arg(&budgets)
+        .arg("--write")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let merged: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&budgets).unwrap()).unwrap();
+    assert_eq!(
+        merged["wheel_bytes"]["cp311-abi3-manylinux_2_28_x86_64"],
+        1000
+    );
+    assert_eq!(merged["wheel_bytes"]["cp314-cp314t-macosx_11_0_arm64"], 7);
     let out = run(&[], false);
     assert!(out.status.success(), "{out:?}");
     assert!(
@@ -519,6 +542,17 @@ fn wheel_sizes_record_and_gate() {
         String::from_utf8_lossy(&out.stderr).contains("grew from 1000 to 1100"),
         "{out:?}"
     );
+    assert!(run(&[], true).status.success(), "approved growth passes");
+    std::fs::write(&wheel, vec![0_u8; 1000]).unwrap();
+    // A wheel with no recorded size once a baseline exists: a violation.
+    let new_target = wheels.join("krishiv-0.1.0-cp311-abi3-musllinux_1_2_x86_64.whl");
+    std::fs::write(&new_target, "x").unwrap();
+    let out = run(&[], false);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no recorded size"),
+        "{out:?}"
+    );
+    std::fs::remove_file(&new_target).unwrap();
     // Usage and input errors.
     assert!(!run(&["--bogus"], false).status.success());
     assert!(!run(&["--budgets"], false).status.success());
