@@ -257,6 +257,16 @@ fn padding_matches_spark() {
     let lens = Int32Array::from(vec![Some(3), Some(3)]);
     let out = pad(Left, S::Array(&a), Operand::Array(&lens), None).unwrap();
     assert_eq!(rows(&out), [Some("  a".to_owned()), None]);
+    // A result that cannot fit the offset type is an error before anything is
+    // allocated (a multibyte pad is wider than its character count).
+    let e = pad(
+        Left,
+        S::Array(&a),
+        int(i32::MAX),
+        Some(S::Scalar(Some("é"))),
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
     let null_len = pad(Left, S::Array(&a), Operand::Scalar(None), None).unwrap();
     assert_eq!(null_len.null_count(), 2);
 }

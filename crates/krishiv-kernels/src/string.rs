@@ -546,9 +546,21 @@ pub fn pad<O: OffsetSizeTrait>(
             continue;
         }
         scratch.clear();
+        // The exact byte length first (a multibyte pad is wider than its
+        // character count), so an oversized result is an error before any
+        // allocation, and the reserve below is never outgrown.
+        let pad_chars = pad.chars().count();
+        let reps = missing.checked_div(pad_chars).unwrap_or(0);
+        let rest = missing.checked_rem(pad_chars).unwrap_or(0);
+        let rest_bytes = pad.char_indices().nth(rest).map_or(pad.len(), |(at, _)| at);
+        let need = reps
+            .saturating_mul(pad.len())
+            .saturating_add(rest_bytes)
+            .saturating_add(s.len());
+        check_offset::<O>(sink.bytes.saturating_add(need))?;
         scratch
-            .try_reserve(missing.saturating_add(s.len()))
-            .map_err(|_| KernelError::out_of_memory(missing))?;
+            .try_reserve(need)
+            .map_err(|_| KernelError::out_of_memory(need))?;
         if side == PadSide::Right {
             scratch.push_str(s);
         }
@@ -590,6 +602,7 @@ pub fn pad_binary<O: OffsetSizeTrait>(
             continue;
         }
         scratch.clear();
+        check_offset::<O>(sink.bytes.saturating_add(want))?;
         reserve(&mut scratch, want)?;
         if side == PadSide::Right {
             scratch.extend_from_slice(s);
