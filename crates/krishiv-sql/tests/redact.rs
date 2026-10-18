@@ -14,7 +14,7 @@ const CANARY: &str = "Canary7f3a9c";
 
 /// Every way a secret is written into query text; `CANARY` (or the digits
 /// `70319753`) is the secret.
-const SECRETS: [&str; 26] = [
+const SECRETS: [&str; 28] = [
     "SELECT a FROM t WITH ('password' = 'Canary7f3a9c', 'path' = 's3a://b/k')",
     "SELECT a FROM t WITH (fs.s3a.secret.key = 'Canary7f3a9c', other = 1)",
     "SELECT a FROM t WITH (token 'Canary7f3a9c')",
@@ -45,6 +45,9 @@ const SECRETS: [&str; 26] = [
     "SET spark.hadoop.fs.s3a.secret.key = 'Canary7f3a9c' ;",
     "CREATE TABLE x USING parquet OPTIONS (password 'Canary7f3a9c') TBLPROPERTIES ('token' = 'Canary7f3a9c')",
     "SELECT a FROM t WITH (password = 'x' 'Canary7f3a9c'",
+    // An escape that only decodes into the URL delimiters.
+    "SELECT 'https://u:Canary7f3a9c\\u0040h/' AS s FROM t",
+    "SELECT \"https://u:Canary7f3a9c\"\"@h/\" AS s FROM t",
 ];
 
 fn leaks(text: &str) -> bool {

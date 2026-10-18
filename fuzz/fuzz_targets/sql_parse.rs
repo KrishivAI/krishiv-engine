@@ -70,6 +70,7 @@ fn redaction_oracle(data: &[u8]) {
         "SELECT a FROM t WITH (password '{s}' '{s}', k = 'v')",
         "SELECT a FROM t WITH (fs.s3a.secret.key = 'x' '{s}'",
         "SELECT a FROM t WITH ('url' = 'https://u:{s}@h/')",
+        "SELECT 'https://u:{s}\\u0040h/' AS s FROM t",
         "SET spark.hadoop.fs.s3a.secret.key={s}",
         "SELECT a FROM t WITH (password = {s} {s})",
     ] {

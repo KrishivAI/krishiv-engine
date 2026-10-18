@@ -267,15 +267,29 @@ fn url_marks(sql: &str, t: &Token, marks: &mut Vec<Mark>) {
     }
     let r = content(sql, t);
     let value = &sql[r.clone()];
+    let escaped = value.contains('\\')
+        || value.contains("''")
+        || value.contains("\"\"")
+        || value.contains("``");
+    if escaped {
+        // Positions in the value are not positions in the text, and an
+        // escape (`\u0040`, a doubled quote) can make the decoded value a
+        // URL the written one is not: hide all when any reading is a URL.
+        let raw = t.span.text(sql);
+        let readings = match t.kind {
+            TokenKind::QuotedIdent => vec![unquote_ident(raw)],
+            _ => vec![unescape_string(raw, true), unescape_string(raw, false)],
+        };
+        if SecretUrl::parse(value).is_some()
+            || readings.iter().any(|d| SecretUrl::parse(d).is_some())
+        {
+            marks.push(Mark::Secret(r));
+        }
+        return;
+    }
     let Some(url) = SecretUrl::parse(value) else {
         return;
     };
-    let escaped = value.contains('\\') || value.contains("''") || value.contains("``");
-    if escaped {
-        // Positions in the value are not positions in the text: hide all.
-        marks.push(Mark::Secret(r));
-        return;
-    }
     let mut at = r.start;
     for part in url.parts() {
         let len = match part {
