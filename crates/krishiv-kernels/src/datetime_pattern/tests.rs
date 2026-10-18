@@ -153,6 +153,13 @@ fn parse_edge_cases() {
     assert_eq!(parse("OOOO", "GMT+05:30:15"), Some(-19_815_000_000));
     assert_eq!(parse("OOOO", "GMT+0530"), None);
     assert_eq!(parse("OOOO", "GMT+24:00"), None);
+    // java.time (and so Spark 4.2: CANNOT_PARSE_TIMESTAMP) rejects offsets
+    // beyond +-18:00; the bound itself is fine.
+    assert_eq!(parse("O", "GMT+20"), None);
+    assert_eq!(parse("OOOO", "GMT+19:00"), None);
+    assert_eq!(parse("OOOO", "GMT+18:01"), None);
+    assert_eq!(parse("OOOO", "GMT+18:00"), Some(-18 * H));
+    assert_eq!(parse("O", "GMT+18"), Some(-18 * H));
     // Zone ids: GMT0, UT prefixes; zone names.
     assert_eq!(parse("VV", "GMT0"), Some(0));
     assert_eq!(parse("VV", "GMT+01:00"), Some(-H));
@@ -227,4 +234,38 @@ proptest::proptest! {
         let _ = fixed_zone_offset(&s);
         let _ = DateTimePattern::new(&s, Purpose::Format);
     }
+}
+
+#[test]
+fn optional_section_keeps_real_errors() {
+    // Spark 4.2 prints "2020 PST"; a region zone name is not known here,
+    // so the error must surface instead of the section being dropped.
+    let p = DateTimePattern::new("yyyy[ z]", Purpose::Format).unwrap();
+    let la = Zone {
+        id: "America/Los_Angeles",
+        rules: &FixedOffset(-28_800),
+    };
+    let e = p.format_timestamp(0, la).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    // A field the value lacks still skips the section.
+    assert_eq!(p.format_date(0).unwrap(), "1970");
+    assert_eq!(p.format_local(0).unwrap(), "1970");
+    assert_eq!(p.format_timestamp(0, utc()).unwrap(), "1970 UTC");
+}
+
+#[test]
+fn every_date_formats() {
+    // Past year 294247 the microsecond form overflows i64.
+    let p = DateTimePattern::new("yyyy-MM-dd", Purpose::Format).unwrap();
+    assert_eq!(p.format_date(i32::MAX).unwrap(), "+5881580-07-11");
+    assert_eq!(p.format_date(i32::MIN).unwrap(), "-5877641-06-23");
+    assert_eq!(p.format_date(106_751_992).unwrap(), "+294247-01-11");
+}
+
+#[test]
+fn long_adjacent_numbers_do_not_overflow() {
+    // 49 digits reserved for the first field would overflow an i128.
+    let pattern = format!("y{}", "ddHHmmss".repeat(6));
+    let p = DateTimePattern::new(&pattern, Purpose::Parse).unwrap();
+    assert_eq!(p.parse_local(&"1".repeat(60), false).unwrap(), None);
 }

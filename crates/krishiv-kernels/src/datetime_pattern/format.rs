@@ -35,6 +35,31 @@ const DAYS: [&str; 7] = [
 ];
 const QUARTERS: [&str; 4] = ["1st quarter", "2nd quarter", "3rd quarter", "4th quarter"];
 
+/// Why a section did not print: the value lacks a field (an optional
+/// section skips), or a real error (always propagated).
+enum Fail {
+    Absent(&'static str),
+    Err(KrishivError),
+}
+
+impl From<KrishivError> for Fail {
+    fn from(e: KrishivError) -> Self {
+        Self::Err(e)
+    }
+}
+
+impl From<Fail> for KrishivError {
+    fn from(f: Fail) -> Self {
+        match f {
+            Fail::Absent(what) => unsupported(what),
+            Fail::Err(e) => e,
+        }
+    }
+}
+
+const NO_TIME: &str = "a time-of-day field in a pattern that formats a DATE";
+const NO_ZONE: &str = "a zone or offset field in a pattern that formats a value without a zone";
+
 /// The fields of one local date-time.
 struct Fields {
     year: i64,
@@ -54,8 +79,15 @@ struct Fields {
 
 impl Fields {
     fn new(local: i64, zone: Option<(i32, &str)>, has_time: bool) -> Self {
-        let days = local.div_euclid(MICROS_PER_DAY);
-        let tod = local.rem_euclid(MICROS_PER_DAY);
+        Self::from_days_and_time(
+            local.div_euclid(MICROS_PER_DAY),
+            local.rem_euclid(MICROS_PER_DAY),
+            zone,
+            has_time,
+        )
+    }
+
+    fn from_days_and_time(days: i64, tod: i64, zone: Option<(i32, &str)>, has_time: bool) -> Self {
         let (year, month, day) = civil_from_days(days);
         let jan1 = days_from_civil(year, 1, 1).unwrap_or(days);
         Self {
@@ -73,14 +105,12 @@ impl Fields {
         }
     }
 
-    fn number(&self, f: Field) -> Result<i64, KrishivError> {
+    fn number(&self, f: Field) -> Result<i64, Fail> {
         let time = |v: i64| {
             if self.has_time {
                 Ok(v)
             } else {
-                Err(unsupported(
-                    "a time-of-day field in a pattern that formats a DATE",
-                ))
+                Err(Fail::Absent(NO_TIME))
             }
         };
         Ok(match f {
@@ -110,10 +140,8 @@ impl Fields {
         })
     }
 
-    fn zone(&self) -> Result<&(i32, String), KrishivError> {
-        self.zone.as_ref().ok_or_else(|| {
-            unsupported("a zone or offset field in a pattern that formats a value without a zone")
-        })
+    fn zone(&self) -> Result<&(i32, String), Fail> {
+        self.zone.as_ref().ok_or(Fail::Absent(NO_ZONE))
     }
 }
 
@@ -131,7 +159,17 @@ pub(super) fn format(
     Ok(out)
 }
 
-fn write_items(items: &[Item], f: &Fields, out: &mut String) -> Result<(), KrishivError> {
+/// Prints a `DATE` (days since the epoch) without going through
+/// microseconds, so every `i32` day formats (the microsecond form
+/// overflows `i64` past year 294247).
+pub(super) fn format_days(items: &[Item], days: i64) -> Result<String, KrishivError> {
+    let f = Fields::from_days_and_time(days, 0, None, false);
+    let mut out = String::new();
+    write_items(items, &f, &mut out)?;
+    Ok(out)
+}
+
+fn write_items(items: &[Item], f: &Fields, out: &mut String) -> Result<(), Fail> {
     for item in items {
         match item {
             Item::Literal(s) => out.push_str(s),
@@ -142,9 +180,7 @@ fn write_items(items: &[Item], f: &Fields, out: &mut String) -> Result<(), Krish
             }
             Item::Fraction { max, .. } => {
                 if !f.has_time {
-                    return Err(unsupported(
-                        "a time-of-day field in a pattern that formats a DATE",
-                    ));
+                    return Err(Fail::Absent(NO_TIME));
                 }
                 let digits = format!("{:09}", f.nanos);
                 out.push_str(&digits[..(*max).min(9)]);
@@ -167,11 +203,14 @@ fn write_items(items: &[Item], f: &Fields, out: &mut String) -> Result<(), Krish
                 out.push_str(&zone_name(id, *offset, *full)?);
             }
             // A section prints when the value has all its fields (a DATE
-            // has no time of day), as java.time's optional sections do.
+            // has no time of day), as java.time's optional sections do;
+            // any other error (a region zone name) still fails.
             Item::Optional(inner) => {
                 let mut section = String::new();
-                if write_items(inner, f, &mut section).is_ok() {
-                    out.push_str(&section);
+                match write_items(inner, f, &mut section) {
+                    Ok(()) => out.push_str(&section),
+                    Err(Fail::Absent(_)) => {}
+                    Err(e) => return Err(e),
                 }
             }
         }
@@ -195,7 +234,7 @@ fn write_number(n: &Number, v: i64, out: &mut String) {
     out.push_str(&digits);
 }
 
-fn write_text(text: Text, full: bool, f: &Fields, out: &mut String) -> Result<(), KrishivError> {
+fn write_text(text: Text, full: bool, f: &Fields, out: &mut String) -> Result<(), Fail> {
     let idx = |v: i64| usize::try_from(v - 1).unwrap_or(0);
     match text {
         Text::Era => out.push_str(match (f.year >= 1, full) {
@@ -222,9 +261,7 @@ fn write_text(text: Text, full: bool, f: &Fields, out: &mut String) -> Result<()
         }
         Text::AmPm => {
             if !f.has_time {
-                return Err(unsupported(
-                    "a time-of-day field in a pattern that formats a DATE",
-                ));
+                return Err(Fail::Absent(NO_TIME));
             }
             out.push_str(if f.hour < 12 { "AM" } else { "PM" });
         }

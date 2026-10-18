@@ -255,7 +255,9 @@ fn number(n: &Number, s: &[char], start: usize) -> Option<(i64, usize)> {
                 }
                 break;
             };
-            total = total * 10 + i128::from(d);
+            // Saturates: a pass-0 total is discarded, and a saturated
+            // final total fails the `i64` conversion below.
+            total = total.saturating_mul(10).saturating_add(i128::from(d));
             end += 1;
         }
         match n.subsequent {
@@ -425,7 +427,12 @@ fn localized(full: bool, s: &[char], pos: usize) -> Option<(i32, usize)> {
     if h > 23 || m > 59 || sec > 59 {
         return None;
     }
-    Some((i32::try_from(sign * (h * 3600 + m * 60 + sec)).ok()?, at))
+    // `ZoneOffset.ofTotalSeconds` rejects beyond +-18:00.
+    let total = sign * (h * 3600 + m * 60 + sec);
+    if total.abs() > 18 * 3600 {
+        return None;
+    }
+    Some((i32::try_from(total).ok()?, at))
 }
 
 /// `java.time`'s `ZoneIdPrinterParser` (`names` for `z`, which also reads

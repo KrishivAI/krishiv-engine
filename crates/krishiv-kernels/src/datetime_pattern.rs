@@ -282,12 +282,7 @@ impl DateTimePattern {
     /// # Errors
     /// A pattern with time-of-day or zone fields (a date has none).
     pub fn format_date(&self, days: i32) -> Result<String, KrishivError> {
-        format::format(
-            &self.items,
-            i64::from(days) * format::MICROS_PER_DAY,
-            None,
-            false,
-        )
+        format::format_days(&self.items, i64::from(days))
     }
 
     /// `s` as an instant: its zone or offset, else `session`. `Ok(None)`
