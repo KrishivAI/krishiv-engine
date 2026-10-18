@@ -54,9 +54,9 @@ fn large_to_utf8(large: &LargeStringArray) -> Result<StringArray> {
 /// `a` with offset arrays converted to views (Spark's carriers).
 pub(super) fn to_view(a: &ArrayRef) -> Result<ArrayRef> {
     Ok(match a.data_type() {
-        ArrowType::Utf8 => Arc::new(a.as_string::<i32>().iter().collect::<StringViewArray>()),
-        ArrowType::LargeUtf8 => Arc::new(a.as_string::<i64>().iter().collect::<StringViewArray>()),
-        ArrowType::Binary => Arc::new(a.as_binary::<i32>().iter().collect::<BinaryViewArray>()),
+        ArrowType::Utf8 => Arc::new(StringViewArray::from(a.as_string::<i32>())),
+        ArrowType::LargeUtf8 => Arc::new(StringViewArray::from(a.as_string::<i64>())),
+        ArrowType::Binary => Arc::new(BinaryViewArray::from(a.as_binary::<i32>())),
         ArrowType::Utf8View | ArrowType::BinaryView => Arc::clone(a),
         other => return Err(internal(&format!("{other} is not a string or binary"))),
     })
@@ -233,6 +233,33 @@ mod tests {
         fn eval(&self, batch: &RecordBatch) -> Result<Value> {
             Ok(Value::Array(Arc::clone(batch.column(self.0))))
         }
+    }
+
+    #[test]
+    fn to_view_shares_the_value_bytes() {
+        let utf8: ArrayRef = Arc::new(arrow_array::StringArray::from(vec![
+            Some("ab"),
+            None,
+            Some("cd"),
+        ]));
+        let view = to_view(&utf8).unwrap();
+        let view = view.as_string_view();
+        assert_eq!(
+            view.iter().collect::<Vec<_>>(),
+            [Some("ab"), None, Some("cd")]
+        );
+        assert_eq!(
+            view.data_buffers()[0].as_ptr(),
+            utf8.as_string::<i32>().values().as_ptr(),
+            "Utf8 bytes are not copied"
+        );
+        let bin: ArrayRef = Arc::new(arrow_array::BinaryArray::from(vec![Some(&b"xy"[..]), None]));
+        let view = to_view(&bin).unwrap();
+        assert_eq!(
+            view.as_binary_view().data_buffers()[0].as_ptr(),
+            bin.as_binary::<i32>().values().as_ptr(),
+            "Binary bytes are not copied"
+        );
     }
 
     #[test]
