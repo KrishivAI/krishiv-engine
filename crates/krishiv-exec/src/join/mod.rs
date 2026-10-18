@@ -58,11 +58,10 @@
 //! requests funds it from the bytes being spilled, kept as grant credit
 //! across writes (`Reservation::releasing_to_credit`), and writes at least
 //! 256 KiB when it can. A consumer holding less than the scratch takes the
-//! rest from the pool's free memory, or declines the request (frees
-//! nothing) instead of failing mid-write; so does `end_input`, whose rows
-//! then stay in memory for the grace phase. Only the build's `finalize`
-//! must write (once memory ran short, every partition goes to disk) and
-//! takes missing scratch from the pool per write. Repartitioning reserves
+//! rest from the pool per write, and fails with `UNABLE_TO_ACQUIRE_MEMORY`
+//! if the pool is full (a budget of roughly 256 KiB per driver and
+//! spilling operator is the floor); `end_input` instead keeps rows it
+//! cannot fund in memory for the grace phase. Repartitioning reserves
 //! its scratch and read-back headroom through arbitration first, and the
 //! grace phase reserves the exact read-back headroom of a partition's probe
 //! files when it loads the partition.
