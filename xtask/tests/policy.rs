@@ -198,3 +198,99 @@ fn budgets_measurement_script_waits_and_fetches() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// Every job that runs steps starts with Harden-Runner (audit mode), and
+/// every checkout drops its credentials (zizmor `artipacked`). Jobs that
+/// call a reusable workflow have no steps of their own.
+#[test]
+fn every_job_hardens_its_runner_first() {
+    let dir = root().join(".github/workflows");
+    let mut jobs = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if line.trim_end() == "    steps:" {
+                jobs += 1;
+                let first: String = lines[i + 1..(i + 3).min(lines.len())].join("\n");
+                assert!(
+                    first.contains("uses: step-security/harden-runner@")
+                        && lines[i + 1..(i + 5).min(lines.len())]
+                            .iter()
+                            .any(|l| l.trim() == "egress-policy: audit"),
+                    "{name}:{}: the job's first step is not Harden-Runner in audit mode",
+                    i + 1
+                );
+            }
+            if line
+                .trim_start()
+                .trim_start_matches("- ")
+                .starts_with("uses: actions/checkout@")
+            {
+                let block: Vec<&str> = lines[i + 1..]
+                    .iter()
+                    .take_while(|l| !l.trim_start().starts_with("- ") && !l.trim().is_empty())
+                    .copied()
+                    .collect();
+                assert!(
+                    block
+                        .iter()
+                        .any(|l| l.trim() == "persist-credentials: false"),
+                    "{name}:{}: checkout keeps its credentials",
+                    i + 1
+                );
+            }
+        }
+    }
+    assert!(jobs > 20, "found only {jobs} jobs");
+}
+
+#[test]
+fn security_workflows_are_wired() {
+    let sec = read(".github/workflows/security.yml");
+    for needle in [
+        "actions/dependency-review-action@",
+        "fail-on-severity: high",
+        "zizmorcore/zizmor-action@",
+        "fail-on-scopes: runtime, development, unknown",
+        "advanced-security: false",
+        "advanced-security: true",
+    ] {
+        assert!(sec.contains(needle), "security.yml lacks {needle:?}");
+    }
+    // The license allow list matches deny.toml's.
+    let deny = read("deny.toml");
+    let allow = deny
+        .split("[licenses]")
+        .nth(1)
+        .and_then(|s| s.split("allow = [").nth(1))
+        .and_then(|s| s.split(']').next())
+        .unwrap();
+    let licenses: Vec<&str> = allow.lines().filter_map(|l| l.split('"').nth(1)).collect();
+    assert!(licenses.len() > 5);
+    let listed = sec
+        .split("allow-licenses: >-")
+        .nth(1)
+        .unwrap()
+        .lines()
+        .take_while(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let listed: Vec<&str> = listed.split(',').map(str::trim).collect();
+    assert_eq!(
+        listed, licenses,
+        "dependency-review allow-licenses != deny.toml"
+    );
+    let osv = read(".github/workflows/osv-scanner.yml");
+    for lock in ["Cargo.lock", "python/uv.lock", "bench/uv.lock"] {
+        assert!(
+            osv.contains(&format!("--lockfile={lock}")),
+            "osv lacks {lock}"
+        );
+    }
+    assert!(osv.contains("osv-scanner-reusable-pr.yml@"));
+    assert!(osv.contains("osv-scanner-reusable.yml@"));
+    assert!(osv.contains("schedule:"));
+}

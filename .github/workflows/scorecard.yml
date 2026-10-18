@@ -8,8 +8,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# One analysis at a time per ref; a newer trigger queues behind it.
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: false
+
 # Deny everything at the workflow level; the job grants only what the action needs.
-permissions: read-all
+permissions: {}
 
 jobs:
   analysis:
@@ -24,6 +29,10 @@ jobs:
       contents: read
       actions: read
     steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
