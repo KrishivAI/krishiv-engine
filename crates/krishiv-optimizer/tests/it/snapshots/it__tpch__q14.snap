@@ -3,9 +3,9 @@ source: crates/krishiv-optimizer/tests/it/tpch.rs
 expression: optimized.root().to_string()
 ---
 Aggregate [], [((100.00 * sum(CASE WHEN (p_type#20 like 'PROMO%') THEN (l_extendedprice#5 * (1 - l_discount#6)) ELSE 0 END)) / sum((l_extendedprice#5 * (1 - l_discount#6)))) AS promo_revenue#25]
-+- Project [l_extendedprice#5, l_discount#6, p_type#20]
++- Project [p_type#20, l_extendedprice#5, l_discount#6]
    +- Join Inner, (l_partkey#1 == p_partkey#16)
-      :- Project [l_partkey#1, l_extendedprice#5, l_discount#6]
-      :  +- Filter ((l_shipdate#10 >= DATE '1995-09-01') and (l_shipdate#10 < DATE '1995-10-01'))
-      :     +- Scan spark_catalog.default.lineitem [l_partkey#1, l_extendedprice#5, l_discount#6, l_shipdate#10]
-      +- Scan spark_catalog.default.part [p_partkey#16, p_type#20]
+      :- Scan spark_catalog.default.part [p_partkey#16, p_type#20]
+      +- Project [l_partkey#1, l_extendedprice#5, l_discount#6]
+         +- Filter ((l_shipdate#10 >= DATE '1995-09-01') and (l_shipdate#10 < DATE '1995-10-01'))
+            +- Scan spark_catalog.default.lineitem [l_partkey#1, l_extendedprice#5, l_discount#6, l_shipdate#10]

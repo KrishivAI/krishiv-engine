@@ -1,0 +1,26 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: optimized.root().to_string()
+---
+Sort [revenue#47 DESC NULLS LAST], true
++- Aggregate [n_name#41], [n_name#41, sum((l_extendedprice#22 * (1 - l_discount#23))) AS revenue#47]
+   +- Project [l_extendedprice#22, l_discount#23, n_name#41]
+      +- Join Inner, ((c_nationkey#3 == s_nationkey#36) and (c_custkey#0 == o_custkey#9))
+         :- Project [l_extendedprice#22, l_discount#23, s_nationkey#36, n_name#41, o_custkey#9]
+         :  +- Join Inner, (l_orderkey#17 == o_orderkey#8)
+         :     :- Project [l_orderkey#17, l_extendedprice#22, l_discount#23, s_nationkey#36, n_name#41]
+         :     :  +- Join Inner, (l_suppkey#19 == s_suppkey#33)
+         :     :     :- Scan spark_catalog.default.lineitem [l_orderkey#17, l_suppkey#19, l_extendedprice#22, l_discount#23]
+         :     :     +- Project [s_suppkey#33, s_nationkey#36, n_name#41]
+         :     :        +- Join Inner, (s_nationkey#36 == n_nationkey#40)
+         :     :           :- Scan spark_catalog.default.supplier [s_suppkey#33, s_nationkey#36]
+         :     :           +- Project [n_nationkey#40, n_name#41]
+         :     :              +- Join Inner, (n_regionkey#42 == r_regionkey#44)
+         :     :                 :- Scan spark_catalog.default.nation [n_nationkey#40, n_name#41, n_regionkey#42]
+         :     :                 +- Project [r_regionkey#44]
+         :     :                    +- Filter (r_name#45 == 'ASIA')
+         :     :                       +- Scan spark_catalog.default.region [r_regionkey#44, r_name#45]
+         :     +- Project [o_orderkey#8, o_custkey#9]
+         :        +- Filter ((o_orderdate#12 >= DATE '1994-01-01') and (o_orderdate#12 < DATE '1995-01-01'))
+         :           +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12]
+         +- Scan spark_catalog.default.customer [c_custkey#0, c_nationkey#3]

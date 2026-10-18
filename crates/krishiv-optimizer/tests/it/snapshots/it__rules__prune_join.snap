@@ -4,7 +4,7 @@ expression: SELECT t.b FROM t JOIN u ON t.a = u.a WHERE t.c > 1
 ---
 Project [b#1]
 +- Join Inner, (a#0 == a#3)
-   :- Project [a#0, b#1]
-   :  +- Filter (c#2 > 1)
-   :     +- Scan spark_catalog.default.t [a#0, b#1, c#2]
-   +- Scan spark_catalog.default.u [a#3]
+   :- Scan spark_catalog.default.u [a#3]
+   +- Project [a#0, b#1]
+      +- Filter (c#2 > 1)
+         +- Scan spark_catalog.default.t [a#0, b#1, c#2]

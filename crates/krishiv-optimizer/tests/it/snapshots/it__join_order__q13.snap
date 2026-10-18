@@ -1,0 +1,13 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: optimized.root().to_string()
+---
+Sort [custdist#20 DESC NULLS LAST, c_count#19 DESC NULLS LAST], true
++- Aggregate [c_count#19], [c_count#19, count(1) AS custdist#20]
+   +- Aggregate [c_custkey#0], [count(o_orderkey#8) AS c_count#19]
+      +- Project [c_custkey#0, o_orderkey#8]
+         +- Join LeftOuter, (c_custkey#0 == o_custkey#9)
+            :- Scan spark_catalog.default.customer [c_custkey#0]
+            +- Project [o_orderkey#8, o_custkey#9]
+               +- Filter (NOT (o_comment#16 like '%special%requests%'))
+                  +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_comment#16]

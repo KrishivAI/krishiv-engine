@@ -1,0 +1,14 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: "SELECT o_orderkey FROM (SELECT o_orderkey, o_orderdate FROM orders ORDER BY o_orderdate LIMIT 10) o JOIN lineitem ON l_orderkey = o_orderkey JOIN part ON p_partkey = l_partkey"
+---
+Project [o_orderkey#0]
++- Join Inner, (p_partkey#25 == l_partkey#10)
+   :- Scan spark_catalog.default.part [p_partkey#25]
+   +- Project [l_partkey#10, o_orderkey#0]
+      +- Join Inner, (l_orderkey#9 == o_orderkey#0)
+         :- Scan spark_catalog.default.lineitem [l_orderkey#9, l_partkey#10]
+         +- Project [o_orderkey#0]
+            +- Limit 10
+               +- Sort [o_orderdate#4 ASC NULLS FIRST], true
+                  +- Scan spark_catalog.default.orders [o_orderkey#0, o_orderdate#4]

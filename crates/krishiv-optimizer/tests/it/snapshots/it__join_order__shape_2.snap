@@ -1,0 +1,13 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: "SELECT r_name FROM region, nation, supplier WHERE TRUE AND r_regionkey = n_regionkey AND CAST(s_nationkey AS BIGINT) = n_nationkey AND s_acctbal > 100.00"
+---
+Project [r_name#1]
++- Join Inner, (s_nationkey#10 == n_nationkey#3)
+   :- Project [s_nationkey#10]
+   :  +- Filter (s_acctbal#12 > 100.00)
+   :     +- Scan spark_catalog.default.supplier [s_nationkey#10, s_acctbal#12]
+   +- Project [n_nationkey#3, r_name#1]
+      +- Join Inner, (r_regionkey#0 == n_regionkey#5)
+         :- Scan spark_catalog.default.nation [n_nationkey#3, n_regionkey#5]
+         +- Scan spark_catalog.default.region [r_regionkey#0, r_name#1]

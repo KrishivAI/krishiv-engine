@@ -1,0 +1,36 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: optimized.root().to_string()
+---
+Sort [o_year#60 ASC NULLS FIRST], true
++- Aggregate [o_year#60], [o_year#60, (sum(CASE WHEN (nation#62 == 'BRAZIL') THEN volume#61 ELSE 0 END) / sum(volume#61)) AS mkt_share#63]
+   +- Project [extract('year', o_orderdate#36) AS o_year#60, (l_extendedprice#21 * (1 - l_discount#22)) AS volume#61, n_name#54 AS nation#62]
+      +- Join Inner, (s_nationkey#12 == n_nationkey#53)
+         :- Project [s_nationkey#12, o_orderdate#36, l_extendedprice#21, l_discount#22]
+         :  +- Join Inner, (s_suppkey#9 == l_suppkey#18)
+         :     :- Scan spark_catalog.default.supplier [s_suppkey#9, s_nationkey#12]
+         :     +- Project [o_orderdate#36, l_suppkey#18, l_extendedprice#21, l_discount#22]
+         :        +- Join Inner, (c_nationkey#44 == n_nationkey#49)
+         :           :- Project [c_nationkey#44, o_orderdate#36, l_suppkey#18, l_extendedprice#21, l_discount#22]
+         :           :  +- Join Inner, (o_custkey#33 == c_custkey#41)
+         :           :     :- Scan spark_catalog.default.customer [c_custkey#41, c_nationkey#44]
+         :           :     +- Project [o_custkey#33, o_orderdate#36, l_suppkey#18, l_extendedprice#21, l_discount#22]
+         :           :        +- Join Inner, (l_orderkey#16 == o_orderkey#32)
+         :           :           :- Filter (o_orderdate#36 BETWEEN DATE '1995-01-01' AND DATE '1996-12-31')
+         :           :           :  +- Scan spark_catalog.default.orders [o_orderkey#32, o_custkey#33, o_orderdate#36]
+         :           :           +- Project [l_orderkey#16, l_suppkey#18, l_extendedprice#21, l_discount#22]
+         :           :              +- Join Inner, (p_partkey#0 == l_partkey#17)
+         :           :                 :- Scan spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_extendedprice#21, l_discount#22]
+         :           :                 +- Project [p_partkey#0]
+         :           :                    +- Filter (p_type#4 == 'ECONOMY ANODIZED STEEL')
+         :           :                       +- Scan spark_catalog.default.part [p_partkey#0, p_type#4]
+         :           +- Project [n_nationkey#49]
+         :              +- Join Inner, (n_regionkey#51 == r_regionkey#57)
+         :                 :- Project [n_nationkey#49, n_regionkey#51]
+         :                 :  +- Scan spark_catalog.default.nation [n_nationkey#49, n_name#50, n_regionkey#51] (shared #1)
+         :                 +- Project [r_regionkey#57]
+         :                    +- Filter (r_name#58 == 'AMERICA')
+         :                       +- Scan spark_catalog.default.region [r_regionkey#57, r_name#58]
+         +- Project [n_nationkey#53, n_name#54]
+            +- Shift +4
+               +- Shared #1, printed above
