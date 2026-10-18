@@ -16,17 +16,19 @@
 //!    with explicit stacks; each operator is resolved once after its
 //!    children and yields its output scope. Names resolve in Spark 4.2's
 //!    order: the operator's input (qualifier = the longest matching suffix
-//!    of `catalog.namespace.table` or the alias), then select-list aliases
-//!    where Spark allows them (`GROUP BY`), then enclosing queries; a
-//!    DataFrame `df["a"]` resolves among the relations carrying its
-//!    `plan_id`. Rewrites run inside the pass in a fixed order:
-//!    `WithColumns` to `Project`, `USING` expansion, aggregates and grouping
-//!    columns that `HAVING` / `ORDER BY` use but the aggregate lacks, a
-//!    `SELECT` with aggregates to an aggregate.
-//!
-//! Lateral column aliases, `GROUP BY` / `ORDER BY` ordinals and `ORDER BY`
-//! columns outside the select list come in a follow-up unit of P2-T071a;
-//! until then they fail with `KRISHIV_UNSUPPORTED_FEATURE`, never silently.
+//!    of `catalog.namespace.table` or the alias), then aliases defined
+//!    earlier in the same select list (lateral column aliases), then
+//!    select-list aliases where Spark allows them (`GROUP BY`), then
+//!    enclosing queries; a DataFrame `df["a"]` resolves among the
+//!    relations carrying its `plan_id`. Rewrites run inside the pass in a
+//!    fixed order: `WithColumns` to `Project`, `USING` expansion,
+//!    `GROUP BY` / `ORDER BY` ordinals to the items they number, aggregates
+//!    and grouping columns that `HAVING` / `ORDER BY` use but the
+//!    aggregate lacks, a `SELECT` with aggregates to an aggregate, lateral
+//!    aliases to projections below the items reading them (above the
+//!    aggregate, for an aggregate's select list), and columns a filter or
+//!    sort names that a projection below dropped added back to it (Spark's
+//!    missing references) and dropped again above.
 //!
 //! Resolution reads only the [`AnalysisContext`], whose configuration is a
 //! [`ResolutionConf`]: an input it does not hold cannot change the result,

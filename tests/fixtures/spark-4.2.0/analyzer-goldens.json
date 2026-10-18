@@ -2691,6 +2691,1047 @@
      "nullable": false
     }
    ]
+  },
+  {
+   "sql": "SELECT a + 1, `(a + 1)` + 1 FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "(a + 1)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference((a + 1)) + 1)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a + 1 AS a, a + 1 FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(a + 1)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS k, b AS k, k FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "AMBIGUOUS_LATERAL_COLUMN_ALIAS",
+   "sql_state": "42702",
+   "message_parameters": {
+    "n": "2",
+    "name": "`k`"
+   }
+  },
+  {
+   "sql": "SELECT a AS k, k AS j, j FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "j",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "j",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS k, (SELECT max(k) FROM u) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`k`",
+    "proposal": "`a`, `d`"
+   },
+   "context": {
+    "start": 27,
+    "stop": 27,
+    "fragment": "k"
+   }
+  },
+  {
+   "sql": "SELECT a AS k, k FROM t WHERE k > 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`k`",
+    "proposal": "`a`, `b`, `c`"
+   },
+   "context": {
+    "start": 30,
+    "stop": 30,
+    "fragment": "k"
+   }
+  },
+  {
+   "sql": "SELECT (SELECT 1 FROM u) AS k, k + 1 FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(k) + 1)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (SELECT max(a) FROM u WHERE u.a = t.a) AS s, s + 1 FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(s) + 1)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT max(a) AS m, m FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT count(*) AS n, n * 2 FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "n",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "(lateralAliasReference(n) * 2)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT max(a) AS m, m + 1 AS n, n + 1 FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "n",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(n) + 1)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT max(a) AS m, m + 1 FROM t HAVING m > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(m) + 1)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS k, sum(k) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "MISSING_GROUP_BY",
+   "sql_state": "42803",
+   "message_parameters": {},
+   "context": {
+    "start": 0,
+    "stop": 27,
+    "fragment": "SELECT a AS k, sum(k) FROM t"
+   }
+  },
+  {
+   "sql": "SELECT max(a) AS m, sum(m) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_AGGREGATE_FUNC",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "aggFunc": "\"sum(lateralAliasReference(m))\"",
+    "lca": "`m`"
+   }
+  },
+  {
+   "sql": "SELECT a, a AS k, max(k) FROM t GROUP BY a",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_AGGREGATE_FUNC",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "aggFunc": "\"max(lateralAliasReference(k))\"",
+    "lca": "`k`"
+   }
+  },
+  {
+   "sql": "SELECT a AS k, sum(c) FILTER (WHERE k > 1) FROM t GROUP BY a",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_AGGREGATE_FUNC",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "aggFunc": "\"sum(c) FILTER (WHERE (lateralAliasReference(k) > 1))\"",
+    "lca": "`k`"
+   }
+  },
+  {
+   "sql": "SELECT sum(c) AS s, s + max(a) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(s) + max(a))",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT sum(c) AS s, s + max(a) AS z FROM t GROUP BY b",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "z",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, max(c) AS m, m + c FROM t GROUP BY a",
+   "conf": {},
+   "ok": false,
+   "error_class": "MISSING_AGGREGATION",
+   "sql_state": "42803",
+   "message_parameters": {
+    "expression": "\"c\"",
+    "expressionAnyValue": "\"any_value(c)\""
+   }
+  },
+  {
+   "sql": "SELECT sum(c) AS s, s + a FROM t GROUP BY a + 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "MISSING_AGGREGATION",
+   "sql_state": "42803",
+   "message_parameters": {
+    "expression": "\"a\"",
+    "expressionAnyValue": "\"any_value(a)\""
+   }
+  },
+  {
+   "sql": "SELECT a + 1 AS k, sum(c) AS s, k * s FROM t GROUP BY a + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(k) * lateralAliasReference(s))",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a + 1 AS k, k + 1 FROM t GROUP BY a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(k) + 1)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS k, k + 1 FROM t GROUP BY a, k",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(k) + 1)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT sum(c) AS s, s + 1 AS z FROM t GROUP BY a HAVING z > 2",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "z",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT sum(c) AS s, s + 1 AS z FROM t GROUP BY a HAVING max(b) > 'x'",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "z",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT sum(c) AS s, s + 1 AS z FROM t GROUP BY a ORDER BY max(b)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "z",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT sum(c) AS s, s + 1 FROM t GROUP BY a ORDER BY a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(s) + 1)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT max(a) AS m, m + c FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "MISSING_GROUP_BY",
+   "sql_state": "42803",
+   "message_parameters": {},
+   "context": {
+    "start": 0,
+    "stop": 31,
+    "fragment": "SELECT max(a) AS m, m + c FROM t"
+   }
+  },
+  {
+   "sql": "SELECT sum(c) AS s, s + a FROM t GROUP BY a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(s) + a)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT sum(c) AS s, s + (a + 1) FROM t GROUP BY a + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "(lateralAliasReference(s) + (a + 1))",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT sum(c) AS s, s + max(a) AS z FROM t GROUP BY b ORDER BY max(a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "z",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT sum(c) AS s, s + a AS z FROM t GROUP BY a ORDER BY a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "z",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS k, CAST(k AS BIGINT) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a + 1 AS k, count(*) FROM t GROUP BY 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "count(1)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT 1 AS k, count(*) FROM t GROUP BY 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "count(1)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT b AS k, count(*) FROM t GROUP BY 1 HAVING k = 'x'",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "count(1)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, count(*) FROM t GROUP BY 1, 2",
+   "conf": {},
+   "ok": false,
+   "error_class": "GROUP_BY_POS_AGGREGATE",
+   "sql_state": "42903",
+   "message_parameters": {
+    "aggExpr": "count(1) AS `count(1)`",
+    "index": "2"
+   },
+   "context": {
+    "start": 38,
+    "stop": 38,
+    "fragment": "2"
+   }
+  },
+  {
+   "sql": "SELECT max(c) AS m FROM t GROUP BY 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "GROUP_BY_POS_AGGREGATE",
+   "sql_state": "42903",
+   "message_parameters": {
+    "aggExpr": "max(spark_catalog.default.t.c) AS m",
+    "index": "1"
+   },
+   "context": {
+    "start": 35,
+    "stop": 35,
+    "fragment": "1"
+   }
+  },
+  {
+   "sql": "SELECT max(c) AS m, m FROM t GROUP BY 2",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_GROUP_BY",
+   "sql_state": "0A000",
+   "message_parameters": {}
+  },
+  {
+   "sql": "SELECT a AS k, k, count(*) FROM t GROUP BY 1, 2",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_GROUP_BY",
+   "sql_state": "0A000",
+   "message_parameters": {}
+  },
+  {
+   "sql": "SELECT x, count(*) FROM t GROUP BY 3",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`a`, `b`, `c`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 7,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT a, count(*) FROM t GROUP BY y, 3",
+   "conf": {},
+   "ok": false,
+   "error_class": "GROUP_BY_POS_OUT_OF_RANGE",
+   "sql_state": "42805",
+   "message_parameters": {
+    "index": "3",
+    "size": "2"
+   },
+   "context": {
+    "start": 38,
+    "stop": 38,
+    "fragment": "3"
+   }
+  },
+  {
+   "sql": "SELECT x FROM t GROUP BY y",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`a`, `b`, `c`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 7,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT *, 1 FROM t GROUP BY 5",
+   "conf": {},
+   "ok": false,
+   "error_class": "STAR_GROUP_BY_POS",
+   "sql_state": "0A000",
+   "message_parameters": {}
+  },
+  {
+   "sql": "SELECT * FROM t GROUP BY a",
+   "conf": {},
+   "ok": false,
+   "error_class": "MISSING_AGGREGATION",
+   "sql_state": "42803",
+   "message_parameters": {
+    "expression": "\"b\"",
+    "expressionAnyValue": "\"any_value(b)\""
+   }
+  },
+  {
+   "sql": "SELECT a, b FROM t ORDER BY -1",
+   "conf": {},
+   "ok": false,
+   "error_class": "ORDER_BY_POS_OUT_OF_RANGE",
+   "sql_state": "42805",
+   "message_parameters": {
+    "index": "-1",
+    "size": "2"
+   },
+   "context": {
+    "start": 28,
+    "stop": 29,
+    "fragment": "-1"
+   }
+  },
+  {
+   "sql": "SELECT a, b FROM t ORDER BY 0",
+   "conf": {},
+   "ok": false,
+   "error_class": "ORDER_BY_POS_OUT_OF_RANGE",
+   "sql_state": "42805",
+   "message_parameters": {
+    "index": "0",
+    "size": "2"
+   },
+   "context": {
+    "start": 28,
+    "stop": 28,
+    "fragment": "0"
+   }
+  },
+  {
+   "sql": "SELECT a, b FROM t ORDER BY 1L",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t ORDER BY x, 2",
+   "conf": {},
+   "ok": false,
+   "error_class": "ORDER_BY_POS_OUT_OF_RANGE",
+   "sql_state": "42805",
+   "message_parameters": {
+    "index": "2",
+    "size": "1"
+   },
+   "context": {
+    "start": 28,
+    "stop": 28,
+    "fragment": "2"
+   }
+  },
+  {
+   "sql": "SELECT * FROM t ORDER BY 3",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, count(*) FROM t GROUP BY a ORDER BY 2",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "count(1)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, count(*) FROM t GROUP BY a HAVING count(*) > 1 ORDER BY 2",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "count(1)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t GROUP BY 1 HAVING count(*) > 1 ORDER BY 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS k, k + 1 AS j FROM t ORDER BY 2",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "j",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE c > 1 ORDER BY b, a + c",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS k FROM t ORDER BY b + k",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM (SELECT a, b FROM t) s ORDER BY b",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t ORDER BY b LIMIT 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT t.a FROM t JOIN u ON t.a = u.a ORDER BY d",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS k, k + 1 AS j FROM t ORDER BY c",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "j",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS k FROM t GROUP BY k ORDER BY k",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS b, c AS b FROM t ORDER BY b",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "b",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS k, b AS k FROM t ORDER BY k",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`k`",
+    "proposal": "`k`, `k`"
+   },
+   "context": {
+    "start": 38,
+    "stop": 38,
+    "fragment": "k"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t GROUP BY a HAVING count(*) > 1 ORDER BY b",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`b`",
+    "proposal": "`a`"
+   },
+   "context": {
+    "start": 56,
+    "stop": 56,
+    "fragment": "b"
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT a, d AS b FROM u) o WHERE EXISTS (SELECT a FROM t ORDER BY b LIMIT 1)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT a, d AS b FROM u) o WHERE EXISTS (SELECT a AS k, a AS k FROM t ORDER BY k LIMIT 1)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`k`",
+    "proposal": "`k`, `k`"
+   },
+   "context": {
+    "start": 94,
+    "stop": 94,
+    "fragment": "k"
+   }
+  },
+  {
+   "sql": "SELECT max(c) FROM t GROUP BY a, b HAVING count(*) > 1 ORDER BY b",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "max(c)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT max(c) AS m FROM t GROUP BY a HAVING count(*) > 1 ORDER BY a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
   }
  ],
  "plan_ids": [
@@ -2844,6 +3885,114 @@
    "context": {
     "fragment": "__eq__"
    }
+  },
+  {
+   "id": "missing_through_filter",
+   "dataframe": "t.select(\"a\").where(F.col(\"a\") > 1).orderBy(\"b\")",
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "missing_through_limit",
+   "dataframe": "t.select(\"a\").limit(1).orderBy(\"b\")",
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "missing_two_sorts",
+   "dataframe": "t.select(\"a\").orderBy(\"b\").orderBy(\"c\")",
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "missing_two_projects",
+   "dataframe": "t.select(\"a\", \"b\").select(\"a\").orderBy(\"c\")",
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "missing_in_filter",
+   "dataframe": "t.select(\"a\", \"c\").where(F.col(\"b\") == \"x\")",
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "missing_grouping",
+   "dataframe": "t.groupBy(\"a\").agg(F.max(\"c\").alias(\"m\")).select(\"m\").orderBy(\"a\")",
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "id": "missing_after_alias",
+   "dataframe": "t.select(\"a\").alias(\"x\").orderBy(\"b\")",
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`b`",
+    "proposal": "`a`"
+   },
+   "context": {
+    "fragment": "col"
+   }
+  },
+  {
+   "id": "lateral_alias",
+   "dataframe": "t.select((t[\"a\"] + 1).alias(\"k\"), (F.col(\"k\") + 1).alias(\"m\"))",
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    }
+   ]
   }
  ]
 }

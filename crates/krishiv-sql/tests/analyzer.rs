@@ -166,46 +166,30 @@ fn tpch_resolves_as_spark_does() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Statements using lateral column aliases, ordinals or `ORDER BY`
-/// columns outside the select list, which a follow-up unit of P2-T071a
-/// resolves.
-const DEFERRED: [&str; 13] = [
-    "SELECT a, count(*) FROM t GROUP BY 1",
-    "SELECT a, count(*) FROM t GROUP BY 3",
-    "SELECT a, count(*) FROM t GROUP BY 2",
-    "SELECT *, 1 FROM t GROUP BY 1",
-    "SELECT a, b FROM t ORDER BY 2",
-    "SELECT a, b FROM t ORDER BY 3",
-    "SELECT a FROM t ORDER BY b",
-    "SELECT a + 1 AS k, k + 1 AS m FROM t",
-    "SELECT 1 AS k, 2 AS k, k + 1 FROM t",
-    "SELECT max(a) AS m, m + 1 FROM t",
-    "SELECT a + 1 AS k, k + 1 FROM t",
-    "SELECT a + 1 AS k, k + 1 AS m, m * 2 AS n FROM t",
-    "SELECT a, max(c) AS m, m + a FROM t GROUP BY a",
-];
-
 #[test]
 fn resolution_corpus_matches_spark() {
     let g = goldens();
     let mut failures = Vec::new();
+    let mut raised = std::collections::BTreeSet::new();
     for case in g["corpus"].as_array().unwrap() {
         let sql = case["sql"].as_str().unwrap();
-        let got = analyze(&g, sql, conf(&case["conf"]));
-        let default_conf = case["conf"]
-            .as_object()
-            .is_some_and(serde_json::Map::is_empty);
-        if default_conf && DEFERRED.contains(&sql) {
-            // Not yet resolved: an explicit error, never Spark's success
-            // or a wrong class.
-            let class = got.as_ref().err().map(|e| e.error.error_class().name());
-            if class != Some("KRISHIV_UNSUPPORTED_FEATURE") {
-                failures.push(format!("{sql}: deferred, but {class:?}"));
-            }
-            continue;
-        }
+        let conf = conf(&case["conf"]);
+        let got = analyze(&g, sql, conf);
         if let Some(diff) = compare(sql, &got, case) {
             failures.push(format!("{sql} {}: {diff}", case["conf"]));
+        }
+        if let Err(e) = &got {
+            raised.insert(e.error.error_class().name());
+        }
+        // A resolved plan states its output and resolves to itself.
+        if let Ok(a) = got {
+            let ctx = context(catalog(&g), conf);
+            let again = block_on(DefaultAnalyzer.analyze(&a.plan, &ctx)).unwrap();
+            if !again.plan.structurally_eq(&a.plan)
+                || a.plan.root().resolved_output() != Some(a.output)
+            {
+                failures.push(format!("{sql}: not a fixed point\n{}", again.plan.root()));
+            }
         }
     }
     assert!(
@@ -214,6 +198,19 @@ fn resolution_corpus_matches_spark() {
         failures.len(),
         failures.join("\n")
     );
+    // Classes of lateral aliases and ordinals, each matched against Spark
+    // above.
+    for class in [
+        "AMBIGUOUS_LATERAL_COLUMN_ALIAS",
+        "GROUP_BY_POS_AGGREGATE",
+        "GROUP_BY_POS_OUT_OF_RANGE",
+        "ORDER_BY_POS_OUT_OF_RANGE",
+        "STAR_GROUP_BY_POS",
+        "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_AGGREGATE_FUNC",
+        "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_GROUP_BY",
+    ] {
+        assert!(raised.contains(class), "{class} not raised");
+    }
 }
 
 /// SQL text inside a plan resolves through the front end, which keeps it
