@@ -913,7 +913,9 @@ pub struct FunctionArg {
 
 /// A function call. Spark's special forms (`EXTRACT`, `SUBSTRING ... FROM`,
 /// `TRIM`, `POSITION`, `OVERLAY`, `TIMESTAMPADD`, ...) are calls of the
-/// function they denote, with the arguments in that function's order.
+/// function they denote, with the arguments in that function's order
+/// (`TRIM(c FROM s)` is `trim(c, s)`: the trim string first, as in Spark's
+/// two-parameter `trim`, `ltrim` and `rtrim`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Function {
     /// The function name.
