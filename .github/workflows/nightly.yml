@@ -135,7 +135,8 @@ jobs:
       - name: Build the instrumented extension and run the Python tests
         run: |
           uv venv --python 3.11 "$RUNNER_TEMP/venv"
-          uv pip install --python "$RUNNER_TEMP/venv/bin/python" "maturin>=1.9.4,<2" pytest
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" "maturin>=1.9.4,<2" pytest \
+            "pyarrow>=16" "polars>=1.0" "duckdb>=1.1"
           # Exports RUSTFLAGS, LLVM_PROFILE_FILE and the instrumented target dir.
           # shellcheck source=/dev/null
           source <(cargo llvm-cov show-env --sh)
@@ -270,6 +271,11 @@ jobs:
         run: >-
           cargo +nightly-2026-08-12 test -Zbuild-std --target x86_64-unknown-linux-gnu
           -p krishiv-kernels --locked --lib --tests
+      # P2-T098a: the Arrow C stream bridge (import validation, export).
+      - name: Arrow C stream bridge under ASan
+        run: >-
+          cargo +nightly-2026-08-12 test -Zbuild-std --target x86_64-unknown-linux-gnu
+          -p krishiv-python --locked --test stream_ffi
 
   # P2-T020: differential fuzzing of the kernels (every specialization and CPU
   # target vs the row-at-a-time reference); libFuzzer builds with ASan.
