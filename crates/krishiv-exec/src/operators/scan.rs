@@ -54,7 +54,9 @@ pub trait ScanPushdown {
 /// never reads more than one such batch past its limit. Pushed filters are
 /// applied before the projection and honoured exactly.
 ///
-/// Batches with no rows are skipped. Reports the morsels claimed per driver
+/// One piece is returned per call, possibly with no rows after a pushed
+/// filter, so the driver reaches a batch boundary after every piece read.
+/// Reports the morsels claimed per driver
 /// ([`Source::morsels_claimed`]).
 #[derive(Debug)]
 pub struct MemoryScan {
@@ -151,23 +153,22 @@ impl MemoryScan {
     ) -> Result<Option<Batch>> {
         let g = global_ref::<ScanGlobal>(global, "MemoryScan")?;
         let local = local_mut::<ScanLocal>(local, "MemoryScan")?;
-        loop {
-            if local.batches.is_empty() {
-                let Some(m) = g.cursor.claim() else {
-                    return Ok(None);
-                };
-                local.batches =
-                    g.morsels.get(m).cloned().ok_or_else(|| {
-                        internal(format!("morsel {m} out of {}", g.morsels.len()))
-                    })?;
-                local.offset = 0;
-                local.claimed += 1;
-            }
-            let piece = self.next_piece(local, g.batch_rows)?;
-            if piece.num_rows() > 0 {
-                return Ok(Some(piece));
-            }
+        if local.batches.is_empty() {
+            let Some(m) = g.cursor.claim() else {
+                return Ok(None);
+            };
+            local.batches = g
+                .morsels
+                .get(m)
+                .cloned()
+                .ok_or_else(|| internal(format!("morsel {m} out of {}", g.morsels.len())))?;
+            local.offset = 0;
+            local.claimed += 1;
         }
+        // One piece per call, even an empty input batch or one a pushed
+        // filter emptied: the driver must reach a batch boundary (cancel,
+        // abort and spill checks) after every piece read.
+        Ok(Some(self.next_piece(local, g.batch_rows)?))
     }
 }
 

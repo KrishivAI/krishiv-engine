@@ -536,11 +536,12 @@ fn scan_slices_to_batch_size_and_groups_morsels() {
         morsel_rows: 10,
         ..ExecConfig::default()
     });
-    // 10 + 3 + 0 + 9 rows: morsels {10}, {3, 0, 9}; the 10 splits into 4+4+2.
+    // 10 + 3 + 0 + 9 rows: morsels {10}, {3, 0, 9}; the 10 splits into 4+4+2
+    // and the empty batch is still returned (one piece per call).
     let scan = scan_of(&[10, 3, 0, 9]);
     let (out, morsels) = drain(&scan, &ctx);
     let sizes: Vec<_> = out.iter().map(Batch::num_rows).collect();
-    assert_eq!(sizes, [4, 4, 2, 3, 4, 4, 1]);
+    assert_eq!(sizes, [4, 4, 2, 3, 0, 4, 4, 1]);
     assert_eq!(morsels, 2);
     assert_eq!(scan.rows_read(), 22);
     let g = scan
@@ -581,9 +582,10 @@ fn scan_pushdown_filters_before_projecting_and_projections_compose() {
     let (out, _) = drain(&scan, &ctx);
     assert_eq!(
         out.len(),
-        2,
-        "the first batch is filtered to nothing and skipped"
+        3,
+        "the first batch is filtered to nothing but still returned"
     );
+    assert_eq!(out[0].num_rows(), 0);
     assert_eq!(
         out.iter()
             .flat_map(|b| b.data().column(0).as_string::<i32>().iter())
