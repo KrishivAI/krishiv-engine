@@ -95,7 +95,7 @@ SELECT a FROM t WHERE (a, b) IN (SELECT a, d FROM u) AND a NOT BETWEEN 1 AND 2
 SELECT a <=> 1, a IS DISTINCT FROM 1, a IS NOT DISTINCT FROM 1, a IS TRUE, a IS NOT FALSE, a IS UNKNOWN, a IS NOT UNKNOWN FROM t
   => Project [(a <=> 1), (NOT (a <=> 1)), (a <=> 1), (a <=> true), (NOT (a <=> false)), isnull(a), isnotnull(a)] | +- Read t | 
 SELECT +a, ~a, a DIV 2, a & 1, a | 1, a ^ 1, a << 1, a >> 1, a >>> 1, a || b FROM t
-  => Project [positive(a), ~(a), div(a, 2), &(a, 1), |(a, 1), ^(a, 1), shiftleft(a, 1), shiftright(a, 1), shiftrightunsigned(a, 1), concat(a, b)] | +- Read t | 
+  => Project [positive(a), ~(a), (a div 2), &(a, 1), |(a, 1), ^(a, 1), shiftleft(a, 1), shiftright(a, 1), shiftrightunsigned(a, 1), concat(a, b)] | +- Read t | 
 SELECT CASE a WHEN 1 THEN 'x' END, b ILIKE 'x' ESCAPE '/', b NOT RLIKE 'x', TRY_CAST(a AS INT) FROM t
   => Project [CASE WHEN (a == 1) THEN 'x' END, ilike(b, 'x', '/'), (NOT (b rlike 'x')), TRY_CAST(a AS INT)] | +- Read t | 
 SELECT * FROM (t JOIN u ON true) x CROSS JOIN v LEFT SEMI JOIN w ON true

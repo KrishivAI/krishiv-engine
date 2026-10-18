@@ -475,6 +475,9 @@ ANALYZER_FIXES = [
         ("SELECT CURRENT_TIMESTAMP AS ts", {}),
         ("SELECT current_date FROM t", {}),
         ("SELECT a, current_date FROM t ORDER BY current_date", {}),
+        ("SELECT 1 AS current_date, current_date FROM t", {}),
+        ("SELECT a AS current_date, count(*) FROM t GROUP BY current_date", {}),
+        ("SELECT (SELECT current_date) FROM t", {}),
         ("SELECT NULL", {}),
         ("SELECT NULL AS n, 1", {}),
         ("SELECT CAST(NULL AS VOID)", {}),
@@ -653,7 +656,10 @@ def main() -> None:
     for path in sorted(TPCH_DIR.glob("q*.sql")):
         sql = path.read_text(encoding="utf-8").strip().rstrip(";")
         tpch.append({"id": path.stem, **run_sql(sql, {})})
-    corpus = [{"sql": sql, "conf": conf, **run_sql(sql, conf)} for sql, conf in CORPUS + MATRIX + CASTS + ANALYZER_FIXES]
+    corpus = [
+        {"sql": sql, "conf": conf, **run_sql(sql, conf)}
+        for sql, conf in CORPUS + MATRIX + CASTS + ANALYZER_FIXES
+    ]
     plan_ids = [{"id": i, "dataframe": d, **analyze(f)} for i, d, f in plan_id_cases(spark)]
     for name in TABLES:
         spark.sql(f"DROP TABLE IF EXISTS {name}")

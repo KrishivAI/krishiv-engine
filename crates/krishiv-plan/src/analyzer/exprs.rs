@@ -1044,6 +1044,27 @@ impl Resolver<'_> {
                 ));
             }
         }
+        // A name no input column has may be a function written without
+        // parentheses (what the parser leaves a column unless ANSI reserved
+        // keywords are on). Spark 4.2 tries it before lateral aliases,
+        // GROUP BY aliases and outer references.
+        if let [name] = &c.name[..]
+            && let Some(function) = LITERAL_FUNCTIONS
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, f)| *f)
+        {
+            let call = Arc::new(
+                Expr::new(ExprNode::Function(FunctionCall {
+                    name: function.to_owned(),
+                    args: Vec::new(),
+                    distinct: false,
+                    filter: None,
+                }))
+                .with_origin(origin),
+            );
+            return self.expr(&call, cx);
+        }
         if let ([name], Some(lateral)) = (&c.name[..], cx.lateral) {
             let cs = self.ctx.conf.case_sensitive;
             let hits: Vec<&Attr> = lateral
@@ -1098,26 +1119,6 @@ impl Resolver<'_> {
                     Some(level),
                 ));
             }
-        }
-        // A name no column has may be a function written without
-        // parentheses (what the parser leaves a column unless ANSI reserved
-        // keywords are on).
-        if let [name] = &c.name[..]
-            && let Some(function) = LITERAL_FUNCTIONS
-                .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(name))
-                .map(|(_, f)| *f)
-        {
-            let call = Arc::new(
-                Expr::new(ExprNode::Function(FunctionCall {
-                    name: function.to_owned(),
-                    args: Vec::new(),
-                    distinct: false,
-                    filter: None,
-                }))
-                .with_origin(origin),
-            );
-            return self.expr(&call, cx);
         }
         Err(unresolved(&c.name, cx.scope, origin))
     }

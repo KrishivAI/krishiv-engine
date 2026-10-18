@@ -37092,6 +37092,46 @@
    ]
   },
   {
+   "sql": "SELECT 1 AS current_date, current_date FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "current_date",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "current_date()",
+     "type": "date",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS current_date, count(*) FROM t GROUP BY current_date",
+   "conf": {},
+   "ok": false,
+   "error_class": "MISSING_AGGREGATION",
+   "sql_state": "42803",
+   "message_parameters": {
+    "expression": "\"a\"",
+    "expressionAnyValue": "\"any_value(a)\""
+   }
+  },
+  {
+   "sql": "SELECT (SELECT current_date) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "scalarsubquery()",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
    "sql": "SELECT NULL",
    "conf": {},
    "ok": true,
