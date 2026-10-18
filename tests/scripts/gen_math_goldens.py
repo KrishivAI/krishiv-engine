@@ -19,7 +19,6 @@ and `acosh`, so their fixtures (`tests/fixtures/spark-4.{0,1}.0/math-differentia
 The fixture goes to stdout (the container user cannot write the mount); Spark logs go to stderr.
 """
 
-import datetime
 import decimal
 import json
 import math
@@ -110,7 +109,6 @@ def main() -> None:
 
     ident = lambda v: v  # noqa: E731
     unscaled = lambda scale: lambda v: None if v is None else str(int(v.scaleb(scale)))  # noqa: E731
-    hexs = lambda v: None if v is None else bytes(v).hex()  # noqa: E731
 
     def dec_out(v):
         if v is None:
