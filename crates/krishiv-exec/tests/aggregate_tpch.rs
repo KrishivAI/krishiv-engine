@@ -131,15 +131,34 @@ async fn run(plan: Arc<dyn ExecNode>, slots: usize, limit: usize) -> (Vec<Batch>
     (out, q.metrics())
 }
 
-fn spill_scope() -> (SpillManager, SpillScope) {
-    let dir = std::env::temp_dir().join(format!("krishiv-tpch-agg-{}", std::process::id()));
-    let m = SpillManager::open(&SpillConfig {
-        dir,
+/// A spill manager on its own temporary directory. Fields drop in order: the
+/// manager removes its session, then the directory itself goes (also when
+/// the test panics).
+struct TestSpill {
+    _manager: SpillManager,
+    _dir: tempfile::TempDir,
+}
+
+fn spill_scope() -> (TestSpill, SpillScope) {
+    let dir = tempfile::Builder::new()
+        .prefix("krishiv-tpch-agg-")
+        .tempdir()
+        .unwrap();
+    let manager = SpillManager::open(&SpillConfig {
+        // A path inside the temporary directory: the manager creates it
+        // private (0700), whatever the umask.
+        dir: dir.path().join("spill"),
         ..SpillConfig::default()
     })
     .unwrap();
-    let s = m.scope().unwrap();
-    (m, s)
+    let scope = manager.scope().unwrap();
+    (
+        TestSpill {
+            _manager: manager,
+            _dir: dir,
+        },
+        scope,
+    )
 }
 
 fn agg(f: AggregateFunction, col: usize, s: &SchemaRef) -> AggregateExpr {

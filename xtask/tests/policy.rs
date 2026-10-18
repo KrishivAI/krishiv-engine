@@ -137,6 +137,43 @@ fn ci_policy_wiring() {
     ] {
         assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
     }
+    // Budgets: ci.yml only measures (no label reads); the label-aware gate in
+    // pr-policy.yml compares that measurement, so a label re-runs only the gate.
+    for needle in [
+        "  budgets-measure:\n",
+        "cargo xtask budgets --build-time --measure-only",
+        "name: budgets-current",
+    ] {
+        assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
+    }
+    for label in ["budget-approved", "unsafe-reviewed", "size-approved"] {
+        assert!(
+            !ci.contains(&format!("approval-label.sh {label}")),
+            "ci.yml must not resolve the {label} label (labels do not re-run it)"
+        );
+    }
+    for needle in [
+        "  budgets:\n",
+        ".github/scripts/budgets-measurement.sh",
+        "git show FETCH_HEAD:budgets.json > budgets.json",
+        "approval-label.sh budget-approved",
+        "approval-label.sh unsafe-reviewed",
+        "cargo xtask budgets --compare",
+    ] {
+        assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
+    }
+    // The gate finds the measurement by job and artifact name.
+    let fetch = read(".github/scripts/budgets-measurement.sh");
+    for needle in [
+        "actions/workflows/ci.yml/runs",
+        "select(.name == \"budgets-measure\")",
+        "--name budgets-current",
+    ] {
+        assert!(
+            fetch.contains(needle),
+            "budgets-measurement.sh lacks {needle:?}"
+        );
+    }
     assert!(
         !ci.contains("--all-features --locked --no-tests"),
         "PR nextest must use default features"
@@ -148,4 +185,16 @@ fn ci_policy_wiring() {
     assert!(nightly.contains("--all-features"));
     assert!(nightly.contains("sccache"));
     assert!(!nightly.contains("/home/"));
+}
+
+#[test]
+fn budgets_measurement_script_waits_and_fetches() {
+    let script = root().join(".github/scripts/test-budgets-measurement.sh");
+    let out = Command::new("bash").arg(&script).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

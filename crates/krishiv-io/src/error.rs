@@ -9,16 +9,16 @@
 //! | the store failed (after retries, or with a non-retryable error) | `KRISHIV_OBJECT_STORE_REQUEST_FAILED` |
 //! | the file was deleted after listing | `FAILED_READ_FILE.FILE_NOT_EXIST` |
 //! | a stored type cannot be read as the requested type | `FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH` |
-//! | case-insensitive resolution matched several fields | `_LEGACY_ERROR_TEMP_2093` |
+//! | case-insensitive resolution matched several fields | `FAILED_READ_FILE.NO_HINT` caused by `_LEGACY_ERROR_TEMP_2093` |
 //! | the file changed between planning and reading | `KRISHIV_FILE_CHANGED_DURING_READ` |
 //! | an upload failed | `TASK_WRITE_FAILED` |
 //! | unknown / invalid format option | `KRISHIV_UNKNOWN_FORMAT_OPTION` / `KRISHIV_INVALID_FORMAT_OPTION_VALUE` |
 //! | the scan was cancelled | `OPERATION_CANCELED` |
 //!
 //! Spark wraps reader failures as `FAILED_READ_FILE.NO_HINT` with the detail in
-//! the Java cause. A [`KrishivError`] has no cause chain, so where Spark's
-//! chain holds a more specific classified condition (the duplicate-field
-//! error), that condition is raised; the detail of an unclassified cause is
+//! the Java cause. Where Spark's cause is a classified condition (the
+//! duplicate-field error), the error carries it as its
+//! [`cause`](KrishivError::cause); the detail of an unclassified cause is
 //! logged with the redacted path.
 
 use std::fmt;

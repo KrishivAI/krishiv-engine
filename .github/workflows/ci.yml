@@ -31,12 +31,14 @@ env:
 #   `policy` (pr-policy.yml) only build the small `xtask` crate; they always run
 #   so that DCO and the size cap still apply to docs PRs.
 # - Label changes do not start this workflow (a relabel would cancel and rebuild
-#   the whole run). Only the label-dependent `policy` job reacts to labels, in
-#   pr-policy.yml.
+#   the whole run). Only the label-dependent jobs react to labels, in
+#   pr-policy.yml: `policy` (size cap) and `budgets` (the gate for the
+#   measurement made by `budgets-measure` here).
 # - Never use `pull_request_target` (enforced by `cargo xtask workflow-lint`).
 
-# NOTE: actions are pinned to major version tags for now; pin to full commit
-# SHAs (Renovate can maintain them) before the repository goes public.
+# Every third-party action is pinned to a full commit SHA (enforced by
+# `cargo xtask workflow-lint`) with its version in a trailing comment; Renovate
+# (renovate.json) updates both together.
 # The toolchain comes from rust-toolchain.toml (1.99.1); the rustup default
 # toolchain installed below honours it.
 
@@ -307,67 +309,35 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-kernels --locked
 
-  # Pull requests only: measured against the base branch's budgets.json, so
-  # growth always needs the label, even when the PR refreshes the baseline.
-  # The baseline is updated by the PR that changes it, so main never needs to
-  # re-run this. If a PR exceeds the budget,
-  # a maintainer adds the `budget-approved` label and the job is re-run or the
-  # PR is updated (labels no longer trigger this workflow); the job then passes and the PR author must refresh the baseline with
-  #   cargo xtask budgets --write-baseline
-  # and commit budgets.json (see the job summary).
-  budgets:
+  # Budget measurement (pull requests only). This job only measures and uploads
+  # `budgets-current.json`; the label-aware gate (`budgets` in pr-policy.yml)
+  # compares it with the base branch's baseline. That way adding the
+  # `budget-approved` or `unsafe-reviewed` label re-runs only the cheap gate,
+  # not this build. The job name and artifact name are read by
+  # .github/scripts/budgets-measurement.sh; keep them in sync.
+  budgets-measure:
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-      checks: read
-      actions: read
+    # The gate in pr-policy.yml waits up to 75 minutes for this job (queueing
+    # included); keep this limit below that.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-      # Compare with the base branch's baseline, not the PR's: a PR that
-      # refreshes budgets.json must not approve its own growth.
-      - name: Use the base branch baseline
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
-          git show FETCH_HEAD:budgets.json > budgets.json
       # --build-time wipes its own target dir, so it measures a clean build.
-      # The summary table is appended to the job summary by xtask itself.
-      # Same rule as `size-approved`.
-      - name: Resolve budget-approved label
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'budget-approved') }}
-          APPROVER: ${{ vars.SIZE_APPROVER }}
-        run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
-      # New unsafe sites need their own review label (same approval rule).
-      - name: Resolve unsafe-reviewed label
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'unsafe-reviewed') }}
-          APPROVER: ${{ vars.SIZE_APPROVER }}
-        run: echo "UNSAFE_APPROVED=$(.github/scripts/approval-label.sh unsafe-reviewed)" >> "$GITHUB_ENV"
-      - run: cargo xtask budgets --build-time
+      - run: cargo xtask budgets --build-time --measure-only
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
         with:
           name: budgets-current
           path: target/budgets-current.json
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   # P2-T148: the Python wheels build and import. abi3 (CPython >= 3.11, one
   # wheel) and the free-threaded cp314t wheel (not abi3). Branch protection

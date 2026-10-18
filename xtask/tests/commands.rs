@@ -2,7 +2,7 @@
 //! End-to-end tests of the policy subcommands against temporary fixtures.
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
 fn xtask(args: &[&str]) -> Output {
@@ -13,11 +13,27 @@ fn xtask(args: &[&str]) -> Output {
         .unwrap()
 }
 
-fn tmp(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("xtask-cmd-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+/// A temporary directory, removed on drop (also when the test panics).
+struct Tmp(tempfile::TempDir);
+
+impl std::ops::Deref for Tmp {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        self.0.path()
+    }
+}
+
+impl AsRef<Path> for Tmp {
+    fn as_ref(&self) -> &Path {
+        self.0.path()
+    }
+}
+
+fn tmp(name: &str) -> Tmp {
+    Tmp(tempfile::Builder::new()
+        .prefix(&format!("xtask-cmd-{name}-"))
+        .tempdir()
+        .unwrap())
 }
 
 fn write(root: &Path, rel: &str, text: &str) {
@@ -39,7 +55,7 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 
-fn init_repo(name: &str) -> PathBuf {
+fn init_repo(name: &str) -> Tmp {
     let dir = tmp(name);
     git(&dir, &["init", "-q", "-b", "main"]);
     git(&dir, &["config", "commit.gpgsign", "false"]);
@@ -310,4 +326,134 @@ fn diff_coverage_ignores_what_the_base_gained_after_the_branch_point() {
         String::from_utf8_lossy(&out.stdout)
     );
     assert!(String::from_utf8_lossy(&out.stdout).contains("2 of 2"));
+}
+
+/// `budgets --compare FILE` (the CI gate) against the repository baseline.
+#[test]
+fn budgets_compare_gates_growth_on_the_approval_labels() {
+    let dir = tmp("budgets");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let base: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("budgets.json")).unwrap()).unwrap();
+    let measured = |edit: &dyn Fn(&mut serde_json::Value)| {
+        let mut v = base.clone();
+        edit(&mut v);
+        let path = dir.join("m.json");
+        std::fs::write(&path, v.to_string()).unwrap();
+        path
+    };
+    let summary = dir.join("summary.md");
+    let run = |file: &Path, env: &[(&str, &str)]| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        c.args(["budgets", "--compare", file.to_str().unwrap()])
+            .env_remove("BUDGET_APPROVED")
+            .env_remove("UNSAFE_APPROVED")
+            .env("GITHUB_STEP_SUMMARY", &summary);
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        c.output().unwrap()
+    };
+    // Unchanged: passes, and the table lands in the job summary.
+    let same = measured(&|_| {});
+    let out = run(&same, &[]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        std::fs::read_to_string(&summary)
+            .unwrap()
+            .contains("| transitive crates |")
+    );
+    // Growth needs budget-approved; unsafe growth needs unsafe-reviewed.
+    let grown = measured(&|v| {
+        v["transitive_crates"] = (v["transitive_crates"].as_u64().unwrap() * 2).into();
+    });
+    let out = run(&grown, &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("budget-approved"));
+    let out = run(&grown, &[("BUDGET_APPROVED", "1")]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Refresh the baseline"));
+    let unsafe_grown = measured(&|v| {
+        v["unsafe_sites"]["krishiv-new"] = 1.into();
+    });
+    let out = run(&unsafe_grown, &[("BUDGET_APPROVED", "1")]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unsafe-reviewed"));
+    assert!(
+        run(&unsafe_grown, &[("UNSAFE_APPROVED", "1")])
+            .status
+            .success()
+    );
+    // A missing or malformed measurement is an error, never a pass.
+    let out = run(&dir.join("missing.json"), &[]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
+    std::fs::write(dir.join("bad.json"), "{").unwrap();
+    let out = run(&dir.join("bad.json"), &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("bad "));
+    // Flags that make no sense together are a usage error.
+    assert!(
+        !xtask(&["budgets", "--compare", "x", "--build-time"])
+            .status
+            .success()
+    );
+}
+
+/// `budgets` measuring through a fake `cargo` (`$CARGO`): the measurement
+/// is written for the CI artifact, and the default mode also compares it.
+#[cfg(unix)]
+#[test]
+fn budgets_measure_writes_the_measurement_with_a_fake_cargo() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp("budgets-measure");
+    let target = dir.join("target");
+    let fake = dir.join("cargo");
+    std::fs::write(
+        &fake,
+        r#"#!/bin/sh
+case "$1" in
+  metadata) printf '{"workspace_members":["w"],"resolve":{"nodes":[{"id":"w"},{"id":"dep"}]},"target_directory":"%s"}' "$FAKE_TARGET" ;;
+  tree) printf 'krishiv-cli v0.1.0 (/w)\ndep v1.0.0\n' ;;
+  build)
+    [ -n "$FAKE_BUILD_FAIL" ] && exit 1
+    while [ $# -gt 0 ]; do [ "$1" = --target-dir ] && d=$2; shift; done
+    mkdir -p "$d/release" && printf 'bin' > "$d/release/krishiv" ;;
+  *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let run = |args: &[&str], fail_build: bool| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        c.arg("budgets")
+            .args(args)
+            .env("CARGO", &fake)
+            .env("FAKE_TARGET", &target)
+            .env_remove("GITHUB_STEP_SUMMARY");
+        if fail_build {
+            c.env("FAKE_BUILD_FAIL", "1");
+        }
+        c.output().unwrap()
+    };
+    // --build-time measures in a fresh directory: a stale one is removed.
+    std::fs::create_dir_all(target.join("budget-clean/stale")).unwrap();
+    let out = run(&["--build-time", "--measure-only"], false);
+    assert!(out.status.success(), "{out:?}");
+    assert!(!target.join("budget-clean/stale").exists());
+    let m: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(target.join("budgets-current.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(m["transitive_crates"], 1);
+    assert_eq!(m["transitive_crates_all_features"], 1);
+    assert_eq!(m["binary_bytes"], 3);
+    assert!(m["clean_build_secs"].is_u64());
+    assert!(m["unsafe_sites"].is_object());
+    // Default mode: measure, then compare (everything shrank: passes).
+    let out = run(&[], false);
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("## Budgets"));
+    let out = run(&["--measure-only"], true);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("release build of krishiv-cli failed"));
 }

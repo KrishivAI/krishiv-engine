@@ -6,10 +6,63 @@
 //! caller opts out (CI sets `BUDGET_APPROVED=1` for `budget-approved` PRs).
 //! Any growth of a crate's unsafe sites needs its own approval
 //! (`UNSAFE_APPROVED=1`, label `unsafe-reviewed`).
+//!
+//! CI splits the work in two: `ci.yml` measures (`--measure-only`, uploads
+//! `budgets-current.json`) and the label-aware gate in `pr-policy.yml`
+//! compares that measurement with the base branch's baseline (`--compare`),
+//! so adding an approval label re-runs only the cheap gate.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+/// What one `cargo xtask budgets` invocation does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Mode {
+    /// Measure, then compare with `budgets.json` and apply the verdict.
+    Check {
+        /// Also measure a clean release build's wall time.
+        build_time: bool,
+    },
+    /// Measure and write `budgets-current.json` only; no verdict.
+    Measure {
+        /// Also measure a clean release build's wall time.
+        build_time: bool,
+    },
+    /// Measure and overwrite the `budgets.json` baseline.
+    WriteBaseline {
+        /// Also measure a clean release build's wall time.
+        build_time: bool,
+    },
+    /// Compare an existing measurement file with `budgets.json`.
+    Compare(PathBuf),
+}
+
+/// Parses the `budgets` flags; `None` on an unknown flag or a conflicting
+/// combination (`--compare` measures nothing, so it takes no other flag).
+#[must_use]
+pub fn parse_flags(flags: &[&str]) -> Option<Mode> {
+    let (mut build_time, mut measure_only, mut write_baseline) = (false, false, false);
+    let mut compare = None;
+    let mut it = flags.iter();
+    while let Some(f) = it.next() {
+        match *f {
+            "--build-time" => build_time = true,
+            "--measure-only" => measure_only = true,
+            "--write-baseline" => write_baseline = true,
+            "--compare" => compare = Some(PathBuf::from(it.next()?)),
+            _ => return None,
+        }
+    }
+    match (compare, measure_only, write_baseline) {
+        (Some(path), false, false) if !build_time => Some(Mode::Compare(path)),
+        (None, false, false) => Some(Mode::Check { build_time }),
+        (None, true, false) => Some(Mode::Measure { build_time }),
+        (None, false, true) => Some(Mode::WriteBaseline { build_time }),
+        _ => None,
+    }
+}
 
 /// Largest tolerated growth of any metric, in percent.
 pub const MAX_GROWTH_PERCENT: u64 = 5;
@@ -267,6 +320,34 @@ mod tests {
             ..b(1, None)
         };
         assert_eq!(compare(&base, &with(1)).unsafe_violations.len(), 1);
+    }
+
+    #[test]
+    fn parses_flags() {
+        let check = |b| Some(Mode::Check { build_time: b });
+        assert_eq!(parse_flags(&[]), check(false));
+        assert_eq!(parse_flags(&["--build-time"]), check(true));
+        assert_eq!(
+            parse_flags(&["--build-time", "--measure-only"]),
+            Some(Mode::Measure { build_time: true })
+        );
+        assert_eq!(
+            parse_flags(&["--write-baseline"]),
+            Some(Mode::WriteBaseline { build_time: false })
+        );
+        assert_eq!(
+            parse_flags(&["--compare", "m.json"]),
+            Some(Mode::Compare(PathBuf::from("m.json")))
+        );
+        for bad in [
+            &["--compare"][..],
+            &["--compare", "m.json", "--build-time"],
+            &["--compare", "m.json", "--measure-only"],
+            &["--measure-only", "--write-baseline"],
+            &["--bogus"],
+        ] {
+            assert_eq!(parse_flags(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

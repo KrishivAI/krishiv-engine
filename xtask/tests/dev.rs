@@ -2,17 +2,33 @@
 //! `doctor` and `stack` against a faked `PATH` (P2-T123).
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::{Command, Output};
 
-fn tmp(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("xtask-dev-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+/// A temporary directory, removed on drop (also when the test panics).
+struct Tmp(tempfile::TempDir);
+
+impl std::ops::Deref for Tmp {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        self.0.path()
+    }
 }
 
-fn xtask_with_path(args: &[&str], path: &PathBuf) -> Output {
+impl AsRef<Path> for Tmp {
+    fn as_ref(&self) -> &Path {
+        self.0.path()
+    }
+}
+
+fn tmp(name: &str) -> Tmp {
+    Tmp(tempfile::Builder::new()
+        .prefix(&format!("xtask-dev-{name}-"))
+        .tempdir()
+        .unwrap())
+}
+
+fn xtask_with_path(args: &[&str], path: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(args)
         .env("PATH", path)

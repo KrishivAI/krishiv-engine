@@ -1,7 +1,8 @@
 name: PR policy
 
 # Label-dependent repository policy (DCO, PR size cap with the `size-approved`
-# label). Kept out of ci.yml so that label changes re-run only this small job
+# label; budget gate with the `budget-approved` and `unsafe-reviewed` labels).
+# Kept out of ci.yml so that label changes re-run only these small jobs
 # instead of cancelling and rebuilding the full CI run. The job name `policy`
 # is a required status check; do not rename it.
 
@@ -71,3 +72,85 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: cargo xtask pr-size --base "$BASE_SHA" --head "$HEAD_SHA"
+
+  # Budget gate (pull requests only): compares the measurement made by ci.yml's
+  # `budgets-measure` job for this head with the base branch's budgets.json.
+  # Growth beyond the budget needs `budget-approved`, new unsafe sites need
+  # `unsafe-reviewed` (same approval rule as `size-approved`). Adding a label
+  # re-runs only this job; it waits for the measurement while CI is still
+  # running. On growth the PR author refreshes the baseline with
+  #   cargo xtask budgets --write-baseline
+  # and commits budgets.json (see the job summary). Compared with the base
+  # branch's baseline, not the PR's: a PR that refreshes budgets.json must not
+  # approve its own growth.
+  budgets:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # Longer than the wait below, which covers CI queueing plus the
+    # 45-minute limit of budgets-measure.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Wait for the CI measurement
+        id: measure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OUT_DIR: ${{ runner.temp }}/budgets
+          WAIT_SECS: 4500
+        # Assign first: a failing command substitution inside `echo` would not
+        # fail the step.
+        run: |
+          result=$(.github/scripts/budgets-measurement.sh)
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+      - name: Use the base branch baseline
+        if: steps.measure.outputs.result == 'measured'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          git show FETCH_HEAD:budgets.json > budgets.json
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        if: steps.measure.outputs.result == 'measured'
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.measure.outputs.result == 'measured'
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+        if: steps.measure.outputs.result == 'measured'
+      - name: Resolve budget-approved label
+        if: steps.measure.outputs.result == 'measured'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'budget-approved') }}
+          APPROVER: ${{ vars.SIZE_APPROVER }}
+        run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
+      - name: Resolve unsafe-reviewed label
+        if: steps.measure.outputs.result == 'measured'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'unsafe-reviewed') }}
+          APPROVER: ${{ vars.SIZE_APPROVER }}
+        run: echo "UNSAFE_APPROVED=$(.github/scripts/approval-label.sh unsafe-reviewed)" >> "$GITHUB_ENV"
+      - name: Compare with the budgets
+        if: steps.measure.outputs.result == 'measured'
+        env:
+          MEASURED: ${{ runner.temp }}/budgets/budgets-current.json
+        run: cargo xtask budgets --compare "$MEASURED"
+      - name: Nothing measured
+        if: steps.measure.outputs.result == 'skipped'
+        run: echo "No Rust change in this PR; budgets-measure was skipped." >> "$GITHUB_STEP_SUMMARY"

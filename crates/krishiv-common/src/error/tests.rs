@@ -288,3 +288,44 @@ fn every_legacy_class_omits_the_class_prefix() {
     });
     assert_eq!(e.to_string(), "boom SQLSTATE: P0001");
 }
+
+#[test]
+fn cause_chain_like_spark() {
+    use std::error::Error as _;
+    let dup = KrishivError::from(LegacyErrorTemp2093 {
+        required_field_name: "a".to_owned(),
+        matched_orc_fields: "[a, A]".to_owned(),
+    });
+    let read = KrishivError::from(FailedReadFileNoHint {
+        path: "file:/t/p.parquet".to_owned(),
+    });
+    assert_eq!(read.cause(), None);
+    assert!(read.source().is_none());
+    let e = read.clone().with_cause(dup.clone());
+    assert_eq!(e.cause(), Some(&dup));
+    assert_eq!(e.causes().collect::<Vec<_>>(), [&dup]);
+    // Display is Spark's getMessage: the cause is not part of it.
+    assert_eq!(e.to_string(), read.to_string());
+    assert_ne!(e, read);
+    let source = e.source().expect("source");
+    assert_eq!(source.to_string(), dup.to_string());
+    // Two levels; with_cause replaces the direct cause.
+    let top = KrishivError::from(OperationCanceled {}).with_cause(e.clone());
+    let chain: Vec<ErrorClass> = top.causes().map(KrishivError::error_class).collect();
+    assert_eq!(
+        chain,
+        [
+            ErrorClass::FailedReadFileNoHint,
+            ErrorClass::LegacyErrorTemp2093
+        ]
+    );
+    assert_eq!(top.clone().with_cause(dup).causes().count(), 1);
+    // Redaction covers the causes.
+    let r = top.redacted();
+    assert!(r.causes().all(|c| {
+        c.message_parameters()
+            .iter()
+            .all(|(_, v)| v == crate::secret::REDACTED)
+    }));
+    assert_eq!(r.causes().count(), 2);
+}

@@ -81,7 +81,11 @@ fn batches() -> Vec<Batch> {
 fn bench_spill(c: &mut Criterion) {
     let input = batches();
     let in_memory: usize = input.iter().map(|b| b.data().get_array_memory_size()).sum();
-    let root = std::env::temp_dir().join(format!("krishiv-bench-spill-{}", std::process::id()));
+    // Removed when the bench returns or panics.
+    let root = tempfile::Builder::new()
+        .prefix("krishiv-bench-spill-")
+        .tempdir()
+        .expect("temporary directory");
     let pool = TreePool::new(&MemoryConfig::default()).child("bench", None);
     let id = pool.register("spill", None);
 
@@ -94,7 +98,7 @@ fn bench_spill(c: &mut Criterion) {
         ("none", SpillCodec::None),
     ] {
         let manager = SpillManager::open(&SpillConfig {
-            dir: root.clone(),
+            dir: root.path().join("spill"),
             codec,
             ..SpillConfig::default()
         })
@@ -127,7 +131,6 @@ fn bench_spill(c: &mut Criterion) {
         });
     }
     group.finish();
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 criterion_group!(benches, bench_spill);

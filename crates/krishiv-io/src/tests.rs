@@ -1278,8 +1278,11 @@ fn case_rules_field_ids_and_column_mapping() {
     );
     let dup = schema(vec![f("a", DataType::Int32), f("A", DataType::Int32)]);
     let e = mapper(&schema(vec![f("a", DataType::Int32)]), &dup, by_name()).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::LegacyErrorTemp2093);
-    assert_eq!(e.message_parameters()[1].1, "[a, A]");
+    // Spark 4.2: FAILED_READ_FILE.NO_HINT caused by _LEGACY_ERROR_TEMP_2093.
+    assert_eq!(e.error_class(), ErrorClass::FailedReadFileNoHint);
+    let cause = e.cause().unwrap();
+    assert_eq!(cause.error_class(), ErrorClass::LegacyErrorTemp2093);
+    assert_eq!(cause.message_parameters()[1].1, "[a, A]");
     assert_eq!(FieldMapping::default(), by_name());
 }
 
