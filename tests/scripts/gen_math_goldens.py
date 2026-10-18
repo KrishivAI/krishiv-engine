@@ -19,6 +19,7 @@ and `acosh`, so their fixtures (`tests/fixtures/spark-4.{0,1}.0/math-differentia
 The fixture goes to stdout (the container user cannot write the mount); Spark logs go to stderr.
 """
 
+import datetime
 import decimal
 import json
 import math
@@ -109,6 +110,7 @@ def main() -> None:
 
     ident = lambda v: v  # noqa: E731
     unscaled = lambda scale: lambda v: None if v is None else str(int(v.scaleb(scale)))  # noqa: E731
+    hexs = lambda v: None if v is None else bytes(v).hex()  # noqa: E731
 
     def dec_out(v):
         if v is None:
@@ -235,6 +237,146 @@ def main() -> None:
                 [fl],
                 dec_out,
             )
+    # pmod (ANSI off: a zero divisor is NULL)
+    for ty, lo, hi in [
+        ("tinyint", -128, 127),
+        ("smallint", -32768, 32767),
+        ("int", -(2**31), 2**31 - 1),
+        ("bigint", -(2**63), 2**63 - 1),
+    ]:
+        int_rows: list[tuple[int | None, int | None]] = [
+            (rng.randint(lo, hi), rng.choice([rng.randint(lo, hi), rng.randint(-5, 5), -1, 0])) for _ in range(200)
+        ]
+        int_rows += [(lo, -1), (hi, -1), (lo, hi), (lo, lo), (None, 3), (3, None)]
+        group(f"pmod_{ty}", "pmod(c0, c1)", f"c0 {ty}, c1 {ty}", int_rows, [ident, ident], dec_out)
+    rows = [(rand_double(rng), rand_double(rng)) for _ in range(200)] + [
+        (-3.0, 3.0),
+        (-0.0, 3.0),
+        (5.0, 0.0),
+        (-5.0, float("inf")),
+        (5.0, float("inf")),
+    ]
+    group("pmod_double", "pmod(c0, c1)", "c0 double, c1 double", rows, [fl, fl])
+    rows = [(rng.uniform(-100, 100), rng.uniform(-10, 10)) for _ in range(100)]
+    group("pmod_float", "pmod(c0, c1)", "c0 float, c1 float", rows, [fl, fl])
+    for (p1, s1), (p2, s2) in [((10, 2), (6, 3)), ((38, 18), (20, 5)), ((5, 0), (5, 0)), ((20, 10), (10, 2))]:
+        rows = [
+            (
+                decimal.Decimal(rng.randint(-(10**p1) + 1, 10**p1 - 1)).scaleb(-s1),
+                decimal.Decimal(rng.choice([rng.randint(-(10**p2) + 1, 10**p2 - 1), 0, 7, -7])).scaleb(-s2),
+            )
+            for _ in range(100)
+        ]
+        group(
+            f"pmod_decimal_{p1}_{s1}_{p2}_{s2}",
+            "pmod(c0, c1)",
+            f"c0 decimal({p1},{s1}), c1 decimal({p2},{s2})",
+            rows,
+            [unscaled(s1), unscaled(s2)],
+            dec_out,
+        )
+
+    # greatest / least
+    base = datetime.date(2020, 1, 1)
+    for fn in ("greatest", "least"):
+
+        def triple(gen):
+            return [tuple(nullable(rng, gen, 0.2) for _ in range(3)) for _ in range(100)]
+
+        group(
+            f"{fn}_int", f"{fn}(c0, c1, c2)", "c0 int, c1 int, c2 int", triple(lambda: rng.randint(-5, 5)), [ident] * 3
+        )
+        group(
+            f"{fn}_bigint",
+            f"{fn}(c0, c1, c2)",
+            "c0 bigint, c1 bigint, c2 bigint",
+            triple(lambda: rng.randint(-5, 5) * 10**15),
+            [ident] * 3,
+        )
+        group(
+            f"{fn}_double",
+            f"{fn}(c0, c1, c2)",
+            "c0 double, c1 double, c2 double",
+            triple(lambda: rng.choice([0.0, -0.0, float("nan"), 1.5, -1.5, float("inf"), float("-inf"), rng.random()])),
+            [fl] * 3,
+        )
+        group(
+            f"{fn}_float",
+            f"{fn}(c0, c1, c2)",
+            "c0 float, c1 float, c2 float",
+            triple(lambda: rng.choice([0.0, -0.0, float("nan"), 1.5, -1.5, 2.25])),
+            [fl] * 3,
+        )
+        group(
+            f"{fn}_string",
+            f"{fn}(c0, c1, c2)",
+            "c0 string, c1 string, c2 string",
+            triple(lambda: rng.choice(["", "a", "b", "é", "😀", "ab", "B", "日"])),
+            [ident] * 3,
+        )
+        group(
+            f"{fn}_binary",
+            f"{fn}(c0, c1, c2)",
+            "c0 binary, c1 binary, c2 binary",
+            triple(lambda: bytearray(rng.choice([b"", b"\x01", b"\x01\x02", b"\xff", b"\x80\x00"]))),
+            [hexs] * 3,
+            lambda v: None if v is None else bytes(v).hex(),
+        )
+        group(
+            f"{fn}_boolean",
+            f"{fn}(c0, c1, c2)",
+            "c0 boolean, c1 boolean, c2 boolean",
+            triple(lambda: rng.random() < 0.5),
+            [ident] * 3,
+        )
+        group(
+            f"{fn}_date",
+            f"{fn}(c0, c1)",
+            "c0 date, c1 date",
+            [
+                (
+                    nullable(rng, lambda: base + datetime.timedelta(days=rng.randint(-5, 5)), 0.2),
+                    nullable(rng, lambda: base + datetime.timedelta(days=rng.randint(-5, 5)), 0.2),
+                )
+                for _ in range(40)
+            ],
+            [lambda v: None if v is None else (v - datetime.date(1970, 1, 1)).days] * 2,
+            lambda v: None if v is None else (v - datetime.date(1970, 1, 1)).days,
+        )
+        group(
+            f"{fn}_decimal",
+            f"{fn}(c0, c1, c2)",
+            "c0 decimal(10,2), c1 decimal(20,5), c2 decimal(5,0)",
+            [
+                tuple(
+                    nullable(rng, lambda s=s: decimal.Decimal(rng.randint(-999, 999)).scaleb(-s), 0.2)
+                    for s in (2, 5, 0)
+                )
+                for _ in range(100)
+            ],
+            [unscaled(2), unscaled(5), unscaled(0)],
+            dec_out,
+        )
+        group(
+            f"{fn}_mixed",
+            f"{fn}(c0, c1, c2)",
+            "c0 tinyint, c1 smallint, c2 int",
+            triple(lambda: rng.randint(-100, 100)),
+            [ident] * 3,
+        )
+        group(
+            f"{fn}_int_double",
+            f"{fn}(c0, c1)",
+            "c0 int, c1 double",
+            [
+                (
+                    nullable(rng, lambda: rng.randint(-5, 5), 0.2),
+                    nullable(rng, lambda: rng.choice([0.5, -0.5, 4.0, float("nan")]), 0.2),
+                )
+                for _ in range(60)
+            ],
+            [ident, fl],
+        )
     print(
         json.dumps(
             {

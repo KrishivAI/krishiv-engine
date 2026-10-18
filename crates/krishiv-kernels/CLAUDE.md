@@ -47,8 +47,9 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
 - `math` (P2-T026): the `double` functions (`UnaryFn`/`BinaryFn`: `sqrt` .. `signum`, `pow`, `atan2`, `hypot`, `log`; pure-Rust `libm`
   plus the fdlibm ports of `math/fdlibm.rs` for `cbrt`/`log10`/`hypot`/`acosh`/`tanh`, so results do not depend on the CPU or libc;
   `asinh`/`acosh` follow the `SparkVersion`), `round`/`bround`/`ceil`/`floor` (`math/round.rs`: integral with ANSI overflow, `double` through
-  the shortest decimal text like `BigDecimal.valueOf`, exact decimals with `round_decimal_type`, `ceil`/`floor` of doubles to `bigint`).
-  The module docs list which functions are bit-identical to Spark's JVM results and the share of inputs where
+  the shortest decimal text like `BigDecimal.valueOf`, exact decimals with `round_decimal_type`, `ceil`/`floor` of doubles to `bigint`),
+  `pmod` (`math/pmod.rs`: Java `int`/`long` wrap in `(r + n) % n`), `greatest`/`least` (`math/extremum.rs`: NULLs skipped, NaN greatest,
+  `-0.0 == 0.0`). The module docs list which functions are bit-identical to Spark's JVM results and the share of inputs where
   `sin`/`cos`/`tan`/`ln`/`atan2`/`log10` differ in the last bit (the JVM's intrinsics are not fdlibm); `tests/math_differential.rs` in
   `krishiv-testkit` holds that bound.
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.

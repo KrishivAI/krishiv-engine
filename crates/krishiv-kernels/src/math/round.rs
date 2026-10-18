@@ -442,7 +442,7 @@ pub fn round_decimal(
 }
 
 /// `BigDecimal.toPlainString` of `unscaled * 10^-scale`.
-fn plain_string(unscaled: i128, scale: i32) -> String {
+pub(super) fn plain_string(unscaled: i128, scale: i32) -> String {
     let digits = unscaled.unsigned_abs().to_string();
     let sign = if unscaled < 0 { "-" } else { "" };
     let s = usize::try_from(scale).unwrap_or(0);
