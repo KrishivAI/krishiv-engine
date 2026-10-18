@@ -1,0 +1,116 @@
+name: Fuzz (weekly long run)
+
+# P2-T108. Every cargo-fuzz target for several hours (the nightly run gives
+# each one hour), the kernels differential fuzzer for the same time, and a
+# self-test of the crash pipeline. GitHub-hosted runners only (`cargo xtask
+# workflow-lint`); a job is capped at six hours, so a target gets 4.5 h.
+on:
+  schedule:
+    - cron: "0 1 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-weekly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  NIGHTLY: nightly-2026-08-12
+
+jobs:
+  targets:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fuzz.yml
+    with:
+      seconds: 16200
+      minimize: true
+
+  # The kernels differential fuzzer (every specialization and CPU target vs
+  # the row-at-a-time reference); its corpus is the one the nightly job keeps.
+  kernels:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    env:
+      RUSTC_WRAPPER: ""
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nightly toolchain
+        run: rustup toolchain install "$NIGHTLY" --profile minimal
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz@0.13.2
+      - name: Restore the corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: crates/krishiv-kernels/fuzz/corpus
+          key: fuzz-kernels-corpus-${{ github.run_id }}
+          restore-keys: fuzz-kernels-corpus-
+      # cargo-fuzz has no --locked; the committed fuzz/Cargo.lock pins the graph.
+      - name: differential (4.5 hours)
+        working-directory: crates/krishiv-kernels/fuzz
+        run: cargo "+$NIGHTLY" fuzz run differential -- -max_total_time=16200
+      - name: Save the corpus
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: crates/krishiv-kernels/fuzz/corpus
+          key: fuzz-kernels-corpus-${{ github.run_id }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-kernels-artifacts
+          path: crates/krishiv-kernels/fuzz/artifacts
+          retention-days: 30
+
+  # The pipeline has to find a planted panic and turn it into a regression
+  # input that reproduces it; otherwise a green fuzz run proves nothing.
+  pipeline-selftest:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUSTC_WRAPPER: ""
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nightly toolchain
+        run: rustup toolchain install "$NIGHTLY" --profile minimal
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz@0.13.2
+      - name: The planted panic is found
+        working-directory: fuzz
+        run: |
+          if cargo "+$NIGHTLY" fuzz run planted_panic -- -dict=planted.dict -max_total_time=300; then
+            echo "::error::the planted panic was not found"
+            exit 1
+          fi
+      - name: It is minimized into a regression input
+        run: |
+          python3 tests/scripts/fuzz_triage.py triage planted_panic --toolchain "$NIGHTLY"
+          test "$(cat fuzz/regressions/planted_panic/crash-*)" = "KRSH"
+      - name: The regression input reproduces it on replay
+        run: |
+          if python3 tests/scripts/fuzz_triage.py replay planted_panic --toolchain "$NIGHTLY"; then
+            echo "::error::replay did not fail on the regression input"
+            exit 1
+          fi

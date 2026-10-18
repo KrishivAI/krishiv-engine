@@ -45,4 +45,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "planted_panic"
+path = "fuzz_targets/planted_panic.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
