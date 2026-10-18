@@ -23,6 +23,7 @@
 pub mod cache;
 mod coalesce;
 pub mod fault;
+mod pace;
 pub mod upload;
 
 use std::collections::HashMap;
@@ -49,6 +50,8 @@ use tokio::sync::Semaphore;
 pub use self::cache::{CacheKey, MetadataCache};
 pub use self::coalesce::coalesce;
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
+pub use self::pace::StorePolicy;
+use self::pace::{Direction, Pacer};
 pub use self::upload::Upload;
 use crate::error::{
     Result, cancelled, changed, internal, not_found, read_failed, store_failed, write_failed,
@@ -305,7 +308,29 @@ impl IoCounters {
 
 struct Registered {
     store: Arc<dyn ObjectStore>,
-    permits: Arc<Semaphore>,
+    lane: Arc<Lane>,
+}
+
+/// What every request to one store goes through: prefix pacing, then an
+/// in-flight permit.
+#[derive(Debug)]
+pub(crate) struct Lane {
+    /// The store's in-flight request cap, shared by reads and writes.
+    permits: Semaphore,
+    pacer: Pacer,
+}
+
+impl Lane {
+    /// Waits for the prefix of `path` to allow a request, then for an
+    /// in-flight permit (held until the guard drops).
+    pub(crate) async fn admit(
+        &self,
+        direction: Direction,
+        path: &Path,
+    ) -> Result<tokio::sync::SemaphorePermit<'_>> {
+        self.pacer.pace(direction, path).await;
+        self.permits.acquire().await.map_err(|_| cancelled())
+    }
 }
 
 /// The process-wide I/O scheduler (see the module docs).
@@ -351,21 +376,36 @@ impl IoScheduler {
         })
     }
 
-    /// Registers (or replaces) the store `id`.
+    /// Registers (or replaces) the store `id`, unpaced (local files,
+    /// memory).
     pub fn register_store(&self, id: StoreId, store: Arc<dyn ObjectStore>) {
-        let permits = Arc::new(Semaphore::new(self.config.max_concurrent_requests));
+        self.register_store_with(id, store, StorePolicy::UNPACED);
+    }
+
+    /// Registers (or replaces) the store `id` with a pacing `policy`
+    /// ([`StorePolicy::S3`] for S3).
+    pub fn register_store_with(
+        &self,
+        id: StoreId,
+        store: Arc<dyn ObjectStore>,
+        policy: StorePolicy,
+    ) {
+        let lane = Arc::new(Lane {
+            permits: Semaphore::new(self.config.max_concurrent_requests),
+            pacer: Pacer::new(policy),
+        });
         self.stores
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id, Registered { store, permits });
+            .insert(id, Registered { store, lane });
     }
 
-    fn store(&self, id: &StoreId) -> Result<(Arc<dyn ObjectStore>, Arc<Semaphore>)> {
+    fn store(&self, id: &StoreId) -> Result<(Arc<dyn ObjectStore>, Arc<Lane>)> {
         self.stores
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(id)
-            .map(|r| (Arc::clone(&r.store), Arc::clone(&r.permits)))
+            .map(|r| (Arc::clone(&r.store), Arc::clone(&r.lane)))
             .ok_or_else(|| internal(format!("object store {id} is not registered")))
     }
 
@@ -731,12 +771,12 @@ impl IoContext {
         if range.start >= range.end {
             return Ok(Bytes::new());
         }
-        let (store, permits) = self.sched.store(&file.store)?;
+        let (store, lane) = self.sched.store(&file.store)?;
         let cfg = &self.sched.config;
         let mut attempt = 0;
         loop {
             let outcome = {
-                let _permit = permits.acquire().await.map_err(|_| cancelled())?;
+                let _permit = lane.admit(Direction::Read, &file.path).await?;
                 self.count(|c| &c.requests, 1);
                 let mut opts = GetOptions {
                     range: Some(GetRange::Bounded(range.clone())),
@@ -804,20 +844,76 @@ impl IoContext {
     ) -> Result<Arc<dyn FileMetadata>> {
         let fingerprint = options.metadata_fingerprint(self.secrets()).await?;
         let key = CacheKey::new(format.name(), file, fingerprint);
-        let needs = match self.sched.cache.get(&key, needs) {
+        let cache = &self.sched.cache;
+        if let Ok(m) = cache.get(&key, needs) {
+            self.count(|c| &c.cache_hits, 1);
+            return Ok(m);
+        }
+        // Single flight: wait for a read of this key in progress and take
+        // its outcome, or read it ourselves while holding the slot.
+        let slot = cache.load_slot(&key);
+        let seen = slot.completed.load(Ordering::Acquire);
+        let mut loaded = slot.loaded.lock().await;
+        // Reads from here on start in the current generation; a read from
+        // before an invalidation is not reused.
+        let generation = cache.generation();
+        let last = loaded.as_ref().filter(|l| l.generation == generation);
+        match last.map(|l| (&l.outcome, l.completion)) {
+            Some((Ok(m), _)) if m.needs().covers(&needs) => {
+                self.count(|c| &c.cache_hits, 1);
+                return Ok(Arc::clone(m));
+            }
+            // A read that ended while we waited failed: fail with it.
+            Some((Err(e), completion)) if completion > seen => return Err(e.clone()),
+            _ => {}
+        }
+        let previous = last.and_then(|l| l.outcome.as_ref().ok().map(|m| m.needs()));
+        let needs = match cache.get(&key, needs) {
             Ok(m) => {
                 self.count(|c| &c.cache_hits, 1);
                 return Ok(m);
             }
-            Err(stale) => stale.map_or(needs, |s| s.union(needs)),
+            Err(stale) => stale.or(previous).map_or(needs, |s| s.union(needs)),
         };
         self.count(|c| &c.cache_misses, 1);
-        let meta = format
+        let outcome = format
             .read_metadata(self, file, needs, options)
             .await
-            .map_err(|e| e.into_error(&file.display_path()))?;
-        self.sched.cache.insert(key, Arc::clone(&meta));
-        Ok(meta)
+            .map_err(|e| e.into_error(&file.display_path()));
+        if let Ok(meta) = &outcome {
+            cache.insert_read_in(generation, key, Arc::clone(meta));
+        }
+        let completion = slot.completed.fetch_add(1, Ordering::AcqRel) + 1;
+        *loaded = Some(cache::Loaded {
+            generation,
+            completion,
+            outcome: outcome.clone(),
+        });
+        outcome
+    }
+
+    /// [`Self::read_metadata`] as an owned future that runs on the I/O
+    /// runtime when the scheduler has one: a scan starts reading the next
+    /// file's footer while it decodes the current file. The result lands in
+    /// the cache (or is shared with a concurrent read of the same file), so
+    /// the scan's own `read_metadata` then costs no request. Dropping the
+    /// future cancels the read.
+    pub fn prefetch_metadata(
+        &self,
+        format: Arc<dyn FileFormat>,
+        file: FileRef,
+        needs: MetadataNeeds,
+        options: FormatOptions,
+    ) -> BoxFuture<'static, Result<Arc<dyn FileMetadata>>> {
+        let ctx = self.clone();
+        let fut = async move {
+            ctx.read_metadata(format.as_ref(), &file, needs, &options)
+                .await
+        };
+        match &self.sched.runtime {
+            None => Box::pin(fut),
+            Some(rt) => spawned(rt, fut),
+        }
     }
 
     /// A [`ReadAt`] over `file` through this context (for formats whose
@@ -835,15 +931,15 @@ impl IoContext {
     /// # Errors
     /// `INTERNAL_ERROR` if the store is not registered.
     pub fn upload(&self, store: &StoreId, path: Path) -> Result<Upload> {
-        let (s, permits) = self.sched.store(store)?;
+        let (s, lane) = self.sched.store(store)?;
         let display = format!("{store}/{path}");
-        Ok(Upload::new(self.clone(), s, permits, path, display))
+        Ok(Upload::new(self.clone(), s, lane, path, display))
     }
 
     async fn put(
         &self,
         store: &Arc<dyn ObjectStore>,
-        permits: &Semaphore,
+        lane: &Lane,
         path: &Path,
         display: &str,
         payload: PutPayload,
@@ -853,7 +949,7 @@ impl IoContext {
         let mut attempt = 0;
         loop {
             let r = {
-                let _permit = permits.acquire().await.map_err(|_| cancelled())?;
+                let _permit = lane.admit(Direction::Write, path).await?;
                 self.count(|c| &c.requests, 1);
                 let opts = PutOptions {
                     extensions: ScheduledRequest.into_extensions(),
@@ -890,7 +986,8 @@ impl IoContext {
     /// # Errors
     /// `TASK_WRITE_FAILED` if the store refuses.
     pub async fn delete(&self, store: &StoreId, path: &Path) -> Result<()> {
-        let (s, _) = self.sched.store(store)?;
+        let (s, lane) = self.sched.store(store)?;
+        let _permit = lane.admit(Direction::Write, path).await?;
         self.count(|c| &c.requests, 1);
         let mut deleted = s.delete_stream(Box::pin(futures::stream::once(std::future::ready(Ok(
             path.clone(),

@@ -17,16 +17,15 @@
 use std::fmt;
 use std::sync::Arc;
 
+use super::pace::Direction;
+use super::{IoContext, Lane, ScheduledRequest};
+use crate::error::{Result, write_failed};
 use bytes::Bytes;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 use object_store::path::Path;
 use object_store::{MultipartUpload, ObjectStore, PutMultipartOptions, PutPayload};
-use tokio::sync::Semaphore;
-
-use super::{IoContext, ScheduledRequest};
-use crate::error::{Result, cancelled, write_failed};
 
 /// Smallest part object stores accept (except the last).
 pub const MIN_PART_BYTES: u64 = 5 * 1024 * 1024;
@@ -39,8 +38,8 @@ const MAX_PARTS_IN_FLIGHT: usize = 4;
 pub struct Upload {
     ctx: IoContext,
     store: Arc<dyn ObjectStore>,
-    /// The store's in-flight request cap, shared with reads.
-    permits: Arc<Semaphore>,
+    /// The store's pacing and in-flight request cap, shared with reads.
+    lane: Arc<Lane>,
     path: Path,
     display: String,
     buf: Vec<Bytes>,
@@ -72,14 +71,14 @@ impl Upload {
     pub(super) fn new(
         ctx: IoContext,
         store: Arc<dyn ObjectStore>,
-        permits: Arc<Semaphore>,
+        lane: Arc<Lane>,
         path: Path,
         display: String,
     ) -> Self {
         Self {
             ctx,
             store,
-            permits,
+            lane,
             path,
             display,
             buf: Vec::new(),
@@ -174,6 +173,9 @@ impl Upload {
                 extensions: ScheduledRequest.into_extensions(),
                 ..PutMultipartOptions::default()
             };
+            // Starting and completing a multipart upload are writes too.
+            let lane = Arc::clone(&self.lane);
+            let _permit = lane.admit(Direction::Write, &self.path).await?;
             let mp = self
                 .store
                 .put_multipart_opts(&self.path, opts)
@@ -190,10 +192,12 @@ impl Upload {
         self.ctx.count(|c| &c.bytes_written, n);
         let part = mp.put_part(payload);
         let shown = self.display.clone();
-        let permits = Arc::clone(&self.permits);
-        // The part counts against the store's in-flight cap like a read.
+        let lane = Arc::clone(&self.lane);
+        let path = self.path.clone();
+        // The part is paced and counts against the store's in-flight cap
+        // like a read.
         let part = async move {
-            let _permit = permits.acquire_owned().await.map_err(|_| cancelled())?;
+            let _permit = lane.admit(Direction::Write, &path).await?;
             part.await
                 .map_err(|e| write_failed(&shown, &e.to_string()))
                 .map(|()| n)
@@ -265,13 +269,7 @@ impl Upload {
             let len = self.buf_len;
             let payload = self.take(len);
             self.ctx
-                .put(
-                    &self.store,
-                    &self.permits,
-                    &self.path,
-                    &self.display,
-                    payload,
-                )
+                .put(&self.store, &self.lane, &self.path, &self.display, payload)
                 .await?;
             return Ok(self.written);
         }
@@ -283,6 +281,8 @@ impl Upload {
         let Some(mp) = self.multipart.as_mut() else {
             return Err(write_failed(&self.display, "multipart upload not started"));
         };
+        let lane = Arc::clone(&self.lane);
+        let _permit = lane.admit(Direction::Write, &self.path).await?;
         mp.complete()
             .await
             .map_err(|e| write_failed(&self.display, &e.to_string()))?;
