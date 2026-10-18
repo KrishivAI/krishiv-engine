@@ -125,8 +125,13 @@ fn trim_trailing_space(s: &str) -> String {
 #[must_use]
 pub fn normalize_test_results(output: &str) -> String {
     let mut traceback = false;
-    let kept: Vec<&str> = output
-        .split('\n')
+    // Java's `String.split` drops trailing empty fields before the filter runs.
+    let mut lines: Vec<&str> = output.split('\n').collect();
+    while lines.last() == Some(&"") {
+        lines.pop();
+    }
+    let kept: Vec<&str> = lines
+        .into_iter()
         .filter(|line| {
             if *line == "Traceback (most recent call last):" {
                 traceback = true;
@@ -270,6 +275,9 @@ ValueError: bad\nafter\nTraceback (most recent call last):\n  File \"b.py\"\n";
         assert_eq!(normalize_test_results("a\u{a0}"), "a\u{a0}");
         assert_eq!(normalize_test_results("a\u{3000}\n"), "a\u{3000}");
         assert_eq!(normalize_test_results("a  \u{85}"), "a\u{85}");
+        // Split drops the empty field after the final newline first.
+        assert_eq!(normalize_test_results("a \u{85}\n"), "a\u{85}");
+        assert_eq!(normalize_test_results("a \u{85}\n\n\n"), "a\u{85}");
         assert_eq!(normalize_test_results("a \u{2028}"), "a\u{2028}");
         assert_eq!(
             normalize_test_results("a\u{2029}\u{2029}"),
