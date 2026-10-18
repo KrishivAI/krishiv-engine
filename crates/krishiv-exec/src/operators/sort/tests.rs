@@ -119,6 +119,33 @@ fn the_merge_breaks_ties_by_run_order() {
     assert!(merger.next(3).unwrap().is_none());
 }
 
+/// A merged batch is built from the batches it uses only (not every
+/// buffered one): rows from constant-weight batches keep a constant weight.
+#[test]
+fn a_merged_batch_reads_only_the_batches_it_uses() {
+    let (schema, batch) = floats();
+    let keys = KeyEncoder::new(&schema, &[SortKey::asc(2)]).unwrap();
+    let column = Weights::Column(Int64Array::from(vec![4, 5, 6]));
+    let runs: Vec<_> = [(0, Weights::Const(2)), (4, column)]
+        .into_iter()
+        .map(|(start, w)| {
+            let b = batch.slice(start, 3).unwrap();
+            let b = Batch::with_weights(b.data().clone(), w).unwrap();
+            Arc::new(SortedBatch::new(b, &keys).unwrap())
+        })
+        .collect();
+    let root = TreePool::new(&MemoryConfig::default());
+    let handle = ConsumerHandle::register(root.child("q", None), "sort", None);
+    let mut merger = Merger::new(schema, keys, runs, &[], &handle).unwrap();
+    let first = merger.next(3).unwrap().unwrap();
+    assert_eq!(
+        (ids(&first), first.weights()),
+        (vec![0, 1, 2], &Weights::Const(2))
+    );
+    let rest = merger.next(3).unwrap().unwrap();
+    assert_eq!(ids(&rest), [4, 5, 6]);
+}
+
 #[test]
 fn interleaving_keeps_weights() {
     let (schema, batch) = floats();

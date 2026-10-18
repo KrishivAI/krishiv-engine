@@ -344,7 +344,17 @@ impl Merger {
         if out.is_empty() {
             return Ok(None);
         }
-        let batch = interleave_batches(&self.schema, &self.sources, &out)?;
+        // Interleave only the batches this output uses: an in-memory merge
+        // has one source per buffered batch, and passing them all would
+        // make every output batch cost O(buffered batches).
+        let mut used: Vec<usize> = out.iter().map(|&(s, _)| s).collect();
+        used.sort_unstable();
+        used.dedup();
+        let sources: Vec<Batch> = used.iter().map(|&s| self.sources[s].clone()).collect();
+        for o in &mut out {
+            o.0 = used.binary_search(&o.0).unwrap_or_default();
+        }
+        let batch = interleave_batches(&self.schema, &sources, &out)?;
         if self.retired {
             // Only the batches cursors are on stay referenced.
             self.sources = self.cursors.iter().map(|c| c.batch().clone()).collect();
