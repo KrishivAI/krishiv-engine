@@ -10,6 +10,10 @@ permissions:
   contents: read
 
 env:
+  # Faster builds and links in CI: line tables only (backtraces and coverage keep
+  # line numbers); mold is installed per job by rui314/setup-mold.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -22,6 +26,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest

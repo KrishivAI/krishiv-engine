@@ -14,6 +14,10 @@ permissions:
   contents: read
 
 env:
+  # Faster builds and links in CI: line tables only (backtraces and coverage keep
+  # line numbers); mold is installed per job by rui314/setup-mold.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: 1
@@ -47,6 +51,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - id: filter
         env:
           EVENT: ${{ github.event_name }}
@@ -75,6 +80,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - run: cargo xtask workflow-lint
       - run: cargo xtask spdx
       - run: cargo xtask source-guard
@@ -182,6 +188,7 @@ jobs:
           toolchain: 1.99.1
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
@@ -194,6 +201,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest
@@ -235,6 +243,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-hack
@@ -250,6 +259,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - run: cargo xtask layering
 
   msrv:
@@ -264,6 +274,7 @@ jobs:
         with:
           toolchain: "1.97"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - run: cargo check --workspace --all-targets --locked
         env:
           RUSTUP_TOOLCHAIN: "1.97"
@@ -280,6 +291,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - run: cargo doc --workspace --no-deps --locked
 
   # P2-T020: Miri on krishiv-kernels (ADR 0029; the crate holds unsafe and
@@ -318,6 +330,7 @@ jobs:
         run: rustup toolchain install nightly-2026-08-12 --profile minimal --component miri,rust-src
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.gate.outputs.run == 'true'
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - name: Miri (unit, property and doc tests; reduced cases under cfg(miri))
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-kernels --locked
@@ -345,6 +358,7 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       # Compare with the base branch's baseline, not the PR's: a PR that
       # refreshes budgets.json must not approve its own growth.
       - name: Use the base branch baseline
@@ -415,6 +429,7 @@ jobs:
           persist-credentials: false
       - run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - name: Install Python ${{ matrix.python }}
         run: uv python install "${{ matrix.python }}"
