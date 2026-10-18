@@ -13,7 +13,7 @@ use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use futures::StreamExt;
 use futures::executor::block_on;
 use krishiv_common::error::{ErrorClass, KrishivError};
-use krishiv_plan::analyzer::testing::TestFunctions;
+use krishiv_plan::analyzer::BuiltinFunctions;
 use krishiv_session::functions::{col, count_star, lit, sum};
 use krishiv_session::{ExplainMode, JoinType, Session};
 
@@ -112,12 +112,9 @@ fn errors_surface_where_spark_raises_them() {
         class(block_on(df.schema())),
         ErrorClass::UnresolvedColumnWithSuggestion
     );
-    // Built-in functions wait for the registry; operators work.
-    let df = s.table("people").agg([sum(col("id"))]);
-    assert_eq!(
-        class(block_on(df.schema())),
-        ErrorClass::KrishivUnsupportedFeature
-    );
+    // The built-in registry resolves functions by default.
+    let df = s.table("people").agg([sum(col("id")).alias("total")]);
+    assert_eq!(block_on(df.schema()).unwrap().field(0).name(), "total");
     let df = s.table("people").select([(col("id") + 1).alias("next")]);
     assert_eq!(block_on(df.schema()).unwrap().field(0).name(), "next");
     // Relations the physical planner does not have yet fail clearly.
@@ -131,7 +128,7 @@ fn errors_surface_where_spark_raises_them() {
 #[test]
 fn dataframe_columns_resolve_in_their_own_frame() {
     let s = Session::builder()
-        .functions(Arc::new(TestFunctions))
+        .functions(Arc::new(BuiltinFunctions::new()))
         .build()
         .unwrap();
     let (schema, batch) = people();

@@ -27,8 +27,8 @@ use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{FileFormat, IoConfig, IoScheduler, StoreId};
 use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
 use krishiv_plan::analyzer::{
-    AllowAll, AnalysisContext, AnalyzedPlan, Analyzer as _, DefaultAnalyzer, FunctionRegistry,
-    Principal, ResolutionConf, SparkProfile, TableColumn,
+    AllowAll, AnalysisContext, AnalyzedPlan, Analyzer as _, BuiltinFunctions, DefaultAnalyzer,
+    FunctionRegistry, Principal, ResolutionConf, SparkProfile, TableColumn,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
@@ -38,7 +38,7 @@ use krishiv_types::batch::{Batch, Weights};
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
-use crate::catalog::{PendingFunctions, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
+use crate::catalog::{QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
 
@@ -188,9 +188,9 @@ impl SessionBuilder {
     /// registry.
     ///
     /// ```
-    /// use krishiv_plan::analyzer::testing::TestFunctions;
+    /// use krishiv_plan::analyzer::BuiltinFunctions;
     /// let s = krishiv_session::Session::builder()
-    ///     .functions(std::sync::Arc::new(TestFunctions))
+    ///     .functions(std::sync::Arc::new(BuiltinFunctions::new()))
     ///     .build()?;
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
@@ -228,7 +228,9 @@ impl SessionBuilder {
                 catalog: Arc::new(SessionCatalog::default()),
                 profile: self.profile,
                 principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
-                functions: self.functions.unwrap_or_else(|| Arc::new(PendingFunctions)),
+                functions: self
+                    .functions
+                    .unwrap_or_else(|| Arc::new(BuiltinFunctions::new())),
                 runner: QueryRunner::new(Arc::clone(&executor)),
                 executor,
                 memory,

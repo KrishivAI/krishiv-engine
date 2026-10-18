@@ -19,8 +19,8 @@ use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeatu
 use krishiv_exec::files::FileReads;
 use krishiv_exec::planner::{MemoryTable, TableProvider, TableProviderResolver};
 use krishiv_plan::analyzer::{
-    BoxFuture, Catalog, CatalogResolver, FileSchemaResolver, FunctionLookup, FunctionRegistry,
-    SparkProfile, TableColumn, TableIdent, TableKind, TableMeta,
+    BoxFuture, Catalog, CatalogResolver, FileSchemaResolver, TableColumn, TableIdent, TableKind,
+    TableMeta,
 };
 use krishiv_plan::{ReadSource, Scan, TableVersion};
 
@@ -250,21 +250,5 @@ impl TableProviderResolver for QueryCatalog {
             ReadSource::Files { .. } => self.files_provider(),
             _ => Err(unsupported("this scan")),
         }
-    }
-}
-
-/// The built-in functions until the registry (P2-T153) lands: every name is
-/// known to Spark but not implemented, so a call fails with
-/// `KRISHIV_UNSUPPORTED_FEATURE`. Operators need no registry.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct PendingFunctions;
-
-impl FunctionRegistry for PendingFunctions {
-    fn lookup(&self, _: &[String], _: SparkProfile) -> FunctionLookup {
-        FunctionLookup::KnownUnsupported
-    }
-
-    fn version(&self) -> u64 {
-        0
     }
 }
