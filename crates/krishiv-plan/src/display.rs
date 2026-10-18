@@ -165,6 +165,7 @@ impl Display for NodeLine<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self.0.node {
             PlanNode::Read(source) => write!(f, "Read {}", SourceText(source)),
+            PlanNode::OneRowRelation => f.write_str("OneRowRelation"),
             PlanNode::Sql { query, args } => {
                 // Query text reaches sinks only as `RedactedSql`, which the
                 // SQL front end builds from tokens; the printer shows none.
@@ -615,6 +616,7 @@ const fn is_infix(op: Builtin) -> bool {
             | Builtin::Multiply
             | Builtin::Divide
             | Builtin::Remainder
+            | Builtin::IntegralDivide
             | Builtin::Like
             | Builtin::ILike
             | Builtin::RLike

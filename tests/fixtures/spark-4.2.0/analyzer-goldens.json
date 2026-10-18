@@ -36867,6 +36867,842 @@
      "nullable": true
     }
    ]
+  },
+  {
+   "sql": "SELECT a, CAST(a AS STRING) AS a FROM t ORDER BY a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "a",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT CAST(a AS STRING) AS a, a FROM t ORDER BY a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, CAST(a AS STRING) AS a FROM t ORDER BY a + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "a",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, CAST(a AS STRING) AS a FROM (SELECT a FROM t) ORDER BY a",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "a",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "1",
+     "type": "int",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT 1 AS x, 'y' AS z, 2.5, TRUE",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "x",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "z",
+     "type": "string",
+     "nullable": false
+    },
+    {
+     "name": "2.5",
+     "type": "decimal(2,1)",
+     "nullable": false
+    },
+    {
+     "name": "true",
+     "type": "boolean",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT 1 WHERE 1 = 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "1",
+     "type": "int",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT 1 LIMIT 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "1",
+     "type": "int",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT count(*)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "count(1)",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`a`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 7,
+    "fragment": "a"
+   }
+  },
+  {
+   "sql": "SELECT (SELECT 1)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "scalarsubquery()",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT current_date",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "current_date()",
+     "type": "date",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT CURRENT_TIMESTAMP AS ts",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ts",
+     "type": "timestamp",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT current_date FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "current_date()",
+     "type": "date",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, current_date FROM t ORDER BY current_date",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "current_date()",
+     "type": "date",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT NULL",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "NULL",
+     "type": "void",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT NULL AS n, 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "n",
+     "type": "void",
+     "nullable": true
+    },
+    {
+     "name": "1",
+     "type": "int",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT CAST(NULL AS VOID)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "CAST(NULL AS VOID)",
+     "type": "void",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT CAST(a AS VOID) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "sqlExpr": "\"CAST(a AS VOID)\"",
+    "srcType": "\"INT\"",
+    "targetType": "\"VOID\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "CAST(a AS VOID)"
+   }
+  },
+  {
+   "sql": "SELECT TRY_CAST(b AS VOID) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "sqlExpr": "\"TRY_CAST(b AS VOID)\"",
+    "srcType": "\"STRING\"",
+    "targetType": "\"VOID\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 25,
+    "fragment": "TRY_CAST(b AS VOID)"
+   }
+  },
+  {
+   "sql": "SELECT coalesce(NULL, NULL)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "coalesce(NULL, NULL)",
+     "type": "void",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT CASE WHEN TRUE THEN NULL END",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "CASE WHEN true THEN NULL END",
+     "type": "void",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (SELECT NULL)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "scalarsubquery()",
+     "type": "void",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT n FROM (SELECT NULL AS n FROM t) WHERE n IS NULL",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "n",
+     "type": "void",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT 1 FROM t WHERE NULL",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.FILTER_NOT_BOOLEAN",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "filter": "\"NULL\"",
+    "sqlExpr": "\"NULL\"",
+    "type": "\"VOID\""
+   },
+   "context": {
+    "start": 0,
+    "stop": 25,
+    "fragment": "SELECT 1 FROM t WHERE NULL"
+   }
+  },
+  {
+   "sql": "SELECT 1 FROM t LIMIT NULL",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.DATA_TYPE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "dataType": "\"VOID\"",
+    "expr": "\"NULL\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 22,
+    "stop": 25,
+    "fragment": "NULL"
+   }
+  },
+  {
+   "sql": "SELECT a + NULL, NULL = NULL, -NULL FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "(a + NULL)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "(NULL = NULL)",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "(- NULL)",
+     "type": "double",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT coalesce(a, b) FROM t",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "coalesce(a, b)",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT coalesce(a, b) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "coalesce(a, b)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT coalesce(c, CAST(a AS FLOAT)) FROM t",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "coalesce(c, CAST(a AS FLOAT))",
+     "type": "float",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT coalesce(c, CAST(a AS FLOAT)) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "coalesce(c, CAST(a AS FLOAT))",
+     "type": "double",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT coalesce(b, DATE '2020-01-01', a) FROM t",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "coalesce(b, DATE '2020-01-01', a)",
+     "type": "string",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT coalesce(a, TRUE) FROM t",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "dataType": "(\"INT\" or \"BOOLEAN\")",
+    "functionName": "`coalesce`",
+    "sqlExpr": "\"coalesce(a, true)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "coalesce(a, TRUE)"
+   }
+  },
+  {
+   "sql": "SELECT coalesce(b, CAST(a AS BINARY)) FROM t",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "dataType": "(\"STRING\" or \"BINARY\")",
+    "functionName": "`coalesce`",
+    "sqlExpr": "\"coalesce(b, CAST(a AS BINARY))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 36,
+    "fragment": "coalesce(b, CAST(a AS BINARY))"
+   }
+  },
+  {
+   "sql": "SELECT coalesce(CAST(a AS DECIMAL(38,0)), CAST(a AS DECIMAL(10,5))) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "coalesce(CAST(a AS DECIMAL(38,0)), CAST(a AS DECIMAL(10,5)))",
+     "type": "decimal(38,0)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT coalesce(CAST(a AS DECIMAL(36,0)), CAST(a AS DECIMAL(10,5))) FROM t",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "coalesce(CAST(a AS DECIMAL(36,0)), CAST(a AS DECIMAL(10,5)))",
+     "type": "decimal(38,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT coalesce(CAST(a AS DECIMAL(38,10)), CAST(a AS DECIMAL(38,2))) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "coalesce(CAST(a AS DECIMAL(38,10)), CAST(a AS DECIMAL(38,2)))",
+     "type": "decimal(38,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT extract(year FROM a) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"a\"",
+    "inputType": "\"INT\"",
+    "paramIndex": "first",
+    "requiredType": "\"DATE\"",
+    "sqlExpr": "\"year(a)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 26,
+    "fragment": "extract(year FROM a)"
+   }
+  },
+  {
+   "sql": "SELECT extract(w FROM a) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"a\"",
+    "inputType": "\"INT\"",
+    "paramIndex": "first",
+    "requiredType": "\"DATE\"",
+    "sqlExpr": "\"weekofyear(a)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "extract(w FROM a)"
+   }
+  },
+  {
+   "sql": "SELECT extract(dow_iso FROM a) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"a\"",
+    "inputType": "\"INT\"",
+    "paramIndex": "first",
+    "requiredType": "\"DATE\"",
+    "sqlExpr": "\"weekday(a)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 29,
+    "fragment": "extract(dow_iso FROM a)"
+   }
+  },
+  {
+   "sql": "SELECT extract(second FROM a) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"a\"",
+    "inputType": "\"INT\"",
+    "paramIndex": "first",
+    "requiredType": "\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\"",
+    "sqlExpr": "\"secondwithfraction(a)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 28,
+    "fragment": "extract(second FROM a)"
+   }
+  },
+  {
+   "sql": "SELECT extract(hour FROM a) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"a\"",
+    "inputType": "\"INT\"",
+    "paramIndex": "first",
+    "requiredType": "\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\"",
+    "sqlExpr": "\"hour(a)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 26,
+    "fragment": "extract(hour FROM a)"
+   }
+  },
+  {
+   "sql": "SELECT date_part('doy', a) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"a\"",
+    "inputType": "\"INT\"",
+    "paramIndex": "first",
+    "requiredType": "\"DATE\"",
+    "sqlExpr": "\"dayofyear(a)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 25,
+    "fragment": "date_part('doy', a)"
+   }
+  },
+  {
+   "sql": "SELECT extract(epoch FROM a) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_EXTRACT_FIELD",
+   "sql_state": "42601",
+   "message_parameters": {
+    "expr": "\"a\"",
+    "field": "`epoch`"
+   },
+   "context": {
+    "start": 7,
+    "stop": 27,
+    "fragment": "extract(epoch FROM a)"
+   }
+  },
+  {
+   "sql": "SELECT a div 2, c div a, 7.5 div 2, a div NULL, b div 2 FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "(a div 2)",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "(c div a)",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "(7.5 div 2)",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "(a div NULL)",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "(b div 2)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT CAST(a AS DECIMAL(38,10)) div CAST(a AS DECIMAL(20,0)) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "(CAST(a AS DECIMAL(38,10)) div CAST(a AS DECIMAL(20,0)))",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a div 0 + 1 FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "((a div 0) + 1)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT 1.5D div 2 FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "left": "\"DOUBLE\"",
+    "right": "\"BIGINT\"",
+    "sqlExpr": "\"(1.5 div 2)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 16,
+    "fragment": "1.5D div 2"
+   }
+  },
+  {
+   "sql": "SELECT b div b FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "actualDataType": "\"STRING\"",
+    "inputType": "(\"BIGINT\" or \"DECIMAL\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL DAY TO SECOND\")",
+    "sqlExpr": "\"(b div b)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 13,
+    "fragment": "b div b"
+   }
+  },
+  {
+   "sql": "SELECT DATE '2020-01-01' div 2",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "left": "\"DATE\"",
+    "right": "\"BIGINT\"",
+    "sqlExpr": "\"(DATE '2020-01-01' div 2)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 29,
+    "fragment": "DATE '2020-01-01' div 2"
+   }
+  },
+  {
+   "sql": "SELECT CAST(a AS FLOAT) div CAST(a AS FLOAT) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "actualDataType": "\"FLOAT\"",
+    "inputType": "(\"BIGINT\" or \"DECIMAL\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL DAY TO SECOND\")",
+    "sqlExpr": "\"(CAST(a AS FLOAT) div CAST(a AS FLOAT))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 43,
+    "fragment": "CAST(a AS FLOAT) div CAST(a AS FLOAT)"
+   }
+  },
+  {
+   "sql": "SELECT b div 2 FROM t",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "left": "\"DOUBLE\"",
+    "right": "\"BIGINT\"",
+    "sqlExpr": "\"(b div 2)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 13,
+    "fragment": "b div 2"
+   }
+  },
+  {
+   "sql": "SELECT b div b FROM t",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "actualDataType": "\"DOUBLE\"",
+    "inputType": "(\"BIGINT\" or \"DECIMAL\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL DAY TO SECOND\")",
+    "sqlExpr": "\"(b div b)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 13,
+    "fragment": "b div b"
+   }
   }
  ],
  "plan_ids": [

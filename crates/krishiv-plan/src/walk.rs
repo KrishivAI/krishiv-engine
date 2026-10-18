@@ -138,6 +138,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                     JoinCondition::None | JoinCondition::On(_) => true,
                 },
                 PlanNode::Scan(_)
+                | PlanNode::OneRowRelation
                 | PlanNode::CteRef(_)
                 | PlanNode::Shift { .. }
                 | PlanNode::Project { .. }
@@ -222,7 +223,10 @@ impl Teardown {
 
     fn plan(&mut self, node: PlanNode) {
         match node {
-            PlanNode::Read(_) | PlanNode::Scan(_) | PlanNode::CteRef(_) => {}
+            PlanNode::Read(_)
+            | PlanNode::Scan(_)
+            | PlanNode::CteRef(_)
+            | PlanNode::OneRowRelation => {}
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => self.exprs.extend(v),

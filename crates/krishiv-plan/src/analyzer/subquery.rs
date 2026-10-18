@@ -921,6 +921,7 @@ fn on_no_rows(e: &Arc<Expr>) -> Option<Option<Literal>> {
                             | Builtin::Multiply
                             | Builtin::Divide
                             | Builtin::Remainder
+                            | Builtin::IntegralDivide
                             | Builtin::Negative
                     )
                 ) =>

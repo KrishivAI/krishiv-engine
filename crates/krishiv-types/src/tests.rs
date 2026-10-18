@@ -40,6 +40,7 @@ fn spark_to_arrow_to_spark_round_trips_every_type() {
 fn canonical_arrow_types() {
     let ts = |tz: Option<&str>| ArrowType::Timestamp(TimeUnit::Microsecond, tz.map(Arc::from));
     let cases = [
+        (DataType::Null, ArrowType::Null),
         (DataType::Boolean, ArrowType::Boolean),
         (DataType::Byte, ArrowType::Int8),
         (DataType::Short, ArrowType::Int16),
@@ -156,7 +157,6 @@ fn arrow_storage_alternatives() {
         ArrowType::Date64,
         ArrowType::UInt32,
         ArrowType::Float16,
-        ArrowType::Null,
         ArrowType::Decimal32(5, 2),
         ArrowType::Decimal64(5, 2),
         ArrowType::Decimal256(10, 2),
@@ -356,4 +356,14 @@ fn trailing_unrecognized_character_gets_the_extra_input_hint() {
     }
     let e = parse_data_type("int;").unwrap_err();
     assert!(!e.to_string().contains("extra input"), "{e}");
+}
+
+#[test]
+fn void_is_spark_null_type() {
+    let t = DataType::Null;
+    assert_eq!(t.simple_string(), "void");
+    assert_eq!(t.sql(), "VOID");
+    assert_eq!(t.type_name(), "void");
+    assert_eq!(crate::parse_data_type("VOID"), Ok(DataType::Null));
+    assert_eq!(DataType::from_arrow(&ArrowType::Null), Ok(DataType::Null));
 }

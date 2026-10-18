@@ -208,7 +208,7 @@ impl Gen<'_> {
             },
             8 => {
                 let id = if self.flag() {
-                    FunctionId::Builtin(Builtin::ALL[usize::from(self.pick(24))])
+                    FunctionId::Builtin(Builtin::ALL[usize::from(self.pick(25))])
                 } else {
                     FunctionId::Registry {
                         name: self.name(),
@@ -288,7 +288,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 14 };
+        let kinds = if depth == 0 { 4 } else { 15 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -314,6 +314,7 @@ impl Gen<'_> {
                 source: self.many(0, 2, |g| AttrId(u64::from(g.pick(9)))),
                 output: self.many(0, 2, Gen::bound),
             }),
+            14 => PlanNode::OneRowRelation,
             12 => PlanNode::Shift {
                 input: self.input(d),
                 offset: u64::from(self.pick(9)),
@@ -703,6 +704,7 @@ fn m_grouping(g: &mut Grouping, w: &mut Walk) -> bool {
 fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
     let p = Arc::make_mut(p);
     match &mut p.node {
+        PlanNode::OneRowRelation => false,
         PlanNode::Read(s) => m_source(s, w),
         PlanNode::Sql { query, args } => {
             site!(w, query.push('x'));
@@ -866,6 +868,8 @@ proptest! {
     #[test]
     fn any_single_field_mutation_changes_the_key(b in bytes(), at in any::<Index>()) {
         let p = build(&b, false);
+        // A lone `OneRowRelation` has no field to change.
+        prop_assume!(sites(&p) > 0);
         let mut root = Arc::clone(p.root());
         let mut walk = Walk { k: at.index(sites(&p)) };
         prop_assert!(m_plan(&mut root, &mut walk));

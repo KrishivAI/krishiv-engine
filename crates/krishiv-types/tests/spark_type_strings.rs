@@ -15,7 +15,6 @@ use serde_json::Value;
 /// Spark types that parse in Spark but are out of scope here; Krishiv
 /// rejects them with `KRISHIV_UNSUPPORTED_FEATURE`.
 const OUT_OF_SCOPE: &[&str] = &[
-    "void",
     "array<int>",
     "map<string,int>",
     "struct<a:int>",

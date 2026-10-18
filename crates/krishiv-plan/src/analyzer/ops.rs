@@ -307,7 +307,7 @@ impl Resolver<'_> {
             }
             _ => pretty(&lateral_refs(&shown, &b.lateral)),
         };
-        let output = self.attr(&name, &b.ty, b.expr.origin)?;
+        let output = self.attr(&name, &b.ty);
         let origin = b.expr.origin;
         Ok(Bound {
             expr: Arc::new(
@@ -486,6 +486,7 @@ impl Resolver<'_> {
         cx.lenient = lenient;
         // Without the enclosing queries when there is something below.
         let below = Self::below(c);
+        let lookup = Self::below_of(c, true);
         cx.outer = below.is_empty();
         let unresolved = |e: &AnalysisError| {
             e.error
@@ -495,10 +496,10 @@ impl Resolver<'_> {
         };
         match self.bind_all(exprs, &cx) {
             Ok(bounds) => return Ok((bounds, c.clone())),
-            Err(e) if !unresolved(&e) || below.is_empty() => return Err(e),
+            Err(e) if !unresolved(&e) || lookup.is_empty() => return Err(e),
             Err(_) => {}
         }
-        cx.extra = Some(&below);
+        cx.extra = Some(&lookup);
         let bounds = match self.bind_all(exprs, &cx) {
             Err(e) if unresolved(&e) => {
                 cx.outer = true;
@@ -538,8 +539,20 @@ impl Resolver<'_> {
     /// The attributes relations below `r` dropped and could add back
     /// (see [`Self::bind_missing`]), nearest first.
     fn below(r: &Rel) -> Vec<Attr> {
+        Self::below_of(r, false)
+    }
+
+    /// [`Self::below`]; with `keep_output`, attributes `r` already outputs
+    /// are kept too (Spark looks a name the select list outputs twice up
+    /// among them: `SELECT id, CAST(id AS STRING) AS id ... ORDER BY id`
+    /// sorts by the first).
+    fn below_of(r: &Rel, keep_output: bool) -> Vec<Attr> {
         let mut out: Vec<Attr> = Vec::new();
-        let mut seen: HashSet<AttrId> = r.out.iter().map(|a| a.col.id).collect();
+        let mut seen: HashSet<AttrId> = if keep_output {
+            HashSet::new()
+        } else {
+            r.out.iter().map(|a| a.col.id).collect()
+        };
         let mut add = |a: &Attr, out: &mut Vec<Attr>| {
             if seen.insert(a.col.id) {
                 out.push(a.clone());
@@ -669,7 +682,7 @@ impl Resolver<'_> {
                                 data_type: Some(f.data_type.clone()),
                                 nullable: f.nullable,
                             };
-                            let output = self.attr(&pretty(&x), &ty, x.origin)?;
+                            let output = self.attr(&pretty(&x), &ty);
                             grown.aggregates.push(Arc::new(Expr::new(ExprNode::Resolved(
                                 ResolvedExpr::Alias {
                                     expr: Arc::clone(&x),
@@ -996,7 +1009,7 @@ impl Resolver<'_> {
                     a
                 }
                 (None, None) => {
-                    let output = self.attr(&pretty(&x), &ty, x.origin)?;
+                    let output = self.attr(&pretty(&x), &ty);
                     info.aggregates.push(Arc::new(Expr::new(ExprNode::Resolved(
                         ResolvedExpr::Alias {
                             expr: Arc::clone(&x),
