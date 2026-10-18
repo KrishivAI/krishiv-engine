@@ -381,6 +381,63 @@ pub trait SqlFrontend: Send + Sync {
     fn fingerprint(&self) -> u64;
 }
 
+/// What a data source name in `` format.`path` `` is, for Spark's
+/// `ResolveSQLOnFile`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SourceKind {
+    /// A file format: the name reads files by path.
+    File,
+    /// A data source that does not read files (`jdbc`, `noop`, ...):
+    /// `UNSUPPORTED_DATASOURCE_FOR_DIRECT_QUERY`.
+    Other,
+    /// Not a data source: the name stays a table name.
+    Unknown,
+}
+
+/// Lists and reads the files of a read by path (`spark.read.parquet(path)`,
+/// `` parquet.`path` ``), for their schema. The session implements it over
+/// its file formats and stores; the analyzer stays free of I/O crates.
+///
+/// A plan that reads files depends on what the files hold when they are
+/// listed, which no context input captures: [`super::AnalyzedPlan::reads_files`]
+/// marks such plans, and a resolved-plan cache must list them again
+/// (ADR 0037). An implementation serves one query: it lists each read once
+/// and lets execution read the same files, and a new query gets a new
+/// resolver (so it lists the files again).
+///
+/// The analyzer asks the access policy about each path in the form
+/// [`Self::qualify`] gives, which is also the form the scan reads, so a
+/// policy never sees one path while the query reads another.
+pub trait FileSchemaResolver: Send + Sync {
+    /// What the data source `name` is (case-insensitive).
+    fn source_kind(&self, name: &str) -> SourceKind;
+    /// `path` in the form the read uses: relative paths made absolute,
+    /// `.` and `..` resolved, URLs in one spelling. The default keeps it
+    /// as written.
+    ///
+    /// # Errors
+    /// For a path the session cannot place (`KRISHIV_UNSUPPORTED_FEATURE`).
+    fn qualify(&self, path: &OptionValue) -> Result<OptionValue, KrishivError> {
+        Ok(path.clone())
+    }
+    /// The columns of reading `paths` as `format` with `options`, as the
+    /// format infers them (the analyzer makes them nullable, as Spark does
+    /// for every file source).
+    ///
+    /// # Errors
+    /// `PATH_NOT_FOUND` for a path that does not exist,
+    /// `UNABLE_TO_INFER_SCHEMA` when no file is left to infer from,
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for what the session cannot read yet,
+    /// and storage failures.
+    fn infer<'a>(
+        &'a self,
+        format: &'a str,
+        paths: &'a [OptionValue],
+        options: &'a BTreeMap<String, OptionValue>,
+    ) -> BoxFuture<'a, Result<Vec<TableColumn>, KrishivError>>;
+}
+
 /// Tables in memory, by namespace and name, stored lower-case like Spark's
 /// session catalog: lookups fold case unless `case_sensitive`.
 #[derive(Debug, Clone, Default)]

@@ -72,6 +72,7 @@ mod context;
 mod driver;
 mod error;
 mod executor;
+pub mod files;
 pub mod hash;
 mod join;
 mod metrics;

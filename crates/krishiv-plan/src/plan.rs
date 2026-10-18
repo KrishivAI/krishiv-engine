@@ -200,7 +200,8 @@ pub enum ReadSource {
     },
     /// Files of a format (`spark.read.parquet(path)`).
     Files {
-        /// Format name, e.g. `parquet`.
+        /// Format name, e.g. `parquet`, as written (compared
+        /// case-insensitively; a resolved [`Scan`] holds it in lower case).
         format: String,
         /// Paths or globs, typed like options (built with
         /// [`OptionValue::from_user`] under the key `path`, as Spark keeps

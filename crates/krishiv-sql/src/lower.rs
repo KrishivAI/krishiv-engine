@@ -473,7 +473,8 @@ impl Lowerer {
                     // `parquet.`s3://...``: a path, kept typed so that its
                     // credentials never sit in a name.
                     [format, path] if path.quoted && is_path(&path.value) => ReadSource::Files {
-                        format: format.value.to_lowercase(),
+                        // As written: Spark names it so in errors.
+                        format: format.value.clone(),
                         paths: vec![OptionValue::from_user("path", path.value.clone())],
                         options: opts,
                     },
