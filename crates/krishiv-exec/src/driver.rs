@@ -25,8 +25,8 @@ use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::{DriverStats, OperatorMetrics};
-use crate::morsel::Countdown;
-use crate::operator::{GlobalState, LocalState, OperatorOutput, SinkStatus};
+use crate::morsel::{Barrier, Countdown};
+use crate::operator::{FlushOutput, GlobalState, LocalState, OperatorOutput, SinkStatus};
 use crate::pipeline::Pipeline;
 
 /// An operator's `HaveMoreOutput` loop yields after this many iterations.
@@ -35,6 +35,10 @@ const YIELD_EVERY_OUTPUTS: u32 = 8;
 /// One run of a pipeline, shared by its drivers.
 pub(crate) struct PipelineRun {
     pub(crate) pipeline: Pipeline,
+    /// Per operator: the finalized breaker state it reads, if any.
+    pub(crate) operator_deps: Vec<Option<GlobalState>>,
+    /// Per operator: its flush barrier (used if it needs a flush).
+    pub(crate) barriers: Vec<Barrier>,
     pub(crate) source_global: GlobalState,
     pub(crate) sink_global: GlobalState,
     pub(crate) countdown: Countdown,
@@ -179,10 +183,14 @@ impl Drop for Timed {
 }
 
 /// An operator's or the sink's context and local state (`None` once the
-/// sink state is combined).
+/// sink state is combined, once an operator's output is no longer wanted,
+/// and while an operator's `end_input` or `flush` step runs, `busy`).
 struct Slot {
     ctx: Arc<TaskContext>,
     local: Option<LocalState>,
+    /// The state is out of the slot for a step in progress: spill requests
+    /// for it wait until the step ends.
+    busy: bool,
 }
 
 /// The driver's operator and sink state. It sits behind an async mutex only
@@ -247,13 +255,19 @@ impl Driver {
         slots.push(Slot {
             ctx: source_ctx,
             local: None,
+            busy: false,
         });
-        for (id, op) in &p.operators {
-            let c = Arc::new(ctx(*id, op.name()));
+        for (k, (id, op)) in p.operators.iter().enumerate() {
+            let mut c = ctx(*id, op.name());
+            if let Some(Some(state)) = run.operator_deps.get(k) {
+                c = c.with_dependency(Arc::clone(state));
+            }
+            let c = Arc::new(c);
             let local = op.local_state(&c)?;
             slots.push(Slot {
                 ctx: c,
                 local: Some(local),
+                busy: false,
             });
         }
         let (sink_id, sink) = &p.sink;
@@ -262,6 +276,7 @@ impl Driver {
         slots.push(Slot {
             ctx: c,
             local: Some(local),
+            busy: false,
         });
         let metrics = vec![OperatorMetrics::default(); p.operators.len() + 2];
         Ok(Self {
@@ -368,17 +383,16 @@ impl Driver {
 
     /// Drains the buffered output ([`Operator::finish`]) of operators
     /// `from..` in pipeline order through the operators after each into the
-    /// sink. An operator upstream of one that returned `Finished` is not
-    /// asked; one downstream still is.
+    /// sink, each followed by its flush phase if it needs one. An operator
+    /// upstream of one that returned `Finished` is not asked; one downstream
+    /// still is.
     ///
     /// [`Operator::finish`]: crate::Operator::finish
     async fn finish_operators(&mut self, mut from: usize) -> Result<()> {
         let run = Arc::clone(&self.run);
-        let ops = &run.pipeline.operators;
-        while let Some((_, op)) = ops.get(from) {
-            let i = from;
-            from += 1;
-            loop {
+        self.release_unwanted(from);
+        for (i, (_, op)) in run.pipeline.operators.iter().enumerate() {
+            while i >= from {
                 self.boundary().await?;
                 let out = {
                     let slots = self.slots.get_mut();
@@ -394,12 +408,94 @@ impl Driver {
                 self.metrics(i + 1).output(b.num_rows());
                 if let Some(next) = self.push(i + 1, b).await? {
                     from = next;
-                    break;
                 }
                 self.yield_now().await;
             }
+            if let Some(barrier) = run.barriers.get(i).filter(|_| op.needs_flush()) {
+                from = self.flush(i, barrier, from).await?;
+            }
+            self.release_unwanted(from);
         }
         Ok(())
+    }
+
+    /// Drops the state of operators `..from`, whose output is no longer
+    /// wanted: their memory goes back at once, and work they share with the
+    /// other drivers (a hash join's claimed grace partition) is given up
+    /// before this driver waits at a later operator's flush barrier, where
+    /// a driver waiting for that work would otherwise wait forever.
+    fn release_unwanted(&mut self, from: usize) {
+        let slots = self.slots.get_mut();
+        let n = slots.slots.len().saturating_sub(2);
+        for slot in slots.slots.iter_mut().skip(1).take(from.min(n)) {
+            if slot.local.take().is_some()
+                && let Some(m) = slot.ctx.registered()
+            {
+                m.signal().set_spillable_bytes(0);
+            }
+        }
+    }
+
+    /// Takes operator `i`'s state out of its slot for a step that may wait
+    /// (`end_input`, `flush`), so the driver can service spill requests for
+    /// its other consumers meanwhile.
+    fn take_local(&mut self, i: usize) -> Result<(Arc<TaskContext>, LocalState)> {
+        let slot = self.slots.get_mut().slot(i + 1)?;
+        let local = slot.local.take();
+        let local = local.ok_or_else(|| internal("operator state missing".to_owned()))?;
+        slot.busy = true;
+        Ok((Arc::clone(&slot.ctx), local))
+    }
+
+    fn put_local(&mut self, i: usize, local: LocalState) -> Result<()> {
+        let slot = self.slots.get_mut().slot(i + 1)?;
+        slot.local = Some(local);
+        slot.busy = false;
+        Ok(())
+    }
+
+    /// The flush phase of operator `i` (see
+    /// [`Operator::needs_flush`](crate::Operator::needs_flush)); every
+    /// driver arrives at its barrier exactly once, also when operator `i`'s
+    /// output is no longer wanted (`i < from`). Returns the new `from`.
+    async fn flush(&mut self, i: usize, barrier: &Barrier, mut from: usize) -> Result<usize> {
+        let run = Arc::clone(&self.run);
+        let Some((_, op)) = run.pipeline.operators.get(i) else {
+            return Ok(from);
+        };
+        if i < from {
+            barrier.arrive();
+            return Ok(from);
+        }
+        let (ctx, mut local) = self.take_local(i)?;
+        let spill = Some((&*self.owner, &self.slots));
+        let ended = pause(&run, spill, op.end_input(&mut local, &ctx)).await;
+        self.put_local(i, local)?;
+        ended?.0?;
+        barrier.arrive();
+        pause(&run, Some((&self.owner, &self.slots)), barrier.wait()).await?;
+        while i >= from {
+            self.boundary().await?;
+            let start = run.executor.now();
+            let (ctx, mut local) = self.take_local(i)?;
+            let spill = Some((&*self.owner, &self.slots));
+            let out = pause(&run, spill, op.flush(&mut local, &ctx)).await;
+            self.put_local(i, local)?;
+            let out = out?.0;
+            self.metrics(i + 1).compute_time += since(&*run.executor, start);
+            match out? {
+                FlushOutput::Done => break,
+                FlushOutput::Continue => {}
+                FlushOutput::Batch(b) => {
+                    self.metrics(i + 1).output(b.num_rows());
+                    if let Some(next) = self.push(i + 1, b).await? {
+                        from = next;
+                    }
+                }
+            }
+            self.yield_now().await;
+        }
+        Ok(from)
     }
 
     /// Pushes a batch into operator `start` (the sink if `start` is the
@@ -558,6 +654,11 @@ async fn service(run: &PipelineRun, slots: &mut Slots) -> Result<()> {
         let freed = match (k, slot.local.as_mut(), op) {
             // Sources have no spill hook.
             (0, _, _) => 0,
+            // A step of this operator is in progress: it is serviced at the
+            // next batch boundary, once the step ended.
+            (_, None, Some(_)) if slot.busy => continue,
+            // No longer wanted: its state is gone with its memory.
+            (_, None, Some(_)) => 0,
             (_, Some(local), Some((_, op))) => op.spill(local, target, &slot.ctx).await?,
             (_, Some(local), None) => run.pipeline.sink.1.spill(local, target, &slot.ctx).await?,
             // Combined (finalize runs): the sink's state is global now.
