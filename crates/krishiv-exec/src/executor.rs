@@ -1,0 +1,270 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The [`Executor`] seam and its Tokio implementation (E01, ADR 0006 §6,
+//! spec 13 §4): pipeline drivers run as tasks on a multi-thread compute
+//! runtime, object-store and network I/O on a small separate runtime, and
+//! non-yielding work over ~1 ms on Tokio's blocking pool, gated by a
+//! semaphore so at most a fixed number of such closures run at once.
+
+use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use futures::future::BoxFuture;
+use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
+use tokio::sync::{Semaphore, oneshot};
+use tokio::task::{JoinError, JoinHandle};
+
+use crate::error::{Result, cancelled, internal};
+
+/// Workload class of a query. P2a runs every class on one compute runtime;
+/// the class is threaded through so workload management (per-class
+/// runtimes or admission budgets) drops in behind [`Executor::spawn`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WorkloadClass {
+    /// Short interactive queries.
+    Interactive,
+    /// Long batch queries.
+    Batch,
+    /// Maintenance work (compaction, statistics).
+    Background,
+    /// Queries issued by agents.
+    Agent,
+}
+
+/// Where tasks run. Keeps a dedicated CPU pool possible later without
+/// changing operators or the driver.
+pub trait Executor: Send + Sync + fmt::Debug {
+    /// Runs a pipeline driver (or another engine task) on the compute
+    /// runtime.
+    fn spawn(&self, class: WorkloadClass, fut: BoxFuture<'static, ()>) -> TaskHandle;
+    /// Runs non-yielding CPU work over ~1 ms on the bounded blocking pool;
+    /// never run blocking code elsewhere. The closure keeps its pool slot
+    /// until it returns, even if the returned future is dropped, so long
+    /// closures must poll their query's cancellation between chunks
+    /// (≤ 10 ms each).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if the closure panicked.
+    fn spawn_blocking(
+        &self,
+        f: Box<dyn FnOnce() + Send + 'static>,
+    ) -> BoxFuture<'static, Result<()>>;
+    /// The I/O runtime, for object-store and network futures.
+    fn io_handle(&self) -> &Handle;
+    /// Worker slots: the most drivers one pipeline runs at once.
+    fn parallelism(&self) -> usize;
+}
+
+/// Runs `f` through [`Executor::spawn_blocking`] and returns its result
+/// (operators use [`TaskContext::run_blocking`](crate::TaskContext::run_blocking)).
+pub(crate) async fn run_blocking<T, F>(executor: &dyn Executor, f: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let (tx, rx) = oneshot::channel();
+    executor
+        .spawn_blocking(Box::new(move || drop(tx.send(f()))))
+        .await?;
+    rx.await
+        .map_err(|_| internal("a blocking task ended without a result".to_owned()))?
+}
+
+/// A spawned task. Awaiting it yields the task's outcome: a panic becomes
+/// `INTERNAL_ERROR` for the task's query only (no `catch_unwind`; Tokio
+/// isolates the panic), an abort becomes `OPERATION_CANCELED`. Dropping the
+/// handle detaches the task.
+#[derive(Debug)]
+pub struct TaskHandle {
+    join: JoinHandle<()>,
+}
+
+impl TaskHandle {
+    /// Wraps a Tokio join handle.
+    pub fn new(join: JoinHandle<()>) -> Self {
+        Self { join }
+    }
+
+    /// Aborts the task: it is dropped at its next await, releasing what it
+    /// holds.
+    pub fn abort(&self) {
+        self.join.abort();
+    }
+}
+
+impl Future for TaskHandle {
+    type Output = Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        Pin::new(&mut self.join)
+            .poll(cx)
+            .map(|r| r.map_err(join_error))
+    }
+}
+
+fn join_error(e: JoinError) -> krishiv_common::error::KrishivError {
+    if !e.is_panic() {
+        return cancelled();
+    }
+    let payload = e.into_panic();
+    let message = payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    internal(format!("a query task panicked: {message}"))
+}
+
+/// Sizes of the [`TokioExecutor`] runtimes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutorConfig {
+    /// Compute worker threads (default: available cores).
+    pub compute_threads: usize,
+    /// I/O runtime threads (default 2).
+    pub io_threads: usize,
+    /// Blocking closures that may run at once (default: compute threads).
+    pub blocking_threads: usize,
+}
+
+impl Default for ExecutorConfig {
+    fn default() -> Self {
+        let cores = std::thread::available_parallelism().map_or(1, usize::from);
+        Self {
+            compute_threads: cores,
+            io_threads: 2,
+            blocking_threads: cores,
+        }
+    }
+}
+
+/// Owned runtimes, shut down without blocking when the executor drops (so
+/// dropping it inside async code is fine).
+struct Runtimes {
+    compute: Option<Runtime>,
+    io: Option<Runtime>,
+}
+
+impl Drop for Runtimes {
+    fn drop(&mut self) {
+        for rt in [self.compute.take(), self.io.take()].into_iter().flatten() {
+            rt.shutdown_background();
+        }
+    }
+}
+
+/// The v1 [`Executor`]: Tokio for compute (E01), a small I/O runtime and a
+/// semaphore-gated blocking pool.
+pub struct TokioExecutor {
+    compute: Handle,
+    io: Handle,
+    parallelism: usize,
+    blocking: Arc<Semaphore>,
+    _owned: Option<Runtimes>,
+}
+
+impl fmt::Debug for TokioExecutor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokioExecutor")
+            .field("parallelism", &self.parallelism)
+            .field("blocking_permits", &self.blocking.available_permits())
+            .finish_non_exhaustive()
+    }
+}
+
+impl TokioExecutor {
+    /// Starts a compute and an I/O runtime.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if a runtime cannot be started.
+    pub fn new(config: &ExecutorConfig) -> Result<Arc<Self>> {
+        let compute_threads = config.compute_threads.max(1);
+        let blocking_threads = config.blocking_threads.max(1);
+        let build = |builder: &mut tokio::runtime::Builder, name: &str| {
+            builder
+                .thread_name(name)
+                .enable_all()
+                .build()
+                .map_err(|e| internal(format!("cannot start the {name} runtime: {e}")))
+        };
+        let compute = build(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(compute_threads)
+                .max_blocking_threads(blocking_threads),
+            "krishiv-compute",
+        )?;
+        let io = build(
+            tokio::runtime::Builder::new_multi_thread().worker_threads(config.io_threads.max(1)),
+            "krishiv-io",
+        )?;
+        Ok(Arc::new(Self {
+            compute: compute.handle().clone(),
+            io: io.handle().clone(),
+            parallelism: compute_threads,
+            blocking: Arc::new(Semaphore::new(blocking_threads)),
+            _owned: Some(Runtimes {
+                compute: Some(compute),
+                io: Some(io),
+            }),
+        }))
+    }
+
+    /// Deterministic test mode (spec 13 §4, ADR 0029): every task runs on
+    /// the caller's current-thread runtime, so with Tokio's paused clock and
+    /// a seeded [`ExecConfig`](crate::ExecConfig) a run's interleavings,
+    /// morsel order and spill/cancel timing replay exactly. `slots` drivers
+    /// per pipeline interleave at their yields.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` outside a current-thread Tokio runtime.
+    pub fn deterministic(slots: usize) -> Result<Arc<Self>> {
+        let handle = Handle::try_current()
+            .ok()
+            .filter(|h| h.runtime_flavor() == RuntimeFlavor::CurrentThread)
+            .ok_or_else(|| {
+                internal("deterministic mode needs a current-thread Tokio runtime".to_owned())
+            })?;
+        Ok(Arc::new(Self {
+            compute: handle.clone(),
+            io: handle,
+            parallelism: slots.max(1),
+            blocking: Arc::new(Semaphore::new(1)),
+            _owned: None,
+        }))
+    }
+}
+
+impl Executor for TokioExecutor {
+    fn spawn(&self, _class: WorkloadClass, fut: BoxFuture<'static, ()>) -> TaskHandle {
+        TaskHandle::new(self.compute.spawn(fut))
+    }
+
+    fn spawn_blocking(
+        &self,
+        f: Box<dyn FnOnce() + Send + 'static>,
+    ) -> BoxFuture<'static, Result<()>> {
+        let permits = Arc::clone(&self.blocking);
+        let compute = self.compute.clone();
+        Box::pin(async move {
+            // The semaphore is never closed, so `acquire` cannot fail.
+            let permit = permits
+                .acquire_owned()
+                .await
+                .map_err(|_| internal("the blocking pool is closed".to_owned()))?;
+            let task = compute.spawn_blocking(move || {
+                let _slot = permit;
+                f();
+            });
+            TaskHandle::new(task).await
+        })
+    }
+
+    fn io_handle(&self) -> &Handle {
+        &self.io
+    }
+
+    fn parallelism(&self) -> usize {
+        self.parallelism
+    }
+}

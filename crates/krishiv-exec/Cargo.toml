@@ -10,3 +10,18 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-schema.workspace = true
+futures = { workspace = true, features = ["alloc"] }
+krishiv-common = { path = "../krishiv-common" }
+krishiv-memory = { path = "../krishiv-memory" }
+krishiv-types = { path = "../krishiv-types" }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = { workspace = true, features = ["futures"] }
