@@ -362,9 +362,11 @@ impl SpillOwner {
         let mut arbitration = pool.reserve(id, bytes);
         loop {
             let mut requested = self.requested.listen();
+            // Service once, then always poll arbitration too: a request the
+            // service could not clear must not starve it (or a caller's
+            // cancellation).
             if self.pending() {
                 service().await;
-                continue;
             }
             let done = poll_fn(|cx| {
                 if let Poll::Ready(r) = arbitration.as_mut().poll(cx) {
@@ -373,9 +375,8 @@ impl SpillOwner {
                 Pin::new(&mut requested).poll(cx).map(|()| None)
             })
             .await;
-            match done {
-                Some(r) => return r,
-                None => service().await,
+            if let Some(r) = done {
+                return r;
             }
         }
     }

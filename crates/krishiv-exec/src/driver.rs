@@ -72,11 +72,12 @@ async fn pause<F: Future>(
     loop {
         // Listen before checking, so a request in between is not missed.
         let mut requested = pin!(spill.map(|(owner, _)| owner.requested()));
+        // Service once, then always wait on `f`, cancel and abort too: a
+        // request the pass could not clear must not starve them.
         if let Some((owner, slots)) = spill
             && owner.pending()
         {
             service(run, &mut *slots.lock().await).await?;
-            continue;
         }
         let wake = poll_fn(|cx| {
             if let Poll::Ready(out) = f.as_mut().poll(cx) {
@@ -188,7 +189,9 @@ struct Slot {
 /// so the spill service can borrow it from inside `SpillOwner::reserve`;
 /// the mutex is never contended.
 struct Slots {
-    /// Operators `1..=n`, then the sink at `n + 1` (index `k - 1`).
+    /// Every memory consumer the driver owns, one slot each: the source at
+    /// 0 (its state stays in the driver, so `local` is `None`), operators
+    /// `1..=n`, the sink at `n + 1`.
     slots: Vec<Slot>,
     /// Source at 0, operators `1..=n`, sink at `n + 1`.
     metrics: Vec<OperatorMetrics>,
@@ -196,8 +199,8 @@ struct Slots {
 
 impl Slots {
     fn slot(&mut self, k: usize) -> Result<&mut Slot> {
-        k.checked_sub(1)
-            .and_then(|i| self.slots.get_mut(i))
+        self.slots
+            .get_mut(k)
             .ok_or_else(|| internal(format!("no operator slot {k}")))
     }
 }
@@ -212,8 +215,6 @@ enum Blocked {
 struct Driver {
     run: Arc<PipelineRun>,
     owner: Arc<SpillOwner>,
-    /// Kept for the source's memory consumer, if it registered one.
-    _source_ctx: TaskContext,
     source_local: LocalState,
     slots: tokio::sync::Mutex<Slots>,
     /// Inputs in flight, by operator index (`n` = the sink).
@@ -240,9 +241,13 @@ impl Driver {
         };
         let p = &run.pipeline;
         let (source_id, source) = &p.source;
-        let source_ctx = ctx(*source_id, source.name());
+        let source_ctx = Arc::new(ctx(*source_id, source.name()));
         let source_local = source.local_state(&source_ctx, &run.source_global)?;
-        let mut slots = Vec::with_capacity(p.operators.len() + 1);
+        let mut slots = Vec::with_capacity(p.operators.len() + 2);
+        slots.push(Slot {
+            ctx: source_ctx,
+            local: None,
+        });
         for (id, op) in &p.operators {
             let c = Arc::new(ctx(*id, op.name()));
             let local = op.local_state(&c)?;
@@ -260,7 +265,6 @@ impl Driver {
         });
         let metrics = vec![OperatorMetrics::default(); p.operators.len() + 2];
         Ok(Self {
-            _source_ctx: source_ctx,
             source_local,
             slots: tokio::sync::Mutex::new(Slots { slots, metrics }),
             stack: Vec::new(),
@@ -381,7 +385,7 @@ impl Driver {
             let rows = top.1.num_rows();
             let out = {
                 let slots = self.slots.get_mut();
-                let local = slots.slots[i].local.as_mut();
+                let local = slots.slots[i + 1].local.as_mut();
                 let local = local.ok_or_else(|| internal("operator state missing".to_owned()))?;
                 let start = run.executor.now();
                 let out = ops[i].1.execute(&top.1, local);
@@ -494,10 +498,12 @@ impl Driver {
 }
 
 /// Spills every slot whose consumer has a pending request, on the owning
-/// driver, and completes the requests.
+/// driver, and completes every request it finds: one pass over every
+/// consumer the driver owns, so no request is left pending (a source has no
+/// spill hook and frees 0).
 async fn service(run: &PipelineRun, slots: &mut Slots) -> Result<()> {
     let n = run.pipeline.operators.len();
-    for k in 1..=n + 1 {
+    for k in 0..=n + 1 {
         let slot = slots.slot(k)?;
         let Some(m) = slot.ctx.registered() else {
             continue;
@@ -505,11 +511,14 @@ async fn service(run: &PipelineRun, slots: &mut Slots) -> Result<()> {
         let Some(target) = m.signal().spill_requested() else {
             continue;
         };
-        let freed = match (slot.local.as_mut(), run.pipeline.operators.get(k - 1)) {
-            (Some(local), Some((_, op))) => op.spill(local, target, &slot.ctx).await?,
-            (Some(local), None) => run.pipeline.sink.1.spill(local, target, &slot.ctx).await?,
+        let op = k.checked_sub(1).and_then(|i| run.pipeline.operators.get(i));
+        let freed = match (k, slot.local.as_mut(), op) {
+            // Sources have no spill hook.
+            (0, _, _) => 0,
+            (_, Some(local), Some((_, op))) => op.spill(local, target, &slot.ctx).await?,
+            (_, Some(local), None) => run.pipeline.sink.1.spill(local, target, &slot.ctx).await?,
             // Combined (finalize runs): the sink's state is global now.
-            (None, _) => {
+            (_, None, _) => {
                 let sink = &run.pipeline.sink.1;
                 sink.spill_global(&run.sink_global, target, &slot.ctx)
                     .await?
@@ -536,7 +545,7 @@ impl Drop for Driver {
         let slots = self.slots.get_mut();
         for (k, slot) in slots.slots.iter().enumerate() {
             if let Some(m) = slot.ctx.registered() {
-                slots.metrics[k + 1].peak_reserved = m.consumer().peak() as u64;
+                slots.metrics[k].peak_reserved = m.consumer().peak() as u64;
             }
         }
         let metrics = std::mem::take(&mut slots.metrics);

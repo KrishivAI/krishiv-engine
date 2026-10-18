@@ -1106,3 +1106,71 @@ async fn breaker_state_is_released_when_a_sibling_fails() {
     assert_released(&root);
     drop(held);
 }
+
+/// A range scan whose drivers each register a memory consumer (an I/O
+/// buffer, say) and record its spill signal.
+struct BufferedScan(
+    Arc<RangeSource>,
+    std::sync::Mutex<Vec<Arc<krishiv_memory::SpillSignal>>>,
+);
+
+impl krishiv_exec::Source for BufferedScan {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn global_state(&self, ctx: &TaskContext) -> Result<krishiv_exec::GlobalState> {
+        self.0.global_state(ctx)
+    }
+
+    fn max_parallelism(&self, g: &krishiv_exec::GlobalState) -> usize {
+        self.0.max_parallelism(g)
+    }
+
+    fn local_state(&self, ctx: &TaskContext, g: &krishiv_exec::GlobalState) -> Result<LocalState> {
+        let memory = ctx.consumer();
+        memory.signal().set_spillable_bytes(MIB);
+        self.1.lock().unwrap().push(Arc::clone(memory.signal()));
+        self.0.local_state(ctx, g)
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        g: &'a krishiv_exec::GlobalState,
+    ) -> BoxFuture<'a, Result<Option<Batch>>> {
+        self.0.get_data(local, g)
+    }
+}
+
+/// A spill request to a source's consumer (a source has no spill hook) is
+/// completed with 0 bytes by the parked driver, which then still sees its
+/// query's cancellation: it neither spins on the request nor hangs.
+#[tokio::test]
+async fn a_spill_request_to_a_source_is_answered_and_never_hangs() {
+    let runner = QueryRunner::new(executor(1));
+    let root = root(1 << 30);
+    let q = query(&root, 1, ExecConfig::default());
+    let source = Arc::new(BufferedScan(
+        RangeSource::new(u64::MAX >> 8),
+        std::sync::Mutex::default(),
+    ));
+    let plan = Arc::new(Scan(Arc::clone(&source) as Arc<dyn krishiv_exec::Source>));
+    let stream = runner.submit(plan, Arc::clone(&q)).await.unwrap();
+    while source.1.lock().unwrap().is_empty() {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(20)).await; // parked on the full channel
+    let signal = Arc::clone(&source.1.lock().unwrap()[0]);
+    let freed = tokio::time::timeout(Duration::from_secs(5), signal.request_spill(MIB)).await;
+    assert_eq!(freed, Ok(0), "answered while parked");
+    drop(stream);
+    tokio::time::timeout(Duration::from_secs(5), q.finished())
+        .await
+        .unwrap();
+    assert_eq!(
+        q.error().unwrap().error_class(),
+        ErrorClass::OperationCanceled
+    );
+    assert_released(&root);
+}
