@@ -64,6 +64,8 @@ pub struct SpillWriter {
     charged: u64,
     batches: u64,
     rows: u64,
+    /// The largest frame plus its decoded bound ([`SpillFile::max_read_reservation`]).
+    max_read: usize,
     committed: bool,
     failed: bool,
 }
@@ -93,6 +95,7 @@ impl SpillWriter {
             charged: 0,
             batches: 0,
             rows: 0,
+            max_read: 0,
             committed: false,
             failed: false,
         };
@@ -158,6 +161,7 @@ impl SpillWriter {
             bytes,
             self.rows,
             self.batches,
+            self.max_read,
         ))
     }
 
@@ -264,6 +268,9 @@ impl SpillWriter {
         if let Err(e) = result {
             return Err(error.unwrap_or_else(|| encode_error(&self.tmp, &e)));
         }
+        // What `SpillReader::read_payload` reserves for this frame.
+        let read = usize::try_from(len.saturating_add(decoded)).unwrap_or(usize::MAX);
+        self.max_read = self.max_read.max(read);
         let header = FrameHeader {
             kind,
             constant,

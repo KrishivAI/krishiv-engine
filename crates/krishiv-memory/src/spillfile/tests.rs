@@ -191,6 +191,55 @@ fn round_trip_every_codec_keeps_data_and_both_weight_kinds() {
     assert!(sizes[1] < sizes[0] && sizes[2] < sizes[0], "{sizes:?}");
 }
 
+/// `max_read_reservation` is exactly the most a reader reserves at once:
+/// a pool of that size reads the file back, one byte less refuses a frame.
+#[test]
+fn max_read_reservation_is_what_reading_back_needs() {
+    for codec in [SpillCodec::None, SpillCodec::Lz4] {
+        let (_dir, _manager, scope, writer_pool) = env(codec);
+        let batches = vec![
+            int_batch(0, 10, Weights::Const(1)),
+            int_batch(0, 5_000, Weights::Column(Int64Array::from(vec![2; 5_000]))),
+            int_batch(0, 300, Weights::Const(1)),
+        ];
+        let file = write_file(&scope, &writer_pool, &batches);
+        let need = file.max_read_reservation();
+        assert!(need > 5_000 * 16, "{need}");
+        let exact = Pool::new(Some(need));
+        assert_eq!(read_all(&file, &exact).unwrap(), batches);
+        let short = Pool::new(Some(need - 1));
+        assert!(matches!(
+            read_all(&file, &short),
+            Err(SpillError::Memory(_))
+        ));
+    }
+}
+
+/// A writer's scratch goes back to the pool after each write, also from a
+/// handle-made reservation (operators that never return grant credit must
+/// not strand it), unless the reservation opted in with
+/// `releasing_to_credit`: then it stays the consumer's credit.
+#[test]
+fn writer_scratch_returns_to_credit_only_when_opted_in() {
+    let (_dir, _manager, scope, pool) = env(SpillCodec::None);
+    for opt_in in [false, true] {
+        let h = crate::ConsumerHandle::register(Arc::clone(&pool.query), "op", None);
+        let mut r = h.reservation();
+        if opt_in {
+            r = r.releasing_to_credit();
+        }
+        let mut w = scope.writer(schema_i64(), r).unwrap();
+        w.write(&int_batch(0, 1000, Weights::Const(1))).unwrap();
+        let file = w.finish().unwrap();
+        assert_eq!(h.credit() > 0, opt_in);
+        assert_eq!(pool.root.reserved(), h.credit());
+        let reader = file.reader(h.reservation()).unwrap();
+        assert_eq!(reader.count(), 1);
+        h.release_credit();
+        assert_eq!(pool.root.reserved(), 0);
+    }
+}
+
 #[test]
 fn dictionary_columns_and_schema_metadata_round_trip() {
     let (_dir, _manager, scope, pool) = env(SpillCodec::Lz4);
@@ -949,6 +998,7 @@ impl Sample {
             content.len() as u64,
             self.rows,
             self.batches,
+            0,
         )
     }
 

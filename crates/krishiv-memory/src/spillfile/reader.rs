@@ -28,6 +28,8 @@ struct FileInner {
     bytes: u64,
     rows: u64,
     batches: u64,
+    /// The most a reader reserves at once: a frame plus its decoded bound.
+    max_read: usize,
 }
 
 impl Drop for FileInner {
@@ -54,6 +56,7 @@ impl SpillFile {
         bytes: u64,
         rows: u64,
         batches: u64,
+        max_read: usize,
     ) -> Self {
         Self {
             inner: Arc::new(FileInner {
@@ -63,6 +66,7 @@ impl SpillFile {
                 bytes,
                 rows,
                 batches,
+                max_read,
             }),
         }
     }
@@ -85,6 +89,13 @@ impl SpillFile {
     /// Batches in the file.
     pub fn num_batches(&self) -> u64 {
         self.inner.batches
+    }
+
+    /// The most a [`SpillReader`] of this file reserves at once (its largest
+    /// frame plus that frame's decoded bound): reserve this much before
+    /// reading the file back and a read can never be refused for memory.
+    pub fn max_read_reservation(&self) -> usize {
+        self.inner.max_read
     }
 
     /// The file's path (for diagnostics; do not move or open it).
