@@ -164,6 +164,133 @@ fn projections_keep_nested_fields_in_schema_order() {
     assert_eq!(ColumnPath::default().root(), "");
 }
 
+#[test]
+fn batches_are_projected_like_their_schemas() {
+    let inner = Fields::from(vec![f("x", DataType::Int32), f("y", DataType::Int32)]);
+    let st = StructArray::new(
+        inner.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![3, 4])) as ArrayRef,
+        ],
+        None,
+    );
+    let item = f("item", DataType::Struct(inner.clone()));
+    let list = ListArray::new(
+        Arc::new(item.clone()),
+        OffsetBuffer::from_lengths([1, 1]),
+        Arc::new(st.clone()),
+        None,
+    );
+    let large = arrow_array::LargeListArray::new(
+        Arc::new(item),
+        arrow_buffer::OffsetBuffer::<i64>::from_lengths([2, 0]),
+        Arc::new(st.clone()),
+        None,
+    );
+    let entries = Fields::from(vec![
+        Field::new("key", DataType::Utf8, false),
+        f("value", DataType::Struct(inner.clone())),
+    ]);
+    let kv = StructArray::new(
+        entries.clone(),
+        vec![
+            Arc::new(StringArray::from(vec!["k1", "k2"])) as ArrayRef,
+            Arc::new(st.clone()) as ArrayRef,
+        ],
+        None,
+    );
+    let entries_field = Arc::new(Field::new("entries", DataType::Struct(entries), false));
+    let map = MapArray::new(
+        Arc::clone(&entries_field),
+        OffsetBuffer::from_lengths([1, 1]),
+        kv,
+        None,
+        false,
+    );
+    let s = schema(vec![
+        f("a", DataType::Int32),
+        f("st", DataType::Struct(inner)),
+        f("l", list.data_type().clone()),
+        f("ll", large.data_type().clone()),
+        f("m", DataType::Map(entries_field, false)),
+    ]);
+    let batch = RecordBatch::try_new(
+        Arc::clone(&s),
+        vec![
+            Arc::new(Int32Array::from(vec![7, 8])),
+            Arc::new(st),
+            Arc::new(list),
+            Arc::new(large),
+            Arc::new(map),
+        ],
+    )
+    .unwrap();
+    let paths = [
+        ColumnPath::nested(["m", "y"]),
+        ColumnPath::nested(["st", "y"]),
+        col("a"),
+        ColumnPath::nested(["l", "x"]),
+        ColumnPath::nested(["ll", "y"]),
+    ];
+    let out = project_batch(&batch, &paths).unwrap();
+    assert_eq!(out.schema(), project_schema(&s, &paths).unwrap());
+    assert_eq!(out.num_rows(), 2);
+    let st = out.column(1).as_struct();
+    assert_eq!(st.num_columns(), 1);
+    assert_eq!(
+        st.column(0)
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .values(),
+        &[3, 4]
+    );
+    let l = out.column(3).as_list::<i32>();
+    assert_eq!(l.values().as_struct().num_columns(), 1);
+    // Whole columns are shared, not copied; a bad path is an error.
+    let whole = project_batch(&batch, &[col("st")]).unwrap();
+    assert_eq!(
+        whole.column(0).to_data().buffers(),
+        batch.column(1).to_data().buffers()
+    );
+    assert!(project_batch(&batch, &[col("nope")]).is_err());
+    let rows_only = project_batch(&batch, &[]).unwrap();
+    assert_eq!((rows_only.num_columns(), rows_only.num_rows()), (0, 2));
+    // List views and fixed-size lists of structs prune too.
+    let item = Arc::new(f("item", DataType::Struct(inner2())));
+    let st2 = StructArray::new(
+        inner2(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![5, 6, 7, 8])) as ArrayRef,
+        ],
+        None,
+    );
+    let view = arrow_array::ListViewArray::new(
+        Arc::clone(&item),
+        arrow_buffer::ScalarBuffer::from(vec![0, 2]),
+        arrow_buffer::ScalarBuffer::from(vec![2, 2]),
+        Arc::new(st2.clone()),
+        None,
+    );
+    let fixed = arrow_array::FixedSizeListArray::new(Arc::clone(&item), 2, Arc::new(st2), None);
+    let s2 = schema(vec![
+        f("v", view.data_type().clone()),
+        f("fx", fixed.data_type().clone()),
+    ]);
+    let batch =
+        RecordBatch::try_new(Arc::clone(&s2), vec![Arc::new(view), Arc::new(fixed)]).unwrap();
+    let paths = [
+        ColumnPath::nested(["v", "y"]),
+        ColumnPath::nested(["fx", "x"]),
+    ];
+    let out = project_batch(&batch, &paths).unwrap();
+    assert_eq!(out.schema(), project_schema(&s2, &paths).unwrap());
+}
+
+fn inner2() -> Fields {
+    Fields::from(vec![f("x", DataType::Int32), f("y", DataType::Int32)])
+}
+
 // ---- statistics ------------------------------------------------------------
 
 fn stats(rows: u64, nulls: u64, min: ScalarValue, max: ScalarValue) -> FileStatistics {

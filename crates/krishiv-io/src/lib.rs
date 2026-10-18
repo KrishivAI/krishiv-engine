@@ -45,7 +45,7 @@ pub use format::{
 };
 pub use io::{
     ByteRange, FileRef, Held, IoConfig, IoContext, IoCounters, IoScheduler, SecretResolver,
-    StoreId, Tail, VersionToken,
+    StoreId, StorePolicy, Tail, VersionToken,
 };
 pub use options::{
     FILE_SOURCE_OPTIONS, FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec,
@@ -53,7 +53,8 @@ pub use options::{
 };
 pub use request::{
     CmpOp, Collation, ColumnPath, DynamicFilter, FieldMapping, MetadataCols, PushdownExpr,
-    ROW_INDEX_COLUMN, RowFilterPolicy, RowSelection, ScalarValue, ScanRequest, project_schema,
+    ROW_INDEX_COLUMN, RowFilterPolicy, RowSelection, ScalarValue, ScanRequest, project_batch,
+    project_schema,
 };
 pub use scan::{ScanOptions, ScanStream};
 pub use schema_map::{FIELD_ID_KEY, SchemaMapper};

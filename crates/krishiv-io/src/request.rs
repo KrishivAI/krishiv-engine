@@ -11,6 +11,11 @@ use std::fmt;
 use std::ops::Range;
 use std::sync::Arc;
 
+use arrow_array::cast::AsArray;
+use arrow_array::{
+    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, ListViewArray, MapArray,
+    RecordBatch, RecordBatchOptions, StructArray,
+};
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 
 use crate::error::{Result, internal};
@@ -599,6 +604,133 @@ pub fn project_schema(schema: &Schema, paths: &[ColumnPath]) -> Result<SchemaRef
         fields,
         schema.metadata().clone(),
     )))
+}
+
+/// `batch` holding exactly the fields named by `paths`, as
+/// [`project_schema`] shapes its schema: nested struct fields are pruned
+/// (zero-copy) through structs, lists and maps.
+///
+/// # Errors
+/// `INTERNAL_ERROR` if a path does not exist in the batch's schema.
+pub fn project_batch(batch: &RecordBatch, paths: &[ColumnPath]) -> Result<RecordBatch> {
+    let schema = project_schema(batch.schema_ref(), paths)?;
+    let columns = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let i = batch
+                .schema_ref()
+                .index_of(f.name())
+                .map_err(|e| internal(e.to_string()))?;
+            prune_array(batch.column(i), f.data_type())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    RecordBatch::try_new_with_options(
+        schema,
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+    )
+    .map_err(|e| internal(format!("projected batch is invalid: {e}")))
+}
+
+/// `array` with its nested struct fields pruned to `want`'s.
+fn prune_array(array: &ArrayRef, want: &DataType) -> Result<ArrayRef> {
+    if array.data_type() == want {
+        return Ok(Arc::clone(array));
+    }
+    let bad = |e: arrow_schema::ArrowError| internal(format!("cannot prune a nested column: {e}"));
+    Ok(match (array.data_type(), want) {
+        (DataType::Struct(_), DataType::Struct(fields)) => {
+            let s = array.as_struct();
+            let children = fields
+                .iter()
+                .map(|f| {
+                    let c = s.column_by_name(f.name()).ok_or_else(|| {
+                        internal(format!("no struct field {} to project", f.name()))
+                    })?;
+                    prune_array(c, f.data_type())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Arc::new(
+                StructArray::try_new_with_length(
+                    fields.clone(),
+                    children,
+                    s.nulls().cloned(),
+                    s.len(),
+                )
+                .map_err(bad)?,
+            )
+        }
+        (DataType::List(_), DataType::List(f)) => {
+            let l = array.as_list::<i32>();
+            let values = prune_array(l.values(), f.data_type())?;
+            Arc::new(
+                ListArray::try_new(
+                    Arc::clone(f),
+                    l.offsets().clone(),
+                    values,
+                    l.nulls().cloned(),
+                )
+                .map_err(bad)?,
+            )
+        }
+        (DataType::LargeList(_), DataType::LargeList(f)) => {
+            let l = array.as_list::<i64>();
+            let values = prune_array(l.values(), f.data_type())?;
+            Arc::new(
+                LargeListArray::try_new(
+                    Arc::clone(f),
+                    l.offsets().clone(),
+                    values,
+                    l.nulls().cloned(),
+                )
+                .map_err(bad)?,
+            )
+        }
+        (DataType::Map(_, _), DataType::Map(f, sorted)) => {
+            let m = array.as_map();
+            let entries: ArrayRef = Arc::new(m.entries().clone());
+            let entries = prune_array(&entries, f.data_type())?;
+            Arc::new(
+                MapArray::try_new(
+                    Arc::clone(f),
+                    m.offsets().clone(),
+                    entries.as_struct().clone(),
+                    m.nulls().cloned(),
+                    *sorted,
+                )
+                .map_err(bad)?,
+            )
+        }
+        (DataType::ListView(_), DataType::ListView(f)) => {
+            let l = array
+                .as_any()
+                .downcast_ref::<ListViewArray>()
+                .ok_or_else(|| internal("a list view column is not a ListViewArray"))?;
+            let values = prune_array(l.values(), f.data_type())?;
+            Arc::new(
+                ListViewArray::try_new(
+                    Arc::clone(f),
+                    l.offsets().clone(),
+                    l.sizes().clone(),
+                    values,
+                    l.nulls().cloned(),
+                )
+                .map_err(bad)?,
+            )
+        }
+        (DataType::FixedSizeList(_, n), DataType::FixedSizeList(f, _)) => {
+            let l = array.as_fixed_size_list();
+            let values = prune_array(l.values(), f.data_type())?;
+            Arc::new(
+                FixedSizeListArray::try_new(Arc::clone(f), *n, values, l.nulls().cloned())
+                    .map_err(bad)?,
+            )
+        }
+        (have, _) => {
+            return Err(internal(format!("cannot prune a {have} column to {want}")));
+        }
+    })
 }
 
 /// `field` pruned to the sub-paths `subs` (an empty sub-path keeps it whole).
