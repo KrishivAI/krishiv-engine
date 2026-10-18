@@ -33,6 +33,7 @@ criterion.workspace = true
 object_store.workspace = true
 proptest = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
 
 [target.'cfg(loom)'.dev-dependencies]

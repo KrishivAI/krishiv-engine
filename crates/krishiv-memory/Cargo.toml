@@ -23,6 +23,7 @@ thiserror.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 proptest = { workspace = true, features = ["std"] }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
 
 [target.'cfg(loom)'.dev-dependencies]

@@ -209,8 +209,8 @@ fn kernel_unsafe_only_in_unsafe_modules() {
 
 #[test]
 fn unsafe_sites_are_counted_per_crate() {
-    let root = std::env::temp_dir().join(format!("xtask-unsafe-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
     let src = root.join("crates/k/src/inner");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::create_dir_all(root.join("crates/clean/src")).unwrap();
@@ -249,7 +249,6 @@ fn unsafe_sites_are_counted_per_crate() {
         std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
     assert!(unsafe_sites_per_crate(&root.join("missing")).is_err());
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// Fuzz-style: an `unsafe` placed after arbitrary literals and comments is

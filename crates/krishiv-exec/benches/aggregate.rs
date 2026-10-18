@@ -129,9 +129,15 @@ fn bench(c: &mut Criterion) {
         });
     }
     let batches = input(1 << 18);
-    let dir = std::env::temp_dir().join(format!("krishiv-bench-agg-{}", std::process::id()));
+    // Removed after the manager when the bench returns.
+    let dir = tempfile::Builder::new()
+        .prefix("krishiv-bench-agg-")
+        .tempdir()
+        .expect("temporary directory");
     let spill = SpillManager::open(&SpillConfig {
-        dir,
+        // A path inside the temporary directory: the manager creates it
+        // private (0700), whatever the umask.
+        dir: dir.path().join("spill"),
         ..SpillConfig::default()
     })
     .expect("spill directory");

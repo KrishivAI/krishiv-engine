@@ -403,25 +403,24 @@ mod tests {
 
     #[test]
     fn load_errors_name_the_problem() -> R {
-        let dir = std::env::temp_dir().join(format!("krishiv-fixtures-{}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path();
         let write = |text: &str| std::fs::write(dir.join(Fixture::TestData.file()), text);
         let err = Fixture::TestData.load(&dir.join("missing"));
         assert!(matches!(err, Err(FixtureError::Io { .. })));
         write("{")?;
         assert!(matches!(
-            Fixture::TestData.load(&dir),
+            Fixture::TestData.load(dir),
             Err(FixtureError::Json { .. })
         ));
         write(
             r#"{"name":"t","columns":[{"name":"a","type":"int","nullable":true}],"rows":[["x"]]}"#,
         )?;
         let err = Fixture::TestData
-            .load(&dir)
+            .load(dir)
             .err()
             .ok_or("expected an error")?;
         assert!(err.to_string().contains("table testdata: t:"), "{err}");
-        std::fs::remove_dir_all(&dir)?;
         Ok(())
     }
 

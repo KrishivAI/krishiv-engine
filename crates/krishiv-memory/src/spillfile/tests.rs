@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use arrow_array::types::Int32Type;
@@ -36,15 +36,23 @@ use super::format::{self, FILE_HEADER_LEN, FRAME_HEADER_LEN};
 use super::*;
 use crate::{ConsumerId, MemoryConfig, MemoryPool, Reservation, TreePool};
 
-static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
-
-/// A unique directory name under the system temp dir, removed on drop.
-struct TestDir(PathBuf);
+/// A fresh path (not created yet) inside a temporary directory of its own.
+/// The whole temporary directory is removed on drop, also when the test
+/// panics, whatever the test left at the path (a directory, a file, a
+/// symlink).
+struct TestDir(
+    PathBuf,
+    #[expect(dead_code, reason = "held for its Drop, which removes the directory")]
+    tempfile::TempDir,
+);
 
 impl TestDir {
     fn new() -> Self {
-        let n = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
-        Self(std::env::temp_dir().join(format!("krishiv-spilltest-{}-{n}", std::process::id())))
+        let parent = tempfile::Builder::new()
+            .prefix("krishiv-spilltest-")
+            .tempdir()
+            .unwrap();
+        Self(parent.path().join("d"), parent)
     }
 
     /// Creates the directory the way a careful user would (mode 0700).
@@ -60,12 +68,6 @@ impl TestDir {
             codec,
             ..SpillConfig::default()
         }
-    }
-}
-
-impl Drop for TestDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }
 

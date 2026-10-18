@@ -2,7 +2,7 @@
 //! End-to-end tests of the policy subcommands against temporary fixtures.
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
 fn xtask(args: &[&str]) -> Output {
@@ -13,11 +13,27 @@ fn xtask(args: &[&str]) -> Output {
         .unwrap()
 }
 
-fn tmp(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("xtask-cmd-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+/// A temporary directory, removed on drop (also when the test panics).
+struct Tmp(tempfile::TempDir);
+
+impl std::ops::Deref for Tmp {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        self.0.path()
+    }
+}
+
+impl AsRef<Path> for Tmp {
+    fn as_ref(&self) -> &Path {
+        self.0.path()
+    }
+}
+
+fn tmp(name: &str) -> Tmp {
+    Tmp(tempfile::Builder::new()
+        .prefix(&format!("xtask-cmd-{name}-"))
+        .tempdir()
+        .unwrap())
 }
 
 fn write(root: &Path, rel: &str, text: &str) {
@@ -39,7 +55,7 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 
-fn init_repo(name: &str) -> PathBuf {
+fn init_repo(name: &str) -> Tmp {
     let dir = tmp(name);
     git(&dir, &["init", "-q", "-b", "main"]);
     git(&dir, &["config", "commit.gpgsign", "false"]);

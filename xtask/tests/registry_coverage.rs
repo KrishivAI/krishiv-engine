@@ -71,16 +71,15 @@ fn rust_identifier_counts_as_reference() {
 
 #[test]
 fn fixture_tree_is_scanned() {
-    let dir = std::env::temp_dir().join(format!("xtask-regcov-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
     std::fs::create_dir_all(dir.join("c/tests")).unwrap();
     std::fs::create_dir_all(dir.join("target")).unwrap();
     std::fs::write(dir.join("c/tests/t.rs"), "ALPHA").unwrap();
     std::fs::write(dir.join("c/lib.rs"), "BETA").unwrap();
     std::fs::write(dir.join("target/tests.rs"), "GAMMA").unwrap();
-    let texts = collect_tests(&dir);
+    let texts = collect_tests(dir);
     assert_eq!(texts, ["ALPHA"]);
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

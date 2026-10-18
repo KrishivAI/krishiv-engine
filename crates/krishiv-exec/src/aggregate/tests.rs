@@ -6,7 +6,6 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use arrow_array::cast::AsArray;
@@ -92,21 +91,35 @@ async fn exec(plan: Arc<dyn ExecNode>, o: Opts) -> crate::Result<(Vec<Batch>, Qu
     err.map_or(Ok((out, q.metrics())), Err)
 }
 
-/// A spill directory for one test (removed when the manager drops).
-fn spill_dir() -> (SpillManager, SpillScope) {
-    static N: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join(format!(
-        "krishiv-agg-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ));
-    let m = SpillManager::open(&SpillConfig {
-        dir,
+/// A spill manager on its own temporary directory. Fields drop in order: the
+/// manager removes its session, then the directory itself goes (also when
+/// the test panics).
+struct TestSpill {
+    _manager: SpillManager,
+    _dir: tempfile::TempDir,
+}
+
+/// A spill directory for one test.
+fn spill_dir() -> (TestSpill, SpillScope) {
+    let dir = tempfile::Builder::new()
+        .prefix("krishiv-agg-")
+        .tempdir()
+        .unwrap();
+    let manager = SpillManager::open(&SpillConfig {
+        // A path inside the temporary directory: the manager creates it
+        // private (0700), whatever the umask.
+        dir: dir.path().join("spill"),
         ..SpillConfig::default()
     })
     .unwrap();
-    let s = m.scope().unwrap();
-    (m, s)
+    let scope = manager.scope().unwrap();
+    (
+        TestSpill {
+            _manager: manager,
+            _dir: dir,
+        },
+        scope,
+    )
 }
 
 fn cell(a: &ArrayRef, i: usize) -> String {

@@ -26,11 +26,10 @@ fn emits_to_stdout_or_path() {
     emit("# hi\n", None, &mut buf).unwrap();
     assert_eq!(buf, b"# hi\n");
 
-    let dir = std::env::temp_dir().join(format!("xtask-docs-{}", std::process::id()));
-    let path = dir.join("nested/config.md");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nested/config.md");
     let mut buf = Vec::new();
     emit("# hi\n", Some(&path), &mut buf).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "# hi\n");
     assert!(buf.is_empty());
-    std::fs::remove_dir_all(dir).unwrap();
 }

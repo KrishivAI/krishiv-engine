@@ -1450,6 +1450,7 @@ dependencies = [
  "object_store",
  "proptest",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -1517,6 +1518,7 @@ dependencies = [
  "krishiv-types",
  "loom",
  "proptest",
+ "tempfile",
  "thiserror",
  "tokio",
 ]
@@ -1616,6 +1618,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqllogictest",
+ "tempfile",
  "thiserror",
  "tokio",
 ]
@@ -3100,6 +3103,7 @@ dependencies = [
  "krishiv-common",
  "serde",
  "serde_json",
+ "tempfile",
  "toml",
 ]
 
