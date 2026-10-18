@@ -303,10 +303,6 @@ struct ProbeLocal {
     parts: Vec<Part>,
     signal: Arc<SpillSignal>,
     flush: Flush,
-    rows: u64,
-    deferred: u64,
-    file_bytes: u64,
-    reported: bool,
     batch_size: usize,
 }
 
@@ -327,9 +323,11 @@ impl ProbeOp {
         if s.join_type == JoinType::NullAwareAnti {
             use std::sync::atomic::Ordering;
             if g.null_key.load(Ordering::Acquire) {
+                s.counters.add(Counter::ProbeRows, input.num_rows() as u64);
                 return Ok(OperatorOutput::NeedMoreInput(None));
             }
             if g.rows.load(Ordering::Acquire) == 0 {
+                s.counters.add(Counter::ProbeRows, input.num_rows() as u64);
                 return Ok(OperatorOutput::NeedMoreInput(
                     (input.num_rows() > 0).then(|| input.clone()),
                 ));
@@ -353,13 +351,14 @@ impl ProbeOp {
                 return Ok(OperatorOutput::NeedMemory { bytes });
             }
             for (p, c) in chunks {
-                l.deferred += c.num_rows() as u64;
+                s.counters
+                    .add(Counter::ProbeSpilledRows, c.num_rows() as u64);
                 l.parts[p].chunks.push(c);
                 l.parts[p].coalesce(&s.probe_schema)?;
             }
             l.signal
                 .set_spillable_bytes(l.parts.iter().map(Part::bytes).sum());
-            l.rows += input.num_rows() as u64;
+            s.counters.add(Counter::ProbeRows, input.num_rows() as u64);
             l.cursor = Some(cursor);
         }
         let limit = l.batch_size;
@@ -405,10 +404,6 @@ impl Operator for ProbeOp {
                 .collect(),
             signal: Arc::clone(memory.signal()),
             flush: Flush::default(),
-            rows: 0,
-            deferred: 0,
-            file_bytes: 0,
-            reported: false,
             batch_size: ctx.query().config().batch_size.max(1),
         }))
     }
@@ -438,7 +433,7 @@ impl Operator for ProbeOp {
                 false,
             )
             .await?;
-            l.file_bytes += written;
+            self.0.counters.add(Counter::ProbeSpillBytes, written);
             l.signal
                 .set_spillable_bytes(l.parts.iter().map(Part::bytes).sum());
             Ok(freed)
@@ -470,7 +465,7 @@ impl Operator for ProbeOp {
                 let schema = &self.0.probe_schema;
                 let (_, written) =
                     spill_parts(&mut l.parts, &all, schema, scope, ctx, false).await?;
-                l.file_bytes += written;
+                self.0.counters.add(Counter::ProbeSpillBytes, written);
             }
             l.signal.set_spillable_bytes(0);
             let built = l
@@ -493,13 +488,6 @@ impl Operator for ProbeOp {
     ) -> BoxFuture<'a, Result<FlushOutput>> {
         Box::pin(async move {
             let l = local_mut(local)?;
-            if !l.reported {
-                l.reported = true;
-                let n = &self.0.counters;
-                n.add(Counter::ProbeRows, l.rows);
-                n.add(Counter::ProbeSpilledRows, l.deferred);
-                n.add(Counter::ProbeSpillBytes, l.file_bytes);
-            }
             grace::step(&self.0, &l.build.seed, &l.build, &mut l.flush, ctx).await
         })
     }
