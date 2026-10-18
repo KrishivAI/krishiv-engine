@@ -1385,7 +1385,7 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
                     "documented divergence (ADR 0023): STRING holds valid UTF-8 only".to_owned(),
                 );
             }
-            if ev.day_overflow.get() {
+            if ev.day_overflow.get() && expected_rows.is_some() {
                 return CellOutcome::NotRun(
                     "documented divergence (ADR 0023): ANSI date day arithmetic raises where Spark wraps"
                         .to_owned(),
@@ -1548,7 +1548,7 @@ pub fn run_golden(text: &str, ansi: bool) -> Result<GoldenTally, crate::golden::
             day_overflow: std::cell::Cell::new(false),
         };
         let values: Result<Vec<ArrayRef>, EvalError> = nodes.iter().map(|n| ev.eval(n)).collect();
-        if ev.day_overflow.get() {
+        if ev.day_overflow.get() && matches!(&st.expected, GoldenExpected::Rows(_)) {
             t.needs_engine.push((
                 q.to_owned(),
                 "documented divergence (ADR 0023): ANSI date day arithmetic raises where Spark wraps"
