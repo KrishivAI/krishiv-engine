@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Arithmetic kernel benchmarks per operator family (64K rows, one
-//! thread; run under CodSpeed in CI): integral `% div`, unary ops and
-//! narrow-type `+`.
+//! thread; run under CodSpeed in CI): integral `% div`, unary ops,
+//! narrow-type `+` and float `* /`.
 
 #![expect(
     missing_docs,
@@ -14,11 +14,12 @@
 
 use std::hint::black_box;
 
-use arrow_array::types::{Int8Type, Int32Type, Int64Type};
-use arrow_array::{Int8Array, Int32Array, Int64Array};
+use arrow_array::types::{Float64Type, Int8Type, Int32Type, Int64Type};
+use arrow_array::{Float64Array, Int8Array, Int32Array, Int64Array};
 use criterion::{Criterion, criterion_group, criterion_main};
+use krishiv_kernels::float;
 use krishiv_kernels::integer::{UnaryOp, binary, integral_divide, remainder, unary};
-use krishiv_kernels::{Add, AnsiError, JavaWrap, KernelCtx, Operand};
+use krishiv_kernels::{Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Operand};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -97,5 +98,50 @@ fn integral(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, integral);
+fn float(c: &mut Criterion) {
+    let ctx = KernelCtx::new();
+    #[expect(clippy::cast_precision_loss, reason = "bench data")]
+    let mk =
+        |s: i64| -> Float64Array { (0..ROWS).map(|i| Some(((i * s) % 1000) as f64)).collect() };
+    let (a, b) = (mk(7919), mk(104_729));
+    // Divisors 1..=1000: never zero, so this measures the ANSI success path.
+    #[expect(clippy::cast_precision_loss, reason = "bench data")]
+    let nz: Float64Array = (0..ROWS)
+        .map(|i| Some(((i * 104_729) % 1000 + 1) as f64))
+        .collect();
+    c.bench_function("f64_div/ansi", |bench| {
+        bench.iter(|| {
+            float::divide::<Float64Type, AnsiError>(
+                Operand::Array(black_box(&a)),
+                Operand::Array(&nz),
+                &ctx,
+            )
+            .unwrap()
+        });
+    });
+    // Zero divisors under legacy mode: NULL rows.
+    c.bench_function("f64_div/java_wrap_zero_divisors", |bench| {
+        bench.iter(|| {
+            float::divide::<Float64Type, JavaWrap>(
+                Operand::Array(black_box(&a)),
+                Operand::Array(&b),
+                &ctx,
+            )
+            .unwrap()
+        });
+    });
+    c.bench_function("f64_mul", |bench| {
+        bench.iter(|| {
+            float::binary(
+                ArithOp::Multiply,
+                Operand::Array(black_box(&a)),
+                Operand::Array(&b),
+                &ctx,
+            )
+            .unwrap()
+        });
+    });
+}
+
+criterion_group!(benches, integral, float);
 criterion_main!(benches);

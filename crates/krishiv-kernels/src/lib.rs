@@ -38,6 +38,7 @@
 #![deny(clippy::arithmetic_side_effects)]
 
 mod chunk;
+pub mod compare;
 pub mod decimal;
 pub mod dispatch;
 pub mod error;

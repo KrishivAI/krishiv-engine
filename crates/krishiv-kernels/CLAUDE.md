@@ -16,7 +16,8 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   in any other file here and `xtask budgets` counts unsafe sites.
 - `version`: the Spark version profile (`KernelCtx::with_spark_version`); error classes/messages differ by version.
 - Kernels: `integer` (tinyint..bigint `+ - * %`, bigint `div`, unary `-`/`abs`), `decimal` (`+ - *`, 64-bit hook),
-  `float` (Spark comparisons). Dividing lanes keep a per-row flag word so NULL slots with a zero divisor never take
+  `float` (`+ - * / %`, unary), `compare` (`= != < <= > >=` for primitives incl. date/timestamp/decimal with Spark
+  float order, strings/binary in byte order, booleans; `null_safe` builds `<=>` from `=`). Dividing lanes keep a per-row flag word so NULL slots with a zero divisor never take
   the slow path (measured: `div` with 10% NULLs 302 -> 262 µs, = the no-NULL time; so no `by_nulls` axis).
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.
 

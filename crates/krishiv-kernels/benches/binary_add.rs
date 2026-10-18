@@ -23,8 +23,8 @@ use std::hint::black_box;
 use arrow_array::types::{Decimal128Type, Float64Type, Int64Type};
 use arrow_array::{Decimal128Array, Float64Array, Int64Array, PrimitiveArray};
 use criterion::{Criterion, criterion_group, criterion_main};
+use krishiv_kernels::compare::{Equal, compare};
 use krishiv_kernels::decimal::{DecimalPlan, DecimalStorage, decimal_binary};
-use krishiv_kernels::float::{Equal, compare};
 use krishiv_kernels::integer::{binary, binary_nulls_path};
 use krishiv_kernels::reference;
 use krishiv_kernels::{

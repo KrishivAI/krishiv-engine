@@ -10,10 +10,10 @@ use arrow_array::types::{Decimal128Type, Float64Type, Int32Type, Int64Type};
 use arrow_array::{ArrowPrimitiveType, PrimitiveArray};
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 use krishiv_kernels::decimal::{DecimalPlan, DecimalStorage, decimal_binary};
-use krishiv_kernels::float::{self, CompareOp, Equal, Greater, GreaterEq, Less, LessEq};
+use krishiv_kernels::compare::{self, CompareKind, CompareOp, Equal, Greater, GreaterEq, Less, LessEq};
 use krishiv_kernels::integer::{SparkIntegral, binary};
 use krishiv_kernels::ops::BinaryOp;
-use krishiv_kernels::reference::{self, CompareKind};
+use krishiv_kernels::reference;
 use krishiv_kernels::{
     Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Operand, Overflow,
     SparkVersion, Sub, Target, Unchecked,
@@ -130,7 +130,7 @@ fn cmp<Op: CompareOp>(kind: CompareKind, i: &Input<f64>) {
     let slow = i.run::<Float64Type, _>(|l, r| reference::compare::<Float64Type>(kind, l, r), |a| a);
     for ctx in ctxs() {
         let fast =
-            i.run::<Float64Type, _>(|l, r| float::compare::<Float64Type, Op>(l, r, &ctx), |a| a);
+            i.run::<Float64Type, _>(|l, r| compare::compare::<Float64Type, Op>(l, r, &ctx), |a| a);
         assert_eq!(fast, slow);
     }
 }

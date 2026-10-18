@@ -15,6 +15,7 @@ use arrow_array::types::{Decimal128Type, Int64Type};
 use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, Decimal128Array, PrimitiveArray};
 use arrow_buffer::i256;
 
+use crate::compare::CompareKind;
 use crate::decimal::DecimalPlan;
 use crate::dispatch::KernelCtx;
 use crate::error::KernelError;
@@ -256,22 +257,7 @@ fn spark_order<F: SparkFloat>(x: F, y: F) -> Ordering {
     }
 }
 
-/// A comparison operator, for [`compare`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CompareKind {
-    /// `=`
-    Equal,
-    /// `<`
-    Less,
-    /// `<=`
-    LessEq,
-    /// `>`
-    Greater,
-    /// `>=`
-    GreaterEq,
-}
-
-/// Reference for [`crate::float::compare`].
+/// Reference for [`crate::compare::compare`] on floats.
 ///
 /// # Errors
 /// As the fast path.
@@ -283,20 +269,81 @@ pub fn compare<T>(
 where
     T: ArrowPrimitiveType<Native: SparkFloat>,
 {
+    compare_by(kind, l, r, spark_order)
+}
+
+/// Reference for [`crate::compare::compare`] on integral, decimal, date
+/// and timestamp values (their natural order).
+///
+/// # Errors
+/// As the fast path.
+pub fn compare_ord<T>(
+    kind: CompareKind,
+    l: Operand<'_, T>,
+    r: Operand<'_, T>,
+) -> Result<BooleanArray, KernelError>
+where
+    T: ArrowPrimitiveType<Native: Ord>,
+{
+    compare_by(kind, l, r, |a: T::Native, b| a.cmp(&b))
+}
+
+fn compare_by<T: ArrowPrimitiveType>(
+    kind: CompareKind,
+    l: Operand<'_, T>,
+    r: Operand<'_, T>,
+    ord: impl Fn(T::Native, T::Native) -> Ordering,
+) -> Result<BooleanArray, KernelError> {
     let len = length(l, r)?;
     Ok((0..len)
-        .map(|i| {
-            let (a, b) = (value(l, i)?, value(r, i)?);
-            let o = spark_order(a, b);
-            Some(match kind {
-                CompareKind::Equal => o.is_eq(),
-                CompareKind::Less => o.is_lt(),
-                CompareKind::LessEq => o.is_le(),
-                CompareKind::Greater => o.is_gt(),
-                CompareKind::GreaterEq => o.is_ge(),
-            })
-        })
+        .map(|i| Some(kind.holds(ord(value(l, i)?, value(r, i)?))))
         .collect())
+}
+
+/// Reference for [`crate::compare::compare_bytes`]: `None` rows are NULL.
+#[must_use]
+pub fn compare_bytes(kind: CompareKind, l: &[Option<&[u8]>], r: &[Option<&[u8]>]) -> BooleanArray {
+    l.iter()
+        .zip(r)
+        .map(|(a, b)| Some(kind.holds((*a)?.cmp((*b)?))))
+        .collect()
+}
+
+/// Reference for [`crate::compare::null_safe`] over row values.
+#[must_use]
+pub fn null_safe_equal<T: PartialEq>(l: &[Option<T>], r: &[Option<T>]) -> BooleanArray {
+    l.iter().zip(r).map(|(a, b)| Some(a == b)).collect()
+}
+
+/// Reference for [`crate::float::binary`], [`crate::float::divide`]
+/// (`op == None`, `rem == false`) and [`crate::float::remainder`]
+/// (`rem == true`).
+///
+/// # Errors
+/// As the fast path.
+pub fn float_arith<T>(
+    op: Option<ArithOp>,
+    rem: bool,
+    mode: OverflowMode,
+    version: SparkVersion,
+    l: Operand<'_, T>,
+    r: Operand<'_, T>,
+) -> Result<PrimitiveArray<T>, KernelError>
+where
+    T: ArrowPrimitiveType<Native: SparkFloat>,
+{
+    rows(l, r, |i, a, b| match op {
+        Some(op) => Ok(Some(a.arith(op, b))),
+        None if b.is_zero() => settle(mode, Fault::DivideByZero, a, || {
+            if rem {
+                KernelError::remainder_by_zero(i, version)
+            } else {
+                KernelError::divide_by_zero(i)
+            }
+        }),
+        None if rem => Ok(Some(a.rem(b))),
+        None => Ok(Some(a.div(b))),
+    })
 }
 
 #[cfg(test)]

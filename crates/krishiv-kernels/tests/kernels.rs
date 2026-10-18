@@ -11,9 +11,10 @@ use arrow_array::{
     Array, BooleanArray, Decimal128Array, Float64Array, Int8Array, Int16Array, Int32Array,
     Int64Array,
 };
+use arrow_buffer::NullBuffer;
 use krishiv_common::error::ErrorClass;
+use krishiv_kernels::compare::{Equal, Less, compare};
 use krishiv_kernels::decimal::{DecimalPlan, DecimalStorage, decimal_binary};
-use krishiv_kernels::float::{Equal, Less, compare};
 use krishiv_kernels::integer::{UnaryOp, binary, integral_divide, remainder, unary};
 use krishiv_kernels::{
     Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Operand, SparkVersion, Sub,
@@ -379,4 +380,143 @@ fn unary_minus_and_abs_match_spark() {
     let l = Int64Array::from(vec![-3, 4]);
     let a = unary::<Int64Type, AnsiError>(UnaryOp::Abs, &l, &ctx()).unwrap();
     assert_eq!(a, Int64Array::from(vec![3, 4]));
+}
+
+/// Values recorded from Spark 4.2.
+#[test]
+fn comparisons_match_spark() {
+    use arrow_array::{BinaryArray, StringArray};
+    use krishiv_kernels::compare::{
+        BoolOperand, BytesOperand, Greater, NotEqual, Validity, compare_bool, compare_bytes,
+        null_safe,
+    };
+    // 'abc' < 'abe', 'a' < 'ab', 'é' > 'z', '' < 'a', 'ab' = 'ab ' is false, 'A' < 'a'.
+    let l = StringArray::from(vec!["abc", "a", "é", "", "ab", "A"]);
+    let r = StringArray::from(vec!["abe", "ab", "z", "a", "ab ", "a"]);
+    let lt = compare_bytes::<_, Less>(BytesOperand::Array(&l), BytesOperand::Array(&r)).unwrap();
+    assert_eq!(
+        lt,
+        BooleanArray::from(vec![true, true, false, true, true, true])
+    );
+    let ne =
+        compare_bytes::<_, NotEqual>(BytesOperand::Array(&l), BytesOperand::Scalar(Some(b"ab")));
+    assert!(!ne.unwrap().value(4));
+    // X'00' < X'FF', X'7F' < X'80': unsigned bytes.
+    let x = BinaryArray::from(vec![&[0x00_u8][..], &[0x7F]]);
+    let y = BinaryArray::from(vec![&[0xFF_u8][..], &[0x80]]);
+    let lt = compare_bytes::<_, Less>(BytesOperand::Array(&x), BytesOperand::Array(&y)).unwrap();
+    assert_eq!(lt, BooleanArray::from(vec![true, true]));
+    let none = compare_bytes::<_, Less>(BytesOperand::Array(&x), BytesOperand::Scalar(None));
+    assert_eq!(none.unwrap().null_count(), 2);
+    // true > false; true <=> NULL is false; NULL <=> NULL is true.
+    let t = BooleanArray::from(vec![Some(true), None]);
+    let gt = compare_bool::<Greater>(BoolOperand::Array(&t), BoolOperand::Scalar(Some(false)));
+    assert_eq!(gt.unwrap(), BooleanArray::from(vec![Some(true), None]));
+    let eq = compare_bool::<Equal>(BoolOperand::Array(&t), BoolOperand::Scalar(None)).unwrap();
+    let ns = null_safe(
+        &eq,
+        Validity::Array(t.nulls()),
+        Validity::Scalar { null: true },
+    );
+    assert_eq!(ns.unwrap(), BooleanArray::from(vec![false, true]));
+    // -0.0 <=> 0.0 and NaN = NaN.
+    let f = Float64Array::from(vec![-0.0, f64::NAN]);
+    let g = Float64Array::from(vec![0.0, f64::NAN]);
+    let eq = compare::<_, Equal>(Operand::Array(&f), Operand::Array(&g), &ctx()).unwrap();
+    let ns = null_safe(&eq, Validity::Array(None), Validity::Array(None));
+    assert_eq!(ns.unwrap(), BooleanArray::from(vec![true, true]));
+    let short = NullBuffer::new_valid(1);
+    let e = null_safe(&eq, Validity::Array(Some(&short)), Validity::Array(None));
+    assert_eq!(e.unwrap_err().error_class(), ErrorClass::InternalError);
+    let e = compare_bool::<Equal>(BoolOperand::Scalar(Some(true)), BoolOperand::Scalar(None));
+    assert_eq!(e.unwrap_err().error_class(), ErrorClass::InternalError);
+}
+
+/// Values and errors recorded from Spark 4.2.
+#[test]
+fn float_arithmetic_matches_spark() {
+    use arrow_array::types::Float64Type;
+    use krishiv_kernels::float;
+    let a = Float64Array::from(vec![Some(1.0), Some(f64::NAN), None, Some(-7.5)]);
+    let b = Float64Array::from(vec![Some(0.0), Some(1.0), Some(0.0), Some(2.0)]);
+    let legacy =
+        float::divide::<Float64Type, JavaWrap>(Operand::Array(&a), Operand::Array(&b), &ctx());
+    let legacy = legacy.unwrap();
+    assert!(legacy.is_null(0) && legacy.value(1).is_nan() && legacy.is_null(2));
+    let e = float::divide::<Float64Type, AnsiError>(Operand::Array(&a), Operand::Array(&b), &ctx());
+    assert_eq!(e.unwrap_err().error_class(), ErrorClass::DivideByZero);
+    let e = float::remainder::<Float64Type, AnsiError>(
+        Operand::Array(&a),
+        Operand::Scalar(Some(-0.0)),
+        &ctx(),
+    );
+    assert_eq!(e.unwrap_err().error_class(), ErrorClass::RemainderByZero);
+    let r =
+        float::remainder::<Float64Type, AnsiError>(Operand::Array(&a), Operand::Array(&b), &ctx());
+    assert_eq!(r.unwrap_err().row(), Some(0));
+    let r = float::remainder::<Float64Type, NullOnOverflow>(
+        Operand::Array(&a),
+        Operand::Array(&b),
+        &ctx(),
+    );
+    assert_eq!(r.unwrap().value(3), -1.5);
+    // Infinity * 0 is NaN; nothing overflows.
+    let inf = Float64Array::from(vec![f64::INFINITY, f64::MAX]);
+    let m = float::binary(
+        ArithOp::Multiply,
+        Operand::Array(&inf),
+        Operand::Scalar(Some(0.0)),
+        &ctx(),
+    );
+    assert!(m.unwrap().value(0).is_nan());
+    let s = float::binary(
+        ArithOp::Add,
+        Operand::Array(&inf),
+        Operand::Scalar(None),
+        &ctx(),
+    );
+    assert_eq!(s.unwrap().null_count(), 2);
+    let d = float::binary(
+        ArithOp::Subtract,
+        Operand::Array(&inf),
+        Operand::Array(&inf),
+        &ctx(),
+    );
+    assert_eq!(d.unwrap().value(1), 0.0);
+    let n =
+        float::divide::<Float64Type, AnsiError>(Operand::Scalar(None), Operand::Array(&b), &ctx());
+    assert_eq!(n.unwrap().null_count(), 4);
+    let n = float::remainder::<Float64Type, AnsiError>(
+        Operand::Scalar(None),
+        Operand::Array(&b),
+        &ctx(),
+    );
+    assert_eq!(n.unwrap().null_count(), 4);
+    let neg = float::unary(UnaryOp::Abs, &Float64Array::from(vec![Some(-0.0), None])).unwrap();
+    assert_eq!((neg.value(0).to_bits(), neg.null_count()), (0, 1));
+    let neg = float::unary(UnaryOp::Negate, &Float64Array::from(vec![2.5])).unwrap();
+    assert_eq!(neg.value(0), -2.5);
+}
+#[test]
+fn comparison_engine_errors() {
+    use arrow_array::StringArray;
+    use krishiv_kernels::compare::{BytesOperand, compare_bytes};
+    let a = dec(vec![Some(1)], 5, 0);
+    let b = dec(vec![Some(1)], 6, 1);
+    let e = compare::<_, Equal>(Operand::Array(&a), Operand::Array(&b), &ctx()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    let (x, y) = (
+        StringArray::from(vec!["a"]),
+        StringArray::from(vec!["a", "b"]),
+    );
+    let op = BytesOperand::Array(&x);
+    #[expect(clippy::clone_on_copy, reason = "exercises the manual Clone impl")]
+    let copy = op.clone();
+    let e = compare_bytes::<_, Equal>(copy, BytesOperand::Array(&y)).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    let e = compare_bytes::<_, Equal>(
+        BytesOperand::<arrow_array::types::Utf8Type>::Scalar(None),
+        BytesOperand::Scalar(None),
+    );
+    assert!(e.is_err());
 }
