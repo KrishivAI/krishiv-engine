@@ -87,6 +87,12 @@ pub struct Budgets {
     /// unsafe site is reviewed); `None` means not measured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unsafe_sites: Option<BTreeMap<String, u64>>,
+    /// Size in bytes of each Python wheel, keyed by its tags (P2-T103).
+    /// Measured and gated by `cargo xtask wheel-sizes` in the wheels
+    /// workflow, not by `budgets`; `--write-baseline` keeps the recorded
+    /// values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wheel_bytes: Option<BTreeMap<String, u64>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,6 +298,7 @@ mod tests {
             binary_bytes: bytes,
             clean_build_secs: None,
             unsafe_sites: None,
+            wheel_bytes: None,
         }
     }
 
@@ -299,6 +306,7 @@ mod tests {
     fn any_unsafe_growth_is_a_violation() {
         let with = |n: u64| Budgets {
             unsafe_sites: Some(BTreeMap::from([("k".to_owned(), n)])),
+            wheel_bytes: None,
             ..b(1, None)
         };
         assert!(compare(&with(2), &with(2)).unsafe_violations.is_empty());
@@ -317,6 +325,7 @@ mod tests {
         assert_eq!(compare(&b(1, None), &with(1)).unsafe_violations.len(), 0);
         let base = Budgets {
             unsafe_sites: Some(BTreeMap::new()),
+            wheel_bytes: None,
             ..b(1, None)
         };
         assert_eq!(compare(&base, &with(1)).unsafe_violations.len(), 1);

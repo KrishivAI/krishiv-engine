@@ -19,7 +19,7 @@ use xtask::layering;
 use xtask::policy::{self, DiffArgs};
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse]>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE | wheel-sizes DIR [--budgets FILE] [--write] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,6 +33,7 @@ fn main() -> ExitCode {
         ["golden", flags @ ..] => run_golden(flags),
         ["registry-coverage"] => registry_coverage::run(&workspace_root()),
         ["budgets", flags @ ..] => run_budgets(flags),
+        ["wheel-sizes", dir, flags @ ..] => run_wheel_sizes(Path::new(dir), flags),
         ["setup"] => dev::run_setup_full(&workspace_root(), false),
         ["setup", "--install"] => dev::run_setup_full(&workspace_root(), true),
         ["doctor"] => dev::run_doctor(&workspace_root()),
@@ -160,7 +161,12 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
         budgets::Mode::Check { build_time }
         | budgets::Mode::Measure { build_time }
         | budgets::Mode::WriteBaseline { build_time } => {
-            let (now, target_dir) = measure_budgets(&root, *build_time)?;
+            let (mut now, target_dir) = measure_budgets(&root, *build_time)?;
+            // Wheel sizes are measured by `wheel-sizes`, not here: keep the
+            // recorded ones.
+            if baseline_path.exists() {
+                now.wheel_bytes = read_budgets(&baseline_path)?.wheel_bytes;
+            }
             let json = serde_json::to_string_pretty(&now).map_err(|e| e.to_string())? + "\n";
             if matches!(mode, budgets::Mode::WriteBaseline { .. }) {
                 std::fs::write(&baseline_path, &json)
@@ -197,6 +203,75 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
         append_step_summary(note);
     }
     Ok(())
+}
+
+/// `wheel-sizes DIR [--budgets FILE] [--write]`: compares (or records) the
+/// size of every wheel in `DIR` with the `wheel_bytes` of `budgets.json`
+/// (or `FILE`) (P2-T103).
+fn run_wheel_sizes(dir: &Path, flags: &[&str]) -> Result<(), String> {
+    let (mut write, mut path) = (false, workspace_root().join("budgets.json"));
+    let mut it = flags.iter();
+    while let Some(f) = it.next() {
+        match *f {
+            "--write" => write = true,
+            "--budgets" => path = PathBuf::from(it.next().ok_or_else(|| USAGE.to_owned())?),
+            _ => return Err(USAGE.to_owned()),
+        }
+    }
+    let mut measured = std::collections::BTreeMap::new();
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+    for e in entries {
+        let e = e.map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".whl") {
+            continue;
+        }
+        let key = xtask::wheels::wheel_key(&name)
+            .ok_or_else(|| format!("not a wheel file name: {name}"))?;
+        let bytes = e
+            .metadata()
+            .map_err(|e| format!("cannot stat {name}: {e}"))?
+            .len();
+        if measured.insert(key.clone(), bytes).is_some() {
+            return Err(format!(
+                "two wheels with the tags {key} in {}",
+                dir.display()
+            ));
+        }
+    }
+    if measured.is_empty() {
+        return Err(format!("no wheels in {}", dir.display()));
+    }
+    let mut base = read_budgets(&path)?;
+    if write {
+        base.wheel_bytes = Some(measured);
+        let json = serde_json::to_string_pretty(&base).map_err(|e| e.to_string())? + "\n";
+        std::fs::write(&path, &json).map_err(|e| format!("cannot write budgets.json: {e}"))?;
+        println!("wrote {}", path.display());
+        return Ok(());
+    }
+    let cmp = xtask::wheels::compare(&base.wheel_bytes.unwrap_or_default(), &measured);
+    let summary = format!("## Wheel sizes\n\n{}", cmp.markdown);
+    println!("{summary}");
+    append_step_summary(&summary);
+    if cmp.violations.is_empty() {
+        return Ok(());
+    }
+    for v in &cmp.violations {
+        eprintln!("{v}");
+    }
+    if std::env::var("BUDGET_APPROVED").is_ok_and(|v| v == "1") {
+        let note = "Growth approved. Record the sizes: download the wheels, run `cargo xtask wheel-sizes DIR --write` and commit budgets.json.";
+        println!("{note}");
+        append_step_summary(note);
+        Ok(())
+    } else {
+        Err(
+            "wheel size budget exceeded; add the `budget-approved` label or set BUDGET_APPROVED=1"
+                .to_owned(),
+        )
+    }
 }
 
 /// Appends `text` to the GitHub job summary when running in Actions.
@@ -304,6 +379,7 @@ fn measure_budgets(root: &Path, build_time: bool) -> Result<(Budgets, PathBuf), 
         binary_bytes: Some(binary_bytes),
         clean_build_secs,
         unsafe_sites: Some(xtask::lint::unsafe_sites_per_crate(root)?),
+        wheel_bytes: None,
     };
     Ok((now, target_dir))
 }
