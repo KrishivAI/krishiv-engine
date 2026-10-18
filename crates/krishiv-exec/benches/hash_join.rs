@@ -28,7 +28,7 @@ use futures::StreamExt;
 use krishiv_exec::testing::{Batches, Scan};
 use krishiv_exec::{
     DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, HashJoin, HashJoinNode, JoinSpec, JoinType,
-    QueryContext, QueryId, QueryRunner, Scheduler, TokioExecutor, WorkloadClass,
+    QueryContext, QueryId, QueryRunner, Scheduler, TokioClock, TokioExecutor, WorkloadClass,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_types::batch::Batch;
@@ -81,10 +81,15 @@ fn run(
     plan: Arc<dyn ExecNode>,
     limit: Option<usize>,
 ) -> usize {
-    let root = TreePool::new(&MemoryConfig {
-        limit,
-        ..MemoryConfig::default()
-    });
+    // The pool's spill and abort waits on the caller's paused clock: they
+    // pass only while every task waits, never because the machine is slow.
+    let root = TreePool::with_clock(
+        &MemoryConfig {
+            limit,
+            ..MemoryConfig::default()
+        },
+        Arc::new(TokioClock),
+    );
     let query = QueryContext::new(
         QueryId(1),
         WorkloadClass::Batch,
@@ -105,6 +110,7 @@ fn run(
 fn bench(c: &mut Criterion) {
     let caller = tokio::runtime::Builder::new_current_thread()
         .enable_all()
+        .start_paused(true)
         .build()
         .expect("caller runtime");
     let runner = {
@@ -113,7 +119,7 @@ fn bench(c: &mut Criterion) {
     };
     let dir = std::env::temp_dir().join(format!("krishiv-bench-join-{}", std::process::id()));
     let manager = SpillManager::open(&SpillConfig {
-        dir,
+        dir: dir.clone(),
         ..SpillConfig::default()
     })
     .expect("spill dir");
@@ -139,6 +145,9 @@ fn bench(c: &mut Criterion) {
         });
     });
     g.finish();
+    drop(manager);
+    // Best effort: the scratch directory is empty once every file dropped.
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 criterion_group!(benches, bench);
