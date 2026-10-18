@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT k FROM (SELECT a AS k, count(*) AS n, max(b) AS m FROM t GROUP BY a)"
+---
+Aggregate [a#0], [a#0 AS k#3]
++- Scan spark_catalog.default.t [a#0]

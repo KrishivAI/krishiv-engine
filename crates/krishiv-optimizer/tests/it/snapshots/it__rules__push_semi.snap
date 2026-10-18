@@ -1,0 +1,11 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM t LEFT SEMI JOIN u ON t.a = u.a AND u.d = 'y' AND t.b = 'x' WHERE t.c > 1"
+---
+Join LeftSemi, (a#0 == a#3)
+:- Project [a#0]
+:  +- Filter ((c#2 > 1) and (b#1 == 'x'))
+:     +- Scan spark_catalog.default.t [a#0, b#1, c#2]
++- Project [a#3]
+   +- Filter (d#4 == 'y')
+      +- Scan spark_catalog.default.u [a#3, d#4]

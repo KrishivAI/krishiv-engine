@@ -1,0 +1,7 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT r FROM (SELECT rand() AS r FROM t) LIMIT 1
+---
+Limit 1
++- Project [rand() AS r#3]
+   +- Scan spark_catalog.default.t [a#0]

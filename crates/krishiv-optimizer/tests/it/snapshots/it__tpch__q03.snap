@@ -1,0 +1,19 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpch.rs
+expression: optimized.root().to_string()
+---
+Limit 10
++- Sort [revenue#33 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST], true
+   +- Aggregate [l_orderkey#17, o_orderdate#12, o_shippriority#15], [l_orderkey#17, sum((l_extendedprice#22 * (1 - l_discount#23))) AS revenue#33, o_orderdate#12, o_shippriority#15]
+      +- Project [o_orderdate#12, o_shippriority#15, l_orderkey#17, l_extendedprice#22, l_discount#23]
+         +- Join Inner, (l_orderkey#17 == o_orderkey#8)
+            :- Project [o_orderkey#8, o_orderdate#12, o_shippriority#15]
+            :  +- Join Inner, (c_custkey#0 == o_custkey#9)
+            :     :- Project [c_custkey#0]
+            :     :  +- Filter (c_mktsegment#6 == 'BUILDING')
+            :     :     +- Scan spark_catalog.default.customer [c_custkey#0, c_mktsegment#6]
+            :     +- Filter (o_orderdate#12 < DATE '1995-03-15')
+            :        +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12, o_shippriority#15]
+            +- Project [l_orderkey#17, l_extendedprice#22, l_discount#23]
+               +- Filter (l_shipdate#27 > DATE '1995-03-15')
+                  +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_shipdate#27]

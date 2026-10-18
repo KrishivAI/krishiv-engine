@@ -1,0 +1,15 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT t.a FROM t JOIN u ON t.a = u.a WHERE t.c > (SELECT count(*) FROM u u2 WHERE u2.d = t.b AND u2.a = u.a)
+---
+Project [a#0]
++- Filter (c#2 > scalar-subquery)
+   :  +- Aggregate [], [count(1) AS count(1)#7]
+   :     +- Project [a#5]
+   :        +- Filter ((d#6 == outer(b#1)) and (a#5 == outer(a#3)))
+   :           +- Shift +2
+   :              +- Scan spark_catalog.default.u [a#3, d#4] (shared #1)
+   +- Join Inner, (a#0 == a#3)
+      :- Scan spark_catalog.default.t [a#0, b#1, c#2]
+      +- Project [a#3]
+         +- Shared #1, printed above

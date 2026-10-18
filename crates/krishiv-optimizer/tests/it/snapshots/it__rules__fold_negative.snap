@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT a FROM t WHERE a > -(2) AND a < -(-2147483647 - 1)
+---
+Filter ((a#0 > -2) and (a#0 < (- -2147483648)))
++- Scan spark_catalog.default.t [a#0]

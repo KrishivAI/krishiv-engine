@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM t WHERE 'b' > 'a' AND 2L >= 2L AND 1.50 = 1.5 AND true AND a = a"
+---
+Filter (a#0 == a#0)
++- Scan spark_catalog.default.t [a#0]

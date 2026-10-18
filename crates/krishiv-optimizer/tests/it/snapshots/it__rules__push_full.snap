@@ -1,0 +1,10 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT t.a FROM t FULL JOIN u ON t.a = u.a AND t.b = 'x' WHERE t.c > 1"
+---
+Project [a#0]
++- Join LeftOuter, ((a#0 == a#3) and (b#1 == 'x'))
+   :- Project [a#0, b#1]
+   :  +- Filter (c#2 > 1)
+   :     +- Scan spark_catalog.default.t [a#0, b#1, c#2]
+   +- Scan spark_catalog.default.u [a#3]

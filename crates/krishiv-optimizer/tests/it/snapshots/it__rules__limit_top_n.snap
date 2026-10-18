@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a, a + 1 AS x FROM t ORDER BY a LIMIT 4"
+---
+Limit 4
++- Sort [a#0 ASC NULLS FIRST], true
+   +- Project [a#0, (a#0 + 1) AS x#3]
+      +- Scan spark_catalog.default.t [a#0]

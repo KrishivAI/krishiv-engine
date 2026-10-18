@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM t WHERE a > CAST('x' AS INT) OR a > TRY_CAST('x' AS INT)"
+---
+Filter (a#0 > CAST('x' AS INT))
++- Scan spark_catalog.default.t [a#0]

@@ -8,5 +8,19 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[dependencies]
+arrow-array.workspace = true
+arrow-schema.workspace = true
+krishiv-common = { path = "../krishiv-common" }
+krishiv-kernels = { path = "../krishiv-kernels" }
+krishiv-plan = { path = "../krishiv-plan" }
+krishiv-types = { path = "../krishiv-types" }
+
+[dev-dependencies]
+insta.workspace = true
+krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
+krishiv-sql = { path = "../krishiv-sql" }
+serde_json = { workspace = true, features = ["std"] }
+
 [lints]
 workspace = true

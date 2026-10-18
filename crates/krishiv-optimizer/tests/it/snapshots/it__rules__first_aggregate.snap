@@ -1,0 +1,7 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT k, f FROM (SELECT a AS k, first(b) AS f FROM t GROUP BY a) WHERE k > 1"
+---
+Filter (k#3 > 1)
++- Aggregate [a#0], [a#0 AS k#3, first(b#1) AS f#4]
+   +- Scan spark_catalog.default.t [a#0, b#1]

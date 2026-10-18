@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT a FROM t WHERE (CASE WHEN a IS NULL THEN 1 WHEN false THEN 2 END) IS NULL
+---
+Filter isnull(CASE WHEN isnull(a#0) THEN 1 END)
++- Scan spark_catalog.default.t [a#0]
