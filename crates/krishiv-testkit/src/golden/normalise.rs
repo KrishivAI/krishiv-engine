@@ -104,7 +104,9 @@ impl Masker {
 }
 
 /// Java's `\s`: the ASCII whitespace `[ \t\n\x0B\f\r]`.
-const JAVA_SPACE: [char; 6] = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
+/// Java's `\\s`: ASCII whitespace only. Spark trims with it, so a trailing
+/// U+00A0 or U+3000 is kept.
+pub(crate) const JAVA_SPACE: [char; 6] = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
 
 /// `replaceAll("\\s+$", "")`: Java's `$` also matches before a final line terminator, so a
 /// trailing `U+0085`, `U+2028` or `U+2029` stays and the whitespace before it goes.
@@ -288,7 +290,7 @@ ValueError: bad\nafter\nTraceback (most recent call last):\n  File \"b.py\"\n";
                 if let Expected::Rows(out) = s.expected {
                     assert_eq!(
                         normalize_test_results(&out),
-                        out.trim_end(),
+                        out.trim_end_matches(JAVA_SPACE),
                         "{}",
                         pair.name
                     );
@@ -296,5 +298,13 @@ ValueError: bad\nafter\nTraceback (most recent call last):\n  File \"b.py\"\n";
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn trailing_non_ascii_whitespace_is_kept_like_java() {
+        // Java `\s` is ASCII-only: Spark keeps a trailing NBSP / ideographic space.
+        assert_eq!(normalize_test_results("a\u{a0}"), "a\u{a0}");
+        assert_eq!(normalize_test_results("a\u{3000}\n"), "a\u{3000}");
+        assert_eq!(normalize_test_results("a \t\n"), "a");
     }
 }

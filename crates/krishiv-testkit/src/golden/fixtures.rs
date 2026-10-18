@@ -355,7 +355,8 @@ mod tests {
                 .collect();
             assert_eq!(
                 printed.join("\n"),
-                golden_output("limit", query)?.trim_end(),
+                golden_output("limit", query)?
+                    .trim_end_matches(crate::golden::normalise::JAVA_SPACE),
                 "{query}"
             );
         }
