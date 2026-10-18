@@ -10,3 +10,29 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-buffer.workspace = true
+arrow-schema.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+futures = { workspace = true, features = ["alloc", "std"] }
+krishiv-common = { path = "../krishiv-common" }
+krishiv-memory = { path = "../krishiv-memory" }
+krishiv-types = { path = "../krishiv-types" }
+object_store.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+arrow-buffer.workspace = true
+criterion.workspace = true
+proptest = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
+
+[[bench]]
+name = "io"
+harness = false
