@@ -59,7 +59,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use krishiv_common::secret::{OptionValue, SecretValue, UrlPart};
+use krishiv_common::secret::{OptionValue, SecretUrl, SecretValue, UrlPart};
 use twox_hash::XxHash3_128;
 
 use crate::{BoundColumn, Scan};
@@ -861,10 +861,18 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(data_type.precision());
                 self.u8(data_type.scale());
             }
-            Literal::String(s) => {
-                self.u8(10);
-                self.str(s);
-            }
+            // A URL's credentials enter as keyed fingerprints, like an
+            // option's (see the module docs).
+            Literal::String(s) => match SecretUrl::parse(s) {
+                Some(url) => {
+                    self.u8(17);
+                    self.option_value(&OptionValue::Url(url));
+                }
+                None => {
+                    self.u8(10);
+                    self.str(s);
+                }
+            },
             Literal::Binary(b) => {
                 self.u8(11);
                 self.bytes(b);

@@ -142,15 +142,17 @@ fn options_print_as_typed_values() {
 }
 
 #[test]
-fn sql_text_is_redacted_as_free_text() {
+fn sql_text_and_literal_urls_never_print() {
     let plan = LogicalPlan::new(PlanNode::Sql {
         query: "select * from t where password = 'hunter2'".to_owned(),
         args: crate::SqlArgs::None,
     });
-    let shown = plan.to_string();
+    assert_eq!(plan.to_string(), "Sql [42 bytes]\n");
+    let url = crate::Expr::from(crate::Literal::String("https://u:hunter2@h/".to_owned()));
+    let shown = LogicalPlan::table(["t"]).project(vec![url]).to_string();
     assert!(!shown.contains("hunter2"), "{shown}");
     assert!(
-        shown.starts_with("Sql 'select * from t where password = "),
+        shown.contains("'https://u:*********(redacted)@h/'"),
         "{shown}"
     );
 }

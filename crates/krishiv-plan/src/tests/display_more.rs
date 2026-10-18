@@ -43,7 +43,7 @@ fn every_relation_prints_its_fields() {
                 query: "select ?".to_owned(),
                 args: SqlArgs::Positional(vec![col("a")]),
             },
-            "Sql 'select ?', [a]",
+            "Sql [8 bytes], [a]",
         ),
         (
             PlanNode::Sql {
@@ -53,7 +53,7 @@ fn every_relation_prints_its_fields() {
                     ("y".to_owned(), col("b")),
                 ])),
             },
-            "Sql 'select :x', {x = a, y = b}",
+            "Sql [9 bytes], {x = a, y = b}",
         ),
         (
             PlanNode::Scan(Scan {

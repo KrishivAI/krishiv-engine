@@ -17,7 +17,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter, Write};
 
-use krishiv_common::redact::redact;
+use krishiv_common::secret::SecretUrl;
 
 use crate::walk::{self, Node};
 use crate::{
@@ -166,7 +166,9 @@ impl Display for NodeLine<'_> {
         match &self.0.node {
             PlanNode::Read(source) => write!(f, "Read {}", SourceText(source)),
             PlanNode::Sql { query, args } => {
-                write!(f, "Sql '{}'", Escaped(&redact(query)))?;
+                // Query text reaches sinks only as `RedactedSql`, which the
+                // SQL front end builds from tokens; the printer shows none.
+                write!(f, "Sql [{} bytes]", query.len())?;
                 match args {
                     SqlArgs::None => Ok(()),
                     SqlArgs::Positional(v) => write!(f, ", [{}]", List(v)),
@@ -632,7 +634,11 @@ impl Display for Literal {
                 unscaled,
                 data_type,
             } => write_decimal(f, *unscaled, data_type.scale()),
-            Self::String(s) => write!(f, "'{}'", Escaped(s)),
+            // A URL's credentials never print, even in a literal.
+            Self::String(s) => match SecretUrl::parse(s) {
+                Some(url) => write!(f, "'{}'", Escaped(&url.to_string())),
+                None => write!(f, "'{}'", Escaped(s)),
+            },
             Self::Binary(b) => {
                 f.write_str("X'")?;
                 b.iter().try_for_each(|byte| write!(f, "{byte:02X}"))?;

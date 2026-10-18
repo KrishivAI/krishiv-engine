@@ -93,7 +93,7 @@ impl ParserOptions {
 /// `INVALID_IDENTIFIER`, `FAILED_TO_PARSE_TOO_COMPLEX` or
 /// `SYNTAX_DISCONTINUED.BANG_EQUALS_NOT`.
 pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, ParseError> {
-    parser::parse_query(sql, *options)
+    parser::parse_query(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
 #[cfg(test)]

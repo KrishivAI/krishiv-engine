@@ -82,8 +82,13 @@ impl RedactedSql {
     /// `sql` with every [`Mark`] applied. Marks out of range, inside an
     /// earlier mark or not on character boundaries are widened or skipped
     /// so that no part of a marked range survives.
+    ///
+    /// Only the SQL front end's token redactor (`krishiv_sql::redact_sql`)
+    /// calls this: the marks must be every secret of the text, which only
+    /// the lexer knows. `cargo xtask source-guard` rejects any other caller.
+    #[doc(hidden)]
     #[must_use]
-    pub fn from_marks(sql: &str, mut marks: Vec<Mark>) -> Self {
+    pub fn from_marks_unchecked(sql: &str, mut marks: Vec<Mark>) -> Self {
         let range = |m: &Mark| match m {
             Mark::Secret(r) | Mark::FreeText(r) => r.clone(),
         };
@@ -396,7 +401,7 @@ mod tests {
     #[test]
     fn marks_replace_secrets_and_fragments_follow() {
         let sql = "SELECT 'Canary-7f3a9c' /* token=Canary-7f3a9c */ FROM t é";
-        let r = RedactedSql::from_marks(
+        let r = RedactedSql::from_marks_unchecked(
             sql,
             vec![
                 Mark::FreeText(23..48),
@@ -414,7 +419,7 @@ mod tests {
         assert_eq!(r.fragment(10..12), REDACTED_MARK);
         assert_eq!(r.fragment(49..55), "FROM t");
         assert_eq!(r.fragment(56..99), "é");
-        let plain = RedactedSql::from_marks("SELECT 1", Vec::new());
+        let plain = RedactedSql::from_marks_unchecked("SELECT 1", Vec::new());
         assert_eq!(plain.fragment(7..8), "1");
     }
 

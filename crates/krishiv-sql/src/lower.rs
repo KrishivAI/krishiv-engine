@@ -43,7 +43,7 @@ type R<T> = Result<T, ParseError>;
 /// # Errors
 /// A [`ParseError`]: the parser's, or a lowering error with its span.
 pub fn parse_and_lower(sql: &str, options: &ParserOptions, source: SourceId) -> R<Plan> {
-    lower(&parse_query(sql, options)?, source)
+    lower(&parse_query(sql, options)?, source).map_err(|e| e.redacted_in(sql))
 }
 
 /// Lowers `query` into an unresolved plan whose spans index `source`.

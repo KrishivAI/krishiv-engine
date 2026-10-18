@@ -12,7 +12,8 @@
 //! | `!` for `NOT` in `a ! IN (...)` and similar | `SYNTAX_DISCONTINUED.BANG_EQUALS_NOT` |
 //!
 //! A syntax error never echoes the text of a string literal (it may be a
-//! secret): the token is described instead.
+//! secret): the token is described instead. An error at a secret that is
+//! not a string (an unquoted password value) has its parameters redacted.
 
 use krishiv_common::error::{
     FailedToParseTooComplex, InvalidIdentifier, KrishivError, ParseEmptyStatement,
@@ -35,6 +36,26 @@ impl PartialEq for ParseError {
     /// The error and its position (unlike [`Span`] equality alone).
     fn eq(&self, other: &Self) -> bool {
         self.error == other.error && self.span.range() == other.span.range()
+    }
+}
+
+impl ParseError {
+    /// This error with its message parameters redacted when its span
+    /// touches a secret of `sql` (a token at a password echoes it).
+    #[must_use]
+    pub(crate) fn redacted_in(self, sql: &str) -> Self {
+        let (start, end) = (self.span.start, self.span.end.max(self.span.start + 1));
+        let secret = crate::redact::secret_ranges(sql)
+            .iter()
+            .any(|r| r.start < end && start < r.end);
+        if secret {
+            Self {
+                error: self.error.redacted(),
+                ..self
+            }
+        } else {
+            self
+        }
     }
 }
 

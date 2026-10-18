@@ -6,6 +6,8 @@
 //! lie within the input; and a tree must pass the span checks and parse to
 //! an equal tree with other whitespace and comments. A tree is then
 //! lowered (a plan or an error, never a panic), and the text is redacted.
+//! A redaction oracle writes a secret built from the input into every
+//! option form: it never survives `redact_sql` or reaches an error.
 #![no_main]
 
 use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
@@ -46,7 +48,38 @@ fuzz_target!(|data: &[u8]| {
         Err(e) => assert!(e.span.end <= sql.len()),
     }
     let _ = redact_sql(&sql).fragment(0..sql.len());
+    redaction_oracle(rest);
 });
+
+/// A secret of at least 8 letters and digits from `data`, written into
+/// option values in every form, is hidden by `redact_sql` and absent from
+/// parse and lowering errors.
+fn redaction_oracle(data: &[u8]) {
+    let secret: String = data
+        .iter()
+        .map(|b| char::from(b'a' + b % 26))
+        .take(24)
+        .collect();
+    if secret.len() < 8 {
+        return;
+    }
+    let secret = format!("Zq{secret}");
+    for template in [
+        "SELECT a FROM t WITH ('password' = '{s}')",
+        "SELECT a FROM t WITH (password = {s})",
+        "SELECT a FROM t WITH (password '{s}' '{s}', k = 'v')",
+        "SELECT a FROM t WITH (fs.s3a.secret.key = 'x' '{s}'",
+        "SELECT a FROM t WITH ('url' = 'https://u:{s}@h/')",
+        "SET spark.hadoop.fs.s3a.secret.key={s}",
+        "SELECT a FROM t WITH (password = {s} {s})",
+    ] {
+        let sql = template.replace("{s}", &secret);
+        assert!(!redact_sql(&sql).as_str().contains(&secret), "{sql}");
+        if let Err(e) = parse_query(&sql, &ParserOptions::default()) {
+            assert!(!format!("{e} {e:?}").contains(&secret), "{sql}");
+        }
+    }
+}
 
 /// The deepest parenthesis nesting of `sql`, plus its longest run of
 /// prefix operators (each nests the expression after it).

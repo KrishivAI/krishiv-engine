@@ -23,11 +23,39 @@ use std::ops::Range;
 use krishiv_common::redact::{Mark, RedactedSql};
 use krishiv_common::secret::{SecretUrl, UrlPart, is_sensitive_key};
 
-use crate::lexer::{Sym, Token, TokenKind, is_keyword, tokenize};
+use crate::lexer::{Sym, Token, TokenKind, is_keyword, tokenize, unescape_string, unquote_ident};
 
 /// `sql` with its secrets replaced (see the module docs).
 #[must_use]
 pub fn redact_sql(sql: &str) -> RedactedSql {
+    RedactedSql::from_marks_unchecked(sql, marks(sql))
+}
+
+/// The byte ranges of `sql` that [`redact_sql`] hides as secrets.
+pub(crate) fn secret_ranges(sql: &str) -> Vec<Range<usize>> {
+    marks(sql)
+        .into_iter()
+        .filter_map(|m| match m {
+            Mark::Secret(r) => Some(r),
+            Mark::FreeText(_) => None,
+        })
+        .collect()
+}
+
+/// What an option list is reading.
+enum State {
+    /// The key, parts so far.
+    Key(String),
+    /// The value of a key; `Some(start)` once a value token was seen.
+    Value {
+        sensitive: bool,
+        start: Option<usize>,
+        end: usize,
+        reference: bool,
+    },
+}
+
+fn marks(sql: &str) -> Vec<Mark> {
     let toks: Vec<Token> = tokenize(sql);
     let mut marks = Vec::new();
     let code: Vec<&Token> = toks
@@ -41,17 +69,29 @@ pub fn redact_sql(sql: &str) -> RedactedSql {
         })
         .collect();
     let text = |t: &Token| t.span.text(sql);
-    let mut depth = 0_usize;
-    // The depth inside an option list, the key read so far, whether a
-    // value comes next, and the depth of a `secret(...)` to skip.
-    let mut list: Option<usize> = None;
-    let mut key = String::new();
-    let mut skip: Option<usize> = None;
-    for (i, t) in code.iter().enumerate() {
+    for t in &code {
         url_marks(sql, t, &mut marks);
+    }
+    set_value(sql, &code, &mut marks);
+    let mut depth = 0_usize;
+    // The depth of the option list being read, and what it is reading.
+    let mut list: Option<usize> = None;
+    let mut state = State::Key(String::new());
+    let finish = |state: &State, marks: &mut Vec<Mark>| {
+        if let State::Value {
+            sensitive: true,
+            start: Some(start),
+            end,
+            reference: false,
+        } = *state
+        {
+            marks.push(Mark::Secret(start..end));
+        }
+    };
+    for (i, t) in code.iter().enumerate() {
+        let at_list = list == Some(depth);
         match t.kind {
             TokenKind::Sym(Sym::LParen) => {
-                depth += 1;
                 let opener = i
                     .checked_sub(1)
                     .and_then(|j| code.get(j))
@@ -61,72 +101,136 @@ pub fn redact_sql(sql: &str) -> RedactedSql {
                             .iter()
                             .any(|k| is_keyword(text(p), k))
                     });
+                depth += 1;
                 if list.is_none() && opener {
                     list = Some(depth);
-                    key.clear();
+                    state = State::Key(String::new());
+                    continue;
                 }
-                continue;
             }
-            TokenKind::Sym(Sym::RParen) => {
-                if list == Some(depth) {
-                    list = None;
-                }
-                if skip == Some(depth) {
-                    skip = None;
-                }
+            TokenKind::Sym(Sym::RParen) if at_list => {
+                finish(&state, &mut marks);
+                list = None;
                 depth = depth.saturating_sub(1);
                 continue;
             }
+            TokenKind::Sym(Sym::RParen) => depth = depth.saturating_sub(1),
+            TokenKind::Sym(Sym::Comma) if at_list => {
+                finish(&state, &mut marks);
+                state = State::Key(String::new());
+                continue;
+            }
             _ => {}
         }
-        if list != Some(depth) || skip.is_some() {
+        if list.is_none() {
             continue;
         }
-        match t.kind {
-            TokenKind::Sym(Sym::Comma) => key.clear(),
-            TokenKind::Sym(Sym::Eq) => {}
-            TokenKind::Sym(Sym::Dot) => key.push('.'),
-            TokenKind::Word | TokenKind::QuotedIdent
-                if is_keyword(text(t), "SECRET")
-                    && code
-                        .get(i + 1)
-                        .is_some_and(|n| n.kind == TokenKind::Sym(Sym::LParen)) =>
-            {
-                skip = Some(depth + 1);
+        let key_part = matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent)
+            || t.kind.is_string_like()
+            || t.kind == TokenKind::Sym(Sym::Dot);
+        match &mut state {
+            State::Key(key) if at_list && t.kind == TokenKind::Sym(Sym::Eq) => {
+                state = State::Value {
+                    sensitive: sensitive(key),
+                    start: None,
+                    end: 0,
+                    reference: false,
+                };
             }
-            _ if value_follows(&code, i, &key) => {
-                if is_sensitive_key(&key) {
-                    marks.push(Mark::Secret(content(sql, t)));
+            State::Key(key) if at_list && key_part && !value_starts(&code, i, key) => {
+                key.push_str(&key_text(sql, t));
+            }
+            State::Key(key) if at_list => {
+                // A value written without `=`.
+                state = State::Value {
+                    sensitive: sensitive(key),
+                    start: Some(t.span.start),
+                    end: t.span.end,
+                    reference: is_reference(sql, &code, i),
+                };
+            }
+            State::Value {
+                start,
+                end,
+                reference,
+                ..
+            } => {
+                if start.is_none() {
+                    *start = Some(t.span.start);
+                    *reference = at_list && is_reference(sql, &code, i);
                 }
-                key.clear();
+                *end = t.span.end;
             }
-            TokenKind::Word | TokenKind::QuotedIdent => key.push_str(&unquote(sql, t)),
-            _ if t.kind.is_string_like() => key.push_str(&unquote(sql, t)),
-            _ => {}
+            State::Key(_) => {}
         }
     }
-    RedactedSql::from_marks(sql, marks)
+    // An unterminated list: its last value runs to the end.
+    finish(&state, &mut marks);
+    marks
 }
 
-/// Whether token `i` is an option's value: the key is complete and `i`
-/// follows `=`, or is a literal after the key.
-fn value_follows(code: &[&Token], i: usize, key: &str) -> bool {
-    if key.is_empty() {
-        return false;
+/// `SET key = value` with a sensitive key: the value (raw text to the end
+/// of the statement) is a secret.
+fn set_value(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
+    let Some(first) = code.first() else {
+        return;
+    };
+    if first.kind != TokenKind::Word || !is_keyword(first.span.text(sql), "SET") {
+        return;
     }
-    let after_eq = i
-        .checked_sub(1)
-        .is_some_and(|j| code[j].kind == TokenKind::Sym(Sym::Eq));
-    let literal = matches!(code[i].kind, TokenKind::Number(_)) || code[i].kind.is_string_like();
-    let key_ended = i
-        .checked_sub(1)
-        .is_some_and(|j| !matches!(code[j].kind, TokenKind::Sym(Sym::Dot)));
-    after_eq || (literal && key_ended)
+    let Some(eq) = code.iter().position(|t| t.kind == TokenKind::Sym(Sym::Eq)) else {
+        return;
+    };
+    let key: String = code[1..eq].iter().map(|t| key_text(sql, t)).collect();
+    let end = code
+        .iter()
+        .rposition(|t| t.kind != TokenKind::Sym(Sym::Semi))
+        .map_or(sql.len(), |j| code[j].span.end);
+    let start = code.get(eq + 1).map_or(end, |t| t.span.start);
+    if sensitive(&key) && start < end {
+        marks.push(Mark::Secret(start..end));
+    }
 }
 
-/// The quoted text of a string or identifier token, without its quotes.
-fn unquote(sql: &str, t: &Token) -> String {
-    sql[content(sql, t)].to_owned()
+/// Whether a key names a secret, its escapes decoded or not (fail-safe).
+fn sensitive(key: &str) -> bool {
+    is_sensitive_key(key)
+}
+
+/// A key part's text: identifiers unquoted, strings unescaped (both the
+/// decoded and the written form, so an escaped key cannot hide).
+fn key_text(sql: &str, t: &Token) -> String {
+    let raw = t.span.text(sql);
+    match t.kind {
+        TokenKind::QuotedIdent => unquote_ident(raw),
+        TokenKind::Sym(Sym::Dot) => ".".to_owned(),
+        k if k.is_string_like() => {
+            let decoded = unescape_string(raw, true);
+            let plain = unescape_string(raw, false);
+            if decoded == plain {
+                decoded
+            } else {
+                format!("{decoded}{plain}")
+            }
+        }
+        _ => raw.to_owned(),
+    }
+}
+
+/// Whether token `i` starts a value written without `=`: any token but a
+/// dot right after a complete key (`password 'x'`, `password x`).
+fn value_starts(code: &[&Token], i: usize, key: &str) -> bool {
+    let dot = |j: usize| code[j].kind == TokenKind::Sym(Sym::Dot);
+    !key.is_empty() && !dot(i) && i.checked_sub(1).is_some_and(|j| !dot(j))
+}
+
+/// Whether the value at token `i` is a `secret('scope', 'key')` reference.
+fn is_reference(sql: &str, code: &[&Token], i: usize) -> bool {
+    matches!(code[i].kind, TokenKind::Word | TokenKind::QuotedIdent)
+        && is_keyword(code[i].span.text(sql), "SECRET")
+        && code
+            .get(i + 1)
+            .is_some_and(|n| n.kind == TokenKind::Sym(Sym::LParen))
 }
 
 /// The range of a token's content: inside its quotes for strings and

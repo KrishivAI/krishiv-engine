@@ -7,8 +7,9 @@ use krishiv_types::{DataType, DecimalType};
 ///
 /// Equality compares floating-point values by their bits, so `NaN` equals
 /// itself and `0.0` differs from `-0.0`: two literals are equal exactly
-/// when they are the same literal.
-#[derive(Debug, Clone)]
+/// when they are the same literal. A string holding a URL with credentials
+/// never prints them, through `Display` or `Debug` (ADR 0038).
+#[derive(Clone)]
 #[non_exhaustive]
 pub enum Literal {
     /// `NULL`: of the given type, or untyped (Spark's `void`) when `None`.
@@ -64,6 +65,49 @@ pub enum Literal {
         /// The trailing field; equal to `start` for a single-field type.
         end: DayTimeField,
     },
+}
+
+impl std::fmt::Debug for Literal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Null(t) => f.debug_tuple("Null").field(t).finish(),
+            Self::Boolean(v) => f.debug_tuple("Boolean").field(v).finish(),
+            Self::Byte(v) => f.debug_tuple("Byte").field(v).finish(),
+            Self::Short(v) => f.debug_tuple("Short").field(v).finish(),
+            Self::Integer(v) => f.debug_tuple("Integer").field(v).finish(),
+            Self::Long(v) => f.debug_tuple("Long").field(v).finish(),
+            Self::Float(v) => f.debug_tuple("Float").field(v).finish(),
+            Self::Double(v) => f.debug_tuple("Double").field(v).finish(),
+            Self::Decimal {
+                unscaled,
+                data_type,
+            } => f
+                .debug_struct("Decimal")
+                .field("unscaled", unscaled)
+                .field("data_type", data_type)
+                .finish(),
+            Self::String(s) => match krishiv_common::secret::SecretUrl::parse(s) {
+                Some(url) => f.debug_tuple("String").field(&url).finish(),
+                None => f.debug_tuple("String").field(s).finish(),
+            },
+            Self::Binary(v) => f.debug_tuple("Binary").field(v).finish(),
+            Self::Date(v) => f.debug_tuple("Date").field(v).finish(),
+            Self::Timestamp(v) => f.debug_tuple("Timestamp").field(v).finish(),
+            Self::TimestampNtz(v) => f.debug_tuple("TimestampNtz").field(v).finish(),
+            Self::YearMonthInterval { months, start, end } => f
+                .debug_struct("YearMonthInterval")
+                .field("months", months)
+                .field("start", start)
+                .field("end", end)
+                .finish(),
+            Self::DayTimeInterval { micros, start, end } => f
+                .debug_struct("DayTimeInterval")
+                .field("micros", micros)
+                .field("start", start)
+                .field("end", end)
+                .finish(),
+        }
+    }
 }
 
 /// A field of a year-month interval type (Spark's `YearMonthIntervalType`).
