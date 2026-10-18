@@ -1494,6 +1494,7 @@ dependencies = [
  "arrow-array",
  "arrow-buffer",
  "arrow-schema",
+ "arrow-select",
  "codspeed-criterion-compat",
  "krishiv-common",
  "libm",
