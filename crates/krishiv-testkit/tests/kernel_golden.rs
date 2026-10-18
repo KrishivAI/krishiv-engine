@@ -33,6 +33,8 @@ fn literal_statements_match_spark() -> R {
         ("nonansi/timestamp.sql.out", false),
         ("datetime-special.sql.out", true),
         ("datetime-legacy.sql.out", true),
+        ("math.sql.out", true),
+        ("nonansi/math.sql.out", false),
     ] {
         let t = run_golden(&std::fs::read_to_string(dir.join(file))?, ansi)?;
         writeln!(

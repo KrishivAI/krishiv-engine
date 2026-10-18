@@ -93,6 +93,7 @@ foldhash = { version = "0.2", default-features = false }
 md5 = { package = "md-5", version = "0.11", default-features = false }
 sha1 = { version = "0.11", default-features = false }
 sha2 = { version = "0.11", default-features = false }
+libm = { version = "0.2", default-features = false }
 xxhash-rust = { version = "0.8", default-features = false }
 twox-hash = { version = "2.1", default-features = false }
 crossbeam-deque = { version = "0.8.8", default-features = false }

@@ -15,6 +15,7 @@
 
 mod datetime;
 pub mod hash;
+mod math;
 mod strings;
 mod zone;
 
@@ -139,6 +140,47 @@ pub const FUNCTIONS: &[&str] = &[
     "now",
     "to_date",
     "to_timestamp",
+    // P2-T026: math functions.
+    "round",
+    "bround",
+    "ceil",
+    "ceiling",
+    "floor",
+    "sqrt",
+    "cbrt",
+    "exp",
+    "expm1",
+    "ln",
+    "log",
+    "log10",
+    "log2",
+    "log1p",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "sinh",
+    "cosh",
+    "tanh",
+    "asinh",
+    "acosh",
+    "atanh",
+    "cot",
+    "csc",
+    "sec",
+    "degrees",
+    "radians",
+    "rint",
+    "sign",
+    "signum",
+    "pow",
+    "power",
+    "atan2",
+    "hypot",
+    "pi",
+    "e",
 ];
 
 /// The outcome of one cell.
@@ -183,6 +225,8 @@ enum Node {
     Interval(datetime::IntervalVal),
     /// A datetime function (`datetime`) with its result type.
     Dt(datetime::DtFn, Vec<Node>, DataType),
+    /// A math function (`math`) with its result type.
+    Math(math::MathFn, Vec<Node>, DataType),
 }
 
 /// Binary arithmetic operators.
@@ -204,7 +248,8 @@ impl Node {
             | Self::Arith { ty: t, .. }
             | Self::Str(_, _, t)
             | Self::Dt(_, _, t)
-            | Self::Hash(_, _, t) => t.clone(),
+            | Self::Hash(_, _, t)
+            | Self::Math(_, _, t) => t.clone(),
             Self::Interval(datetime::IntervalVal::YearMonth(_)) => {
                 DataType::Interval(arrow_schema::IntervalUnit::YearMonth)
             }
@@ -394,6 +439,9 @@ impl Binder<'_> {
             return node;
         }
         if let Some(node) = self.hash_function(&name, &args) {
+            return node;
+        }
+        if let Some(node) = self.math_function(&name, &args) {
             return node;
         }
         let cast_to = match name.as_str() {
@@ -925,6 +973,7 @@ impl Evaluator<'_> {
             }
             Node::Interval(v) => self.interval_array(*v),
             Node::Dt(f, args, _) => self.datetime_fn(*f, args),
+            Node::Math(f, args, _) => self.math_fn(*f, args),
         }
     }
 
@@ -1808,8 +1857,8 @@ mod tests {
             error("DIVIDE_BY_ZERO", "other text", "execution"),
         ));
         not_run(cell(
-            "sin",
-            "SELECT sin(1)",
+            "factorial",
+            "SELECT factorial(1)",
             on,
             rows("double", Value::Null),
         ));
@@ -1822,7 +1871,12 @@ mod tests {
         ));
         not_run(cell("+", "SELECT 1 +", on, rows("int", json!(1))));
         not_run(cell("+", "SELECT a + 1 FROM t", on, rows("int", json!(1))));
-        not_run(cell("+", "SELECT 1 + sin(1)", on, rows("double", json!(1))));
+        not_run(cell(
+            "+",
+            "SELECT 1 + factorial(1)",
+            on,
+            rows("double", json!(1)),
+        ));
         not_run(cell("+", "SELECT 1 + rand()", on, rows("double", json!(1))));
         not_run(cell("+", "SELECT '1' div 2", off, rows("bigint", json!(0))));
         not_run(cell("+", "SELECT 1.5D div 2", on, rows("bigint", json!(0))));
@@ -2082,6 +2136,123 @@ mod tests {
     }
 
     #[test]
+    fn math_functions_run_in_every_shape() {
+        let on = Mode::AnsiOn;
+        let off = Mode::AnsiOff;
+        let dbl = |v: f64| json!({ "f64": format!("{:016x}", v.to_bits()), "repr": v.to_string() });
+        let dec = |scale: i64, unscaled: &str| json!({ "scale": scale, "unscaled": unscaled });
+        for (f, sql, ty, want) in [
+            ("sqrt", "SELECT sqrt(4)", "double", dbl(2.0)),
+            ("sqrt", "SELECT sqrt('9')", "double", dbl(3.0)),
+            ("pow", "SELECT pow(2, 10)", "double", dbl(1024.0)),
+            ("log", "SELECT log(2, 8)", "double", dbl(3.0)),
+            ("ln", "SELECT ln(0)", "double", Value::Null),
+            ("pi", "SELECT pi()", "double", dbl(std::f64::consts::PI)),
+            ("round", "SELECT round(2.5, 0)", "decimal(2,0)", dec(0, "3")),
+            (
+                "bround",
+                "SELECT bround(2.5, 0)",
+                "decimal(2,0)",
+                dec(0, "2"),
+            ),
+            ("round", "SELECT round(15, -1)", "int", json!(20)),
+            (
+                "round",
+                "SELECT round(CAST(2.675 AS DOUBLE), 2)",
+                "double",
+                dbl(2.68),
+            ),
+            (
+                "round",
+                "SELECT round(CAST(2.675 AS FLOAT), 2)",
+                "float",
+                json!({ "f32": format!("{:08x}", 2.67_f32.to_bits()) }),
+            ),
+            (
+                "ceil",
+                "SELECT ceil(3.1411, 3)",
+                "decimal(5,3)",
+                dec(3, "3142"),
+            ),
+            (
+                "floor",
+                "SELECT floor(CAST(12345 AS INT), -2)",
+                "decimal(11,0)",
+                dec(0, "12300"),
+            ),
+            ("floor", "SELECT floor(-1.5D)", "bigint", json!(-2)),
+            ("ceil", "SELECT ceil(7)", "bigint", json!(7)),
+            (
+                "ceil",
+                "SELECT ceil(CAST(1.5 AS DECIMAL(10,2)))",
+                "decimal(9,0)",
+                dec(0, "2"),
+            ),
+            (
+                "ceil",
+                "SELECT ceil(1.1D, 1)",
+                "decimal(17,1)",
+                dec(1, "11"),
+            ),
+            (
+                "floor",
+                "SELECT floor('1', 3)",
+                "decimal(24,3)",
+                dec(3, "1000"),
+            ),
+        ] {
+            let outcome = cell(f, sql, on, rows(ty, want));
+            assert_eq!(outcome, CellOutcome::Pass, "{sql}");
+        }
+        // Legacy mode: tinyint overflow wraps.
+        assert_eq!(
+            cell(
+                "round",
+                "SELECT round(CAST(127 AS TINYINT), -1)",
+                off,
+                rows("tinyint", json!(-126))
+            ),
+            CellOutcome::Pass
+        );
+        for (f, sql, want) in [
+            (
+                "sqrt",
+                "SELECT sqrt(4)",
+                rows(
+                    "double",
+                    json!({ "f64": format!("{:016x}", 3.0_f64.to_bits()) }),
+                ),
+            ),
+            ("round", "SELECT round(15, -1)", rows("int", json!(10))),
+        ] {
+            let outcome = cell(f, sql, on, want);
+            assert!(
+                matches!(outcome, CellOutcome::Fail(_)),
+                "{sql}: {outcome:?}"
+            );
+        }
+        for (f, sql) in [
+            ("round", "SELECT round(2.5, NULL)"),
+            ("round", "SELECT round(true, 0)"),
+            ("round", "SELECT round(2.5, 'x')"),
+            ("sqrt", "SELECT sqrt(true)"),
+            ("sqrt", "SELECT sqrt()"),
+            ("pi", "SELECT pi(1)"),
+            ("pow", "SELECT pow(2)"),
+            ("ceil", "SELECT ceil(DATE'2020-01-01')"),
+            ("ceil", "SELECT ceil(2.5, true)"),
+            ("ceil", "SELECT ceil(true, 1)"),
+            ("ceil", "SELECT ceil(1, 2, 3)"),
+        ] {
+            let outcome = cell(f, sql, on, rows("double", json!(1)));
+            assert!(
+                matches!(outcome, CellOutcome::NotRun(_)),
+                "{sql}: {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
     fn datetime_functions_run_in_every_shape() {
         let on = Mode::AnsiOn;
         let day = |d: i64| json!({ "days": d });
@@ -2255,7 +2426,7 @@ mod tests {
                     -- !query\nselect 1 div 0\n-- !query schema\nstruct<>\n-- !query output\norg.apache.spark.SparkArithmeticException\n{\"errorClass\" : \"ARITHMETIC_OVERFLOW\"}\n\n\n\
                     -- !query\nselect 1 + 1\n-- !query schema\nstruct<>\n-- !query output\norg.apache.spark.SparkArithmeticException\n{\"errorClass\" : \"ARITHMETIC_OVERFLOW\"}\n\n\n\
                     -- !query\nselect 1 + 2147483647\n-- !query schema\nstruct<>\n-- !query output\n3\n\n\n\
-                    -- !query\nselect sin(1)\n-- !query schema\nstruct<>\n-- !query output\n1\n\n\n\
+                    -- !query\nselect factorial(1)\n-- !query schema\nstruct<>\n-- !query output\n1\n\n\n\
                     -- !query\nselect CAST(X'01' AS INT)\n-- !query schema\nstruct<>\n-- !query output\n1\n\n\n\
                     -- !query\nselect 1 + rand()\n-- !query schema\nstruct<>\n-- !query output\n1\n\n\n\
                     -- !query\nselect 1 limit 0\n-- !query schema\nstruct<1:int>\n-- !query output\n\n\n\n\

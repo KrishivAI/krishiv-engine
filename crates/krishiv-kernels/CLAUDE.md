@@ -44,6 +44,13 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   `current_date` from the query-start instant. Zones come in as `TimeZoneRules`, never as names. The cast module also
   parses `string -> TIMESTAMP[_NTZ]` (`cast/timestamp.rs`: the full Spark grammar; a region id in the text and a bare
   time of day are `KRISHIV_UNSUPPORTED_FEATURE` until the tz database / query clock reach the kernels).
+- `math` (P2-T026): the `double` functions (`UnaryFn`/`BinaryFn`: `sqrt` .. `signum`, `pow`, `atan2`, `hypot`, `log`; pure-Rust `libm`
+  plus the fdlibm ports of `math/fdlibm.rs` for `cbrt`/`log10`/`hypot`/`acosh`/`tanh`, so results do not depend on the CPU or libc;
+  `asinh`/`acosh` follow the `SparkVersion`), `round`/`bround`/`ceil`/`floor` (`math/round.rs`: integral with ANSI overflow, `double` through
+  the shortest decimal text like `BigDecimal.valueOf`, exact decimals with `round_decimal_type`, `ceil`/`floor` of doubles to `bigint`).
+  The module docs list which functions are bit-identical to Spark's JVM results and the share of inputs where
+  `sin`/`cos`/`tan`/`ln`/`atan2`/`log10` differ in the last bit (the JVM's intrinsics are not fdlibm); `tests/math_differential.rs` in
+  `krishiv-testkit` holds that bound.
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.
 
 ## Invariants
