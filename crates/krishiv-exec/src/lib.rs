@@ -93,7 +93,9 @@ pub use error::Result;
 pub use executor::{
     Executor, ExecutorConfig, TaskHandle, TokioClock, TokioExecutor, WorkloadClass,
 };
-pub use join::{HashJoin, HashJoinNode, JoinSpec, JoinType};
+pub use join::{
+    HashJoin, HashJoinNode, JoinSpec, JoinType, NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec,
+};
 pub use metrics::{DriverStats, OperatorEntry, OperatorMetrics, QueryMetrics};
 pub use morsel::MorselCursor;
 pub use operator::{
