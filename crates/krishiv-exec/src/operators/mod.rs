@@ -25,11 +25,13 @@
 
 mod expr;
 mod filter;
+mod limit;
 mod project;
 mod scan;
 
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
 pub use filter::Filter;
+pub use limit::Limit;
 pub use project::{Project, ProjectItem};
 pub use scan::{FilterPushdown, MemoryScan, ScanPushdown};
 #[cfg(test)]

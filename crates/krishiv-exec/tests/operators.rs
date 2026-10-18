@@ -14,9 +14,10 @@ use arrow_array::types::Int64Type;
 use arrow_array::{BooleanArray, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::StreamExt;
-use krishiv_exec::testing::{Pipe, Scan};
+use krishiv_common::error::ErrorClass;
+use krishiv_exec::testing::{Break, Count, Pipe, Scan};
 use krishiv_exec::{
-    ExecConfig, ExecNode, Filter, FnPredicate, MemoryScan, Predicate, Project, ProjectItem,
+    ExecConfig, ExecNode, Filter, FnPredicate, Limit, MemoryScan, Predicate, Project, ProjectItem,
     QueryContext, QueryId, QueryRunner, Result, ScanPushdown, Scheduler, TokioClock, TokioExecutor,
     WorkloadClass,
 };
@@ -154,6 +155,60 @@ async fn scan_with_pushdown_then_filter_and_project() {
     assert_eq!(root.reserved(), 0);
 }
 
+/// Acceptance: a limit stops upstream reading (rows read <= limit + one batch).
+#[tokio::test(start_paused = true)]
+async fn limit_stops_the_scan() {
+    for (offset, limit) in [(0, 2_500), (0, 1), (700, 2_000), (0, 0)] {
+        let scan = Arc::new(MemoryScan::try_new(schema(), table(1_000, 1_000)).unwrap());
+        let l = Limit::with_offset(schema(), offset, limit);
+        let plan = pipe(scan_node(&scan), l);
+        let root = root();
+        let config = ExecConfig {
+            batch_size: 1_000,
+            ..ExecConfig::default()
+        };
+        let q = query(&root, config);
+        let out = run(&deterministic(), plan, &q).await.unwrap();
+        assert_eq!(
+            a_values(&out),
+            (offset as i64..(offset + limit) as i64).collect::<Vec<_>>()
+        );
+        assert!(
+            scan.rows_read() <= offset + limit + 1_000,
+            "read {} rows for offset {offset} limit {limit}",
+            scan.rows_read()
+        );
+        assert!(scan.rows_read() < 1_000_000);
+        assert_eq!(root.reserved(), 0);
+    }
+}
+
+/// With several drivers the count is exact and each other driver reads at
+/// most the batch it had in flight.
+#[tokio::test]
+async fn limit_is_exact_with_parallel_drivers() {
+    let executor = TokioExecutor::new(&krishiv_exec::ExecutorConfig {
+        compute_threads: 4,
+        io_threads: 1,
+        blocking_threads: 2,
+    })
+    .unwrap();
+    let runner = QueryRunner::new(executor);
+    let scan = Arc::new(MemoryScan::try_new(schema(), table(400, 1_000)).unwrap());
+    let plan = pipe(scan_node(&scan), Limit::new(schema(), 12_345));
+    let root = root();
+    let config = ExecConfig {
+        batch_size: 1_000,
+        morsel_rows: 5_000,
+        ..ExecConfig::default()
+    };
+    let q = query(&root, config);
+    let out = run(&runner, plan, &q).await.unwrap();
+    assert_eq!(rows(&out), 12_345);
+    assert!(scan.rows_read() <= 12_345 + 4 * 1_000 + 4 * 5_000);
+    assert_eq!(root.reserved(), 0);
+}
+
 /// Scans report the morsels each driver claimed.
 #[tokio::test(start_paused = true)]
 async fn scans_report_the_morsel_metric() {
@@ -222,4 +277,44 @@ async fn weights_flow_through_the_pipeline() {
         out[0].weights(),
         &Weights::Column(Int64Array::from(vec![-1, 3, 5]))
     );
+}
+
+/// `LIMIT` rejects a weighted stream with its error class; the query still
+/// releases its memory.
+#[tokio::test(start_paused = true)]
+async fn limit_rejects_weighted_input_in_a_pipeline() {
+    let (record, _) = table(1, 6).into_iter().next().unwrap().into_parts();
+    let weighted = Batch::with_weights(record, Weights::Const(2)).unwrap();
+    let scan = Arc::new(MemoryScan::try_new(schema(), vec![weighted]).unwrap());
+    let plan = pipe(scan_node(&scan), Limit::new(schema(), 3));
+    let root = root();
+    let q = query(&root, ExecConfig::default());
+    let e = run(&deterministic(), plan, &q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(root.reserved(), 0);
+}
+
+/// A limit above a breaker-free union branch still finishes the query and
+/// leaves no memory behind, including with a breaker above it.
+#[tokio::test(start_paused = true)]
+async fn limit_below_a_breaker_ends_cleanly() {
+    let scan = Arc::new(MemoryScan::try_new(schema(), table(100, 100)).unwrap());
+    let limited = pipe(scan_node(&scan), Limit::new(schema(), 250));
+    let plan = Arc::new(Break(limited, Count::new(), false));
+    let root = root();
+    let q = query(
+        &root,
+        ExecConfig {
+            batch_size: 100,
+            ..ExecConfig::default()
+        },
+    );
+    let out = run(&deterministic(), plan, &q).await.unwrap();
+    assert_eq!(out.len(), 1);
+    assert_eq!(
+        out[0].data().column(0).as_primitive::<Int64Type>().value(0),
+        250
+    );
+    assert!(scan.rows_read() <= 350);
+    assert_eq!(root.reserved(), 0);
 }

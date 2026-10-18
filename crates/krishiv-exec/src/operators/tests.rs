@@ -348,6 +348,71 @@ fn project_rejects_bad_plans_and_bad_evaluators() {
     assert!(p.execute(&narrow, &mut unlocal()).is_err());
 }
 
+fn run_limit(offset: u64, limit: u64, sizes: &[usize]) -> (Vec<i64>, usize) {
+    let l = Limit::with_offset(schema(), offset, limit);
+    let mut got = Vec::new();
+    let mut next = 0i64;
+    let mut calls = 0;
+    for &n in sizes {
+        let rows: Vec<i64> = (next..next + n as i64).collect();
+        next += n as i64;
+        calls += 1;
+        let (out, done) = match l
+            .execute(&ints(&rows), &mut unlocal())
+            .unwrap_or_else(|e| unreachable!("{e}"))
+        {
+            OperatorOutput::NeedMoreInput(b) => (b, false),
+            OperatorOutput::Finished(b) => (b, true),
+            other => unreachable!("unexpected {other:?}"),
+        };
+        got.extend(out.iter().flat_map(col_a).flatten());
+        if done {
+            break;
+        }
+    }
+    (got, calls)
+}
+
+#[test]
+fn limit_counts_rows_across_batches() {
+    assert_eq!(run_limit(0, 5, &[3, 3, 3]), ((0..5).collect(), 2));
+    assert_eq!(run_limit(0, 3, &[3, 3]), ((0..3).collect(), 1)); // exact fit stops at once
+    assert_eq!(run_limit(0, 100, &[3, 3]), ((0..6).collect(), 2)); // never reached
+    assert_eq!(run_limit(0, 0, &[3, 3]), (vec![], 1)); // LIMIT 0
+    assert_eq!(run_limit(2, 3, &[2, 2, 2]), (vec![2, 3, 4], 3)); // OFFSET skips a batch
+    assert_eq!(run_limit(1, 1, &[3]), (vec![1], 1)); // slice in the middle
+    assert_eq!(run_limit(5, 5, &[0, 2]), (vec![], 2)); // empty batches
+    assert_eq!(run_limit(u64::MAX, u64::MAX, &[2, 2]), (vec![], 2)); // saturates
+}
+
+#[test]
+fn limit_after_finished_and_weights() {
+    let l = Limit::new(schema(), 1);
+    assert!(matches!(
+        l.execute(&ints(&[1, 2]), &mut unlocal())
+            .unwrap_or_else(|e| unreachable!("{e}")),
+        OperatorOutput::Finished(Some(_))
+    ));
+    // A batch already in flight in another driver gets nothing.
+    assert!(matches!(
+        l.execute(&ints(&[3]), &mut unlocal())
+            .unwrap_or_else(|e| unreachable!("{e}")),
+        OperatorOutput::Finished(None)
+    ));
+    // Weights other than insert-only are rejected, not miscounted.
+    for b in [
+        weighted(&[1], &[1]),
+        Batch::with_weights(ints(&[1]).into_parts().0, Weights::Const(2))
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    ] {
+        let e = Limit::new(schema(), 5)
+            .execute(&b, &mut unlocal())
+            .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    }
+    assert_eq!((l.name(), l.schema()), ("Limit", schema()));
+}
+
 fn schema_of(fields: &[(&str, DataType, bool)]) -> SchemaRef {
     Arc::new(Schema::new(
         fields
