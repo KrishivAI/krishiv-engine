@@ -137,6 +137,18 @@ pub trait FileFormat: Send + Sync + 'static {
         schema: SchemaRef,
         o: &'a FormatOptions,
     ) -> BoxFuture<'a, FormatResult<Box<dyn Encoder>>>;
+
+    /// Checks, when a write is planned, that files of `schema` can be
+    /// written with `o` (a known codec, a supported timestamp type), so a
+    /// bad setting fails before any task runs. [`Self::writer`] may still
+    /// fail later on the data itself. Default: no checks.
+    ///
+    /// # Errors
+    /// The error the write would fail with.
+    fn check_write(&self, schema: &SchemaRef, o: &FormatOptions) -> FormatResult<()> {
+        let _ = (schema, o);
+        Ok(())
+    }
 }
 
 /// What [`FileFormat::read_metadata`] must load beyond the footer. A cached

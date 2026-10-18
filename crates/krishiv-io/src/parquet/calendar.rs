@@ -25,6 +25,7 @@ use arrow_array::types::{
     TimestampSecondType,
 };
 use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_schema::{DataType, TimeUnit};
 use krishiv_common::error::{
     InconsistentBehaviorCrossVersionReadAncientDatetime, KrishivUnsupportedFeature,
@@ -213,33 +214,87 @@ impl Guard {
 }
 
 /// Whether `a` holds a date before 1582-10-15 or a timestamp (with a time
-/// zone) before 1900-01-01T00:00:00Z, at any depth.
-fn ancient(a: &ArrayRef) -> bool {
-    fn below<T: arrow_array::ArrowPrimitiveType>(a: &dyn Array, limit: T::Native) -> bool
+/// zone) before 1900-01-01T00:00:00Z, at any depth. Only values a reader
+/// sees count: list and map elements of null (or masked) rows, elements
+/// outside the offsets of a sliced array, and struct fields under a null
+/// struct are not checked.
+pub(crate) fn ancient(a: &ArrayRef) -> bool {
+    ancient_under(a, None)
+}
+
+/// The mask of the elements of a list or map whose rows are valid under
+/// `valid` and the array's own `nulls` (`offsets` has one more entry than
+/// rows): elements of other rows, or outside every row, are masked out.
+fn element_mask<O: ArrowNativeType>(
+    offsets: &[O],
+    valid: Option<&NullBuffer>,
+    nulls: Option<&NullBuffer>,
+    elements: usize,
+) -> NullBuffer {
+    let rows = NullBuffer::union(valid, nulls);
+    let mut keep = vec![false; elements];
+    for (i, w) in offsets.windows(2).enumerate() {
+        if rows.as_ref().is_none_or(|r| r.is_valid(i)) {
+            let (lo, hi) = (w[0].as_usize(), w[1].as_usize().min(elements));
+            keep.iter_mut().take(hi).skip(lo).for_each(|k| *k = true);
+        }
+    }
+    NullBuffer::from(keep)
+}
+
+/// [`ancient`], with `valid` (when set) masking out the rows of `a` its
+/// parents hide.
+fn ancient_under(a: &ArrayRef, valid: Option<&NullBuffer>) -> bool {
+    fn below<T: arrow_array::ArrowPrimitiveType>(
+        a: &dyn Array,
+        valid: Option<&NullBuffer>,
+        limit: T::Native,
+    ) -> bool
     where
         T::Native: PartialOrd,
     {
         let p = a.as_primitive::<T>();
-        p.iter().flatten().any(|v| v < limit)
+        p.iter()
+            .enumerate()
+            .any(|(i, v)| valid.is_none_or(|n| n.is_valid(i)) && v.is_some_and(|v| v < limit))
+    }
+    fn list<O: arrow_array::OffsetSizeTrait>(
+        l: &arrow_array::GenericListArray<O>,
+        valid: Option<&NullBuffer>,
+    ) -> bool {
+        let mask = element_mask(l.value_offsets(), valid, l.nulls(), l.values().len());
+        ancient_under(l.values(), Some(&mask))
     }
     match a.data_type() {
-        DataType::Date32 => below::<Date32Type>(a.as_ref(), SWITCH_DAY),
+        DataType::Date32 => below::<Date32Type>(a.as_ref(), valid, SWITCH_DAY),
         DataType::Timestamp(unit, Some(_)) => match unit {
-            TimeUnit::Second => below::<TimestampSecondType>(a.as_ref(), SWITCH_MICROS / 1_000_000),
+            TimeUnit::Second => {
+                below::<TimestampSecondType>(a.as_ref(), valid, SWITCH_MICROS / 1_000_000)
+            }
             TimeUnit::Millisecond => {
-                below::<TimestampMillisecondType>(a.as_ref(), SWITCH_MICROS / 1_000)
+                below::<TimestampMillisecondType>(a.as_ref(), valid, SWITCH_MICROS / 1_000)
             }
-            TimeUnit::Microsecond => below::<TimestampMicrosecondType>(a.as_ref(), SWITCH_MICROS),
-            TimeUnit::Nanosecond => {
-                below::<TimestampNanosecondType>(a.as_ref(), SWITCH_MICROS.saturating_mul(1_000))
+            TimeUnit::Microsecond => {
+                below::<TimestampMicrosecondType>(a.as_ref(), valid, SWITCH_MICROS)
             }
+            TimeUnit::Nanosecond => below::<TimestampNanosecondType>(
+                a.as_ref(),
+                valid,
+                SWITCH_MICROS.saturating_mul(1_000),
+            ),
         },
-        DataType::Struct(_) => a.as_struct().columns().iter().any(ancient),
-        DataType::List(_) => ancient(a.as_list::<i32>().values()),
-        DataType::LargeList(_) => ancient(a.as_list::<i64>().values()),
+        DataType::Struct(_) => {
+            let s = a.as_struct();
+            let mask = NullBuffer::union(valid, s.nulls());
+            s.columns().iter().any(|c| ancient_under(c, mask.as_ref()))
+        }
+        DataType::List(_) => list(a.as_list::<i32>(), valid),
+        DataType::LargeList(_) => list(a.as_list::<i64>(), valid),
         DataType::Map(_, _) => {
-            let entries: ArrayRef = std::sync::Arc::new(a.as_map().entries().clone());
-            ancient(&entries)
+            let m = a.as_map();
+            let entries: ArrayRef = std::sync::Arc::new(m.entries().clone());
+            let mask = element_mask(m.value_offsets(), valid, m.nulls(), entries.len());
+            ancient_under(&entries, Some(&mask))
         }
         _ => false,
     }
@@ -327,5 +382,55 @@ mod tests {
             None,
         ));
         assert!(ancient(&list));
+        // Every timestamp unit, and large lists.
+        let second: ArrayRef = Arc::new(
+            arrow_array::TimestampSecondArray::from(vec![SWITCH_MICROS / 1_000_000 - 1])
+                .with_timezone("UTC"),
+        );
+        let nano: ArrayRef = Arc::new(
+            arrow_array::TimestampNanosecondArray::from(vec![SWITCH_MICROS * 1_000])
+                .with_timezone("UTC"),
+        );
+        assert!(ancient(&second) && !ancient(&nano));
+        let large: ArrayRef = Arc::new(arrow_array::LargeListArray::new(
+            Arc::new(arrow_schema::Field::new(
+                "item",
+                DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
+                true,
+            )),
+            arrow_buffer::OffsetBuffer::from_lengths([1]),
+            second,
+            None,
+        ));
+        assert!(ancient(&large));
+        // Elements of a null list slot (a non-empty range, which Arrow
+        // allows), and lists under a null struct, are not seen.
+        let hidden: ArrayRef = Arc::new(Date32Array::from(vec![SWITCH_DAY - 1, SWITCH_DAY]));
+        let item = Arc::new(arrow_schema::Field::new("item", DataType::Date32, true));
+        let null_slot = ListArray::new(
+            Arc::clone(&item),
+            arrow_buffer::OffsetBuffer::from_lengths([1, 1]),
+            Arc::clone(&hidden),
+            Some(arrow_buffer::NullBuffer::from(vec![false, true])),
+        );
+        assert!(!ancient(&(Arc::new(null_slot) as ArrayRef)));
+        let visible: ArrayRef = Arc::new(ListArray::new(
+            Arc::clone(&item),
+            arrow_buffer::OffsetBuffer::from_lengths([1, 1]),
+            hidden,
+            None,
+        ));
+        assert!(ancient(&visible));
+        let under_null: ArrayRef = Arc::new(StructArray::new(
+            vec![Arc::new(arrow_schema::Field::new(
+                "l",
+                visible.data_type().clone(),
+                true,
+            ))]
+            .into(),
+            vec![visible],
+            Some(arrow_buffer::NullBuffer::from(vec![false, true])),
+        ));
+        assert!(!ancient(&under_null));
     }
 }
