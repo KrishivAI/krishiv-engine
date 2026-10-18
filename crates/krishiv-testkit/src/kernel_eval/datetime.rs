@@ -464,11 +464,11 @@ impl Evaluator<'_> {
             },
             DtFn::CurrentDate => {
                 let d = current_date(self.now, self.zone)?;
-                self.per_selected_row(Arc::new(Date32Array::from(vec![d])))?
+                Arc::new(Date32Array::from(vec![d]))
             }
-            DtFn::CurrentTimestamp => self.per_selected_row(Arc::new(
-                TimestampMicrosecondArray::from(vec![self.now]).with_timezone("UTC"),
-            ))?,
+            DtFn::CurrentTimestamp => {
+                Arc::new(TimestampMicrosecondArray::from(vec![self.now]).with_timezone("UTC"))
+            }
             DtFn::DateMonths(negate, try_) => {
                 let months = v[1].as_primitive::<IntervalYearMonthType>();
                 let months = Int32Array::new(months.values().clone(), months.nulls().cloned());

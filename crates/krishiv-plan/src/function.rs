@@ -187,16 +187,4 @@ impl FunctionId {
     }
 }
 
-/// What kind of function a resolved call is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum FunctionKind {
-    /// One row in, one value out.
-    Scalar,
-    /// An aggregate (`sum`, `count`, ...).
-    Aggregate,
-    /// A window function (`row_number`, `rank`, ...).
-    Window,
-    /// A generator (`explode`, ...): one row in, many rows out.
-    Generator,
-}
+pub use krishiv_functions::signature::FunctionKind;

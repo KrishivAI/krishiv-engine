@@ -491,7 +491,7 @@ impl Interp<'_> {
                     "avg" => V::Num(nums().sum::<i128>() / i128::try_from(vals.len()).unwrap()),
                     "min" => vals.iter().min().unwrap().clone(),
                     "max" => vals.iter().max().unwrap().clone(),
-                    "any_value" | "first" => vals[0].clone(),
+                    "any_value" | "nondeterministic_first" => vals[0].clone(),
                     other => panic!("aggregate {other}"),
                 }
             }

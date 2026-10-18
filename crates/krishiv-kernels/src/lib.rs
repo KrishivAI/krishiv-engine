@@ -40,7 +40,6 @@
 pub mod cast;
 mod chunk;
 pub mod compare;
-pub mod conditional;
 pub mod datetime;
 pub mod decimal;
 pub mod dispatch;

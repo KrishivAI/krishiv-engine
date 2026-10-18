@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Spark-compatible built-in functions (layer L2).
 //!
+//! - [`registry`]: Spark's built-in names bound to their analysis
+//!   signature ([`signature`]: implicit casts, result type, arity),
+//!   determinism, per-version availability and execution.
 //! - [`scalar`]: the execution binding. [`scalar::bind_scalar`] turns a
 //!   scalar function's name and argument types into a
 //!   [`scalar::ScalarFunction`] over the `krishiv-kernels` kernels, which
@@ -11,4 +14,6 @@
 
 #![forbid(unsafe_code)]
 
+pub mod registry;
 pub mod scalar;
+pub mod signature;

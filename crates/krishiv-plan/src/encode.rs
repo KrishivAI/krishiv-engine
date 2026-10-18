@@ -64,10 +64,9 @@ use twox_hash::XxHash3_128;
 
 use crate::{BoundColumn, CteRef, Scan};
 use crate::{
-    CastMode, ColumnRef, DayTimeField, Expr, ExprNode, FunctionCall, FunctionKind, Grouping,
-    JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, Plan, PlanId, PlanNode,
-    ReadSource, ResolvedExpr, ResolvedFunction, SortDirection, SqlArgs, Star, SubqueryKind,
-    YearMonthField,
+    CastMode, ColumnRef, DayTimeField, Expr, ExprNode, FunctionCall, Grouping, JoinCondition,
+    JoinKind, Literal, LogicalPlan, NullOrdering, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr,
+    ResolvedFunction, SortDirection, SqlArgs, Star, SubqueryKind, YearMonthField,
 };
 
 /// The version of the canonical encoding layout.
@@ -912,17 +911,14 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 filter,
                 data_type,
                 nullable,
+                // Follows from the identity (see `ResolvedFunction`).
+                deterministic: _,
             })) => {
                 self.u8(10);
                 // The canonical name only: a registry id is never part of
                 // a key (see `FunctionId`).
                 self.str(id.name());
-                self.u8(match kind {
-                    FunctionKind::Scalar => 1,
-                    FunctionKind::Aggregate => 2,
-                    FunctionKind::Window => 3,
-                    FunctionKind::Generator => 4,
-                });
+                self.u8(kind.code());
                 self.data_type(data_type);
                 self.bool(*nullable);
                 self.call(args, *distinct, filter.as_ref());

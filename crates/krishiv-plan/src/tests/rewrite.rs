@@ -230,6 +230,7 @@ fn resolved_call(args: Vec<Arc<Expr>>, filter: Option<Arc<Expr>>) -> Expr {
             filter,
             data_type: DataType::Integer,
             nullable: true,
+            deterministic: true,
         },
     )))
 }

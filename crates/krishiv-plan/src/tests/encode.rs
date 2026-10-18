@@ -236,6 +236,7 @@ fn resolved_call(name: &str, id: u32, kind: FunctionKind, arg: &str) -> LogicalP
         filter: None,
         data_type: DataType::String,
         nullable: true,
+        deterministic: true,
     };
     let call = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(func)));
     LogicalPlan::table(["t"]).project(vec![call])

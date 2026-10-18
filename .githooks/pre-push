@@ -1,27 +1,20 @@
 #!/usr/bin/env sh
 # SPDX-License-Identifier: Apache-2.0
-# Krishiv pre-push:
-# 1. (P2-T134) refuse pushes to main and non-fast-forward (force) pushes.
-#    Interim guard until branch protection is available on the org plan.
-#    Override deliberately with KRISHIV_ALLOW_MAIN_PUSH=1.
-# 2. (ADR 0029) clippy and cargo-deny, once per push, when the commits being
-#    pushed change Rust or Cargo files (*.rs, Cargo.toml/lock, deny.toml,
-#    rust-toolchain.toml, .cargo/). SKIP_CLIPPY=1 skips them; CI runs both.
+# Krishiv pre-push (P2-T134): refuse pushes to main and non-fast-forward
+# (force) pushes. Interim guard until branch protection is available on the
+# org plan. Override deliberately with KRISHIV_ALLOW_MAIN_PUSH=1.
 # Install with `cargo xtask setup`.
 set -eu
 
+if [ "${KRISHIV_ALLOW_MAIN_PUSH:-0}" = "1" ]; then
+  echo "pre-push: KRISHIV_ALLOW_MAIN_PUSH=1, guard bypassed" >&2
+  exit 0
+fi
+
 zero=0000000000000000000000000000000000000000
 status=0
-pushed=""
 # stdin: <local ref> <local sha> <remote ref> <remote sha> per ref being pushed.
 while read -r local_ref local_sha remote_ref remote_sha; do
-  # Branch deletion pushes no commits.
-  if [ "$local_sha" != "$zero" ]; then
-    pushed="$pushed $local_sha"
-  fi
-  if [ "${KRISHIV_ALLOW_MAIN_PUSH:-0}" = "1" ]; then
-    continue
-  fi
   case "$remote_ref" in
     refs/heads/main | refs/heads/master)
       echo "pre-push: refusing to push '$local_ref' to $remote_ref (set KRISHIV_ALLOW_MAIN_PUSH=1 to override)" >&2
@@ -44,32 +37,4 @@ while read -r local_ref local_sha remote_ref remote_sha; do
       ;;
   esac
 done
-
-if [ "${KRISHIV_ALLOW_MAIN_PUSH:-0}" = "1" ]; then
-  echo "pre-push: KRISHIV_ALLOW_MAIN_PUSH=1, guard bypassed" >&2
-fi
-if [ "$status" != 0 ]; then
-  exit "$status"
-fi
-
-if [ -z "$pushed" ] || [ "${SKIP_CLIPPY:-0}" = "1" ]; then
-  exit 0
-fi
-# Files changed by the commits being pushed that no remote branch has yet.
-# shellcheck disable=SC2086 # word splitting of the sha list is intended
-changed=$(git log --format= --name-only $pushed --not --remotes 2>/dev/null || true)
-rust_changed=$(printf '%s\n' "$changed" | command grep -E '(\.rs$|(^|/)Cargo\.(toml|lock)$|^deny\.toml$|^rust-toolchain\.toml$|^\.cargo/)' || true)
-if [ -z "$rust_changed" ]; then
-  echo "pre-push: no Rust/Cargo changes in the pushed commits; skipping clippy and deny"
-  exit 0
-fi
-
-echo "pre-push: cargo clippy --workspace --all-targets -- -D warnings"
-cargo clippy --workspace --all-targets --locked -- -D warnings
-
-if command -v cargo-deny >/dev/null 2>&1; then
-  echo "pre-push: cargo deny check"
-  cargo deny check
-else
-  echo "pre-push: cargo-deny not installed; skipping (CI still runs it)" >&2
-fi
+exit "$status"

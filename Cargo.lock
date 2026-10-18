@@ -1476,6 +1476,7 @@ dependencies = [
  "arrow-select",
  "krishiv-common",
  "krishiv-kernels",
+ "krishiv-types",
 ]
 
 [[package]]
@@ -1509,7 +1510,6 @@ dependencies = [
  "arrow-array",
  "arrow-buffer",
  "arrow-schema",
- "arrow-select",
  "codspeed-criterion-compat",
  "krishiv-common",
  "libm",
@@ -1567,6 +1567,7 @@ dependencies = [
  "codspeed-criterion-compat",
  "insta",
  "krishiv-common",
+ "krishiv-functions",
  "krishiv-kernels",
  "krishiv-types",
  "proptest",
@@ -1645,6 +1646,7 @@ dependencies = [
  "jiff",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-functions",
  "krishiv-io",
  "krishiv-kernels",
  "krishiv-memory",

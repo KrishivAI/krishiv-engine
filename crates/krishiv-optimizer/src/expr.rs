@@ -14,38 +14,6 @@ use krishiv_types::DataType;
 /// A set of attribute ids.
 pub(crate) type Attrs = HashSet<AttrId>;
 
-/// Functions Spark marks nondeterministic: a predicate holding one is never
-/// moved, and a projection holding one is never inlined. The function
-/// registry does not carry determinism yet, so the optimizer keeps Spark's
-/// list here.
-const NONDETERMINISTIC: [&str; 25] = [
-    "rand",
-    "randn",
-    "random",
-    "uniform",
-    "randstr",
-    "uuid",
-    "shuffle",
-    "monotonically_increasing_id",
-    "spark_partition_id",
-    "input_file_name",
-    "input_file_block_start",
-    "input_file_block_length",
-    "reflect",
-    "java_method",
-    "try_reflect",
-    "first",
-    "first_value",
-    "last",
-    "last_value",
-    "any_value",
-    "collect_list",
-    "collect_set",
-    "array_agg",
-    "listagg",
-    "string_agg",
-];
-
 /// A relation or an expression, for walks that enter subquery plans.
 #[derive(Clone, Copy)]
 enum Item<'a> {
@@ -109,14 +77,16 @@ pub(crate) fn references(e: &Expr) -> Attrs {
     out
 }
 
-/// Whether `e` (subquery plans included) calls no nondeterministic function.
+/// Whether `e` (subquery plans included) calls no nondeterministic function
+/// (the registry's flag, which the analyzer copies into each call): a
+/// predicate holding one is never moved, and a projection holding one is
+/// never inlined.
 pub(crate) fn is_deterministic(e: &Expr) -> bool {
     let mut ok = true;
     walk(e, |item| {
         if let Item::Expr(x, _) = item
             && let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
-            && let FunctionId::Registry { name, .. } = &f.id
-            && NONDETERMINISTIC.contains(&name.as_str())
+            && !f.deterministic
         {
             ok = false;
         }
@@ -227,6 +197,7 @@ pub(crate) fn call(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType) -> Ar
             filter: None,
             data_type,
             nullable,
+            deterministic: true,
         },
     ))))
 }

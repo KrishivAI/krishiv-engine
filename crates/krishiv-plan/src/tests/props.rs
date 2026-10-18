@@ -230,6 +230,7 @@ impl Gen<'_> {
                     filter,
                     data_type: self.data_type(),
                     nullable: self.flag(),
+                    deterministic: self.flag(),
                 }))
             }
             9 => ExprNode::Resolved(ResolvedExpr::Alias {
@@ -629,6 +630,7 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                 filter,
                 data_type,
                 nullable,
+                deterministic: _,
             }) => {
                 let other = match id {
                     FunctionId::Builtin(Builtin::Eq) => FunctionId::Builtin(Builtin::Lt),

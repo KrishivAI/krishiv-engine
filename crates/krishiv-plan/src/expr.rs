@@ -229,6 +229,11 @@ pub struct ResolvedFunction {
     pub data_type: DataType,
     /// Whether the result may be null.
     pub nullable: bool,
+    /// Whether the call is deterministic (from the function registry; the
+    /// canonical operators are). Not part of the canonical encoding: it
+    /// follows from the function's identity in a registry version, which
+    /// the analysis fingerprint covers.
+    pub deterministic: bool,
 }
 
 /// Expression forms produced by the analyzer.
