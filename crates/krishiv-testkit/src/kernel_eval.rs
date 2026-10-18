@@ -179,6 +179,9 @@ pub const FUNCTIONS: &[&str] = &[
     "power",
     "atan2",
     "hypot",
+    "pmod",
+    "greatest",
+    "least",
     "pi",
     "e",
 ];
@@ -2200,17 +2203,85 @@ mod tests {
                 "decimal(24,3)",
                 dec(3, "1000"),
             ),
+            ("pmod", "SELECT pmod(-7, 3)", "int", json!(2)),
+            ("pmod", "SELECT pmod(-7.5, 2)", "decimal(2,1)", dec(1, "5")),
+            ("pmod", "SELECT pmod(-7.5D, 2)", "double", dbl(0.5)),
+            ("pmod", "SELECT pmod('7', 4)", "bigint", json!(3)),
+            (
+                "greatest",
+                "SELECT greatest(1, 2.5)",
+                "decimal(11,1)",
+                dec(1, "25"),
+            ),
+            ("greatest", "SELECT greatest(1, NULL, 3)", "int", json!(3)),
+            (
+                "greatest",
+                "SELECT greatest(TRUE, FALSE)",
+                "boolean",
+                json!(true),
+            ),
+            (
+                "greatest",
+                "SELECT greatest(X'01', X'02')",
+                "binary",
+                json!({ "hex": "02" }),
+            ),
+            (
+                "greatest",
+                "SELECT greatest(CAST('NaN' AS DOUBLE), 1D)",
+                "double",
+                dbl(f64::NAN),
+            ),
+            ("least", "SELECT least('b', 'a', 'c')", "string", json!("a")),
+            (
+                "least",
+                "SELECT least(DATE'2020-01-02', DATE'2020-01-01')",
+                "date",
+                json!({ "days": 18_262 }),
+            ),
+            (
+                "least",
+                "SELECT least(CAST(1.5 AS FLOAT), 2, 3)",
+                "double",
+                dbl(1.5),
+            ),
+            (
+                "least",
+                "SELECT least(1, 2L, CAST(3 AS SMALLINT))",
+                "bigint",
+                json!(1),
+            ),
+            (
+                "least",
+                "SELECT least(CAST(1 AS TINYINT), CAST(2 AS TINYINT))",
+                "tinyint",
+                json!(1),
+            ),
+            ("least", "SELECT least(1S, 2S)", "smallint", json!(1)),
+            ("greatest", "SELECT greatest(1.5D, 1)", "double", dbl(1.5)),
         ] {
             let outcome = cell(f, sql, on, rows(ty, want));
             assert_eq!(outcome, CellOutcome::Pass, "{sql}");
         }
-        // Legacy mode: tinyint overflow wraps.
+        // Legacy mode: tinyint overflow wraps; a float and an int stay float.
         assert_eq!(
             cell(
                 "round",
                 "SELECT round(CAST(127 AS TINYINT), -1)",
                 off,
                 rows("tinyint", json!(-126))
+            ),
+            CellOutcome::Pass
+        );
+        assert_eq!(
+            cell(
+                "greatest",
+                "SELECT greatest(CAST(1.5 AS FLOAT), 2)",
+                off,
+                rows(
+                    "float",
+                    json!({ "f32": format!("{:08x}", 2.0_f32.to_bits()) })
+                )
             ),
             CellOutcome::Pass
         );
@@ -2224,6 +2295,7 @@ mod tests {
                 ),
             ),
             ("round", "SELECT round(15, -1)", rows("int", json!(10))),
+            ("pmod", "SELECT pmod(-7, 3)", rows("int", json!(1))),
         ] {
             let outcome = cell(f, sql, on, want);
             assert!(
@@ -2243,6 +2315,12 @@ mod tests {
             ("ceil", "SELECT ceil(2.5, true)"),
             ("ceil", "SELECT ceil(true, 1)"),
             ("ceil", "SELECT ceil(1, 2, 3)"),
+            ("pmod", "SELECT pmod(1)"),
+            ("pmod", "SELECT pmod(true, 1)"),
+            ("greatest", "SELECT greatest(1)"),
+            ("greatest", "SELECT greatest(1, 'a')"),
+            ("greatest", "SELECT greatest(NULL, NULL)"),
+            ("greatest", "SELECT greatest(array(1), array(2))"),
         ] {
             let outcome = cell(f, sql, on, rows("double", json!(1)));
             assert!(

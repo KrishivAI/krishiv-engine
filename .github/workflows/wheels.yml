@@ -1,0 +1,223 @@
+name: Wheels
+
+# P2-T103: the Python wheels for every supported target, each installed in a
+# clean environment and tested. Two flavours per target: abi3 (one wheel for
+# CPython >= 3.11, tested on 3.11 and 3.14) and the free-threaded cp314t.
+# Targets: manylinux_2_28 x86_64 and aarch64, musllinux_1_2 x86_64, macOS
+# arm64. mimalloc is linked into every wheel (P2-T012). Nothing is published
+# (P2-T147).
+#
+# Called by ci.yml for pull requests that touch the Python package, the
+# extension crate or the packaging, and by nightly.yml; runnable by hand.
+# The size of every wheel is gated against budgets.json (`wheel_bytes`; on a
+# pull request the base branch's) by `cargo xtask wheel-sizes`; the
+# `budget-approved` label approves growth (labels do not re-run CI: re-run the
+# `sizes` job after labelling).
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # maturin build flags per flavour.
+  ABI3_ARGS: --release --locked
+  FT_ARGS: --release --locked --no-default-features --features mimalloc
+
+jobs:
+  # manylinux_2_28 and musllinux_1_2 on x86_64. The wheels are built in the
+  # PyPA images by maturin-action; the musllinux ones are tested inside the
+  # PyPA musllinux image, the manylinux ones on the runner.
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        libc: [manylinux, musllinux]
+        flavour: [abi3, cp314t]
+    name: wheel (${{ matrix.libc }} x86_64 ${{ matrix.flavour }})
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          target: x86_64
+          manylinux: ${{ matrix.libc == 'manylinux' && '2_28' || 'musllinux_1_2' }}
+          args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        if: matrix.libc == 'manylinux'
+      - name: Test (manylinux, on the runner)
+        if: matrix.libc == 'manylinux'
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+        run: |
+          if [ "$FLAVOUR" = abi3 ]; then versions="3.11 3.14"; else versions="3.14t"; fi
+          for v in $versions; do
+            uv python install "$v"
+            .github/scripts/wheel-test.sh "$(uv python find "$v")" dist "$FLAVOUR"
+          done
+      - name: Test (musllinux, in the PyPA musllinux image)
+        if: matrix.libc == 'musllinux'
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+        run: |
+          if [ "$FLAVOUR" = abi3 ]; then pys="cp311-cp311 cp314-cp314"; else pys="cp314-cp314t"; fi
+          for p in $pys; do
+            docker run --rm -v "$PWD:/w" -w /w \
+              quay.io/pypa/musllinux_1_2_x86_64:2026.10.03-1@sha256:ff786af69d772d7ac3e318c00a2b682428a352cc822d6175f6a0d4b431c0d44d \
+              bash .github/scripts/wheel-test.sh "/opt/python/$p/bin/python" dist "$FLAVOUR"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-${{ matrix.libc }}-x86_64-${{ matrix.flavour }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # manylinux_2_28 aarch64, built and tested natively on an Arm runner.
+  linux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        flavour: [abi3, cp314t]
+    name: wheel (manylinux aarch64 ${{ matrix.flavour }})
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          target: aarch64
+          manylinux: 2_28
+          args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Test
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+        run: |
+          if [ "$FLAVOUR" = abi3 ]; then versions="3.11 3.14"; else versions="3.14t"; fi
+          for v in $versions; do
+            uv python install "$v"
+            .github/scripts/wheel-test.sh "$(uv python find "$v")" dist "$FLAVOUR"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-manylinux-aarch64-${{ matrix.flavour }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # macOS arm64 (11.0+), built and tested natively.
+  macos-arm64:
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        flavour: [abi3, cp314t]
+    name: wheel (macOS arm64 ${{ matrix.flavour }})
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Interpreters
+        id: py
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+        run: |
+          if [ "$FLAVOUR" = abi3 ]; then versions="3.11 3.14"; else versions="3.14t"; fi
+          uv python install $versions
+          echo "build=$(uv python find "${versions%% *}")" >> "$GITHUB_OUTPUT"
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+      - name: Build
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          target: aarch64-apple-darwin
+          args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || env.FT_ARGS }} --interpreter ${{ steps.py.outputs.build }} --out ../dist
+      - name: Test
+        env:
+          FLAVOUR: ${{ matrix.flavour }}
+          VERSIONS: ${{ steps.py.outputs.versions }}
+        run: |
+          for v in $VERSIONS; do
+            .github/scripts/wheel-test.sh "$(uv python find "$v")" dist "$FLAVOUR"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-macos-arm64-${{ matrix.flavour }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # Every wheel's size against budgets.json (`wheel_bytes`). Growth past the
+  # budget, or a wheel without a recorded size, needs `budget-approved`
+  # applied by the approver after the latest push (same rule as pr-policy).
+  sizes:
+    needs: [linux-x86_64, linux-aarch64, macos-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - name: Resolve budget-approved label
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          APPROVER: ${{ vars.SIZE_APPROVER }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'budget-approved') }}
+        run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
+      # On a pull request the budget is the base branch's (a PR cannot raise
+      # its own); otherwise this commit's.
+      - name: Budget file
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            git fetch --quiet --depth=1 origin "$BASE_SHA"
+            git show "$BASE_SHA:budgets.json" > "$RUNNER_TEMP/budgets.json"
+          else
+            cp budgets.json "$RUNNER_TEMP/budgets.json"
+          fi
+      - name: Wheel sizes
+        run: cargo xtask wheel-sizes dist --budgets "$RUNNER_TEMP/budgets.json"

@@ -133,6 +133,7 @@ dependencies = [
  "chrono",
  "half",
  "hashbrown",
+ "libc",
  "num-complex",
  "num-integer",
  "num-traits",
@@ -208,6 +209,9 @@ name = "arrow-schema"
 version = "60.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f85a9a58cd03560526b0066487574aacb9008e413504fa0ee23d61141e96c338"
+dependencies = [
+ "bitflags 2.13.2",
+]
 
 [[package]]
 name = "arrow-select"
@@ -1442,9 +1446,13 @@ dependencies = [
  "foldhash",
  "futures",
  "hashbrown",
+ "insta",
  "krishiv-common",
  "krishiv-io",
  "krishiv-memory",
+ "krishiv-optimizer",
+ "krishiv-plan",
+ "krishiv-sql",
  "krishiv-types",
  "loom",
  "object_store",
@@ -1462,6 +1470,14 @@ version = "0.1.0-dev"
 [[package]]
 name = "krishiv-functions"
 version = "0.1.0-dev"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "arrow-select",
+ "krishiv-common",
+ "krishiv-kernels",
+ "krishiv-types",
+]
 
 [[package]]
 name = "krishiv-io"
@@ -1551,6 +1567,7 @@ dependencies = [
  "codspeed-criterion-compat",
  "insta",
  "krishiv-common",
+ "krishiv-functions",
  "krishiv-kernels",
  "krishiv-types",
  "proptest",
@@ -1563,6 +1580,11 @@ dependencies = [
 name = "krishiv-python"
 version = "0.1.0-dev"
 dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "krishiv-common",
  "mimalloc",
  "pyo3",
 ]
@@ -1624,6 +1646,7 @@ dependencies = [
  "jiff",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-functions",
  "krishiv-io",
  "krishiv-kernels",
  "krishiv-memory",

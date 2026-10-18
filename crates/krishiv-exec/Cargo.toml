@@ -23,11 +23,16 @@ futures = { workspace = true, features = ["alloc"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-io = { path = "../krishiv-io" }
 krishiv-memory = { path = "../krishiv-memory" }
+krishiv-optimizer = { path = "../krishiv-optimizer" }
+krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 tracing = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
+insta.workspace = true
+krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
+krishiv-sql = { path = "../krishiv-sql" }
 arrow-ipc = { workspace = true, features = ["zstd"] }
 criterion.workspace = true
 object_store.workspace = true

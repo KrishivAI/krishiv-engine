@@ -33,6 +33,8 @@ fn is_pinned(rest: &str) -> bool {
         .unwrap_or("")
         .trim()
         .trim_matches(['"', '\'']);
+    // `./path` and GitHub's self-repository form `$/path` both name a file in
+    // this repository at the workflow's own commit.
     if target.starts_with("./") || target.starts_with("$/") {
         return true;
     }

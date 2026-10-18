@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The math functions of the kernel evaluator (P2-T026): the `double`
-//! functions, `round`/`bround`/`ceil`/`floor`, `sign` and the constants
-//! `pi()`/`e()`, typed with Spark 4.2's
+//! functions, `round`/`bround`/`ceil`/`floor`, `sign`, `pmod`,
+//! `greatest`/`least` and the constants `pi()`/`e()`, typed with Spark 4.2's
 //! implicit casts (a string, NULL or any other numeric type is a `double`
 //! where the function takes one).
 
@@ -9,12 +9,13 @@ use std::sync::Arc;
 
 use arrow_array::types::{
     Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    TimestampMicrosecondType,
 };
 use arrow_array::{ArrayRef, Float64Array, cast::AsArray};
 use arrow_schema::DataType;
 use krishiv_kernels::OverflowMode;
 use krishiv_kernels::math::{
-    self, BinaryFn, DecimalRounding, RoundMode, UnaryFn, round_decimal_type,
+    self, BinaryFn, DecimalRounding, Extremum, RoundMode, UnaryFn, round_decimal_type,
 };
 use krishiv_sql::ast;
 
@@ -36,6 +37,8 @@ pub(super) enum MathFn {
         ceil: bool,
         scale: i32,
     },
+    Pmod,
+    Extremum(Extremum),
 }
 
 fn unary_fn(name: &str) -> Option<UnaryFn> {
@@ -151,6 +154,9 @@ impl Binder<'_> {
                     | "ceil"
                     | "ceiling"
                     | "floor"
+                    | "pmod"
+                    | "greatest"
+                    | "least"
                     | "pi"
                     | "e"
             );
@@ -266,9 +272,102 @@ impl Binder<'_> {
                     DataType::Decimal128(op, os),
                 ))
             }
-            other => Err(format!("math function `{other}`")),
+            "pmod" => {
+                arity(args.len() == 2)?;
+                let (l, r) = (self.bind(args[0])?, self.bind(args[1])?);
+                let (l, r) = self.numeric_operands(None, l, r)?;
+                let (tl, tr) = self.wider(&l, &r);
+                let (l, r) = (self.implicit(l, &tl), self.implicit(r, &tr));
+                let ty = match (&tl, &tr) {
+                    (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
+                        let (p, s) = krishiv_kernels::decimal::result_type(
+                            krishiv_kernels::decimal::DecimalOp::Remainder,
+                            (*p1, *s1),
+                            (*p2, *s2),
+                            self.allow_loss,
+                        )
+                        .map_err(|e| format!("decimal result type: {e}"))?;
+                        DataType::Decimal128(p, s)
+                    }
+                    (t, _) => t.clone(),
+                };
+                Ok(Node::Math(MathFn::Pmod, vec![l, r], ty))
+            }
+            _ => {
+                arity(args.len() >= 2)?;
+                let kind = if name == "greatest" {
+                    Extremum::Greatest
+                } else {
+                    Extremum::Least
+                };
+                let nodes = args
+                    .iter()
+                    .map(|e| self.bind(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ty = common_type(&nodes, self.ansi)
+                    .ok_or_else(|| "analysis: arguments of different types".to_owned())?;
+                let nodes = nodes.into_iter().map(|n| self.implicit(n, &ty)).collect();
+                Ok(Node::Math(MathFn::Extremum(kind), nodes, ty))
+            }
         }
     }
+}
+
+/// The type `greatest`/`least` compare in (Spark's tightest common type
+/// without string promotion); `None` for arguments that have none.
+fn common_type(nodes: &[Node], ansi: bool) -> Option<DataType> {
+    let types: Vec<DataType> = nodes
+        .iter()
+        .map(Node::ty)
+        .filter(|t| *t != DataType::Null)
+        .collect();
+    let first = types.first()?;
+    if types.iter().all(|t| t == first) {
+        return Some(first.clone());
+    }
+    if !types.iter().all(is_numeric) {
+        return None;
+    }
+    let has = |t: &DataType| types.contains(t);
+    let decimals: Vec<(u8, i8)> = types
+        .iter()
+        .filter_map(|t| match t {
+            DataType::Decimal128(p, s) => Some((*p, *s)),
+            _ => integral_decimal(t).and_then(|d| match d {
+                DataType::Decimal128(p, s) => Some((p, s)),
+                _ => None,
+            }),
+        })
+        .collect();
+    let any_decimal = types.iter().any(|t| matches!(t, DataType::Decimal128(..)));
+    if has(&DataType::Float64) || (any_decimal && has(&DataType::Float32)) {
+        return Some(DataType::Float64);
+    }
+    if any_decimal {
+        let int = decimals
+            .iter()
+            .map(|(p, s)| i32::from(*p) - i32::from(*s))
+            .max()?;
+        let scale = decimals.iter().map(|(_, s)| i32::from(*s)).max()?;
+        let precision = u8::try_from((int + scale).min(38)).ok()?;
+        return Some(DataType::Decimal128(precision, i8::try_from(scale).ok()?));
+    }
+    if has(&DataType::Float32) {
+        // A float meeting an integral type widens to double in ANSI mode.
+        return Some(if ansi {
+            DataType::Float64
+        } else {
+            DataType::Float32
+        });
+    }
+    [
+        DataType::Int64,
+        DataType::Int32,
+        DataType::Int16,
+        DataType::Int8,
+    ]
+    .into_iter()
+    .find(|t| has(t))
 }
 
 impl Evaluator<'_> {
@@ -344,6 +443,84 @@ impl Evaluator<'_> {
                     rounding,
                 )?)
             }
+            MathFn::Pmod => self.pmod(a, &v[1])?,
+            MathFn::Extremum(kind) => extremum(kind, &v)?,
         })
     }
+
+    fn pmod(&self, a: &ArrayRef, b: &ArrayRef) -> Result<ArrayRef, EvalError> {
+        let mode = self.overflow_mode();
+        macro_rules! int {
+            ($t:ty) => {{
+                let (l, r) = self.operands::<$t>(a.as_ref(), b.as_ref());
+                Arc::new(math::pmod_integral::<$t>(l, r, mode, &self.ctx)?) as ArrayRef
+            }};
+        }
+        macro_rules! flt {
+            ($t:ty) => {{
+                let (l, r) = self.operands::<$t>(a.as_ref(), b.as_ref());
+                Arc::new(math::pmod_float::<$t>(l, r, mode, &self.ctx)?) as ArrayRef
+            }};
+        }
+        Ok(match (a.data_type(), b.data_type()) {
+            (DataType::Int8, _) => int!(Int8Type),
+            (DataType::Int16, _) => int!(Int16Type),
+            (DataType::Int32, _) => int!(Int32Type),
+            (DataType::Int64, _) => int!(Int64Type),
+            (DataType::Float32, _) => flt!(Float32Type),
+            (DataType::Float64, _) => flt!(Float64Type),
+            (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
+                let (l, r) = self.operands::<Decimal128Type>(a.as_ref(), b.as_ref());
+                Arc::new(math::pmod_decimal(
+                    l,
+                    r,
+                    (*p1, *s1),
+                    (*p2, *s2),
+                    true,
+                    mode,
+                    &self.ctx,
+                )?)
+            }
+            (t, _) => return Err(EvalError::other(format!("pmod of {t}"))),
+        })
+    }
+}
+
+fn extremum(kind: Extremum, v: &[ArrayRef]) -> Result<ArrayRef, EvalError> {
+    macro_rules! prim {
+        ($t:ty) => {{
+            let cols: Vec<_> = v.iter().map(|c| c.as_primitive::<$t>()).collect();
+            Arc::new(math::extremum_primitive(kind, &cols, |a, b| a.cmp(b))?) as ArrayRef
+        }};
+    }
+    macro_rules! flt {
+        ($t:ty) => {{
+            let cols: Vec<_> = v.iter().map(|c| c.as_primitive::<$t>()).collect();
+            Arc::new(math::extremum_float(kind, &cols)?) as ArrayRef
+        }};
+    }
+    Ok(match v[0].data_type() {
+        DataType::Int8 => prim!(Int8Type),
+        DataType::Int16 => prim!(Int16Type),
+        DataType::Int32 => prim!(Int32Type),
+        DataType::Int64 => prim!(Int64Type),
+        DataType::Date32 => prim!(arrow_array::types::Date32Type),
+        DataType::Timestamp(..) => prim!(TimestampMicrosecondType),
+        DataType::Decimal128(..) => prim!(Decimal128Type),
+        DataType::Float32 => flt!(Float32Type),
+        DataType::Float64 => flt!(Float64Type),
+        DataType::Boolean => {
+            let cols: Vec<_> = v.iter().map(AsArray::as_boolean).collect();
+            Arc::new(math::extremum_bool(kind, &cols)?)
+        }
+        DataType::Utf8 => {
+            let cols: Vec<_> = v.iter().map(AsArray::as_string::<i32>).collect();
+            Arc::new(math::extremum_bytes(kind, &cols)?)
+        }
+        DataType::Binary => {
+            let cols: Vec<_> = v.iter().map(AsArray::as_binary::<i32>).collect();
+            Arc::new(math::extremum_bytes(kind, &cols)?)
+        }
+        t => return Err(EvalError::other(format!("greatest/least of {t}"))),
+    })
 }

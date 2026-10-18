@@ -100,6 +100,7 @@ fn actions_must_be_pinned_to_a_commit_sha() {
         "dtolnay/rust-toolchain@stable",
         "actions/checkout@3d3c42e",
         "docker://alpine:3.20",
+        "$.github/workflows/reusable.yml",
     ] {
         let v = workflow_violations("bad.yml", &job(bad));
         assert_eq!(v.len(), 1, "{bad}: {v:?}");
