@@ -13,8 +13,9 @@ use super::*;
 
 mod probe;
 
+/// The tree of `sql`, without Spark's post-parse checks (tree shapes).
 fn ok(sql: &str) -> ast::Query {
-    match parse_query(sql, &ParserOptions::default()) {
+    match parser::parse_query_unchecked(sql, ParserOptions::default()) {
         Ok(q) => q,
         Err(e) => panic!("{sql}: {}", e.error),
     }
@@ -406,8 +407,8 @@ fn data_types_resolve_through_the_ddl_parser() {
         );
     }
     assert_eq!(
-        cast("ARRAY<STRUCT<a: INT NOT NULL, `b``c` MAP<STRING, ARRAY>>>").to_string(),
-        "array<struct<`a`:int not null,`b``c`:map<string,array>>>"
+        cast("ARRAY<STRUCT<a: INT NOT NULL, `b``c` MAP<STRING, ARRAY<INT>>>>").to_string(),
+        "array<struct<`a`:int not null,`b``c`:map<string,array<int>>>>"
     );
     assert_eq!(
         cast("TIME(6) WITHOUT TIME ZONE").to_string(),

@@ -40,6 +40,8 @@ impl SqlFrontend for Frontend {
             o.legacy_setops_precedence,
             o.escaped_string_literals,
             o.legacy_bang_equals_not,
+            o.legacy_interval,
+            o.timestamp_ntz,
         ]
         .iter()
         .fold(0, |acc, b| acc << 1 | u64::from(*b))

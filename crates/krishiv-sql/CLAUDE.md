@@ -25,8 +25,9 @@ syntactic, origins = spans); `redact_sql` turns query text into a `RedactedSql` 
 - `lexer::tokenize` is lossless and never fails (comments, unterminated quotes and unclosed comments are
   typed tokens): redaction (ADR 0038) relies on it. Errors never echo a string literal's text.
 - Facts Spark's `AstBuilder` checks after parsing stay in the tree (`Keyword` vs string arguments,
-  interval `trailing` parts, quoted typed-literal names, table options with spans); the post-parse
-  validation (P2-T079) raises those errors, not the parser.
+  interval `trailing` parts, quoted typed-literal names, table options with spans); `validate/` raises
+  those errors (P2-T079) after every top rule parses, in `AstBuilder`'s visit order, on a big stack for
+  deep trees. Lowering reads literal values through `validate::literal`, so checked literals lower.
 - Type errors follow ANTLR's prediction: a complex type whose `<...>` fails falls back to the bare
   type when that reads on (error at the `<`; after `::` the statement is re-parsed with the bare
   type when the complex one fails later); optional type parts are taken only when complete.

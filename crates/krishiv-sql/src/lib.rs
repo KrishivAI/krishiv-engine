@@ -71,6 +71,12 @@ pub struct ParserOptions {
     /// `spark.sql.legacy.bangEqualsNot`: `!` may stand for `NOT` inside a
     /// predicate (`a ! IN (1)`).
     pub legacy_bang_equals_not: bool,
+    /// `spark.sql.legacy.interval.enabled`: an interval literal may mix
+    /// year-month and day-time fields.
+    pub legacy_interval: bool,
+    /// `spark.sql.timestampType = TIMESTAMP_NTZ`: a `TIMESTAMP '...'`
+    /// literal without a zone is a `TIMESTAMP_NTZ`.
+    pub timestamp_ntz: bool,
 }
 
 impl ParserOptions {
@@ -87,6 +93,9 @@ impl ParserOptions {
             legacy_setops_precedence: on("spark.sql.legacy.setopsPrecedence.enabled", false),
             escaped_string_literals: on("spark.sql.parser.escapedStringLiterals", false),
             legacy_bang_equals_not: on("spark.sql.legacy.bangEqualsNot", false),
+            legacy_interval: on("spark.sql.legacy.interval.enabled", false),
+            timestamp_ntz: conf("spark.sql.timestampType")
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
         }
     }
 }
@@ -97,7 +106,16 @@ impl ParserOptions {
 /// A [`ParseError`] with Spark's error class: `PARSE_SYNTAX_ERROR`,
 /// `PARSE_EMPTY_STATEMENT`, `UNCLOSED_BRACKETED_COMMENT`,
 /// `INVALID_IDENTIFIER`, `FAILED_TO_PARSE_TOO_COMPLEX` or
-/// `SYNTAX_DISCONTINUED.BANG_EQUALS_NOT`.
+/// `SYNTAX_DISCONTINUED.BANG_EQUALS_NOT`; and the errors Spark raises
+/// after parsing, while it builds the plan (invalid literals and types,
+/// duplicate CTE names, ...).
+///
+/// ```
+/// use krishiv_sql::{parse_query, ParserOptions};
+///
+/// let e = parse_query("SELECT DATE '2020-02-30'", &ParserOptions::default()).unwrap_err();
+/// assert_eq!(e.error.error_class().name(), "INVALID_TYPED_LITERAL");
+/// ```
 pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, ParseError> {
     parser::parse_query(sql, *options).map_err(|e| e.redacted_in(sql))
 }
@@ -150,9 +168,7 @@ pub fn parse_data_type(
     sql: &str,
     options: &ParserOptions,
 ) -> Result<ast::DataTypeSpec, ParseError> {
-    parser::parse_data_type(sql, *options)
-        .and_then(|t| validate::data_type(&t).map(|()| t))
-        .map_err(|e| e.redacted_in(sql))
+    parser::parse_data_type(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
 /// Parses a table schema string, as Spark's
@@ -165,14 +181,7 @@ pub fn parse_table_schema(
     sql: &str,
     options: &ParserOptions,
 ) -> Result<Vec<ast::StructField>, ParseError> {
-    parser::parse_table_schema(sql, *options)
-        .and_then(|columns| {
-            columns
-                .iter()
-                .try_for_each(|c| validate::data_type(&c.data_type))
-                .map(|()| columns)
-        })
-        .map_err(|e| e.redacted_in(sql))
+    parser::parse_table_schema(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
 /// Parses a schema string as Spark's `DataType.fromDDL` does (the schema

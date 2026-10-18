@@ -1,9 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The checks Spark's `AstBuilder` makes while it builds a plan from a
-//! parse tree: they raise `ParseException`s for statements the grammar
-//! accepts. The parser keeps the facts they need in the tree, and these
-//! checks run on the finished tree, so the parser never raises them.
-//!
 //! Data types (`visitPrimitiveDataType`, `visitComplexDataType`):
 //!
 //! | Type | Error class |

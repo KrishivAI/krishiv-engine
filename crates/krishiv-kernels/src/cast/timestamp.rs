@@ -42,6 +42,31 @@ pub(crate) enum Parsed {
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
 
+/// What a string is as a Spark timestamp, without resolving its zone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TimestampText {
+    /// A date, optionally with a time of day and a zone. A region id is
+    /// not checked against the time-zone database.
+    DateTime,
+    /// A time of day without a date (`10:00`, `T10:00`).
+    TimeOnly,
+    /// Not a timestamp.
+    Malformed,
+}
+
+/// Reads `s` with Spark's `stringToTimestamp` grammar (the module docs),
+/// for checks that need only its shape, such as SQL `TIMESTAMP '...'`
+/// literals.
+#[must_use]
+pub fn timestamp_text(s: &str) -> TimestampText {
+    match parse(s.as_bytes()) {
+        Parsed::At(..) => TimestampText::DateTime,
+        Parsed::NeedsClock => TimestampText::TimeOnly,
+        Parsed::Malformed => TimestampText::Malformed,
+    }
+}
+
 /// Parses one string.
 pub(crate) fn parse(s: &[u8]) -> Parsed {
     let s = trim_all(s);
@@ -310,5 +335,20 @@ mod tests {
         assert_eq!(zone(b"UTC-01:30"), Some(Zone::Offset(-5400)));
         assert_eq!(zone(b"Europe/Berlin"), Some(Zone::Region));
         assert_eq!(zone(b"1x"), None);
+    }
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::{TimestampText, timestamp_text};
+
+    #[test]
+    fn shapes_of_timestamp_strings() {
+        assert_eq!(
+            timestamp_text("2020-01-01 10:00:00 UTC"),
+            TimestampText::DateTime
+        );
+        assert_eq!(timestamp_text("T10:00"), TimestampText::TimeOnly);
+        assert_eq!(timestamp_text("2020-13-01"), TimestampText::Malformed);
     }
 }

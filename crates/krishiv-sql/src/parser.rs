@@ -32,7 +32,7 @@ use crate::ast::{DataTypeSpec, Explain, ExplainMode, Statement, StructField};
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
 use crate::lexer::{Sym, Token, TokenKind, tokenize, unquote_ident};
-use crate::{MAX_DEPTH, ParserOptions};
+use crate::{MAX_DEPTH, ParserOptions, validate};
 
 /// Why a rule did not match.
 pub(crate) enum Fail {
@@ -83,6 +83,30 @@ pub(crate) fn parse_query(src: &str, opts: ParserOptions) -> Result<Query, Parse
     parse_with::<QueryRule>(src, opts)
 }
 
+/// Parses one query statement without Spark's post-parse checks: the tree
+/// the checks see (parser tests of tree shapes).
+#[cfg(test)]
+pub(crate) fn parse_query_unchecked(src: &str, opts: ParserOptions) -> Result<Query, ParseError> {
+    parse_with::<UncheckedQueryRule>(src, opts)
+}
+
+/// [`QueryRule`] without its checks.
+#[cfg(test)]
+struct UncheckedQueryRule;
+
+#[cfg(test)]
+impl TopRule for UncheckedQueryRule {
+    type Out = Query;
+
+    fn parse(p: &mut Parser<'_>) -> PR<Query> {
+        p.statement()
+    }
+
+    fn validate(_: &Query, _: &str, _: ParserOptions) -> Result<(), ParseError> {
+        Ok(())
+    }
+}
+
 /// Parses one statement: a query, or `EXPLAIN` of a statement.
 pub(crate) fn parse_statement(src: &str, opts: ParserOptions) -> Result<Statement, ParseError> {
     parse_with::<StatementRule>(src, opts)
@@ -91,13 +115,15 @@ pub(crate) fn parse_statement(src: &str, opts: ParserOptions) -> Result<Statemen
 /// The top rule of a statement.
 trait TopRule {
     /// What it parses.
-    type Out: Send;
+    type Out: Send + Sync;
     /// Whether an unclosed bracketed comment is reported even when the
     /// input has a syntax error (Spark's type-string entry points do so;
     /// a statement reports the syntax error).
     const UNCLOSED_FIRST: bool = false;
     /// Parses it.
     fn parse(p: &mut Parser<'_>) -> PR<Self::Out>;
+    /// The checks Spark's `AstBuilder` makes on the parsed tree.
+    fn validate(out: &Self::Out, src: &str, opts: ParserOptions) -> Result<(), ParseError>;
 }
 
 /// [`Parser::statement`].
@@ -109,6 +135,10 @@ impl TopRule for QueryRule {
     fn parse(p: &mut Parser<'_>) -> PR<Query> {
         p.statement()
     }
+
+    fn validate(out: &Self::Out, src: &str, opts: ParserOptions) -> Result<(), ParseError> {
+        validate::query(out, src, opts)
+    }
 }
 
 /// [`Parser::explainable`].
@@ -119,6 +149,10 @@ impl TopRule for StatementRule {
     /// One statement.
     fn parse(p: &mut Parser<'_>) -> PR<Statement> {
         p.explainable()
+    }
+
+    fn validate(out: &Self::Out, src: &str, opts: ParserOptions) -> Result<(), ParseError> {
+        validate::statement(out, src, opts)
     }
 }
 
@@ -145,6 +179,10 @@ impl TopRule for DataTypeRule {
     fn parse(p: &mut Parser<'_>) -> PR<DataTypeSpec> {
         p.single_data_type()
     }
+
+    fn validate(out: &Self::Out, _src: &str, _opts: ParserOptions) -> Result<(), ParseError> {
+        validate::data_type(out)
+    }
 }
 
 /// [`Parser::single_table_schema`].
@@ -156,6 +194,10 @@ impl TopRule for TableSchemaRule {
     /// Columns.
     fn parse(p: &mut Parser<'_>) -> PR<Vec<StructField>> {
         p.single_table_schema()
+    }
+
+    fn validate(out: &Self::Out, _src: &str, _opts: ParserOptions) -> Result<(), ParseError> {
+        validate::columns(out)
     }
 }
 
@@ -213,11 +255,7 @@ fn parse_tokens<R: TopRule>(
     }
     // A deeply nested statement parses on its own thread, whose stack fits
     // `MAX_DEPTH` levels whatever the caller's stack is.
-    let stack = if cfg!(debug_assertions) {
-        64 << 20
-    } else {
-        16 << 20
-    };
+    let stack = BIG_STACK;
     let at = statement_span(src, &toks);
     std::thread::scope(|scope| {
         std::thread::Builder::new()
@@ -233,6 +271,14 @@ fn parse_tokens<R: TopRule>(
             )
     })
 }
+
+/// The stack of the threads that parse and check deep statements: it fits
+/// [`MAX_DEPTH`] levels.
+const BIG_STACK: usize = if cfg!(debug_assertions) {
+    64 << 20
+} else {
+    16 << 20
+};
 
 /// The span of a whole statement, from its first token to its last: where
 /// Spark reports `FAILED_TO_PARSE_TOO_COMPLEX` (its query context is the
@@ -281,7 +327,12 @@ fn nesting_bound(src: &str, toks: &[Token]) -> usize {
 fn run<R: TopRule>(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<R::Out, Failed> {
     let mut p = Parser::new(src, toks, opts, None);
     let failed = match R::parse(&mut p) {
-        Ok(out) => return p.finish(out),
+        Ok(out) => {
+            let deep = p.peak > INLINE_NESTING;
+            return p
+                .finish(out)
+                .and_then(|out| checked::<R>(out, src, opts, deep));
+        }
         Err(Fail::Fatal(e)) => return Err((*e).into()),
         Err(Fail::Syntax) => p.syntax_error(),
     };
@@ -292,12 +343,53 @@ fn run<R: TopRule>(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<R
     for &keyword in &p.cast_types {
         let mut retry = Parser::new(src, p.toks.clone(), opts, Some(keyword));
         match R::parse(&mut retry) {
-            Ok(out) => return retry.finish(out),
+            Ok(out) => {
+                let deep = retry.peak > INLINE_NESTING;
+                return retry
+                    .finish(out)
+                    .and_then(|out| checked::<R>(out, src, opts, deep));
+            }
             Err(Fail::Syntax) if retry.far > p.far => return Err(retry.syntax_error().into()),
             Err(_) => {}
         }
     }
     Err(failed.into())
+}
+
+/// `out` after Spark's post-parse checks ([`TopRule::validate`]), whose
+/// errors Spark raises after parsing. The checks follow the tree, so a
+/// `deep` tree is checked on a thread whose stack fits [`MAX_DEPTH`]
+/// levels.
+fn checked<R: TopRule>(
+    out: R::Out,
+    src: &str,
+    opts: ParserOptions,
+    deep: bool,
+) -> Result<R::Out, Failed> {
+    let result = if deep {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("krishiv-sql-check".to_owned())
+                .stack_size(BIG_STACK)
+                .spawn_scoped(scope, || R::validate(&out, src, opts))
+                .map_or_else(
+                    |_| Err(error::too_complex(Span::new(0, src.len()))),
+                    |h| {
+                        h.join()
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                    },
+                )
+        })
+    } else {
+        R::validate(&out, src, opts)
+    };
+    match result {
+        Ok(()) => Ok(out),
+        Err(error) => Err(Failed {
+            error,
+            deferred: true,
+        }),
+    }
 }
 
 /// Words after which a parenthesis opens a query rather than an expression.

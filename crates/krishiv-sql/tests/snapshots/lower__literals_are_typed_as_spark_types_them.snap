@@ -13,9 +13,9 @@ SELECT 40000S FROM t
 SELECT 9223372036854775808L FROM t
   => [INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 9223372036854775808 is outside the valid range for bigint with minimum value of -9223372036854775808 and maximum value of 9223372036854775807. Please adjust the value accordingly. SQLSTATE: 22003 @ 7..27
 SELECT 1e400 FROM t
-  => [INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1e400 is outside the valid range for double with minimum value of -1.7976931348623157E308 and maximum value of 1.7976931348623157E308. Please adjust the value accordingly. SQLSTATE: 22003 @ 7..12
+  => [INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1e400 is outside the valid range for double with minimum value of -1.7976931348623157E+308 and maximum value of 1.7976931348623157E+308. Please adjust the value accordingly. SQLSTATE: 22003 @ 7..12
 SELECT 1e40F FROM t
-  => [INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1e40 is outside the valid range for float with minimum value of -3.4028235E38 and maximum value of 3.4028235E38. Please adjust the value accordingly. SQLSTATE: 22003 @ 7..12
+  => [INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1e40 is outside the valid range for float with minimum value of -3.4028234663852886E+38 and maximum value of 3.4028234663852886E+38. Please adjust the value accordingly. SQLSTATE: 22003 @ 7..12
 SELECT 123456789012345678901234567890123456789 FROM t
   => [DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION] Decimal precision 39 exceeds max precision 38. SQLSTATE: 22003 @ 7..46
 SELECT DATE '2021-02-29' FROM t

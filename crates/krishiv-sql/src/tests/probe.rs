@@ -131,7 +131,7 @@ fn agrees_with_spark_on_the_parse_probe() {
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut deviations = vec![];
     let mut type_deviations = vec![];
-    let mut owed_to_validation = 0;
+    let mut validated = 0;
     for case in doc["cases"].as_array().unwrap() {
         let sql = case["sql"].as_str().unwrap();
         let conf = case["conf"].as_object().unwrap();
@@ -165,8 +165,10 @@ fn agrees_with_spark_on_the_parse_probe() {
             ours.as_ref()
                 .is_err_and(|e| same_error(sql, e, case, case["start"].as_u64()))
         } else {
-            owed_to_validation += 1;
-            ours.is_ok()
+            // Raised by the post-parse checks (P2-T079).
+            validated += 1;
+            ours.as_ref()
+                .is_err_and(|e| same_error(sql, e, case, case["start"].as_u64()))
         };
         if !agrees {
             deviations.push(sql);
@@ -188,7 +190,7 @@ fn agrees_with_spark_on_the_parse_probe() {
         .map(|(m, sql, _)| (*m, *sql))
         .collect();
     assert_eq!(found, known, "{type_deviations:#?}");
-    assert_eq!(owed_to_validation, 20);
+    assert_eq!(validated, 20);
 }
 
 /// Every DDL type string of the Spark type-string fixture
@@ -238,4 +240,149 @@ fn agrees_with_spark_on_the_type_string_fixture() {
             }
         }
     }
+}
+
+/// Every class the post-parse checks raise, on a statement Spark rejects
+/// with it (the probe fixture holds Spark's runs of these shapes).
+#[test]
+fn post_parse_checks_raise_spark_classes() {
+    let d = ParserOptions::default();
+    let class = |sql: &str| match parse_statement(sql, &d) {
+        Ok(_) => panic!("{sql} parsed"),
+        Err(e) => e.error.error_class(),
+    };
+    for (sql, expected) in [
+        ("SELECT CAST(x AS char)", ErrorClass::DatatypeMissingSize),
+        (
+            "SELECT CAST(x AS array)",
+            ErrorClass::IncompleteTypeDefinitionArray,
+        ),
+        (
+            "SELECT CAST(x AS map)",
+            ErrorClass::IncompleteTypeDefinitionMap,
+        ),
+        (
+            "SELECT CAST(x AS struct)",
+            ErrorClass::IncompleteTypeDefinitionStruct,
+        ),
+        (
+            "SELECT CAST(x AS time(7))",
+            ErrorClass::UnsupportedTimePrecision,
+        ),
+        (
+            "WITH t AS (SELECT 1), T AS (SELECT 2) SELECT 1",
+            ErrorClass::DuplicatedCteNames,
+        ),
+        (
+            "SELECT * FROM a NATURAL JOIN LATERAL (SELECT 1)",
+            ErrorClass::IncompatibleJoinTypes,
+        ),
+        (
+            "SELECT * FROM a JOIN LATERAL (SELECT 1) USING (c)",
+            ErrorClass::UnsupportedFeatureLateralJoinUsing,
+        ),
+        (
+            "VALUES (1, 2), (3)",
+            ErrorClass::InvalidInlineTableNumColumnsMismatch,
+        ),
+        ("SELECT 128Y", ErrorClass::InvalidNumericLiteralRange),
+        (
+            "SELECT 1.20E-38BD",
+            ErrorClass::DecimalPrecisionExceedsMaxPrecision,
+        ),
+        (
+            "SELECT dateadd('DAY', 1, d)",
+            ErrorClass::InvalidParameterValueDatetimeUnit,
+        ),
+        (
+            "SELECT 1 IN ()",
+            ErrorClass::InvalidSqlSyntaxEmptyInPredicate,
+        ),
+        (
+            "SELECT 1 FROM t WINDOW w AS (), w AS ()",
+            ErrorClass::InvalidSqlSyntaxRepetitiveWindowDefinition,
+        ),
+        ("SELECT DATE '2020-02-30'", ErrorClass::InvalidTypedLiteral),
+        ("SELECT TIME '24:00'", ErrorClass::InvalidTypedLiteral),
+        (
+            "SELECT TIMESTAMP_NTZ '10:00'",
+            ErrorClass::InvalidTypedLiteral,
+        ),
+        ("SELECT X'XY'", ErrorClass::InvalidTypedLiteral),
+        ("SELECT INTERVAL '1 d'", ErrorClass::InvalidTypedLiteral),
+        ("SELECT GEO 'x'", ErrorClass::UnsupportedTypedLiteral),
+        (
+            "SELECT INTERVAL '1' YEAR TO SECOND",
+            ErrorClass::InvalidIntervalFormatUnsupportedFromToExpression,
+        ),
+        (
+            "SELECT INTERVAL '10-12' YEAR TO MONTH",
+            ErrorClass::InvalidIntervalFormatIntervalParsing,
+        ),
+        (
+            "SELECT INTERVAL '2' YEAR TO MONTH",
+            ErrorClass::InvalidIntervalFormatUnmatchedFormatString,
+        ),
+        (
+            "SELECT INTERVAL '1 2' DAY TO SECOND",
+            ErrorClass::InvalidIntervalFormatUnmatchedFormatStringWithNotice,
+        ),
+        (
+            "SELECT INTERVAL '1 25:00:00' DAY TO SECOND",
+            ErrorClass::LegacyErrorTemp0063,
+        ),
+        (
+            "SELECT INTERVAL '106751991 23' DAY TO HOUR",
+            ErrorClass::IntervalArithmeticOverflowWithoutSuggestion,
+        ),
+        (
+            "SELECT INTERVAL 1.5 DAY",
+            ErrorClass::InvalidIntervalFormatInvalidFraction,
+        ),
+        (
+            "SELECT INTERVAL 1 YEAR '2-1' YEAR TO MONTH",
+            ErrorClass::LegacyErrorTemp0024,
+        ),
+        (
+            "SELECT INTERVAL '1 day' DAY",
+            ErrorClass::LegacyErrorTemp0026,
+        ),
+        (
+            "SELECT INTERVAL 1 YEAR TO MONTH",
+            ErrorClass::LegacyErrorTemp0027,
+        ),
+        (
+            "SELECT INTERVAL 1 YEAR 1 DAY",
+            ErrorClass::LegacyErrorTemp0029,
+        ),
+        ("SELECT * FROM t WITH (k)", ErrorClass::LegacyErrorTemp0035),
+        (
+            "WITH r MAX RECURSION LEVEL 5 AS (SELECT 1) SELECT 1",
+            ErrorClass::LegacyErrorTemp0035,
+        ),
+        (
+            "SELECT a FROM t GROUP BY CUBE(())",
+            ErrorClass::LegacyErrorTemp0051,
+        ),
+        ("SELECT a LIKE ANY ()", ErrorClass::LegacyErrorTemp0064),
+        (
+            "SELECT sum(a) OVER (ORDER BY a ROWS x PRECEDING) FROM t",
+            ErrorClass::LegacyErrorTemp0064,
+        ),
+    ] {
+        assert_eq!(class(sql), expected, "{sql}");
+    }
+    // The configs that relax the checks.
+    let legacy = ParserOptions {
+        legacy_interval: true,
+        ..d
+    };
+    assert!(parse_statement("SELECT INTERVAL 1 YEAR 1 DAY", &legacy).is_ok());
+    let ntz =
+        ParserOptions::from_conf(|k| (k == "spark.sql.timestampType").then_some("TIMESTAMP_NTZ"));
+    assert!(parse_statement("SELECT TIMESTAMP '10:00'", &ntz).is_err());
+    assert!(parse_statement("SELECT TIMESTAMP '10:00'", &d).is_ok());
+    // A string option key is never echoed.
+    let e = parse_statement("SELECT * FROM t WITH ('secret')", &d).unwrap_err();
+    assert!(!e.error.to_string().contains("secret"), "{}", e.error);
 }
