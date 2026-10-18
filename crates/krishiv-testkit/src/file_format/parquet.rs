@@ -43,7 +43,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
             default: OptionDefault::Int(0),
             conf_fallback: None,
             metadata_key: false,
-            doc: "Test writer: truncate statistics to this many bytes (0: never).",
+            doc: "Test writer: truncate statistics to this many bytes (0: the product default).",
         },
         OptionSpec {
             name: "createdBy",
@@ -113,7 +113,8 @@ impl FileFormat for TestParquet {
         o: &'a FormatOptions,
     ) -> BoxFuture<'a, FormatResult<Box<dyn Encoder>>> {
         let rows = usize::try_from(o.int("rowGroupRows").unwrap_or(1 << 20)).unwrap_or(1 << 20);
-        // 0 is "never" (the product writer's footer statistics default).
+        // 0 keeps the product writer's truncation; a positive length
+        // overrides it (truncated-bound edge cases).
         let truncate = usize::try_from(o.int("statsTruncateLength").unwrap_or(0))
             .ok()
             .filter(|n| *n > 0);
@@ -122,9 +123,11 @@ impl FileFormat for TestParquet {
             &schema,
             o,
             |p| {
-                let p = p
-                    .set_max_row_group_row_count(Some(rows))
-                    .set_statistics_truncate_length(truncate);
+                let p = p.set_max_row_group_row_count(Some(rows));
+                let p = match truncate {
+                    Some(n) => p.set_statistics_truncate_length(Some(n)),
+                    None => p,
+                };
                 match created_by {
                     Some(by) => p.set_created_by(by),
                     None => p,
