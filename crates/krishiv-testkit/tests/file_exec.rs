@@ -82,13 +82,17 @@ async fn run(
     plan: Arc<dyn ExecNode>,
     slots: usize,
 ) -> Result<Vec<RecordBatch>, KrishivError> {
+    run_with(pool, plan, slots, ExecConfig::default()).await
+}
+
+async fn run_with(
+    pool: &Arc<dyn MemoryPool>,
+    plan: Arc<dyn ExecNode>,
+    slots: usize,
+    config: ExecConfig,
+) -> Result<Vec<RecordBatch>, KrishivError> {
     let runner = QueryRunner::new(TokioExecutor::deterministic(slots)?);
-    let query = QueryContext::new(
-        QueryId(7),
-        WorkloadClass::Batch,
-        ExecConfig::default(),
-        Arc::clone(pool),
-    );
+    let query = QueryContext::new(QueryId(7), WorkloadClass::Batch, config, Arc::clone(pool));
     let mut stream = runner.submit(plan, Arc::clone(&query)).await?;
     let mut out = Vec::new();
     let mut error = None;
@@ -854,4 +858,56 @@ fn a_write_failing_at_finish_leaves_nothing() {
     let left = env.block_on(env.inner.list(Some(&Path::from("fin"))).collect::<Vec<_>>());
     assert!(left.is_empty());
     assert_eq!(env.root.reserved(), 0);
+}
+
+/// Several drivers of one task, and tasks with adjacent numbers writing to
+/// one directory, never write two files under one name.
+#[test]
+fn concurrent_writers_never_share_a_file_name() {
+    let env = Env::new(None).unwrap();
+    let fx = MockFixture::default();
+    let config = ExecConfig {
+        morsel_rows: 100,
+        ..ExecConfig::default()
+    };
+    let mut written = 0;
+    for task in [3, 4] {
+        let input = MemoryScan::try_new(
+            schema(),
+            (0..6).map(|k| Batch::new(sorted(100, k * 100))).collect(),
+        )
+        .unwrap();
+        let sink = Arc::new(
+            FileWriteSink::try_new(
+                fx.format(),
+                env.io.clone(),
+                schema(),
+                env.options(&fx, &[]).unwrap(),
+                WriteOptions {
+                    store: StoreId::new("memory://suite"),
+                    dir: Path::from("same"),
+                    task,
+                    job_uuid: "u".into(),
+                    max_records_per_file: 40,
+                    target_file_bytes: 0,
+                },
+            )
+            .unwrap(),
+        );
+        let plan = Arc::new(FileWrite {
+            input: Arc::new(Leaf(Arc::new(input))),
+            sink: Arc::clone(&sink),
+        });
+        env.block_on(run_with(&env.query, plan, 3, config.clone()))
+            .unwrap();
+        let files = sink.files();
+        assert_eq!(files.iter().map(|f| f.rows).sum::<u64>(), 600);
+        written += files.len();
+    }
+    let listed = env.block_on(
+        env.inner
+            .list(Some(&Path::from("same")))
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(listed.len(), written, "a file overwrote another");
 }

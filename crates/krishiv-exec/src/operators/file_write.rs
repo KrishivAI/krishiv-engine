@@ -7,8 +7,11 @@
 //!   hands the batch to a [`FileWriter`] running on its own task through a
 //!   bounded channel, and reports [`SinkStatus::Blocked`] while the channel
 //!   is full (the encoder or the upload window is behind). Each driver
-//!   writes its own files (Spark's `part-<task>` names, one task number per
-//!   driver), with `maxRecordsPerFile` and target-size rollover.
+//!   writes its own files, named as Spark names a task's files
+//!   (`part-<task>-<uuid>-c<n>`): the task number is the sink's, and the
+//!   drivers share the file counter, so names never collide within a task
+//!   or with another task's. `maxRecordsPerFile` and target-size rollover
+//!   apply per file.
 //! - **Nothing of a failed or cancelled write stays visible.** `combine`
 //!   tells the driver's writer to finish its last file; `finalize` waits
 //!   for every writer and then tells them to keep their files, or, if any
@@ -20,7 +23,7 @@
 //! - Files land under the write's staging directory; publishing them is
 //!   the commit protocol's job, never a rename.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringViewArray};
@@ -70,7 +73,8 @@ struct Writer {
 }
 
 struct WriteGlobal {
-    next_task: AtomicU32,
+    /// File numbers of the task, shared by its drivers' writers.
+    file_numbers: Arc<AtomicU32>,
     writers: Mutex<Vec<Writer>>,
     written: Mutex<Vec<WrittenFileInfo>>,
 }
@@ -143,8 +147,8 @@ impl WriterTask {
 }
 
 impl FileWriteSink {
-    /// Writes batches of `schema` in `format` with `options` (the task
-    /// number there is the first driver's; each driver takes the next).
+    /// Writes batches of `schema` in `format` with `options` (one task:
+    /// its drivers share the task number and the file counter).
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` if the format cannot write.
@@ -216,7 +220,7 @@ impl Sink for FileWriteSink {
 
     fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
         Ok(Arc::new(WriteGlobal {
-            next_task: AtomicU32::new(self.options.task),
+            file_numbers: Arc::new(AtomicU32::new(0)),
             writers: Mutex::new(Vec::new()),
             written: Mutex::new(Vec::new()),
         }))
@@ -224,18 +228,15 @@ impl Sink for FileWriteSink {
 
     fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
         let g = global_ref::<WriteGlobal>(global, "FileWrite")?;
-        let options = WriteOptions {
-            task: g.next_task.fetch_add(1, Ordering::Relaxed),
-            ..self.options.clone()
-        };
         let writer = FileWriter::new(
             &self.io,
             Arc::clone(&self.format),
             Arc::clone(&self.schema),
             self.format_options.clone(),
-            options,
+            self.options.clone(),
             ctx.consumer().reservation(),
-        )?;
+        )?
+        .sharing_file_numbers(Arc::clone(&g.file_numbers));
         let (batches_tx, batches_rx) = mpsc::channel(QUEUED_BATCHES);
         let (commit_tx, commit_rx) = oneshot::channel();
         let (done_tx, done_rx) = oneshot::channel();
