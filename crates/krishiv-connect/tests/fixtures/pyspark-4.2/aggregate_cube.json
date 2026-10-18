@@ -1,0 +1,53 @@
+{
+  "root": {
+    "aggregate": {
+      "aggregateExpressions": [
+        {
+          "unresolvedFunction": {
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "isMetadataColumn": false,
+                  "unparsedIdentifier": "c"
+                }
+              }
+            ],
+            "functionName": "sum"
+          }
+        }
+      ],
+      "groupType": "GROUP_TYPE_CUBE",
+      "groupingExpressions": [
+        {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "unparsedIdentifier": "a"
+          }
+        },
+        {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "unparsedIdentifier": "b"
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    },
+    "common": {
+      "planId": "1"
+    }
+  }
+}

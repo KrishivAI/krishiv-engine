@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Project [7Y, 300S, 70000, 1.25F, 2.5D, 1.5000]
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Project plan_id=1
+  Read plan_id=0

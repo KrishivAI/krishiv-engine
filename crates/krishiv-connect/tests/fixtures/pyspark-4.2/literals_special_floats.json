@@ -1,0 +1,40 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "project": {
+      "expressions": [
+        {
+          "literal": {
+            "double": "NaN"
+          }
+        },
+        {
+          "literal": {
+            "double": "Infinity"
+          }
+        },
+        {
+          "literal": {
+            "double": -0.0
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

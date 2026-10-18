@@ -1,0 +1,182 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "filter": {
+      "condition": {
+        "unresolvedFunction": {
+          "arguments": [
+            {
+              "unresolvedFunction": {
+                "arguments": [
+                  {
+                    "unresolvedFunction": {
+                      "arguments": [
+                        {
+                          "unresolvedFunction": {
+                            "arguments": [
+                              {
+                                "unresolvedFunction": {
+                                  "arguments": [
+                                    {
+                                      "unresolvedFunction": {
+                                        "arguments": [
+                                          {
+                                            "unresolvedAttribute": {
+                                              "isMetadataColumn": false,
+                                              "unparsedIdentifier": "a"
+                                            }
+                                          },
+                                          {
+                                            "literal": {
+                                              "integer": 1
+                                            }
+                                          }
+                                        ],
+                                        "functionName": ">="
+                                      }
+                                    },
+                                    {
+                                      "unresolvedFunction": {
+                                        "arguments": [
+                                          {
+                                            "unresolvedAttribute": {
+                                              "isMetadataColumn": false,
+                                              "unparsedIdentifier": "b"
+                                            }
+                                          },
+                                          {
+                                            "literal": {
+                                              "integer": 2
+                                            }
+                                          }
+                                        ],
+                                        "functionName": "<="
+                                      }
+                                    }
+                                  ],
+                                  "functionName": "and"
+                                }
+                              },
+                              {
+                                "unresolvedFunction": {
+                                  "arguments": [
+                                    {
+                                      "unresolvedFunction": {
+                                        "arguments": [
+                                          {
+                                            "unresolvedAttribute": {
+                                              "isMetadataColumn": false,
+                                              "unparsedIdentifier": "a"
+                                            }
+                                          },
+                                          {
+                                            "unresolvedAttribute": {
+                                              "isMetadataColumn": false,
+                                              "unparsedIdentifier": "b"
+                                            }
+                                          }
+                                        ],
+                                        "functionName": "=="
+                                      }
+                                    }
+                                  ],
+                                  "functionName": "not"
+                                }
+                              }
+                            ],
+                            "functionName": "or"
+                          }
+                        },
+                        {
+                          "unresolvedFunction": {
+                            "arguments": [
+                              {
+                                "unresolvedFunction": {
+                                  "arguments": [
+                                    {
+                                      "unresolvedAttribute": {
+                                        "isMetadataColumn": false,
+                                        "unparsedIdentifier": "a"
+                                      }
+                                    },
+                                    {
+                                      "literal": {
+                                        "integer": 3
+                                      }
+                                    }
+                                  ],
+                                  "functionName": "=="
+                                }
+                              }
+                            ],
+                            "functionName": "not"
+                          }
+                        }
+                      ],
+                      "functionName": "or"
+                    }
+                  },
+                  {
+                    "unresolvedFunction": {
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "isMetadataColumn": false,
+                            "unparsedIdentifier": "a"
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "isMetadataColumn": false,
+                            "unparsedIdentifier": "b"
+                          }
+                        }
+                      ],
+                      "functionName": "<=>"
+                    }
+                  }
+                ],
+                "functionName": "or"
+              }
+            },
+            {
+              "unresolvedFunction": {
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "isMetadataColumn": false,
+                      "unparsedIdentifier": "a"
+                    }
+                  },
+                  {
+                    "literal": {
+                      "integer": 4
+                    }
+                  }
+                ],
+                "functionName": "<"
+              }
+            }
+          ],
+          "functionName": "or"
+        }
+      },
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

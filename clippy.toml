@@ -3,3 +3,16 @@ allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-dbg-in-tests = true
 allow-print-in-tests = true
+
+# prost is built with `no-recursion-limit` (krishiv-connect needs plans deeper
+# than its fixed limit of 100), and Cargo unifies features, so every crate
+# linked with krishiv-connect decodes without a depth limit. Untrusted bytes
+# are decoded only through `krishiv_connect::wire`, which bounds depth, size
+# and decoded memory first.
+disallowed-methods = [
+    { path = "prost::Message::decode", reason = "unbounded recursion: decode through krishiv_connect::wire" },
+    { path = "prost::Message::decode_length_delimited", reason = "unbounded recursion: decode through krishiv_connect::wire" },
+    { path = "prost::Message::merge", reason = "unbounded recursion: decode through krishiv_connect::wire" },
+    { path = "prost::Message::merge_length_delimited", reason = "unbounded recursion: decode through krishiv_connect::wire" },
+    { path = "prost_types::Any::to_msg", reason = "unbounded recursion: decode through krishiv_connect::wire" },
+]

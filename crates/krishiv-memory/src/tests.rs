@@ -774,6 +774,60 @@ fn consumer_handles_unregister_after_their_last_reservation() {
 }
 
 #[test]
+fn shrink_to_credit_hands_bytes_over_without_the_pool() {
+    let root = root(Some(1000), 1);
+    let q: Arc<dyn MemoryPool> = root.child("q", None);
+    let h = ConsumerHandle::register(Arc::clone(&q), "op", None);
+    let mut headroom = h.reservation();
+    headroom.try_grow(600).unwrap();
+    headroom.shrink_to_credit(400);
+    assert_eq!(
+        (headroom.size(), h.credit(), root.reserved()),
+        (200, 400, 600)
+    );
+    // Another reservation of the same consumer takes the credit first.
+    let mut scratch = h.reservation();
+    scratch.try_grow(500).unwrap(); // 400 credit + 100 from the pool
+    assert_eq!((h.credit(), root.reserved()), (0, 700));
+    // Clamped to the size; a plain reservation just shrinks.
+    headroom.shrink_to_credit(10_000);
+    assert_eq!((headroom.size(), h.credit()), (0, 200));
+    h.release_credit();
+    let mut plain = Reservation::new(Arc::clone(&q), h.id());
+    plain.try_grow(50).unwrap();
+    plain.shrink_to_credit(50);
+    assert_eq!((plain.size(), h.credit(), root.reserved()), (0, 0, 500));
+    drop((scratch, headroom, plain, h));
+    assert_eq!(root.reserved(), 0);
+}
+
+#[test]
+fn a_reservation_releasing_to_credit_keeps_its_bytes_with_the_consumer() {
+    let root = root(Some(1000), 1);
+    let q: Arc<dyn MemoryPool> = root.child("q", None);
+    let h = ConsumerHandle::register(Arc::clone(&q), "op", None);
+    let mut scratch = h.reservation().releasing_to_credit();
+    scratch.try_grow(300).unwrap();
+    scratch.shrink(100);
+    assert_eq!(
+        (scratch.size(), h.credit(), root.reserved()),
+        (200, 100, 300)
+    );
+    // Another consumer cannot take what was freed; this one regrows from it.
+    scratch.try_grow(100).unwrap();
+    assert_eq!((h.credit(), root.reserved()), (0, 300));
+    drop(scratch);
+    assert_eq!((h.credit(), root.reserved()), (300, 300));
+    h.release_credit();
+    assert_eq!(root.reserved(), 0);
+    // Without a handle it releases to the pool as usual.
+    let mut plain = Reservation::new(Arc::clone(&q), h.id()).releasing_to_credit();
+    plain.try_grow(10).unwrap();
+    drop(plain);
+    assert_eq!((h.credit(), root.reserved()), (0, 0));
+}
+
+#[test]
 fn grant_credit_is_taken_once_and_refunded_on_failure() {
     let root = root(Some(1000), 1);
     let q: Arc<dyn MemoryPool> = root.child("q", None);
@@ -876,4 +930,65 @@ async fn reserve_for_parks_the_grant_as_credit() {
     let e = owner.reserve_for(&h, 8 * Q, || async {}).await.unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
     assert_eq!(h.credit(), Q, "a refused request parks nothing");
+}
+
+#[test]
+fn transfer_moves_bytes_between_consumers_of_one_pool() {
+    let root = root(Some(1 << 20), 4096);
+    let q = root.child("q", None);
+    let a = ConsumerHandle::register(Arc::clone(&q), "a", None);
+    let b = ConsumerHandle::register(Arc::clone(&q), "b", None);
+    let mut r = a.reservation();
+    r.try_grow(10_000).unwrap();
+    let before = q.reserved();
+    r.transfer_to(&b).unwrap();
+    assert_eq!(
+        (r.consumer(), r.size(), q.reserved()),
+        (b.id(), 10_000, before)
+    );
+    assert_eq!(b.peak(), 10_000);
+    drop(a);
+    r.shrink(4_000);
+    drop(r);
+    assert_eq!(q.reserved(), 0);
+    // A consumer of another pool is refused; the reservation is unchanged.
+    let other = ConsumerHandle::register(root.child("q2", None), "c", None);
+    let mut r = b.reservation();
+    r.try_grow(100).unwrap();
+    assert!(matches!(
+        r.transfer_to(&other),
+        Err(MemoryError::UnknownConsumer { .. })
+    ));
+    assert_eq!(r.consumer(), b.id());
+}
+
+/// Bytes transferred to a spillable consumer are what the arbitrator sees:
+/// it asks that consumer to spill them (`min(spillable, used)`).
+#[tokio::test(start_paused = true)]
+async fn the_arbitrator_sees_transferred_bytes() {
+    let root = root(Some(64 * Q), Q);
+    let q = root.child_pool("q", Some(16 * Q));
+    let pool = Arc::clone(&q) as Arc<dyn MemoryPool>;
+    let gone = ConsumerHandle::register(Arc::clone(&pool), "finished-driver", None);
+    let mut state = gone.reservation();
+    state.try_grow(10 * Q).unwrap();
+    let owner = SpillOwner::new();
+    let signal = owner.signal();
+    let live = ConsumerHandle::register(
+        Arc::clone(&pool),
+        "finalizing-driver",
+        Some(Arc::clone(&signal) as Arc<dyn Spillable>),
+    );
+    state.transfer_to(&live).unwrap();
+    drop(gone);
+    signal.set_spillable_bytes(10 * Q);
+    let w = q.register("w", None);
+    let qc = Arc::clone(&q);
+    let waiting = tokio::spawn(async move { qc.reserve(w, 10 * Q).await });
+    tokio::task::yield_now().await;
+    let target = signal.spill_requested().expect("asked to spill");
+    assert!(target >= 4 * Q, "{target}");
+    state.shrink(target);
+    signal.complete(target);
+    waiting.await.unwrap().unwrap();
 }

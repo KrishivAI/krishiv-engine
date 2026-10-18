@@ -1,0 +1,4 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+[KRISHIV_UNSUPPORTED_FEATURE] The feature Spark Connect relation WithColumnsRenamed (spark.connect.Relation.with_columns_renamed) is not supported by Krishiv yet. SQLSTATE: 0A000

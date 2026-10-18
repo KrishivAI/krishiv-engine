@@ -13,6 +13,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.10"
+prost = "0.14.4"
+krishiv-connect = { path = "../crates/krishiv-connect" }
 krishiv-plan = { path = "../crates/krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../crates/krishiv-sql" }
 krishiv-types = { path = "../crates/krishiv-types" }
@@ -21,6 +23,13 @@ krishiv-testkit = { path = "../crates/krishiv-testkit" }
 [[bin]]
 name = "sql_parse"
 path = "fuzz_targets/sql_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "connect_decode"
+path = "fuzz_targets/connect_decode.rs"
 test = false
 doc = false
 bench = false

@@ -1,0 +1,62 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "project": {
+      "expressions": [
+        {
+          "unresolvedFunction": {
+            "arguments": [
+              {
+                "literal": {
+                  "integer": 1
+                }
+              },
+              {
+                "literal": {
+                  "integer": 2
+                }
+              }
+            ],
+            "functionName": "array"
+          }
+        },
+        {
+          "literal": {
+            "array": {
+              "elementType": {
+                "integer": {}
+              },
+              "elements": [
+                {
+                  "integer": 1
+                },
+                {
+                  "integer": 2
+                },
+                {
+                  "integer": 3
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,4 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+[KRISHIV_UNSUPPORTED_FEATURE] The feature aliases with several names (spark.connect.Expression.Alias.name) is not supported by Krishiv yet. SQLSTATE: 0A000

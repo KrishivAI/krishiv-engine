@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Read `my db`.`ev.ents`
+-- plan ids --
+Read plan_id=0

@@ -95,8 +95,10 @@ deny = [
     # Banned crates here are not currently in the dependency graph. If a
     # third-party dependency ever pulls one in, add `wrappers = ["<parent>"]`
     # to that entry with a justification rather than removing the ban.
-    # Exception: the `codspeed` bench instrumentation crate (dev-dependency only, never shipped).
-    { crate = "anyhow", wrappers = ["codspeed"], reason = "libraries use thiserror (ADR 0028)" },
+    # Exceptions: the `codspeed` bench instrumentation crate (dev-dependency only, never shipped) and
+    # `prost-derive` (the derive macro of prost, which krishiv-connect needs; a proc macro runs at
+    # build time and its dependencies are not linked into any Krishiv binary).
+    { crate = "anyhow", wrappers = ["codspeed", "prost-derive"], reason = "libraries use thiserror (ADR 0028)" },
     # Single-version crates (deny duplicates).
     { crate = "tokio", deny-multiple-versions = true },
     { crate = "prost", deny-multiple-versions = true },

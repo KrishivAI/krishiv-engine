@@ -1,0 +1,15 @@
+{
+  "root": {
+    "common": {
+      "planId": "0"
+    },
+    "read": {
+      "namedTable": {
+        "options": {
+          "versionAsOf": "3"
+        },
+        "unparsedIdentifier": "events"
+      }
+    }
+  }
+}

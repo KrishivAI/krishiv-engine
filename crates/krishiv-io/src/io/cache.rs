@@ -8,10 +8,23 @@
 //! Distinct from the table-metadata cache of ADR 0037; `REFRESH` and
 //! `CLEAR CACHE` clear it ([`MetadataCache::invalidate_path`],
 //! [`MetadataCache::clear`]).
+//!
+//! **Single flight.** Concurrent misses on one key share one read: the
+//! first reader holds the key's load slot while it reads, the others
+//! wait for it and take its result (even when the entry was too large to
+//! cache), or its error if it failed: readers queued behind a failed read
+//! fail with it instead of retrying one after another (a reader arriving
+//! after the failure reads again). A reader dropped mid-read releases the
+//! slot to the next one, which reads.
+//! An invalidation (`REFRESH`, `CLEAR CACHE`) starts a new generation: a
+//! read begun before it neither fills the cache nor serves later readers.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+
+use krishiv_common::error::KrishivError;
 
 use krishiv_memory::{MemoryPool, Reservation};
 use object_store::path::Path;
@@ -74,6 +87,8 @@ struct Lru {
     tick: u64,
     /// The cache's memory, reserved from its own pool when one is attached.
     reservation: Option<Reservation>,
+    /// Bumped by every invalidation.
+    generation: u64,
 }
 
 impl Lru {
@@ -96,10 +111,31 @@ impl Lru {
     }
 }
 
+/// What a finished read left for the readers waiting on its key: the cache
+/// generation it began in, its completion number and its outcome.
+pub(crate) struct Loaded {
+    pub(crate) generation: u64,
+    pub(crate) completion: u64,
+    pub(crate) outcome: Result<Arc<dyn FileMetadata>, KrishivError>,
+}
+
+/// The readers of one key in flight: the reads completed so far and the
+/// last outcome, behind the lock the reading reader holds.
+#[derive(Default)]
+pub(crate) struct LoadSlot {
+    /// Reads completed (a reader notes this before it waits: a failure
+    /// completed after that is shared with it).
+    pub(crate) completed: AtomicU64,
+    pub(crate) loaded: tokio::sync::Mutex<Option<Loaded>>,
+}
+
 /// The process-wide file-metadata cache (see the module docs).
 pub struct MetadataCache {
     limit: u64,
     inner: Mutex<Lru>,
+    /// Reads in progress, by key (single flight); entries die with their
+    /// last reader.
+    loads: Mutex<HashMap<CacheKey, Weak<LoadSlot>>>,
 }
 
 impl fmt::Debug for MetadataCache {
@@ -121,7 +157,36 @@ impl MetadataCache {
         Self {
             limit,
             inner: Mutex::new(Lru::default()),
+            loads: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The load slot of `key`, shared by every reader of it in flight.
+    pub(crate) fn load_slot(&self, key: &CacheKey) -> Arc<LoadSlot> {
+        let mut loads = self.loads.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(slot) = loads.get(key).and_then(Weak::upgrade) {
+            return slot;
+        }
+        loads.retain(|_, w| w.strong_count() > 0);
+        let slot = Arc::new(LoadSlot::default());
+        loads.insert(key.clone(), Arc::downgrade(&slot));
+        slot
+    }
+
+    /// The current generation (see the module docs).
+    pub(crate) fn generation(&self) -> u64 {
+        self.lock().generation
+    }
+
+    /// Keys with a read in flight (tests).
+    #[must_use]
+    pub fn loads_in_flight(&self) -> usize {
+        self.loads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .filter(|w| w.strong_count() > 0)
+            .count()
     }
 
     fn lock(&self) -> MutexGuard<'_, Lru> {
@@ -157,11 +222,26 @@ impl MetadataCache {
     /// stay within the limit. Metadata larger than the whole cache is not
     /// cached.
     pub fn insert(&self, key: CacheKey, meta: Arc<dyn FileMetadata>) {
+        let generation = self.generation();
+        self.insert_read_in(generation, key, meta);
+    }
+
+    /// [`Self::insert`] for metadata read in cache generation `generation`:
+    /// not cached if the cache was invalidated since.
+    pub(crate) fn insert_read_in(
+        &self,
+        generation: u64,
+        key: CacheKey,
+        meta: Arc<dyn FileMetadata>,
+    ) {
         let bytes = meta.heap_size() as u64;
         if bytes > self.limit {
             return;
         }
         let mut lru = self.lock();
+        if lru.generation != generation {
+            return;
+        }
         lru.tick += 1;
         let tick = lru.tick;
         lru.remove(&key);
@@ -187,6 +267,7 @@ impl MetadataCache {
     /// Drops every entry of `path` in `store` (`REFRESH`).
     pub fn invalidate_path(&self, store: &StoreId, path: &Path) {
         let mut lru = self.lock();
+        lru.generation += 1;
         let victims: Vec<CacheKey> = lru
             .map
             .keys()
@@ -201,6 +282,7 @@ impl MetadataCache {
     /// Drops every entry (`CLEAR CACHE`).
     pub fn clear(&self) {
         let mut lru = self.lock();
+        lru.generation += 1;
         lru.map.clear();
         lru.order.clear();
         lru.bytes = 0;

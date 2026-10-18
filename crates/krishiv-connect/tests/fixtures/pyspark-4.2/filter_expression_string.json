@@ -1,0 +1,28 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "filter": {
+      "condition": {
+        "expressionString": {
+          "expression": "a > 1 AND b < 2"
+        }
+      },
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

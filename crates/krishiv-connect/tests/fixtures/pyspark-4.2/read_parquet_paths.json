@@ -1,0 +1,17 @@
+{
+  "root": {
+    "common": {
+      "planId": "0"
+    },
+    "read": {
+      "dataSource": {
+        "format": "parquet",
+        "paths": [
+          "/data/a.parquet",
+          "/data/b.parquet"
+        ],
+        "schema": ""
+      }
+    }
+  }
+}

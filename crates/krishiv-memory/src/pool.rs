@@ -752,6 +752,34 @@ impl MemoryPool for TreePool {
         }
     }
 
+    fn transfer(&self, from: ConsumerId, to: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+        let (a, b) = (self.node.consumer(from)?, self.node.consumer(to)?);
+        if from == to {
+            return Ok(());
+        }
+        // Both consumers sit on this node, so its totals do not change: the
+        // bytes move from one consumer's `used`/`granted` to the other's.
+        let moved = {
+            let mut u = lock(&a.usage);
+            let moved = bytes.min(u.used);
+            u.used -= moved;
+            u.granted -= moved;
+            moved
+        };
+        let mut v = lock(&b.usage);
+        if v.closed {
+            drop(v);
+            // `to` unregistered meanwhile: the bytes stay with `from`.
+            let mut u = lock(&a.usage);
+            u.used += moved;
+            u.granted += moved;
+            return Err(MemoryError::UnknownConsumer { id: to });
+        }
+        v.used += moved;
+        v.granted += moved;
+        Ok(())
+    }
+
     fn reserved(&self) -> usize {
         self.node.reserved()
     }

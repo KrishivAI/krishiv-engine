@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Sql [37 bytes], [5, 'x']
+-- plan ids --
+Sql plan_id=0

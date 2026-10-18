@@ -68,6 +68,7 @@ arrow-array = { version = "60", default-features = false }
 arrow-buffer = { version = "60", default-features = false }
 arrow-schema = { version = "60", default-features = false }
 arrow-select = { version = "60", default-features = false }
+arrow-row = { version = "60", default-features = false }
 arrow-data = { version = "60", default-features = false }
 arrow-ipc = { version = "60", default-features = false }
 arrow-flight = { version = "60", default-features = false }
@@ -84,6 +85,7 @@ chrono = { version = "0.4.42", default-features = false }
 tokio = { version = "1.53", default-features = false }
 tonic = { version = "0.14.6", default-features = false }
 prost = { version = "0.14.4", default-features = false }
+prost-types = { version = "0.14.4", default-features = false }
 pyo3 = { version = "0.30.1", default-features = false }
 hashbrown = { version = "0.17", default-features = false }
 foldhash = { version = "0.2", default-features = false }
@@ -127,6 +129,8 @@ regex-lite = { version = "0.1", default-features = false, features = ["std", "st
 sqllogictest = { version = "0.29", default-features = false }
 # Property tests (dev-dependency only).
 proptest = { version = "1.9", default-features = false }
+# Protobuf JSON for the golden tests of krishiv-connect (dev-dependency only).
+prost-reflect = { version = "0.16.5", default-features = false }
 # Concurrency model checking (dev-dependency only, under `--cfg loom`).
 loom = { version = "0.7", default-features = false }
 thiserror = { version = "2.0", default-features = false }

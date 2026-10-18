@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Read parquet [/data/default]
+-- plan ids --
+Read plan_id=0

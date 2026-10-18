@@ -1,0 +1,79 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "project": {
+      "expressions": [
+        {
+          "literal": {
+            "boolean": true
+          }
+        },
+        {
+          "literal": {
+            "integer": 1
+          }
+        },
+        {
+          "literal": {
+            "long": "1099511627776"
+          }
+        },
+        {
+          "literal": {
+            "double": 1.5
+          }
+        },
+        {
+          "literal": {
+            "string": "text"
+          }
+        },
+        {
+          "literal": {
+            "binary": "Ymlu"
+          }
+        },
+        {
+          "literal": {
+            "decimal": {
+              "precision": 10,
+              "scale": 0,
+              "value": "12.345"
+            }
+          }
+        },
+        {
+          "literal": {
+            "date": 18321
+          }
+        },
+        {
+          "literal": {
+            "timestamp": "1582938123456789"
+          }
+        },
+        {
+          "literal": {
+            "timestamp": "1582938123456789"
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

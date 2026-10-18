@@ -1,0 +1,25 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "showString": {
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      },
+      "numRows": 20,
+      "truncate": 20
+    }
+  }
+}

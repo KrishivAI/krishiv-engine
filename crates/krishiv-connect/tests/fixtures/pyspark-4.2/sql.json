@@ -1,0 +1,10 @@
+{
+  "root": {
+    "common": {
+      "planId": "0"
+    },
+    "sql": {
+      "query": "SELECT a, count(*) FROM t GROUP BY a"
+    }
+  }
+}

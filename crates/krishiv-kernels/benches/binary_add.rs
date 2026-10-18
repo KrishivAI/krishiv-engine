@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! 1M-row kernel benchmarks, one per specialization path, against the
-//! row-at-a-time reference ("generic path"); run under CodSpeed in CI.
+//! 1M-row kernel benchmarks, one per specialization path; run under CodSpeed
+//! in CI.
+//!
+//! The row-at-a-time reference ("generic path") is the test oracle, not a
+//! shipped kernel: its cost changes whenever its semantics do, so it is not
+//! tracked by CodSpeed. Set `KRISHIV_BENCH_REFERENCE=1` to add it locally and
+//! compare against the fast paths.
 //!
 //! Design goals: the no-null fast path is at least 1.2x the generic
 //! (row-at-a-time reference) path; `Unchecked`/`JavaWrap` cost the same;
@@ -115,6 +120,9 @@ fn integer(c: &mut Criterion) {
             .unwrap()
         });
     });
+    if std::env::var_os("KRISHIV_BENCH_REFERENCE").is_none() {
+        return;
+    }
     c.bench_function("i64_add/no_nulls/ansi/generic_reference", |bench| {
         bench.iter(|| {
             reference::integer_binary::<Int64Type>(

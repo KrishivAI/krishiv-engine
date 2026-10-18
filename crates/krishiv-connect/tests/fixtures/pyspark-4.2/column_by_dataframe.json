@@ -1,0 +1,82 @@
+{
+  "root": {
+    "common": {
+      "planId": "3"
+    },
+    "project": {
+      "expressions": [
+        {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "planId": "0",
+            "unparsedIdentifier": "a"
+          }
+        },
+        {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "planId": "1",
+            "unparsedIdentifier": "b"
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "2"
+        },
+        "join": {
+          "joinCondition": {
+            "unresolvedFunction": {
+              "arguments": [
+                {
+                  "unresolvedAttribute": {
+                    "isMetadataColumn": false,
+                    "planId": "0",
+                    "unparsedIdentifier": "id"
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "isMetadataColumn": false,
+                    "planId": "1",
+                    "unparsedIdentifier": "id"
+                  }
+                }
+              ],
+              "functionName": "=="
+            }
+          },
+          "joinType": "JOIN_TYPE_INNER",
+          "left": {
+            "common": {
+              "planId": "0"
+            },
+            "read": {
+              "dataSource": {
+                "format": "parquet",
+                "paths": [
+                  "/data/l.parquet"
+                ],
+                "schema": ""
+              }
+            }
+          },
+          "right": {
+            "common": {
+              "planId": "1"
+            },
+            "read": {
+              "dataSource": {
+                "format": "parquet",
+                "paths": [
+                  "/data/r.parquet"
+                ],
+                "schema": ""
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

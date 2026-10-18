@@ -108,17 +108,34 @@ fn deny_toml_guards_object_store_coupling() {
 #[test]
 fn ci_policy_wiring() {
     let ci = read(".github/workflows/ci.yml");
+    for needle in ["cargo xtask changes", "cargo hack check --each-feature"] {
+        assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
+    }
+    // Label-dependent policy lives in its own workflow so label changes never
+    // restart (and cancel) the full CI run; the job name is a required check.
+    let types_line = ci
+        .lines()
+        .find(|l| l.trim_start().starts_with("types:"))
+        .expect("ci.yml pull_request types");
+    assert!(
+        !types_line.contains("labeled"),
+        "ci.yml must not trigger on label changes"
+    );
+    assert!(!ci.contains("cargo xtask pr-size"));
+    assert!(!ci.contains("  policy:\n"));
+    let policy = read(".github/workflows/pr-policy.yml");
     for needle in [
+        "  policy:\n",
         "cargo xtask pr-size",
         "cargo xtask dco",
         "cargo xtask workflow-lint",
         "cargo xtask spdx",
         "cargo xtask source-guard",
-        "cargo xtask changes",
         "size-approved",
-        "cargo hack check --each-feature",
+        "labeled, unlabeled",
+        "group: pr-policy-",
     ] {
-        assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
+        assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
     }
     assert!(
         !ci.contains("--all-features --locked --no-tests"),

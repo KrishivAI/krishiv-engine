@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Project [upper(c), abs(a), coalesce(a, b), substring(c, 1, 2)]
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Project plan_id=1
+  Read plan_id=0

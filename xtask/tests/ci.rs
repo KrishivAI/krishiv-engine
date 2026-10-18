@@ -68,6 +68,10 @@ fn allowlist_matches_expected_paths() {
     // Data directories count only at their fixed place under a crate.
     assert!(is_size_excluded("crates/krishiv-common/vendored/x.json"));
     assert!(is_size_excluded(
+        "proto/spark-connect/4.2/spark/connect/base.proto"
+    ));
+    assert!(!is_size_excluded("proto/krishiv/v1/plan.proto"));
+    assert!(is_size_excluded(
         "crates/krishiv-io/tests/fixtures/a.parquet"
     ));
     assert!(!is_size_excluded("crates/x/src/generated/ids.rs"));

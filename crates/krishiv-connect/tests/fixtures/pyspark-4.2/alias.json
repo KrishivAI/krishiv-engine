@@ -1,0 +1,24 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "subqueryAlias": {
+      "alias": "t1",
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

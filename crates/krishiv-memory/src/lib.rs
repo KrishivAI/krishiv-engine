@@ -132,6 +132,14 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     ) -> BoxFuture<'a, Result<(), MemoryError>>;
     /// Returns up to `bytes` reserved by `id` (clamped to what it holds).
     fn release(&self, id: ConsumerId, bytes: usize);
+    /// Moves `bytes` held by consumer `from` to consumer `to` of this pool
+    /// (clamped to what `from` holds), without changing what the pool
+    /// holds: state handed from one operator instance to another stays
+    /// accounted, now charged to (and spillable through) `to`.
+    ///
+    /// # Errors
+    /// [`MemoryError::UnknownConsumer`] if either is not registered here.
+    fn transfer(&self, from: ConsumerId, to: ConsumerId, bytes: usize) -> Result<(), MemoryError>;
     /// Bytes held by this pool's subtree, including quantisation slack.
     fn reserved(&self) -> usize;
     /// This pool's own limit.

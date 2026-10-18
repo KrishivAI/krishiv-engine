@@ -28,6 +28,7 @@ ignore:
   - "**/tests/**"
   - "**/tests.rs"
   - "xtask/**"
+  - "**/*.pb.rs"
 
 # Flags (P2-T151). `python` is pytest --cov of the wheel; `rust` is the Rust test suite
 # (`pr` and `nightly` uploads); `rust-from-python` is Rust reached via the Python API

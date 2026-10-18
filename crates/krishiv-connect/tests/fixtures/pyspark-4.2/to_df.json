@@ -1,0 +1,27 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "toDf": {
+      "columnNames": [
+        "x",
+        "y"
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

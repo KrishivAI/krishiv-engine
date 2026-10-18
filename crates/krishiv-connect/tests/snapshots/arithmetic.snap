@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Project [(a + b) AS add, (a - b) AS sub, (a * b) AS mul, (a / b) AS div, (a % b) AS rem, (- a) AS neg]
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Project plan_id=1
+  Read plan_id=0
