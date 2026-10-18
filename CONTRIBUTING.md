@@ -54,6 +54,24 @@ cargo xtask diff-coverage --base origin/main --fail-under 90 # the merge gate, o
 Pull requests get a diff-coverage report in the job summary; the nightly job publishes the full HTML and JSON report
 as an artifact. Both upload to [Codecov](https://about.codecov.io/), which is informational only and never blocks a merge.
 
+## Fuzzing and mutation testing
+
+Nightly CI fuzzes every target of `fuzz/` for an hour and the kernels differential fuzzer for ten minutes; a weekly
+run gives each 4.5 hours (`fuzz.yml`, `fuzz-weekly.yml`). The corpus lives only in the CI cache, never in the
+repository. A failing run replays its inputs through `tests/scripts/fuzz_triage.py`, which shrinks each reproducer
+into `fuzz/regressions/<target>/` and uploads it as the `fuzz-regression-<target>` artifact. To close a finding:
+
+```text
+gh run download <run> -n fuzz-regression-<target> -D /tmp/fz    # or reproduce locally with cargo fuzz
+cp -r /tmp/fz/fuzz/regressions/<target> fuzz/regressions/       # commit these with the fix
+python3 tests/scripts/fuzz_triage.py replay <target>            # every run replays this directory first
+```
+
+`cargo-mutants` runs nightly (`mutants.yml`, one seventh of the mutants per night, the full set weekly) on the kernels, the hash functions, the SQL parser and the spill-file
+format. The score is `caught / (caught + missed + timeout)` per area, reported in the run summary and the
+`mutation-score` artifact; the floors are in `tests/mutation-floors.json`. To try it on one file:
+`cargo mutants --package krishiv-kernels --file crates/krishiv-kernels/src/hash/murmur3.rs --test-tool nextest`.
+
 ## Python quality
 
 All Python (`python/`, `bench/`, `tests/scripts/`) is checked with the Astral toolchain: ruff (lint and format) and
