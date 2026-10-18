@@ -12,13 +12,19 @@
 //! **Single flight.** Concurrent misses on one key share one read: the
 //! first reader holds the key's load slot while it reads, the others
 //! wait for it and take its result (even when the entry was too large to
-//! cache). A reader dropped mid-read releases the slot to the next one.
+//! cache), or its error if it failed: readers queued behind a failed read
+//! fail with it instead of retrying one after another (a reader arriving
+//! after the failure reads again). A reader dropped mid-read releases the
+//! slot to the next one, which reads.
 //! An invalidation (`REFRESH`, `CLEAR CACHE`) starts a new generation: a
 //! read begun before it neither fills the cache nor serves later readers.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+
+use krishiv_common::error::KrishivError;
 
 use krishiv_memory::{MemoryPool, Reservation};
 use object_store::path::Path;
@@ -105,9 +111,23 @@ impl Lru {
     }
 }
 
-/// The metadata a finished read left for the readers waiting on its key,
-/// with the cache generation the read began in.
-pub(crate) type LoadSlot = tokio::sync::Mutex<Option<(u64, Arc<dyn FileMetadata>)>>;
+/// What a finished read left for the readers waiting on its key: the cache
+/// generation it began in, its completion number and its outcome.
+pub(crate) struct Loaded {
+    pub(crate) generation: u64,
+    pub(crate) completion: u64,
+    pub(crate) outcome: Result<Arc<dyn FileMetadata>, KrishivError>,
+}
+
+/// The readers of one key in flight: the reads completed so far and the
+/// last outcome, behind the lock the reading reader holds.
+#[derive(Default)]
+pub(crate) struct LoadSlot {
+    /// Reads completed (a reader notes this before it waits: a failure
+    /// completed after that is shared with it).
+    pub(crate) completed: AtomicU64,
+    pub(crate) loaded: tokio::sync::Mutex<Option<Loaded>>,
+}
 
 /// The process-wide file-metadata cache (see the module docs).
 pub struct MetadataCache {
@@ -148,7 +168,7 @@ impl MetadataCache {
             return slot;
         }
         loads.retain(|_, w| w.strong_count() > 0);
-        let slot = Arc::new(LoadSlot::new(None));
+        let slot = Arc::new(LoadSlot::default());
         loads.insert(key.clone(), Arc::downgrade(&slot));
         slot
     }

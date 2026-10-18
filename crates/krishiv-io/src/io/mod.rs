@@ -845,41 +845,51 @@ impl IoContext {
         let fingerprint = options.metadata_fingerprint(self.secrets()).await?;
         let key = CacheKey::new(format.name(), file, fingerprint);
         let cache = &self.sched.cache;
-        let generation = cache.generation();
         if let Ok(m) = cache.get(&key, needs) {
             self.count(|c| &c.cache_hits, 1);
             return Ok(m);
         }
         // Single flight: wait for a read of this key in progress and take
-        // its result, or read it ourselves while holding the slot.
+        // its outcome, or read it ourselves while holding the slot.
         let slot = cache.load_slot(&key);
-        let mut loaded = slot.lock().await;
-        // A read from before an invalidation is not reused.
-        let current = loaded
-            .as_ref()
-            .filter(|(g, _)| *g == cache.generation())
-            .map(|(_, m)| m);
-        if let Some(m) = current.filter(|m| m.needs().covers(&needs)) {
-            self.count(|c| &c.cache_hits, 1);
-            return Ok(Arc::clone(m));
+        let seen = slot.completed.load(Ordering::Acquire);
+        let mut loaded = slot.loaded.lock().await;
+        // Reads from here on start in the current generation; a read from
+        // before an invalidation is not reused.
+        let generation = cache.generation();
+        let last = loaded.as_ref().filter(|l| l.generation == generation);
+        match last.map(|l| (&l.outcome, l.completion)) {
+            Some((Ok(m), _)) if m.needs().covers(&needs) => {
+                self.count(|c| &c.cache_hits, 1);
+                return Ok(Arc::clone(m));
+            }
+            // A read that ended while we waited failed: fail with it.
+            Some((Err(e), completion)) if completion > seen => return Err(e.clone()),
+            _ => {}
         }
+        let previous = last.and_then(|l| l.outcome.as_ref().ok().map(|m| m.needs()));
         let needs = match cache.get(&key, needs) {
             Ok(m) => {
                 self.count(|c| &c.cache_hits, 1);
                 return Ok(m);
             }
-            Err(stale) => stale
-                .or_else(|| current.map(|m| m.needs()))
-                .map_or(needs, |s| s.union(needs)),
+            Err(stale) => stale.or(previous).map_or(needs, |s| s.union(needs)),
         };
         self.count(|c| &c.cache_misses, 1);
-        let meta = format
+        let outcome = format
             .read_metadata(self, file, needs, options)
             .await
-            .map_err(|e| e.into_error(&file.display_path()))?;
-        cache.insert_read_in(generation, key, Arc::clone(&meta));
-        *loaded = Some((generation, Arc::clone(&meta)));
-        Ok(meta)
+            .map_err(|e| e.into_error(&file.display_path()));
+        if let Ok(meta) = &outcome {
+            cache.insert_read_in(generation, key, Arc::clone(meta));
+        }
+        let completion = slot.completed.fetch_add(1, Ordering::AcqRel) + 1;
+        *loaded = Some(cache::Loaded {
+            generation,
+            completion,
+            outcome: outcome.clone(),
+        });
+        outcome
     }
 
     /// [`Self::read_metadata`] as an owned future that runs on the I/O

@@ -156,7 +156,8 @@ fn single_flight_without_a_cache_and_with_a_cancelled_leader() {
 }
 
 /// A read begun before an invalidation (`REFRESH`) neither fills the cache
-/// nor serves a reader that arrives after it.
+/// nor serves a reader waiting on it; that reader reads again, in the new
+/// generation, and fills the cache.
 #[test]
 fn invalidation_retires_reads_in_flight() {
     let t = Timed::new(StorePolicy::UNPACED);
@@ -166,24 +167,70 @@ fn invalidation_retires_reads_in_flight() {
     let o = t.options();
     let io = t.sched.context();
     t.rt.block_on(async {
-        let mut leader =
-            Box::pin(io.read_metadata(format.as_ref(), &file, MetadataNeeds::default(), &o));
+        let read = || io.read_metadata(format.as_ref(), &file, MetadataNeeds::default(), &o);
+        let mut leader = Box::pin(read());
+        let mut waiter = Box::pin(read());
         let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(leader.as_mut().poll(&mut cx).is_pending());
+        assert!(waiter.as_mut().poll(&mut cx).is_pending());
         t.sched.cache().invalidate_path(&file.store, &file.path);
-        assert!(leader.await.is_ok());
+        let (a, b) = futures::join!(leader, waiter);
         assert!(
-            t.sched.cache().is_empty(),
-            "a retired read filled the cache"
+            !Arc::ptr_eq(&a.unwrap(), &b.unwrap()),
+            "the waiter took a retired read"
         );
-        io.read_metadata(format.as_ref(), &file, MetadataNeeds::default(), &o)
-            .await
-            .unwrap();
     });
-    assert_eq!(t.store.stats().tail_gets, 2, "the later reader read again");
-    assert_eq!(t.sched.cache().len(), 1);
+    assert_eq!(t.store.stats().tail_gets, 2, "the waiter read again");
+    assert_eq!(t.sched.cache().len(), 1, "the new read filled the cache");
     t.sched.cache().clear();
     assert!(t.sched.cache().is_empty());
+}
+
+/// Readers waiting on a read that fails fail with it, instead of each
+/// retrying the store one after another; a reader arriving later reads
+/// again.
+#[test]
+fn a_failed_read_is_shared_with_its_waiters() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap();
+    let inner = Arc::new(InMemory::new());
+    let store = FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
+    let sched = IoScheduler::new(IoConfig {
+        max_retries: 1,
+        ..IoConfig::default()
+    });
+    sched.register_store(
+        StoreId::new(STORE),
+        Arc::clone(&store) as Arc<dyn ObjectStore>,
+    );
+    let t = Timed {
+        rt,
+        store,
+        inner,
+        sched,
+    };
+    let file = t.file("fail/f", 100);
+    let format = MockFixture::default().format();
+    let o = t.options();
+    let io = t.sched.context();
+    t.store.fail_next_gets(1000, None);
+    let before = t.store.stats().gets;
+    t.rt.block_on(async {
+        let read = || io.read_metadata(format.as_ref(), &file, MetadataNeeds::default(), &o);
+        let (a, b, c) = futures::join!(read(), read(), read());
+        assert!(a.is_err() && b.is_err() && c.is_err());
+    });
+    assert_eq!(
+        t.store.stats().gets - before,
+        2,
+        "one read (and its retry) for three readers"
+    );
+    t.store.fail_next_gets(0, None);
+    t.rt.block_on(io.read_metadata(format.as_ref(), &file, MetadataNeeds::default(), &o))
+        .unwrap();
 }
 
 /// A footer read ahead on the I/O runtime lands in the cache; dropping the

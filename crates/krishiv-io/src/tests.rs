@@ -248,10 +248,7 @@ fn batches_are_projected_like_their_schemas() {
     assert_eq!(l.values().as_struct().num_columns(), 1);
     // Whole columns are shared, not copied; a bad path is an error.
     let whole = project_batch(&batch, &[col("st")]).unwrap();
-    assert_eq!(
-        whole.column(0).to_data().buffers(),
-        batch.column(1).to_data().buffers()
-    );
+    assert!(Arc::ptr_eq(whole.column(0), batch.column(1)));
     assert!(project_batch(&batch, &[col("nope")]).is_err());
     let rows_only = project_batch(&batch, &[]).unwrap();
     assert_eq!((rows_only.num_columns(), rows_only.num_rows()), (0, 2));
