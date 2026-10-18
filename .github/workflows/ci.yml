@@ -36,8 +36,9 @@ env:
 #   measurement made by `budgets-measure` here).
 # - Never use `pull_request_target` (enforced by `cargo xtask workflow-lint`).
 
-# NOTE: actions are pinned to major version tags for now; pin to full commit
-# SHAs (Renovate can maintain them) before the repository goes public.
+# Every third-party action is pinned to a full commit SHA (enforced by
+# `cargo xtask workflow-lint`) with its version in a trailing comment; Renovate
+# (renovate.json) updates both together.
 # The toolchain comes from rust-toolchain.toml (1.99.1); the rustup default
 # toolchain installed below honours it.
 
