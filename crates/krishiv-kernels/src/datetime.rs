@@ -371,8 +371,7 @@ pub fn date_add_months(
 /// `timestamp + months` / `timestamp - months` for a year-month interval:
 /// calendar arithmetic on the local date-time in `zone` (`None` for
 /// `TIMESTAMP_NTZ`); a local time that does not exist (a DST gap) moves
-/// forward, an ambiguous one keeps the start's offset (see
-/// [`local_to_utc_keeping`]). A result outside the
+/// forward, an ambiguous one keeps the start's offset. A result outside the
 /// timestamp range is `DATETIME_OVERFLOW` (Spark: an unclassified
 /// `ArithmeticException`), or NULL if `null_on_overflow`.
 ///

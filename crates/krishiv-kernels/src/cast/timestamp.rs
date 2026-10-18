@@ -193,21 +193,34 @@ fn offset(z: &[u8]) -> Option<i32> {
         (b'-', r) => (-1, r),
         _ => return None,
     };
-    let two = |d: &[u8]| -> Option<i32> {
+    // Exactly `n` digits, or one when `lenient` (Spark pads `+h:` to `+0h:`
+    // and a final `:m` to `:0m` before `ZoneOffset.of`).
+    let digits = |d: &[u8], lenient: bool| -> Option<i32> {
+        let ok = d.iter().all(u8::is_ascii_digit);
         match d {
-            [a, b] if a.is_ascii_digit() && b.is_ascii_digit() => {
-                Some(i32::from(a - b'0') * 10 + i32::from(b - b'0'))
-            }
+            [a, b] if ok => Some(i32::from(a - b'0') * 10 + i32::from(b - b'0')),
+            [a] if ok && lenient => Some(i32::from(a - b'0')),
             _ => None,
         }
     };
     let (h, m, s) = match rest {
         [h] if h.is_ascii_digit() => (i32::from(h - b'0'), 0, 0),
-        [h @ .., b':', m1, m2, b':', s1, s2] => (two(h)?, two(&[*m1, *m2])?, two(&[*s1, *s2])?),
-        [h @ .., b':', m1, m2] => (two(h)?, two(&[*m1, *m2])?, 0),
-        [h1, h2] => (two(&[*h1, *h2])?, 0, 0),
-        [h1, h2, m1, m2] => (two(&[*h1, *h2])?, two(&[*m1, *m2])?, 0),
-        [h1, h2, m1, m2, s1, s2] => (two(&[*h1, *h2])?, two(&[*m1, *m2])?, two(&[*s1, *s2])?),
+        [h @ .., b':', m1, m2, b':', s1, s2] => (
+            digits(h, true)?,
+            digits(&[*m1, *m2], false)?,
+            digits(&[*s1, *s2], false)?,
+        ),
+        [h @ .., b':', m] if h.len() <= 2 && !h.contains(&b':') => {
+            (digits(h, true)?, digits(&[*m], true)?, 0)
+        }
+        [h @ .., b':', m1, m2] => (digits(h, true)?, digits(&[*m1, *m2], false)?, 0),
+        [h1, h2] => (digits(&[*h1, *h2], false)?, 0, 0),
+        [h1, h2, m1, m2] => (digits(&[*h1, *h2], false)?, digits(&[*m1, *m2], false)?, 0),
+        [h1, h2, m1, m2, s1, s2] => (
+            digits(&[*h1, *h2], false)?,
+            digits(&[*m1, *m2], false)?,
+            digits(&[*s1, *s2], false)?,
+        ),
         _ => return None,
     };
     let total = h * 3600 + m * 60 + s;
@@ -280,11 +293,16 @@ mod tests {
             ("+08:30:15", 8 * 3600 + 1815),
             ("+083015", 8 * 3600 + 1815),
             ("-18:00", -18 * 3600),
+            ("+8:00", 8 * 3600),
+            ("+01:3", 3600 + 180),
+            ("-1:3", -(3600 + 180)),
+            ("+8:5", 8 * 3600 + 300),
+            ("+8:30:15", 8 * 3600 + 1815),
         ] {
             assert_eq!(offset(text.as_bytes()), Some(secs), "{text}");
         }
         for bad in [
-            "+19:00", "+18:01", "+8:00", "+08:60", "08:00", "+", "+080", "+12345",
+            "+19:00", "+18:01", "+8:5:6", "+08:30:5", "+08:60", "08:00", "+", "+080", "+12345",
         ] {
             assert_eq!(offset(bad.as_bytes()), None, "{bad}");
         }

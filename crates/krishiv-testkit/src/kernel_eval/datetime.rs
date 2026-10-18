@@ -96,8 +96,8 @@ fn seconds(text: &str) -> Option<i128> {
     }
     let micros: i128 = format!("{frac:0<6}").parse().ok()?;
     let neg = whole.trim().starts_with('-');
-    let secs = integer(whole)?;
-    Some(secs * 1_000_000 + if neg { -micros } else { micros })
+    let secs = integer(whole)?.checked_mul(1_000_000)?;
+    secs.checked_add(if neg { -micros } else { micros })
 }
 
 fn year_month(months: i128) -> Result<IntervalVal, Skip> {
@@ -120,20 +120,23 @@ fn unit_value(v: &ast::IntervalValue, unit: &str) -> Result<(bool, i128), Skip> 
         v.value.clone()
     };
     let bad = || format!("interval value {text} {unit}");
-    Ok(match unit.trim_end_matches('s') {
-        "year" => (true, integer(&text).ok_or_else(bad)? * 12),
-        "month" => (true, integer(&text).ok_or_else(bad)?),
-        "day" => (
-            false,
-            integer(&text).ok_or_else(bad)? * i128::from(MICROS_PER_DAY),
-        ),
-        "hour" => (false, integer(&text).ok_or_else(bad)? * 3_600_000_000),
-        "minute" => (false, integer(&text).ok_or_else(bad)? * 60_000_000),
-        "second" => (false, seconds(&text).ok_or_else(bad)?),
-        "millisecond" => (false, integer(&text).ok_or_else(bad)? * 1_000),
-        "microsecond" => (false, integer(&text).ok_or_else(bad)?),
+    let unit = unit.trim_end_matches('s');
+    let (year_month, factor) = match unit {
+        "year" => (true, 12),
+        "month" => (true, 1),
+        "day" => (false, i128::from(MICROS_PER_DAY)),
+        "hour" => (false, 3_600_000_000),
+        "minute" => (false, 60_000_000),
+        "millisecond" => (false, 1_000),
+        "microsecond" | "second" => (false, 1),
         other => return Err(format!("interval unit {other}")),
-    })
+    };
+    let x = if unit == "second" {
+        seconds(&text)
+    } else {
+        integer(&text).and_then(|n| n.checked_mul(factor))
+    };
+    Ok((year_month, x.ok_or_else(bad)?))
 }
 
 /// An interval literal (`INTERVAL '90' DAY`, `interval 3 months`,
@@ -152,11 +155,8 @@ pub(super) fn interval_literal(iv: &ast::Interval) -> Result<Node, Skip> {
                     return Err("interval mixing year-month and day-time fields".to_owned());
                 }
                 family = Some(is_ym);
-                if is_ym {
-                    months += x;
-                } else {
-                    micros += x;
-                }
+                let total = if is_ym { &mut months } else { &mut micros };
+                *total = total.checked_add(x).ok_or("interval overflow")?;
             }
             match family {
                 Some(true) => year_month(months)?,

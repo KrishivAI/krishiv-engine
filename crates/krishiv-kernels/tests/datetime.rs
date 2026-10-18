@@ -243,121 +243,85 @@ fn year_month_intervals_clamp_the_day() {
 
 #[test]
 fn timestamp_intervals() {
-    let t = |s: &str| TimestampMicrosecondArray::from(vec![ts(s)]);
-    let months =
-        |s: &str, m: i32, negate: bool, zone: Option<&dyn krishiv_kernels::cast::TimeZoneRules>| {
-            timestamp_add_months(
-                Operand::Array(&t(s)),
-                Operand::Scalar(Some(m)),
-                negate,
-                zone,
-                false,
-            )
-            .unwrap()
-            .value(0)
-        };
+    type Zone<'a> = Option<&'a dyn krishiv_kernels::cast::TimeZoneRules>;
+    let months = |s: &str, m: i32, negate: bool, zone: Zone<'_>| {
+        let t = TimestampMicrosecondArray::from(vec![ts(s)]);
+        let (m, z) = (Operand::Scalar(Some(m)), zone);
+        timestamp_add_months(Operand::Array(&t), m, negate, z, false).map(|a| a.value(0))
+    };
+    let micros = |s: &str, m: i64, negate: bool, zone: Zone<'_>| {
+        let t = TimestampMicrosecondArray::from(vec![ts(s)]);
+        let m = Operand::Scalar(Some(m));
+        timestamp_add_day_time(Operand::Array(&t), m, negate, zone, false).map(|a| a.value(0))
+    };
+    let at = |s| ts(s);
     assert_eq!(
-        months("2020-01-31 10:00:00", 1, false, None),
-        ts("2020-02-29 10:00:00")
+        months("2020-01-31 10:00:00", 1, false, None).unwrap(),
+        at("2020-02-29 10:00:00")
     );
     assert_eq!(
-        months("2020-01-31 10:00:00", 1, true, None),
-        ts("2019-12-31 10:00:00")
+        months("2020-01-31 10:00:00", 1, true, None).unwrap(),
+        at("2019-12-31 10:00:00")
     );
     assert_eq!(
-        months("2020-01-01 10:00:00", 14, false, None),
-        ts("2021-03-01 10:00:00")
+        months("2020-01-01 10:00:00", 14, false, None).unwrap(),
+        at("2021-03-01 10:00:00")
     );
-    // In a zone the calendar arithmetic is on the local time: 10:00 at
-    // UTC-08:00 is 18:00 UTC, and stays 10:00 locally.
+    // In a zone the calendar arithmetic is on the local time.
     let la = FixedOffset(-8 * 3600);
+    let local = months("2020-01-31 18:00:00", 1, false, Some(&la)).unwrap();
+    assert_eq!(local, at("2020-02-29 18:00:00"));
+    let (day, hour) = (86_400_000_000_i64, 3_600_000_000_i64);
     assert_eq!(
-        months("2020-01-31 18:00:00", 1, false, Some(&la)),
-        ts("2020-02-29 18:00:00")
-    );
-    let micros =
-        |s: &str, m: i64, negate: bool, zone: Option<&dyn krishiv_kernels::cast::TimeZoneRules>| {
-            timestamp_add_day_time(
-                Operand::Array(&t(s)),
-                Operand::Scalar(Some(m)),
-                negate,
-                zone,
-                false,
-            )
-            .unwrap()
-            .value(0)
-        };
-    let day = 86_400_000_000_i64;
-    assert_eq!(
-        micros("2020-01-01 10:00:00", 90 * day, true, None),
-        ts("2019-10-03 10:00:00")
+        micros("2020-01-01 10:00:00", 90 * day, true, None).unwrap(),
+        at("2019-10-03 10:00:00")
     );
     assert_eq!(
-        micros("2020-01-01 10:00:00", 2 * day, false, None),
-        ts("2020-01-03 10:00:00")
-    );
-    assert_eq!(
-        micros("2020-01-01 10:00:00", 36 * 3_600_000_000, false, None),
-        ts("2020-01-02 22:00:00")
+        micros("2020-01-01 10:00:00", 36 * hour, false, None).unwrap(),
+        at("2020-01-02 22:00:00")
     );
     // Overflow: DATETIME_OVERFLOW, or NULL for try_add.
     let max = TimestampMicrosecondArray::from(vec![i64::MAX]);
-    let add = |m: i64, null| {
-        timestamp_add_day_time(
-            Operand::Array(&max),
-            Operand::Scalar(Some(m)),
-            false,
-            None,
-            null,
-        )
+    let add = |m: i64, negate: bool, null| {
+        let m = Operand::Scalar(Some(m));
+        timestamp_add_day_time(Operand::Array(&max), m, negate, None, null)
     };
     assert_eq!(
-        add(1, false).unwrap_err().error_class(),
+        add(1, false, false).unwrap_err().error_class(),
         ErrorClass::DatetimeOverflow
     );
-    assert!(add(1, true).unwrap().is_null(0));
-    let neg = timestamp_add_day_time(
-        Operand::Array(&max),
-        Operand::Scalar(Some(i64::MIN)),
-        true,
-        None,
-        false,
+    assert!(add(1, false, true).unwrap().is_null(0));
+    assert_eq!(
+        add(i64::MIN, true, false).unwrap_err().error_class(),
+        ErrorClass::DatetimeOverflow
     );
-    assert_eq!(neg.unwrap_err().error_class(), ErrorClass::DatetimeOverflow);
     let e = timestamp_add_months(
         Operand::Array(&max),
         Operand::Scalar(Some(1)),
         false,
         None,
         false,
-    )
-    .unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::DatetimeOverflow);
-    // NULLs and mismatched lengths.
+    );
+    assert_eq!(e.unwrap_err().error_class(), ErrorClass::DatetimeOverflow);
+    // NULLs, mismatched lengths and two literals.
     let a = TimestampMicrosecondArray::from(vec![Some(0), None]);
     let ms = Int64Array::from(vec![Some(1), Some(1)]);
     let out = timestamp_add_day_time(Operand::Array(&a), Operand::Array(&ms), false, None, false)
         .unwrap();
     assert_eq!((out.value(0), out.is_null(1)), (1, true));
     let short = Int64Array::from(vec![1]);
-    let e = timestamp_add_day_time(
+    let uneven = timestamp_add_day_time(
         Operand::Array(&a),
         Operand::Array(&short),
         false,
         None,
         false,
-    )
-    .unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::InternalError);
-    let e = timestamp_add_day_time(
-        Operand::Scalar(Some(1)),
-        Operand::Scalar(Some(1)),
-        false,
-        None,
-        false,
-    )
-    .unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    );
+    let (one, two) = (Operand::Scalar(Some(1)), Operand::Scalar(Some(1)));
+    let literals = timestamp_add_day_time(one, two, false, None, false);
+    for e in [uneven.unwrap_err(), literals.unwrap_err()] {
+        assert_eq!(e.error_class(), ErrorClass::InternalError);
+    }
 }
 
 #[test]

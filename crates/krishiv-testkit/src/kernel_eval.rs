@@ -405,10 +405,21 @@ impl Binder<'_> {
         match (name.as_str(), args.as_slice()) {
             (_, [a]) if cast_to.is_some() => {
                 let mut child = self.bind(a)?;
-                // `to_date`/`to_timestamp` take a boolean as its string.
-                if matches!(name.as_str(), "to_date" | "to_timestamp")
-                    && child.ty() == DataType::Boolean
-                {
+                // `to_timestamp` reads a boolean or binary as its string; `to_date`
+                // reads anything but a string, date or timestamp so (`to_date(1)`
+                // is the malformed date `'1'`).
+                let via_string = match (name.as_str(), child.ty()) {
+                    ("to_timestamp", t) => matches!(t, DataType::Boolean | DataType::Binary),
+                    ("to_date", t) => !matches!(
+                        t,
+                        DataType::Null
+                            | DataType::Utf8
+                            | DataType::Date32
+                            | DataType::Timestamp(..)
+                    ),
+                    _ => false,
+                };
+                if via_string {
                     child = self.implicit(child, &DataType::Utf8);
                 }
                 let to = cast_to.unwrap_or(DataType::Null);
@@ -2158,6 +2169,10 @@ mod tests {
             ("+", "SELECT INTERVAL '1' DAY + INTERVAL '1' DAY"),
             ("+", "SELECT DATE'2020-01-01' + INTERVAL '1' YEAR '1' DAY"),
             ("+", "SELECT DATE'2020-01-01' + INTERVAL '1.5' DAY"),
+            (
+                "+",
+                "SELECT DATE'2020-01-01' + INTERVAL '99999999999999999999999999999999' DAY",
+            ),
             ("+", "SELECT DATE'2020-01-01' + INTERVAL '2147483648' MONTH"),
             (
                 "+",
