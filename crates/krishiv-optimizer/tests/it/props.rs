@@ -1,0 +1,356 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Random filter/join/aggregate queries: the optimised plan keeps its
+//! output, is a fixed point, returns the same rows as the unoptimised one,
+//! and leaves no pushable predicate above the lowest operator it may
+//! legally reach.
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use krishiv_optimizer::optimize;
+use krishiv_plan::{
+    AttrId, Builtin, Expr, ExprNode, FunctionId, Grouping, JoinCondition, JoinKind, LogicalPlan,
+    PlanNode, ResolvedExpr,
+};
+use proptest::prelude::*;
+
+use crate::support::{self, Rng, data, eval};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ty {
+    Int,
+    Str,
+}
+
+/// A generator of random queries over `t(a int, b string, c bigint)` and
+/// `u(a int, d string)`.
+pub(crate) struct Gen {
+    r: Rng,
+    alias: usize,
+}
+
+type Scope = Vec<(String, Ty)>;
+
+impl Gen {
+    pub(crate) fn new(seed: u64) -> Self {
+        Self {
+            r: Rng(seed | 1),
+            alias: 0,
+        }
+    }
+
+    fn chance(&mut self, percent: i64) -> bool {
+        self.r.range(1, 100) <= percent
+    }
+
+    fn col(&mut self, scope: &Scope, ty: Option<Ty>) -> Option<(String, Ty)> {
+        let fit: Vec<_> = scope
+            .iter()
+            .filter(|(_, t)| ty.is_none_or(|x| x == *t))
+            .collect();
+        if fit.is_empty() {
+            return None;
+        }
+        let i = self.r.range(0, i64::try_from(fit.len()).unwrap() - 1);
+        Some(fit[usize::try_from(i).unwrap()].clone())
+    }
+
+    fn lit(&mut self, ty: Ty) -> String {
+        match ty {
+            Ty::Int => self.r.range(-2, 3).to_string(),
+            Ty::Str => format!("'{}'", self.r.pick(&["x", "y", "z"])),
+        }
+    }
+
+    /// A query and its output columns `c0, c1, ...`.
+    pub(crate) fn query(&mut self, depth: u32) -> (String, Scope) {
+        let (from, scope) = self.from(depth);
+        let filter = if self.chance(70) {
+            format!(" WHERE {}", self.pred(&scope, 2))
+        } else {
+            String::new()
+        };
+        if self.chance(25) {
+            let (key, ty) = self.col(&scope, None).unwrap();
+            let sql =
+                format!("SELECT {key} AS c0, count(*) AS c1 FROM {from}{filter} GROUP BY {key}");
+            return (sql, vec![("c0".into(), ty), ("c1".into(), Ty::Int)]);
+        }
+        let mut items = Vec::new();
+        let mut out = Vec::new();
+        for i in 0..self.r.range(1, 3) {
+            let (c, ty) = self.col(&scope, None).unwrap();
+            let e = match ty {
+                Ty::Int if self.chance(30) => format!("{c} + 1"),
+                _ => c,
+            };
+            items.push(format!("{e} AS c{i}"));
+            out.push((format!("c{i}"), ty));
+        }
+        (
+            format!("SELECT {} FROM {from}{filter}", items.join(", ")),
+            out,
+        )
+    }
+
+    fn from(&mut self, depth: u32) -> (String, Scope) {
+        let roll = if depth == 0 { 0 } else { self.r.range(0, 2) };
+        if roll == 2 {
+            let (left, ls) = self.from(depth - 1);
+            let (right, rs) = self.relation(depth - 1);
+            let kinds = [
+                "JOIN",
+                "LEFT JOIN",
+                "RIGHT JOIN",
+                "FULL JOIN",
+                "CROSS JOIN",
+                "LEFT SEMI JOIN",
+                "LEFT ANTI JOIN",
+            ];
+            let kind = kinds[usize::try_from(self.r.range(0, 6)).unwrap()];
+            let both: Scope = ls.iter().chain(&rs).cloned().collect();
+            let on = if kind == "CROSS JOIN" {
+                String::new()
+            } else {
+                let key = match (self.col(&ls, Some(Ty::Int)), self.col(&rs, Some(Ty::Int))) {
+                    (Some((l, _)), Some((r, _))) => format!("{l} = {r}"),
+                    _ => self.pred(&both, 1),
+                };
+                let extra = if self.chance(50) {
+                    format!(" AND {}", self.pred(&both, 1))
+                } else {
+                    String::new()
+                };
+                format!(" ON {key}{extra}")
+            };
+            let scope = if kind.contains("SEMI") || kind.contains("ANTI") {
+                ls
+            } else {
+                both
+            };
+            return (format!("{left} {kind} {right}{on}"), scope);
+        }
+        self.relation(depth)
+    }
+
+    /// A table or a derived table, under a fresh alias.
+    fn relation(&mut self, depth: u32) -> (String, Scope) {
+        self.alias += 1;
+        let x = format!("x{}", self.alias);
+        if depth > 0 && self.chance(40) {
+            let (sql, out) = self.query(depth - 1);
+            let scope = out
+                .into_iter()
+                .map(|(c, t)| (format!("{x}.{c}"), t))
+                .collect();
+            return (format!("({sql}) AS {x}"), scope);
+        }
+        let (table, cols): (&str, &[(&str, Ty)]) = if self.chance(50) {
+            ("t", &[("a", Ty::Int), ("b", Ty::Str), ("c", Ty::Int)])
+        } else {
+            ("u", &[("a", Ty::Int), ("d", Ty::Str)])
+        };
+        let scope = cols.iter().map(|(c, t)| (format!("{x}.{c}"), *t)).collect();
+        (format!("{table} AS {x}"), scope)
+    }
+
+    fn pred(&mut self, scope: &Scope, depth: u32) -> String {
+        let (c, ty) = self.col(scope, None).unwrap();
+        let roll = self.r.range(0, if depth == 0 { 4 } else { 7 });
+        match roll {
+            0 | 1 => {
+                let op = self.r.pick(&["=", "<", "<=", ">", ">=", "<>", "<=>"]);
+                let rhs = match self.col(scope, Some(ty)) {
+                    Some((other, _)) if self.chance(40) => other,
+                    _ => self.lit(ty),
+                };
+                format!("{c} {op} {rhs}")
+            }
+            2 => format!("{c} IS {}NULL", if self.chance(50) { "NOT " } else { "" }),
+            3 => format!("{c} IN ({}, {})", self.lit(ty), self.lit(ty)),
+            4 => format!("coalesce({c}, {}) = {}", self.lit(ty), self.lit(ty)),
+            5 => format!("NOT ({})", self.pred(scope, depth - 1)),
+            6 => format!(
+                "({} AND {})",
+                self.pred(scope, depth - 1),
+                self.pred(scope, depth - 1)
+            ),
+            _ => format!(
+                "({} OR {})",
+                self.pred(scope, depth - 1),
+                self.pred(scope, depth - 1)
+            ),
+        }
+    }
+
+    /// A random query, sometimes ordered and limited.
+    pub(crate) fn top(&mut self) -> String {
+        let (sql, out) = self.query(3);
+        if self.chance(30) {
+            let keys: Vec<_> = out.iter().map(|(c, _)| c.as_str()).collect();
+            return format!(
+                "SELECT * FROM ({sql}) ORDER BY {} LIMIT {}",
+                keys.join(", "),
+                self.r.range(0, 4)
+            );
+        }
+        sql
+    }
+}
+
+fn refs(e: &Expr, out: &mut HashSet<AttrId>) {
+    if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node {
+        out.insert(c.id);
+    }
+    e.for_each_child(&mut |c| refs(c, out));
+}
+
+fn conjuncts(e: &Arc<Expr>, out: &mut Vec<Arc<Expr>>) {
+    match op(e) {
+        Some((Builtin::And, args)) => args.iter().for_each(|a| conjuncts(a, out)),
+        _ => out.push(Arc::clone(e)),
+    }
+}
+
+fn op(e: &Expr) -> Option<(Builtin, &[Arc<Expr>])> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => match f.id {
+            FunctionId::Builtin(b) => Some((b, &f.args)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn ids(p: &LogicalPlan) -> HashSet<AttrId> {
+    p.resolved_output().unwrap().iter().map(|c| c.id).collect()
+}
+
+/// Whether `pred` is certainly false or NULL when a column of `side` is
+/// NULL: a null-intolerant comparison over a column of `side`.
+fn rejects_nulls(pred: &Expr, side: &HashSet<AttrId>) -> bool {
+    match op(pred) {
+        Some((
+            Builtin::Eq | Builtin::Lt | Builtin::LtEq | Builtin::Gt | Builtin::GtEq | Builtin::In,
+            args,
+        )) => {
+            matches!(&args[0].node, ExprNode::Resolved(ResolvedExpr::Column(c)) if side.contains(&c.id))
+        }
+        Some((Builtin::IsNotNull, [a])) => {
+            matches!(&a.node, ExprNode::Resolved(ResolvedExpr::Column(c)) if side.contains(&c.id))
+        }
+        _ => false,
+    }
+}
+
+/// Whether filter conjunct `pred` could legally move below `child`.
+fn pushable(pred: &Expr, child: &LogicalPlan) -> bool {
+    let mut r = HashSet::new();
+    refs(pred, &mut r);
+    match &child.node {
+        PlanNode::Filter { .. }
+        | PlanNode::Project { .. }
+        | PlanNode::Sort { .. }
+        | PlanNode::SubqueryAlias { .. }
+        | PlanNode::WithCte { .. }
+        | PlanNode::Shift { .. } => true,
+        PlanNode::Aggregate {
+            grouping: Grouping::GroupBy(keys),
+            aggregates,
+            ..
+        } if !keys.is_empty() => {
+            let grouped: HashSet<AttrId> = aggregates
+                .iter()
+                .filter_map(|e| match &e.node {
+                    ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+                    ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
+                        let mut x = String::new();
+                        x.push_str(&expr.to_string());
+                        (!["count(", "sum(", "max(", "min(", "avg("]
+                            .iter()
+                            .any(|f| x.contains(f)))
+                        .then_some(output.id)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let own = ids(child);
+            let mine: HashSet<_> = r.intersection(&own).copied().collect();
+            !mine.is_empty() && mine.is_subset(&grouped)
+        }
+        PlanNode::Join {
+            left, right, kind, ..
+        } => {
+            let (lo, ro) = (ids(left), ids(right));
+            match kind {
+                JoinKind::Inner | JoinKind::Cross | JoinKind::LeftSemi | JoinKind::LeftAnti => true,
+                JoinKind::LeftOuter => r.is_subset(&lo) || rejects_nulls(pred, &ro),
+                JoinKind::RightOuter => r.is_subset(&ro) || rejects_nulls(pred, &lo),
+                _ => rejects_nulls(pred, &lo) || rejects_nulls(pred, &ro),
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Every filter conjunct sits at the lowest operator it may reach, and no
+/// join condition conjunct could move into an input.
+pub(crate) fn no_pushdown_missed(root: &LogicalPlan, sql: &str) {
+    let mut stack = vec![root];
+    while let Some(p) = stack.pop() {
+        p.for_each_child(&mut |c| stack.push(c));
+        match &p.node {
+            PlanNode::Filter { input, predicate } => {
+                let mut cs = Vec::new();
+                conjuncts(predicate, &mut cs);
+                for c in cs {
+                    assert!(!pushable(&c, input), "{sql}\n{c} could move below\n{p}");
+                }
+            }
+            PlanNode::Join {
+                left,
+                right,
+                kind,
+                condition: JoinCondition::On(cond),
+            } => {
+                let (lo, ro) = (ids(left), ids(right));
+                let mut cs = Vec::new();
+                conjuncts(cond, &mut cs);
+                for c in cs {
+                    let mut r = HashSet::new();
+                    refs(&c, &mut r);
+                    let (l, rr) = (r.is_subset(&lo), r.is_subset(&ro));
+                    let movable = match kind {
+                        JoinKind::Inner | JoinKind::Cross | JoinKind::LeftSemi => l || rr,
+                        JoinKind::LeftOuter | JoinKind::LeftAnti => rr,
+                        JoinKind::RightOuter => l,
+                        _ => false,
+                    };
+                    assert!(
+                        !movable,
+                        "{sql}\njoin condition {c} could move into an input\n{p}"
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn random_queries_reach_the_lowest_operator(seed in any::<u64>()) {
+        let ctx = support::ctx();
+        let sql = Gen::new(seed).top();
+        let plan = support::resolve(&sql, &ctx);
+        let optimized = optimize(&plan).unwrap();
+        prop_assert_eq!(optimized.root().resolved_output(), plan.root().resolved_output());
+        let again = optimize(&optimized).unwrap();
+        prop_assert!(again.structurally_eq(&optimized), "{sql}: not a fixed point");
+        no_pushdown_missed(optimized.root(), &sql);
+        let db = data::small(seed);
+        prop_assert_eq!(eval::rows(&db, optimized.root()), eval::rows(&db, plan.root()), "{}", sql);
+    }
+}
