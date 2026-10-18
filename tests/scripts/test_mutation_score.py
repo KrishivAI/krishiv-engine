@@ -63,3 +63,9 @@ def test_main_writes_json_and_returns_status(tmp_path, capsys):
     assert m.main(["--floors", str(floors), "--out", str(out), f"a={p}"]) == 1
     assert json.loads(out.read_text())["areas"][0]["score"] == 90.0
     assert "| a | 90.0% |" in capsys.readouterr().out
+
+
+def test_enforced_area_without_input_fails():
+    rows, failures = m.evaluate({}, {"areas": {"gone": {"floor": 70, "enforce": True}, "soft": {}}})
+    assert [r["area"] for r in rows] == ["gone", "soft"]
+    assert failures == ["gone: no mutants tested is below the floor 70%"]

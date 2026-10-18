@@ -51,8 +51,9 @@ def merge(shards: Sequence[tuple[str, Path]]) -> dict[str, Counter[str]]:
 def evaluate(areas: dict[str, Counter[str]], floors: dict) -> tuple[list[dict], list[str]]:
     """Result rows (one per area) and the failures of enforced floors."""
     rows, failures = [], []
-    for area in sorted(areas):
-        c = areas[area]
+    # An area with a floor but no input (its job produced nothing) is reported as untested.
+    for area in sorted(set(areas) | set(floors.get("areas", {}))):
+        c = areas.get(area, Counter())
         s = score(c)
         spec = floors.get("areas", {}).get(area, {})
         floor = spec.get("floor", floors.get("target", 70))

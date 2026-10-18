@@ -86,9 +86,14 @@ jobs:
           args=(--package "$PACKAGE" --test-tool nextest --in-place --no-shuffle
                 --shard "$SHARD/$SHARDS" --timeout-multiplier 3 --minimum-test-timeout 120
                 --output "$RUNNER_TEMP/out" --jobs 2)
+          set -f  # pass the globs to cargo-mutants literally (it expands them recursively)
           for f in $FILES; do args+=(--file "$f"); done
           for f in $SKIP; do args+=(--exclude "$f"); done
-          cargo mutants "${args[@]}" -- --locked
+          # Exit 2 (missed mutants) and 3 (timeouts) are results, scored below;
+          # anything else (usage error, failing baseline: 1, 4) fails the job.
+          rc=0
+          cargo mutants "${args[@]}" -- --locked || rc=$?
+          case "$rc" in 0|2|3) ;; *) exit "$rc" ;; esac
       - name: Missed mutants
         if: always()
         run: |
@@ -132,6 +137,7 @@ jobs:
           path: shards
           merge-multiple: true
       - name: Score per area
+        shell: bash # -eo pipefail: the scorer's status survives the tee
         run: |
           args=()
           for f in shards/*.json; do
