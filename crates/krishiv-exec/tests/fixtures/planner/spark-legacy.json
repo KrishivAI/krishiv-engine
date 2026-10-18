@@ -273,6 +273,73 @@
     "4|12.20|2"
    ]
   },
+  "hint_bad_parameter": {
+   "error": "_LEGACY_ERROR_TEMP_1046"
+  },
+  "hint_broadcast_alias": {
+   "rows": [
+    "1|NULL",
+    "2|one",
+    "3|two",
+    "3|two again",
+    "4|NULL",
+    "5|NULL",
+    "6|NULL",
+    "7|NULL",
+    "8|NULL"
+   ]
+  },
+  "hint_broadcast_left": {
+   "rows": [
+    "2|one",
+    "3|two",
+    "3|two again"
+   ]
+  },
+  "hint_broadcast_non_equi": {
+   "rows": [
+    "1|1",
+    "1|2",
+    "1|3",
+    "1|5",
+    "2|2",
+    "2|3",
+    "2|5",
+    "3|5",
+    "5|5",
+    "6|5",
+    "8|5"
+   ]
+  },
+  "hint_merge": {
+   "rows": [
+    "2|1",
+    "3|2",
+    "3|3"
+   ]
+  },
+  "hint_replicate_nl": {
+   "rows": []
+  },
+  "hint_shuffle_hash_semi": {
+   "rows": [
+    "2",
+    "3"
+   ]
+  },
+  "hint_subquery": {
+   "rows": [
+    "2",
+    "3"
+   ]
+  },
+  "hint_unknown_and_missing": {
+   "rows": [
+    "2|1",
+    "3|2",
+    "3|3"
+   ]
+  },
   "in_between_like": {
    "rows": [
     "1|NULL|false|NULL|true|false|true|false|false|false|false",
@@ -510,6 +577,24 @@
   "scalar_subquery_too_many": {
    "error": "SCALAR_SUBQUERY_TOO_MANY_ROWS"
   },
+  "select_distinct": {
+   "rows": [
+    "NULL",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4"
+   ]
+  },
+  "select_distinct_two": {
+   "rows": [
+    "NULL|false",
+    "NULL|true",
+    "0|false",
+    "1|false"
+   ]
+  },
   "self_join": {
    "rows": [
     "5|8"
@@ -618,6 +703,131 @@
     "7",
     "8"
    ]
+  },
+  "union_all": {
+   "rows": [
+    "1|0",
+    "1|1",
+    "2|1",
+    "2|2",
+    "3|2",
+    "3|2",
+    "4|NULL",
+    "4|NULL",
+    "5|3",
+    "5|9",
+    "6|4",
+    "7|NULL",
+    "8|3"
+   ]
+  },
+  "union_all_aggregate": {
+   "rows": [
+    "NULL|3|114",
+    "0|1|10",
+    "1|2|21",
+    "2|3|-25",
+    "3|2|-9223372036854775729",
+    "4|1|-50",
+    "9|1|5"
+   ]
+  },
+  "union_all_in_subquery": {
+   "rows": [
+    "2",
+    "3",
+    "6"
+   ]
+  },
+  "union_all_join_build": {
+   "rows": [
+    "1|0",
+    "2|1",
+    "2|1",
+    "3|2",
+    "3|2"
+   ]
+  },
+  "union_all_join_probe": {
+   "rows": [
+    "1|one",
+    "1|one",
+    "2|two",
+    "2|two",
+    "2|two",
+    "2|two again",
+    "2|two again",
+    "2|two again",
+    "9|nine"
+   ]
+  },
+  "union_all_nested_branches": {
+   "rows": [
+    "1",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "7",
+    "8"
+   ]
+  },
+  "union_all_nullability": {
+   "rows": [
+    "NULL",
+    "1",
+    "1",
+    "2",
+    "2",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9"
+   ]
+  },
+  "union_all_three_with_limit": {
+   "rows": [
+    "15"
+   ]
+  },
+  "union_all_widens": {
+   "rows": [
+    "NULL|NULL",
+    "NULL|a_b",
+    "0|apple",
+    "1|1.5",
+    "1|banana",
+    "2|3.0",
+    "2|abc",
+    "3|4.5",
+    "3|ab",
+    "3|xyz",
+    "4|42",
+    "4|6.0",
+    "5|7.5"
+   ]
+  },
+  "union_columns_mismatch": {
+   "error": "NUM_COLUMNS_MISMATCH"
+  },
+  "union_distinct": {
+   "rows": [
+    "NULL",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "9"
+   ]
+  },
+  "union_types_incompatible": {
+   "error": "INCOMPATIBLE_COLUMN_TYPE"
   }
  },
  "spark_version": "4.2.0"

@@ -49,3 +49,15 @@ impl ExecNode for BreakerNode {
         Ok(())
     }
 }
+
+/// `UNION ALL`: its inputs fan into the current pipeline (see
+/// [`PipelineBuilder::fan_in`]).
+pub(crate) struct FanInNode {
+    pub(crate) inputs: Vec<Arc<dyn ExecNode>>,
+}
+
+impl ExecNode for FanInNode {
+    fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+        b.fan_in(&self.inputs)
+    }
+}

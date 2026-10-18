@@ -132,7 +132,12 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
     visit_distinct(root, |node| {
         let resolved = match node {
             Node::Plan(p) => match &p.node {
-                PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::WithColumns { .. } => false,
+                PlanNode::Read(_)
+                | PlanNode::Sql { .. }
+                | PlanNode::WithColumns { .. }
+                | PlanNode::Hint { .. }
+                | PlanNode::Distinct { .. } => false,
+                PlanNode::Union { by_name, .. } => !by_name,
                 PlanNode::Join { condition, .. } => match condition {
                     JoinCondition::Using(_) => false,
                     JoinCondition::None | JoinCondition::On(_) => true,
@@ -146,7 +151,8 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Sort { .. }
                 | PlanNode::Limit { .. }
                 | PlanNode::SubqueryAlias { .. }
-                | PlanNode::WithCte { .. } => true,
+                | PlanNode::WithCte { .. }
+                | PlanNode::JoinHint { .. } => true,
             },
             Node::Expr(e) => match &e.node {
                 ExprNode::Column(_)
@@ -278,9 +284,17 @@ impl Teardown {
                 self.exprs
                     .extend(order.into_iter().map(|SortOrder { expr, .. }| expr));
             }
-            PlanNode::SubqueryAlias { input, .. } | PlanNode::Shift { input, .. } => {
+            PlanNode::SubqueryAlias { input, .. }
+            | PlanNode::Shift { input, .. }
+            | PlanNode::JoinHint { input, .. }
+            | PlanNode::Distinct { input } => {
                 self.plans.push(input);
             }
+            PlanNode::Hint { input, params, .. } => {
+                self.plans.push(input);
+                self.exprs.extend(params);
+            }
+            PlanNode::Union { inputs, .. } => self.plans.extend(inputs),
             PlanNode::WithCte { input, ctes } => {
                 self.plans.push(input);
                 self.plans

@@ -252,6 +252,31 @@ impl Display for NodeLine<'_> {
                 f.write_str("]")
             }
             PlanNode::Shift { offset, .. } => write!(f, "Shift +{offset}"),
+            PlanNode::Hint { name, params, .. } => {
+                write!(f, "Hint {}", Name(std::slice::from_ref(name)))?;
+                if params.is_empty() {
+                    return Ok(());
+                }
+                write!(f, " ({})", List(params))
+            }
+            PlanNode::JoinHint { strategy, .. } => {
+                write!(f, "JoinHint (strategy={})", strategy.name())
+            }
+            PlanNode::Union {
+                by_name,
+                allow_missing_columns,
+                ..
+            } => {
+                f.write_str("Union")?;
+                if *by_name {
+                    f.write_str(" byName")?;
+                }
+                if *allow_missing_columns {
+                    f.write_str(" allowMissingColumns")?;
+                }
+                Ok(())
+            }
+            PlanNode::Distinct { .. } => f.write_str("Distinct"),
             PlanNode::WithCte { ctes, .. } => {
                 f.write_str("WithCte [")?;
                 for (i, c) in ctes.iter().enumerate() {

@@ -82,7 +82,8 @@ impl Graph {
             }
             PlanNode::Filter { input, .. }
             | PlanNode::Sort { input, .. }
-            | PlanNode::Limit { input, .. } => {
+            | PlanNode::Limit { input, .. }
+            | PlanNode::JoinHint { input, .. } => {
                 let mut need = req.clone();
                 p.for_each_expr(&mut |e| references_into(e, &mut need));
                 child(input, Some(need));
@@ -100,6 +101,8 @@ impl Graph {
                 let need = req.iter().filter_map(|id| id.0.checked_sub(*offset));
                 child(input, Some(need.map(krishiv_plan::AttrId).collect()));
             }
+            // Inputs match by position: each is read whole.
+            PlanNode::Union { inputs, .. } => inputs.iter().for_each(|i| child(i, None)),
             _ => {}
         }
         subqueries(p, &mut |kind, s| {

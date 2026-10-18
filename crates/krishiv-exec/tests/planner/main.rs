@@ -10,6 +10,7 @@
     reason = "test helpers sit outside #[test] fns; the TPC-H runs print their timings"
 )]
 
+mod hints;
 mod semantics;
 mod tpch;
 mod write;
@@ -93,13 +94,15 @@ fn env() -> Env {
 }
 
 impl Env {
-    fn analyze(&self, sql: &str) -> Plan {
+    fn analyzed(&self, sql: &str) -> krishiv_plan::analyzer::AnalyzedPlan {
         let plan =
             krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
                 .unwrap_or_else(|e| panic!("{sql}: {e}"));
-        block_on(DefaultAnalyzer.analyze(&plan, &self.ctx))
-            .unwrap_or_else(|e| panic!("{sql}: {e}"))
-            .plan
+        block_on(DefaultAnalyzer.analyze(&plan, &self.ctx)).unwrap_or_else(|e| panic!("{sql}: {e}"))
+    }
+
+    fn analyze(&self, sql: &str) -> Plan {
+        self.analyzed(sql).plan
     }
 
     fn cx(&self) -> PlanningContext {

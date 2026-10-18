@@ -15,6 +15,13 @@
 //!   [`push_operator_reading`](PipelineBuilder::push_operator_reading), which
 //!   hands it the build's finalized state.
 //!
+//! - a `UNION ALL` fans in: [`fan_in`](PipelineBuilder::fan_in) builds each
+//!   input into a pipeline of its own ending in the current pipeline's
+//!   sink, and the operators pushed after it go into every one of them
+//!   (DuckDB's union pipelines). The executor starts these pipelines
+//!   together and runs them as one: one sink state, finalized once, and
+//!   one flush barrier per shared operator.
+//!
 //! A pipeline starts once every child pipeline it depends on has
 //! finalized. The executor owns breaker state: it keeps each finalized
 //! sink's global state, hands it to the reading source and drops it when the
@@ -53,6 +60,9 @@ pub(crate) struct Pipeline {
 }
 
 struct Draft {
+    /// The pipelines a fan-in below this one's next operators added: the
+    /// operators pushed from now on go into them too.
+    fanned: Vec<usize>,
     source: Option<(OperatorId, Arc<dyn Source>)>,
     input: Option<OperatorId>,
     operators: Vec<(OperatorId, Arc<dyn Operator>)>,
@@ -93,6 +103,7 @@ impl PipelineBuilder {
         };
         let id = b.id(result.name());
         b.drafts.push(Draft {
+            fanned: Vec::new(),
             source: None,
             input: None,
             operators: Vec::new(),
@@ -154,10 +165,23 @@ impl PipelineBuilder {
     /// source and the operators pushed before it).
     pub fn push_operator(&mut self, op: Arc<dyn Operator>) -> OperatorId {
         let id = self.id(op.name());
-        let draft = self.draft();
+        let (last, rest) = (self.current, self.drafts[self.current].fanned.clone());
+        for i in rest {
+            let draft = &mut self.drafts[i];
+            draft.operators.push((id, Arc::clone(&op)));
+            draft.operator_inputs.push(None);
+        }
+        let draft = &mut self.drafts[last];
         draft.operators.push((id, op));
         draft.operator_inputs.push(None);
         id
+    }
+
+    /// The current pipeline and those a fan-in below it added.
+    fn frontier(&self) -> Vec<usize> {
+        let mut all = vec![self.current];
+        all.extend(&self.drafts[self.current].fanned);
+        all
     }
 
     /// As [`push_operator`](Self::push_operator), for an operator that reads
@@ -175,18 +199,22 @@ impl PipelineBuilder {
     ) -> Result<OperatorId> {
         self.check_child(sink)?;
         let id = self.push_operator(op);
-        if let Some(input) = self.draft().operator_inputs.last_mut() {
-            *input = Some(sink);
+        for i in self.frontier() {
+            if let Some(input) = self.drafts[i].operator_inputs.last_mut() {
+                *input = Some(sink);
+            }
         }
         Ok(id)
     }
 
     fn check_child(&self, sink: OperatorId) -> Result<()> {
-        let deps = &self.drafts[self.current].deps;
-        if deps.iter().any(|&d| self.drafts[d].sink.0 == sink) {
-            return Ok(());
+        for i in self.frontier() {
+            let deps = &self.drafts[i].deps;
+            if !deps.iter().any(|&d| self.drafts[d].sink.0 == sink) {
+                return Err(internal(format!("{sink:?} does not end a child pipeline")));
+            }
         }
-        Err(internal(format!("{sink:?} does not end a child pipeline")))
+        Ok(())
     }
 
     /// Runs the current pipeline with one driver, keeping its input order
@@ -208,6 +236,7 @@ impl PipelineBuilder {
         let id = self.id(sink.name());
         let index = self.drafts.len();
         self.drafts.push(Draft {
+            fanned: Vec::new(),
             source: None,
             input: None,
             operators: Vec::new(),
@@ -220,8 +249,53 @@ impl PipelineBuilder {
         let built = child.build_pipelines(self);
         self.current = parent;
         built?;
-        self.draft().deps.push(index);
+        for i in self.frontier() {
+            self.drafts[i].deps.push(index);
+        }
         Ok(id)
+    }
+
+    /// Fans `inputs` in (`UNION ALL`): the first is built into the current
+    /// pipeline, each other one into a new pipeline that ends in the same
+    /// sink and depends on what the current one depends on so far; the
+    /// operators pushed after this call go into all of them.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` without inputs or if the current pipeline already
+    /// has a source; errors of the inputs' planning.
+    pub fn fan_in(&mut self, inputs: &[Arc<dyn ExecNode>]) -> Result<()> {
+        let Some((first, rest)) = inputs.split_first() else {
+            return Err(internal("a fan-in without inputs".to_owned()));
+        };
+        if self.draft().source.is_some() || !self.draft().operators.is_empty() {
+            return Err(internal("a fan-in into a started pipeline".to_owned()));
+        }
+        let (sink, deps) = (self.draft().sink.clone(), self.draft().deps.clone());
+        let order = self.draft().preserve_order;
+        Arc::clone(first).build_pipelines(self)?;
+        let main = self.current;
+        let mut added = Vec::new();
+        for input in rest {
+            let index = self.drafts.len();
+            self.drafts.push(Draft {
+                fanned: Vec::new(),
+                source: None,
+                input: None,
+                operators: Vec::new(),
+                operator_inputs: Vec::new(),
+                sink: sink.clone(),
+                deps: deps.clone(),
+                preserve_order: order,
+            });
+            self.current = index;
+            let built = Arc::clone(input).build_pipelines(self);
+            self.current = main;
+            built?;
+            added.push(index);
+            added.extend(self.drafts[index].fanned.iter().copied());
+        }
+        self.draft().fanned.extend(added);
+        Ok(())
     }
 
     /// The pipelines and every operator's name.
