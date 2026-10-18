@@ -167,8 +167,10 @@ impl AggregateExpr {
             (F::Sum, t) if is_integral(t) => DataType::Int64,
             (F::Sum | F::Avg, DataType::Float32 | DataType::Float64) => DataType::Float64,
             (F::Avg, t) if is_integral(t) => DataType::Float64,
-            (F::Sum, DataType::Decimal128(p, s)) => sum_decimal(*p, *s),
-            (F::Avg, DataType::Decimal128(p, s)) => {
+            // Spark refuses negative decimal scales by default
+            // (`spark.sql.legacy.allowNegativeScaleOfDecimal`).
+            (F::Sum, DataType::Decimal128(p, s)) if *s >= 0 => sum_decimal(*p, *s),
+            (F::Avg, DataType::Decimal128(p, s)) if *s >= 0 => {
                 DataType::Decimal128((*p + 4).min(38), s.saturating_add(4).min(38))
             }
             (F::Min | F::Max, t) if accumulator::min_max_supported(t) => t.clone(),

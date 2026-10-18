@@ -232,6 +232,10 @@ fn result_types_follow_spark_4_2() {
     assert_eq!(t(Max, DataType::Utf8View), Ok(DataType::Utf8View));
     let unsupported = Err(ErrorClass::KrishivUnsupportedFeature);
     assert_eq!(t(Sum, DataType::Utf8View), unsupported);
+    // Negative decimal scales (Spark refuses them by default).
+    assert_eq!(t(Avg, d(5, -2)), unsupported);
+    assert_eq!(t(Sum, d(5, -2)), unsupported);
+    assert_eq!(t(Max, d(5, -2)), Ok(d(5, -2)));
     let e = AggregateExpr::new(Avg, 0, d(15, 2), "a");
     assert_eq!(e.merging(3).args, vec![3, 4]);
     let s = schema(vec![("k", DataType::Int64)]);
@@ -631,6 +635,21 @@ async fn two_phase_and_adaptive_bypass() {
     let (out, m) = exec(plan, Opts::default()).await.unwrap();
     assert_eq!(rows(&out), expected);
     assert!(extra(&m, "PartialAggregate", "flushes") > 3);
+    // Unique keys with a table that flushes long before `min_rows`: the
+    // reduction is judged across flushes, so the partial still bypasses.
+    let (s, b) = grouped_input(40_000, 1_000_000);
+    let expected = run_rows(single(&s, &b)).await;
+    let flushing = BypassPolicy {
+        max_table_bytes: 64 << 10,
+        min_rows: 10_000,
+        ..BypassPolicy::default()
+    };
+    let (plan, p) = two_phase(scan(&s, b), &s, flushing, None);
+    assert_eq!(
+        rows(&exec(plan, Opts::default()).await.unwrap().0),
+        expected
+    );
+    assert!(p.bypassed_drivers() > 0);
     assert!(PartialAggregate::new(spec(&s, vec![0], vec![]), tiny, None).is_err());
 }
 
@@ -1223,6 +1242,15 @@ async fn combined_tables_move_to_the_last_driver() {
     let held = root.reserved();
     let last = drivers[2].consumer().consumer().peak();
     assert!(last * 10 >= held * 9, "last driver holds {last} of {held}");
+    // Another driver may finalize: the tables move to its consumer first.
+    let first = drivers[0].consumer().consumer().peak();
+    agg.finalize(&g, &drivers[0]).await.unwrap();
+    let after = drivers[0].consumer().consumer().peak();
+    assert!(first < held / 2, "driver 0 held {first} of {held} before");
+    assert!(
+        after >= held * 9 / 10,
+        "finalizing driver holds {after} of {held}"
+    );
     drop((g, drivers));
     assert_eq!(root.reserved(), 0);
 }

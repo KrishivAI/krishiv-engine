@@ -725,6 +725,15 @@ impl Sink for HashAggregate {
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let g = global(g)?;
+            {
+                // The finalizing driver is not necessarily the last one to
+                // combine: charge the tables to its live spill hook.
+                let mut inner = lock(&g.inner);
+                let to = ctx.consumer().consumer();
+                for (_, r) in &mut inner.tables {
+                    r.transfer_to(to).map_err(KrishivError::from)?;
+                }
+            }
             loop {
                 ctx.query().check_cancelled()?;
                 match self.step(g, ctx)? {

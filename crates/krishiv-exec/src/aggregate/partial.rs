@@ -20,8 +20,8 @@ use crate::operator::{LocalState, Operator, OperatorOutput};
 /// When a [`PartialAggregate`] gives up aggregating.
 ///
 /// After a driver has seen at least [`min_rows`](Self::min_rows) input rows,
-/// if its table holds at least [`max_group_percent`](Self::max_group_percent)
-/// groups per 100 input rows (it reduces the data by less than
+/// if it has produced at least [`max_group_percent`](Self::max_group_percent)
+/// groups per 100 input rows (flushed and held, across flushes) (it reduces the data by less than
 /// `100 − max_group_percent` percent), it flushes the table and passes every
 /// later row through as its own partial state: the final phase does all the
 /// work and the partial phase stops costing a hash probe per row. The
@@ -71,6 +71,8 @@ struct Local {
     reservation: Reservation,
     consumer: Arc<ConsumerHandle>,
     rows: u64,
+    /// Groups already flushed: with `rows`, the reduction across flushes.
+    flushed_groups: u64,
     bypass: bool,
     /// `finish` has started.
     finished: bool,
@@ -112,10 +114,10 @@ impl PartialAggregate {
     /// Moves the table out to be emitted chunk by chunk.
     fn start_drain(&self, l: &mut Local) -> Result<()> {
         let table = std::mem::replace(&mut l.table, AggTable::new(&self.core, &self.seed)?);
+        let table_groups = table.len() as u64;
         let reservation = std::mem::replace(&mut l.reservation, l.consumer.reservation());
         l.draining = Some((table, reservation, 0));
-        // The reduction is judged per table: count rows from this flush on.
-        l.rows = 0;
+        l.flushed_groups += table_groups;
         self.flushes.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -166,6 +168,7 @@ impl Operator for PartialAggregate {
             reservation: consumer.reservation(),
             consumer,
             rows: 0,
+            flushed_groups: 0,
             bypass: false,
             finished: false,
             draining: None,
@@ -211,7 +214,7 @@ impl Operator for PartialAggregate {
         l.reservation
             .shrink(l.reservation.size().saturating_sub(keep));
         l.rows += input.num_rows() as u64;
-        let groups = l.table.len() as u64;
+        let groups = l.flushed_groups + l.table.len() as u64;
         if l.rows >= self.policy.min_rows
             && groups.saturating_mul(100) >= l.rows.saturating_mul(self.policy.max_group_percent)
         {
