@@ -65,8 +65,9 @@ impl KernelError {
         &self.error
     }
 
-    /// `INTERNAL_ERROR`: a caller broke a kernel precondition.
-    pub(crate) fn internal(message: impl Into<String>) -> Self {
+    /// `INTERNAL_ERROR`: a caller broke a kernel precondition (also how a
+    /// [`crate::conditional::Lazy`] operand reports a failure of its own).
+    pub fn internal(message: impl Into<String>) -> Self {
         Self {
             row: None,
             error: InternalError {

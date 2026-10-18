@@ -353,6 +353,7 @@ impl Evaluator<'_> {
             shape: Shape::Arrays,
             invalid_utf8: std::cell::Cell::new(false),
             day_overflow: std::cell::Cell::new(false),
+            frame: std::cell::RefCell::new(None),
         }
     }
 

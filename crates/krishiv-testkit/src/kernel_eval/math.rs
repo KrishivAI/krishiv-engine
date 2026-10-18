@@ -315,7 +315,7 @@ impl Binder<'_> {
 
 /// The type `greatest`/`least` compare in (Spark's tightest common type
 /// without string promotion); `None` for arguments that have none.
-fn common_type(nodes: &[Node], ansi: bool) -> Option<DataType> {
+pub(super) fn common_type(nodes: &[Node], ansi: bool) -> Option<DataType> {
     let types: Vec<DataType> = nodes
         .iter()
         .map(Node::ty)
