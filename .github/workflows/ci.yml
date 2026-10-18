@@ -330,7 +330,6 @@ jobs:
         run: rustup toolchain install nightly-2026-08-12 --profile minimal --component miri,rust-src
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.gate.outputs.run == 'true'
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - name: Miri (unit, property and doc tests; reduced cases under cfg(miri))
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-kernels --locked
