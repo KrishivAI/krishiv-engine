@@ -193,7 +193,9 @@ pub enum NullOrdering {
 /// The identity of a resolved attribute (Spark's `ExprId`).
 ///
 /// The analyzer numbers attributes deterministically per plan, so resolving
-/// the same plan twice yields the same identifiers.
+/// the same plan twice yields the same identifiers. Identifiers are unique
+/// within a plan but not dense (a self-join instance reserves a span):
+/// never index by them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AttrId(pub u64);
 

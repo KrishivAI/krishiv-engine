@@ -1,0 +1,456 @@
+// SPDX-License-Identifier: Apache-2.0
+//! What the analyzer resolves names against: catalogs (metadata only),
+//! functions, the access policy and the SQL front end (spec 13 §7, ADR
+//! 0036 R2).
+
+use std::collections::BTreeMap;
+use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use krishiv_common::error::KrishivError;
+use krishiv_common::redact::RedactedSql;
+use krishiv_common::secret::OptionValue;
+use krishiv_types::DataType;
+
+use super::{AnalysisError, SparkProfile};
+use crate::{Expr, FunctionId, FunctionKind, Plan, SourceId, TableVersion};
+
+/// A boxed `Send` future, as trait methods that may do I/O return.
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// A table's identity in its catalog.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TableIdent {
+    /// The catalog name.
+    pub catalog: String,
+    /// The namespace parts (a database is one part).
+    pub namespace: Vec<String>,
+    /// The table name.
+    pub name: String,
+}
+
+impl TableIdent {
+    /// Every part: catalog, namespace, name.
+    #[must_use]
+    pub fn parts(&self) -> Vec<String> {
+        let mut out = vec![self.catalog.clone()];
+        out.extend(self.namespace.iter().cloned());
+        out.push(self.name.clone());
+        out
+    }
+}
+
+impl fmt::Display for TableIdent {
+    /// The quoted name, as Spark's errors print it: `` `cat`.`db`.`t` ``.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&quoted(&self.parts()))
+    }
+}
+
+/// `parts` quoted as Spark's `toSQLId` does: `` `a`.`b` ``.
+pub(crate) fn quoted(parts: &[String]) -> String {
+    let quote = |p: &String| format!("`{}`", p.replace('`', "``"));
+    parts.iter().map(quote).collect::<Vec<_>>().join(".")
+}
+
+/// A column of a table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableColumn {
+    /// The name.
+    pub name: String,
+    /// The type.
+    pub data_type: DataType,
+    /// Whether it may be null.
+    pub nullable: bool,
+}
+
+/// What a catalog entry is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TableKind {
+    /// A table.
+    Table,
+    /// A view (expanded by a later analyzer pass; rejected until then).
+    View,
+}
+
+/// The metadata of a table at one version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableMeta {
+    /// Its identity, as the catalog spells it.
+    pub ident: TableIdent,
+    /// Its columns.
+    pub columns: Vec<TableColumn>,
+    /// The current version, for versioned formats.
+    pub version: Option<TableVersion>,
+    /// Table or view.
+    pub kind: TableKind,
+}
+
+/// The metadata half of a catalog (spec 13 §7); scans and writes are an
+/// execution-layer concern.
+pub trait Catalog: Send + Sync {
+    /// The catalog's name.
+    fn name(&self) -> &str;
+    /// Bumped on every change made through Krishiv; part of the context
+    /// fingerprint.
+    fn epoch(&self) -> u64;
+    /// The table `id` (as written; the catalog applies `case_sensitive`, as
+    /// Spark's catalogs do) at `version`, or the current one; `None` when
+    /// it does not exist.
+    fn load_table<'a>(
+        &'a self,
+        id: &'a TableIdent,
+        version: Option<TableVersion>,
+        case_sensitive: bool,
+    ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>>;
+}
+
+/// The session's catalogs: the current catalog and namespace, and the
+/// catalogs by name.
+pub trait CatalogResolver: Send + Sync {
+    /// The current catalog's name.
+    fn current_catalog(&self) -> &str;
+    /// The current namespace.
+    fn current_namespace(&self) -> &[String];
+    /// The catalog named `name`.
+    fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>>;
+    /// Changes whenever the set of catalogs or their names change; part of
+    /// the context fingerprint.
+    fn epoch(&self) -> u64;
+}
+
+/// The type of a value, as function signatures see it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArgType {
+    /// The type; `None` for an untyped `NULL`.
+    pub data_type: Option<DataType>,
+    /// Whether it may be null.
+    pub nullable: bool,
+}
+
+/// A function's result type for its argument types (implicit casts are a
+/// later pass's, P2-T071b). A closure, so catalog and session functions can
+/// carry state.
+pub type ResultType = Arc<dyn Fn(&[ArgType]) -> Result<ArgType, KrishivError> + Send + Sync>;
+
+/// A function the registry knows.
+#[derive(Clone)]
+pub struct FunctionEntry {
+    /// Its identity.
+    pub id: FunctionId,
+    /// Scalar, aggregate, ...
+    pub kind: FunctionKind,
+    /// The result type for the argument types.
+    pub result: ResultType,
+}
+
+impl fmt::Debug for FunctionEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FunctionEntry")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A registry lookup.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum FunctionLookup {
+    /// Found.
+    Found(FunctionEntry),
+    /// Spark has it in this profile but Krishiv does not implement it.
+    KnownUnsupported,
+    /// Spark does not have it in this profile.
+    NotFound,
+}
+
+/// The function registry: built-in functions resolve in-process, so the
+/// lookup is synchronous.
+pub trait FunctionRegistry: Send + Sync {
+    /// The function named by `name`'s parts (as written, case-insensitive;
+    /// one part for a built-in, more for a qualified name) in `profile`.
+    fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup;
+    /// Changes whenever a lookup could answer differently (temporary and
+    /// session functions); part of the context fingerprint.
+    fn version(&self) -> u64;
+}
+
+/// Who runs a query. Build it with [`Principal::new`]; more attributes
+/// arrive with authentication (P2-T136).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct Principal {
+    /// The user or service name.
+    pub name: String,
+    /// Group memberships.
+    pub groups: Vec<String>,
+    /// The tenant, in multi-tenant servers.
+    pub tenant: Option<String>,
+    /// User or service principal.
+    pub kind: PrincipalKind,
+}
+
+/// The kind of a principal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PrincipalKind {
+    /// A person.
+    User,
+    /// A service principal.
+    Service,
+}
+
+impl Principal {
+    /// A principal of `kind` named `name`, without groups or tenant.
+    #[must_use]
+    pub fn new(name: impl Into<String>, kind: PrincipalKind) -> Self {
+        Self {
+            name: name.into(),
+            groups: Vec::new(),
+            tenant: None,
+            kind,
+        }
+    }
+
+    /// The embedded default: the local OS user.
+    #[must_use]
+    pub fn local_user() -> Self {
+        let name = ["USER", "USERNAME"]
+            .iter()
+            .find_map(|k| std::env::var(k).ok())
+            .unwrap_or_else(|| "unknown".to_owned());
+        Self {
+            name,
+            groups: Vec::new(),
+            tenant: None,
+            kind: PrincipalKind::User,
+        }
+    }
+
+    /// The identity that enters the context fingerprint: kind, tenant,
+    /// name and the sorted groups (a policy may decide by group).
+    #[must_use]
+    pub fn id(&self) -> String {
+        let kind = match self.kind {
+            PrincipalKind::User => "user",
+            PrincipalKind::Service => "service",
+        };
+        let mut groups = self.groups.clone();
+        groups.sort();
+        groups.dedup();
+        format!(
+            "{kind}:{}/{}{}",
+            quoted(std::slice::from_ref(
+                &self.tenant.clone().unwrap_or_default()
+            )),
+            quoted(std::slice::from_ref(&self.name)),
+            if groups.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", quoted(&groups))
+            }
+        )
+    }
+}
+
+/// Something a privilege is granted on (ADR 0036 R2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Securable {
+    /// A table.
+    Table(TableIdent),
+    /// A view.
+    View(TableIdent),
+    /// A catalog function.
+    Function(Vec<String>),
+    /// Files read by path (`volume`/path grant); a URL's credentials stay
+    /// typed.
+    Path(OptionValue),
+}
+
+impl fmt::Display for Securable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Table(t) => write!(f, "table {t}"),
+            Self::View(t) => write!(f, "view {t}"),
+            Self::Function(n) => write!(f, "function {}", quoted(n)),
+            Self::Path(p) => write!(f, "path '{p}'"),
+        }
+    }
+}
+
+/// A privilege.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum Privilege {
+    /// Read rows.
+    Select,
+}
+
+impl fmt::Display for Privilege {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Select => "SELECT",
+        })
+    }
+}
+
+/// Row filter and column masks for a securable, as unresolved expressions
+/// over its columns.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RowColumnPolicy {
+    /// Rows the principal may see.
+    pub row_filter: Option<Arc<Expr>>,
+    /// Column name → mask expression.
+    pub column_masks: BTreeMap<String, Arc<Expr>>,
+}
+
+/// An access decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AccessDecision {
+    /// Allowed.
+    Allow,
+    /// Denied; `reason` is for audit, never shown to the user.
+    Deny {
+        /// Why.
+        reason: String,
+    },
+    /// Allowed through a row filter and column masks (applied from P5-T045;
+    /// rejected until then).
+    AllowWith(RowColumnPolicy),
+}
+
+/// The version of an access policy; part of the context fingerprint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PolicyVersion(pub u64);
+
+/// The access-policy hook (ADR 0036 R2): called once per securable a query
+/// reads, with the query's principal, before the resolver sees any of its
+/// metadata. Every error and every denial fails the query.
+pub trait AccessPolicy: Send + Sync {
+    /// The policy version.
+    fn version(&self) -> PolicyVersion;
+    /// The decision for `principal` on `securable`.
+    fn check<'a>(
+        &'a self,
+        principal: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>>;
+}
+
+/// The embedded default policy: everything is allowed.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AllowAll;
+
+impl AccessPolicy for AllowAll {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(0)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        _: &'a Securable,
+        _: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        Box::pin(std::future::ready(Ok(AccessDecision::Allow)))
+    }
+}
+
+/// The SQL front end, for `PlanNode::Sql` (and later view text): keeps this
+/// crate free of the parser.
+pub trait SqlFrontend: Send + Sync {
+    /// Parses and lowers `query`, its spans indexing `source`.
+    ///
+    /// # Errors
+    /// The parse or lowering error.
+    fn lower(&self, query: &str, source: SourceId) -> Result<Plan, AnalysisError>;
+    /// `query` with its secrets replaced.
+    fn redact(&self, query: &str) -> RedactedSql;
+    /// A digest of the options that change how text parses; part of the
+    /// context fingerprint.
+    fn fingerprint(&self) -> u64;
+}
+
+/// Tables in memory, by namespace and name, stored lower-case like Spark's
+/// session catalog: lookups fold case unless `case_sensitive`.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryCatalog {
+    name: String,
+    epoch: u64,
+    tables: BTreeMap<(Vec<String>, String), TableMeta>,
+}
+
+impl MemoryCatalog {
+    /// An empty catalog named `name`.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Adds (or replaces) a table and bumps the epoch.
+    #[must_use]
+    pub fn with_table(
+        mut self,
+        namespace: &[&str],
+        name: &str,
+        columns: Vec<TableColumn>,
+        version: Option<TableVersion>,
+    ) -> Self {
+        let namespace: Vec<String> = namespace.iter().map(|s| s.to_lowercase()).collect();
+        let ident = TableIdent {
+            catalog: self.name.clone(),
+            namespace: namespace.clone(),
+            name: name.to_lowercase(),
+        };
+        let meta = TableMeta {
+            ident: ident.clone(),
+            columns,
+            version,
+            kind: TableKind::Table,
+        };
+        self.tables.insert((namespace, ident.name), meta);
+        self.epoch += 1;
+        self
+    }
+}
+
+impl Catalog for MemoryCatalog {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    fn load_table<'a>(
+        &'a self,
+        id: &'a TableIdent,
+        version: Option<TableVersion>,
+        case_sensitive: bool,
+    ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
+        let fold = |s: &String| {
+            if case_sensitive {
+                s.clone()
+            } else {
+                s.to_lowercase()
+            }
+        };
+        let key = (id.namespace.iter().map(fold).collect(), fold(&id.name));
+        let found = self.tables.get(&key).map(|m| TableMeta {
+            version: version.or(m.version),
+            ..m.clone()
+        });
+        Box::pin(std::future::ready(Ok(found)))
+    }
+}

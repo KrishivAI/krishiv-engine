@@ -1435,6 +1435,8 @@ dependencies = [
  "krishiv-common",
  "krishiv-types",
  "proptest",
+ "serde_json",
+ "thiserror",
  "twox-hash",
 ]
 

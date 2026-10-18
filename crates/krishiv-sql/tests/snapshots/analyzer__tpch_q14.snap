@@ -1,0 +1,9 @@
+---
+source: crates/krishiv-sql/tests/analyzer.rs
+expression: a.plan.root().to_string()
+---
+Aggregate [], [((100.00 * sum(CASE WHEN (p_type#20 like 'PROMO%') THEN (l_extendedprice#5 * (1 - l_discount#6)) ELSE 0 END)) / sum((l_extendedprice#5 * (1 - l_discount#6)))) AS promo_revenue#25]
++- Filter (((l_partkey#1 == p_partkey#16) and (l_shipdate#10 >= DATE '1995-09-01')) and (l_shipdate#10 < CAST('1995-10-01' AS DATE)))
+   +- Join Inner
+      :- Scan spark_catalog.default.lineitem [l_orderkey#0, l_partkey#1, l_suppkey#2, l_linenumber#3, l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10, l_commitdate#11, l_receiptdate#12, l_shipinstruct#13, l_shipmode#14, l_comment#15]
+      +- Scan spark_catalog.default.part [p_partkey#16, p_name#17, p_mfgr#18, p_brand#19, p_type#20, p_size#21, p_container#22, p_retailprice#23, p_comment#24]

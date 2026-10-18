@@ -1,4 +1,10 @@
 {
+  "KRISHIV_CATALOG_FAILURE" : {
+    "message" : [
+      "The catalog <catalog> failed while loading <relationName>."
+    ],
+    "sqlState" : "58030"
+  },
   "KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE" : {
     "message" : [
       "The remainder of <dividend> divided by <divisor> needs an integral quotient of more than 39 significant digits, so it cannot be computed (Spark raises `ArithmeticException: Division impossible` here in every mode)."
@@ -10,6 +16,12 @@
       "The file <path> changed while it was being read: it no longer matches the version <version> seen when the scan was planned. Run REFRESH TABLE, or re-run the query to read the new version."
     ],
     "sqlState" : "KD001"
+  },
+  "KRISHIV_INSUFFICIENT_PERMISSIONS" : {
+    "message" : [
+      "The principal <principal> lacks the <privilege> privilege on <securable>."
+    ],
+    "sqlState" : "42501"
   },
   "KRISHIV_INVALID_CONFIG_VALUE" : {
     "message" : [

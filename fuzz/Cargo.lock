@@ -661,6 +661,7 @@ dependencies = [
  "krishiv-plan",
  "krishiv-sql",
  "krishiv-testkit",
+ "krishiv-types",
  "libfuzzer-sys",
 ]
 
@@ -670,6 +671,7 @@ version = "0.1.0-dev"
 dependencies = [
  "krishiv-common",
  "krishiv-types",
+ "thiserror",
  "twox-hash",
 ]
 

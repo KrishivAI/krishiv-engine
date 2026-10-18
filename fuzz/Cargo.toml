@@ -13,8 +13,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.10"
-krishiv-plan = { path = "../crates/krishiv-plan" }
+krishiv-plan = { path = "../crates/krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../crates/krishiv-sql" }
+krishiv-types = { path = "../crates/krishiv-types" }
 krishiv-testkit = { path = "../crates/krishiv-testkit" }
 
 [[bin]]

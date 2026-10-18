@@ -1,0 +1,26 @@
+---
+source: crates/krishiv-sql/tests/analyzer.rs
+expression: a.plan.root().to_string()
+---
+Limit 100
++- Sort [numwait#68 DESC NULLS LAST, s_name#1 ASC NULLS FIRST], true
+   +- Aggregate [s_name#1], [s_name#1, count(1) AS numwait#68]
+      +- Filter ((((s_suppkey#0 == l_suppkey#9) and (o_orderkey#23 == l_orderkey#7)) and ((o_orderstatus#25 == 'F') and (l_receiptdate#19 > l_commitdate#18))) and ((exists and (NOT exists)) and ((s_nationkey#3 == n_nationkey#32) and (n_name#33 == 'SAUDI ARABIA'))))
+         :  :- Project [l_orderkey#36, l_partkey#37, l_suppkey#38, l_linenumber#39, l_quantity#40, l_extendedprice#41, l_discount#42, l_tax#43, l_returnflag#44, l_linestatus#45, l_shipdate#46, l_commitdate#47, l_receiptdate#48, l_shipinstruct#49, l_shipmode#50, l_comment#51]
+         :  :  +- Filter ((l_orderkey#36 == outer(l_orderkey#7)) and (NOT (l_suppkey#38 == outer(l_suppkey#9))))
+         :  :     +- SubqueryAlias l2
+         :  :        +- Shift +29
+         :  :           +- Scan spark_catalog.default.lineitem [l_orderkey#7, l_partkey#8, l_suppkey#9, l_linenumber#10, l_quantity#11, l_extendedprice#12, l_discount#13, l_tax#14, l_returnflag#15, l_linestatus#16, l_shipdate#17, l_commitdate#18, l_receiptdate#19, l_shipinstruct#20, l_shipmode#21, l_comment#22] (shared #1)
+         :  +- Project [l_orderkey#52, l_partkey#53, l_suppkey#54, l_linenumber#55, l_quantity#56, l_extendedprice#57, l_discount#58, l_tax#59, l_returnflag#60, l_linestatus#61, l_shipdate#62, l_commitdate#63, l_receiptdate#64, l_shipinstruct#65, l_shipmode#66, l_comment#67]
+         :     +- Filter (((l_orderkey#52 == outer(l_orderkey#7)) and (NOT (l_suppkey#54 == outer(l_suppkey#9)))) and (l_receiptdate#64 > l_commitdate#63))
+         :        +- SubqueryAlias l3
+         :           +- Shift +45
+         :              +- Shared #1, printed above
+         +- Join Inner
+            :- Join Inner
+            :  :- Join Inner
+            :  :  :- Scan spark_catalog.default.supplier [s_suppkey#0, s_name#1, s_address#2, s_nationkey#3, s_phone#4, s_acctbal#5, s_comment#6]
+            :  :  +- SubqueryAlias l1
+            :  :     +- Shared #1, printed above
+            :  +- Scan spark_catalog.default.orders [o_orderkey#23, o_custkey#24, o_orderstatus#25, o_totalprice#26, o_orderdate#27, o_orderpriority#28, o_clerk#29, o_shippriority#30, o_comment#31]
+            +- Scan spark_catalog.default.nation [n_nationkey#32, n_name#33, n_regionkey#34, n_comment#35]

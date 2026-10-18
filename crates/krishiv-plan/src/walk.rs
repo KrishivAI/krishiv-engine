@@ -138,6 +138,8 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                     JoinCondition::None | JoinCondition::On(_) => true,
                 },
                 PlanNode::Scan(_)
+                | PlanNode::CteRef(_)
+                | PlanNode::Shift { .. }
                 | PlanNode::Project { .. }
                 | PlanNode::Filter { .. }
                 | PlanNode::Aggregate { .. }
@@ -220,7 +222,7 @@ impl Teardown {
 
     fn plan(&mut self, node: PlanNode) {
         match node {
-            PlanNode::Read(_) | PlanNode::Scan(_) => {}
+            PlanNode::Read(_) | PlanNode::Scan(_) | PlanNode::CteRef(_) => {}
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => self.exprs.extend(v),
@@ -276,7 +278,9 @@ impl Teardown {
                 self.exprs
                     .extend(order.into_iter().map(|SortOrder { expr, .. }| expr));
             }
-            PlanNode::SubqueryAlias { input, .. } => self.plans.push(input),
+            PlanNode::SubqueryAlias { input, .. } | PlanNode::Shift { input, .. } => {
+                self.plans.push(input);
+            }
             PlanNode::WithCte { input, ctes } => {
                 self.plans.push(input);
                 self.plans

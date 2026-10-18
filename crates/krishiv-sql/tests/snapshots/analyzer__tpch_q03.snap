@@ -1,0 +1,13 @@
+---
+source: crates/krishiv-sql/tests/analyzer.rs
+expression: a.plan.root().to_string()
+---
+Limit 10
++- Sort [revenue#33 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST], true
+   +- Aggregate [l_orderkey#17, o_orderdate#12, o_shippriority#15], [l_orderkey#17, sum((l_extendedprice#22 * (1 - l_discount#23))) AS revenue#33, o_orderdate#12, o_shippriority#15]
+      +- Filter ((((c_mktsegment#6 == 'BUILDING') and (c_custkey#0 == o_custkey#9)) and (l_orderkey#17 == o_orderkey#8)) and ((o_orderdate#12 < CAST('1995-03-15' AS DATE)) and (l_shipdate#27 > CAST('1995-03-15' AS DATE))))
+         +- Join Inner
+            :- Join Inner
+            :  :- Scan spark_catalog.default.customer [c_custkey#0, c_name#1, c_address#2, c_nationkey#3, c_phone#4, c_acctbal#5, c_mktsegment#6, c_comment#7]
+            :  +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderstatus#10, o_totalprice#11, o_orderdate#12, o_orderpriority#13, o_clerk#14, o_shippriority#15, o_comment#16]
+            +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_partkey#18, l_suppkey#19, l_linenumber#20, l_quantity#21, l_extendedprice#22, l_discount#23, l_tax#24, l_returnflag#25, l_linestatus#26, l_shipdate#27, l_commitdate#28, l_receiptdate#29, l_shipinstruct#30, l_shipmode#31, l_comment#32]

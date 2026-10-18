@@ -11,12 +11,18 @@ publish = false
 [dependencies]
 krishiv-common = { path = "../krishiv-common" }
 krishiv-types = { path = "../krishiv-types" }
+thiserror.workspace = true
 twox-hash = { workspace = true, features = ["xxhash3_128"] }
+
+[features]
+# Test doubles (a function registry) for other crates' tests and benchmarks.
+testing = []
 
 [dev-dependencies]
 criterion.workspace = true
 insta.workspace = true
 proptest = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
 
 [[bench]]
 name = "plan_key"
