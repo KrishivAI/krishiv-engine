@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT * FROM (SELECT a FROM t LIMIT 5) LIMIT 3
+---
+Limit 3
++- Scan spark_catalog.default.t [a#0]

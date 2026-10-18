@@ -1,3 +1,7 @@
 /target
 /dist
 .coverage*
+
+# insta: pending snapshots awaiting review
+*.snap.new
+*.pending-snap

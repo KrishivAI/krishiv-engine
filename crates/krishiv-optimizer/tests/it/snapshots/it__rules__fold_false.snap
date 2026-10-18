@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT a FROM t WHERE 1 = 2 OR (a > 1 AND false)
+---
+Filter false
++- Scan spark_catalog.default.t [a#0]

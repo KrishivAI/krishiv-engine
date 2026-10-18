@@ -1,0 +1,5 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM t WHERE CAST('NaN' AS DOUBLE) = CAST('NaN' AS DOUBLE) AND -0.0D = 0.0D AND 1.0F < 2.0F"
+---
+Scan spark_catalog.default.t [a#0]

@@ -1,0 +1,14 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT y.a FROM (SELECT a FROM t LEFT SEMI JOIN u ON t.a = u.a ORDER BY a LIMIT 1) y LEFT JOIN u ON y.a = u.a LIMIT 2
+---
+Project [a#0]
++- Limit 2
+   +- Join LeftOuter, (a#0 == a#5)
+      :- Limit 1
+      :  +- Sort [a#0 ASC NULLS FIRST], true
+      :     +- Join LeftSemi, (a#0 == a#3)
+      :        :- Scan spark_catalog.default.t [a#0]
+      :        +- Scan spark_catalog.default.u [a#3] (shared #1)
+      +- Shift +2
+         +- Shared #1, printed above

@@ -1,0 +1,9 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT n, (SELECT max(a) FROM u) AS m FROM (SELECT count(*) AS n FROM t GROUP BY a)"
+---
+Project [n#3, scalar-subquery AS m#7]
+:  +- Aggregate [], [max(a#4) AS max(a)#6]
+:     +- Scan spark_catalog.default.u [a#4]
++- Aggregate [a#0], [count(1) AS n#3]
+   +- Scan spark_catalog.default.t [a#0]

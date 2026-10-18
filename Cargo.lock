@@ -1524,6 +1524,17 @@ dependencies = [
 [[package]]
 name = "krishiv-optimizer"
 version = "0.1.0-dev"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "insta",
+ "krishiv-common",
+ "krishiv-kernels",
+ "krishiv-plan",
+ "krishiv-sql",
+ "krishiv-types",
+ "serde_json",
+]
 
 [[package]]
 name = "krishiv-plan"

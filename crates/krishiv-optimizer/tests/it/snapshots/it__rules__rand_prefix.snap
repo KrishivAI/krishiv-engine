@@ -1,0 +1,9 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE rand() > 0.5 AND t.b = 'x'"
+---
+Project [a#0]
++- Filter ((rand() > 0.5D) and (b#1 == 'x'))
+   +- Join Inner, (a#0 == a#3)
+      :- Scan spark_catalog.default.t [a#0, b#1]
+      +- Scan spark_catalog.default.u [a#3]

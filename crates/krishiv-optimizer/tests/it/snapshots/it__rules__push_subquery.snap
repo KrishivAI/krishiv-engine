@@ -1,0 +1,12 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM t WHERE a IN (SELECT a FROM u WHERE d = 'y') AND EXISTS (SELECT 1 FROM u WHERE u.a = t.a)"
+---
+Filter (((a#0) IN (list-query)) and exists)
+:  :- Project [a#3]
+:  :  +- Filter (d#4 == 'y')
+:  :     +- Scan spark_catalog.default.u [a#3, d#4] (shared #1)
+:  +- Project [1 AS 1#5]
+:     +- Filter (a#3 == outer(a#0))
+:        +- Shared #1, printed above
++- Scan spark_catalog.default.t [a#0]

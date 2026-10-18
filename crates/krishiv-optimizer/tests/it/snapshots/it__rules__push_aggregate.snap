@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT k, n FROM (SELECT a + 1 AS k, count(*) AS n FROM t GROUP BY a + 1) WHERE k > 2 AND n > 1"
+---
+Filter (n#4 > 1L)
++- Aggregate [(a#0 + 1)], [(a#0 + 1) AS k#3, count(1) AS n#4]
+   +- Filter ((a#0 + 1) > 2)
+      +- Scan spark_catalog.default.t [a#0]

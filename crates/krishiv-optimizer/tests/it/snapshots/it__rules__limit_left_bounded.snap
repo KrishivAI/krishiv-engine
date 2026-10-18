@@ -1,0 +1,10 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT x.a FROM (SELECT a FROM t LIMIT 1) x LEFT JOIN u ON x.a = u.a LIMIT 2
+---
+Project [a#0]
++- Limit 2
+   +- Join LeftOuter, (a#0 == a#3)
+      :- Limit 1
+      :  +- Scan spark_catalog.default.t [a#0]
+      +- Scan spark_catalog.default.u [a#3]

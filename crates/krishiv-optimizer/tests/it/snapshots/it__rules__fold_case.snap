@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT CASE WHEN false THEN 1 WHEN a > 1 THEN 2 WHEN true THEN 3 ELSE 4 END AS x, CASE WHEN 1 = 1 THEN 'p' ELSE 'q' END AS y, CASE WHEN false THEN 1 END AS z FROM t"
+---
+Project [CASE WHEN (a#0 > 1) THEN 2 ELSE 3 END AS x#3, 'p' AS y#4, CAST(NULL AS INT) AS z#5]
++- Scan spark_catalog.default.t [a#0]
