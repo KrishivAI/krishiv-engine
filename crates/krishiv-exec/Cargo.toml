@@ -30,3 +30,7 @@ loom = { workspace = true, features = ["futures"] }
 [[bench]]
 name = "pipeline"
 harness = false
+
+[[bench]]
+name = "operators"
+harness = false

@@ -24,9 +24,13 @@
 //!   (distinct) breaker are split between tasks.
 
 mod expr;
+mod filter;
+mod project;
 mod scan;
 
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
+pub use filter::Filter;
+pub use project::{Project, ProjectItem};
 pub use scan::{FilterPushdown, MemoryScan, ScanPushdown};
 #[cfg(test)]
 use scan::{ScanGlobal, ScanLocal};
@@ -51,6 +55,11 @@ pub(crate) fn global_ref<'a, T: Send + Sync + 'static>(
 ) -> Result<&'a T> {
     <dyn std::any::Any + Send + Sync>::downcast_ref::<T>(&**state)
         .ok_or_else(|| internal(format!("wrong global state for {what}")))
+}
+
+/// Unit local state of the stateless operators.
+pub(crate) fn no_state() -> LocalState {
+    Box::new(())
 }
 
 #[cfg(all(test, not(loom)))]

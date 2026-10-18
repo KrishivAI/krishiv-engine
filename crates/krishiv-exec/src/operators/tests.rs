@@ -6,15 +6,17 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{BooleanArray, Int64Array, RecordBatch, StringArray};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Int64Array, RecordBatch, RecordBatchOptions, StringArray,
+};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::FutureExt;
-use krishiv_common::error::ErrorClass;
+use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillOwner, TreePool};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::*;
-use crate::operator::{LocalState, Source};
+use crate::operator::{LocalState, Operator, OperatorOutput, Source};
 use crate::{
     ExecConfig, ExecutorConfig, OperatorId, QueryContext, QueryId, TaskContext, TokioExecutor,
     WorkloadClass,
@@ -47,6 +49,25 @@ fn weighted(a: &[i64], w: &[i64]) -> Batch {
         .unwrap_or_else(|e| unreachable!("{e}"))
 }
 
+fn col_a(b: &Batch) -> Vec<Option<i64>> {
+    b.data()
+        .column(0)
+        .as_primitive::<Int64Type>()
+        .iter()
+        .collect()
+}
+
+fn unlocal() -> LocalState {
+    Box::new(())
+}
+
+fn out_batch(o: OperatorOutput) -> Option<Batch> {
+    match o {
+        OperatorOutput::NeedMoreInput(b) => b,
+        other => unreachable!("unexpected {other:?}"),
+    }
+}
+
 /// `a > 1`; a null `a` gives a null mask value.
 fn gt1() -> Arc<dyn Predicate> {
     Arc::new(FnPredicate(|b: &RecordBatch| {
@@ -74,6 +95,257 @@ fn ctx_with(config: ExecConfig) -> (Arc<TreePool>, TaskContext) {
         TokioExecutor::new(&ExecutorConfig::default()).unwrap_or_else(|e| unreachable!("{e}"));
     let ctx = TaskContext::new(q, exec, SpillOwner::new(), OperatorId(0), "op");
     (root, ctx)
+}
+
+#[test]
+fn filter_keeps_selected_rows_with_their_weights() {
+    let (_root, ctx) = ctx();
+    let f = Filter::new(schema(), gt1());
+    let mut local = f.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let out = out_batch(
+        f.execute(&weighted(&[1, 2, 3], &[5, -1, 2]), &mut local)
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    );
+    let out = out.unwrap_or_else(|| unreachable!("rows survive"));
+    assert_eq!(col_a(&out), [Some(2), Some(3)]);
+    assert_eq!(
+        out.weights(),
+        &Weights::Column(Int64Array::from(vec![-1, 2]))
+    );
+    // A constant weight stays a constant.
+    let (data, _) = ints(&[1, 2]).into_parts();
+    let b = Batch::with_weights(data, Weights::Const(3)).unwrap_or_else(|e| unreachable!("{e}"));
+    let out = out_batch(
+        f.execute(&b, &mut local)
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    );
+    assert_eq!(out.map(|o| o.weights().clone()), Some(Weights::Const(3)));
+    assert_eq!(f.name(), "Filter");
+    assert_eq!(f.schema(), schema());
+}
+
+#[test]
+fn filter_edge_cases_produce_no_output_and_null_does_not_select() {
+    let f = Filter::new(schema(), gt1());
+    let mut local = unlocal();
+    // Empty batch.
+    let empty = ints(&[]);
+    assert!(
+        out_batch(
+            f.execute(&empty, &mut local)
+                .unwrap_or_else(|e| unreachable!("{e}"))
+        )
+        .is_none()
+    );
+    // All-null column: every mask value is null.
+    let nulls = batch(&[None, None, None]);
+    assert!(
+        out_batch(
+            f.execute(&nulls, &mut local)
+                .unwrap_or_else(|e| unreachable!("{e}"))
+        )
+        .is_none()
+    );
+    // Nothing passes.
+    assert!(
+        out_batch(
+            f.execute(&ints(&[0, 1]), &mut local)
+                .unwrap_or_else(|e| unreachable!("{e}"))
+        )
+        .is_none()
+    );
+    // Mixed null and passing rows.
+    let mixed = batch(&[None, Some(5), None, Some(0)]);
+    let out = out_batch(
+        f.execute(&mixed, &mut local)
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    );
+    assert_eq!(out.map(|o| col_a(&o)), Some(vec![Some(5)]));
+    // Everything passes: the output shares the input's buffers.
+    let all = ints(&[2, 3]);
+    let out = out_batch(
+        f.execute(&all, &mut local)
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    );
+    let out = out.unwrap_or_else(|| unreachable!("all rows pass"));
+    assert_eq!(
+        out.data().column(0).to_data().buffers()[0].as_ptr(),
+        all.data().column(0).to_data().buffers()[0].as_ptr()
+    );
+}
+
+#[test]
+fn filter_errors_propagate() {
+    let bad_len = Filter::new(
+        schema(),
+        Arc::new(FnPredicate(|_: &RecordBatch| {
+            Ok(BooleanArray::from(vec![true]))
+        })),
+    );
+    let e = bad_len.execute(&ints(&[1, 2]), &mut unlocal()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    let failing = Filter::new(
+        schema(),
+        Arc::new(FnPredicate(|_: &RecordBatch| {
+            Err::<BooleanArray, _>(KrishivError::from(krishiv_common::error::InternalError {
+                message: "boom".to_owned(),
+            }))
+        })),
+    );
+    assert!(failing.execute(&ints(&[1]), &mut unlocal()).is_err());
+    assert!(
+        format!(
+            "{:?}",
+            FnPredicate(|_: &RecordBatch| Ok::<_, KrishivError>(BooleanArray::from(vec![true])))
+        )
+        .contains("FnPredicate")
+    );
+}
+
+/// `a + 1`, or an expression that misbehaves.
+#[derive(Debug)]
+struct PlusOne {
+    ty: DataType,
+    short: bool,
+}
+
+impl ScalarExpr for PlusOne {
+    fn data_type(&self) -> DataType {
+        self.ty.clone()
+    }
+
+    fn nullable(&self) -> bool {
+        true
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> crate::Result<ArrayRef> {
+        let a = batch.column(0).as_primitive::<Int64Type>();
+        let mut values: Vec<Option<i64>> = a.iter().map(|v| v.map(|v| v + 1)).collect();
+        if self.short {
+            values.pop();
+        }
+        Ok(Arc::new(Int64Array::from(values)))
+    }
+}
+
+fn plus_one() -> Arc<dyn ScalarExpr> {
+    Arc::new(PlusOne {
+        ty: DataType::Int64,
+        short: false,
+    })
+}
+
+#[test]
+fn project_reorders_renames_and_computes() {
+    let p = Project::try_new(
+        &schema(),
+        vec![
+            ProjectItem::column(1),
+            ProjectItem::aliased(0, "x"),
+            ProjectItem::expr("y", plus_one()),
+            ProjectItem::column(1),
+        ],
+    )
+    .unwrap_or_else(|e| unreachable!("{e}"));
+    let names: Vec<_> = p
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+    assert_eq!(names, ["s", "x", "y", "s"]);
+    let input = weighted(&[1, 2], &[3, -4]);
+    let out = out_batch(
+        p.execute(&input, &mut unlocal())
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    )
+    .unwrap_or_else(|| unreachable!("rows"));
+    assert_eq!(
+        out.data()
+            .column(1)
+            .as_primitive::<Int64Type>()
+            .values()
+            .to_vec(),
+        [1, 2]
+    );
+    assert_eq!(
+        out.data()
+            .column(2)
+            .as_primitive::<Int64Type>()
+            .values()
+            .to_vec(),
+        [2, 3]
+    );
+    assert_eq!(out.weights(), input.weights());
+    // Plain columns share buffers.
+    assert_eq!(
+        out.data().column(0).to_data().buffers()[1].as_ptr(),
+        input.data().column(1).to_data().buffers()[1].as_ptr()
+    );
+    assert_eq!(p.name(), "Project");
+}
+
+#[test]
+fn project_edge_cases() {
+    let all_null = batch(&[None, None]);
+    let p = Project::try_new(
+        &schema(),
+        vec![ProjectItem::column(0), ProjectItem::expr("y", plus_one())],
+    )
+    .unwrap_or_else(|e| unreachable!("{e}"));
+    let out = out_batch(
+        p.execute(&all_null, &mut unlocal())
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    )
+    .unwrap_or_else(|| unreachable!("rows"));
+    assert_eq!(out.data().column(0).null_count(), 2);
+    assert_eq!(out.data().column(1).null_count(), 2);
+    // Empty input: no output.
+    assert!(
+        out_batch(
+            p.execute(&ints(&[]), &mut unlocal())
+                .unwrap_or_else(|e| unreachable!("{e}"))
+        )
+        .is_none()
+    );
+    // No columns: the row count survives.
+    let none = Project::try_new(&schema(), vec![]).unwrap_or_else(|e| unreachable!("{e}"));
+    let out = out_batch(
+        none.execute(&ints(&[1, 2, 3]), &mut unlocal())
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    );
+    assert_eq!(
+        out.map(|o| (o.num_rows(), o.data().num_columns())),
+        Some((3, 0))
+    );
+}
+
+#[test]
+fn project_rejects_bad_plans_and_bad_evaluators() {
+    let e = Project::try_new(&schema(), vec![ProjectItem::column(2)]).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    // An evaluator whose column is shorter than the batch, or of another type.
+    for (ty, short) in [(DataType::Int64, true), (DataType::Utf8, false)] {
+        let p = Project::try_new(
+            &schema(),
+            vec![ProjectItem::expr("y", Arc::new(PlusOne { ty, short }))],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        let e = p.execute(&ints(&[1, 2]), &mut unlocal()).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InternalError);
+    }
+    // An index that is valid for the plan but not for the batch.
+    let p = Project::try_new(&schema(), vec![ProjectItem::column(1)])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let narrow = Batch::new(
+        RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
+        )
+        .unwrap_or_else(|e| unreachable!("{e}")),
+    );
+    assert!(p.execute(&narrow, &mut unlocal()).is_err());
 }
 
 fn schema_of(fields: &[(&str, DataType, bool)]) -> SchemaRef {

@@ -11,16 +11,17 @@ use std::time::Duration;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{Int64Array, RecordBatch, StringArray};
+use arrow_array::{BooleanArray, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::StreamExt;
-use krishiv_exec::testing::Scan;
+use krishiv_exec::testing::{Pipe, Scan};
 use krishiv_exec::{
-    ExecConfig, ExecNode, MemoryScan, QueryContext, QueryId, QueryRunner, Result, Scheduler,
-    TokioClock, TokioExecutor, WorkloadClass,
+    ExecConfig, ExecNode, Filter, FnPredicate, MemoryScan, Predicate, Project, ProjectItem,
+    QueryContext, QueryId, QueryRunner, Result, ScanPushdown, Scheduler, TokioClock, TokioExecutor,
+    WorkloadClass,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
-use krishiv_types::batch::Batch;
+use krishiv_types::batch::{Batch, Weights};
 
 fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -85,6 +86,10 @@ fn deterministic() -> QueryRunner {
     QueryRunner::new(TokioExecutor::deterministic(1).unwrap())
 }
 
+fn pipe(child: Arc<dyn ExecNode>, op: Arc<dyn krishiv_exec::Operator>) -> Arc<dyn ExecNode> {
+    Arc::new(Pipe(child, op))
+}
+
 fn a_values(batches: &[Batch]) -> Vec<i64> {
     batches
         .iter()
@@ -102,8 +107,51 @@ fn rows(batches: &[Batch]) -> usize {
     batches.iter().map(Batch::num_rows).sum()
 }
 
+fn mod_pred(modulus: i64, keep: i64) -> Arc<dyn Predicate> {
+    Arc::new(FnPredicate(move |b: &RecordBatch| {
+        Ok(b.column(0)
+            .as_primitive::<Int64Type>()
+            .iter()
+            .map(|v| v.map(|v| v % modulus == keep))
+            .collect::<BooleanArray>())
+    }))
+}
+
 fn scan_node(scan: &Arc<MemoryScan>) -> Arc<dyn ExecNode> {
     Arc::new(Scan(Arc::clone(scan) as Arc<dyn krishiv_exec::Source>))
+}
+
+#[tokio::test(start_paused = true)]
+async fn scan_with_pushdown_then_filter_and_project() {
+    let mut scan = MemoryScan::try_new(schema(), table(10, 100)).unwrap();
+    scan.push_filter(mod_pred(2, 0));
+    scan.push_projection(&[1, 0]).unwrap();
+    let scan = Arc::new(scan);
+    let filter = Filter::new(
+        krishiv_exec::Source::schema(&*scan),
+        Arc::new(FnPredicate(|b: &RecordBatch| {
+            // Column 1 is `a` after the pushed projection: keep a % 3 == 0.
+            Ok(b.column(1)
+                .as_primitive::<Int64Type>()
+                .iter()
+                .map(|v| v.map(|v| v % 3 == 0))
+                .collect::<BooleanArray>())
+        })),
+    );
+    let project = Project::try_new(
+        &krishiv_exec::Operator::schema(&*filter),
+        vec![ProjectItem::aliased(1, "id")],
+    )
+    .unwrap();
+    let plan = pipe(pipe(scan_node(&scan), filter), project);
+    let root = root();
+    let q = query(&root, ExecConfig::default());
+    let out = run(&deterministic(), plan, &q).await.unwrap();
+    let expected: Vec<i64> = (0..1000).filter(|v| v % 6 == 0).collect();
+    assert_eq!(a_values(&out), expected);
+    assert_eq!(out[0].data().schema().field(0).name(), "id");
+    assert_eq!(scan.rows_read(), 1000);
+    assert_eq!(root.reserved(), 0);
 }
 
 /// Scans report the morsels each driver claimed.
@@ -153,4 +201,25 @@ async fn deterministic_mode_replays_scan_order() {
     assert_eq!(a, firsts(Some(3)).await);
     assert_ne!(a, firsts(Some(4)).await);
     assert_eq!(firsts(None).await, (0..160).collect::<Vec<_>>());
+}
+
+/// Weights survive scan, filter, project and union alignment end to end.
+#[tokio::test(start_paused = true)]
+async fn weights_flow_through_the_pipeline() {
+    let data = table(1, 6);
+    let (record, _) = data.into_iter().next().unwrap().into_parts();
+    let w = Int64Array::from(vec![1, -1, 2, 3, -4, 5]);
+    let batch = Batch::with_weights(record, Weights::Column(w)).unwrap();
+    let scan = Arc::new(MemoryScan::try_new(schema(), vec![batch]).unwrap());
+    let filter = Filter::new(schema(), mod_pred(2, 1)); // a = 1, 3, 5
+    let project = Project::try_new(&schema(), vec![ProjectItem::column(0)]).unwrap();
+    let plan = pipe(pipe(scan_node(&scan), filter), project);
+    let q = query(&root(), ExecConfig::default());
+    let out = run(&deterministic(), plan, &q).await.unwrap();
+    assert_eq!(out.len(), 1);
+    assert_eq!(a_values(&out), [1, 3, 5]);
+    assert_eq!(
+        out[0].weights(),
+        &Weights::Column(Int64Array::from(vec![-1, 3, 5]))
+    );
 }
