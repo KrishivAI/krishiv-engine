@@ -293,6 +293,11 @@ impl Resolver<'_> {
                 if !matches!(p.node, PlanNode::WithCte { .. }) {
                     let mut kids = Vec::new();
                     p.for_each_child(&mut |c| kids.push(self.rep(c)));
+                    if matches!(p.node, PlanNode::Shift { .. }) {
+                        // A shift reads its input's own resolution (see
+                        // `shift_input`): resolved before, nothing to do.
+                        kids.retain(|c| !self.closed.contains_key(&(addr(&**c), env.ctes_id)));
+                    }
                     stack.extend(kids.into_iter().rev().map(|c| (c, false)));
                 }
                 continue;
@@ -320,6 +325,26 @@ impl Resolver<'_> {
             .get(&(addr(&*self.rep(c)), env.id))
             .cloned()
             .ok_or_else(|| unsupported("a plan shape", c.origin))
+    }
+
+    /// The input of a `Shift`, resolved as itself: the shift is the fresh
+    /// instance, so it stands over the input's own resolution (the ids the
+    /// input states, which it reads as `id + offset`), never over an
+    /// instance made because those ids meet an enclosing query's. The
+    /// input has no outer references, so its resolution is closed and
+    /// shared by every environment with this CTE scope.
+    fn shift_input(&self, input: &Arc<LogicalPlan>, env: &Env) -> Result<Rel, AnalysisError> {
+        let rep = self.rep(input);
+        match self.closed.get(&(addr(&*rep), env.ctes_id)) {
+            Some(r) => Ok(r.clone()),
+            None => {
+                let r = self.child(&rep, env)?;
+                if r.outer.is_some() {
+                    return Err(unsupported("a shift over a correlated plan", input.origin));
+                }
+                Ok(r)
+            }
+        }
     }
 
     /// A relation over `kids` with output `out`, at `origin` (whose
@@ -449,11 +474,18 @@ impl Resolver<'_> {
                 Ok(self.wrap(Arc::clone(p), o.plan_id, out, &[]))
             }
             PlanNode::Shift { input, offset } => {
-                let c = self.child(input, env)?;
+                let c = self.shift_input(input, env)?;
                 // The shifted node keeps its input: it may stand for the
-                // resolved plan only when resolving left the input as it was.
-                if !Arc::ptr_eq(&c.plan, input) && !input.is_resolved() {
-                    return Err(unsupported("a shift over an unresolved plan", o));
+                // resolved plan only when resolving left the input as it
+                // was, with the attributes it states.
+                if !Arc::ptr_eq(&c.plan, input) {
+                    let same = input.is_resolved()
+                        && input.resolved_output().is_some_and(|out| {
+                            out.iter().map(|b| b.id).eq(c.out.iter().map(|a| a.col.id))
+                        });
+                    if !same {
+                        return Err(unsupported("a shift over an unresolved plan", o));
+                    }
                 }
                 self.shifted(&c, *offset, Some(Arc::clone(p)))
             }

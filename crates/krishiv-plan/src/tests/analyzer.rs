@@ -748,6 +748,62 @@ fn subqueries_over_shared_plans_stay_linear() {
     assert!(again.plan.structurally_eq(&a.plan), "a fixed point");
 }
 
+/// A `Shift` is the fresh instance: its input resolves as itself even
+/// where the input's ids meet an enclosing query's (which makes a direct
+/// reference to the input a fresh instance). So the attributes bound over
+/// the shift are the ones the retained node reads, `id + offset` of what
+/// the input states, and re-analysis is a fixed point.
+#[test]
+fn shift_input_is_never_re_instanced() {
+    let ctx = ctx();
+    let p = run(LogicalPlan::table(["t"]).project(vec![c("a")]), &ctx).unwrap();
+    let p = Arc::clone(p.plan.root());
+    let stated: Vec<_> = p.resolved_output().unwrap();
+    // `p WHERE EXISTS (SELECT a FROM <instance of p>)`: in the subquery,
+    // `p`'s ids are those of the enclosing query.
+    let shift = LogicalPlan::new(PlanNode::Shift {
+        input: Arc::clone(&p),
+        offset: 100,
+    });
+    let plan = LogicalPlan::new(PlanNode::Filter {
+        input: Arc::clone(&p),
+        predicate: Arc::new(Expr::subquery(
+            crate::SubqueryKind::Exists,
+            shift.project(vec![c("a")]),
+        )),
+    });
+    let a = run(plan, &ctx).unwrap();
+    let PlanNode::Filter { predicate, .. } = &a.plan.root().node else {
+        panic!("{:?}", a.plan)
+    };
+    let ExprNode::Subquery { plan: sub, .. } = &predicate.node else {
+        panic!("{predicate:?}")
+    };
+    let PlanNode::Project { input, exprs } = &sub.node else {
+        panic!("{sub:?}")
+    };
+    assert!(matches!(input.node, PlanNode::Shift { offset: 100, .. }));
+    let read: Vec<_> = exprs
+        .iter()
+        .map(|e| match &e.node {
+            ExprNode::Resolved(crate::ResolvedExpr::Column(c)) => c.id,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    let shifted: Vec<_> = stated.iter().map(|c| crate::AttrId(c.id.0 + 100)).collect();
+    assert_eq!(read, shifted, "bound over the attributes the shift reads");
+    let output: Vec<_> = input
+        .resolved_output()
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(output, shifted);
+    let again = block_on(DefaultAnalyzer.analyze(&a.plan, &ctx)).unwrap();
+    assert!(again.plan.structurally_eq(&a.plan), "a fixed point");
+    assert_eq!(again.output, a.output);
+}
+
 /// A deep copy: every relation and expression a new `Arc`.
 fn unshared(p: &LogicalPlan) -> LogicalPlan {
     Arc::unwrap_or_clone(
