@@ -6,15 +6,17 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    AmbiguousReference, AssignmentArityMismatch, FailedToParseTooComplex, GroupByPosAggregate,
-    GroupByPosOutOfRange, InvalidWhereCondition, MissingAggregation, MissingGroupBy,
-    OrderByPosOutOfRange, StarGroupByPos, TableOrViewNotFound, UnresolvedUsingColumnForJoin,
+    AmbiguousReference, AssignmentArityMismatch, DatatypeMismatchFilterNotBoolean,
+    FailedToParseTooComplex, GroupByPosAggregate, GroupByPosOutOfRange, InvalidWhereCondition,
+    JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy, OrderByPosOutOfRange,
+    StarGroupByPos, TableOrViewNotFound, UnresolvedUsingColumnForJoin,
     UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy,
 };
 
 use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
+use super::coerce::quoted_type;
 use super::exprs::{Bound, Cx, names, pretty, semantic_key};
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, TableKind};
@@ -46,6 +48,7 @@ fn column_bound(a: &Attr, origin: Origin) -> Bound {
         agg: None,
         outer: None,
         lateral: Vec::new(),
+        shown: None,
     }
 }
 
@@ -260,16 +263,19 @@ impl Resolver<'_> {
     /// generated name (a cast of a column keeps the column's name, a
     /// lateral alias otherwise reads `lateralAliasReference(name)`).
     fn named(&mut self, b: Bound) -> Result<Bound, AnalysisError> {
-        let name = match &b.expr.node {
-            ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::Alias { .. }) => {
-                return Ok(b);
-            }
+        if let ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::Alias { .. }) =
+            &b.expr.node
+        {
+            return Ok(b);
+        }
+        let shown = b.shown();
+        let name = match &shown.node {
             ExprNode::Cast { expr, .. }
                 if matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Column(_))) =>
             {
                 pretty(expr)
             }
-            _ => pretty(&lateral_refs(&b.expr, &b.lateral)),
+            _ => pretty(&lateral_refs(&shown, &b.lateral)),
         };
         let output = self.attr(&name, &b.ty, b.expr.origin)?;
         let origin = b.expr.origin;
@@ -349,7 +355,7 @@ impl Resolver<'_> {
     }
 
     /// A projection of `exprs` (with output `out`) over `input`.
-    fn projection(
+    pub(super) fn projection(
         &self,
         origin: Origin,
         input: &Rel,
@@ -379,6 +385,7 @@ impl Resolver<'_> {
         if c.agg.is_some() {
             let (bounds, agg, extended) =
                 self.over_agg(&c, std::slice::from_ref(predicate), env, "Filter")?;
+            boolean_filter(&bounds[0], p.origin)?;
             let node = PlanNode::Filter {
                 input: Arc::clone(&agg.plan),
                 predicate: Arc::clone(&bounds[0].expr),
@@ -397,12 +404,13 @@ impl Resolver<'_> {
         if b.agg.is_some() {
             return Err(AnalysisError::new(
                 InvalidWhereCondition {
-                    condition: format!("\"{}\"", pretty(&b.expr)),
+                    condition: format!("\"{}\"", pretty(&b.shown())),
                     expression_list: aggregate_sql(&b.expr, &wide.out),
                 },
                 p.origin,
             ));
         }
+        boolean_filter(&b, p.origin)?;
         let node = PlanNode::Filter {
             input: Arc::clone(&wide.plan),
             predicate: b.expr,
@@ -1044,10 +1052,20 @@ impl Resolver<'_> {
             JoinCondition::None => JoinCondition::None,
             JoinCondition::On(e) => {
                 let scope: Vec<Attr> = l.out.iter().chain(r.out.iter()).cloned().collect();
-                JoinCondition::On(self.bind(e, &Self::cx(&scope, &rels, env, "Join"))?.expr)
+                let b = self.bind(e, &Self::cx(&scope, &rels, env, "Join"))?;
+                if b.ty.data_type != Some(krishiv_types::DataType::Boolean) {
+                    return Err(AnalysisError::new(
+                        JoinConditionIsNotBooleanType {
+                            join_condition: format!("\"{}\"", pretty(&b.shown())),
+                            condition_type: quoted_type(b.ty.data_type.as_ref()),
+                        },
+                        p.origin,
+                    ));
+                }
+                JoinCondition::On(b.expr)
             }
             JoinCondition::Using(cols) => {
-                let (cond, k) = self.using(cols, &l, &r, env)?;
+                let (cond, k) = self.using(cols, &l, &r, env, p.origin)?;
                 keys = Some(k);
                 JoinCondition::On(cond)
             }
@@ -1072,6 +1090,7 @@ impl Resolver<'_> {
         l: &Rel,
         r: &Rel,
         env: &Arc<Env>,
+        origin: Origin,
     ) -> Result<(Arc<Expr>, Vec<Keys>), AnalysisError> {
         let cs = self.ctx.conf.case_sensitive;
         let side = |rel: &Rel, which: &str, name: &String| {
@@ -1103,6 +1122,7 @@ impl Resolver<'_> {
         let mut cond: Option<Arc<Expr>> = None;
         for name in cols {
             let (la, ra) = (side(l, "left", name)?, side(r, "right", name)?);
+            // Spark's errors cite the join for its keys' comparison.
             let eq = self.call(
                 "==",
                 vec![
@@ -1110,10 +1130,11 @@ impl Resolver<'_> {
                     col_expr(&ra.col, Origin::UNKNOWN),
                 ],
                 env,
+                origin,
             )?;
             cond = Some(match cond {
                 None => eq,
-                Some(c) => self.call("and", vec![c, eq], env)?,
+                Some(c) => self.call("and", vec![c, eq], env, Origin::UNKNOWN)?,
             });
             keys.push((la, ra));
         }
@@ -1127,13 +1148,17 @@ impl Resolver<'_> {
         name: &str,
         args: Vec<Arc<Expr>>,
         env: &Arc<Env>,
+        origin: Origin,
     ) -> Result<Arc<Expr>, AnalysisError> {
-        let call = Arc::new(Expr::new(ExprNode::Function(FunctionCall {
-            name: name.to_owned(),
-            args,
-            distinct: false,
-            filter: None,
-        })));
+        let call = Arc::new(
+            Expr::new(ExprNode::Function(FunctionCall {
+                name: name.to_owned(),
+                args,
+                distinct: false,
+                filter: None,
+            }))
+            .with_origin(origin),
+        );
         Ok(self.bind(&call, &Self::cx(&[], &[], env, "Join"))?.expr)
     }
 
@@ -1166,7 +1191,7 @@ impl Resolver<'_> {
                         col_expr(&l.col, Origin::UNKNOWN),
                         col_expr(&r.col, Origin::UNKNOWN),
                     ];
-                    let value = self.call("coalesce", both, env)?;
+                    let value = self.call("coalesce", both, env, Origin::UNKNOWN)?;
                     let named = Arc::new(Expr::new(ExprNode::Alias {
                         expr: value,
                         name: l.col.name.clone(),
@@ -1353,6 +1378,22 @@ fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
     }
 }
 
+/// Spark's `DATATYPE_MISMATCH.FILTER_NOT_BOOLEAN`.
+fn boolean_filter(b: &Bound, origin: Origin) -> Result<(), AnalysisError> {
+    if b.ty.data_type == Some(krishiv_types::DataType::Boolean) {
+        return Ok(());
+    }
+    let text = format!("\"{}\"", pretty(&b.shown()));
+    Err(AnalysisError::new(
+        DatatypeMismatchFilterNotBoolean {
+            sql_expr: text.clone(),
+            filter: text,
+            r#type: quoted_type(b.ty.data_type.as_ref()),
+        },
+        origin,
+    ))
+}
+
 /// `e` with every column renamed by `rename` (an attribute's name in
 /// generated text only; ids and types stay).
 fn renamed_columns(e: &Arc<Expr>, rename: &dyn Fn(&BoundColumn) -> Option<String>) -> Arc<Expr> {
@@ -1369,7 +1410,7 @@ fn renamed_columns(e: &Arc<Expr>, rename: &dyn Fn(&BoundColumn) -> Option<String
 }
 
 /// `e` with its columns fully qualified, as Spark's `sql` prints them.
-fn qualified(e: &Arc<Expr>, scope: &[Attr]) -> Arc<Expr> {
+pub(super) fn qualified(e: &Arc<Expr>, scope: &[Attr]) -> Arc<Expr> {
     renamed_columns(e, &|c| {
         let mut parts: Vec<String> = scope
             .iter()

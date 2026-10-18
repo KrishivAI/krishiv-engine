@@ -3,7 +3,7 @@ source: crates/krishiv-sql/tests/analyzer.rs
 expression: a.plan.root().to_string()
 ---
 Aggregate [], [(sum(l_extendedprice#5) / 7.0) AS avg_yearly#42]
-+- Filter (((p_partkey#16 == l_partkey#1) and (p_brand#19 == 'Brand#23')) and ((p_container#22 == 'MED BOX') and (l_quantity#4 < scalar-subquery)))
++- Filter (((p_partkey#16 == l_partkey#1) and (p_brand#19 == 'Brand#23')) and ((p_container#22 == 'MED BOX') and (CAST(l_quantity#4 AS DECIMAL(21,7)) < scalar-subquery)))
    :  +- Aggregate [], [(0.2 * avg(l_quantity#29)) AS (0.2 * avg(l_quantity))#41]
    :     +- Filter (l_partkey#26 == outer(p_partkey#16))
    :        +- Shift +25

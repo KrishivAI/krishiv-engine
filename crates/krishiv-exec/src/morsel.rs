@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Morsel dispatch (HyPer-style) and the finalize countdown.
+//! Morsel dispatch (HyPer-style), the finalize countdown and the flush
+//! barrier.
 
-use crate::sync::{AtomicUsize, Ordering};
+use crate::sync::{AtomicUsize, Event, Ordering};
 
 /// Hands out morsel indices `0..len` to drivers, each exactly once: one
 /// atomic increment per claim, so drivers balance load by pulling. Seeded,
@@ -77,5 +78,41 @@ impl Countdown {
     /// `true` for the last driver.
     pub(crate) fn arrive(&self) -> bool {
         self.0.fetch_sub(1, Ordering::AcqRel) == 1
+    }
+}
+
+/// The flush barrier of one operator (see
+/// [`Operator::needs_flush`](crate::Operator::needs_flush)): every driver
+/// [`arrive`](Self::arrive)s once, and [`wait`](Self::wait) completes once
+/// all have, observing everything each did before arriving.
+#[derive(Debug)]
+pub(crate) struct Barrier {
+    left: AtomicUsize,
+    event: Event,
+}
+
+impl Barrier {
+    pub(crate) fn new(drivers: usize) -> Self {
+        Self {
+            left: AtomicUsize::new(drivers),
+            event: Event::default(),
+        }
+    }
+
+    pub(crate) fn arrive(&self) {
+        if self.left.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.event.notify();
+        }
+    }
+
+    /// Completes once every driver has arrived.
+    pub(crate) async fn wait(&self) {
+        loop {
+            let listener = self.event.listen();
+            if self.left.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            listener.await;
+        }
     }
 }

@@ -310,6 +310,64 @@ impl KeyTable {
         }
         Ok(self.len() - before)
     }
+
+    /// The id of key row `bytes` whose hash is `hash`, inserting it if new;
+    /// `true` if it was new. For callers that keep the hashes (a join's
+    /// build rows carry theirs). [`find_or_insert`](Self::find_or_insert)
+    /// keeps its own loop on purpose: it is the aggregate's hot path, and
+    /// routing it through this call cost about 15% in its benchmarks.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` past `u32::MAX` keys.
+    pub fn insert_hashed(&mut self, bytes: &[u8], hash: u64) -> Result<(u32, bool)> {
+        if self.offsets.is_empty() {
+            self.offsets.push(0);
+        }
+        let Self {
+            data,
+            offsets,
+            hashes,
+            index,
+        } = self;
+        let eq = |&id: &u32| key_eq(data, offsets, hashes, id, bytes, hash);
+        match index.entry(hash, eq, |&id| hashes[id as usize]) {
+            Entry::Occupied(o) => Ok((*o.get(), false)),
+            Entry::Vacant(v) => {
+                let id = u32::try_from(hashes.len())
+                    .map_err(|_| internal("more than 2^32 keys in one table".to_owned()))?;
+                data.extend_from_slice(bytes);
+                offsets.push(data.len());
+                hashes.push(hash);
+                v.insert(id);
+                Ok((id, true))
+            }
+        }
+    }
+
+    /// The id of key row `bytes` whose hash is `hash`, if present (a join
+    /// probe).
+    pub fn find(&self, bytes: &[u8], hash: u64) -> Option<u32> {
+        let eq = |&id: &u32| key_eq(&self.data, &self.offsets, &self.hashes, id, bytes, hash);
+        self.index.find(hash, eq).copied()
+    }
+}
+
+/// Whether key `id` is `bytes` with hash `hash`.
+#[inline]
+fn key_eq(
+    data: &[u8],
+    offsets: &[usize],
+    hashes: &[u64],
+    id: u32,
+    bytes: &[u8],
+    hash: u64,
+) -> bool {
+    let id = id as usize;
+    hashes.get(id) == Some(&hash)
+        && match (offsets.get(id), offsets.get(id + 1)) {
+            (Some(&s), Some(&e)) => data.get(s..e).is_some_and(|k| eq_bytes(k, bytes)),
+            _ => false,
+        }
 }
 
 /// Byte-slice equality without a `memcmp` call for short keys (most

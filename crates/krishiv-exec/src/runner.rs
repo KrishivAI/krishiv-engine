@@ -26,7 +26,7 @@ use crate::driver::{PipelineRun, spawn_driver};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::OperatorEntry;
-use crate::morsel::Countdown;
+use crate::morsel::{Barrier, Countdown};
 use crate::operator::GlobalState;
 use crate::pipeline::{ExecNode, Pipeline, PipelineBuilder};
 use crate::sync::{Mutex, lock};
@@ -252,13 +252,19 @@ fn start_pipeline(
     };
     let (source_id, source) = &pipeline.source;
     let (sink_id, sink) = &pipeline.sink;
+    let read = |input: &OperatorId| {
+        let state = finalized.get(input).cloned();
+        state.ok_or_else(|| internal("a breaker read before it finalized".to_owned()))
+    };
     let mut source_ctx = ctx((*source_id, source.name()));
-    if let Some(input) = pipeline.input {
-        let state = finalized.get(&input).cloned();
-        let state =
-            state.ok_or_else(|| internal("a breaker read before it finalized".to_owned()))?;
-        source_ctx = source_ctx.with_dependency(state);
+    if let Some(input) = &pipeline.input {
+        source_ctx = source_ctx.with_dependency(read(input)?);
     }
+    let operator_deps = pipeline
+        .operator_inputs
+        .iter()
+        .map(|i| i.as_ref().map(read).transpose())
+        .collect::<Result<Vec<_>>>()?;
     let source_global = source.global_state(&source_ctx)?;
     let sink_global = sink.global_state(&ctx((*sink_id, sink.name())))?;
     let drivers = if pipeline.preserve_order {
@@ -269,8 +275,13 @@ fn start_pipeline(
             .min(source.max_parallelism(&source_global))
             .max(1)
     };
+    let barriers = (0..pipeline.operators.len())
+        .map(|_| Barrier::new(drivers))
+        .collect();
     let run = Arc::new(PipelineRun {
         pipeline,
+        operator_deps,
+        barriers,
         source_global,
         sink_global,
         countdown: Countdown::new(drivers),

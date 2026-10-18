@@ -1,7 +1,7 @@
 # krishiv-io
 
 **Layer:** L2 (may depend only on crates in L2 or lower; `cargo xtask layering`).  
-**Real code since:** P2-T117 (`FileFormat` framework); the Parquet reader is P2-T080a (writer: P2-T082a).
+**Real code since:** P2-T117 (`FileFormat` framework); the Parquet reader is P2-T080a, the writer P2-T082a.
 
 ## Purpose
 Object store and file format I/O: the `FileFormat` trait (sans-IO `Decoder`/`Encoder`), the `IoScheduler`
@@ -19,10 +19,16 @@ multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detectio
 (`StorePolicy`, per-store; single-flight footer reads live in `cache.rs`).
 `parquet/` (P2-T080a) `ParquetFormat` over arrow-rs's `ParquetPushDecoder`, no custom decoders: `meta.rs` footer
 (one tail read, checked against the file size, engine types, exact-only row-group statistics, calendar markers) ·
-`decode.rs` the sans-IO decoder (projection mask, row-group selections, row index, unsigned widening) · `tests.rs`.
+`decode.rs` the sans-IO decoder (projection mask, row-group selections, row index, unsigned widening, millisecond
+timestamps as microseconds) · `write.rs` (P2-T082a) the encoder: `ArrowWriter` over a drained buffer, Spark codec names
+and file suffixes, `parquet.block.size`/`page.size`/`enable.dictionary`/`writer.version`, page indexes always,
+`outputTimestampType` (INT96 refused), `datetimeRebaseModeInWrite`, `org.apache.spark.version` footer marker · `tests.rs`.
 Interop fixtures (pyarrow codecs/pages, INT96, unsigned, DuckDB, Spark 4.2): `tests/fixtures/parquet/`
 (`tests/scripts/gen_parquet_fixtures.py`, checked by `krishiv-testkit/tests/parquet_interop.rs`); TPC-H SF1 parity
-with pyarrow: `tests/scripts/tpch_parquet_checksums.py` + the ignored `tpch_sf1_reads_as_pyarrow_reads_it`; fuzz
+with pyarrow: `tests/scripts/tpch_parquet_checksums.py` + the ignored `tpch_sf1_reads_as_pyarrow_reads_it`; written
+files read back by pyarrow, DuckDB and Spark 4.2: `tests/fixtures/parquet/written/`
+(`tests/scripts/check_parquet_written.py` + `parquet_written.scala`, checked by
+`krishiv-testkit/tests/parquet_write_interop.rs`); fuzz
 target `fuzz/fuzz_targets/parquet_read.rs` (seeds: `tests/scripts/fuzz_seed_parquet.py`).
 
 ## Invariants

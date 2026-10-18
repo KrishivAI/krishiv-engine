@@ -356,6 +356,7 @@ impl Parser<'_> {
     #[inline(never)]
     fn predicate(&mut self, expr: Expr, mut height: usize) -> PR<(Expr, usize)> {
         let start = expr.span.start;
+        let op_start = self.start();
         let negated = !self.kw_at(0, "IS") && (self.kw_at(0, "NOT") || self.sym_at(0, Sym::Bang));
         self.block_bang(0);
         self.pos += usize::from(negated);
@@ -369,6 +370,7 @@ impl Parser<'_> {
                 low,
                 high,
                 negated,
+                op: Span::default(),
             }
         } else if self.eat_kw("IN") {
             self.expect_sym(Sym::LParen)?;
@@ -388,11 +390,13 @@ impl Parser<'_> {
                     expr,
                     query: Box::new(q),
                     negated,
+                    op: Span::default(),
                 },
                 None => ExprKind::InList {
                     expr,
                     list: self.opt_expr_list()?,
                     negated,
+                    op: Span::default(),
                 },
             };
             self.expect_sym(Sym::RParen)?;
@@ -499,7 +503,14 @@ impl Parser<'_> {
                 }
             }
         };
-        self.finish_predicate(kind, start, height)
+        let (mut e, height) = self.finish_predicate(kind, start, height)?;
+        if let ExprKind::Between { op, .. }
+        | ExprKind::InList { op, .. }
+        | ExprKind::InSubquery { op, .. } = &mut e.kind
+        {
+            *op = Span::new(op_start, e.span.end);
+        }
+        Ok((e, height))
     }
 
     /// A predicate operand (`valueExpression`), raising `height` to its.

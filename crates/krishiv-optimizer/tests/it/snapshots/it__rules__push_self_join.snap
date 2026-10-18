@@ -3,7 +3,7 @@ source: crates/krishiv-optimizer/tests/it/rules.rs
 expression: "SELECT x.a FROM t x JOIN t y ON x.a = y.c WHERE y.b = 'q'"
 ---
 Project [a#0]
-+- Join Inner, (a#0 == c#5)
++- Join Inner, (CAST(a#0 AS BIGINT) == c#5)
    :- Project [a#0]
    :  +- Scan spark_catalog.default.t [a#0, b#1, c#2] (shared #1)
    +- Project [c#5]

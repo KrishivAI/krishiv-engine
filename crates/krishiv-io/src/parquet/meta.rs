@@ -11,7 +11,8 @@
 //!   never a panic later.
 //! - **The file schema in engine types**: strings as `Utf8View`, binary as
 //!   `BinaryView`, decimals as `Decimal128`, `INT96` as `timestamp`
-//!   (`int96AsTimestamp`), unsigned integers widened as Spark reads them
+//!   (`int96AsTimestamp`), unsigned integers widened and
+//!   millisecond timestamps in microseconds, as Spark reads them
 //!   (`UINT_8`→`smallint`, `UINT_16`→`int`, `UINT_32`→`bigint`,
 //!   `UINT_64`→`decimal(20,0)`); field ids and extension metadata kept.
 //! - **Statistics per row group** in the column's own (engine) type, exact
@@ -215,7 +216,7 @@ fn describe_checked(
             .schema()
             .fields()
             .iter()
-            .map(|f| Arc::new(widen_unsigned_field(f)))
+            .map(|f| Arc::new(spark_read_field(f)))
             .collect::<Vec<FieldRef>>(),
         reader.schema().metadata().clone(),
     ));
@@ -382,29 +383,31 @@ fn hint_nested(
     hint_field(field, &["\u{0}"], descr, o)
 }
 
-/// Unsigned integers as Spark reads them; nested types recursively.
-pub(crate) fn widen_unsigned(dt: &DataType) -> DataType {
+/// Unsigned integers and millisecond timestamps as Spark reads them (wider
+/// signed integers, microsecond timestamps); nested types recursively.
+pub(crate) fn spark_read_type(dt: &DataType) -> DataType {
     match dt {
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+            DataType::Timestamp(TimeUnit::Microsecond, tz.clone())
+        }
         DataType::UInt8 => DataType::Int16,
         DataType::UInt16 => DataType::Int32,
         DataType::UInt32 => DataType::Int64,
         DataType::UInt64 => DataType::Decimal128(20, 0),
-        DataType::Struct(f) => DataType::Struct(
-            f.iter()
-                .map(|c| Arc::new(widen_unsigned_field(c)))
-                .collect(),
-        ),
-        DataType::List(e) => DataType::List(Arc::new(widen_unsigned_field(e))),
-        DataType::LargeList(e) => DataType::LargeList(Arc::new(widen_unsigned_field(e))),
-        DataType::Map(e, s) => DataType::Map(Arc::new(widen_unsigned_field(e)), *s),
+        DataType::Struct(f) => {
+            DataType::Struct(f.iter().map(|c| Arc::new(spark_read_field(c))).collect())
+        }
+        DataType::List(e) => DataType::List(Arc::new(spark_read_field(e))),
+        DataType::LargeList(e) => DataType::LargeList(Arc::new(spark_read_field(e))),
+        DataType::Map(e, s) => DataType::Map(Arc::new(spark_read_field(e)), *s),
         other => other.clone(),
     }
 }
 
-fn widen_unsigned_field(f: &FieldRef) -> Field {
+fn spark_read_field(f: &FieldRef) -> Field {
     f.as_ref()
         .clone()
-        .with_data_type(widen_unsigned(f.data_type()))
+        .with_data_type(spark_read_type(f.data_type()))
 }
 
 /// The type of the leaf at `path` (structs only).
@@ -472,14 +475,37 @@ fn column_statistics(
         Some(v) if exact(is_exact) => Precision::Exact(v),
         Some(v) => Precision::Inexact(v),
     };
-    let (min, max) = scalar_bounds(s, dt);
+    let (min, max) = scalar_bounds(s, dt, micros_per_unit(d));
     c.min = precise(min, s.min_is_exact() || !bytes_typed);
     c.max = precise(max, s.max_is_exact() || !bytes_typed);
     c
 }
 
-/// The statistic's bounds as values of `dt`, where they can be expressed.
-fn scalar_bounds(s: &Statistics, dt: &DataType) -> (Option<ScalarValue>, Option<ScalarValue>) {
+/// Microseconds per stored unit of a timestamp leaf (`None`: another
+/// unit, or not a timestamp): a millisecond column reads as microseconds,
+/// so its statistics are scaled the same way.
+pub(super) fn micros_per_unit(d: &ColumnDescriptor) -> Option<i64> {
+    match d.logical_type_ref() {
+        Some(LogicalType::Timestamp(t)) => match t.unit {
+            parquet::basic::TimeUnit::MILLIS => Some(1000),
+            parquet::basic::TimeUnit::MICROS => Some(1),
+            parquet::basic::TimeUnit::NANOS => None,
+        },
+        _ => match d.converted_type() {
+            ConvertedType::TIMESTAMP_MILLIS => Some(1000),
+            ConvertedType::TIMESTAMP_MICROS => Some(1),
+            _ => None,
+        },
+    }
+}
+
+/// The statistic's bounds as values of `dt`, where they can be expressed;
+/// timestamps are scaled by `micros_per_unit`.
+fn scalar_bounds(
+    s: &Statistics,
+    dt: &DataType,
+    micros_per_unit: Option<i64>,
+) -> (Option<ScalarValue>, Option<ScalarValue>) {
     let int = |v: i64| -> Option<ScalarValue> {
         Some(match dt {
             DataType::Int8 => ScalarValue::Int8(i8::try_from(v).ok()?),
@@ -487,7 +513,9 @@ fn scalar_bounds(s: &Statistics, dt: &DataType) -> (Option<ScalarValue>, Option<
             DataType::Int32 => ScalarValue::Int32(i32::try_from(v).ok()?),
             DataType::Int64 => ScalarValue::Int64(v),
             DataType::Date32 => ScalarValue::Date32(i32::try_from(v).ok()?),
-            DataType::Timestamp(TimeUnit::Microsecond, _) => ScalarValue::TimestampMicros(v),
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                ScalarValue::TimestampMicros(v.checked_mul(micros_per_unit?)?)
+            }
             DataType::Decimal128(p, sc) => ScalarValue::Decimal128 {
                 unscaled: i128::from(v),
                 precision: *p,

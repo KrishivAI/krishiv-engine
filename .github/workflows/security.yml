@@ -1,0 +1,97 @@
+name: Security
+
+# Supply-chain and workflow security checks:
+# - `dependency-review` (pull requests): fails when a PR adds a dependency
+#   with a high or critical advisory, or under a license outside the
+#   cargo-deny allow list (deny.toml [licenses]; keep the two in sync).
+# - `zizmor`: static analysis of the workflows. On pull requests it fails on
+#   any finding (read-only job); on main and on the schedule `zizmor-sarif`
+#   uploads SARIF to code scanning instead.
+# Vulnerability scanning of the lock files is in osv-scanner.yml.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "41 5 * * 2"
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Read the repository and its dependency graph diff.
+      contents: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          # Dev-only and unscoped dependencies count too (the default is
+          # runtime only).
+          fail-on-scopes: runtime, development, unknown
+          # deny.toml [licenses] allow list.
+          allow-licenses: >-
+            Apache-2.0, Apache-2.0 WITH LLVM-exception, MIT, BSD-2-Clause,
+            BSD-3-Clause, ISC, Zlib, Unicode-3.0, MPL-2.0
+          # deny.toml [licenses] exceptions (tiny-keccak is CC0-1.0, reached
+          # only on wasm32).
+          allow-dependencies-licenses: pkg:cargo/tiny-keccak
+
+  # Pull requests: read-only, fails on any finding.
+  zizmor:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Read the workflows; online audits query action metadata.
+      contents: read
+      actions: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          version: 1.30.1
+          advanced-security: false
+
+  # Main and the schedule: report to code scanning.
+  zizmor-sarif:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Read the workflows; online audits query action metadata.
+      contents: read
+      actions: read
+      # Upload the SARIF results to code scanning.
+      security-events: write
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          version: 1.30.1
+          advanced-security: true

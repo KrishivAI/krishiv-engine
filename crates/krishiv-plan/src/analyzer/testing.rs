@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Test doubles for analyzer tests and benchmarks (feature `testing`): a
-//! function registry with simplified result types (Spark's implicit casts
-//! and decimal rules are a later pass's), a one-catalog resolver, a
-//! context builder and a single-threaded `block_on`.
+//! function registry of the common SQL functions with Spark's signatures
+//! and result types, a one-catalog resolver, a context builder and a
+//! single-threaded `block_on`.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -13,11 +13,12 @@ use krishiv_types::{DataType, DecimalType};
 
 use super::{
     AllowAll, AnalysisContext, ArgType, Catalog, CatalogResolver, FunctionEntry, FunctionLookup,
-    FunctionRegistry, MemoryCatalog, Principal, PrincipalKind, ResolutionConf, SparkProfile,
+    FunctionRegistry, InputType, Inputs, MemoryCatalog, Principal, PrincipalKind, ResolutionConf,
+    SparkProfile,
 };
-use crate::{Builtin, FunctionId, FunctionKind};
+use crate::{FunctionId, FunctionKind};
 
-/// A registry of the canonical operators and the common SQL functions.
+/// A registry of common SQL functions, typed as Spark 4.2 types them.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TestFunctions;
 
@@ -34,97 +35,41 @@ fn of(t: DataType, nullable: bool) -> ArgType {
     }
 }
 
-fn boolean(a: &[ArgType]) -> Result<ArgType, KrishivError> {
-    Ok(of(DataType::Boolean, any_null(a)))
-}
-
-fn wider(a: &[ArgType]) -> Option<DataType> {
-    let mut out: Option<DataType> = None;
-    for t in a.iter().filter_map(|t| t.data_type.clone()) {
-        out = Some(match (out, t) {
-            (None, t) => t,
-            (Some(DataType::Double), _) | (_, DataType::Double) => DataType::Double,
-            (Some(DataType::Decimal(x)), DataType::Decimal(y)) => {
-                DataType::Decimal(if x.precision() >= y.precision() { x } else { y })
-            }
-            (Some(DataType::Decimal(x)), _) | (Some(_), DataType::Decimal(x)) => {
-                DataType::Decimal(x)
-            }
-            (Some(DataType::Long), _) | (_, DataType::Long) => DataType::Long,
-            (Some(x), _) => x,
-        });
-    }
-    out
-}
-
-fn arith(a: &[ArgType]) -> Result<ArgType, KrishivError> {
-    Ok(ArgType {
-        data_type: wider(a),
-        nullable: any_null(a),
-    })
-}
-
-fn division(a: &[ArgType]) -> Result<ArgType, KrishivError> {
-    Ok(ArgType {
-        data_type: wider(a),
-        nullable: true,
-    })
-}
-
-fn same_as_first(a: &[ArgType]) -> Result<ArgType, KrishivError> {
-    Ok(ArgType {
-        data_type: a.first().and_then(|t| t.data_type.clone()),
-        nullable: any_null(a),
-    })
-}
-
-fn not_null(a: &[ArgType]) -> Result<ArgType, KrishivError> {
-    let _ = a;
-    Ok(of(DataType::Boolean, false))
-}
-
-fn when(a: &[ArgType]) -> Result<ArgType, KrishivError> {
-    let values: Vec<ArgType> = a
-        .chunks(2)
-        .filter_map(|p| match p {
-            [_, v] | [v] => Some(v.clone()),
-            _ => None,
-        })
-        .collect();
-    Ok(ArgType {
-        data_type: wider(&values),
-        nullable: any_null(&values) || a.len().is_multiple_of(2),
-    })
+fn first(a: &[ArgType]) -> Option<DataType> {
+    a.first().and_then(|t| t.data_type.clone())
 }
 
 fn string(a: &[ArgType]) -> Result<ArgType, KrishivError> {
     Ok(of(DataType::String, any_null(a)))
 }
 
+/// `coalesce`: the arguments share one type after their casts.
 fn coalesce(a: &[ArgType]) -> Result<ArgType, KrishivError> {
     Ok(ArgType {
-        data_type: wider(a),
+        data_type: a.iter().find_map(|t| t.data_type.clone()),
         nullable: a.iter().all(|t| t.nullable),
     })
 }
 
+/// `sum`: `decimal(min(38, p + 10), s)`, `bigint` or `double`.
 fn sum(a: &[ArgType]) -> Result<ArgType, KrishivError> {
-    let t = match a.first().and_then(|t| t.data_type.clone()) {
+    let t = match first(a) {
         Some(DataType::Decimal(d)) => DataType::Decimal(DecimalType::try_new(
-            (d.precision() + 10).min(38).into(),
+            (u32::from(d.precision()) + 10).min(38),
             d.scale().into(),
         )?),
-        Some(DataType::Double | DataType::Float) => DataType::Double,
-        _ => DataType::Long,
+        Some(DataType::Double | DataType::Float) | None => DataType::Double,
+        Some(_) => DataType::Long,
     };
     Ok(of(t, true))
 }
 
+/// `avg`: `decimal(p + 4, s + 4)` bounded to 38, else `double`.
 fn avg(a: &[ArgType]) -> Result<ArgType, KrishivError> {
-    let t = match a.first().and_then(|t| t.data_type.clone()) {
+    let t = match first(a) {
         Some(DataType::Decimal(d)) => DataType::Decimal(DecimalType::try_new(
-            (d.precision() + 4).min(38).into(),
-            (d.scale() + 4).min(38).into(),
+            (u32::from(d.precision()) + 4).min(38),
+            (u32::from(d.scale()) + 4).min(38),
         )?),
         _ => DataType::Double,
     };
@@ -137,7 +82,7 @@ fn count(_: &[ArgType]) -> Result<ArgType, KrishivError> {
 
 fn min_max(a: &[ArgType]) -> Result<ArgType, KrishivError> {
     Ok(ArgType {
-        data_type: a.first().and_then(|t| t.data_type.clone()),
+        data_type: first(a),
         nullable: true,
     })
 }
@@ -146,30 +91,45 @@ fn extract(a: &[ArgType]) -> Result<ArgType, KrishivError> {
     Ok(of(DataType::Integer, a.get(1).is_some_and(|t| t.nullable)))
 }
 
-const REGISTRY: [(&str, FunctionKind, Sig); 10] = [
-    ("sum", FunctionKind::Aggregate, sum),
-    ("avg", FunctionKind::Aggregate, avg),
-    ("count", FunctionKind::Aggregate, count),
-    ("min", FunctionKind::Aggregate, min_max),
-    ("max", FunctionKind::Aggregate, min_max),
-    ("any_value", FunctionKind::Aggregate, min_max),
-    ("extract", FunctionKind::Scalar, extract),
-    ("substring", FunctionKind::Scalar, string),
-    ("upper", FunctionKind::Scalar, string),
-    ("coalesce", FunctionKind::Scalar, coalesce),
-];
+/// How each function's arguments are cast.
+#[derive(Clone, Copy)]
+enum In {
+    Any,
+    Field,
+    Numeric,
+    Substring,
+    String,
+    Common,
+}
 
-fn builtin(b: Builtin) -> Sig {
-    match b {
-        Builtin::EqNullSafe | Builtin::IsNull | Builtin::IsNotNull => not_null,
-        Builtin::Add | Builtin::Subtract | Builtin::Multiply => arith,
-        Builtin::Divide | Builtin::Remainder => division,
-        Builtin::Negative => same_as_first,
-        Builtin::When => when,
-        Builtin::Concat => string,
-        _ => boolean,
+impl In {
+    fn inputs(self) -> Inputs {
+        let exact = |t| InputType::Exact(t);
+        match self {
+            Self::Any => Inputs::Any,
+            Self::Field => Inputs::Expects(vec![exact(DataType::String), InputType::Any]),
+            Self::Numeric => Inputs::Expects(vec![InputType::Numeric { intervals: true }]),
+            Self::Substring => {
+                Inputs::Expects(vec![exact(DataType::String), exact(DataType::Integer)])
+            }
+            Self::String => Inputs::Expects(vec![exact(DataType::String)]),
+            Self::Common => Inputs::Common,
+        }
     }
 }
+
+const REGISTRY: [(&str, FunctionKind, In, Sig); 10] = [
+    ("sum", FunctionKind::Aggregate, In::Numeric, sum),
+    ("avg", FunctionKind::Aggregate, In::Numeric, avg),
+    ("count", FunctionKind::Aggregate, In::Any, count),
+    ("min", FunctionKind::Aggregate, In::Any, min_max),
+    ("max", FunctionKind::Aggregate, In::Any, min_max),
+    ("any_value", FunctionKind::Aggregate, In::Any, min_max),
+    ("extract", FunctionKind::Scalar, In::Field, extract),
+    ("substring", FunctionKind::Scalar, In::Substring, string),
+    ("upper", FunctionKind::Scalar, In::String, string),
+    ("coalesce", FunctionKind::Scalar, In::Common, coalesce),
+];
 
 impl FunctionRegistry for TestFunctions {
     fn version(&self) -> u64 {
@@ -180,18 +140,9 @@ impl FunctionRegistry for TestFunctions {
         let [name] = name else {
             return FunctionLookup::NotFound;
         };
-        if let Some(b) = Builtin::from_name(name) {
-            return FunctionLookup::Found(FunctionEntry {
-                id: FunctionId::Builtin(b),
-                kind: FunctionKind::Scalar,
-                result: Arc::new(builtin(b)),
-            });
-        }
         let lower = name.to_lowercase();
-        if let Some((i, (n, kind, result))) = REGISTRY
-            .iter()
-            .enumerate()
-            .find(|(_, (n, _, _))| *n == lower)
+        if let Some((i, (n, kind, inputs, result))) =
+            REGISTRY.iter().enumerate().find(|(_, (n, ..))| *n == lower)
         {
             return FunctionLookup::Found(FunctionEntry {
                 id: FunctionId::Registry {
@@ -199,6 +150,7 @@ impl FunctionRegistry for TestFunctions {
                     id: u32::try_from(i).unwrap_or(u32::MAX),
                 },
                 kind: *kind,
+                inputs: inputs.inputs(),
                 result: Arc::new(*result),
             });
         }

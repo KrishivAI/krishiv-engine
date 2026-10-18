@@ -99,7 +99,8 @@ impl FileWriter {
     /// A writer of `schema` in `format`, holding encoder memory in `mem`.
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` if the format cannot write.
+    /// `KRISHIV_UNSUPPORTED_FEATURE` if the format cannot write; the
+    /// format's [`FileFormat::check_write`] error.
     pub fn new(
         io: &IoContext,
         format: Arc<dyn FileFormat>,
@@ -111,6 +112,9 @@ impl FileWriter {
         if !format.capabilities(&format_options).write {
             return Err(unsupported(format!("writing the {} format", format.name())));
         }
+        format
+            .check_write(&schema, &format_options)
+            .map_err(|e| e.into_error(&format!("{}/{}", options.store, options.dir)))?;
         let suffix = format.file_suffix(&format_options);
         Ok(Self {
             io: io.clone(),

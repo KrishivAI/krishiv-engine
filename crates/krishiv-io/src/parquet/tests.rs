@@ -13,7 +13,6 @@ use arrow_array::{
     UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use bytes::Bytes;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use object_store::ObjectStore;
 use object_store::memory::InMemory;
@@ -177,6 +176,171 @@ fn sorted_key_ranges_skip_most_row_groups() {
     assert_eq!(rows(&out), 4000);
     let first = out[0].column(0).as_primitive::<Int32Type>().value(0);
     assert_eq!(first, 41_000);
+}
+
+/// `TIMESTAMP(MILLIS)` columns (Spark's `outputTimestampType=TIMESTAMP_MILLIS`)
+/// read as Spark reads them: microsecond timestamps, with and without a
+/// zone; their statistics prune in microseconds too.
+#[test]
+fn millisecond_timestamps_read_as_microseconds() {
+    use arrow_array::TimestampMillisecondArray;
+    use arrow_array::types::TimestampMicrosecondType;
+    use arrow_schema::TimeUnit;
+
+    let env = Env::new();
+    let millis: Vec<i64> = (0..4000).map(|i| i * 1000 - 1_999_999).collect();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new(
+            "ntz",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        ),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(TimestampMillisecondArray::from(millis.clone()).with_timezone("UTC")),
+            Arc::new(TimestampMillisecondArray::from(millis.clone())),
+        ],
+    )
+    .unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(1000))
+        .build();
+    let file = env.put("ms.parquet", write(&[batch], props));
+    let o = env.options(&[]);
+    let meta = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+        )
+        .unwrap();
+    let schema = meta.schema();
+    assert_eq!(
+        schema.field(0).data_type(),
+        &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+    );
+    assert_eq!(
+        schema.field(1).data_type(),
+        &DataType::Timestamp(TimeUnit::Microsecond, None)
+    );
+    let out = env
+        .scan(&file, &ScanRequest::all(Arc::clone(&schema)), &o)
+        .unwrap();
+    let got: Vec<i64> = out
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_primitive::<TimestampMicrosecondType>()
+                .values()
+                .to_vec()
+        })
+        .collect();
+    assert_eq!(got, millis.iter().map(|v| v * 1000).collect::<Vec<_>>());
+    // Row group 2 holds [1 ms, 999_001 ms]: only scaled to microseconds do
+    // its bounds keep it (and only it) for this predicate.
+    let mut req = ScanRequest::all(Arc::clone(&schema));
+    req.predicate = Some(PushdownExpr::And(vec![
+        PushdownExpr::cmp(
+            ColumnPath::new("ts"),
+            CmpOp::GtEq,
+            ScalarValue::TimestampMicros(500_000_000),
+        ),
+        PushdownExpr::cmp(
+            ColumnPath::new("ts"),
+            CmpOp::Lt,
+            ScalarValue::TimestampMicros(600_000_000),
+        ),
+    ]));
+    let plan = ParquetFormat
+        .plan_units(meta.as_ref(), &ByteRange::whole(file.size), &req)
+        .unwrap();
+    assert_eq!(plan.units.iter().map(|u| u.index).collect::<Vec<_>>(), [2]);
+    // A millisecond value beyond the microsecond range fails the scan (Spark's
+    // `multiplyExact` fails too), never wraps.
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "ts",
+        DataType::Timestamp(TimeUnit::Millisecond, None),
+        false,
+    )]));
+    let huge = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(TimestampMillisecondArray::from(vec![
+            i64::MAX / 10,
+        ]))],
+    )
+    .unwrap();
+    let file = env.put(
+        "huge.parquet",
+        write(&[huge], WriterProperties::builder().build()),
+    );
+    let schema = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+        )
+        .unwrap()
+        .schema();
+    let e = env.scan(&file, &ScanRequest::all(schema), &o).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::FailedReadFileNoHint);
+}
+
+/// Statistics of timestamp leaves scale by their stored unit, whether the
+/// file says it with a logical type or only with a legacy converted type;
+/// nanoseconds have no microsecond statistics.
+#[test]
+fn timestamp_statistics_scale_by_the_stored_unit() {
+    use parquet::basic::{ConvertedType, Repetition, Type as PhysicalType};
+    use parquet::schema::types::{ColumnDescriptor, ColumnPath as LeafPath, Type};
+
+    let leaf = |logical: Option<parquet::basic::LogicalType>, converted: ConvertedType| {
+        let t = Type::primitive_type_builder("t", PhysicalType::INT64)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(logical)
+            .with_converted_type(converted)
+            .build()
+            .unwrap();
+        ColumnDescriptor::new(Arc::new(t), 0, 0, LeafPath::from("t"))
+    };
+    let ts = |unit| {
+        Some(parquet::basic::LogicalType::Timestamp(
+            parquet::basic::TimestampType {
+                is_adjusted_to_u_t_c: true,
+                unit,
+            },
+        ))
+    };
+    let per_unit = super::meta::micros_per_unit;
+    assert_eq!(
+        per_unit(&leaf(
+            ts(parquet::basic::TimeUnit::MILLIS),
+            ConvertedType::NONE
+        )),
+        Some(1000)
+    );
+    assert_eq!(
+        per_unit(&leaf(
+            ts(parquet::basic::TimeUnit::NANOS),
+            ConvertedType::NONE
+        )),
+        None
+    );
+    assert_eq!(
+        per_unit(&leaf(None, ConvertedType::TIMESTAMP_MILLIS)),
+        Some(1000)
+    );
+    assert_eq!(
+        per_unit(&leaf(None, ConvertedType::TIMESTAMP_MICROS)),
+        Some(1)
+    );
+    assert_eq!(per_unit(&leaf(None, ConvertedType::NONE)), None);
 }
 
 /// Splits own row groups by their midpoint: any split points read every row
@@ -530,22 +694,10 @@ fn binary_as_string() {
         )
         .unwrap();
     assert_eq!(out[0].column(0).as_string_view().value(0), "hi");
-    assert!(
-        ParquetFormat
-            .writer(&env.io, out[0].schema(), &o)
-            .now_or_never_err()
-    );
-    let _ = Bytes::new();
-}
-
-trait NowOrNever {
-    fn now_or_never_err(self) -> bool;
-}
-
-impl<T> NowOrNever for futures::future::BoxFuture<'_, crate::FormatResult<T>> {
-    fn now_or_never_err(self) -> bool {
-        matches!(futures::FutureExt::now_or_never(self), Some(Err(_)))
-    }
+    // What was read as a string writes back as one.
+    let written =
+        futures::FutureExt::now_or_never(ParquetFormat.writer(&env.io, out[0].schema(), &o));
+    assert!(matches!(written, Some(Ok(_))));
 }
 
 /// A fuzzer-found file whose dictionary index points past its dictionary

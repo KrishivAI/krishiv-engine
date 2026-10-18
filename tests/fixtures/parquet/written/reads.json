@@ -1,0 +1,132 @@
+{
+  "duckdb": {
+    "gzip": {
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "lz4": {
+      "unsupported": "no reader for the Hadoop-framed LZ4 codec (Spark's lz4 writes it too)"
+    },
+    "lz4_raw": {
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "millis": {
+      "rows": 300,
+      "sha256": "735b86b6b8958cf8c55958d1ead270e8306f7f0f02161df12a69c1b7c01c6fd3"
+    },
+    "none": {
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "small_groups": {
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "snappy": {
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "v2": {
+      "unsupported": "no DELTA_BYTE_ARRAY for fixed-length decimals (Spark's v2 writer without dictionary uses it too)"
+    },
+    "zstd": {
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    }
+  },
+  "pyarrow": {
+    "gzip": {
+      "page_index": true,
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "lz4": {
+      "page_index": true,
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "lz4_raw": {
+      "page_index": true,
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "millis": {
+      "page_index": true,
+      "rows": 300,
+      "sha256": "735b86b6b8958cf8c55958d1ead270e8306f7f0f02161df12a69c1b7c01c6fd3"
+    },
+    "none": {
+      "page_index": true,
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "small_groups": {
+      "page_index": true,
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "snappy": {
+      "page_index": true,
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "v2": {
+      "page_index": true,
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "zstd": {
+      "page_index": true,
+      "rows": 300,
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    }
+  },
+  "spark": {
+    "gzip": {
+      "rows": 300,
+      "schema": "struct<id:int,bool:boolean,byte:tinyint,short:smallint,long:bigint,float:float,double:double,dec9:decimal(9,2),dec18:decimal(18,4),dec38:decimal(38,10),s:string,bin:binary,d:date,ts:timestamp,ntz:timestamp_ntz,st:struct<x:int,y:string,t:timestamp>,arr:array<bigint>,m:map<string,int>>",
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "lz4": {
+      "rows": 300,
+      "schema": "struct<id:int,bool:boolean,byte:tinyint,short:smallint,long:bigint,float:float,double:double,dec9:decimal(9,2),dec18:decimal(18,4),dec38:decimal(38,10),s:string,bin:binary,d:date,ts:timestamp,ntz:timestamp_ntz,st:struct<x:int,y:string,t:timestamp>,arr:array<bigint>,m:map<string,int>>",
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "lz4_raw": {
+      "rows": 300,
+      "schema": "struct<id:int,bool:boolean,byte:tinyint,short:smallint,long:bigint,float:float,double:double,dec9:decimal(9,2),dec18:decimal(18,4),dec38:decimal(38,10),s:string,bin:binary,d:date,ts:timestamp,ntz:timestamp_ntz,st:struct<x:int,y:string,t:timestamp>,arr:array<bigint>,m:map<string,int>>",
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "millis": {
+      "rows": 300,
+      "schema": "struct<id:int,bool:boolean,byte:tinyint,short:smallint,long:bigint,float:float,double:double,dec9:decimal(9,2),dec18:decimal(18,4),dec38:decimal(38,10),s:string,bin:binary,d:date,ts:timestamp,ntz:timestamp_ntz,st:struct<x:int,y:string,t:timestamp>,arr:array<bigint>,m:map<string,int>>",
+      "sha256": "735b86b6b8958cf8c55958d1ead270e8306f7f0f02161df12a69c1b7c01c6fd3"
+    },
+    "none": {
+      "rows": 300,
+      "schema": "struct<id:int,bool:boolean,byte:tinyint,short:smallint,long:bigint,float:float,double:double,dec9:decimal(9,2),dec18:decimal(18,4),dec38:decimal(38,10),s:string,bin:binary,d:date,ts:timestamp,ntz:timestamp_ntz,st:struct<x:int,y:string,t:timestamp>,arr:array<bigint>,m:map<string,int>>",
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "small_groups": {
+      "rows": 300,
+      "schema": "struct<id:int,bool:boolean,byte:tinyint,short:smallint,long:bigint,float:float,double:double,dec9:decimal(9,2),dec18:decimal(18,4),dec38:decimal(38,10),s:string,bin:binary,d:date,ts:timestamp,ntz:timestamp_ntz,st:struct<x:int,y:string,t:timestamp>,arr:array<bigint>,m:map<string,int>>",
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "snappy": {
+      "rows": 300,
+      "schema": "struct<id:int,bool:boolean,byte:tinyint,short:smallint,long:bigint,float:float,double:double,dec9:decimal(9,2),dec18:decimal(18,4),dec38:decimal(38,10),s:string,bin:binary,d:date,ts:timestamp,ntz:timestamp_ntz,st:struct<x:int,y:string,t:timestamp>,arr:array<bigint>,m:map<string,int>>",
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "v2": {
+      "rows": 300,
+      "schema": "struct<id:int,bool:boolean,byte:tinyint,short:smallint,long:bigint,float:float,double:double,dec9:decimal(9,2),dec18:decimal(18,4),dec38:decimal(38,10),s:string,bin:binary,d:date,ts:timestamp,ntz:timestamp_ntz,st:struct<x:int,y:string,t:timestamp>,arr:array<bigint>,m:map<string,int>>",
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    },
+    "zstd": {
+      "rows": 300,
+      "schema": "struct<id:int,bool:boolean,byte:tinyint,short:smallint,long:bigint,float:float,double:double,dec9:decimal(9,2),dec18:decimal(18,4),dec38:decimal(38,10),s:string,bin:binary,d:date,ts:timestamp,ntz:timestamp_ntz,st:struct<x:int,y:string,t:timestamp>,arr:array<bigint>,m:map<string,int>>",
+      "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"
+    }
+  }
+}

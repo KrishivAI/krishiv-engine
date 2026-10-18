@@ -200,6 +200,11 @@ fn visit<'a>(
 }
 
 fn check_function(ctx: &AnalysisContext, name: &str, origin: Origin) -> Result<(), AnalysisError> {
+    // The canonical operators exist in every profile; the analyzer types
+    // them itself.
+    if crate::Builtin::from_name(name).is_some() {
+        return Ok(());
+    }
     match ctx
         .functions
         .lookup(std::slice::from_ref(&name.to_owned()), ctx.profile)

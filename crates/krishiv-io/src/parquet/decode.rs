@@ -8,12 +8,15 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{UInt8Type, UInt16Type, UInt32Type, UInt64Type};
+use arrow_array::types::{
+    TimestampMicrosecondType, TimestampMillisecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
+};
 use arrow_array::{
     Array, ArrayRef, LargeListArray, ListArray, MapArray, RecordBatch, RecordBatchOptions,
     StructArray,
 };
-use arrow_schema::{DataType, Field, SchemaRef};
+use arrow_schema::{DataType, Field, SchemaRef, TimeUnit};
 use bytes::Bytes;
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, RowSelection as ParquetSelection};
@@ -24,7 +27,7 @@ use parquet::arrow::{ProjectionMask, RowNumber};
 use parquet::errors::ParquetError;
 
 use super::calendar::Guard;
-use super::meta::{ParquetMetadata, widen_unsigned};
+use super::meta::{ParquetMetadata, spark_read_type};
 use crate::error::{FormatError, FormatResult};
 use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
 use crate::options::FormatOptions;
@@ -179,7 +182,7 @@ impl ParquetDecoder {
             projection: req.projection.clone(),
             output,
             row_index,
-            widen: widen_unsigned(&DataType::Struct(meta.reader.schema().fields().clone()))
+            widen: spark_read_type(&DataType::Struct(meta.reader.schema().fields().clone()))
                 != DataType::Struct(meta.reader.schema().fields().clone()),
             metrics,
             poisoned: false,
@@ -206,7 +209,7 @@ impl ParquetDecoder {
             let columns = batch
                 .columns()
                 .iter()
-                .map(widen_array)
+                .map(spark_read_array)
                 .collect::<FormatResult<Vec<_>>>()?;
             let fields: Vec<Field> = schema
                 .fields()
@@ -304,10 +307,25 @@ impl Decoder for ParquetDecoder {
     }
 }
 
-/// `a` with unsigned integers widened as [`widen_unsigned`] types them.
-fn widen_array(a: &ArrayRef) -> FormatResult<ArrayRef> {
+/// `a` as [`spark_read_type`] types it.
+///
+/// # Errors
+/// A millisecond timestamp beyond the microsecond range (Spark's
+/// `multiplyExact` fails on it too).
+fn spark_read_array(a: &ArrayRef) -> FormatResult<ArrayRef> {
     let bad = |e: arrow_schema::ArrowError| FormatError::Corrupt(e.to_string());
     Ok(match a.data_type() {
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => Arc::new(
+            a.as_primitive::<TimestampMillisecondType>()
+                .try_unary::<_, TimestampMicrosecondType, FormatError>(|ms| {
+                    ms.checked_mul(1000).ok_or_else(|| {
+                        FormatError::Corrupt(format!(
+                            "the millisecond timestamp {ms} is out of the microsecond range"
+                        ))
+                    })
+                })?
+                .with_timezone_opt(tz.clone()),
+        ) as ArrayRef,
         DataType::UInt8 => Arc::new(
             a.as_primitive::<UInt8Type>()
                 .unary::<_, arrow_array::types::Int16Type>(i16::from),
@@ -331,7 +349,7 @@ fn widen_array(a: &ArrayRef) -> FormatResult<ArrayRef> {
             let children = s
                 .columns()
                 .iter()
-                .map(widen_array)
+                .map(spark_read_array)
                 .collect::<FormatResult<Vec<_>>>()?;
             let fields = fields
                 .iter()
@@ -350,7 +368,7 @@ fn widen_array(a: &ArrayRef) -> FormatResult<ArrayRef> {
         }
         DataType::List(f) => {
             let l = a.as_list::<i32>();
-            let values = widen_array(l.values())?;
+            let values = spark_read_array(l.values())?;
             let f = Arc::new(
                 f.as_ref()
                     .clone()
@@ -363,7 +381,7 @@ fn widen_array(a: &ArrayRef) -> FormatResult<ArrayRef> {
         }
         DataType::LargeList(f) => {
             let l = a.as_list::<i64>();
-            let values = widen_array(l.values())?;
+            let values = spark_read_array(l.values())?;
             let f = Arc::new(
                 f.as_ref()
                     .clone()
@@ -377,7 +395,7 @@ fn widen_array(a: &ArrayRef) -> FormatResult<ArrayRef> {
         DataType::Map(f, sorted) => {
             let m = a.as_map();
             let entries: ArrayRef = Arc::new(m.entries().clone());
-            let entries = widen_array(&entries)?;
+            let entries = spark_read_array(&entries)?;
             let f = Arc::new(
                 f.as_ref()
                     .clone()
