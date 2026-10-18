@@ -4,7 +4,8 @@
 //! [`parse_query`] parses a Spark 4.2 query statement (`SELECT`, `WITH`,
 //! `VALUES`, `TABLE`, `FROM ... SELECT`, set operations) into the syntax tree
 //! of [`ast`], whose nodes carry source spans; [`parse_statement`] also
-//! accepts `EXPLAIN`. The parser is hand-written:
+//! accepts `EXPLAIN`. [`parse_data_type`], [`parse_table_schema`] and
+//! [`parse_ddl_type`] parse type strings with the same grammar. The parser is hand-written:
 //! a lexer ([`lexer`]) and a recursive-descent parser with precedence
 //! climbing for expressions. Errors are Spark's error classes
 //! ([`ParseError`]).
@@ -37,6 +38,7 @@ mod lower;
 mod parser;
 mod redact;
 mod types;
+mod validate;
 
 pub use error::ParseError;
 pub use frontend::Frontend;
@@ -120,6 +122,85 @@ pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, Par
 /// `EXPLAIN LOGICAL`, which Spark parses and then rejects.
 pub fn parse_statement(sql: &str, options: &ParserOptions) -> Result<ast::Statement, ParseError> {
     parser::parse_statement(sql, *options).map_err(|e| e.redacted_in(sql))
+}
+
+/// Parses a data type string, as Spark's `CatalystSqlParser.parseDataType`
+/// does (`int`, `decimal(10, 2)`, `array<struct<a: int>>`), with the checks
+/// Spark makes on the type it builds.
+///
+/// ```
+/// use krishiv_sql::{parse_data_type, ParserOptions};
+///
+/// let d = ParserOptions::default();
+/// assert_eq!(parse_data_type("ARRAY < INT >", &d).unwrap().to_string(), "array<int>");
+/// let e = parse_data_type("a InvalidType", &d).unwrap_err();
+/// assert_eq!(
+///     e.error.to_string(),
+///     "[PARSE_SYNTAX_ERROR] Syntax error at or near 'InvalidType': extra input 'InvalidType'. \
+///      SQLSTATE: 42601"
+/// );
+/// ```
+///
+/// # Errors
+/// The syntax errors of [`parse_query`], and `UNSUPPORTED_DATATYPE`,
+/// `DATATYPE_MISSING_SIZE`, `INCOMPLETE_TYPE_DEFINITION.*`, the decimal
+/// bound errors and `UNSUPPORTED_TIME_PRECISION` for a type Spark rejects
+/// after parsing.
+pub fn parse_data_type(
+    sql: &str,
+    options: &ParserOptions,
+) -> Result<ast::DataTypeSpec, ParseError> {
+    parser::parse_data_type(sql, *options)
+        .and_then(|t| validate::data_type(&t).map(|()| t))
+        .map_err(|e| e.redacted_in(sql))
+}
+
+/// Parses a table schema string, as Spark's
+/// `CatalystSqlParser.parseTableSchema` does: `name type [NOT NULL]
+/// [COMMENT '...']`, separated by commas.
+///
+/// # Errors
+/// As for [`parse_data_type`], for the column list grammar.
+pub fn parse_table_schema(
+    sql: &str,
+    options: &ParserOptions,
+) -> Result<Vec<ast::StructField>, ParseError> {
+    parser::parse_table_schema(sql, *options)
+        .and_then(|columns| {
+            columns
+                .iter()
+                .try_for_each(|c| validate::data_type(&c.data_type))
+                .map(|()| columns)
+        })
+        .map_err(|e| e.redacted_in(sql))
+}
+
+/// Parses a schema string as Spark's `DataType.fromDDL` does (the schema
+/// argument of `from_json`, `from_csv` and `from_xml`): a data type, or else
+/// a table schema, which becomes a `STRUCT` of its columns. When neither
+/// parses, the error is the data type's.
+///
+/// ```
+/// use krishiv_sql::{parse_ddl_type, ParserOptions};
+///
+/// let d = ParserOptions::default();
+/// let t = parse_ddl_type("a int, b array<string>", &d).unwrap();
+/// assert_eq!(t.to_string(), "struct<`a`:int,`b`:array<string>>");
+/// assert_eq!(parse_ddl_type("map<string,int>", &d).unwrap().to_string(), "map<string,int>");
+/// ```
+///
+/// # Errors
+/// The error of [`parse_data_type`] when [`parse_table_schema`] fails too.
+pub fn parse_ddl_type(sql: &str, options: &ParserOptions) -> Result<ast::DataTypeSpec, ParseError> {
+    parse_data_type(sql, options).or_else(|e| {
+        let columns = parse_table_schema(sql, options).map_err(|_| e)?;
+        let start = columns.first().map_or(0, |c| c.span.start);
+        let end = columns.last().map_or(sql.len(), |c| c.span.end);
+        Ok(ast::DataTypeSpec {
+            kind: ast::DataTypeKind::Struct(Some(columns)),
+            span: ast::Span::new(start, end),
+        })
+    })
 }
 
 #[cfg(test)]

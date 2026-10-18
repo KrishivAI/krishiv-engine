@@ -8,6 +8,10 @@ Spark SQL dialect parser and analyzer (resolution, type coercion).
 `parse_query` → `ast::Query` (every node spanned; `==` ignores spans). Lexer `lexer.rs`, keyword
 classes `keywords.rs`, recursive descent `parser.rs` + precedence climbing `parser/expr.rs`,
 `types.rs` resolves written types through `krishiv_types::parse_data_type`.
+Type strings use the same grammar (`parser/types.rs`): `parse_data_type` (Spark's `parseDataType`),
+`parse_table_schema` (`parseTableSchema`) and `parse_ddl_type` (`DataType.fromDDL`, the schema
+argument of `from_json` and friends); `validate.rs` holds the checks Spark's `AstBuilder` makes on
+the tree (unknown types, missing sizes, decimal bounds, ...).
 `lower` / `parse_and_lower` turn a query into an unresolved `krishiv_plan::Plan` (`lower.rs`, purely
 syntactic, origins = spans); `redact_sql` turns query text into a `RedactedSql` from lexer tokens
 (`redact.rs`).
@@ -23,6 +27,9 @@ syntactic, origins = spans); `redact_sql` turns query text into a `RedactedSql` 
 - Facts Spark's `AstBuilder` checks after parsing stay in the tree (`Keyword` vs string arguments,
   interval `trailing` parts, quoted typed-literal names, table options with spans); the post-parse
   validation (P2-T079) raises those errors, not the parser.
+- Type errors follow ANTLR's prediction: a complex type whose `<...>` fails falls back to the bare
+  type when that reads on (error at the `<`; after `::` the statement is re-parsed with the bare
+  type when the complex one fails later); optional type parts are taken only when complete.
 - `FROM ... SELECT ...` stores its `FROM` once (`FromStatement`); never copy subtrees per use.
 - Ambiguities ANTLR resolves by prediction are decided deterministically; every decision is checked
   against a real Spark run (`tests/fixtures/spark-4.2.0/sql-parse-probe.json`,

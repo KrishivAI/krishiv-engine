@@ -25,6 +25,14 @@ impl fmt::Display for DataTypeSpec {
                     write!(f, " {tail}")
                 }
             }
+            DataTypeKind::Quoted { name, args } => {
+                write!(f, "`{}`", name.replace('`', "``"))?;
+                if args.is_empty() {
+                    Ok(())
+                } else {
+                    write!(f, "({})", args.join(","))
+                }
+            }
             DataTypeKind::Array(None) => f.write_str("array"),
             DataTypeKind::Array(Some(e)) => write!(f, "array<{e}>"),
             DataTypeKind::Map(None) => f.write_str("map"),
