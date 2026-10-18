@@ -631,6 +631,7 @@ pub(crate) fn create_new_file(path: &Path) -> io::Result<File> {
 }
 
 #[cfg(test)]
+#[cfg(not(loom))]
 impl SpillScope {
     /// The shared state, for tests that build a [`super::SpillFile`] by hand.
     pub(crate) fn inner_for_tests(&self) -> Arc<ScopeInner> {
