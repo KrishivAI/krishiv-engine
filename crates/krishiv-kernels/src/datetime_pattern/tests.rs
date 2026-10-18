@@ -1,0 +1,219 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Unit checks of datetime patterns; the Spark differential is
+//! `krishiv-testkit/tests/datetime_pattern_differential.rs`.
+
+use super::*;
+use krishiv_common::error::ErrorClass;
+
+use crate::cast::FixedOffset;
+
+fn utc() -> Zone<'static> {
+    Zone {
+        id: "UTC",
+        rules: &FixedOffset(0),
+    }
+}
+
+#[test]
+fn spark_write_defaults_round_trip() {
+    let p = DateTimePattern::new("yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX", Purpose::Format).unwrap();
+    let r = DateTimePattern::new("yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX", Purpose::Parse).unwrap();
+    for m in [0, 1_577_934_245_123_456, -62_135_596_800_000_001] {
+        let s = p.format_timestamp(m, utc()).unwrap();
+        assert_eq!(
+            r.parse_timestamp(&s, &FixedOffset(0)).unwrap(),
+            Some(m),
+            "{s}"
+        );
+    }
+    assert!(p.has_zone() && p.has_time());
+}
+
+#[test]
+fn dates_and_local_values() {
+    let p = DateTimePattern::new("yyyy-MM-dd", Purpose::Format).unwrap();
+    assert_eq!(p.format_date(18_263).unwrap(), "2020-01-02");
+    assert!(!p.has_time() && !p.has_zone());
+    let t = DateTimePattern::new("HH:mm", Purpose::Format).unwrap();
+    assert_eq!(
+        t.format_date(0).unwrap_err().error_class(),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    let z = DateTimePattern::new("yyyy XXX", Purpose::Format).unwrap();
+    assert!(z.format_local(0).is_err());
+    let opt = DateTimePattern::new("yyyy[ HH]", Purpose::Format).unwrap();
+    assert_eq!(opt.format_date(0).unwrap(), "1970");
+    let r = DateTimePattern::new("yyyy-MM-dd HH:mm XXX", Purpose::Parse).unwrap();
+    assert_eq!(
+        r.parse_local("1970-01-01 01:00 +01:00", false).unwrap(),
+        None
+    );
+    assert_eq!(
+        r.parse_local("1970-01-01 01:00 +01:00", true).unwrap(),
+        Some(3_600_000_000)
+    );
+    assert_eq!(r.parse_date("1970-01-02 01:00 Z").unwrap(), Some(1));
+    assert_eq!(r.parse_date("1970-01-02").unwrap(), None);
+    assert_eq!(r.pattern(), "yyyy-MM-dd HH:mm XXX");
+}
+
+#[test]
+fn region_zones_need_the_tz_database() {
+    let p = DateTimePattern::new("yyyy VV", Purpose::Parse).unwrap();
+    let e = p
+        .parse_timestamp("2020 America/Los_Angeles", &FixedOffset(0))
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(p.parse_local("2020 Foo/Bar", true).is_err());
+    assert_eq!(p.parse_local("2020 Foo/Bar", false).unwrap(), None);
+    assert!(p.parse_date("2020 Foo/Bar").is_err());
+    let f = DateTimePattern::new("z", Purpose::Format).unwrap();
+    let la = Zone {
+        id: "America/Los_Angeles",
+        rules: &FixedOffset(-28_800),
+    };
+    assert!(f.format_timestamp(0, la).is_err());
+    assert!(DateTimePattern::new("v", Purpose::Format).is_err());
+}
+
+#[test]
+fn fixed_zone_ids() {
+    for (id, want) in [
+        ("UTC", Some(0)),
+        ("Etc/UTC", Some(0)),
+        ("+05:30", Some(19_800)),
+        ("-8", Some(-28_800)),
+        ("UTC+01:00", Some(3600)),
+        ("GMT-0530", Some(-19_800)),
+        ("+05:30:15", Some(19_815)),
+        ("+053015", Some(19_815)),
+        ("+19", None),
+        ("America/Los_Angeles", None),
+        ("+5:3", None),
+        ("+1é:0", None),
+        ("+0é00", None),
+    ] {
+        assert_eq!(fixed_zone_offset(id), want, "{id}");
+    }
+}
+
+fn fmt(pattern: &str, micros: i64, id: &str, offset: i32) -> String {
+    DateTimePattern::new(pattern, Purpose::Format)
+        .unwrap()
+        .format_timestamp(
+            micros,
+            Zone {
+                id,
+                rules: &FixedOffset(offset),
+            },
+        )
+        .unwrap()
+}
+
+#[test]
+fn offsets_with_seconds_and_names() {
+    let off = 19_815; // +05:30:15
+    assert_eq!(fmt("XXXXX", 0, "+05:30:15", off), "+05:30:15");
+    assert_eq!(fmt("XXXX", 0, "+05:30:15", off), "+053015");
+    assert_eq!(fmt("OOOO", 0, "+05:30:15", off), "GMT+05:30:15");
+    assert_eq!(fmt("O", 0, "+05:30:15", off), "GMT+5:30:15");
+    assert_eq!(fmt("O", 0, "-05:00", -18_000), "GMT-5");
+    assert_eq!(fmt("z", 0, "+05:30:15", off), "+05:30:15");
+    assert_eq!(fmt("zzzz", 0, "GMT", 0), "Greenwich Mean Time");
+    assert_eq!(fmt("z", 0, "Z", 0), "Z");
+    assert_eq!(fmt("VV", 0, "Z", 0), "Z");
+}
+
+#[test]
+fn dates_reject_time_fields() {
+    for p in ["SSS", "a", "hh"] {
+        let p = DateTimePattern::new(p, Purpose::Format).unwrap();
+        assert!(p.format_date(0).is_err());
+    }
+    let p = DateTimePattern::new("yyyy[ a][ SSS]", Purpose::Format).unwrap();
+    assert!(p.has_time() && !p.has_zone());
+    assert_eq!(p.format_date(0).unwrap(), "1970");
+    let z = DateTimePattern::new("yyyy[ XXX]", Purpose::Format).unwrap();
+    assert!(z.has_zone() && !z.has_time());
+}
+
+fn parse(pattern: &str, s: &str) -> Option<i64> {
+    DateTimePattern::new(pattern, Purpose::Parse)
+        .unwrap()
+        .parse_timestamp(s, &FixedOffset(0))
+        .unwrap()
+}
+
+#[test]
+fn parse_edge_cases() {
+    const H: i64 = 3_600_000_000;
+    // Localized offsets with seconds; a full offset needs `HH:MM`.
+    assert_eq!(parse("O", "GMT+5:30:15"), Some(-19_815_000_000));
+    assert_eq!(parse("O", "GMT+10"), Some(-10 * H));
+    assert_eq!(parse("OOOO", "GMT+05:30:15"), Some(-19_815_000_000));
+    assert_eq!(parse("OOOO", "GMT+0530"), None);
+    assert_eq!(parse("OOOO", "GMT+24:00"), None);
+    // Zone ids: GMT0, UT prefixes; zone names.
+    assert_eq!(parse("VV", "GMT0"), Some(0));
+    assert_eq!(parse("VV", "GMT+01:00"), Some(-H));
+    assert_eq!(parse("VV", "UT-01:00"), Some(H));
+    assert_eq!(parse("VV", "UTC"), Some(0));
+    assert_eq!(parse("VV", "+1"), None);
+    assert_eq!(parse("z", "Greenwich Mean Time"), Some(0));
+    // A field or zone read twice must agree.
+    assert_eq!(parse("HH HH", "01 01"), Some(H));
+    assert_eq!(parse("HH HH", "01 02"), None);
+    assert_eq!(parse("XXX XXX", "+01:00 +02:00"), None);
+    // Hours that contradict AM/PM.
+    assert_eq!(parse("HH a", "13 AM"), None);
+    assert_eq!(parse("HH a", "13 PM"), Some(13 * H));
+    assert_eq!(parse("HH K", "13 2"), None);
+    assert_eq!(parse("HH K", "13 1"), Some(13 * H));
+    // Full era names; a reduced year after a variable-width field.
+    assert_eq!(parse("GGGG y", "Before Christ 1"), parse("yyyy", "0000"));
+    assert_eq!(parse("Dyy", "120"), parse("yyyy", "2020"));
+    // Quoted literals with doubled quotes.
+    assert_eq!(parse("'it''s' yyyy", "it's 2020"), parse("yyyy", "2020"));
+}
+
+#[test]
+fn legacy_formatter_decides_the_error_class() {
+    let class = |p: &str| {
+        DateTimePattern::new(p, Purpose::Format)
+            .unwrap_err()
+            .error_class()
+            .name()
+    };
+    assert_eq!(
+        class("'a''b' yyyyyyy"),
+        "INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_PATTERN_RECOGNITION"
+    );
+    assert_eq!(
+        class("'unterminated VV"),
+        "INVALID_DATETIME_PATTERN.WITH_SUGGESTION"
+    );
+    assert_eq!(class("QQQQQ"), "INVALID_DATETIME_PATTERN.LENGTH");
+    assert_eq!(
+        class("yyyy-MM ]"),
+        "INCONSISTENT_BEHAVIOR_CROSS_VERSION.DATETIME_PATTERN_RECOGNITION"
+    );
+}
+
+proptest::proptest! {
+    /// Untrusted strings never panic, whatever the pattern.
+    #[test]
+    fn parsing_never_panics(
+        s in "[0-9a-zA-Z+:.\\- 'éÉ/_]{0,24}",
+        p in proptest::sample::select(vec![
+            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX", "yyyyMMdd", "Dyy", "G y", "hh a", "O", "OOOO",
+            "VV", "z", "XXXXX", "x", "yyyy[-MM[-dd]]", "MMMM d", "y", "kk:mm",
+        ]),
+    ) {
+        let compiled = DateTimePattern::new(p, Purpose::Parse).unwrap();
+        let _ = compiled.parse_timestamp(&s, &FixedOffset(3600));
+        let _ = compiled.parse_local(&s, false);
+        let _ = compiled.parse_date(&s);
+        let _ = fixed_zone_offset(&s);
+        let _ = DateTimePattern::new(&s, Purpose::Format);
+    }
+}
