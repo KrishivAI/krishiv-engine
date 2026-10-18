@@ -74,6 +74,7 @@ mod executor;
 mod metrics;
 mod morsel;
 mod operator;
+mod operators;
 mod pipeline;
 mod runner;
 mod sync;
@@ -91,6 +92,10 @@ pub use executor::{
 pub use metrics::{DriverStats, OperatorEntry, OperatorMetrics, QueryMetrics};
 pub use morsel::MorselCursor;
 pub use operator::{GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source};
+pub use operators::{
+    Filter, FilterPushdown, FnPredicate, Limit, MemoryScan, Predicate, Project, ProjectItem,
+    ScalarExpr, ScanPushdown, UnionAlign,
+};
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};
 

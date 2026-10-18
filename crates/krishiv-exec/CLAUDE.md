@@ -12,6 +12,9 @@ driver (yields, batch-boundary checks, NeedMemory, spill servicing, stall detect
 Scheduler (coordinator, first error wins) · `channel.rs` bounded result stream · `executor.rs` Executor seam +
 TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.rs` cursor + finalize countdown ·
 `testing.rs` test operators (also used by benches) · `loom_tests.rs`.
+`operators/` (P2-T051) stateless operators: `scan.rs` MemoryScan + `ScanPushdown` (the hook file formats implement) ·
+`filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
+`expr.rs` the `Predicate`/`ScalarExpr` evaluator interface the physical planner plugs in.
 
 ## Invariants
 - All memory through krishiv-memory reservations; every spill path tested with tiny-memory tests.
@@ -28,4 +31,4 @@ TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.r
 ## Test
 `cargo nextest run -p krishiv-exec --no-tests=pass` · `cargo clippy -p krishiv-exec --all-targets -- -D warnings` ·
 loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release` (use a separate target dir) ·
-benches: `cargo bench -p krishiv-exec --bench pipeline`
+benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators`

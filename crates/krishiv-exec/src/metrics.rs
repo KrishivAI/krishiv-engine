@@ -23,6 +23,8 @@ pub struct OperatorMetrics {
     pub compute_time: Duration,
     /// Time a source's `get_data` was pending (I/O).
     pub blocked_on_io: Duration,
+    /// Morsels claimed (sources; reported by the source itself).
+    pub morsels: u64,
     /// Peak bytes reserved through the operator's memory consumer, summed
     /// over its drivers (an upper bound of the true peak).
     pub peak_reserved: u64,
@@ -44,6 +46,7 @@ impl OperatorMetrics {
         self.batches_out += o.batches_out;
         self.compute_time += o.compute_time;
         self.blocked_on_io += o.blocked_on_io;
+        self.morsels += o.morsels;
         self.peak_reserved += o.peak_reserved;
         self.spills += o.spills;
         self.spilled_bytes += o.spilled_bytes;
