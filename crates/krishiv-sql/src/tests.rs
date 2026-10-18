@@ -911,9 +911,92 @@ fn explain_chains_are_capped_without_recursion() {
     }
     assert_eq!(levels, MAX_DEPTH);
     let deeper = format!("{}SELECT 1", "EXPLAIN ".repeat(100_000));
-    let e = on_small_stack(move || parse_statement(&deeper, &ParserOptions::default()));
-    assert_eq!(
-        e.unwrap_err().error.error_class(),
-        ErrorClass::FailedToParseTooComplex
+    let len = deeper.len();
+    let e =
+        on_small_stack(move || parse_statement(&deeper, &ParserOptions::default())).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::FailedToParseTooComplex);
+    assert_eq!(e.span.range(), 0..len);
+}
+
+/// The cap is exact: for each shape, the deepest statement within
+/// [`MAX_DEPTH`] tree levels parses, and one level more fails with
+/// `FAILED_TO_PARSE_TOO_COMPLEX` reported, as Spark does, at the whole
+/// statement. `limit` counts the repeated unit; the query and its select
+/// item (or relation) take the remaining levels.
+#[test]
+fn depth_limit_is_exact_and_reported_at_the_statement() {
+    let shapes: [(&str, &str, &str, &str, &str, usize); 15] = [
+        ("SELECT ", "(", "1", ")", "", MAX_DEPTH - 2),
+        ("SELECT ", "f(", "1", ")", "", MAX_DEPTH - 2),
+        (
+            "SELECT ",
+            "CASE WHEN ",
+            "x",
+            " THEN 1 END",
+            "",
+            MAX_DEPTH - 2,
+        ),
+        // An element access is the access and its index.
+        ("SELECT ", "a[", "1", "]", "", (MAX_DEPTH - 2) / 2),
+        ("SELECT ", "x -> ", "1", "", "", MAX_DEPTH - 2),
+        ("SELECT * FROM ", "(", "t", ")", "", MAX_DEPTH - 2),
+        // A subquery relation is a relation and a query.
+        (
+            "SELECT * FROM ",
+            "(SELECT * FROM ",
+            "t",
+            ")",
+            "",
+            (MAX_DEPTH - 2) / 2,
+        ),
+        (
+            "SELECT CAST(x AS ",
+            "ARRAY<",
+            "INT",
+            ">",
+            ")",
+            MAX_DEPTH - 3,
+        ),
+        (
+            "SELECT a FROM t GROUP BY ",
+            "GROUPING SETS (",
+            "a",
+            ")",
+            "",
+            MAX_DEPTH - 1,
+        ),
+        ("SELECT ", "NOT ", "x", "", "", MAX_DEPTH - 2),
+        ("SELECT ", "- ", "x", "", "", MAX_DEPTH - 2),
+        ("SELECT 1", " + 1", "", "", "", MAX_DEPTH - 2),
+        ("SELECT 1", " UNION SELECT 1", "", "", "", MAX_DEPTH - 2),
+        ("SELECT x", "[0]", "", "", "", MAX_DEPTH - 3),
+        ("SELECT x", "::INT", "", "", "", MAX_DEPTH - 3),
+    ];
+    for (pre, open, mid, close, post, limit) in shapes {
+        let deep = move |n: usize| format!("{pre}{}{mid}{}{post}", open.repeat(n), close.repeat(n));
+        let (at, over) = (deep(limit), deep(limit + 1));
+        let len = over.len();
+        let (a, b) = on_small_stack(move || {
+            let d = ParserOptions::default();
+            (parse_query(&at, &d).map(drop), parse_query(&over, &d))
+        });
+        assert_eq!(a, Ok(()), "{pre}{open} x{limit}");
+        let e = b.unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::FailedToParseTooComplex,
+            "{pre}{open} x{}",
+            limit + 1
+        );
+        assert_eq!(e.span.range(), 0..len, "{pre}{open}");
+    }
+    // Leading and trailing trivia are outside the statement.
+    let sql = format!(
+        "  /* c */ SELECT {}1{} ; -- x",
+        "(".repeat(MAX_DEPTH),
+        ")".repeat(MAX_DEPTH)
     );
+    let end = sql.find(" -- x").unwrap();
+    let e = on_small_stack(move || parse_query(&sql, &ParserOptions::default())).unwrap_err();
+    assert_eq!(e.span.range(), 10..end);
 }

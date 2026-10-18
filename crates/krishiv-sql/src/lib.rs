@@ -45,9 +45,10 @@ pub use redact::redact_sql;
 
 /// The deepest tree the parser builds, counted in nested expressions,
 /// queries and relations; deeper statements fail with
-/// `FAILED_TO_PARSE_TOO_COMPLEX`. It equals the logical-plan IR's depth
-/// cap, and it bounds the parser's recursion, so parsing never overflows
-/// the stack.
+/// `FAILED_TO_PARSE_TOO_COMPLEX` at the span of the whole statement (Spark's
+/// query context for it). It equals the logical-plan IR's depth cap, and it
+/// bounds the parser's recursion, so parsing never overflows the stack.
+/// Spark has no fixed cap: its parser fails when the JVM stack runs out.
 pub const MAX_DEPTH: usize = 1000;
 
 /// The Spark session configs that change how SQL parses.

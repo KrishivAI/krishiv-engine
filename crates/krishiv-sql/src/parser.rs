@@ -167,7 +167,7 @@ fn parse_tokens<R: TopRule>(
     } else {
         16 << 20
     };
-    let at = Span::new(0, 0);
+    let at = statement_span(src, &toks);
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("krishiv-sql-parse".to_owned())
@@ -181,6 +181,16 @@ fn parse_tokens<R: TopRule>(
                 },
             )
     })
+}
+
+/// The span of a whole statement, from its first token to its last: where
+/// Spark reports `FAILED_TO_PARSE_TOO_COMPLEX` (its query context is the
+/// statement, not the token parsing stopped at).
+fn statement_span(src: &str, toks: &[Token]) -> Span {
+    match (toks.first(), toks.last()) {
+        (Some(first), Some(last)) => Span::new(first.span.start, last.span.end),
+        _ => Span::new(0, src.len()),
+    }
 }
 
 /// Bracket nesting (`(`, `[`, `CASE`, `<` of a complex type) parsed on the
@@ -469,7 +479,7 @@ impl<'s> Parser<'s> {
     fn grow(&mut self, height: usize) -> PR<()> {
         let level = self.depth + height;
         if level > MAX_DEPTH {
-            return Self::fatal(error::too_complex(Span::new(self.start(), self.start())));
+            return Self::fatal(error::too_complex(statement_span(self.src, &self.toks)));
         }
         self.peak = self.peak.max(level);
         Ok(())
@@ -666,7 +676,7 @@ impl<'s> Parser<'s> {
             let start = self.start();
             self.bump();
             if explains.len() == MAX_DEPTH {
-                return Self::fatal(error::too_complex(Span::new(start, start)));
+                return Self::fatal(error::too_complex(statement_span(self.src, &self.toks)));
             }
             let word = if self.kind(0) == Some(TokenKind::Word) {
                 self.text(0).to_ascii_uppercase()

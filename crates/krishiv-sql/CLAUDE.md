@@ -14,7 +14,8 @@ syntactic, origins = spans); `redact_sql` turns query text into a `RedactedSql` 
 
 ## Invariants
 - Own parser (no sqlparser-rs): hand-written lexer + recursive descent.
-- Nesting is capped at `MAX_DEPTH` (= the IR's) with `FAILED_TO_PARSE_TOO_COMPLEX`; operator chains
+- Nesting is capped at `MAX_DEPTH` (= the IR's) with `FAILED_TO_PARSE_TOO_COMPLEX` at the whole statement's
+  span (exact limit and limit+1 tested per shape; no `stacker`); operator chains
   are iterative, and statements nested deeper than `INLINE_NESTING` brackets parse on a thread with a
   big stack, so no input overflows the caller's stack. Keep new recursive rules inside `nested`.
 - `lexer::tokenize` is lossless and never fails (comments, unterminated quotes and unclosed comments are

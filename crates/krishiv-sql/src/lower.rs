@@ -54,7 +54,11 @@ pub fn parse_and_lower(sql: &str, options: &ParserOptions, source: SourceId) -> 
 /// decimal bounds, unsupported cast types) and `FAILED_TO_PARSE_TOO_COMPLEX`
 /// for plans deeper than `MAX_DEPTH`.
 pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
-    let mut l = Lowerer { source, depth: 0 };
+    let mut l = Lowerer {
+        source,
+        depth: 0,
+        root: query.span,
+    };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
 }
@@ -93,6 +97,8 @@ fn unsupported(feature: &str, span: Span) -> ParseError {
 struct Lowerer {
     source: SourceId,
     depth: usize,
+    /// The whole statement: `FAILED_TO_PARSE_TOO_COMPLEX` refers to it.
+    root: Span,
 }
 
 fn arc<T>(v: T) -> Arc<T> {
@@ -141,10 +147,11 @@ impl Lowerer {
     }
 
     /// Runs `f` one level deeper, on a fresh stack every `STEP` levels.
-    fn deeper<T: Send>(&mut self, span: Span, f: impl FnOnce(&mut Self) -> R<T> + Send) -> R<T> {
+    fn deeper<T: Send>(&mut self, f: impl FnOnce(&mut Self) -> R<T> + Send) -> R<T> {
         self.depth += 1;
+        let root = self.root;
         let r = if self.depth.is_multiple_of(STEP) {
-            on_big_stack(|| f(self)).unwrap_or_else(|| Err(err(FailedToParseTooComplex {}, span)))
+            on_big_stack(|| f(self)).unwrap_or_else(|| Err(err(FailedToParseTooComplex {}, root)))
         } else {
             f(self)
         };
@@ -153,7 +160,7 @@ impl Lowerer {
     }
 
     fn query(&mut self, q: &Query) -> R<LogicalPlan> {
-        self.deeper(q.span, |l| l.query_inner(q))
+        self.deeper(|l| l.query_inner(q))
     }
 
     fn query_inner(&mut self, q: &Query) -> R<LogicalPlan> {
@@ -498,7 +505,7 @@ impl Lowerer {
                 }
                 inner
             }
-            TableFactorKind::Nested(r) => self.deeper(tf.span, |l| l.relation(r))?,
+            TableFactorKind::Nested(r) => self.deeper(|l| l.relation(r))?,
             TableFactorKind::Values(_) => return Err(unsupported("VALUES", tf.span)),
             _ => return Err(unsupported("table-valued functions", tf.span)),
         };
@@ -516,7 +523,7 @@ impl Lowerer {
     }
 
     fn expr(&mut self, e: &Expr) -> R<IrExpr> {
-        self.deeper(e.span, |l| l.expr_inner(e))
+        self.deeper(|l| l.expr_inner(e))
     }
 
     fn arg(&mut self, e: &Expr) -> R<Arc<IrExpr>> {

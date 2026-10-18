@@ -8,7 +8,7 @@
 //! | only whitespace | `PARSE_EMPTY_STATEMENT` |
 //! | `/*` without `*/` | `UNCLOSED_BRACKETED_COMMENT` |
 //! | unquoted identifier with non-ASCII characters, or `a-b` as a name | `INVALID_IDENTIFIER` |
-//! | nesting deeper than [`crate::MAX_DEPTH`] | `FAILED_TO_PARSE_TOO_COMPLEX` |
+//! | nesting deeper than [`crate::MAX_DEPTH`] (span: the whole statement) | `FAILED_TO_PARSE_TOO_COMPLEX` |
 //! | `!` for `NOT` in `a ! IN (...)` and similar | `SYNTAX_DISCONTINUED.BANG_EQUALS_NOT` |
 //! | `EXPLAIN LOGICAL` | `INVALID_STATEMENT_OR_CLAUSE` |
 //!
