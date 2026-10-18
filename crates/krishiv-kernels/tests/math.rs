@@ -364,6 +364,15 @@ fn floating_point_rounding_rounds_the_decimal_text() {
 }
 
 #[test]
+fn atan2_turns_negative_zero_into_positive_zero_like_spark() {
+    let f = |y: f64, x: f64| BinaryFn::Atan2.apply(y, x).unwrap();
+    // Recorded from Spark: math.atan2(y + 0.0, x + 0.0).
+    assert_eq!(f(-0.0, -1.0), std::f64::consts::PI);
+    assert_eq!(f(0.0, -0.0).to_bits(), 0);
+    assert_eq!(f(-0.0, 0.0).to_bits(), 0);
+}
+
+#[test]
 fn a_scale_far_below_the_value_fails_like_big_decimal() {
     let up = RoundMode::HalfUp;
     let msg = |e: krishiv_kernels::KernelError| (e.error_class(), e.row(), e.to_string());
@@ -417,6 +426,19 @@ fn a_scale_far_below_the_value_fails_like_big_decimal() {
             .unwrap_err())
         .2
         .contains("Underflow")
+    );
+    // Java prints a fraction digit even for 25.0 (scale 1) and 1e-5 (1.0E-5, scale 6).
+    let at_limit = |v: f64, scale: i32| round_f64(&f64s(&[Some(v)]), scale, up);
+    assert!(at_limit(25.0, -536_870_919).is_err() && at_limit(25.0, -536_870_918).is_ok());
+    assert!(
+        msg(at_limit(25.0, -2_147_483_647).unwrap_err())
+            .2
+            .contains("Underflow")
+    );
+    assert!(
+        msg(at_limit(1e-5, -2_147_483_642).unwrap_err())
+            .2
+            .contains("Underflow")
     );
     let floats = Float32Array::from(vec![1.5_f32]);
     assert!(round_f32(&floats, i32::MIN, up).is_err());

@@ -155,7 +155,7 @@ pub const FUNCTIONS: &[&str] = &[
     "log10",
     "log2",
     "log1p",
-    "factorial",
+    "sin",
     "cos",
     "tan",
     "asin",

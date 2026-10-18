@@ -241,8 +241,14 @@ fn round_double(v: f64, scale: i32, mode: RoundMode) -> Result<f64, &'static str
     let point = exp.saturating_add(1);
     let keep = point.saturating_add(i64::from(scale));
     let n = i64::try_from(digits.len()).unwrap_or(i64::MAX);
-    // `BigDecimal.valueOf(v)` has this many digits after the point.
-    if let Some(message) = extreme_scale(n.saturating_sub(point), scale) {
+    // `BigDecimal.valueOf(v)` parses `Double.toString(v)`, which always has a
+    // fraction digit ("25.0", "1.0E-5"): that digit counts toward its scale.
+    let java_scale = if (1e-3..1e7).contains(&v.abs()) {
+        n.saturating_sub(point).max(1)
+    } else {
+        n.max(2).saturating_sub(point)
+    };
+    if let Some(message) = extreme_scale(java_scale, scale) {
         return Err(message);
     }
     if keep >= n {
@@ -415,7 +421,11 @@ pub fn round_decimal(
                 // Spark: "The <rounded> rounded half up from <original> cannot
                 // be represented as Decimal(p, s)" (also for ceil and floor).
                 let rounded = if scale < 0 && q != 0 {
-                    format!("{q}{}", "0".repeat(scale.unsigned_abs() as usize))
+                    // Spark prints every zero; past a few hundred, show the exponent.
+                    match scale.unsigned_abs() {
+                        zeros @ 0..=400 => format!("{q}{}", "0".repeat(zeros as usize)),
+                        zeros => format!("{q}E+{zeros}"),
+                    }
                 } else {
                     plain_string(q, bd_scale.max(0))
                 };

@@ -191,7 +191,8 @@ impl BinaryFn {
     pub fn apply(self, l: f64, r: f64) -> Option<f64> {
         Some(match self {
             Self::Pow => java_pow(l, r),
-            Self::Atan2 => libm::atan2(l, r),
+            // Spark calls `atan2(y + 0.0, x + 0.0)`: both -0.0 become +0.0.
+            Self::Atan2 => libm::atan2(l + 0.0, r + 0.0),
             Self::Hypot => fdlibm::hypot(l, r),
             Self::Log => {
                 if l <= 0.0 || r <= 0.0 {
