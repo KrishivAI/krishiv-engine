@@ -10,3 +10,18 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+krishiv-common = { path = "../krishiv-common" }
+krishiv-plan = { path = "../krishiv-plan" }
+krishiv-types = { path = "../krishiv-types" }
+# `no-recursion-limit`: prost's fixed limit of 100 nested messages rejects
+# ordinary plans (a loop of `withColumn` calls); `wire::decode_plan` bounds the
+# depth itself, before prost recurses (see the crate CLAUDE.md).
+prost = { workspace = true, features = ["derive", "std", "no-recursion-limit"] }
+prost-types = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+insta = { workspace = true, features = ["glob"] }
+prost-reflect = { workspace = true, features = ["serde"] }
+serde_json = { workspace = true, features = ["std"] }

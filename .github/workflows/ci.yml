@@ -262,6 +262,23 @@ jobs:
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - run: cargo xtask layering
 
+  # The generated Spark Connect types match the vendored protos (P2-T091a).
+  # `tools/connect-protogen` is a workspace of its own (protox, prost-build),
+  # so the product dependency graph does not carry the protobuf compiler.
+  connect-protos:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools/connect-protogen
+      - run: cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check
+
   msrv:
     needs: changes
     if: needs.changes.outputs.rust == 'true'

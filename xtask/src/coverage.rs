@@ -199,7 +199,9 @@ impl DiffCov {
 }
 
 /// Coverage of the added lines. Only lines the tracefile instruments count;
-/// `root` is stripped from absolute `SF:` paths.
+/// `root` is stripped from absolute `SF:` paths. Files on the PR-size
+/// allowlist (generated, vendored and fixture files, `crate::ci::is_size_excluded`)
+/// are not counted: nobody writes them, so a test cannot be asked for.
 #[must_use]
 pub fn diff_coverage(
     added: &BTreeMap<String, Vec<u32>>,
@@ -218,6 +220,9 @@ pub fn diff_coverage(
         })
         .collect();
     for (file, lines) in added {
+        if crate::ci::is_size_excluded(file) {
+            continue;
+        }
         let Some(hits) = by_rel.get(file.as_str()) else {
             continue;
         };
@@ -504,6 +509,17 @@ mod tests {
         assert!(
             md.contains("1 of 3") && md.contains("33.3%") && md.contains("uncovered lines 2, 3")
         );
+    }
+
+    #[test]
+    fn diff_coverage_skips_generated_files() {
+        let lcov = parse_lcov(
+            "SF:/w/crates/a/src/proto/x.pb.rs\nDA:1,0\nend_of_record\nSF:/w/crates/a/src/lib.rs\nDA:1,1\nend_of_record\n",
+        );
+        let diff = "+++ b/crates/a/src/proto/x.pb.rs\n@@ -0,0 +1 @@\n+x\n+++ b/crates/a/src/lib.rs\n@@ -0,0 +1 @@\n+y\n";
+        let d = diff_coverage(&parse_added_lines(diff), &lcov, "/w");
+        assert_eq!((d.covered, d.total), (1, 1));
+        assert!(d.uncovered.is_empty());
     }
 
     #[test]
