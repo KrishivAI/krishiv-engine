@@ -93,6 +93,8 @@ type Pending = (u64, BoxFuture<'static, Result<Vec<Bytes>>>, Vec<Range<u64>>);
 /// Reads one split of one file (see the module docs).
 pub struct ScanStream {
     decoder: Option<Box<dyn Decoder>>,
+    /// The decoder's counters when it was dropped (the split ended).
+    final_metrics: ScanUnitMetrics,
     mapper: Option<SchemaMapper>,
     io: IoContext,
     file: FileRef,
@@ -146,6 +148,7 @@ impl ScanStream {
     ) -> Result<Self> {
         let mut stream = Self {
             decoder: None,
+            final_metrics: ScanUnitMetrics::default(),
             mapper: None,
             io: io.clone(),
             file,
@@ -230,7 +233,9 @@ impl ScanStream {
 
     fn finish(&mut self) {
         self.done = true;
-        self.decoder = None;
+        if let Some(d) = self.decoder.take() {
+            self.final_metrics = d.metrics();
+        }
         self.ready.clear();
         self.in_flight = None;
         let held = self.mem.size();
@@ -274,6 +279,14 @@ impl ScanStream {
     /// The bytes of `ranges`: from prefetched chunks where possible, the
     /// rest fetched now (after reserving it, with waiting).
     async fn gather(&mut self, ranges: Vec<Range<u64>>) -> Result<Vec<(Range<u64>, Bytes)>> {
+        // Ranges come from file metadata (untrusted): an inverted one is a
+        // corrupt file, never an overflow.
+        if let Some(bad) = ranges.iter().find(|r| r.start > r.end) {
+            return Err(crate::FormatError::Corrupt(format!(
+                "the decoder asked for the inverted range {bad:?}"
+            ))
+            .into_error(&self.file.display_path()));
+        }
         if let Some((_, fut, wanted)) = self.in_flight.take() {
             // The prefetch was issued for what the decoder asks next; a
             // failed prefetch is only a lost hint (the fetch below retries).
@@ -364,6 +377,7 @@ impl ScanStream {
         let ranges: Vec<Range<u64>> = d
             .upcoming(budget)
             .into_iter()
+            .filter(|r| r.start < r.end)
             .filter(|r| {
                 !self
                     .ready
@@ -405,8 +419,7 @@ impl ScanStream {
     pub fn metrics(&self) -> ScanUnitMetrics {
         self.decoder
             .as_ref()
-            .map(|d| d.metrics())
-            .unwrap_or_default()
+            .map_or(self.final_metrics, |d| d.metrics())
     }
 
     /// The mapper of this file (`None` when the file was skipped).

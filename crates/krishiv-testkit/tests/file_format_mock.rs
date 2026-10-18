@@ -110,6 +110,8 @@ fn schema_inference_and_prefetch_release() {
         }
         assert_eq!(s.reserved(), 0);
         assert!(s.next_batch().await.unwrap().is_none());
+        // Counters survive the end of the split.
+        assert_eq!(s.metrics().rows, 5000);
         rows
     });
     assert_eq!(rows, 5000);
@@ -174,4 +176,153 @@ fn ignore_corrupt_files_never_hides_a_storage_failure() {
         .scan(&fx, &file, &ScanRequest::all(schema), None, ignore)
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivObjectStoreRequestFailed);
+}
+
+/// A decoder asking for an inverted range (corrupt metadata) fails with a
+/// typed error, never a panic; a failed `finish` leaves no file behind.
+#[test]
+fn inverted_ranges_and_failed_finishes_are_handled() {
+    use std::ops::Range;
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use bytes::Bytes;
+    use futures::future::BoxFuture;
+    use krishiv_common::error::ErrorClass;
+    use krishiv_io::{
+        ByteRange, Capabilities, Decoder, Encoder, FileFormat, FileMetadata, FileRef, FileWriter,
+        FormatOptions, FormatResult, IoContext, MetadataNeeds, OptionSchema, ScanOptions,
+        ScanRequest, ScanUnitMetrics, Step, StoreId, UnitPlan, WriteOptions,
+    };
+    use krishiv_testkit::file_format::mock::MockFormat;
+    use krishiv_testkit::file_format::{Env, FormatFixture, data};
+    use object_store::path::Path;
+
+    struct Inverted;
+    impl Decoder for Inverted {
+        fn step(&mut self) -> FormatResult<Step> {
+            Ok(Step::NeedData(vec![Range { start: 10, end: 5 }]))
+        }
+        fn push(&mut self, _data: Vec<(Range<u64>, Bytes)>) -> FormatResult<()> {
+            Ok(())
+        }
+        fn buffered_bytes(&self) -> usize {
+            0
+        }
+        fn metrics(&self) -> ScanUnitMetrics {
+            ScanUnitMetrics::default()
+        }
+    }
+    /// The mock format with a broken decoder.
+    struct Broken;
+    impl FileFormat for Broken {
+        fn name(&self) -> &'static str {
+            "broken"
+        }
+        fn options(&self) -> &'static OptionSchema {
+            MockFormat.options()
+        }
+        fn capabilities(&self, o: &FormatOptions) -> Capabilities {
+            MockFormat.capabilities(o)
+        }
+        fn file_suffix(&self, o: &FormatOptions) -> String {
+            MockFormat.file_suffix(o)
+        }
+        fn read_metadata<'a>(
+            &'a self,
+            io: &'a IoContext,
+            f: &'a FileRef,
+            n: MetadataNeeds,
+            o: &'a FormatOptions,
+        ) -> BoxFuture<'a, FormatResult<Arc<dyn FileMetadata>>> {
+            MockFormat.read_metadata(io, f, n, o)
+        }
+        fn plan_units(
+            &self,
+            m: &dyn FileMetadata,
+            s: &ByteRange,
+            r: &ScanRequest,
+        ) -> FormatResult<UnitPlan> {
+            MockFormat.plan_units(m, s, r)
+        }
+        fn open<'a>(
+            &'a self,
+            _io: &'a IoContext,
+            _m: Arc<dyn FileMetadata>,
+            _u: UnitPlan,
+            _r: &'a ScanRequest,
+            _o: &'a FormatOptions,
+        ) -> BoxFuture<'a, FormatResult<Box<dyn Decoder>>> {
+            Box::pin(async { Ok(Box::new(Inverted) as Box<dyn Decoder>) })
+        }
+        fn writer<'a>(
+            &'a self,
+            io: &'a IoContext,
+            s: SchemaRef,
+            o: &'a FormatOptions,
+        ) -> BoxFuture<'a, FormatResult<Box<dyn Encoder>>> {
+            MockFormat.writer(io, s, o)
+        }
+    }
+    struct BrokenFixture;
+    impl FormatFixture for BrokenFixture {
+        fn format(&self) -> Arc<dyn FileFormat> {
+            Arc::new(Broken)
+        }
+        fn unit_rows(&self, rows: usize) -> Vec<(String, String)> {
+            vec![("batchRows".into(), rows.to_string())]
+        }
+    }
+    let env = Env::new(None).unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batch = data::batch(&schema, 50, 1).unwrap();
+    let file = env
+        .write(
+            &BrokenFixture,
+            "b/f",
+            &schema,
+            std::slice::from_ref(&batch),
+            &[],
+        )
+        .unwrap();
+    let req = ScanRequest::all(Arc::clone(&schema));
+    let e = env
+        .scan(&BrokenFixture, &file, &req, None, ScanOptions::default())
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::FailedReadFileNoHint);
+    // A finish that fails deletes the files rolled over before it.
+    let fx = MockFixture::default();
+    let mut w = FileWriter::new(
+        &env.io,
+        fx.format(),
+        Arc::clone(&schema),
+        env.options(&fx, &[]).unwrap(),
+        WriteOptions {
+            store: StoreId::new("memory://suite"),
+            dir: Path::from("failed"),
+            task: 0,
+            job_uuid: "j".into(),
+            max_records_per_file: 20,
+            target_file_bytes: 0,
+        },
+        env.reservation("w"),
+    )
+    .unwrap();
+    let res = env.block_on(async {
+        w.write(&batch.slice(0, 45)).await.unwrap();
+        env.store.fail_next_puts(1000);
+        w.finish().await
+    });
+    assert_eq!(res.unwrap_err().error_class(), ErrorClass::TaskWriteFailed);
+    let left = env.block_on(async {
+        use futures::StreamExt;
+        object_store::ObjectStore::list(env.inner.as_ref(), Some(&Path::from("failed")))
+            .collect::<Vec<_>>()
+            .await
+    });
+    assert!(
+        left.is_empty(),
+        "{} files left after a failed finish",
+        left.len()
+    );
 }

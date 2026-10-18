@@ -388,3 +388,24 @@ fn the_lookup_index_is_sorted_and_complete() {
     let got: Vec<(&str, &str)> = INDEX.iter().map(|(n, e)| (*n, e.key)).collect();
     assert_eq!(got, want, "INDEX must hold exactly every key and alias");
 }
+
+#[test]
+fn positive_ints_reject_zero_and_negatives() {
+    for key in [
+        "spark.sql.files.minPartitionNum",
+        "spark.sql.files.maxPartitionNum",
+        "spark.sql.leafNodeDefaultParallelism",
+    ] {
+        let mut c = Config::new();
+        for bad in ["0", "-3", "x"] {
+            let e = c.set(key, bad).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                crate::error::ErrorClass::KrishivInvalidConfigValue,
+                "{key}={bad}"
+            );
+        }
+        assert!(c.set(key, "4").is_ok());
+    }
+    assert_eq!(ValueType::PositiveInt.to_string(), "positive int");
+}

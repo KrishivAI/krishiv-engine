@@ -245,9 +245,14 @@ impl FileWriter {
     /// Ends the last file; returns every file written.
     ///
     /// # Errors
-    /// Encode and upload errors.
+    /// Encode and upload errors; the files written so far are then deleted.
     pub async fn finish(mut self) -> Result<Vec<WrittenFileInfo>> {
-        self.close_file().await?;
+        if let Err(e) = self.close_file().await {
+            // The caller no longer holds the writer: clean up here, so no
+            // file of a failed write stays visible.
+            self.abort().await;
+            return Err(e);
+        }
         Ok(std::mem::take(&mut self.written))
     }
 

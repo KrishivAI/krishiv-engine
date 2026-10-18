@@ -386,7 +386,7 @@ pub static FILES_OPEN_COST_IN_BYTES: ConfigEntry = ConfigEntry {
 /// `krishiv.sql.files.minPartitionNum`.
 pub static FILES_MIN_PARTITION_NUM: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.files.minPartitionNum",
-    value_type: ValueType::Int,
+    value_type: ValueType::PositiveInt,
     default: None,
     doc: "Suggested minimum number of file-scan partitions. When unset: \
           `krishiv.sql.leafNodeDefaultParallelism`, else the number of worker slots.",
@@ -398,7 +398,7 @@ pub static FILES_MIN_PARTITION_NUM: ConfigEntry = ConfigEntry {
 /// `krishiv.sql.files.maxPartitionNum`.
 pub static FILES_MAX_PARTITION_NUM: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.files.maxPartitionNum",
-    value_type: ValueType::Int,
+    value_type: ValueType::PositiveInt,
     default: None,
     doc: "Suggested maximum number of file-scan partitions: when splitting yields more, the \
           split size is raised so that about this many remain. Unset: no maximum.",
@@ -410,7 +410,7 @@ pub static FILES_MAX_PARTITION_NUM: ConfigEntry = ConfigEntry {
 /// `krishiv.sql.leafNodeDefaultParallelism`.
 pub static LEAF_NODE_DEFAULT_PARALLELISM: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.leafNodeDefaultParallelism",
-    value_type: ValueType::Int,
+    value_type: ValueType::PositiveInt,
     default: None,
     doc: "Default parallelism of leaf scans (used when `krishiv.sql.files.minPartitionNum` is \
           unset). When unset: the number of worker slots.",
