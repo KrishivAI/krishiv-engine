@@ -345,9 +345,11 @@ jobs:
       - run: cargo doc --workspace --no-deps --locked
 
   # P2-T020: Miri on krishiv-kernels (ADR 0029; the crate holds unsafe and
-  # SIMD dispatch). The job always runs and reports, so it can be a required
+  # SIMD dispatch). P2-T098a: also the Arrow C stream bridge of
+  # krishiv-python (`src/stream/tests.rs`; the pyo3 glue cannot run under
+  # Miri). The job always runs and reports, so it can be a required
   # check; the path gate is inside: it only does work when the PR touches what
-  # Miri compiles: the kernels crate, its path dependency krishiv-common, the
+  # Miri compiles: those crates, their path dependency krishiv-common, the
   # root Cargo.toml/Cargo.lock, rust-toolchain.toml or this workflow (and
   # always on main).
   miri-kernels:
@@ -372,7 +374,7 @@ jobs:
           run=true
           if [ "$EVENT" = "pull_request" ]; then
             if ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
-              | grep -qE '^(crates/krishiv-kernels/|crates/krishiv-common/|\.github/workflows/ci\.yml$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
+              | grep -qE '^(crates/krishiv-kernels/|crates/krishiv-python/|crates/krishiv-common/|\.github/workflows/ci\.yml$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
               run=false
             fi
           fi
@@ -387,6 +389,17 @@ jobs:
       - name: Miri (unit, property and doc tests; reduced cases under cfg(miri))
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-kernels --locked
+      - name: Miri (Arrow C stream bridge of krishiv-python)
+        if: steps.gate.outputs.run == 'true'
+        run: cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi --locked
+      # Wheels are release builds without overflow checks: hostile producer
+      # headers must be rejected before arrow-rs computes with them, not by a
+      # debug-build overflow panic.
+      - name: Miri (Arrow C stream bridge, overflow checks off as in release)
+        if: steps.gate.outputs.run == 'true'
+        env:
+          CARGO_PROFILE_DEV_OVERFLOW_CHECKS: "false"
+        run: cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi --locked
 
   # Budget measurement (pull requests only). This job only measures and uploads
   # `budgets-current.json`; the label-aware gate (`budgets` in pr-policy.yml)
@@ -485,6 +498,16 @@ jobs:
         run: |
           uv venv --python "$PY" "$RUNNER_TEMP/venv"
           uv pip install --python "$RUNNER_TEMP/venv/bin/python" dist/*.whl pytest pytest-cov
+          # The Arrow PyCapsule consumers the bridge tests run against, from
+          # binary wheels only. All are required on abi3; Polars and DuckDB
+          # publish no free-threaded wheels yet, so on cp314t a missing one
+          # skips its tests (with a notice) instead of failing the leg.
+          for dep in "pyarrow>=16" "polars>=1.0" "duckdb>=1.1"; do
+            if ! uv pip install --python "$RUNNER_TEMP/venv/bin/python" --only-binary :all: "$dep"; then
+              if [ "$COVERAGE" = "true" ]; then exit 1; fi
+              echo "::notice::$dep has no wheel for this interpreter; its tests are skipped"
+            fi
+          done
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/venv/bin/python" -c "import krishiv, sys; print(krishiv.__version__, sys.version)"
           if [ "$COVERAGE" = "true" ]; then
