@@ -21,9 +21,10 @@ use krishiv_common::error::ErrorClass;
 use krishiv_exec::testing::{Break, Count, Pipe, Scan};
 use krishiv_exec::{
     ExecConfig, ExecNode, Filter, FnPredicate, Limit, MemoryScan, Predicate, Project, ProjectItem,
-    QueryContext, QueryId, QueryRunner, Result, ScalarExpr, ScanPushdown, Scheduler, TokioClock,
-    TokioExecutor, UnionAlign, WorkloadClass,
+    PushedFilter, QueryContext, QueryId, QueryRunner, Result, ScalarExpr, ScanPushdowns, Scheduler,
+    TokioClock, TokioExecutor, UnionAlign, WorkloadClass,
 };
+use krishiv_io::ColumnPath;
 use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
 use krishiv_types::batch::{Batch, Weights};
 
@@ -127,10 +128,13 @@ fn scan_node(scan: &Arc<MemoryScan>) -> Arc<dyn ExecNode> {
 
 #[tokio::test(start_paused = true)]
 async fn scan_with_pushdown_then_filter_and_project() {
-    let mut scan = MemoryScan::try_new(schema(), table(10, 100)).unwrap();
-    scan.push_filter(mod_pred(2, 0));
-    scan.push_projection(&[1, 0]).unwrap();
-    let scan = Arc::new(scan);
+    let base = MemoryScan::try_new(schema(), table(10, 100)).unwrap();
+    let pushed = ScanPushdowns {
+        projection: Some(vec![ColumnPath::new("s"), ColumnPath::new("a")]),
+        filters: vec![PushedFilter::opaque(mod_pred(2, 0))],
+        ..ScanPushdowns::default()
+    };
+    let scan = Arc::new(base.with_pushdowns(pushed).unwrap());
     let filter = Filter::new(
         krishiv_exec::Source::schema(&*scan),
         Arc::new(FnPredicate(|b: &RecordBatch| {

@@ -1392,11 +1392,14 @@ dependencies = [
  "futures",
  "hashbrown",
  "krishiv-common",
+ "krishiv-io",
  "krishiv-memory",
  "krishiv-types",
  "loom",
+ "object_store",
  "proptest",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1545,10 +1548,12 @@ dependencies = [
  "insta",
  "jiff",
  "krishiv-common",
+ "krishiv-exec",
  "krishiv-io",
  "krishiv-memory",
  "krishiv-plan",
  "krishiv-sql",
+ "krishiv-types",
  "object_store",
  "regex-lite",
  "serde_json",

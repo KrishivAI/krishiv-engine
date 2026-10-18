@@ -95,8 +95,9 @@ pub use metrics::{DriverStats, OperatorEntry, OperatorMetrics, QueryMetrics};
 pub use morsel::MorselCursor;
 pub use operator::{GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source};
 pub use operators::{
-    Filter, FilterPushdown, FnPredicate, Limit, MemoryScan, Predicate, Project, ProjectItem,
-    ScalarExpr, ScanPushdown, UnionAlign,
+    FileScan, FileScanMetrics, FileScanSource, FileSelections, FileWrite, FileWriteSink, Filter,
+    FilterPushdown, FnPredicate, Limit, METADATA_COLUMN, MemoryScan, Predicate, Project,
+    ProjectItem, PushedFilter, ScalarExpr, ScanPushdown, ScanPushdowns, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};

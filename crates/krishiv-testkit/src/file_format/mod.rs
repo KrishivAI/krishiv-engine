@@ -38,6 +38,7 @@
 //! `krishiv-io` against Spark 4.2 goldens.
 
 pub mod data;
+pub mod drive;
 pub mod mock;
 
 use std::collections::BTreeMap;
@@ -56,9 +57,9 @@ use krishiv_common::secret::OptionValue;
 use krishiv_io::io::cache::CacheKey;
 use krishiv_io::io::{FaultStore, IoCounters};
 use krishiv_io::{
-    ByteRange, ColumnPath, FIELD_ID_KEY, FieldMapping, FileFormat, FileRef, FileWriter,
-    FormatOptions, IoConfig, IoContext, IoScheduler, MetadataNeeds, OptionKind, OptionWarning,
-    ROW_INDEX_COLUMN, RowSelection, ScanOptions, ScanRequest, ScanStream, StoreId, WriteOptions,
+    ByteRange, ColumnPath, FIELD_ID_KEY, FieldMapping, FileFormat, FileRef, FormatOptions,
+    IoConfig, IoContext, IoScheduler, MetadataNeeds, OptionKind, OptionWarning, ROW_INDEX_COLUMN,
+    RowSelection, ScanOptions, ScanRequest, ScanStream, StoreId, WriteOptions,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
 use object_store::ObjectStore;
@@ -104,6 +105,11 @@ pub trait FormatFixture: Send + Sync {
     /// has one.
     fn metadata_key_option(&self) -> Option<&'static str> {
         None
+    }
+    /// How scans and writes run: the framework's loops ([`drive::Direct`],
+    /// the default) or the executor ([`drive::ThroughExecutor`]).
+    fn driver(&self) -> Arc<dyn drive::Driver> {
+        Arc::new(drive::Direct)
     }
 }
 
@@ -294,7 +300,8 @@ impl Env {
         })
     }
 
-    /// Scans `split` of `file`; the error is the engine error.
+    /// Scans `split` of `file` through the fixture's driver; the error is
+    /// the engine error.
     ///
     /// # Errors
     /// Any scan error.
@@ -309,27 +316,16 @@ impl Env {
         let o = self
             .options(fx, &[])
             .map_err(|e| KrishivError::from(krishiv_common::error::InternalError { message: e }))?;
-        let format = fx.format();
-        let mem = self.reservation("scan");
-        self.block_on(async {
-            let split = split.unwrap_or(ByteRange::whole(file.size));
-            let mut s = ScanStream::open(
-                &self.io,
-                format.as_ref(),
-                file.clone(),
-                split,
-                req,
-                &o,
-                mem,
-                scan,
-            )
-            .await?;
-            let mut out = Vec::new();
-            while let Some(b) = s.next_batch().await? {
-                out.push(b);
-            }
-            Ok(out)
-        })
+        let split = split.unwrap_or(ByteRange::whole(file.size));
+        self.block_on(fx.driver().scan(
+            self,
+            fx.format(),
+            file.clone(),
+            req.clone(),
+            split,
+            o,
+            scan,
+        ))
     }
 }
 
@@ -1205,25 +1201,20 @@ pub fn cancellation(fx: &dyn FormatFixture) -> SuiteResult {
         )?;
         env.store.set_latency(Duration::from_millis(5));
         let o = env.options(fx, &[])?;
-        let format = fx.format();
         let req = ScanRequest::all(Arc::clone(&schema));
-        let mem = env.reservation("scan");
-        let scan = async {
-            let mut s = ScanStream::open(
-                &env.io,
-                format.as_ref(),
-                file.clone(),
-                ByteRange::whole(file.size),
-                &req,
-                &o,
-                mem,
-                ScanOptions::default(),
-            )
-            .await?;
-            while s.next_batch().await?.is_some() {}
-            Ok::<_, KrishivError>(())
-        };
+        let driver = fx.driver();
+        let scan = driver.scan(
+            &env,
+            fx.format(),
+            file.clone(),
+            req,
+            ByteRange::whole(file.size),
+            o,
+            ScanOptions::default(),
+        );
         let finished = poll_n(&env, scan, n);
+        // Let tasks the scan left behind (executor drivers) end.
+        env.block_on(async { tokio::time::sleep(Duration::from_secs(1)).await });
         ensure!(
             env.root.reserved() == 0,
             "scan dropped after {n} polls holds memory"
@@ -1253,8 +1244,9 @@ pub fn cancellation(fx: &dyn FormatFixture) -> SuiteResult {
         let env = Env::new(None)?;
         env.store.set_latency(Duration::from_millis(5));
         let o = env.options(fx, &fx.unit_rows(8))?;
-        let w = FileWriter::new(
-            &env.io,
+        let driver = fx.driver();
+        let write = driver.write(
+            &env,
             fx.format(),
             Arc::clone(&big_schema),
             o,
@@ -1266,15 +1258,9 @@ pub fn cancellation(fx: &dyn FormatFixture) -> SuiteResult {
                 max_records_per_file: 0,
                 target_file_bytes: 0,
             },
-            env.reservation("w"),
-        )
-        .map_err(|e| e.to_string())?;
-        let batch = big.clone();
-        let write = async move {
-            let mut w = w;
-            w.write(&batch).await?;
-            w.finish().await.map(|_| ())
-        };
+            vec![big.clone()],
+            false,
+        );
         poll_n(&env, write, n);
         // Let background aborts run.
         env.block_on(async { tokio::time::sleep(Duration::from_secs(1)).await });
@@ -1531,12 +1517,14 @@ pub fn writer(fx: &dyn FormatFixture) -> SuiteResult {
     let schema = pruning_schema();
     let input = data::batch(&schema, 2500, 71)?;
     let format = fx.format();
-    let new_writer = |dir: &str, max_records: u64, target: u64| -> SuiteResult<FileWriter> {
-        FileWriter::new(
-            &env.io,
+    let driver = fx.driver();
+    let write = |dir: &str, max_records: u64, target: u64, batches: Vec<RecordBatch>, fail| {
+        let o = env.options(fx, &fx.unit_rows(300))?;
+        env.block_on(driver.write(
+            &env,
             Arc::clone(&format),
             Arc::clone(&schema),
-            env.options(fx, &fx.unit_rows(300))?,
+            o,
             WriteOptions {
                 store: StoreId::new("memory://suite"),
                 dir: Path::from(dir),
@@ -1545,19 +1533,19 @@ pub fn writer(fx: &dyn FormatFixture) -> SuiteResult {
                 max_records_per_file: max_records,
                 target_file_bytes: target,
             },
-            env.reservation("w"),
-        )
+            batches,
+            fail,
+        ))
         .map_err(|e| e.to_string())
     };
     // maxRecordsPerFile.
-    let mut w = new_writer("w1", 1000, 0)?;
-    let files = env
-        .block_on(async {
-            w.write(&input.slice(0, 1700)).await?;
-            w.write(&input.slice(1700, 800)).await?;
-            w.finish().await
-        })
-        .map_err(|e| e.to_string())?;
+    let files = write(
+        "w1",
+        1000,
+        0,
+        vec![input.slice(0, 1700), input.slice(1700, 800)],
+        false,
+    )?;
     let names: Vec<String> = files
         .iter()
         .map(|f| f.path.filename().unwrap_or_default().to_owned())
@@ -1607,26 +1595,17 @@ pub fn writer(fx: &dyn FormatFixture) -> SuiteResult {
         "written data differs"
     );
     // Target-size rollover.
-    let mut w = new_writer("w2", 0, 1)?;
-    let files = env
-        .block_on(async {
-            w.write(&input).await?;
-            w.finish().await
-        })
-        .map_err(|e| e.to_string())?;
+    let files = write("w2", 0, 1, vec![input.clone()], false)?;
     ensure!(files.len() > 1, "no rollover at the target size");
     ensure!(
         files.iter().map(|f| f.rows).sum::<u64>() == 2500,
         "rows lost on rollover"
     );
-    // Abort leaves nothing.
-    let mut w = new_writer("w3", 1000, 0)?;
-    env.block_on(async {
-        w.write(&input).await?;
-        w.abort().await;
-        Ok::<_, KrishivError>(())
-    })
-    .map_err(|e| e.to_string())?;
+    // A failed write leaves nothing, not even the files it rolled over.
+    ensure!(
+        write("w3", 1000, 0, vec![input], true).is_err(),
+        "the failing write succeeded"
+    );
     let left = env.block_on(env.inner.list(Some(&Path::from("w3"))).collect::<Vec<_>>());
     ensure!(left.is_empty(), "abort left {} objects", left.len());
     ensure!(env.root.reserved() == 0, "writer memory held");
