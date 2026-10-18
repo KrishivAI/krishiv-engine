@@ -53,7 +53,7 @@ pub(super) fn string_list() -> DataType {
     )))
 }
 
-impl Binder {
+impl Binder<'_> {
     /// A type Spark converts to string implicitly.
     fn to_string_node(self, n: Node) -> Result<Node, Skip> {
         match n.ty() {
@@ -342,11 +342,13 @@ impl Binder {
     }
 }
 
-impl Evaluator {
+impl Evaluator<'_> {
     /// An evaluator for constant folding at bind time.
-    pub(super) fn folder(b: Binder) -> Self {
-        Self {
+    pub(super) fn folder<'z>(b: Binder<'z>) -> Evaluator<'z> {
+        Evaluator {
             ctx: krishiv_kernels::KernelCtx::new(),
+            zone: b.zone,
+            now: 0,
             ansi: b.ansi,
             shape: Shape::Arrays,
             invalid_utf8: std::cell::Cell::new(false),

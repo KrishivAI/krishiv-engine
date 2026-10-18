@@ -3,7 +3,7 @@
 //!
 //! | Situation | Error class |
 //! |---|---|
-//! | ANSI integral overflow (`int`, `bigint`; unary `-`, `abs`; `div`) | `ARITHMETIC_OVERFLOW` |
+//! | ANSI integral overflow (`int`, `bigint`; unary `-`, `abs`; `div`), `date` ± year-month interval | `ARITHMETIC_OVERFLOW` |
 //! | ANSI `tinyint`/`smallint` `+ - *` overflow | `BINARY_ARITHMETIC_OVERFLOW` |
 //! | ANSI division by zero (`/`, `div`) | `DIVIDE_BY_ZERO` |
 //! | ANSI remainder by zero (`%`) | `REMAINDER_BY_ZERO` (Spark 4.0: `DIVIDE_BY_ZERO`) |

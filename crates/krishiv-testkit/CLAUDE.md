@@ -17,6 +17,10 @@ runs the arithmetic/comparison/cast matrix cells and the literal statements of S
 `krishiv-kernels` with a minimal Spark 4.2 implicit-cast typer (tests `kernel_matrix`, `kernel_golden`); it is a
 harness, not the analyzer. P2-T023a adds the string functions (`kernel_eval/strings.rs`; `string_case` checks `upper`/`lower`
 over every Unicode scalar value against `tests/fixtures/spark-<ver>/case-mapping.json`).
+P2-T025a adds the datetime functions and ANSI interval literals (`kernel_eval/datetime.rs`),
+session time zones through `kernel_eval::JiffZone` (the tz database behind `TimeZoneRules`, test-side until the session
+layer has one), and the fixtures `cast-timestamp-differential`, `dst-transitions` (Los Angeles, Berlin) and
+`tpch-date-predicates` (tests `cast_timestamp_differential`, `dst_transitions`, `tpch_date_predicates`).
 The generic `FileFormat` conformance suite (`file_format`, P2-T117: 12 checks over a `FormatFixture`,
 `file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it.
 

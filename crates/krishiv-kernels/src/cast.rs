@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Spark `CAST` between the types of TPC-H and the DataFrame slice:
 //! integral ↔ integral ↔ float ↔ decimal, string → integral / decimal /
-//! float / date, date ↔ timestamp (`TIMESTAMP` and `TIMESTAMP_NTZ`), and
+//! float / date / timestamp, date ↔ timestamp (`TIMESTAMP` and `TIMESTAMP_NTZ`), and
 //! every one of these → string.
 //!
 //! [`cast`] takes the Arrow carrier of the Spark type: `Int8..Int64`,
@@ -19,8 +19,9 @@
 //! Casts that are not listed fail with `KRISHIV_UNSUPPORTED_FEATURE`
 //! (the full cast matrix is a later task).
 
-mod datetime;
+pub(crate) mod datetime;
 mod text;
+mod timestamp;
 
 use std::sync::Arc;
 
@@ -839,7 +840,7 @@ fn decimal_out(a: PrimitiveArray<Decimal128Type>, p: u8, s: i8) -> Result<ArrayR
     ))
 }
 
-/// String → float, decimal or date.
+/// String → float, decimal, date or timestamp.
 fn from_string<O: OffsetSizeTrait>(
     s: &GenericStringArray<O>,
     to: &DataType,
@@ -907,6 +908,41 @@ fn from_string<O: OffsetSizeTrait>(
                     None => fail(mode, None, || invalid(i)),
                 })?;
             Ok(Arc::new(out))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, zone) => {
+            let ntz = zone.is_none();
+            let region = || {
+                KernelError::unsupported(
+                    "a time zone region id in a timestamp string (needs the tz database)",
+                )
+            };
+            let out = map_rows::<TimestampMicrosecondType>(s, |i| {
+                use timestamp::{Parsed, Zone};
+                match timestamp::parse(s.value(i).as_bytes()) {
+                    Parsed::At(_, Zone::Region) => Err(region()),
+                    // A zone in the text is ignored for TIMESTAMP_NTZ.
+                    Parsed::At(local, _) if ntz => Ok(Some(local)),
+                    Parsed::At(local, zone) => {
+                        let utc = match zone {
+                            Zone::Offset(o) => i64::from(o)
+                                .checked_mul(1_000_000)
+                                .and_then(|o| local.checked_sub(o)),
+                            _ => datetime::local_to_utc(local, opts.time_zone),
+                        };
+                        match utc {
+                            Some(v) => Ok(Some(v)),
+                            None => fail(mode, None, || invalid(i)),
+                        }
+                    }
+                    // Spark reads a time of day as today's, for TIMESTAMP only.
+                    Parsed::NeedsClock if ntz => fail(mode, None, || invalid(i)),
+                    Parsed::NeedsClock => Err(KernelError::unsupported(
+                        "a timestamp string that depends on the query clock (a time of day)",
+                    )),
+                    Parsed::Malformed => fail(mode, None, || invalid(i)),
+                }
+            })?;
+            Ok(Arc::new(out.with_timezone_opt(zone.clone())))
         }
         _ => Err(KernelError::unsupported(format!(
             "CAST from STRING to {to_name}"
