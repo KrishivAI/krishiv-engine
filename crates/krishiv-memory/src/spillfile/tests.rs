@@ -848,6 +848,33 @@ fn network_file_systems_are_recognised() {
 }
 
 #[test]
+fn mount_types_are_found_by_longest_mount_point() {
+    let mounts = "/dev/sda1 / ext4 rw 0 0\ntmpfs /run/user/1000 tmpfs rw 0 0\ntmpfs /tmp tmpfs rw 0 0\n/dev/sda2 /var/tmp ext4 rw 0 0\n";
+    let at = |p: &str| dir::mount_type_in(mounts, Path::new(p));
+    assert_eq!(at("/run/user/1000/krishiv-spill").as_deref(), Some("tmpfs"));
+    assert_eq!(at("/tmp/x").as_deref(), Some("tmpfs"));
+    assert_eq!(at("/var/tmp/krishiv-spill-1000").as_deref(), Some("ext4"));
+    assert_eq!(at("/home/u/.cache").as_deref(), Some("ext4"));
+}
+
+#[test]
+fn the_default_spill_dir_avoids_ram_file_systems() {
+    let c = |s: &str| std::path::PathBuf::from(s);
+    let candidates = [
+        c("/home/u/.cache/krishiv/spill"),
+        c("/var/tmp/s"),
+        c("/tmp/s"),
+    ];
+    // The first disk-backed candidate wins.
+    let on_ram = |p: &Path| p.starts_with("/home/u") || p.starts_with("/tmp");
+    assert_eq!(dir::choose_default(&candidates, on_ram), c("/var/tmp/s"));
+    assert_eq!(dir::choose_default(&candidates, |_| false), candidates[0]);
+    // All on RAM: still a usable directory (the first preference).
+    assert_eq!(dir::choose_default(&candidates, |_| true), candidates[0]);
+    assert_eq!(dir::choose_default(&[], |_| true), std::env::temp_dir());
+}
+
+#[test]
 fn open_fails_typed_when_the_directory_is_unusable() {
     let dir = TestDir::new();
     fs::write(&dir.0, b"a file").unwrap();
@@ -1266,7 +1293,12 @@ fn config_keys_drive_the_spill_config() {
     assert_eq!(defaults.codec, SpillCodec::Lz4);
     assert_eq!(defaults.max_bytes, 64 << 30);
     assert_eq!(defaults.zstd_level, 1);
-    assert!(defaults.dir.to_string_lossy().contains("krishiv-spill"));
+    // `.../krishiv/spill` under the user cache dir, or `krishiv-spill-<uid>`.
+    let d = defaults.dir.to_string_lossy().into_owned();
+    assert!(
+        d.contains("krishiv/spill") || d.contains("krishiv-spill-"),
+        "{d}"
+    );
 
     let (config, _) = Config::from_pairs([
         ("krishiv.spill.dir", "/var/tmp/krishiv-x"),

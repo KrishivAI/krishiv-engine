@@ -158,8 +158,10 @@ pub static SPILL_DIR: ConfigEntry = ConfigEntry {
     doc: "Directory for spill files (operator state written to local disk under memory \
           pressure). Each process creates its own subdirectory and removes it on exit; \
           subdirectories left behind by crashed processes are removed at the next start. \
-          When unset: `krishiv-spill` under the system temporary directory. Prefer a local \
-          SSD.",
+          When unset: the first of `$XDG_CACHE_HOME` (or `~/.cache`) `/krishiv/spill`, \
+          `/var/tmp/krishiv-spill-<uid>` and `<temp dir>/krishiv-spill-<uid>` that is not on a \
+          RAM file system (tmpfs). Prefer a local SSD; network and FUSE file systems are \
+          refused.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,

@@ -462,13 +462,21 @@ fn create_private_dir(path: &Path, recursive: bool) -> io::Result<()> {
     builder.create(path)
 }
 
-/// The default directory: per user, so one user cannot occupy or read
-/// another's: `$XDG_RUNTIME_DIR/krishiv-spill` (a private per-user directory),
-/// else `krishiv-spill-<uid>` under the temporary directory.
+/// The default directory: per user (one user cannot occupy or read
+/// another's) and disk-backed, because spilling to a RAM file system
+/// (`tmpfs`, as `/run/user/<uid>` and often `/tmp` are) uses the very memory
+/// spilling must free, out of the pool's sight. The first candidate not on a
+/// RAM file system wins, in this order: the user's cache directory
+/// (`$XDG_CACHE_HOME`, else `~/.cache`) `/krishiv/spill`, then
+/// `/var/tmp/krishiv-spill-<uid>` (disk-backed by convention), then
+/// `krishiv-spill-<uid>` under the temporary directory. An explicitly
+/// configured directory is used as given.
 fn default_dir() -> PathBuf {
-    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").filter(|p| !p.is_empty()) {
-        return PathBuf::from(runtime).join("krishiv-spill");
-    }
+    choose_default(&default_candidates(), |p| ram_fs(p).is_some())
+}
+
+/// The default-directory candidates, in order of preference.
+fn default_candidates() -> Vec<PathBuf> {
     #[cfg(unix)]
     let user = fs::metadata("/proc/self")
         .ok()
@@ -478,7 +486,49 @@ fn default_dir() -> PathBuf {
     let user = user
         .or_else(|| std::env::var("USER").ok())
         .unwrap_or_else(|| "user".to_owned());
-    std::env::temp_dir().join(format!("krishiv-spill-{user}"))
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|p| !p.is_empty())
+                .map(|h| PathBuf::from(h).join(".cache"))
+        });
+    let mut out = Vec::new();
+    if let Some(cache) = cache {
+        out.push(cache.join("krishiv").join("spill"));
+    }
+    #[cfg(unix)]
+    out.push(PathBuf::from("/var/tmp").join(format!("krishiv-spill-{user}")));
+    out.push(std::env::temp_dir().join(format!("krishiv-spill-{user}")));
+    out
+}
+
+/// The first candidate that is not on a RAM file system, else the first.
+pub(crate) fn choose_default(candidates: &[PathBuf], on_ram: impl Fn(&Path) -> bool) -> PathBuf {
+    candidates
+        .iter()
+        .find(|c| !on_ram(c))
+        .or_else(|| candidates.first())
+        .cloned()
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+/// The RAM file system type (`tmpfs`, `ramfs`) holding `path` or its nearest
+/// existing ancestor. Linux only; elsewhere `None`.
+fn ram_fs(path: &Path) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let existing = path.ancestors().find(|p| p.exists())?;
+        let mounts = fs::read_to_string("/proc/self/mounts").ok()?;
+        let ty = mount_type_in(&mounts, &fs::canonicalize(existing).ok()?)?;
+        matches!(ty.as_str(), "tmpfs" | "ramfs").then_some(ty)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 /// Refuses a spill root that is not a real directory owned by this user and
@@ -539,7 +589,20 @@ fn network_fs(root: &Path) -> Option<String> {
 /// The type of the mount containing `path` in `/proc/self/mounts` text, if
 /// it is a network or FUSE file system.
 pub(crate) fn network_fs_in(mounts: &str, path: &Path) -> Option<String> {
-    let (_, fs_type) = mounts
+    let fs_type = mount_type_in(mounts, path)?;
+    let network = [
+        "nfs", "cifs", "smb", "ceph", "gluster", "lustre", "9p", "afs", "fuse",
+    ];
+    network
+        .iter()
+        .any(|p| fs_type.starts_with(p))
+        .then_some(fs_type)
+}
+
+/// The type of the mount containing `path` in `/proc/self/mounts` text (the
+/// longest matching mount point).
+pub(crate) fn mount_type_in(mounts: &str, path: &Path) -> Option<String> {
+    mounts
         .lines()
         .filter_map(|l| {
             let mut f = l.split_whitespace();
@@ -547,14 +610,8 @@ pub(crate) fn network_fs_in(mounts: &str, path: &Path) -> Option<String> {
             path.starts_with(point.replace("\\040", " "))
                 .then_some((point.len(), ty))
         })
-        .max_by_key(|(len, _)| *len)?;
-    let network = [
-        "nfs", "cifs", "smb", "ceph", "gluster", "lustre", "9p", "afs", "fuse",
-    ];
-    network
-        .iter()
-        .any(|p| fs_type.starts_with(p))
-        .then(|| fs_type.to_owned())
+        .max_by_key(|(len, _)| *len)
+        .map(|(_, ty)| ty.to_owned())
 }
 
 /// Creates a new file (mode 0600 where modes exist), failing if it exists.
