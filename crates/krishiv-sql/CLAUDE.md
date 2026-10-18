@@ -8,20 +8,29 @@ Spark SQL dialect parser and analyzer (resolution, type coercion).
 `parse_query` → `ast::Query` (every node spanned; `==` ignores spans). Lexer `lexer.rs`, keyword
 classes `keywords.rs`, recursive descent `parser.rs` + precedence climbing `parser/expr.rs`,
 `types.rs` resolves written types through `krishiv_types::parse_data_type`.
+Type strings use the same grammar (`parser/types.rs`): `parse_data_type` (Spark's `parseDataType`),
+`parse_table_schema` (`parseTableSchema`) and `parse_ddl_type` (`DataType.fromDDL`, the schema
+argument of `from_json` and friends); `validate.rs` holds the checks Spark's `AstBuilder` makes on
+the tree (unknown types, missing sizes, decimal bounds, ...).
 `lower` / `parse_and_lower` turn a query into an unresolved `krishiv_plan::Plan` (`lower.rs`, purely
 syntactic, origins = spans); `redact_sql` turns query text into a `RedactedSql` from lexer tokens
 (`redact.rs`).
 
 ## Invariants
 - Own parser (no sqlparser-rs): hand-written lexer + recursive descent.
-- Nesting is capped at `MAX_DEPTH` (= the IR's) with `FAILED_TO_PARSE_TOO_COMPLEX`; operator chains
+- Nesting is capped at `MAX_DEPTH` (= the IR's) with `FAILED_TO_PARSE_TOO_COMPLEX` at the whole statement's
+  span (exact limit and limit+1 tested per shape; no `stacker`); operator chains
   are iterative, and statements nested deeper than `INLINE_NESTING` brackets parse on a thread with a
   big stack, so no input overflows the caller's stack. Keep new recursive rules inside `nested`.
 - `lexer::tokenize` is lossless and never fails (comments, unterminated quotes and unclosed comments are
   typed tokens): redaction (ADR 0038) relies on it. Errors never echo a string literal's text.
 - Facts Spark's `AstBuilder` checks after parsing stay in the tree (`Keyword` vs string arguments,
-  interval `trailing` parts, quoted typed-literal names, table options with spans); the post-parse
-  validation (P2-T079) raises those errors, not the parser.
+  interval `trailing` parts, quoted typed-literal names, table options with spans); `validate/` raises
+  those errors (P2-T079) after every top rule parses, in `AstBuilder`'s visit order, on a big stack for
+  deep trees. Lowering reads literal values through `validate::literal`, so checked literals lower.
+- Type errors follow ANTLR's prediction: a complex type whose `<...>` fails falls back to the bare
+  type when that reads on (error at the `<`; after `::` the statement is re-parsed with the bare
+  type when the complex one fails later); optional type parts are taken only when complete.
 - `FROM ... SELECT ...` stores its `FROM` once (`FromStatement`); never copy subtrees per use.
 - Ambiguities ANTLR resolves by prediction are decided deterministically; every decision is checked
   against a real Spark run (`tests/fixtures/spark-4.2.0/sql-parse-probe.json`,

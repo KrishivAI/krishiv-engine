@@ -3,7 +3,7 @@
  "spark_version": "4.2.0",
  "image": "apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89",
  "generator": "tests/scripts/gen_sql_parse_probe.py",
- "notes": "Statements parsed by Spark's session SQL parser with each case's configs; errors carry Spark's condition, SQLSTATE, message parameters and query-context start/stop indexes.",
+ "notes": "Statements parsed by Spark's session SQL parser with each case's configs (a `mode` case uses the data-type, table-schema or DataType.fromDDL entry point instead); errors carry Spark's condition, SQLSTATE, message parameters, query-context start/stop indexes, and a ParseException's line and position.",
  "cases": [
   {
    "sql": "SELECT FROM",
@@ -214,6 +214,8 @@
     "error": "'def'",
     "hint": ": extra input 'def'"
    },
+   "line": 1,
+   "pos": 13,
    "conf": {}
   },
   {
@@ -225,6 +227,8 @@
     "error": "')'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 14,
    "conf": {}
   },
   {
@@ -236,6 +240,8 @@
     "error": "'d'",
     "hint": ""
    },
+   "line": 2,
+   "pos": 5,
    "conf": {}
   },
   {
@@ -247,6 +253,8 @@
     "error": "'''",
     "hint": ""
    },
+   "line": 1,
+   "pos": 7,
    "conf": {}
   },
   {
@@ -258,6 +266,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 10,
    "conf": {}
   },
   {
@@ -269,6 +279,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 9,
    "conf": {}
   },
   {
@@ -280,6 +292,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 17,
    "conf": {}
   },
   {
@@ -291,6 +305,8 @@
     "error": "'b'",
     "hint": ": extra input 'b'"
    },
+   "line": 1,
+   "pos": 28,
    "conf": {}
   },
   {
@@ -302,6 +318,8 @@
     "error": "'>'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 17,
    "conf": {}
   },
   {
@@ -313,6 +331,8 @@
     "error": "'t3'",
     "hint": ": extra input 't3'"
    },
+   "line": 1,
+   "pos": 19,
    "conf": {}
   },
   {
@@ -324,6 +344,8 @@
     "error": "'BY'",
     "hint": ": extra input 'BY'"
    },
+   "line": 1,
+   "pos": 22,
    "conf": {}
   },
   {
@@ -346,6 +368,8 @@
     "error": "end of input",
     "hint": ": missing ')'"
    },
+   "line": 1,
+   "pos": 16,
    "conf": {}
   },
   {
@@ -357,6 +381,8 @@
     "error": "'SELECT'",
     "hint": ": extra input 'SELECT'"
    },
+   "line": 1,
+   "pos": 10,
    "conf": {}
   },
   {
@@ -368,6 +394,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 21,
    "conf": {}
   },
   {
@@ -379,6 +407,8 @@
     "error": "'c'",
     "hint": ": extra input 'c'"
    },
+   "line": 1,
+   "pos": 11,
    "conf": {}
   },
   {
@@ -390,6 +420,8 @@
     "error": "'.'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 14,
    "conf": {}
   },
   {
@@ -401,6 +433,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 9,
    "conf": {}
   },
   {
@@ -412,6 +446,8 @@
     "error": "')'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 16,
    "conf": {}
   },
   {
@@ -423,6 +459,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 20,
    "conf": {}
   },
   {
@@ -434,6 +472,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 20,
    "conf": {}
   },
   {
@@ -445,6 +485,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 25,
    "conf": {}
   },
   {
@@ -456,6 +498,8 @@
     "error": "'1'",
     "hint": ": extra input '1'"
    },
+   "line": 1,
+   "pos": 9,
    "conf": {}
   },
   {
@@ -467,6 +511,8 @@
     "error": "'`'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 7,
    "conf": {}
   },
   {
@@ -478,6 +524,8 @@
     "error": "'''",
     "hint": ""
    },
+   "line": 1,
+   "pos": 7,
    "conf": {}
   },
   {
@@ -489,6 +537,8 @@
     "error": "'\"'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 7,
    "conf": {}
   },
   {
@@ -500,6 +550,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 10,
    "conf": {}
   },
   {
@@ -511,6 +563,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 20,
    "conf": {}
   },
   {
@@ -522,6 +576,8 @@
     "error": "'SELECT'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 10,
    "conf": {}
   },
   {
@@ -533,6 +589,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 17,
    "conf": {}
   },
   {
@@ -544,6 +602,8 @@
     "error": "end of input",
     "hint": ": missing ']'"
    },
+   "line": 1,
+   "pos": 10,
    "conf": {}
   },
   {
@@ -554,6 +614,8 @@
    "message_parameters": {
     "ident": "test-table"
    },
+   "line": 1,
+   "pos": 18,
    "conf": {}
   },
   {
@@ -564,6 +626,8 @@
    "message_parameters": {
     "ident": "café"
    },
+   "line": 1,
+   "pos": 7,
    "conf": {}
   },
   {
@@ -572,6 +636,7 @@
    "error_class": "UNCLOSED_BRACKETED_COMMENT",
    "sql_state": "42601",
    "message_parameters": {},
+   "line": 9,
    "conf": {}
   },
   {
@@ -580,6 +645,8 @@
    "error_class": "PARSE_EMPTY_STATEMENT",
    "sql_state": "42617",
    "message_parameters": {},
+   "line": 1,
+   "pos": 3,
    "conf": {}
   },
   {
@@ -631,6 +698,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 24,
    "conf": {}
   },
   {
@@ -642,6 +711,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 23,
    "conf": {}
   },
   {
@@ -684,6 +755,8 @@
    },
    "start": 14,
    "stop": 14,
+   "line": 1,
+   "pos": 21,
    "conf": {}
   },
   {
@@ -695,6 +768,8 @@
     "error": "'x'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 26,
    "conf": {}
   },
   {
@@ -722,6 +797,8 @@
    },
    "start": 9,
    "stop": 9,
+   "line": 1,
+   "pos": 9,
    "conf": {}
   },
   {
@@ -734,6 +811,8 @@
    },
    "start": 12,
    "stop": 12,
+   "line": 1,
+   "pos": 12,
    "conf": {}
   },
   {
@@ -746,6 +825,8 @@
    },
    "start": 9,
    "stop": 9,
+   "line": 1,
+   "pos": 9,
    "conf": {}
   },
   {
@@ -758,6 +839,8 @@
    },
    "start": 9,
    "stop": 9,
+   "line": 1,
+   "pos": 9,
    "conf": {}
   },
   {
@@ -777,6 +860,8 @@
    },
    "start": 7,
    "stop": 34,
+   "line": 1,
+   "pos": 7,
    "conf": {}
   },
   {
@@ -787,6 +872,8 @@
    "message_parameters": {},
    "start": 7,
    "stop": 55,
+   "line": 1,
+   "pos": 37,
    "conf": {}
   },
   {
@@ -797,6 +884,8 @@
    "message_parameters": {},
    "start": 7,
    "stop": 40,
+   "line": 1,
+   "pos": 22,
    "conf": {}
   },
   {
@@ -807,6 +896,8 @@
    "message_parameters": {},
    "start": 7,
    "stop": 38,
+   "line": 1,
+   "pos": 32,
    "conf": {}
   },
   {
@@ -820,6 +911,8 @@
    },
    "start": 7,
    "stop": 25,
+   "line": 1,
+   "pos": 7,
    "conf": {}
   },
   {
@@ -833,6 +926,8 @@
    },
    "start": 7,
    "stop": 13,
+   "line": 1,
+   "pos": 7,
    "conf": {}
   },
   {
@@ -844,6 +939,8 @@
     "error": "'*/'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 25,
    "conf": {}
   },
   {
@@ -855,6 +952,8 @@
     "error": "'='",
     "hint": ""
    },
+   "line": 1,
+   "pos": 25,
    "conf": {}
   },
   {
@@ -871,6 +970,8 @@
     "error": "'='",
     "hint": ""
    },
+   "line": 1,
+   "pos": 17,
    "conf": {}
   },
   {
@@ -882,6 +983,8 @@
     "error": "'!'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 11,
    "conf": {}
   },
   {
@@ -898,6 +1001,8 @@
     "error": "'ORDER'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 33,
    "conf": {}
   },
   {
@@ -914,6 +1019,8 @@
     "error": "'Ⅻ'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 7,
    "conf": {}
   },
   {
@@ -925,6 +1032,8 @@
     "error": "'''",
     "hint": ""
    },
+   "line": 1,
+   "pos": 8,
    "conf": {}
   },
   {
@@ -936,6 +1045,8 @@
     "error": "'$$'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 7,
    "conf": {}
   },
   {
@@ -947,11 +1058,553 @@
     "error": "''secret''",
     "hint": ": extra input ''secret''"
    },
+   "line": 1,
+   "pos": 9,
    "conf": {}
   },
   {
    "sql": "FROM t SELECT 1 SELECT 2",
    "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ IDENTIFIER('BROADCAST')(hint_test) */ * FROM hint_test",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 34,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ BROADCAST(t) REPARTITION(3) */ * FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ BROADCAST(t),, */ * FROM t",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "','",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 24,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ */ * FROM t",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'*/'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 11,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ BROADCAST( */ * FROM t",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'*/'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 22,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ 1 */ * FROM t",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'1'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 11,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ a.b */ * FROM t",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'.'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 12,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ COALESCE(1+1) */ * FROM t",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'+'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 21,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ BROADCAST(t) */ /*+ MERGE(t) */ * FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x('a', 1, t.c) */ * FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x(-1) */ * FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x(a b) */ * FROM t",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'b'",
+    "hint": ": extra input 'b'"
+   },
+   "line": 1,
+   "pos": 15,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x() */ * FROM t",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 13,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x(a, */ * FROM t",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'*/'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 16,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x(a)) */ * FROM t",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 15,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x y */ * FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x(1) 2 */ 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'2'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 16,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x(f(1)) */ 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x(INTERVAL 1 DAY) */ 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x(@a) */ 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'@'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 13,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x(?) */ 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ select */ 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x(a[0]) */ 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x(CAST(1 AS INT)) */ 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x((1)) */ 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT DISTINCT /*+ x */ 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'/*+'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 16,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ x */ DISTINCT 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT /*+ IDENTIFIER('x') */ 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS array<int)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ": missing ')'"
+   },
+   "line": 1,
+   "pos": 22,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS struct<a int,>)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ": missing ')'"
+   },
+   "line": 1,
+   "pos": 23,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS map<int>)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ": missing ')'"
+   },
+   "line": 1,
+   "pos": 20,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS array<int>>)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ": extra input '>'"
+   },
+   "line": 1,
+   "pos": 27,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS decimal(10,2)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": missing ')'"
+   },
+   "line": 1,
+   "pos": 30,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS int x)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 21,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS foo x)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 21,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS string x y)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 24,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 20,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT x::array<int",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.ARRAY",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "elementType": "<INT>"
+   },
+   "start": 10,
+   "stop": 14,
+   "line": 1,
+   "pos": 10,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT x::array<int> y z",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.ARRAY",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "elementType": "<INT>"
+   },
+   "start": 10,
+   "stop": 14,
+   "line": 1,
+   "pos": 10,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS `int`)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INT\""
+   },
+   "start": 17,
+   "stop": 21,
+   "line": 1,
+   "pos": 17,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS array<foo>)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "start": 23,
+   "stop": 25,
+   "line": 1,
+   "pos": 23,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS struct)",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.STRUCT",
+   "sql_state": "42K01",
+   "message_parameters": {},
+   "start": 17,
+   "stop": 22,
+   "line": 1,
+   "pos": 17,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS varchar)",
+   "parses": false,
+   "error_class": "DATATYPE_MISSING_SIZE",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "type": "\"VARCHAR\""
+   },
+   "start": 17,
+   "stop": 23,
+   "line": 1,
+   "pos": 17,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS int(1))",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INT(1)\""
+   },
+   "start": 17,
+   "stop": 22,
+   "line": 1,
+   "pos": 17,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS decimal(5,6))",
+   "parses": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1228",
+   "sql_state": "",
+   "message_parameters": {
+    "precision": "5",
+    "scale": "6"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS time(10))",
+   "parses": false,
+   "error_class": "UNSUPPORTED_TIME_PRECISION",
+   "sql_state": "0A001",
+   "message_parameters": {
+    "precision": "10"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT x::foo",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "start": 10,
+   "stop": 12,
+   "line": 1,
+   "pos": 10,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(CAST(x AS foo) AS bar)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"BAR\""
+   },
+   "start": 30,
+   "stop": 32,
+   "line": 1,
+   "pos": 30,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT CAST(x AS struct<a:foo, b:bar>)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "start": 26,
+   "stop": 28,
+   "line": 1,
+   "pos": 26,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1",
+   "parses": false,
+   "error_class": "FAILED_TO_PARSE_TOO_COMPLEX",
+   "sql_state": "54001",
+   "message_parameters": {},
+   "start": 0,
+   "stop": 4007,
+   "line": 1,
+   "pos": 0,
    "conf": {}
   },
   {
@@ -989,6 +1642,8 @@
    },
    "start": 0,
    "stop": 23,
+   "line": 1,
+   "pos": 0,
    "conf": {}
   },
   {
@@ -1000,6 +1655,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 24,
    "conf": {}
   },
   {
@@ -1011,6 +1668,8 @@
     "error": "'SELECT'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 16,
    "conf": {}
   },
   {
@@ -1022,6 +1681,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 7,
    "conf": {}
   },
   {
@@ -1033,6 +1694,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 16,
    "conf": {}
   },
   {
@@ -1044,6 +1707,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 14,
    "conf": {}
   },
   {
@@ -1055,6 +1720,8 @@
     "error": "'EXTENDED'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 17,
    "conf": {}
   },
   {
@@ -1101,6 +1768,8 @@
     "error": "'def'",
     "hint": ": extra input 'def'"
    },
+   "line": 1,
+   "pos": 21,
    "conf": {}
   },
   {
@@ -1112,6 +1781,8 @@
     "error": "'SELECT'",
     "hint": ": extra input 'SELECT'"
    },
+   "line": 1,
+   "pos": 18,
    "conf": {}
   },
   {
@@ -1128,6 +1799,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 16,
    "conf": {}
   },
   {
@@ -1154,6 +1827,8 @@
     "error": "'a'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 8,
    "conf": {}
   },
   {
@@ -1165,6 +1840,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 12,
    "conf": {}
   },
   {
@@ -1173,6 +1850,7 @@
    "error_class": "UNCLOSED_BRACKETED_COMMENT",
    "sql_state": "42601",
    "message_parameters": {},
+   "line": 17,
    "conf": {}
   },
   {
@@ -1181,6 +1859,7 @@
    "error_class": "UNCLOSED_BRACKETED_COMMENT",
    "sql_state": "42601",
    "message_parameters": {},
+   "line": 25,
    "conf": {}
   },
   {
@@ -1193,6 +1872,8 @@
    },
    "start": 0,
    "stop": 23,
+   "line": 1,
+   "pos": 0,
    "conf": {}
   },
   {
@@ -1205,6 +1886,8 @@
    },
    "start": 8,
    "stop": 31,
+   "line": 1,
+   "pos": 8,
    "conf": {}
   },
   {
@@ -1217,6 +1900,8 @@
    },
    "start": 0,
    "stop": 32,
+   "line": 1,
+   "pos": 0,
    "conf": {}
   },
   {
@@ -1225,6 +1910,7 @@
    "error_class": "UNCLOSED_BRACKETED_COMMENT",
    "sql_state": "42601",
    "message_parameters": {},
+   "line": 18,
    "conf": {}
   },
   {
@@ -1236,6 +1922,8 @@
     "error": "end of input",
     "hint": ""
    },
+   "line": 1,
+   "pos": 15,
    "conf": {}
   },
   {
@@ -1252,6 +1940,8 @@
     "error": "'select'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 12,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1266,6 +1956,8 @@
     "error": "'FROM'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 11,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1280,6 +1972,8 @@
     "error": "'FROM'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 9,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1310,6 +2004,8 @@
     "error": "'end'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 7,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1324,6 +2020,8 @@
     "error": "'end'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 12,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1338,6 +2036,8 @@
     "error": "'end'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 16,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1352,6 +2052,8 @@
     "error": "'end'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 5,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1366,6 +2068,8 @@
     "error": "'any'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 7,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1380,6 +2084,8 @@
     "error": "'some'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 7,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1402,6 +2108,8 @@
     "error": "'all'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 25,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1416,6 +2124,8 @@
     "error": "'all'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 25,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1430,6 +2140,8 @@
     "error": "'order'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 14,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1444,6 +2156,8 @@
     "error": "'select'",
     "hint": ""
    },
+   "line": 1,
+   "pos": 20,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
@@ -1490,6 +2204,8 @@
    },
    "start": 7,
    "stop": 13,
+   "line": 1,
+   "pos": 7,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.doubleQuotedIdentifiers": "true"
@@ -1504,6 +2220,8 @@
     "error": "'z'",
     "hint": ": extra input 'z'"
    },
+   "line": 1,
+   "pos": 15,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.doubleQuotedIdentifiers": "true"
@@ -1515,6 +2233,4191 @@
    "conf": {
     "spark.sql.legacy.setopsPrecedence.enabled": "true"
    }
+  },
+  {
+   "sql": "a InvalidType",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'InvalidType'",
+    "hint": ": extra input 'InvalidType'"
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "a InvalidType",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'InvalidType'",
+    "hint": ": extra input 'InvalidType'"
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "InvalidType",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INVALIDTYPE\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "InvalidType",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INVALIDTYPE\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ": extra input 'int'"
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "a int",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int, b string",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "a int, b string",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a:int>",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a:int>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "STRUCT<a: INT, b: ARRAY<STRING>>",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "STRUCT<a: INT, b: ARRAY<STRING>>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "Array < Int >",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "Array < Int >",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<int>/*c*/",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<int>/*c*/",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array/**/<int>",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array/**/<int>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int\n",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int\n",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "",
+   "parses": false,
+   "error_class": "PARSE_EMPTY_STATEMENT",
+   "sql_state": "42617",
+   "message_parameters": {},
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "",
+   "parses": false,
+   "error_class": "PARSE_EMPTY_STATEMENT",
+   "sql_state": "42617",
+   "message_parameters": {},
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "/* x",
+   "parses": false,
+   "error_class": "UNCLOSED_BRACKETED_COMMENT",
+   "sql_state": "42601",
+   "message_parameters": {},
+   "line": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "/* x",
+   "parses": false,
+   "error_class": "UNCLOSED_BRACKETED_COMMENT",
+   "sql_state": "42601",
+   "message_parameters": {},
+   "line": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<int>>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ": extra input '>'"
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<int>>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ": extra input '>'"
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<>'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<>'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<int,int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<int,int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<array<int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<array<int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<struct<a:int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<struct<a:int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<int NOT NULL>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<int NOT NULL>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "map<int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "map<int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "map<int,>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "map<int,>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "map<,int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "map<,int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "map<int, string x>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "map<int, string x>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a int,>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a int,>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a:int b:int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a:int b:int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a.b:int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a.b:int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a:int COMMENT 1>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a:int COMMENT 1>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a: int NOT NULL, b: int COMMENT 1>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'1'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 39,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a: int NOT NULL, b: int COMMENT 1>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'1'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 39,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a: int COMMENT 'x', b: int COMMENT 1>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'1'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 42,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a: int COMMENT 'x', b: int COMMENT 1>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'1'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 42,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a int NOT NULL x>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 22,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a int NOT NULL x>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 22,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a: decimal(10, 2) x>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 25,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a: decimal(10, 2) x>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 25,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<:int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<:int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<int> x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 11,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<int> x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 11,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<int>> x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<int>> x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<int> > 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 11,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<int> > 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'>'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 11,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<int>)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ": extra input ')'"
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<int>)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ": extra input ')'"
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a:int> x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 14,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a:int> x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 14,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int x y",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int x y",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ": extra input '('"
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ": extra input '('"
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int )",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int )",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int ,",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "','",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int ,",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "','",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int;",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "';'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int;",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "';'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int(1) x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int(1) x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "string x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "string x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "date x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "date x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 5,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "timestamp x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "timestamp x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "timestamp without",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'without'",
+    "hint": ": extra input 'without'"
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "timestamp without",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'without'",
+    "hint": ": extra input 'without'"
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "timestamp with local",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "timestamp with local",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "timestamp with time zone x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "timestamp with time zone x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 10,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "time(6) without",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'without'",
+    "hint": ": extra input 'without'"
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "time(6) without",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'without'",
+    "hint": ": extra input 'without'"
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "time(6) with time zone",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "time(6) with time zone",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "boolean (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ": extra input '('"
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "boolean (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ": extra input '('"
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "double precision",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'precision'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "double precision",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'precision'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "decimal x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "decimal x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "decimal (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "decimal (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "decimal(10,2) x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 14,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "decimal(10,2) x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 14,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "decimal(10,2",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 12,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "decimal(10,2",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 12,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "decimal(any)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'any'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "decimal(any)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'any'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "char (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "char (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "char(3) x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "char(3) x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "foo x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "foo x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "foo (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ": extra input '('"
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "foo (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ": extra input '('"
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "foo )",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ": extra input ')'"
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "foo )",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ": extra input ')'"
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "foo(1) x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "foo(1) x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "foo(any)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "foo(any)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int(any)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int(any)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "`int` x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "`int` x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "`array`<int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "`array`<int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "geometry x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "geometry x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "geometry(x)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "geometry(x)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval x y",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval x y",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ": extra input '('"
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ": extra input '('"
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval day x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 13,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval day x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 13,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval day to",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ": extra input 'to'"
+   },
+   "line": 1,
+   "pos": 13,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval day to",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ": extra input 'to'"
+   },
+   "line": 1,
+   "pos": 13,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval day(1)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 12,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval day(1)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 12,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval second to year",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 16,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval second to year",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 16,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval hour to day",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 14,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval hour to day",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 14,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval day to day",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 13,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval day to day",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 13,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval month to year",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 15,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval month to year",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 15,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "string collate",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'collate'",
+    "hint": ": extra input 'collate'"
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "string collate",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'collate'",
+    "hint": ": extra input 'collate'"
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "foo",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "foo",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "foo(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "foo(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "`int`",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INT\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "`int`",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INT\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "`a`(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"A(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "`a`(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"A(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INT(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INT(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int(1,2)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INT(1,2)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "int(1,2)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INT(1,2)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "string(3)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"STRING(3)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "string(3)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"STRING(3)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "timestamp_ntz(3)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"TIMESTAMP_NTZ(3)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "timestamp_ntz(3)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"TIMESTAMP_NTZ(3)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "binary(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"BINARY(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "binary(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"BINARY(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "void(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"VOID(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "void(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"VOID(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INTERVAL(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INTERVAL(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"ARRAY(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array(1)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"ARRAY(1)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.ARRAY",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "elementType": "<INT>"
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.ARRAY",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "elementType": "<INT>"
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "map",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.MAP",
+   "sql_state": "42K01",
+   "message_parameters": {},
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "map",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.MAP",
+   "sql_state": "42K01",
+   "message_parameters": {},
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.STRUCT",
+   "sql_state": "42K01",
+   "message_parameters": {},
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.STRUCT",
+   "sql_state": "42K01",
+   "message_parameters": {},
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<>",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<array>",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.ARRAY",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "elementType": "<INT>"
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<array>",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.ARRAY",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "elementType": "<INT>"
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "map<int,map>",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.MAP",
+   "sql_state": "42K01",
+   "message_parameters": {},
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "map<int,map>",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.MAP",
+   "sql_state": "42K01",
+   "message_parameters": {},
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a:struct>",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.STRUCT",
+   "sql_state": "42K01",
+   "message_parameters": {},
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a:struct>",
+   "parses": false,
+   "error_class": "INCOMPLETE_TYPE_DEFINITION.STRUCT",
+   "sql_state": "42K01",
+   "message_parameters": {},
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<foo>",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<foo>",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "map<foo,int>",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "map<foo,int>",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a:foo>",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a:foo>",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<char>",
+   "parses": false,
+   "error_class": "DATATYPE_MISSING_SIZE",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "type": "\"CHAR\""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<char>",
+   "parses": false,
+   "error_class": "DATATYPE_MISSING_SIZE",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "type": "\"CHAR\""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "char",
+   "parses": false,
+   "error_class": "DATATYPE_MISSING_SIZE",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "type": "\"CHAR\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "char",
+   "parses": false,
+   "error_class": "DATATYPE_MISSING_SIZE",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "type": "\"CHAR\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "character",
+   "parses": false,
+   "error_class": "DATATYPE_MISSING_SIZE",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "type": "\"CHARACTER\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "character",
+   "parses": false,
+   "error_class": "DATATYPE_MISSING_SIZE",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "type": "\"CHARACTER\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "varchar",
+   "parses": false,
+   "error_class": "DATATYPE_MISSING_SIZE",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "type": "\"VARCHAR\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "varchar",
+   "parses": false,
+   "error_class": "DATATYPE_MISSING_SIZE",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "type": "\"VARCHAR\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "char(3)",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "char(3)",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "char(3,4)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"CHAR(3,4)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "char(3,4)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"CHAR(3,4)\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "varchar(0)",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "varchar(0)",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "decimal(40,0)",
+   "parses": false,
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "40"
+   },
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "decimal(40,0)",
+   "parses": false,
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "40"
+   },
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "array<decimal(40,0)>",
+   "parses": false,
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "40"
+   },
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "array<decimal(40,0)>",
+   "parses": false,
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "40"
+   },
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "numeric(5,6)",
+   "parses": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1228",
+   "sql_state": "",
+   "message_parameters": {
+    "precision": "5",
+    "scale": "6"
+   },
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "numeric(5,6)",
+   "parses": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1228",
+   "sql_state": "",
+   "message_parameters": {
+    "precision": "5",
+    "scale": "6"
+   },
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "decimal(0)",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "decimal(0)",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "decimal(38,38)",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "decimal(38,38)",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "time",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "time",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "time(0)",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "time(0)",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "time(7)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_TIME_PRECISION",
+   "sql_state": "0A001",
+   "message_parameters": {
+    "precision": "7"
+   },
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "time(7)",
+   "parses": false,
+   "error_class": "UNSUPPORTED_TIME_PRECISION",
+   "sql_state": "0A001",
+   "message_parameters": {
+    "precision": "7"
+   },
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "geometry",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"GEOMETRY\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "geometry",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"GEOMETRY\""
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "geometry(any)",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "geometry(any)",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "geography(4326)",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "geography(4326)",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval year",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval year",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "interval day to second",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "interval day to second",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "void",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "void",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "variant",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "variant",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "timestamp_ltz",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "timestamp_ltz",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "map<array<int>,int>",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "map<array<int>,int>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a:void>",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a:void>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<`a b`:int>",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<`a b`:int>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a:int NOT NULL>",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a:int NOT NULL>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a:int COMMENT 'x'>",
+   "parses": true,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "struct<a:int COMMENT 'x'>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a decimal(40,0)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'decimal'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "a decimal(40,0)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'decimal'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a char",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'char'",
+    "hint": ": extra input 'char'"
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "a char",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'char'",
+    "hint": ": extra input 'char'"
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a foo",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'foo'",
+    "hint": ": extra input 'foo'"
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "a foo",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'foo'",
+    "hint": ": extra input 'foo'"
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "`a b` int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ": extra input 'int'"
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "datatype"
+  },
+  {
+   "sql": "`a b` int",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int",
+   "parses": true,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int, b string",
+   "parses": true,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int, b string",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a InvalidType",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INVALIDTYPE\""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a InvalidType",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'InvalidType'",
+    "hint": ": extra input 'InvalidType'"
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a array<int>, b map<int,string>",
+   "parses": true,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a array<int>, b map<int,string>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a INT NOT NULL",
+   "parses": true,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a INT NOT NULL",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int NOT NULL COMMENT 'x', b string",
+   "parses": true,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int NOT NULL COMMENT 'x', b string",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int COMMENT 'x'",
+   "parses": true,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int COMMENT 'x'",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int, a string",
+   "parses": true,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int, a string",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "`a b` int",
+   "parses": true,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "`a b` int",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "select int",
+   "parses": true,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "select int",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a interval day",
+   "parses": true,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a interval day",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a struct<b: int>",
+   "parses": true,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a struct<b: int>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "int",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "int x",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"X\""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "int x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 4,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "struct<a:int>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "struct<a:int>",
+   "parses": true,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int b string",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'b'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int b string",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int, b",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int, b",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int,",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int,",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int, ",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 7,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int, ",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int,,b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "','",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int,,b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a,b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "','",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 1,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a,b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "','",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 1,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a:int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "':'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 1,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a:int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "':'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 1,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a.b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'.'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 1,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a.b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'.'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 1,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "`a`.b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'.'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "`a`.b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'.'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 3,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a-b int",
+   "parses": false,
+   "error_class": "INVALID_IDENTIFIER",
+   "sql_state": "42602",
+   "message_parameters": {
+    "ident": "a-b"
+   },
+   "line": 1,
+   "pos": 1,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a-b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'-'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 1,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "é int",
+   "parses": false,
+   "error_class": "INVALID_IDENTIFIER",
+   "sql_state": "42602",
+   "message_parameters": {
+    "ident": "é"
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "é int",
+   "parses": false,
+   "error_class": "INVALID_IDENTIFIER",
+   "sql_state": "42602",
+   "message_parameters": {
+    "ident": "é"
+   },
+   "line": 1,
+   "pos": 0,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int COMMENT",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 13,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int COMMENT",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int NOT",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": missing 'NULL'"
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int NOT",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int NOT, b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "','",
+    "hint": ": missing 'NULL'"
+   },
+   "line": 1,
+   "pos": 9,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int NOT, b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int COMMENT 'x' NOT NULL",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'NOT'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 18,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int COMMENT 'x' NOT NULL",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int default 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'default'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int default 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a foo x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a foo x",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'foo'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a foo x, b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 6,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a foo x, b int",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'foo'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a char",
+   "parses": false,
+   "error_class": "DATATYPE_MISSING_SIZE",
+   "sql_state": "42K01",
+   "message_parameters": {
+    "type": "\"CHAR\""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a char",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'char'",
+    "hint": ": extra input 'char'"
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a foo",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a foo",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'foo'",
+    "hint": ": extra input 'foo'"
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a foo, b bar",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a foo, b bar",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'foo'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a struct<b:foo>",
+   "parses": false,
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"FOO\""
+   },
+   "line": 1,
+   "pos": 11,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a struct<b:foo>",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'struct'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a decimal(40,0)",
+   "parses": false,
+   "error_class": "DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "maxPrecision": "38",
+    "precision": "40"
+   },
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a decimal(40,0)",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'decimal'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 2,
+   "conf": {},
+   "mode": "fromddl"
+  },
+  {
+   "sql": "a int /* x",
+   "parses": false,
+   "error_class": "UNCLOSED_BRACKETED_COMMENT",
+   "sql_state": "42601",
+   "message_parameters": {},
+   "line": 6,
+   "conf": {},
+   "mode": "tableschema"
+  },
+  {
+   "sql": "a int /* x",
+   "parses": false,
+   "error_class": "UNCLOSED_BRACKETED_COMMENT",
+   "sql_state": "42601",
+   "message_parameters": {},
+   "line": 6,
+   "conf": {},
+   "mode": "fromddl"
   }
  ]
 }

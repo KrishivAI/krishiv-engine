@@ -1644,6 +1644,7 @@ dependencies = [
  "codspeed-criterion-compat",
  "insta",
  "krishiv-common",
+ "krishiv-kernels",
  "krishiv-plan",
  "krishiv-types",
  "serde_json",

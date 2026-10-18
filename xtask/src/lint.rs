@@ -24,7 +24,7 @@ fn is_github_hosted(label: &str) -> bool {
         .any(|p| label.starts_with(p))
 }
 
-/// Whether `rest` (what follows `uses:`) is pinned: a local action, a Docker
+/// Whether `rest` (what follows `uses:`) is pinned: a local action (`./` or `$/`), a Docker
 /// image by digest, or `owner/repo[/path]@<40-hex commit SHA>`.
 fn is_pinned(rest: &str) -> bool {
     let target = rest

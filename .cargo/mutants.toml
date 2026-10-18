@@ -1,0 +1,19 @@
+# cargo-mutants (P2-T107, nightly: .github/workflows/mutants.yml). Read from
+# here by `cargo mutants`; the areas, shards and test tool are chosen by the
+# workflow, this file holds what never changes.
+
+# Generated code, snapshots and test modules are not mutated.
+exclude_globs = [
+    "**/generated/**",
+    "**/snapshots/**",
+    "**/tests.rs",
+    "**/tests/**",
+    "**/*_tests.rs",
+]
+
+# Formatting and diagnostics impls: a mutant here changes text no test asserts
+# on and is not a gap in the checks that matter.
+exclude_re = [
+    "impl (std::fmt::)?(Debug|Display) for",
+    "impl (std::fmt::)?(Debug|Display)<",
+]

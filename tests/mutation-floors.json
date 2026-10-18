@@ -1,0 +1,9 @@
+{
+  "target": 70,
+  "areas": {
+    "kernels": { "floor": 70, "enforce": false },
+    "hash": { "floor": 70, "enforce": false },
+    "parser": { "floor": 70, "enforce": false },
+    "serialization": { "floor": 70, "enforce": false }
+  }
+}

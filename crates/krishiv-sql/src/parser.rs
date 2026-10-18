@@ -16,6 +16,7 @@
 //! stack fits that depth.
 
 mod expr;
+mod types;
 
 use std::collections::HashMap;
 
@@ -27,11 +28,11 @@ use crate::ast::{
     TableAlias, TableFactor, TableFactorKind, TableOption, TemporalClause, TemporalKind, Unpivot,
     UnpivotColumns, Values, With,
 };
-use crate::ast::{Explain, ExplainMode, Statement};
+use crate::ast::{DataTypeSpec, Explain, ExplainMode, Statement, StructField};
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
 use crate::lexer::{Sym, Token, TokenKind, tokenize, unquote_ident};
-use crate::{MAX_DEPTH, ParserOptions};
+use crate::{MAX_DEPTH, ParserOptions, validate};
 
 /// Why a rule did not match.
 pub(crate) enum Fail {
@@ -55,6 +56,9 @@ pub(crate) struct Parser<'s> {
     /// Token after a complete statement, when it is the last one (Spark's
     /// "extra input" hint).
     extra: Option<usize>,
+    /// A token before which ANTLR would insert a missing token, and that
+    /// token (Spark's "missing" hint).
+    missing: Option<(usize, &'static str)>,
     /// Current recursion depth and the deepest tree level reached.
     depth: usize,
     peak: usize,
@@ -68,11 +72,39 @@ pub(crate) struct Parser<'s> {
     /// The first error Spark raises after parsing (in `AstBuilder`) that
     /// the tree cannot carry; reported if the statement parses.
     deferred: Option<ParseError>,
+    /// The keyword tokens of the complex types read after `::`, in order.
+    cast_types: Vec<usize>,
+    /// A complex type keyword after `::` to read as a bare type.
+    force_bare: Option<usize>,
 }
 
 /// Parses one query statement (`query ;* EOF`).
 pub(crate) fn parse_query(src: &str, opts: ParserOptions) -> Result<Query, ParseError> {
     parse_with::<QueryRule>(src, opts)
+}
+
+/// Parses one query statement without Spark's post-parse checks: the tree
+/// the checks see (parser tests of tree shapes).
+#[cfg(test)]
+pub(crate) fn parse_query_unchecked(src: &str, opts: ParserOptions) -> Result<Query, ParseError> {
+    parse_with::<UncheckedQueryRule>(src, opts)
+}
+
+/// [`QueryRule`] without its checks.
+#[cfg(test)]
+struct UncheckedQueryRule;
+
+#[cfg(test)]
+impl TopRule for UncheckedQueryRule {
+    type Out = Query;
+
+    fn parse(p: &mut Parser<'_>) -> PR<Query> {
+        p.statement()
+    }
+
+    fn validate(_: &Query, _: &str, _: ParserOptions) -> Result<(), ParseError> {
+        Ok(())
+    }
 }
 
 /// Parses one statement: a query, or `EXPLAIN` of a statement.
@@ -83,9 +115,15 @@ pub(crate) fn parse_statement(src: &str, opts: ParserOptions) -> Result<Statemen
 /// The top rule of a statement.
 trait TopRule {
     /// What it parses.
-    type Out: Send;
+    type Out: Send + Sync;
+    /// Whether an unclosed bracketed comment is reported even when the
+    /// input has a syntax error (Spark's type-string entry points do so;
+    /// a statement reports the syntax error).
+    const UNCLOSED_FIRST: bool = false;
     /// Parses it.
     fn parse(p: &mut Parser<'_>) -> PR<Self::Out>;
+    /// The checks Spark's `AstBuilder` makes on the parsed tree.
+    fn validate(out: &Self::Out, src: &str, opts: ParserOptions) -> Result<(), ParseError>;
 }
 
 /// [`Parser::statement`].
@@ -97,6 +135,10 @@ impl TopRule for QueryRule {
     fn parse(p: &mut Parser<'_>) -> PR<Query> {
         p.statement()
     }
+
+    fn validate(out: &Self::Out, src: &str, opts: ParserOptions) -> Result<(), ParseError> {
+        validate::query(out, src, opts)
+    }
 }
 
 /// [`Parser::explainable`].
@@ -107,6 +149,55 @@ impl TopRule for StatementRule {
     /// One statement.
     fn parse(p: &mut Parser<'_>) -> PR<Statement> {
         p.explainable()
+    }
+
+    fn validate(out: &Self::Out, src: &str, opts: ParserOptions) -> Result<(), ParseError> {
+        validate::statement(out, src, opts)
+    }
+}
+
+/// Parses one data type (`singleDataType`).
+pub(crate) fn parse_data_type(src: &str, opts: ParserOptions) -> Result<DataTypeSpec, ParseError> {
+    parse_with::<DataTypeRule>(src, opts)
+}
+
+/// Parses a table schema (`singleTableSchema`).
+pub(crate) fn parse_table_schema(
+    src: &str,
+    opts: ParserOptions,
+) -> Result<Vec<StructField>, ParseError> {
+    parse_with::<TableSchemaRule>(src, opts)
+}
+
+/// [`Parser::single_data_type`].
+struct DataTypeRule;
+
+impl TopRule for DataTypeRule {
+    type Out = DataTypeSpec;
+    const UNCLOSED_FIRST: bool = true;
+    /// One data type.
+    fn parse(p: &mut Parser<'_>) -> PR<DataTypeSpec> {
+        p.single_data_type()
+    }
+
+    fn validate(out: &Self::Out, _src: &str, _opts: ParserOptions) -> Result<(), ParseError> {
+        validate::data_type(out)
+    }
+}
+
+/// [`Parser::single_table_schema`].
+struct TableSchemaRule;
+
+impl TopRule for TableSchemaRule {
+    type Out = Vec<StructField>;
+    const UNCLOSED_FIRST: bool = true;
+    /// Columns.
+    fn parse(p: &mut Parser<'_>) -> PR<Vec<StructField>> {
+        p.single_table_schema()
+    }
+
+    fn validate(out: &Self::Out, _src: &str, _opts: ParserOptions) -> Result<(), ParseError> {
+        validate::columns(out)
     }
 }
 
@@ -128,7 +219,9 @@ fn parse_with<R: TopRule>(src: &str, opts: ParserOptions) -> Result<R::Out, Pars
     // Spark raises its post-parse (`AstBuilder`) errors only after the
     // unclosed-comment check, so that error wins over them.
     match (parsed, unclosed) {
-        (Err(e), Some(span)) if e.deferred => Err(error::unclosed_comment(span)),
+        (Err(e), Some(span)) if e.deferred || R::UNCLOSED_FIRST => {
+            Err(error::unclosed_comment(span))
+        }
         (Err(e), _) => Err(e.error),
         (Ok(_), Some(span)) => Err(error::unclosed_comment(span)),
         (Ok(parsed), None) => Ok(parsed),
@@ -162,12 +255,8 @@ fn parse_tokens<R: TopRule>(
     }
     // A deeply nested statement parses on its own thread, whose stack fits
     // `MAX_DEPTH` levels whatever the caller's stack is.
-    let stack = if cfg!(debug_assertions) {
-        64 << 20
-    } else {
-        16 << 20
-    };
-    let at = Span::new(0, 0);
+    let stack = BIG_STACK;
+    let at = statement_span(src, &toks);
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("krishiv-sql-parse".to_owned())
@@ -181,6 +270,24 @@ fn parse_tokens<R: TopRule>(
                 },
             )
     })
+}
+
+/// The stack of the threads that parse and check deep statements: it fits
+/// [`MAX_DEPTH`] levels.
+const BIG_STACK: usize = if cfg!(debug_assertions) {
+    64 << 20
+} else {
+    16 << 20
+};
+
+/// The span of a whole statement, from its first token to its last: where
+/// Spark reports `FAILED_TO_PARSE_TOO_COMPLEX` (its query context is the
+/// statement, not the token parsing stopped at).
+fn statement_span(src: &str, toks: &[Token]) -> Span {
+    match (toks.first(), toks.last()) {
+        (Some(first), Some(last)) => Span::new(first.span.start, last.span.end),
+        _ => Span::new(0, src.len()),
+    }
 }
 
 /// Bracket nesting (`(`, `[`, `CASE`, `<` of a complex type) parsed on the
@@ -218,52 +325,89 @@ fn nesting_bound(src: &str, toks: &[Token]) -> usize {
 
 /// Parses `toks` with the top rule `R` on the current thread.
 fn run<R: TopRule>(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<R::Out, Failed> {
-    let classes = toks
-        .iter()
-        .map(|t| {
-            if t.kind == TokenKind::Word {
-                classify(t.span.text(src))
-            } else {
-                0
-            }
-        })
-        .collect();
-    let mut after_parens = vec![0; toks.len()];
-    let mut next = toks.len();
-    for (i, t) in toks.iter().enumerate().rev() {
-        if t.kind != TokenKind::Sym(Sym::LParen) {
-            next = i;
+    let mut p = Parser::new(src, toks, opts, None);
+    let failed = match R::parse(&mut p) {
+        Ok(out) => {
+            let deep = p.peak > INLINE_NESTING;
+            return p
+                .finish(out)
+                .and_then(|out| checked::<R>(out, src, opts, deep));
         }
-        after_parens[i] = next;
-    }
-    let markers = (0..toks.len())
-        .filter(|&i| toks[i].kind == TokenKind::Sym(Sym::Question))
-        .collect();
-    let mut p = Parser {
-        src,
-        toks,
-        classes,
-        pos: 0,
-        opts,
-        far: 0,
-        extra: None,
-        depth: 0,
-        peak: 0,
-        failed_queries: HashMap::new(),
-        after_parens,
-        markers,
-        deferred: None,
+        Err(Fail::Fatal(e)) => return Err((*e).into()),
+        Err(Fail::Syntax) => p.syntax_error(),
     };
-    match R::parse(&mut p) {
-        Ok(q) => match p.deferred {
-            Some(error) => Err(Failed {
-                error,
-                deferred: true,
-            }),
-            None => Ok(q),
-        },
-        Err(Fail::Fatal(e)) => Err((*e).into()),
-        Err(Fail::Syntax) => Err(p.syntax_error().into()),
+    // ANTLR's full-context prediction keeps a bare `ARRAY` after `::` as an
+    // alternative to `ARRAY<...>` until one of them fails: when the bare
+    // type reads on further (`x::array<int> > y` as a comparison), Spark
+    // takes it.
+    for keyword in retry_keywords(&p.cast_types, p.far) {
+        let mut retry = Parser::new(src, p.toks.clone(), opts, Some(keyword));
+        match R::parse(&mut retry) {
+            Ok(out) => {
+                let deep = retry.peak > INLINE_NESTING;
+                return retry
+                    .finish(out)
+                    .and_then(|out| checked::<R>(out, src, opts, deep));
+            }
+            Err(Fail::Syntax) if retry.far > p.far => return Err(retry.syntax_error().into()),
+            Err(_) => {}
+        }
+    }
+    Err(failed.into())
+}
+
+/// The most `::` complex-cast keywords [`run`] retries as bare types.
+const MAX_CAST_RETRIES: usize = 16;
+
+/// The cast keywords worth a bare-type retry after a parse that read up to
+/// token `far` failed, in
+/// position order. Backtracking records a cast once per attempt, so they
+/// are deduplicated. A keyword at or after the furthest token read cannot
+/// have shaped the failure. Over the cap, the casts nearest the failure
+/// are kept: forcing one bare changes the parse only from that token on,
+/// so the cast that matters is the one the failure sits behind.
+pub(crate) fn retry_keywords(cast_types: &[usize], far: usize) -> Vec<usize> {
+    let mut keywords: Vec<usize> = cast_types.iter().copied().filter(|&k| k < far).collect();
+    keywords.sort_unstable();
+    keywords.dedup();
+    let excess = keywords.len().saturating_sub(MAX_CAST_RETRIES);
+    keywords.drain(..excess);
+    keywords
+}
+
+/// `out` after Spark's post-parse checks ([`TopRule::validate`]), whose
+/// errors Spark raises after parsing. The checks follow the tree, so a
+/// `deep` tree is checked on a thread whose stack fits [`MAX_DEPTH`]
+/// levels.
+fn checked<R: TopRule>(
+    out: R::Out,
+    src: &str,
+    opts: ParserOptions,
+    deep: bool,
+) -> Result<R::Out, Failed> {
+    let result = if deep {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("krishiv-sql-check".to_owned())
+                .stack_size(BIG_STACK)
+                .spawn_scoped(scope, || R::validate(&out, src, opts))
+                .map_or_else(
+                    |_| Err(error::too_complex(Span::new(0, src.len()))),
+                    |h| {
+                        h.join()
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                    },
+                )
+        })
+    } else {
+        R::validate(&out, src, opts)
+    };
+    match result {
+        Ok(()) => Ok(out),
+        Err(error) => Err(Failed {
+            error,
+            deferred: true,
+        }),
     }
 }
 
@@ -271,6 +415,62 @@ fn run<R: TopRule>(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<R
 const QUERY_START: &[&str] = &["SELECT", "WITH", "VALUES", "TABLE", "FROM"];
 
 impl<'s> Parser<'s> {
+    /// A parser at the start of `toks`; `force_bare` is the token of a
+    /// complex type keyword after `::` to read as a bare type.
+    fn new(src: &'s str, toks: Vec<Token>, opts: ParserOptions, force_bare: Option<usize>) -> Self {
+        let classes = toks
+            .iter()
+            .map(|t| {
+                if t.kind == TokenKind::Word {
+                    classify(t.span.text(src))
+                } else {
+                    0
+                }
+            })
+            .collect();
+        let mut after_parens = vec![0; toks.len()];
+        let mut next = toks.len();
+        for (i, t) in toks.iter().enumerate().rev() {
+            if t.kind != TokenKind::Sym(Sym::LParen) {
+                next = i;
+            }
+            after_parens[i] = next;
+        }
+        let markers = (0..toks.len())
+            .filter(|&i| toks[i].kind == TokenKind::Sym(Sym::Question))
+            .collect();
+        Self {
+            src,
+            toks,
+            classes,
+            pos: 0,
+            opts,
+            far: 0,
+            extra: None,
+            missing: None,
+            depth: 0,
+            peak: 0,
+            failed_queries: HashMap::new(),
+            after_parens,
+            markers,
+            deferred: None,
+            cast_types: vec![],
+            force_bare,
+        }
+    }
+
+    /// The outcome of a parse that produced `out`: an error Spark raises
+    /// after parsing, if one was deferred.
+    fn finish<T>(self, out: T) -> Result<T, Failed> {
+        match self.deferred {
+            Some(error) => Err(Failed {
+                error,
+                deferred: true,
+            }),
+            None => Ok(out),
+        }
+    }
+
     // ---- tokens -------------------------------------------------------
 
     fn tok(&self, n: usize) -> Option<Token> {
@@ -393,10 +593,10 @@ impl<'s> Parser<'s> {
                 (self.token_display(*t), span)
             },
         );
-        let hint = if self.extra == Some(self.far) {
-            format!(": extra input {display}")
-        } else {
-            String::new()
+        let hint = match self.missing {
+            _ if self.extra == Some(self.far) => format!(": extra input {display}"),
+            Some((at, token)) if at == self.far => format!(": missing {token}"),
+            _ => String::new(),
         };
         error::syntax_error(display, hint, span)
     }
@@ -469,7 +669,7 @@ impl<'s> Parser<'s> {
     fn grow(&mut self, height: usize) -> PR<()> {
         let level = self.depth + height;
         if level > MAX_DEPTH {
-            return Self::fatal(error::too_complex(Span::new(self.start(), self.start())));
+            return Self::fatal(error::too_complex(statement_span(self.src, &self.toks)));
         }
         self.peak = self.peak.max(level);
         Ok(())
@@ -552,12 +752,14 @@ impl<'s> Parser<'s> {
     fn name_part(&mut self, strong: bool) -> PR<Ident> {
         let id = self.ident_with(strong)?;
         if self.sym_at(0, Sym::Minus) && self.is_ident_at(1, true) {
-            let start = id.span.start;
+            // The name is the whole `a-b-c`; Spark's position is the first
+            // `-` (the start of the extra part it rejects).
+            let (start, dash) = (id.span.start, self.start());
             while self.sym_at(0, Sym::Minus) && self.is_ident_at(1, true) {
                 self.pos += 2;
             }
-            let span = self.span_from(start);
-            return Self::fatal(error::invalid_identifier(span.text(self.src), span));
+            let name = self.span_from(start).text(self.src);
+            return Self::fatal(error::invalid_identifier(name, self.span_from(dash)));
         }
         Ok(id)
     }
@@ -666,7 +868,7 @@ impl<'s> Parser<'s> {
             let start = self.start();
             self.bump();
             if explains.len() == MAX_DEPTH {
-                return Self::fatal(error::too_complex(Span::new(start, start)));
+                return Self::fatal(error::too_complex(statement_span(self.src, &self.toks)));
             }
             let word = if self.kind(0) == Some(TokenKind::Word) {
                 self.text(0).to_ascii_uppercase()

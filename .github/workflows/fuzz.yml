@@ -1,0 +1,120 @@
+name: Fuzz (reusable)
+
+# P2-T108. The cargo-fuzz targets of `fuzz/`, run for `seconds` each on a
+# GitHub-hosted runner by the nightly workflow (one hour) and the weekly one
+# (several). Steps, per target:
+#   1. replay the committed regression inputs (`fuzz/regressions/<target>`):
+#      a fixed bug that returns fails here before any new input is tried;
+#   2. restore the corpus kept in the CI cache, overlay the seeds, fuzz;
+#   3. on a crash, timeout or more than 2 GiB of memory: shrink the
+#      reproducers into regression inputs (`tests/scripts/fuzz_triage.py`)
+#      and upload them ready to commit (step summary says where);
+#   4. save the corpus again, also after a failure (the weekly run shrinks it
+#      with `cargo fuzz cmin` first, so the cache stays small).
+# The corpus lives only in the CI cache (never in the repository); a cache
+# entry unused for 7 days is evicted and the next run starts from the seeds.
+on:
+  workflow_call:
+    inputs:
+      seconds:
+        description: Fuzzing time per target
+        type: number
+        required: true
+      minimize:
+        description: Shrink the corpus with cargo fuzz cmin before saving it
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: sql_parse
+            args: -dict=sql.dict -max_len=262144
+          - target: connect_decode
+            args: -max_len=1048576
+          - target: parquet_read
+            args: -max_len=1048576
+    env:
+      RUSTC_WRAPPER: "" # instrumented builds are not cacheable
+      TARGET: ${{ matrix.target }}
+      FUZZ_ARGS: ${{ matrix.args }}
+      FUZZ_SECONDS: ${{ inputs.seconds }}
+      NIGHTLY: nightly-2026-08-12
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned nightly toolchain (cargo-fuzz needs it)
+        run: rustup toolchain install "$NIGHTLY" --profile minimal
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz@0.13.2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        if: matrix.target == 'connect_decode'
+        with:
+          toolchain: 1.99.1
+      - name: Replay the regression inputs
+        run: python3 tests/scripts/fuzz_triage.py replay "$TARGET" --toolchain "$NIGHTLY"
+      - name: Restore the corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Seed corpus
+        run: |
+          case "$TARGET" in
+            sql_parse) python3 tests/scripts/fuzz_seed_sql.py "fuzz/corpus/$TARGET" ;;
+            parquet_read) python3 tests/scripts/fuzz_seed_parquet.py "fuzz/corpus/$TARGET" ;;
+            connect_decode)
+              KRISHIV_FUZZ_SEED_DIR="$PWD/fuzz/corpus/$TARGET" \
+                cargo test -p krishiv-connect --test goldens --locked ;;
+          esac
+      - name: Fuzz
+        working-directory: fuzz
+        run: |
+          read -ra extra <<< "$FUZZ_ARGS"
+          cargo "+$NIGHTLY" fuzz run "$TARGET" "corpus/$TARGET" -- \
+            "-max_total_time=$FUZZ_SECONDS" "${extra[@]}" -timeout=10 -rss_limit_mb=2048
+      - name: Triage the reproducers into regression inputs
+        if: failure()
+        run: |
+          {
+            echo "### Fuzz failure: \`$TARGET\`"
+            echo
+            echo "Reproducers are minimized into \`fuzz/regressions/$TARGET\` (artifact \`fuzz-regression-$TARGET\`)."
+            echo "Fix the bug, add those files with the fix, and the replay step guards it from then on."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 tests/scripts/fuzz_triage.py triage "$TARGET" --toolchain "$NIGHTLY" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Shrink the corpus
+        if: success() && inputs.minimize
+        working-directory: fuzz
+        run: cargo "+$NIGHTLY" fuzz cmin "$TARGET" "corpus/$TARGET"
+      - name: Save the corpus
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-regression-${{ matrix.target }}
+          path: |
+            fuzz/regressions/${{ matrix.target }}
+            fuzz/artifacts/${{ matrix.target }}
+          retention-days: 30

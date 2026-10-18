@@ -16,10 +16,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use krishiv_common::error::{
-    FailedToParseTooComplex, InvalidNumericLiteralRange, InvalidTypedLiteral, KrishivError,
-    KrishivUnsupportedFeature,
-};
+use krishiv_common::error::{FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature};
 use krishiv_common::secret::OptionValue;
 use krishiv_common::stack::{STEP, on_big_stack};
 use krishiv_plan::{
@@ -34,6 +31,7 @@ use crate::ast::{
     NumKind, Query, Relation, RelationExt, Select, SetExprKind, SetQuantifier, SortItem, Span,
     TableFactor, TableFactorKind, Truth, UnaryOp,
 };
+use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_query};
 
 type R<T> = Result<T, ParseError>;
@@ -54,7 +52,11 @@ pub fn parse_and_lower(sql: &str, options: &ParserOptions, source: SourceId) -> 
 /// decimal bounds, unsupported cast types) and `FAILED_TO_PARSE_TOO_COMPLEX`
 /// for plans deeper than `MAX_DEPTH`.
 pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
-    let mut l = Lowerer { source, depth: 0 };
+    let mut l = Lowerer {
+        source,
+        depth: 0,
+        root: query.span,
+    };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
 }
@@ -93,6 +95,8 @@ fn unsupported(feature: &str, span: Span) -> ParseError {
 struct Lowerer {
     source: SourceId,
     depth: usize,
+    /// The whole statement: `FAILED_TO_PARSE_TOO_COMPLEX` refers to it.
+    root: Span,
 }
 
 fn arc<T>(v: T) -> Arc<T> {
@@ -141,10 +145,11 @@ impl Lowerer {
     }
 
     /// Runs `f` one level deeper, on a fresh stack every `STEP` levels.
-    fn deeper<T: Send>(&mut self, span: Span, f: impl FnOnce(&mut Self) -> R<T> + Send) -> R<T> {
+    fn deeper<T: Send>(&mut self, f: impl FnOnce(&mut Self) -> R<T> + Send) -> R<T> {
         self.depth += 1;
+        let root = self.root;
         let r = if self.depth.is_multiple_of(STEP) {
-            on_big_stack(|| f(self)).unwrap_or_else(|| Err(err(FailedToParseTooComplex {}, span)))
+            on_big_stack(|| f(self)).unwrap_or_else(|| Err(err(FailedToParseTooComplex {}, root)))
         } else {
             f(self)
         };
@@ -153,7 +158,7 @@ impl Lowerer {
     }
 
     fn query(&mut self, q: &Query) -> R<LogicalPlan> {
-        self.deeper(q.span, |l| l.query_inner(q))
+        self.deeper(|l| l.query_inner(q))
     }
 
     fn query_inner(&mut self, q: &Query) -> R<LogicalPlan> {
@@ -499,7 +504,7 @@ impl Lowerer {
                 }
                 inner
             }
-            TableFactorKind::Nested(r) => self.deeper(tf.span, |l| l.relation(r))?,
+            TableFactorKind::Nested(r) => self.deeper(|l| l.relation(r))?,
             TableFactorKind::Values(_) => return Err(unsupported("VALUES", tf.span)),
             _ => return Err(unsupported("table-valued functions", tf.span)),
         };
@@ -517,7 +522,7 @@ impl Lowerer {
     }
 
     fn expr(&mut self, e: &Expr) -> R<IrExpr> {
-        self.deeper(e.span, |l| l.expr_inner(e))
+        self.deeper(|l| l.expr_inner(e))
     }
 
     fn arg(&mut self, e: &Expr) -> R<Arc<IrExpr>> {
@@ -885,175 +890,40 @@ fn literal(v: &Literal, sp: Span) -> R<IrLiteral> {
         Literal::String(s) => IrLiteral::String(s.clone()),
         Literal::Number { text, kind } => number(text, *kind, sp)?,
         Literal::Typed { type_name, value } => {
-            let t = type_name.value.to_ascii_uppercase();
-            match t.as_str() {
-                "DATE" if !type_name.quoted => IrLiteral::Date(date(value).ok_or_else(|| {
-                    err(
-                        InvalidTypedLiteral {
-                            value_type: "\"DATE\"".to_owned(),
-                            value: format!("'{value}'"),
-                        },
-                        sp,
-                    )
-                })?),
-                "X" if !type_name.quoted => IrLiteral::Binary(hex(value).ok_or_else(|| {
-                    err(
-                        InvalidTypedLiteral {
-                            value_type: "\"X\"".to_owned(),
-                            value: format!("'{value}'"),
-                        },
-                        sp,
-                    )
-                })?),
-                _ => return Err(unsupported(&format!("{t} literals"), sp)),
+            let kind = TypedKind::of(&type_name.value, type_name.quoted).map_err(|e| err(e, sp))?;
+            match kind {
+                TypedKind::Date => IrLiteral::Date(
+                    literal::date(value).ok_or_else(|| err(kind.invalid(value), sp))?,
+                ),
+                TypedKind::Binary => IrLiteral::Binary(
+                    literal::hex(value).ok_or_else(|| err(kind.invalid(value), sp))?,
+                ),
+                _ => {
+                    let t = type_name.value.to_ascii_uppercase();
+                    return Err(unsupported(&format!("{t} literals"), sp));
+                }
             }
         }
         _ => return Err(unsupported("INTERVAL literals", sp)),
     })
 }
 
-fn out_of_range(text: &str, ty: &str, min: &str, max: &str, sp: Span) -> ParseError {
-    err(
-        InvalidNumericLiteralRange {
-            raw_stripped_qualifier: text.to_owned(),
-            type_name: ty.to_owned(),
-            min_value: min.to_owned(),
-            max_value: max.to_owned(),
-        },
-        sp,
-    )
-}
-
 /// A numeric literal as Spark's `AstBuilder` types it.
 fn number(text: &str, kind: NumKind, sp: Span) -> R<IrLiteral> {
-    let range = |ty: &str, min: String, max: String| out_of_range(text, ty, &min, &max, sp);
-    Ok(match kind {
-        NumKind::Int => match (text.parse::<i32>(), text.parse::<i64>()) {
-            (Ok(v), _) => IrLiteral::Integer(v),
-            (_, Ok(v)) => IrLiteral::Long(v),
-            _ => decimal(text, sp)?,
+    Ok(match literal::number(text, kind).map_err(|e| err(e, sp))? {
+        Number::Byte(v) => IrLiteral::Byte(v),
+        Number::Short(v) => IrLiteral::Short(v),
+        Number::Integer(v) => IrLiteral::Integer(v),
+        Number::Long(v) => IrLiteral::Long(v),
+        Number::Float(v) => IrLiteral::Float(v),
+        Number::Double(v) => IrLiteral::Double(v),
+        Number::Decimal {
+            unscaled,
+            precision,
+            scale,
+        } => IrLiteral::Decimal {
+            unscaled,
+            data_type: DecimalType::try_new(precision, scale).map_err(|e| err(e, sp))?,
         },
-        NumKind::Long => IrLiteral::Long(
-            text.parse()
-                .map_err(|_| range("bigint", i64::MIN.to_string(), i64::MAX.to_string()))?,
-        ),
-        NumKind::Short => IrLiteral::Short(
-            text.parse()
-                .map_err(|_| range("smallint", i16::MIN.to_string(), i16::MAX.to_string()))?,
-        ),
-        NumKind::Byte => IrLiteral::Byte(
-            text.parse()
-                .map_err(|_| range("tinyint", i8::MIN.to_string(), i8::MAX.to_string()))?,
-        ),
-        NumKind::Decimal | NumKind::BigDecimal if !text.contains(['e', 'E']) => decimal(text, sp)?,
-        // Bounds as Java prints them.
-        NumKind::Float => match text.parse::<f32>() {
-            Ok(v) if v.is_finite() => IrLiteral::Float(v),
-            _ => {
-                return Err(range(
-                    "float",
-                    "-3.4028235E38".into(),
-                    "3.4028235E38".into(),
-                ));
-            }
-        },
-        NumKind::Exponent | NumKind::Double => match text.parse::<f64>() {
-            Ok(v) if v.is_finite() => IrLiteral::Double(v),
-            _ => {
-                let max = "1.7976931348623157E308";
-                return Err(range("double", format!("-{max}"), max.into()));
-            }
-        },
-        _ => return Err(unsupported("this numeric literal", sp)),
     })
-}
-
-/// A decimal literal: precision = significant digits (at least the
-/// scale), as Java's `BigDecimal` counts them.
-fn decimal(text: &str, sp: Span) -> R<IrLiteral> {
-    let (neg, body) = text.strip_prefix('-').map_or((false, text), |b| (true, b));
-    let (int, frac) = body.split_once('.').unwrap_or((body, ""));
-    let digits = format!("{int}{frac}");
-    let trimmed = digits.trim_start_matches('0');
-    let precision = u32::try_from(trimmed.len().max(1)).unwrap_or(u32::MAX);
-    let scale = u32::try_from(frac.len()).unwrap_or(u32::MAX);
-    let data_type = DecimalType::try_new(precision.max(scale), scale).map_err(|e| err(e, sp))?;
-    let unscaled: i128 = if trimmed.is_empty() {
-        0
-    } else {
-        trimmed
-            .parse()
-            .map_err(|_| unsupported("this decimal literal", sp))?
-    };
-    Ok(IrLiteral::Decimal {
-        unscaled: if neg { -unscaled } else { unscaled },
-        data_type,
-    })
-}
-
-/// Days since 1970-01-01 of a date string as Spark's `stringToDate` reads
-/// it: `[+-]y[yyy...][-m[m][-d[d]]]`, optionally followed by a space or `T`
-/// and anything.
-fn date(s: &str) -> Option<i32> {
-    let s = s.trim();
-    let s = s.split([' ', 'T']).next()?;
-    let (neg, body) = match s.strip_prefix('-') {
-        Some(b) => (true, b),
-        None => (false, s.strip_prefix('+').unwrap_or(s)),
-    };
-    let mut parts = body.split('-');
-    let field = |p: Option<&str>, lo: usize, hi: usize| -> Option<i64> {
-        p.filter(|p| (lo..=hi).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()))
-            .and_then(|p| p.parse().ok())
-    };
-    let year = field(parts.next(), 4, 7)?;
-    let month = parts.next().map_or(Some(1), |m| field(Some(m), 1, 2))?;
-    let day = parts.next().map_or(Some(1), |d| field(Some(d), 1, 2))?;
-    if parts.next().is_some() || !(1..=12).contains(&month) {
-        return None;
-    }
-    let year = if neg { -year } else { year };
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let days_in = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    if day < 1 || day > days_in[usize::try_from(month - 1).ok()?] {
-        return None;
-    }
-    // H. Hinnant's `days_from_civil`.
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (month + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    i32::try_from(era * 146_097 + doe - 719_468).ok()
-}
-
-/// The bytes of a hex string (`X'1F'`); an odd length gets a leading 0.
-fn hex(s: &str) -> Option<Vec<u8>> {
-    let padded = if s.len() % 2 == 1 {
-        format!("0{s}")
-    } else {
-        s.to_owned()
-    };
-    (0..padded.len())
-        .step_by(2)
-        .map(|i| {
-            padded
-                .get(i..i + 2)
-                .and_then(|b| u8::from_str_radix(b, 16).ok())
-        })
-        .collect()
 }

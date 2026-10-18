@@ -2,9 +2,9 @@ name: Nightly (heavy)
 
 # Heavy jobs run on GitHub-hosted runners (ADR 0029 CI topology); `cargo xtask
 # workflow-lint` rejects any other runner kind.
-# Mutation (cargo-mutants) and the macro benchmarks (TPC-H/TPC-DS/ClickBench)
-# are added here by their own tasks (P2-T107/T108/T119) as further jobs with
-# the same runner; `fuzz` runs every cargo-fuzz target of `fuzz/`.
+# The macro benchmarks (TPC-H/TPC-DS/ClickBench) are added here by their own
+# task (P2-T119) as further jobs with the same runner; `fuzz` runs every
+# cargo-fuzz target of `fuzz/` (mutation testing is `mutants.yml`).
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -193,67 +193,16 @@ jobs:
       - name: loom models (krishiv-exec)
         run: cargo test -p krishiv-exec --lib --release --locked
 
-  # cargo-fuzz targets (`fuzz/`), one hour each on a GitHub-hosted runner, on
-  # a pinned nightly. Seeds are the Spark golden statements (sql_parse), the
-  # PySpark Connect plans of the golden tests (connect_decode) and the Parquet
-  # interoperability fixtures (parquet_read), one per file; a crash, a timeout
-  # or more than 2 GiB of memory fails the job and uploads the reproducer.
+  # cargo-fuzz targets (`fuzz/`), one hour each: the reusable `fuzz.yml`
+  # (regression replay, cached corpus, crash triage). The weekly long run is
+  # `fuzz-weekly.yml`.
   fuzz:
     if: github.repository == 'KrishivAI/krishiv-engine'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: sql_parse
-            args: -dict=sql.dict -max_len=262144
-          - target: connect_decode
-            args: -max_len=1048576
-          - target: parquet_read
-            args: -max_len=1048576
-    env:
-      RUSTC_WRAPPER: "" # instrumented builds are not cacheable
-      TARGET: ${{ matrix.target }}
-      FUZZ_ARGS: ${{ matrix.args }}
-    steps:
-      - name: Harden the runner (audit egress)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Pinned nightly toolchain (cargo-fuzz needs it)
-        run: rustup toolchain install nightly-2026-08-12 --profile minimal
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
-        with:
-          tool: cargo-fuzz@0.13.2
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        if: matrix.target == 'connect_decode'
-        with:
-          toolchain: 1.99.1
-      - name: Seed corpus
-        run: |
-          case "$TARGET" in
-            sql_parse) python3 tests/scripts/fuzz_seed_sql.py "fuzz/corpus/$TARGET" ;;
-            parquet_read) python3 tests/scripts/fuzz_seed_parquet.py "fuzz/corpus/$TARGET" ;;
-            connect_decode)
-              KRISHIV_FUZZ_SEED_DIR="$PWD/fuzz/corpus/$TARGET" \
-                cargo test -p krishiv-connect --test goldens --locked ;;
-          esac
-      - name: Fuzz for one hour
-        working-directory: fuzz
-        run: |
-          read -ra extra <<< "$FUZZ_ARGS"
-          cargo +nightly-2026-08-12 fuzz run "$TARGET" "corpus/$TARGET" -- \
-            -max_total_time=3600 "${extra[@]}" -timeout=10 -rss_limit_mb=2048
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
-        with:
-          name: fuzz-artifacts-${{ matrix.target }}
-          path: fuzz/artifacts
-          retention-days: 30
+    permissions:
+      contents: read
+    uses: $/.github/workflows/fuzz.yml
+    with:
+      seconds: 3600
 
   # P2-T020: krishiv-kernels under AddressSanitizer with the property tests at
   # full size (Miri runs the reduced cases per PR). std is rebuilt with ASan.

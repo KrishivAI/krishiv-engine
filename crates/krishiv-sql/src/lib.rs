@@ -4,7 +4,8 @@
 //! [`parse_query`] parses a Spark 4.2 query statement (`SELECT`, `WITH`,
 //! `VALUES`, `TABLE`, `FROM ... SELECT`, set operations) into the syntax tree
 //! of [`ast`], whose nodes carry source spans; [`parse_statement`] also
-//! accepts `EXPLAIN`. The parser is hand-written:
+//! accepts `EXPLAIN`. [`parse_data_type`], [`parse_table_schema`] and
+//! [`parse_ddl_type`] parse type strings with the same grammar. The parser is hand-written:
 //! a lexer ([`lexer`]) and a recursive-descent parser with precedence
 //! climbing for expressions. Errors are Spark's error classes
 //! ([`ParseError`]).
@@ -37,6 +38,7 @@ mod lower;
 mod parser;
 mod redact;
 mod types;
+mod validate;
 
 pub use error::ParseError;
 pub use frontend::Frontend;
@@ -45,9 +47,10 @@ pub use redact::redact_sql;
 
 /// The deepest tree the parser builds, counted in nested expressions,
 /// queries and relations; deeper statements fail with
-/// `FAILED_TO_PARSE_TOO_COMPLEX`. It equals the logical-plan IR's depth
-/// cap, and it bounds the parser's recursion, so parsing never overflows
-/// the stack.
+/// `FAILED_TO_PARSE_TOO_COMPLEX` at the span of the whole statement (Spark's
+/// query context for it). It equals the logical-plan IR's depth cap, and it
+/// bounds the parser's recursion, so parsing never overflows the stack.
+/// Spark has no fixed cap: its parser fails when the JVM stack runs out.
 pub const MAX_DEPTH: usize = 1000;
 
 /// The Spark session configs that change how SQL parses.
@@ -68,6 +71,12 @@ pub struct ParserOptions {
     /// `spark.sql.legacy.bangEqualsNot`: `!` may stand for `NOT` inside a
     /// predicate (`a ! IN (1)`).
     pub legacy_bang_equals_not: bool,
+    /// `spark.sql.legacy.interval.enabled`: an interval literal may mix
+    /// year-month and day-time fields.
+    pub legacy_interval: bool,
+    /// `spark.sql.timestampType = TIMESTAMP_NTZ`: a `TIMESTAMP '...'`
+    /// literal without a zone is a `TIMESTAMP_NTZ`.
+    pub timestamp_ntz: bool,
 }
 
 impl ParserOptions {
@@ -84,6 +93,9 @@ impl ParserOptions {
             legacy_setops_precedence: on("spark.sql.legacy.setopsPrecedence.enabled", false),
             escaped_string_literals: on("spark.sql.parser.escapedStringLiterals", false),
             legacy_bang_equals_not: on("spark.sql.legacy.bangEqualsNot", false),
+            legacy_interval: on("spark.sql.legacy.interval.enabled", false),
+            timestamp_ntz: conf("spark.sql.timestampType")
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
         }
     }
 }
@@ -94,7 +106,16 @@ impl ParserOptions {
 /// A [`ParseError`] with Spark's error class: `PARSE_SYNTAX_ERROR`,
 /// `PARSE_EMPTY_STATEMENT`, `UNCLOSED_BRACKETED_COMMENT`,
 /// `INVALID_IDENTIFIER`, `FAILED_TO_PARSE_TOO_COMPLEX` or
-/// `SYNTAX_DISCONTINUED.BANG_EQUALS_NOT`.
+/// `SYNTAX_DISCONTINUED.BANG_EQUALS_NOT`; and the errors Spark raises
+/// after parsing, while it builds the plan (invalid literals and types,
+/// duplicate CTE names, ...).
+///
+/// ```
+/// use krishiv_sql::{parse_query, ParserOptions};
+///
+/// let e = parse_query("SELECT DATE '2020-02-30'", &ParserOptions::default()).unwrap_err();
+/// assert_eq!(e.error.error_class().name(), "INVALID_TYPED_LITERAL");
+/// ```
 pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, ParseError> {
     parser::parse_query(sql, *options).map_err(|e| e.redacted_in(sql))
 }
@@ -119,6 +140,76 @@ pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, Par
 /// `EXPLAIN LOGICAL`, which Spark parses and then rejects.
 pub fn parse_statement(sql: &str, options: &ParserOptions) -> Result<ast::Statement, ParseError> {
     parser::parse_statement(sql, *options).map_err(|e| e.redacted_in(sql))
+}
+
+/// Parses a data type string, as Spark's `CatalystSqlParser.parseDataType`
+/// does (`int`, `decimal(10, 2)`, `array<struct<a: int>>`), with the checks
+/// Spark makes on the type it builds.
+///
+/// ```
+/// use krishiv_sql::{parse_data_type, ParserOptions};
+///
+/// let d = ParserOptions::default();
+/// assert_eq!(parse_data_type("ARRAY < INT >", &d).unwrap().to_string(), "array<int>");
+/// let e = parse_data_type("a InvalidType", &d).unwrap_err();
+/// assert_eq!(
+///     e.error.to_string(),
+///     "[PARSE_SYNTAX_ERROR] Syntax error at or near 'InvalidType': extra input 'InvalidType'. \
+///      SQLSTATE: 42601"
+/// );
+/// ```
+///
+/// # Errors
+/// The syntax errors of [`parse_query`], and `UNSUPPORTED_DATATYPE`,
+/// `DATATYPE_MISSING_SIZE`, `INCOMPLETE_TYPE_DEFINITION.*`, the decimal
+/// bound errors and `UNSUPPORTED_TIME_PRECISION` for a type Spark rejects
+/// after parsing.
+pub fn parse_data_type(
+    sql: &str,
+    options: &ParserOptions,
+) -> Result<ast::DataTypeSpec, ParseError> {
+    parser::parse_data_type(sql, *options).map_err(|e| e.redacted_in(sql))
+}
+
+/// Parses a table schema string, as Spark's
+/// `CatalystSqlParser.parseTableSchema` does: `name type [NOT NULL]
+/// [COMMENT '...']`, separated by commas.
+///
+/// # Errors
+/// As for [`parse_data_type`], for the column list grammar.
+pub fn parse_table_schema(
+    sql: &str,
+    options: &ParserOptions,
+) -> Result<Vec<ast::StructField>, ParseError> {
+    parser::parse_table_schema(sql, *options).map_err(|e| e.redacted_in(sql))
+}
+
+/// Parses a schema string as Spark's `DataType.fromDDL` does (the schema
+/// argument of `from_json`, `from_csv` and `from_xml`): a data type, or else
+/// a table schema, which becomes a `STRUCT` of its columns. When neither
+/// parses, the error is the data type's.
+///
+/// ```
+/// use krishiv_sql::{parse_ddl_type, ParserOptions};
+///
+/// let d = ParserOptions::default();
+/// let t = parse_ddl_type("a int, b array<string>", &d).unwrap();
+/// assert_eq!(t.to_string(), "struct<`a`:int,`b`:array<string>>");
+/// assert_eq!(parse_ddl_type("map<string,int>", &d).unwrap().to_string(), "map<string,int>");
+/// ```
+///
+/// # Errors
+/// The error of [`parse_data_type`] when [`parse_table_schema`] fails too.
+pub fn parse_ddl_type(sql: &str, options: &ParserOptions) -> Result<ast::DataTypeSpec, ParseError> {
+    parse_data_type(sql, options).or_else(|e| {
+        let columns = parse_table_schema(sql, options).map_err(|_| e)?;
+        let start = columns.first().map_or(0, |c| c.span.start);
+        let end = columns.last().map_or(sql.len(), |c| c.span.end);
+        Ok(ast::DataTypeSpec {
+            kind: ast::DataTypeKind::Struct(Some(columns)),
+            span: ast::Span::new(start, end),
+        })
+    })
 }
 
 #[cfg(test)]
