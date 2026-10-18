@@ -326,3 +326,9 @@ fn inverted_ranges_and_failed_finishes_are_handled() {
         left.len()
     );
 }
+
+// The same suite end to end through the executor's file scan and write.
+krishiv_testkit::file_format_conformance!(
+    mock_exec,
+    krishiv_testkit::file_format::drive::ThroughExecutor(MockFixture::default())
+);

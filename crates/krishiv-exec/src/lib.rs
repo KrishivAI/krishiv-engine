@@ -99,8 +99,10 @@ pub use operator::{
     FlushOutput, GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source,
 };
 pub use operators::{
-    DEFAULT_MAX_MERGE_FAN_IN, Filter, FilterPushdown, FnPredicate, Limit, MemoryScan, Predicate,
-    Project, ProjectItem, ScalarExpr, ScanPushdown, Sort, SortKey, SortMetrics, TopN, UnionAlign,
+    DEFAULT_MAX_MERGE_FAN_IN, FileScan, FileScanMetrics, FileScanSource, FileSelections, FileWrite,
+    FileWriteSink, Filter, FilterPushdown, FnPredicate, Limit, METADATA_COLUMN, MemoryScan,
+    Predicate, Project, ProjectItem, PushedFilter, ScalarExpr, ScanPushdown, ScanPushdowns, Sort,
+    SortKey, SortMetrics, TopN, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};

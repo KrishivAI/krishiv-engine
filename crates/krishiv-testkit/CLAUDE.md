@@ -15,7 +15,8 @@ Spark container), loaded by `fn_matrix`, with the coverage dashboard from
 `cargo run -p krishiv-testkit --bin fn-matrix-report [-- --results FILE | --kernel-eval]`. `kernel_eval` (P2-T021a)
 runs the arithmetic/comparison/cast matrix cells and the literal statements of Spark's arithmetic goldens on
 `krishiv-kernels` with a minimal Spark 4.2 implicit-cast typer (tests `kernel_matrix`, `kernel_golden`); it is a
-harness, not the analyzer.
+harness, not the analyzer. P2-T023a adds the string functions (`kernel_eval/strings.rs`; `string_case` checks `upper`/`lower`
+over every Unicode scalar value against `tests/fixtures/spark-<ver>/case-mapping.json`).
 The generic `FileFormat` conformance suite (`file_format`, P2-T117: 12 checks over a `FormatFixture`,
 `file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it.
 

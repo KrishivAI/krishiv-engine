@@ -5,6 +5,7 @@
 //! |---|---|
 //! | footer / metadata cannot be decoded | `FAILED_READ_FILE.CANNOT_READ_FILE_FOOTER` |
 //! | data cannot be decoded | `FAILED_READ_FILE.NO_HINT` |
+//! | a `STRING` value is not valid UTF-8 | `INVALID_UTF8_STRING` |
 //! | the store failed (after retries, or with a non-retryable error) | `KRISHIV_OBJECT_STORE_REQUEST_FAILED` |
 //! | the file was deleted after listing | `FAILED_READ_FILE.FILE_NOT_EXIST` |
 //! | a stored type cannot be read as the requested type | `FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH` |
@@ -24,7 +25,7 @@ use std::fmt;
 
 use krishiv_common::error::{
     FailedReadFileCannotReadFileFooter, FailedReadFileFileNotExist, FailedReadFileNoHint,
-    FailedReadFileParquetColumnDataTypeMismatch, InternalError, KrishivError,
+    FailedReadFileParquetColumnDataTypeMismatch, InternalError, InvalidUtf8String, KrishivError,
     KrishivFileChangedDuringRead, KrishivObjectStoreRequestFailed, KrishivUnsupportedFeature,
     OperationCanceled, TaskWriteFailed,
 };
@@ -55,6 +56,9 @@ pub enum FormatError {
         /// The stored type, e.g. `BINARY`.
         actual: String,
     },
+    /// A `STRING` value holds invalid UTF-8: Krishiv strings are always
+    /// valid UTF-8, so the scan fails (the reason says where).
+    InvalidUtf8(String),
     /// Any other error, already classified (I/O through the
     /// [`IoContext`](crate::IoContext), memory, options, unsupported features).
     Other(KrishivError),
@@ -80,6 +84,10 @@ impl FormatError {
                 }
                 .into()
             }
+            Self::InvalidUtf8(reason) => InvalidUtf8String {
+                str: format!("a STRING value in {path} ({reason})"),
+            }
+            .into(),
             Self::TypeMismatch {
                 column,
                 expected,
@@ -101,6 +109,7 @@ impl fmt::Display for FormatError {
         match self {
             Self::CorruptFooter(r) => write!(f, "cannot read footer: {r}"),
             Self::Corrupt(r) => write!(f, "corrupt data: {r}"),
+            Self::InvalidUtf8(r) => write!(f, "invalid UTF-8 in a string: {r}"),
             Self::TypeMismatch {
                 column,
                 expected,

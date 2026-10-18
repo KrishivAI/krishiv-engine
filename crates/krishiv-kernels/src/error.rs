@@ -12,6 +12,7 @@
 //! | ANSI cast to a narrower integral type | `CAST_OVERFLOW` |
 //! | ANSI string to decimal with over 38 integral digits | `NUMERIC_OUT_OF_SUPPORTED_RANGE` |
 //! | a date or timestamp outside the microsecond range | `DATETIME_OVERFLOW` |
+//! | a `LIKE` pattern ending in its escape, or escaping a character that cannot be escaped | `INVALID_FORMAT.ESC_AT_THE_END`, `INVALID_FORMAT.ESC_IN_THE_MIDDLE` |
 //! | ANSI `BINARY` -> `STRING` of bytes that are not UTF-8 | `INVALID_UTF8_STRING` |
 //! | decimal `%` whose integral quotient exceeds 39 significant digits (every mode) | `KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE` |
 //! | output buffer cannot be reserved | `UNABLE_TO_ACQUIRE_MEMORY` |
@@ -24,9 +25,10 @@
 
 use krishiv_common::error::{
     ArithmeticOverflow, BinaryArithmeticOverflow, CastInvalidInput, CastOverflow, DatetimeOverflow,
-    DivideByZero, ErrorClass, InternalError, InvalidUtf8String, KrishivDecimalRemainderImpossible,
-    KrishivError, KrishivUnsupportedFeature, NumericOutOfSupportedRange,
-    NumericValueOutOfRangeWithSuggestion, RemainderByZero, UnableToAcquireMemory,
+    DivideByZero, ErrorClass, InternalError, InvalidFormatEscAtTheEnd, InvalidFormatEscInTheMiddle,
+    InvalidUtf8String, KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
+    NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion, RemainderByZero,
+    UnableToAcquireMemory,
 };
 
 use crate::policy::Fault;
@@ -224,6 +226,30 @@ impl KernelError {
             row: Some(row),
             error: DatetimeOverflow {
                 operation: operation.to_owned(),
+            }
+            .into(),
+        }
+    }
+
+    /// `INVALID_FORMAT.ESC_AT_THE_END`: a `LIKE` pattern ending in its escape.
+    pub(crate) fn like_escape_at_end(row: usize, pattern: &str) -> Self {
+        Self {
+            row: Some(row),
+            error: InvalidFormatEscAtTheEnd {
+                format: crate::cast::sql_string(pattern),
+            }
+            .into(),
+        }
+    }
+
+    /// `INVALID_FORMAT.ESC_IN_THE_MIDDLE`: the escape before `c`, which it
+    /// cannot escape.
+    pub(crate) fn like_escape_before(row: usize, pattern: &str, c: char) -> Self {
+        Self {
+            row: Some(row),
+            error: InvalidFormatEscInTheMiddle {
+                format: crate::cast::sql_string(pattern),
+                char: crate::cast::sql_string(c.encode_utf8(&mut [0; 4])),
             }
             .into(),
         }

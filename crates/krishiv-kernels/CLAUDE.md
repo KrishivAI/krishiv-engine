@@ -23,6 +23,14 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   `CastMode` Ansi/Legacy/Try; session zone via `TimeZoneRules`, `FixedOffset` only here; parsers in `cast/text.rs`). Dividing lanes keep a per-row flag word so NULL slots with a zero divisor never take
   the slow path (measured: `div` with 10% NULLs 302 -> 262 µs, = the no-NULL time; decimal `/` with 10% NULLs is
   1.08x of the 90%-rows bound, so no kernel takes the `by_nulls` axis: below the 1.2x bar).
+- `string` (P2-T023a): Spark string functions on `Utf8`/`LargeUtf8` (and `Binary` where Spark defines them): `upper`/`lower`
+  (ASCII fast path; Unicode data keyed by `SparkVersion`: the 56 Unicode 17 additions are unmapped before 4.2),
+  `char_length`/`byte_length`, `trim` (spaces only by default), `match_str`/`match_binary` (`startswith`/`endswith`/
+  `contains`), `replace`, `pad`/`pad_binary`, `substring`/`substring_binary`, `concat`, `like` (`string/like.rs`:
+  literal-shaped patterns take string comparisons, the rest a linear backtracking matcher; errors only on non-NULL rows)
+  and `split_literal` (`string/split.rs`: delimiters without regex metacharacters; a regex delimiter is
+  `KRISHIV_UNSUPPORTED_FEATURE` until the regex engine). Operands are columns or literals (`StrOperand`, `BinOperand`,
+  `Operand<Int32Type>`); NULL rows are skipped, so these kernels have no has-nulls axis. Output offsets are checked.
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.
 
 ## Invariants

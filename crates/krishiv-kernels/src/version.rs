@@ -9,6 +9,7 @@
 //! |---|---|---|---|
 //! | `ARITHMETIC_OVERFLOW` text of `int`/`bigint` `+ - *`, unary `-`, `abs` | `integer overflow` / `long overflow` (`byte`/`short` for unary) | as 4.0 | `overflow` |
 //! | `%`, `pmod`, `try_mod` by zero | `DIVIDE_BY_ZERO` | `REMAINDER_BY_ZERO` | `REMAINDER_BY_ZERO` |
+//! | `upper`/`lower` of the 56 code points that gained a case mapping in Unicode 17 | unchanged | unchanged | mapped |
 
 /// A supported Spark release line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]

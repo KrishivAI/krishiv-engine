@@ -87,7 +87,7 @@ pub fn spark_type_name(t: &DataType) -> String {
 
 /// Spark's `toSQLString` of a string value: single quotes, with `\` and
 /// `'` escaped by a backslash.
-fn sql_string(s: &str) -> String {
+pub(crate) fn sql_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len().saturating_add(2));
     out.push('\'');
     for c in s.chars() {

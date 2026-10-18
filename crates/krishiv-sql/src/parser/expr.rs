@@ -1058,8 +1058,10 @@ impl Parser<'_> {
                 Some(self.value()?)
             };
             self.expect_kw("FROM")?;
-            args.push(self.value()?);
+            // Spark's order for the two-parameter call: trim string, then
+            // source (`ltrim('x', s)`, not `btrim(s, 'x')`).
             args.extend(trim);
+            args.push(self.value()?);
         } else {
             let (first, special) = self.first_arg(keywords)?;
             let name = ObjectName {
@@ -1071,11 +1073,9 @@ impl Parser<'_> {
             }
             self.bump();
             let second = self.value()?;
-            if trim {
-                // `TRIM(c FROM s)` is `trim(s, c)`.
-                args.extend([second, first]);
-            } else {
-                args.extend([first, second]);
+            // `TRIM(c FROM s)` is `trim(c, s)`, as in Spark.
+            args.extend([first, second]);
+            if !trim {
                 if overlay {
                     self.expect_kw("FROM")?;
                     args.push(self.value()?);

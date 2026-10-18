@@ -31,6 +31,7 @@ mod error;
 mod format;
 pub mod io;
 mod options;
+pub mod parquet;
 mod request;
 mod scan;
 mod schema_map;

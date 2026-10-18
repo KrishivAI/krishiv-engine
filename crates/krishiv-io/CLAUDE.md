@@ -1,7 +1,7 @@
 # krishiv-io
 
 **Layer:** L2 (may depend only on crates in L2 or lower; `cargo xtask layering`).  
-**Real code since:** P2-T117 (`FileFormat` framework); Parquet arrives with P2-T080a/T082a.
+**Real code since:** P2-T117 (`FileFormat` framework); the Parquet reader is P2-T080a (writer: P2-T082a).
 
 ## Purpose
 Object store and file format I/O: the `FileFormat` trait (sans-IO `Decoder`/`Encoder`), the `IoScheduler`
@@ -17,6 +17,10 @@ re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.
 `scan.rs` ScanStream · `write.rs` FileWriter · `io/` IoScheduler, IoContext, coalescing, metadata cache,
 multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detection), `pace.rs` prefix pacing
 (`StorePolicy`, per-store; single-flight footer reads live in `cache.rs`).
+`parquet/` (P2-T080a) `ParquetFormat` over arrow-rs's `ParquetPushDecoder`, no custom decoders: `meta.rs` footer
+(one tail read, checked against the file size, engine types, exact-only row-group statistics, calendar markers) ·
+`decode.rs` the sans-IO decoder (projection mask, row-group selections, row index, unsigned widening) · `tests.rs`.
+Its conformance, interoperability and fuzz tests live in `krishiv-testkit` and `fuzz/`.
 
 ## Invariants
 - Formats never touch `object_store`: all I/O goes through `IoContext` (counters, retries, `if_match`/
@@ -25,6 +29,8 @@ multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detectio
 - Pruning keeps a superset of matching rows (exact bounds only; NaN/±0/inexact/collated → Unknown).
 - Scan memory is reserved (required bytes with waiting, prefetch with `try_grow`); the pool is empty at the end.
 - New formats must pass `krishiv_testkit::file_format_conformance!`.
+- Strings are valid UTF-8: invalid bytes in a Parquet `STRING` column are `INVALID_UTF8_STRING`, never passed through.
+- The parquet crate's `object_store` feature stays off; Parquet bytes come only from `IoContext`.
 - object_store and parquet versions from the workspace (Arrow 60 family). `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
