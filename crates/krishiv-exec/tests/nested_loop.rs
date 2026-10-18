@@ -3,7 +3,11 @@
 //! empty and multi-batch build sides, NULL conditions, and probe batches
 //! large enough to be split into several chunks.
 #![cfg(not(loom))]
-#![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
+#![expect(
+    clippy::unwrap_used,
+    clippy::unwrap_in_result,
+    reason = "test helpers sit outside #[test] fns"
+)]
 
 use std::sync::Arc;
 
@@ -133,7 +137,7 @@ fn expected(
             JoinType::Inner => out.extend(matches.iter().map(|&b| format!("{},{}", s(p), s(b)))),
             JoinType::LeftOuter if matches.is_empty() => out.push(format!("{},N", s(p))),
             JoinType::LeftOuter => {
-                out.extend(matches.iter().map(|&b| format!("{},{}", s(p), s(b))))
+                out.extend(matches.iter().map(|&b| format!("{},{}", s(p), s(b))));
             }
             JoinType::LeftSemi if !matches.is_empty() => out.push(s(p)),
             JoinType::LeftAnti if matches.is_empty() => out.push(s(p)),
