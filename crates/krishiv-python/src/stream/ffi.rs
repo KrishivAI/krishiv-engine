@@ -460,9 +460,13 @@ pub(crate) unsafe fn import_stream(
         stream: Some(stream),
     };
     let mut out = FFI_ArrowSchema::empty();
+    // `reader` holds the stream it was just built with.
+    let Some(raw) = reader.raw() else {
+        return Err(invalid("the Arrow stream was already consumed"));
+    };
     // SAFETY: `get_schema` is the producer's callback for this live stream;
     // `out` is a valid, released schema it may write to.
-    let code = unsafe { get_schema(reader.raw(), std::ptr::from_mut(&mut out).cast()) };
+    let code = unsafe { get_schema(raw, std::ptr::from_mut(&mut out).cast()) };
     if code != 0 {
         return Err(reader.failure("reading the stream's schema", code));
     }
@@ -493,31 +497,33 @@ pub(crate) struct ValidatingReader {
 }
 
 impl ValidatingReader {
-    /// The stream as the C struct, for calling its callbacks; null once
+    /// The stream as the C struct, for calling its callbacks; `None` once
     /// released.
-    fn raw(&mut self) -> *mut RawStream {
+    fn raw(&mut self) -> Option<*mut RawStream> {
         self.stream
             .as_deref_mut()
-            .map_or(std::ptr::null_mut(), |s| std::ptr::from_mut(s).cast())
+            .map(|s| std::ptr::from_mut(s).cast())
     }
 
     /// An error for a callback that returned `code`, with the producer's
     /// message; releases the stream.
     fn failure(&mut self, what: &str, code: c_int) -> KrishivError {
-        let raw = self.raw();
         let mut message = format!("{what} failed with error code {code}");
-        // SAFETY: `raw` is the live stream (`failure` is only called while
-        // it is held), with the C layout of `RawStream`.
-        if let Some(get_last_error) = unsafe { (*raw).get_last_error } {
-            // SAFETY: the stream's last call failed, so the protocol allows
-            // `get_last_error` on it.
-            let text = unsafe { get_last_error(raw) };
-            if !text.is_null() {
-                // SAFETY: a non-null result is a NUL-terminated string that
-                // lives until the next call on the stream; it is copied out
-                // below, before any other call.
-                let text = unsafe { std::ffi::CStr::from_ptr(text) };
-                message = format!("{message}: {}", text.to_string_lossy());
+        if let Some(stream) = self.stream.as_deref_mut() {
+            let raw: *mut RawStream = std::ptr::from_mut(stream).cast();
+            // SAFETY: `raw` points to the live stream held in `self.stream`
+            // (non-null by construction), with the C layout of `RawStream`.
+            if let Some(get_last_error) = unsafe { (*raw).get_last_error } {
+                // SAFETY: the stream's last call failed, so the protocol
+                // allows `get_last_error` on it.
+                let text = unsafe { get_last_error(raw) };
+                if !text.is_null() {
+                    // SAFETY: a non-null result is a NUL-terminated string
+                    // that lives until the next call on the stream; it is
+                    // copied out here, before any other call.
+                    let text = unsafe { std::ffi::CStr::from_ptr(text) };
+                    message = format!("{message}: {}", text.to_string_lossy());
+                }
             }
         }
         self.stream = None;
@@ -526,10 +532,7 @@ impl ValidatingReader {
 
     /// The next batch, validated; `None` at the end of the stream.
     pub(crate) fn next_batch(&mut self) -> Option<Result<RecordBatch, KrishivError>> {
-        let raw = self.raw();
-        if raw.is_null() {
-            return None;
-        }
+        let raw = self.raw()?;
         let get_next = self.get_next;
         let mut out = FFI_ArrowArray::empty();
         // SAFETY: the producer's callback for this live stream; `out` is a
