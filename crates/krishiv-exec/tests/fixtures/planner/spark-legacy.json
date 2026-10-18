@@ -1,0 +1,624 @@
+{
+ "conf": {
+  "spark.sql.ansi.enabled": "false"
+ },
+ "queries": {
+  "aggregate_count_args": {
+   "rows": [
+    "6|8|0"
+   ]
+  },
+  "and_short_circuit": {
+   "rows": [
+    "2",
+    "3",
+    "5",
+    "8"
+   ]
+  },
+  "arith": {
+   "rows": [
+    "1|1|-10|0|3.00|0.500000|1.50|0|-1.50|0|1.0|0.25",
+    "2|2|-19|3|4.50|0.750000|3.25|-1|-2.25|1|-2.5|-0.625",
+    "3|3|32|6|NULL|NULL|NULL|-2|NULL|2|4.0|1.0",
+    "4|NULL|NULL|NULL|8.00|1.333333|NULL|NULL|-4.00|NULL|NULL|NULL",
+    "5|4|-9223372036854775804|9|-11.50|-1.916667|-2.75|-3|5.75|0|20000000000.0|5000000000.0",
+    "6|5|54|12|12.20|2.033333|10.10|-4|-6.10|1|7.0|1.75",
+    "7|NULL|NULL|NULL|14.00|2.333333|NULL|NULL|-7.00|NULL|0.0|0.0",
+    "8|4|-77|9|17.76|2.960000|11.88|-3|-8.88|0|14.5|3.625"
+   ]
+  },
+  "booleans": {
+   "rows": [
+    "1|true|false|false|false|NULL",
+    "2|false|true|false|false|NULL",
+    "3|false|false|false|NULL|true",
+    "4|NULL|NULL|true|NULL|NULL",
+    "5|true|false|false|NULL|true",
+    "6|false|false|false|NULL|true",
+    "7|NULL|NULL|true|NULL|NULL",
+    "8|true|false|false|NULL|true"
+   ]
+  },
+  "case_first_failing_row": {
+   "rows": [
+    "1|NULL",
+    "2|NULL",
+    "3|NULL",
+    "4|NULL",
+    "5|NULL",
+    "6|NULL",
+    "7|NULL",
+    "8|NULL"
+   ]
+  },
+  "case_first_failing_row_reversed": {
+   "rows": [
+    "1|NULL",
+    "2|NULL",
+    "3|NULL",
+    "4|NULL",
+    "5|NULL",
+    "6|NULL",
+    "7|NULL",
+    "8|NULL"
+   ]
+  },
+  "case_later_branch_first": {
+   "rows": [
+    "1|NULL",
+    "2|NULL",
+    "3|NULL",
+    "4|NULL",
+    "5|NULL",
+    "6|NULL",
+    "7|NULL",
+    "8|NULL"
+   ]
+  },
+  "case_nested": {
+   "rows": [
+    "1|NULL",
+    "2|NULL",
+    "3|NULL",
+    "4|NULL",
+    "5|y",
+    "6|y",
+    "7|NULL",
+    "8|x"
+   ]
+  },
+  "case_when": {
+   "rows": [
+    "1|small|-1.0|NULL",
+    "2|small|10.0|NULL",
+    "3|small|5.0|NULL",
+    "4|none|NULL|NULL",
+    "5|big|3.3333333333333335|-5.75",
+    "6|big|2.5|NULL",
+    "7|none|NULL|NULL",
+    "8|big|3.3333333333333335|NULL"
+   ]
+  },
+  "cast_invalid_string": {
+   "rows": [
+    "1|NULL",
+    "2|NULL",
+    "3|NULL",
+    "4|NULL",
+    "5|NULL",
+    "6|42",
+    "7|NULL",
+    "8|NULL"
+   ]
+  },
+  "cast_overflow": {
+   "rows": [
+    "1|0.50",
+    "2|-1.25",
+    "3|2.00",
+    "4|NULL",
+    "5|NULL",
+    "6|3.50",
+    "7|0.00",
+    "8|7.25"
+   ]
+  },
+  "casts": {
+   "rows": [
+    "1|0|1|1994-01-01|0.50|0.0|10.0|1",
+    "2|1|2|1995-06-30|-1.25|1.0|20.0|2",
+    "3|2|NULL|1996-12-31|2.00|2.0|-30.0|3",
+    "4|NULL|4|1997-02-28|NULL|NULL|40.0|4",
+    "5|3|-5|1998-08-02|10000000000.00|3.0|9.223372036854776e+18|5",
+    "6|4|6|NULL|3.50|4.0|-50.0|6",
+    "7|NULL|7|1999-12-31|0.00|NULL|70.0|7",
+    "8|3|8|2000-02-29|7.25|3.0|80.0|8"
+   ]
+  },
+  "correlated_scalar": {
+   "rows": [
+    "1|0|NULL",
+    "2|1|1",
+    "3|2|3",
+    "4|0|NULL",
+    "5|0|NULL",
+    "6|0|NULL",
+    "7|0|NULL",
+    "8|0|NULL"
+   ]
+  },
+  "cross_join": {
+   "rows": [
+    "40"
+   ]
+  },
+  "cte_twice": {
+   "rows": [
+    "0|1|1",
+    "1|1|1",
+    "2|1|1",
+    "3|2|2",
+    "4|1|1"
+   ]
+  },
+  "dates": {
+   "rows": [
+    "1|false|false|1995|1|1",
+    "2|false|false|1996|6|30",
+    "3|false|true|1997|12|31",
+    "4|false|true|1998|2|28",
+    "5|true|true|1999|8|2",
+    "6|NULL|NULL|NULL|NULL|NULL",
+    "7|false|true|2000|12|31",
+    "8|false|true|2001|2|29"
+   ]
+  },
+  "decimal_divide_by_zero": {
+   "rows": [
+    "1|NULL",
+    "2|NULL",
+    "3|NULL",
+    "4|NULL",
+    "5|NULL",
+    "6|NULL",
+    "7|NULL",
+    "8|NULL"
+   ]
+  },
+  "decimal_ops": {
+   "rows": [
+    "1|0.00|1.50|3.000000|false|false|2.2500",
+    "2|0.75|0.25|4.500000|true|true|5.0625",
+    "3|NULL|NULL|NULL|NULL|NULL|NULL",
+    "4|2.50|0.00|8.000000|true|false|16.0000",
+    "5|-7.25|-1.75|-11.500000|false|false|33.0625",
+    "6|4.60|0.10|12.200000|true|false|37.2100",
+    "7|5.50|1.00|14.000000|true|false|49.0000",
+    "8|7.38|0.88|17.760000|true|false|78.8544"
+   ]
+  },
+  "distinct_mixed": {
+   "rows": [
+    "5|10|8"
+   ]
+  },
+  "divide_by_zero": {
+   "rows": [
+    "1|NULL|NULL",
+    "2|10.0|0",
+    "3|5.0|0",
+    "4|NULL|NULL",
+    "5|3.3333333333333335|1",
+    "6|2.5|-2",
+    "7|NULL|NULL",
+    "8|3.3333333333333335|2"
+   ]
+  },
+  "exists": {
+   "rows": [
+    "2",
+    "3"
+   ]
+  },
+  "expression_first_failing_row": {
+   "rows": [
+    "1|NULL",
+    "2|NULL",
+    "3|NULL",
+    "4|NULL",
+    "5|NULL",
+    "6|47.0",
+    "7|NULL",
+    "8|NULL"
+   ]
+  },
+  "floats": {
+   "rows": [
+    "1|2.0|0.0|NULL|0.5|-0.5|true|false|1.0|NULL",
+    "2|0.25|0.0|NULL|-1.25|1.25|true|false|-2.5|NULL",
+    "3|3.5|0.0|NULL|0.0|-2.0|false|false|4.0|NULL",
+    "4|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL",
+    "5|10000000001.5|0.0|NULL|0.0|-10000000000.0|false|false|20000000000.0|NULL",
+    "6|5.0|0.0|NULL|1.5|-3.5|false|false|7.0|NULL",
+    "7|1.5|0.0|NULL|0.0|-0.0|true|true|0.0|NULL",
+    "8|8.75|0.0|NULL|1.25|-7.25|false|false|14.5|NULL"
+   ]
+  },
+  "global_empty": {
+   "rows": [
+    "0|NULL|NULL|NULL"
+   ]
+  },
+  "group_by": {
+   "rows": [
+    "NULL|2|0|NULL|5.500000|a_b|1999-12-31|0|0.0",
+    "0|3|3|6|3.800000|42|1996-12-31|3|6.0",
+    "1|3|3|7|1.793333|ab|2000-02-29|2|10000000006.0"
+   ]
+  },
+  "group_expression_keys": {
+   "rows": [
+    "NULL|1|NULL",
+    "4|1|5",
+    "a|4|4",
+    "b|1|2",
+    "x|1|4"
+   ]
+  },
+  "having": {
+   "rows": [
+    "NULL|22.00|3",
+    "3|6.26|3",
+    "4|12.20|2"
+   ]
+  },
+  "in_between_like": {
+   "rows": [
+    "1|NULL|false|NULL|true|false|true|false|false|false|false",
+    "2|true|true|false|false|true|false|false|false|true|false",
+    "3|true|true|NULL|false|true|true|true|false|false|false",
+    "4|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL",
+    "5|NULL|false|NULL|true|true|true|false|false|false|true",
+    "6|NULL|false|NULL|true|false|false|false|false|true|false",
+    "7|NULL|NULL|NULL|NULL|NULL|true|false|true|false|false",
+    "8|NULL|false|NULL|true|true|false|false|false|true|true"
+   ]
+  },
+  "in_subquery": {
+   "rows": [
+    "2",
+    "3"
+   ]
+  },
+  "inner_join": {
+   "rows": [
+    "2|one",
+    "3|two",
+    "3|two again"
+   ]
+  },
+  "join_expression_keys": {
+   "rows": [
+    "1|1",
+    "2|2",
+    "2|3"
+   ]
+  },
+  "join_null_safe": {
+   "rows": [
+    "2|1",
+    "3|2",
+    "3|3",
+    "4|4",
+    "7|4"
+   ]
+  },
+  "join_residual": {
+   "rows": [
+    "2|1",
+    "3|2"
+   ]
+  },
+  "left_join": {
+   "rows": [
+    "1|NULL",
+    "2|one",
+    "3|two",
+    "3|two again",
+    "4|NULL",
+    "5|NULL",
+    "6|NULL",
+    "7|NULL",
+    "8|NULL"
+   ]
+  },
+  "left_theta_empty": {
+   "rows": [
+    "1|NULL",
+    "2|NULL",
+    "3|NULL",
+    "4|NULL",
+    "5|NULL",
+    "6|NULL",
+    "7|NULL",
+    "8|NULL"
+   ]
+  },
+  "left_theta_join": {
+   "rows": [
+    "1|NULL",
+    "2|NULL",
+    "3|1",
+    "4|NULL",
+    "5|1",
+    "5|2",
+    "5|3",
+    "6|1",
+    "6|2",
+    "6|3",
+    "7|NULL",
+    "8|1",
+    "8|2",
+    "8|3"
+   ]
+  },
+  "like_more": {
+   "rows": [
+    "1|false|true|true|false",
+    "2|false|true|true|false",
+    "3|false|true|true|true",
+    "4|NULL|NULL|NULL|NULL",
+    "5|false|true|true|true",
+    "6|false|true|true|false",
+    "7|true|true|true|false",
+    "8|false|true|true|false"
+   ]
+  },
+  "logic": {
+   "rows": [
+    "1|false|false|false|false|false|false|true|false|true|true|true|false",
+    "2|false|false|false|false|false|false|true|false|true|true|true|true",
+    "3|true|false|false|false|true|true|false|false|true|false|true|false",
+    "4|NULL|NULL|true|false|NULL|NULL|NULL|true|false|NULL|false|NULL",
+    "5|true|true|false|true|false|true|false|false|true|true|false|false",
+    "6|true|false|false|false|false|true|false|false|true|true|NULL|false",
+    "7|NULL|NULL|true|false|false|NULL|NULL|true|true|NULL|false|false",
+    "8|true|true|false|true|false|true|false|false|true|true|false|true"
+   ]
+  },
+  "long_overflow": {
+   "rows": [
+    "1|20",
+    "2|40",
+    "3|-60",
+    "4|80",
+    "5|-2",
+    "6|-100",
+    "7|140",
+    "8|160"
+   ]
+  },
+  "not_exists": {
+   "rows": [
+    "1",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8"
+   ]
+  },
+  "not_in_empty": {
+   "rows": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8"
+   ]
+  },
+  "not_in_with_null": {
+   "rows": []
+  },
+  "not_in_without_null": {
+   "rows": [
+    "1",
+    "5",
+    "6",
+    "8"
+   ]
+  },
+  "or_join_keys": {
+   "rows": [
+    "2|1",
+    "3|2",
+    "3|3"
+   ]
+  },
+  "or_short_circuit": {
+   "rows": [
+    "1|true",
+    "2|true",
+    "3|true",
+    "4|NULL",
+    "5|true",
+    "6|false",
+    "7|NULL",
+    "8|true"
+   ]
+  },
+  "order_by_expression": {
+   "rows": [
+    "6|4",
+    "5|3",
+    "8|3",
+    "3|2"
+   ]
+  },
+  "order_limit": {
+   "rows": [
+    "8|8.88",
+    "7|7.00",
+    "6|6.10"
+   ]
+  },
+  "pushdown_flipped": {
+   "rows": [
+    "7"
+   ]
+  },
+  "pushdown_variety": {
+   "rows": [
+    "2",
+    "5",
+    "8"
+   ]
+  },
+  "right_join": {
+   "rows": [
+    "NULL|nine",
+    "NULL|none",
+    "2|one",
+    "3|two",
+    "3|two again"
+   ]
+  },
+  "scalar_subquery": {
+   "rows": [
+    "4",
+    "5",
+    "7",
+    "8"
+   ]
+  },
+  "scalar_subquery_empty": {
+   "rows": [
+    "1|NULL",
+    "2|NULL",
+    "3|NULL",
+    "4|NULL",
+    "5|NULL",
+    "6|NULL",
+    "7|NULL",
+    "8|NULL"
+   ]
+  },
+  "scalar_subquery_too_many": {
+   "error": "SCALAR_SUBQUERY_TOO_MANY_ROWS"
+  },
+  "self_join": {
+   "rows": [
+    "5|8"
+   ]
+  },
+  "small_ints": {
+   "rows": [
+    "1|1|0|0|0|true",
+    "2|2|2|-1|1|true",
+    "3|3|4|-2|0|true",
+    "4|NULL|NULL|NULL|NULL|false",
+    "5|4|6|-3|1|false",
+    "6|5|8|-4|0|false",
+    "7|NULL|NULL|NULL|NULL|false",
+    "8|4|6|-3|1|false"
+   ]
+  },
+  "strings_compare": {
+   "rows": [
+    "1|true|false|true|true|false|true",
+    "2|false|false|true|false|false|true",
+    "3|true|true|true|false|false|true",
+    "4|NULL|NULL|NULL|NULL|true|NULL",
+    "5|true|true|false|false|false|true",
+    "6|true|true|false|false|false|true",
+    "7|true|true|false|false|false|true",
+    "8|false|false|true|false|false|false"
+   ]
+  },
+  "strings_dates": {
+   "rows": [
+    "1|pp|pple|apple-apple|apple!|1994|APPLE",
+    "2|an|anana|banana-banana|banana!|1995|BANANA",
+    "3|bc|bc|abc-abc|abc!|1996|ABC",
+    "4|NULL|NULL|NULL|NULL|1997|NULL",
+    "5|b|b|ab-ab|ab!|1998|AB",
+    "6|2|2|42-42|42!|NULL|42",
+    "7|_b|_b|a_b-a_b|a_b!|1999|A_B",
+    "8|yz|yz|xyz-xyz|xyz!|2000|XYZ"
+   ]
+  },
+  "sum_overflow": {
+   "rows": [
+    "-9223372036854775669"
+   ]
+  },
+  "theta_join": {
+   "rows": [
+    "1|1",
+    "1|2",
+    "1|3",
+    "1|5",
+    "2|2",
+    "2|3",
+    "2|5",
+    "3|5",
+    "5|5",
+    "6|5",
+    "8|5"
+   ]
+  },
+  "timestamps": {
+   "rows": [
+    "1|1994-01-01 00:00:00|true",
+    "2|1995-06-30 00:00:00|true",
+    "3|1996-12-31 00:00:00|false",
+    "4|1997-02-28 00:00:00|false",
+    "5|1998-08-02 00:00:00|false",
+    "6|NULL|NULL",
+    "7|1999-12-31 00:00:00|false",
+    "8|2000-02-29 00:00:00|false"
+   ]
+  },
+  "tinyint_overflow": {
+   "rows": [
+    "1|100",
+    "2|-56",
+    "3|44",
+    "4|-112",
+    "5|-12",
+    "6|88",
+    "7|-68",
+    "8|32"
+   ]
+  },
+  "try_cast": {
+   "rows": [
+    "1|NULL|0",
+    "2|NULL|-1",
+    "3|NULL|2",
+    "4|NULL|NULL",
+    "5|NULL|NULL",
+    "6|42|3",
+    "7|NULL|0",
+    "8|NULL|7"
+   ]
+  },
+  "uncorrelated_exists": {
+   "rows": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8"
+   ]
+  }
+ },
+ "spark_version": "4.2.0"
+}

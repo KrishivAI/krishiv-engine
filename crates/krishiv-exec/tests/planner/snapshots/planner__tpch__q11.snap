@@ -1,0 +1,31 @@
+---
+source: crates/krishiv-exec/tests/planner/tpch.rs
+expression: tpch.plan(q).to_string()
+---
+Sort [value#16 DESC NULLS LAST]
++- Filter (CAST(value#16 AS DECIMAL(38,6)) > scalar-subquery)
+   :- Project [ps_partkey#0, sum((ps_supplycost#3 * CAST(ps_availqty#2 AS DECIMAL(20,0))))#4611686018427387906 AS value#16]
+   :  +- HashAggregate keys=[ps_partkey#0], functions=[sum((ps_supplycost#3 * CAST(ps_availqty#2 AS DECIMAL(20,0))))]
+   :     +- Project [ps_partkey#0, (ps_supplycost#3 * CAST(ps_availqty#2 AS DECIMAL(20,0)))]
+   :        +- Project [ps_partkey#0, ps_availqty#2, ps_supplycost#3]
+   :           +- HashJoin Inner, [ps_suppkey#1] = [s_suppkey#5]
+   :              :- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1, ps_availqty#2, ps_supplycost#3]
+   :              +- Project [s_suppkey#5]
+   :                 +- HashJoin Inner, [s_nationkey#8] = [n_nationkey#12]
+   :                    :- Scan spark_catalog.default.supplier [s_suppkey#5, s_nationkey#8]
+   :                    +- Project [n_nationkey#12]
+   :                       +- Filter (n_name#13 == 'GERMANY')
+   :                          +- Scan spark_catalog.default.nation [n_nationkey#12, n_name#13], PushedFilters: [(n_name#13 == 'GERMANY')]
+   +- Subquery scalar
+      +- Project [(sum((ps_supplycost#20 * CAST(ps_availqty#19 AS DECIMAL(20,0))))#4611686018427387910 * 0.0001000000) AS (sum((ps_supplycost * ps_availqty)) * 0.0001000000)#33]
+         +- HashAggregate keys=[], functions=[sum((ps_supplycost#20 * CAST(ps_availqty#19 AS DECIMAL(20,0))))]
+            +- Project [(ps_supplycost#20 * CAST(ps_availqty#19 AS DECIMAL(20,0)))]
+               +- Project [ps_availqty#19, ps_supplycost#20]
+                  +- HashJoin Inner, [ps_suppkey#1] = [s_suppkey#5] (ids +17)
+                     :- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1, ps_availqty#2, ps_supplycost#3]
+                     +- Project [s_suppkey#5]
+                        +- HashJoin Inner, [s_nationkey#8] = [n_nationkey#12]
+                           :- Scan spark_catalog.default.supplier [s_suppkey#5, s_nationkey#8]
+                           +- Project [n_nationkey#12]
+                              +- Filter (n_name#13 == 'GERMANY')
+                                 +- Scan spark_catalog.default.nation [n_nationkey#12, n_name#13], PushedFilters: [(n_name#13 == 'GERMANY')]

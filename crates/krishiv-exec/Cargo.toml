@@ -21,7 +21,9 @@ foldhash.workspace = true
 hashbrown.workspace = true
 futures = { workspace = true, features = ["alloc"] }
 krishiv-common = { path = "../krishiv-common" }
+krishiv-functions = { path = "../krishiv-functions" }
 krishiv-io = { path = "../krishiv-io" }
+krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-memory = { path = "../krishiv-memory" }
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan" }
@@ -37,6 +39,7 @@ krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }
 arrow-ipc = { workspace = true, features = ["zstd"] }
 criterion.workspace = true
+object_store = { workspace = true, features = ["fs"] }
 proptest = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true

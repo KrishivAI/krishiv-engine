@@ -1,0 +1,40 @@
+---
+source: crates/krishiv-exec/tests/planner/tpch.rs
+expression: tpch.plan(q).to_string()
+---
+TopN 100, [s_acctbal#14 DESC NULLS LAST, n_name#22 ASC NULLS FIRST, s_name#10 ASC NULLS FIRST, p_partkey#0 ASC NULLS FIRST]
++- Project [s_acctbal#14, s_name#10, n_name#22, p_partkey#0, p_mfgr#2, s_address#11, s_phone#13, s_comment#15]
+   +- HashJoin Inner, [n_regionkey#23] = [r_regionkey#25]
+      :- Project [n_name#22, n_regionkey#23, s_name#10, s_address#11, s_phone#13, s_acctbal#14, s_comment#15, p_partkey#0, p_mfgr#2]
+      :  +- HashJoin Inner, [n_nationkey#21] = [s_nationkey#12]
+      :     :- Scan spark_catalog.default.nation [n_nationkey#21, n_name#22, n_regionkey#23]
+      :     +- Project [s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15, p_partkey#0, p_mfgr#2]
+      :        +- HashJoin Inner, [s_suppkey#9] = [ps_suppkey#17]
+      :           :- Scan spark_catalog.default.supplier [s_suppkey#9, s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15]
+      :           +- Project [ps_suppkey#17, p_partkey#0, p_mfgr#2]
+      :              +- HashJoin Inner, [ps_supplycost#19, ps_partkey#16] = [min(ps_supplycost)#47, p_partkey#0]
+      :                 :- Scan spark_catalog.default.partsupp [ps_partkey#16, ps_suppkey#17, ps_supplycost#19]
+      :                 +- Project [min(ps_supplycost)#47, p_partkey#0, p_mfgr#2]
+      :                    +- HashJoin Inner, [ps_partkey#28] = [p_partkey#0]
+      :                       :- Project [min(ps_supplycost#31)#4611686018427387905 AS min(ps_supplycost)#47, ps_partkey#28]
+      :                       :  +- HashAggregate keys=[ps_partkey#28], functions=[min(ps_supplycost#31)]
+      :                       :     +- Project [ps_partkey#28, ps_supplycost#31]
+      :                       :        +- HashJoin Inner, [ps_suppkey#29] = [s_suppkey#33]
+      :                       :           :- Scan spark_catalog.default.partsupp [ps_partkey#16, ps_suppkey#17, ps_supplycost#19] (ids +12)
+      :                       :           +- Project [s_suppkey#33]
+      :                       :              +- HashJoin Inner, [s_nationkey#36] = [n_nationkey#40]
+      :                       :                 :- Project [s_suppkey#33, s_nationkey#36]
+      :                       :                 :  +- Scan spark_catalog.default.supplier [s_suppkey#9, s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15] (ids +24)
+      :                       :                 +- Project [n_nationkey#40]
+      :                       :                    +- HashJoin Inner, [n_regionkey#42] = [r_regionkey#44]
+      :                       :                       :- Project [n_nationkey#40, n_regionkey#42]
+      :                       :                       :  +- Scan spark_catalog.default.nation [n_nationkey#21, n_name#22, n_regionkey#23] (ids +19)
+      :                       :                       +- Project [r_regionkey#44]
+      :                       :                          +- Filter (r_name#26 == 'EUROPE') (ids +19)
+      :                       :                             +- Scan spark_catalog.default.region [r_regionkey#25, r_name#26], PushedFilters: [(r_name#26 == 'EUROPE')]
+      :                       +- Project [p_partkey#0, p_mfgr#2]
+      :                          +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
+      :                             +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5], PushedFilters: [((p_size#5 == 15) and (p_type#4 like '%BRASS'))]
+      +- Project [r_regionkey#25]
+         +- Filter (r_name#26 == 'EUROPE')
+            +- Scan spark_catalog.default.region [r_regionkey#25, r_name#26], PushedFilters: [(r_name#26 == 'EUROPE')]
