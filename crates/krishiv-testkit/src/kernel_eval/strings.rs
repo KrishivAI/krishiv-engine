@@ -352,6 +352,7 @@ impl Evaluator<'_> {
             ansi: b.ansi,
             shape: Shape::Arrays,
             invalid_utf8: std::cell::Cell::new(false),
+            day_overflow: std::cell::Cell::new(false),
         }
     }
 

@@ -14,6 +14,7 @@ use krishiv_kernels::cast::{CastMode, CastOptions, TimeZoneRules, cast};
 use krishiv_kernels::datetime::{
     DatePart, date_add, extract_timestamp, timestamp_add_day_time, timestamp_add_months,
 };
+use krishiv_kernels::policy::OverflowMode;
 use krishiv_kernels::{KernelCtx, Operand};
 use krishiv_testkit::kernel_eval::JiffZone;
 use serde_json::Value;
@@ -68,6 +69,7 @@ fn kernels_match_spark_across_dst_transitions() -> R {
             let next = date_add(
                 Operand::Array(d),
                 Operand::<Int32Type>::Scalar(Some(1)),
+                OverflowMode::AnsiError,
                 &ctx,
             )?;
             check("date_add", i64::from(next.value(0)), int(case, "date_add")?);

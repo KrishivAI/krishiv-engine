@@ -20,6 +20,7 @@ use krishiv_kernels::datetime::{
     DatePart, current_date, date_add, date_add_months, date_diff, date_sub, extract_date,
     extract_timestamp, timestamp_add_day_time, timestamp_add_months,
 };
+use krishiv_kernels::policy::OverflowMode;
 use krishiv_kernels::{KernelCtx, Operand, SparkVersion};
 use proptest::prelude::*;
 
@@ -151,41 +152,102 @@ fn timestamp_fields_match_spark() {
 }
 
 #[test]
-fn day_arithmetic_wraps_like_java_int() {
+fn day_arithmetic_wraps_with_ansi_off_and_raises_with_ansi_on() {
     let ctx = KernelCtx::new();
     let start = date("2016-07-30");
     let d = |days| Operand::<Int32Type>::Scalar(Some(days));
-    let add = |days: i32| {
-        date_add(Operand::Array(&dates(&[start])), d(days), &ctx)
-            .unwrap()
-            .value(0)
+    let run = |sub: bool, days: i32, mode| {
+        let s = Operand::Array(&dates(&[start]));
+        if sub {
+            date_sub(s, d(days), mode, &ctx)
+        } else {
+            date_add(s, d(days), mode, &ctx)
+        }
     };
-    let sub = |days: i32| {
-        date_sub(Operand::Array(&dates(&[start])), d(days), &ctx)
-            .unwrap()
-            .value(0)
-    };
-    assert_eq!(add(1), 17_013);
-    assert_eq!(sub(1), 17_011);
-    assert_eq!(add(i32::MAX), -2_147_466_637);
-    assert_eq!(add(i32::MIN), -2_147_466_636);
-    assert_eq!(sub(i32::MIN), -2_147_466_636);
-    let a = Date32Array::from(vec![Some(0), None]);
-    let n = Int32Array::from(vec![Some(1), Some(1)]);
-    let out = date_add(Operand::Array(&a), Operand::Array(&n), &ctx).unwrap();
-    assert_eq!((out.value(0), out.is_null(1)), (1, true));
-    let diff = |e: &str, s: &str| {
+    for mode in [OverflowMode::JavaWrap, OverflowMode::AnsiError] {
+        assert_eq!(run(false, 1, mode).unwrap().value(0), 17_013);
+        assert_eq!(run(true, 1, mode).unwrap().value(0), 17_011);
+    }
+    // ANSI off: Java `int` wrap, Spark's value.
+    let wrap = OverflowMode::JavaWrap;
+    assert_eq!(run(false, i32::MAX, wrap).unwrap().value(0), -2_147_466_637);
+    assert_eq!(run(false, i32::MIN, wrap).unwrap().value(0), -2_147_466_636);
+    assert_eq!(run(true, i32::MIN, wrap).unwrap().value(0), -2_147_466_636);
+    // ANSI on: ARITHMETIC_OVERFLOW (Spark wraps silently, ADR 0023).
+    for (sub, days) in [(false, i32::MAX), (true, i32::MIN)] {
+        let e = run(sub, days, OverflowMode::AnsiError).unwrap_err();
+        assert_eq!(
+            (e.row(), e.error_class()),
+            (Some(0), ErrorClass::ArithmeticOverflow)
+        );
+        assert!(
+            e.to_string()
+                .starts_with("[ARITHMETIC_OVERFLOW] overflow. If necessary")
+        );
+        // try_add / try_subtract: NULL.
+        assert!(
+            run(sub, days, OverflowMode::NullOnOverflow)
+                .unwrap()
+                .is_null(0)
+        );
+    }
+    // The 4.0 and 4.1 text.
+    let old = KernelCtx::new().with_spark_version(SparkVersion::V4_0);
+    let s = Operand::Array(&dates(&[start]));
+    let e = date_add(s, d(i32::MAX), OverflowMode::AnsiError, &old).unwrap_err();
+    assert!(
+        e.to_string()
+            .starts_with("[ARITHMETIC_OVERFLOW] integer overflow.")
+    );
+    // NULL rows never raise.
+    let a = Date32Array::from(vec![Some(i32::MAX), None]);
+    let n = Int32Array::from(vec![Some(0), Some(i32::MAX)]);
+    let out = date_add(
+        Operand::Array(&a),
+        Operand::Array(&n),
+        OverflowMode::AnsiError,
+        &ctx,
+    )
+    .unwrap();
+    assert_eq!((out.value(0), out.is_null(1)), (i32::MAX, true));
+    let diff = |e: i32, s: i32, mode| {
         date_diff(
-            Operand::Array(&dates(&[date(e)])),
-            Operand::Scalar(Some(date(s))),
+            Operand::Array(&dates(&[e])),
+            Operand::Scalar(Some(s)),
+            mode,
             &ctx,
         )
-        .unwrap()
-        .value(0)
     };
-    assert_eq!(diff("2024-02-29", "2009-07-30"), 5327);
-    assert_eq!(diff("2009-07-31", "2024-02-29"), -5326);
-    let e = date_diff(Operand::Scalar(Some(1)), Operand::Scalar(Some(1)), &ctx).unwrap_err();
+    let ansi = OverflowMode::AnsiError;
+    assert_eq!(
+        diff(date("2024-02-29"), date("2009-07-30"), ansi)
+            .unwrap()
+            .value(0),
+        5327
+    );
+    assert_eq!(
+        diff(date("2009-07-31"), date("2024-02-29"), wrap)
+            .unwrap()
+            .value(0),
+        -5326
+    );
+    assert_eq!(diff(i32::MAX, -1, wrap).unwrap().value(0), i32::MIN);
+    assert_eq!(
+        diff(i32::MAX, -1, ansi).unwrap_err().error_class(),
+        ErrorClass::ArithmeticOverflow
+    );
+    assert!(
+        diff(i32::MAX, -1, OverflowMode::NullOnOverflow)
+            .unwrap()
+            .is_null(0)
+    );
+    let e = date_diff(
+        Operand::Scalar(Some(1)),
+        Operand::Scalar(Some(1)),
+        ansi,
+        &ctx,
+    )
+    .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
 }
 
@@ -382,8 +444,8 @@ proptest! {
     fn dates_round_trip(d in -700_000_i32..3_000_000, days in -100_000_i32..100_000) {
         let ctx = KernelCtx::new();
         let start = dates(&[d]);
-        let moved = date_add(Operand::Array(&start), Operand::Scalar(Some(days)), &ctx).unwrap();
-        let back = date_diff(Operand::Array(&moved), Operand::Array(&start), &ctx).unwrap();
+        let moved = date_add(Operand::Array(&start), Operand::Scalar(Some(days)), OverflowMode::AnsiError, &ctx).unwrap();
+        let back = date_diff(Operand::Array(&moved), Operand::Array(&start), OverflowMode::AnsiError, &ctx).unwrap();
         prop_assert_eq!(back.value(0), days);
         // Year, month and day rebuild the date.
         let y = int_field(DatePart::Year, d);
