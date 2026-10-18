@@ -1,0 +1,10 @@
+---
+source: crates/krishiv-sql/tests/analyzer.rs
+expression: a.plan.root().to_string()
+---
+Sort [l_shipmode#23 ASC NULLS FIRST], true
++- Aggregate [l_shipmode#23], [l_shipmode#23, sum(CASE WHEN ((o_orderpriority#5 == '1-URGENT') or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END) AS high_line_count#25, sum(CASE WHEN ((NOT (o_orderpriority#5 == '1-URGENT')) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END) AS low_line_count#26]
+   +- Filter ((((o_orderkey#0 == l_orderkey#9) and (l_shipmode#23 IN ('MAIL', 'SHIP'))) and (l_commitdate#20 < l_receiptdate#21)) and (((l_shipdate#19 < l_commitdate#20) and (l_receiptdate#21 >= CAST('1994-01-01' AS DATE))) and (l_receiptdate#21 < CAST('1995-01-01' AS DATE))))
+      +- Join Inner
+         :- Scan spark_catalog.default.orders [o_orderkey#0, o_custkey#1, o_orderstatus#2, o_totalprice#3, o_orderdate#4, o_orderpriority#5, o_clerk#6, o_shippriority#7, o_comment#8]
+         +- Scan spark_catalog.default.lineitem [l_orderkey#9, l_partkey#10, l_suppkey#11, l_linenumber#12, l_quantity#13, l_extendedprice#14, l_discount#15, l_tax#16, l_returnflag#17, l_linestatus#18, l_shipdate#19, l_commitdate#20, l_receiptdate#21, l_shipinstruct#22, l_shipmode#23, l_comment#24]

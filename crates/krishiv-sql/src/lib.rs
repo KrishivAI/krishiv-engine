@@ -26,6 +26,7 @@
 
 pub mod ast;
 mod error;
+mod frontend;
 mod generated {
     pub(crate) mod letters;
 }
@@ -37,6 +38,7 @@ mod redact;
 mod types;
 
 pub use error::ParseError;
+pub use frontend::Frontend;
 pub use lower::{lower, parse_and_lower};
 pub use redact::redact_sql;
 
