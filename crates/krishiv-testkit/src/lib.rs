@@ -3,6 +3,7 @@
 //!
 //! * [`hash_fixture`]: Spark `hash()`/`xxhash64()` golden fixtures (ADR 0010).
 //! * [`fn_matrix`]: Spark function-matrix fixtures and the coverage-matrix report (P2-T106a).
+//! * [`file_format`]: the generic `FileFormat` conformance suite and a mock format (P2-T117).
 //! * [`kernel_eval`]: runs the arithmetic/comparison/cast matrix cells on `krishiv-kernels` (P2-T021a).
 //! * [`batch_stream`]: batch == bounded-stream invariant harness (ADR 0015/0017).
 //! * [`golden`]: Spark `SQLQueryTestSuite` golden-file runner, exclusion manifest and three-number report.
@@ -10,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod batch_stream;
+pub mod file_format;
 pub mod fn_matrix;
 pub mod golden;
 pub mod hash_fixture;

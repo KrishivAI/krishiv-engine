@@ -27,6 +27,21 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SPILL_ZSTD_LEVEL,
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    &IO_STRICT_OPTIONS,
+    &FILES_MAX_PARTITION_BYTES,
+    &FILES_OPEN_COST_IN_BYTES,
+    &FILES_MIN_PARTITION_NUM,
+    &FILES_MAX_PARTITION_NUM,
+    &LEAF_NODE_DEFAULT_PARALLELISM,
+    &IO_MAX_CONCURRENT_REQUESTS,
+    &IO_COALESCE_BYTES,
+    &IO_MAX_REQUEST_BYTES,
+    &IO_PREFETCH_BYTES,
+    &IO_FOOTER_READ_BYTES,
+    &IO_METADATA_CACHE_BYTES,
+    &IO_MULTIPART_PART_BYTES,
+    &IO_MAX_RETRIES,
+    &IO_REQUEST_TIMEOUT,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -37,31 +52,63 @@ pub static REGISTRY: &[&ConfigEntry] = &[
 pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.dir", &SPILL_DIR),
     ("krishiv.memory.limit", &MEMORY_LIMIT),
+    ("krishiv.io.maxRetries", &IO_MAX_RETRIES),
     ("spark.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.exec.batchSize", &EXEC_BATCH_SIZE),
     ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
+    ("krishiv.io.coalesceBytes", &IO_COALESCE_BYTES),
+    ("krishiv.io.prefetchBytes", &IO_PREFETCH_BYTES),
+    ("krishiv.io.strictOptions", &IO_STRICT_OPTIONS),
     ("krishiv.spill.zstd.level", &SPILL_ZSTD_LEVEL),
     ("krishiv.sql.ansi.enabled", &ANSI_ENABLED),
+    ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
+    ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
+    ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
+    ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
+    ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
     (
         "krishiv.memory.spillWaitTimeout",
         &MEMORY_SPILL_WAIT_TIMEOUT,
     ),
+    ("spark.sql.files.maxPartitionNum", &FILES_MAX_PARTITION_NUM),
+    ("spark.sql.files.minPartitionNum", &FILES_MIN_PARTITION_NUM),
+    ("spark.sql.files.openCostInBytes", &FILES_OPEN_COST_IN_BYTES),
     ("spark.sql.storeAssignmentPolicy", &STORE_ASSIGNMENT_POLICY),
+    (
+        "krishiv.io.maxConcurrentRequests",
+        &IO_MAX_CONCURRENT_REQUESTS,
+    ),
     ("krishiv.exec.targetPartitionBytes", &TARGET_PARTITION_BYTES),
     (
         "krishiv.memory.reservationQuantum",
         &MEMORY_RESERVATION_QUANTUM,
     ),
     (
+        "krishiv.sql.files.maxPartitionNum",
+        &FILES_MAX_PARTITION_NUM,
+    ),
+    (
+        "krishiv.sql.files.minPartitionNum",
+        &FILES_MIN_PARTITION_NUM,
+    ),
+    (
+        "krishiv.sql.files.openCostInBytes",
+        &FILES_OPEN_COST_IN_BYTES,
+    ),
+    (
         "krishiv.sql.storeAssignmentPolicy",
         &STORE_ASSIGNMENT_POLICY,
+    ),
+    (
+        "spark.sql.files.maxPartitionBytes",
+        &FILES_MAX_PARTITION_BYTES,
     ),
     (
         "krishiv.memory.abortReleaseTimeout",
@@ -70,6 +117,18 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.shuffle.partitionsHint",
         &SHUFFLE_PARTITIONS_HINT,
+    ),
+    (
+        "krishiv.sql.files.maxPartitionBytes",
+        &FILES_MAX_PARTITION_BYTES,
+    ),
+    (
+        "spark.sql.leafNodeDefaultParallelism",
+        &LEAF_NODE_DEFAULT_PARALLELISM,
+    ),
+    (
+        "krishiv.sql.leafNodeDefaultParallelism",
+        &LEAF_NODE_DEFAULT_PARALLELISM,
     ),
     (
         "krishiv.experimental.unalignedCheckpoints",
@@ -283,6 +342,183 @@ pub static EXPERIMENTAL_UNALIGNED_CHECKPOINTS: ConfigEntry = ConfigEntry {
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(false)),
     doc: "Experimental: allow unaligned checkpoints under sustained backpressure.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.strictOptions`.
+pub static IO_STRICT_OPTIONS: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.strictOptions",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, a data source option that the format does not know is an error \
+          (`KRISHIV_UNKNOWN_FORMAT_OPTION`). When false (the default, as in Spark), it is \
+          ignored with a warning that suggests the closest known option.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.sql.files.maxPartitionBytes`.
+pub static FILES_MAX_PARTITION_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.files.maxPartitionBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(128 * MIB)),
+    doc: "Most bytes packed into one file-scan partition (Spark's split planning).",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.files.maxPartitionBytes"),
+};
+
+/// `krishiv.sql.files.openCostInBytes`.
+pub static FILES_OPEN_COST_IN_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.files.openCostInBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(4 * MIB)),
+    doc: "Estimated cost of opening a file, in bytes that could be scanned in the same time; \
+          added per file when files are packed into scan partitions.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.files.openCostInBytes"),
+};
+
+/// `krishiv.sql.files.minPartitionNum`.
+pub static FILES_MIN_PARTITION_NUM: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.files.minPartitionNum",
+    value_type: ValueType::PositiveInt,
+    default: None,
+    doc: "Suggested minimum number of file-scan partitions. When unset: \
+          `krishiv.sql.leafNodeDefaultParallelism`, else the number of worker slots.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.files.minPartitionNum"),
+};
+
+/// `krishiv.sql.files.maxPartitionNum`.
+pub static FILES_MAX_PARTITION_NUM: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.files.maxPartitionNum",
+    value_type: ValueType::PositiveInt,
+    default: None,
+    doc: "Suggested maximum number of file-scan partitions: when splitting yields more, the \
+          split size is raised so that about this many remain. Unset: no maximum.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.files.maxPartitionNum"),
+};
+
+/// `krishiv.sql.leafNodeDefaultParallelism`.
+pub static LEAF_NODE_DEFAULT_PARALLELISM: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.leafNodeDefaultParallelism",
+    value_type: ValueType::PositiveInt,
+    default: None,
+    doc: "Default parallelism of leaf scans (used when `krishiv.sql.files.minPartitionNum` is \
+          unset). When unset: the number of worker slots.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.leafNodeDefaultParallelism"),
+};
+
+/// `krishiv.io.maxConcurrentRequests`.
+pub static IO_MAX_CONCURRENT_REQUESTS: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.maxConcurrentRequests",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(64)),
+    doc: "Most object-store requests in flight at once per store, over all queries of the process.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.coalesceBytes`.
+pub static IO_COALESCE_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.coalesceBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(MIB)),
+    doc: "Byte ranges of one file closer than this are fetched with one request.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.maxRequestBytes`.
+pub static IO_MAX_REQUEST_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.maxRequestBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(16 * MIB)),
+    doc: "Ranges are not coalesced into requests larger than this (a single larger range is \
+          still fetched whole).",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.prefetchBytes`.
+pub static IO_PREFETCH_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.prefetchBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(64 * MIB)),
+    doc: "Bytes a file scan may fetch ahead of decoding, per scan driver. Prefetched bytes are \
+          reserved from the query's memory pool and dropped first under memory pressure.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.footerReadBytes`.
+pub static IO_FOOTER_READ_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.footerReadBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(64 * 1024)),
+    doc: "Size of the speculative read at the end of a file that fetches its footer in one \
+          request; a format may ask for more (up to 1 MiB).",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.metadataCacheBytes`.
+pub static IO_METADATA_CACHE_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.metadataCacheBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(64 * MIB)),
+    doc: "Size of the in-memory cache of decoded file footers and metadata (least recently used \
+          entries are evicted). `0` disables it.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.multipartPartBytes`.
+pub static IO_MULTIPART_PART_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.multipartPartBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(8 * MIB)),
+    doc: "Part size of multipart uploads (at least 5 MiB; doubled every 1,000 parts so a file \
+          never needs more than the 10,000 parts object stores allow).",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.maxRetries`.
+pub static IO_MAX_RETRIES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.maxRetries",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(5)),
+    doc: "Retries of an object-store request that failed transiently (throttling, unavailable, \
+          timeout), with jittered exponential backoff honouring `Retry-After`.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.requestTimeout`.
+pub static IO_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.requestTimeout",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(30))),
+    doc: "Timeout of one object-store request attempt; a timed-out attempt is retried.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,

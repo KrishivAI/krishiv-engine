@@ -14,17 +14,25 @@ workspace = true
 [dependencies]
 arrow-array.workspace = true
 arrow-buffer.workspace = true
+arrow-ipc.workspace = true
 arrow-schema.workspace = true
 arrow-select.workspace = true
+bytes.workspace = true
+futures = { workspace = true, features = ["alloc", "std"] }
 jiff = { workspace = true, features = ["std", "tzdb-bundle-always"] }
 krishiv-common = { path = "../krishiv-common" }
+krishiv-io = { path = "../krishiv-io" }
 krishiv-kernels = { path = "../krishiv-kernels" }
+krishiv-memory = { path = "../krishiv-memory" }
 krishiv-plan = { path = "../krishiv-plan" }
+object_store.workspace = true
 krishiv-sql = { path = "../krishiv-sql" }
 regex-lite.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 sqllogictest.workspace = true
 thiserror.workspace = true
+# Paused time and a current-thread runtime for the file-format suite.
+tokio = { workspace = true, features = ["rt", "time", "test-util"] }
 
 [dev-dependencies]
 insta = { workspace = true }

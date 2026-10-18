@@ -5,11 +5,29 @@
     ],
     "sqlState" : "22003"
   },
+  "KRISHIV_FILE_CHANGED_DURING_READ" : {
+    "message" : [
+      "The file <path> changed while it was being read: it no longer matches the version <version> seen when the scan was planned. Run REFRESH TABLE, or re-run the query to read the new version."
+    ],
+    "sqlState" : "KD001"
+  },
   "KRISHIV_INVALID_CONFIG_VALUE" : {
     "message" : [
       "The value <value> for config <key> is invalid: <reason>."
     ],
     "sqlState" : "22023"
+  },
+  "KRISHIV_INVALID_FORMAT_OPTION_VALUE" : {
+    "message" : [
+      "The value <value> of the option <option> of the <format> data source is invalid: <reason>."
+    ],
+    "sqlState" : "22023"
+  },
+  "KRISHIV_OBJECT_STORE_REQUEST_FAILED" : {
+    "message" : [
+      "Reading the file <path> failed: the object store did not complete the request after <attempts> attempt(s): <reason>. This is a storage failure, not a corrupt file, so it is never skipped by \"ignoreCorruptFiles\". Retry the query, or check the store's availability and permissions."
+    ],
+    "sqlState" : "58030"
   },
   "KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY" : {
     "message" : [
@@ -40,6 +58,12 @@
       "The config <key> is not a known Krishiv config. Verify the spelling, or see the configuration reference."
     ],
     "sqlState" : "42K0I"
+  },
+  "KRISHIV_UNKNOWN_FORMAT_OPTION" : {
+    "message" : [
+      "The option <option> is not an option of the <format> data source.<suggestion> Remove it, or set \"krishiv.io.strictOptions\" to \"false\" to ignore unknown options with a warning."
+    ],
+    "sqlState" : "42K06"
   },
   "KRISHIV_UNSUPPORTED_FEATURE" : {
     "message" : [

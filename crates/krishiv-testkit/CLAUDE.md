@@ -16,6 +16,8 @@ Spark container), loaded by `fn_matrix`, with the coverage dashboard from
 runs the arithmetic/comparison/cast matrix cells and the literal statements of Spark's arithmetic goldens on
 `krishiv-kernels` with a minimal Spark 4.2 implicit-cast typer (tests `kernel_matrix`, `kernel_golden`); it is a
 harness, not the analyzer.
+The generic `FileFormat` conformance suite (`file_format`, P2-T117: 12 checks over a `FormatFixture`,
+`file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it.
 
 ## Invariants
 - Golden data comes from a real Spark run or the vendored Spark tag, never hand-written (ADR 0008, 0010).
