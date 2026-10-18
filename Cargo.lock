@@ -1242,6 +1242,7 @@ version = "0.1.0-dev"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
+ "arrow-schema",
  "codspeed-criterion-compat",
  "krishiv-common",
  "mimalloc",

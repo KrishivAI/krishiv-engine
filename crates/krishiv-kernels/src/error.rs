@@ -8,6 +8,11 @@
 //! | ANSI division by zero (`/`, `div`) | `DIVIDE_BY_ZERO` |
 //! | ANSI remainder by zero (`%`) | `REMAINDER_BY_ZERO` (Spark 4.0: `DIVIDE_BY_ZERO`) |
 //! | ANSI decimal result out of range | `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION` |
+//! | ANSI cast of a malformed string | `CAST_INVALID_INPUT` |
+//! | ANSI cast to a narrower integral type | `CAST_OVERFLOW` |
+//! | ANSI string to decimal with over 38 integral digits | `NUMERIC_OUT_OF_SUPPORTED_RANGE` |
+//! | a date or timestamp outside the microsecond range | `DATETIME_OVERFLOW` |
+//! | ANSI `BINARY` -> `STRING` of bytes that are not UTF-8 | `INVALID_UTF8_STRING` |
 //! | decimal `%` whose integral quotient exceeds 39 significant digits (every mode) | `KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE` |
 //! | output buffer cannot be reserved | `UNABLE_TO_ACQUIRE_MEMORY` |
 //! | decimal plan Krishiv does not support yet | `KRISHIV_UNSUPPORTED_FEATURE` |
@@ -18,8 +23,9 @@
 //! [`crate::version::SparkVersion`].
 
 use krishiv_common::error::{
-    ArithmeticOverflow, BinaryArithmeticOverflow, DivideByZero, ErrorClass, InternalError,
-    KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
+    ArithmeticOverflow, BinaryArithmeticOverflow, CastInvalidInput, CastOverflow, DatetimeOverflow,
+    DivideByZero, ErrorClass, InternalError, InvalidUtf8String, KrishivDecimalRemainderImpossible,
+    KrishivError, KrishivUnsupportedFeature, NumericOutOfSupportedRange,
     NumericValueOutOfRangeWithSuggestion, RemainderByZero, UnableToAcquireMemory,
 };
 
@@ -160,6 +166,69 @@ impl KernelError {
         }
     }
 
+    /// `CAST_INVALID_INPUT`; `value` is Spark's SQL rendering of the input
+    /// and the types are SQL type names (`STRING`, `DECIMAL(10,2)`).
+    pub(crate) fn cast_invalid_input(row: usize, value: String, from: &str, to: &str) -> Self {
+        Self {
+            row: Some(row),
+            error: CastInvalidInput {
+                expression: value,
+                source_type: format!("\"{from}\""),
+                target_type: format!("\"{to}\""),
+            }
+            .into(),
+        }
+    }
+
+    /// `CAST_OVERFLOW`; `value` is Spark's SQL rendering of the input.
+    pub(crate) fn cast_overflow(row: usize, value: String, from: &str, to: &str) -> Self {
+        Self {
+            row: Some(row),
+            error: CastOverflow {
+                value,
+                source_type: format!("\"{from}\""),
+                target_type: format!("\"{to}\""),
+            }
+            .into(),
+        }
+    }
+
+    /// `INVALID_UTF8_STRING`: Spark renders every byte as `\xHH`.
+    pub(crate) fn invalid_utf8(row: usize, bytes: &[u8]) -> Self {
+        use std::fmt::Write as _;
+        let mut s = String::with_capacity(bytes.len().saturating_mul(4));
+        for b in bytes {
+            let _ = write!(s, "\\x{b:02X}");
+        }
+        Self {
+            row: Some(row),
+            error: InvalidUtf8String { str: s }.into(),
+        }
+    }
+
+    /// `NUMERIC_OUT_OF_SUPPORTED_RANGE`: a string with more than 38
+    /// integral digits cast to a decimal; `value` is the string as given.
+    pub(crate) fn numeric_out_of_supported_range(row: usize, value: String) -> Self {
+        Self {
+            row: Some(row),
+            error: NumericOutOfSupportedRange { value }.into(),
+        }
+    }
+
+    /// `DATETIME_OVERFLOW` for a date or timestamp outside the microsecond
+    /// range. (Spark raises an unclassified `ArithmeticException("long
+    /// overflow")` here, in both ANSI modes; Krishiv raises the registry
+    /// class that describes it.)
+    pub(crate) fn datetime_overflow(row: usize, operation: &str) -> Self {
+        Self {
+            row: Some(row),
+            error: DatetimeOverflow {
+                operation: operation.to_owned(),
+            }
+            .into(),
+        }
+    }
+
     /// The error for a raised `fault` at `row`; `overflow` builds the
     /// kernel-specific overflow error.
     pub(crate) fn for_fault(
@@ -276,6 +345,24 @@ mod tests {
                  and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" \
                  to bypass this error. SQLSTATE: 22012",
             ),
+            (
+                KernelError::cast_invalid_input(0, "'12.0'".to_owned(), "STRING", "INT"),
+                "[CAST_INVALID_INPUT] The value '12.0' of the type \"STRING\" cannot be cast to \
+                 \"INT\" because it is malformed. Correct the value as per the syntax, or change \
+                 its target type. Use `try_cast` to tolerate malformed input and return NULL \
+                 instead. SQLSTATE: 22018",
+            ),
+            (
+                KernelError::cast_overflow(0, "1.0E10D".to_owned(), "DOUBLE", "INT"),
+                "[CAST_OVERFLOW] The value 1.0E10D of the type \"DOUBLE\" cannot be cast to \
+                 \"INT\" due to an overflow. Use `try_cast` to tolerate overflow and return NULL \
+                 instead. SQLSTATE: 22003",
+            ),
+            (
+                KernelError::numeric_out_of_supported_range(0, " 1e400 ".to_owned()),
+                "[NUMERIC_OUT_OF_SUPPORTED_RANGE] The value  1e400  cannot be interpreted as a \
+                 numeric since it has more than 38 digits. SQLSTATE: 22003",
+            ),
         ];
         for (e, text) in cases {
             assert_eq!(e.to_string(), text);
@@ -285,6 +372,8 @@ mod tests {
             (v40.row(), v40.error_class()),
             (Some(3), ErrorClass::DivideByZero)
         );
+        let dt = KernelError::datetime_overflow(1, "cast to timestamp");
+        assert_eq!(dt.error_class(), ErrorClass::DatetimeOverflow);
     }
 
     #[test]
