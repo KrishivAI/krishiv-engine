@@ -5,6 +5,8 @@
 
 use pyo3::prelude::*;
 
+mod stream;
+
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -21,5 +23,6 @@ const ALLOCATOR: &str = "system";
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__allocator__", ALLOCATOR)?;
+    m.add_class::<stream::ArrowStream>()?;
     Ok(())
 }

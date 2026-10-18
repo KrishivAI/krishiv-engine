@@ -1245,7 +1245,7 @@ impl crate::analyzer::CatalogResolver for Epoch<crate::analyzer::testing::OneCat
     }
 }
 
-impl crate::analyzer::FunctionRegistry for Epoch<crate::analyzer::testing::TestFunctions> {
+impl crate::analyzer::FunctionRegistry for Epoch<crate::analyzer::BuiltinFunctions> {
     fn lookup(&self, name: &[String], profile: SparkProfile) -> crate::analyzer::FunctionLookup {
         self.0.lookup(name, profile)
     }
@@ -1259,7 +1259,8 @@ impl crate::analyzer::FunctionRegistry for Epoch<crate::analyzer::testing::TestF
 /// one changes the digest.
 #[test]
 fn every_context_input_changes_the_key() {
-    use crate::analyzer::testing::{OneCatalog, TestFunctions};
+    use crate::analyzer::BuiltinFunctions;
+    use crate::analyzer::testing::OneCatalog;
     use crate::analyzer::{PrincipalKind, fingerprint};
     let digest = |c: &AnalysisContext, epochs: &[(&str, u64)]| {
         let e = epochs.iter().map(|(n, v)| ((*n).to_owned(), *v)).collect();
@@ -1299,7 +1300,7 @@ fn every_context_input_changes_the_key() {
         c.catalogs = Arc::new(Epoch(inner, 9));
     });
     v("functions", &|c| {
-        c.functions = Arc::new(Epoch(TestFunctions, 9));
+        c.functions = Arc::new(Epoch(BuiltinFunctions::new(), 9));
     });
     v("sql front end", &|c| c.sql = Some(Arc::new(Frontend)));
     v("principal", &|c| {
@@ -1465,6 +1466,19 @@ fn unsupported_inputs_fail_explicitly() {
     let randstr = LogicalPlan::table(["t"]).project(vec![Expr::function("randstr", vec![int(3)])]);
     assert_eq!(class(&run(randstr.clone(), &old)), "UNRESOLVED_ROUTINE");
     assert_eq!(class(&run(randstr, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+    // The argument count is checked first, with Spark's `expectedNum` text.
+    let upper =
+        LogicalPlan::table(["t"]).project(vec![Expr::function("upper", vec![int(1), int(2)])]);
+    let err = run(upper, &ctx).unwrap_err();
+    assert_eq!(
+        err.error.error_class().name(),
+        "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+    );
+    let text = err.error.to_string();
+    assert!(
+        text.contains("The `upper` requires 1 parameters but the actual number is 2"),
+        "{text}"
+    );
 }
 
 /// A column a projection dropped comes back from below it, as Spark's
@@ -1561,16 +1575,29 @@ fn shared_subexpressions_in_rewrites() {
 #[test]
 fn function_entries_print_their_signature() {
     use crate::analyzer::{FunctionLookup, FunctionRegistry as _};
-    let FunctionLookup::Found(entry) = crate::analyzer::testing::TestFunctions
+    let FunctionLookup::Found(entry) = crate::analyzer::BuiltinFunctions::new()
         .lookup(&["substring".to_owned()], SparkProfile::default())
     else {
         panic!("substring is registered");
     };
     let text = format!("{entry:?}");
     assert!(
-        text.contains("inputs: Expects([Exact(String), Exact(Integer)])"),
+        text.contains("inputs: Expects([OneOf([String, Binary]), Exact(Integer), Exact(Integer)])"),
         "{text}"
     );
+    // Built-ins are unqualified; a name only Spark has is known.
+    let b = crate::analyzer::BuiltinFunctions::default();
+    let qualified = ["builtin".to_owned(), "upper".to_owned()];
+    assert!(matches!(
+        b.lookup(&qualified, SparkProfile::V4_2),
+        FunctionLookup::NotFound
+    ));
+    let uuid = ["uuid".to_owned()];
+    assert!(matches!(
+        b.lookup(&uuid, SparkProfile::V4_2),
+        FunctionLookup::KnownUnsupported
+    ));
+    assert_eq!(b.version(), 0);
 }
 
 #[test]

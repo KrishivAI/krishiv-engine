@@ -247,7 +247,7 @@ const CASES: &[(&str, &str)] = &[
     ),
     (
         "first_aggregate",
-        "SELECT k, f FROM (SELECT a AS k, first(b) AS f FROM t GROUP BY a) WHERE k > 1",
+        "SELECT k, f FROM (SELECT a AS k, nondeterministic_first(b) AS f FROM t GROUP BY a) WHERE k > 1",
     ),
     (
         "collapse_passthrough",
@@ -326,7 +326,13 @@ fn rules() {
         // Limits and nondeterministic calls choose rows; the interpreter
         // keeps numbers in unbounded fixed point, without NaN or integral
         // overflow (whose ANSI error or legacy wrap it does not model).
-        let skip = ["LIMIT", "rand()", "first(", "DOUBLE", "1.0F"];
+        let skip = [
+            "LIMIT",
+            "rand()",
+            "nondeterministic_first(",
+            "DOUBLE",
+            "1.0F",
+        ];
         let overflows = ["fold_arith", "fold_int_overflow", "fold_negative"];
         if !skip.iter().any(|s| sql.contains(s)) && !overflows.contains(name) {
             for seed in 1..=8 {
@@ -433,6 +439,7 @@ fn shared_expressions_stay_linear() {
                 filter: None,
                 data_type,
                 nullable: true,
+                deterministic: true,
             },
         ))))
     };

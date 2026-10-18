@@ -27,6 +27,9 @@ P2-T025a adds the datetime functions and ANSI interval literals (`kernel_eval/da
 session time zones through `kernel_eval::JiffZone` (the tz database behind `TimeZoneRules`, test-side until the session
 layer has one), and the fixtures `cast-timestamp-differential`, `dst-transitions` (Los Angeles, Berlin) and
 `tpch-date-predicates` (tests `cast_timestamp_differential`, `dst_transitions`, `tpch_date_predicates`).
+`registry_matrix` (P2-T153) analyzes every matrix case of a registered built-in function with the production registry
+(type, nullability or analysis error class vs Spark, both ANSI modes); failures are listed with reasons in
+`tests/fixtures/analysis/registry-matrix-manifest.json` (`KRISHIV_UPDATE_MANIFEST=1` rewrites it).
 The generic `FileFormat` conformance suite (`file_format`, P2-T117: 12 checks over a `FormatFixture`,
 `file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it, directly and
 through the executor (`file_format::drive::ThroughExecutor`, P2-T117b). `file_format::parquet::ParquetFixture`

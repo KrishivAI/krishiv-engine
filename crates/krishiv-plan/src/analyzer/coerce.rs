@@ -24,7 +24,7 @@
 
 use krishiv_types::{DataType, DecimalType};
 
-use super::catalog::{InputType, Inputs};
+use super::catalog::{CallTypes, InputType, Inputs};
 use crate::{Builtin, CastMode};
 
 /// An argument as coercion sees it.
@@ -507,31 +507,34 @@ fn arithmetic(
 }
 
 /// The casts a registry function's arguments need for its declared
-/// `inputs` (ANSI `implicitCast`).
-pub(super) fn inputs(inputs: &Inputs, args: &[Arg<'_>]) -> Result<Vec<Option<DataType>>, Mismatch> {
-    match inputs {
-        Inputs::Any => Ok(vec![None; args.len()]),
-        Inputs::Common => {
-            let t = common_all(args).ok_or_else(|| {
-                Mismatch::DataDiff(args.iter().map(|a| a.ty.cloned()).collect(), false)
-            })?;
-            Ok(args.iter().map(|a| cast_to(a.ty, t.as_ref())).collect())
-        }
-        Inputs::Expects(types) => {
-            let mut casts = Vec::new();
-            for (i, a) in args.iter().enumerate() {
-                let want = types.get(i).or(types.last()).unwrap_or(&InputType::Any);
-                let to = implicit(a.ty, want).ok_or_else(|| Mismatch::Unexpected {
-                    arg: i,
-                    param: i,
-                    ty: a.ty.cloned(),
-                    required: want.sql(),
-                })?;
-                casts.push(cast_to(a.ty, to.as_ref()));
-            }
-            Ok(casts)
-        }
+/// `inputs` (ANSI `implicitCast`); `call` is the arguments as the function's
+/// input builder sees them.
+pub(super) fn inputs(
+    inputs: &Inputs,
+    args: &[Arg<'_>],
+    call: &CallTypes<'_>,
+) -> Result<Vec<Option<DataType>>, Mismatch> {
+    if *inputs == Inputs::Common {
+        let t = common_all(args).ok_or_else(|| {
+            Mismatch::DataDiff(args.iter().map(|a| a.ty.cloned()).collect(), false)
+        })?;
+        return Ok(args.iter().map(|a| cast_to(a.ty, t.as_ref())).collect());
     }
+    let Some(types) = inputs.expected(call) else {
+        return Ok(vec![None; args.len()]);
+    };
+    let mut casts = Vec::new();
+    for (i, a) in args.iter().enumerate() {
+        let want = types.get(i).or(types.last()).unwrap_or(&InputType::Any);
+        let to = implicit(a.ty, want).ok_or_else(|| Mismatch::Unexpected {
+            arg: i,
+            param: i,
+            ty: a.ty.cloned(),
+            required: want.sql(),
+        })?;
+        casts.push(cast_to(a.ty, to.as_ref()));
+    }
+    Ok(casts)
 }
 
 /// The type an argument of type `from` takes for `want`, if it may.
@@ -541,6 +544,17 @@ fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType
         (_, InputType::Any) => Some(from.cloned()),
         (Some(t), InputType::Numeric { .. }) if is_numeric(t) => Some(Some(t.clone())),
         (None | Some(T::String), InputType::Numeric { .. }) => Some(Some(T::Double)),
+        // A type of the collection stays; another takes the first member
+        // it may be cast to (Spark's `TypeCollection`), except that a number
+        // is not narrowed or widened into one (`date_add(d, 1L)` and
+        // `date_add(d, 1.5D)` fail, while `substring(s, 1L)` casts).
+        (Some(f), InputType::OneOf(types)) if types.contains(f) => Some(Some(f.clone())),
+        (_, InputType::OneOf(types)) => types.iter().find_map(|t| {
+            if from.is_some_and(is_numeric) && is_numeric(t) {
+                return None;
+            }
+            implicit(from, &InputType::Exact(t.clone()))
+        }),
         (None, InputType::Exact(t)) => Some(Some(t.clone())),
         (Some(f), InputType::Exact(t)) => {
             let from_string = is_numeric(t)
@@ -552,7 +566,8 @@ fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType
                 || (is_numeric(f) && is_numeric(t))
                 || *t == T::String
                 || (*f == T::String && from_string)
-                || (*f == T::Date && matches!(t, T::Timestamp | T::TimestampNtz));
+                || (*f == T::Date && matches!(t, T::Timestamp | T::TimestampNtz))
+                || (matches!(f, T::Timestamp | T::TimestampNtz) && *t == T::Date);
             ok.then(|| Some(t.clone()))
         }
         _ => None,
@@ -745,6 +760,23 @@ mod tests {
         );
         assert_eq!(InputType::Any.sql(), r#""ANY""#);
         assert_eq!(exact(T::Integer).sql(), r#""INT""#);
+        // Spark's `TypeCollection`: members stay, others take the first
+        // member they may be cast to, numbers excepted.
+        let days = InputType::OneOf(vec![T::Integer, T::Short, T::Byte]);
+        assert_eq!(implicit(Some(&T::Byte), &days), Some(Some(T::Byte)));
+        assert_eq!(implicit(Some(&T::String), &days), Some(Some(T::Integer)));
+        assert_eq!(implicit(None, &days), Some(Some(T::Integer)));
+        assert_eq!(implicit(Some(&T::Long), &days), None);
+        assert_eq!(implicit(Some(&T::Double), &days), None);
+        let text = InputType::OneOf(vec![T::String, T::Binary]);
+        assert_eq!(implicit(Some(&T::Binary), &text), Some(Some(T::Binary)));
+        assert_eq!(implicit(Some(&T::Boolean), &text), Some(Some(T::String)));
+        assert_eq!(implicit(Some(&T::Long), &text), Some(Some(T::String)));
+        // `year(ts)` reads the timestamp's date.
+        assert_eq!(
+            implicit(Some(&T::TimestampNtz), &exact(T::Date)),
+            Some(Some(T::Date))
+        );
     }
 
     /// A canonical operator called with the wrong number of arguments (no

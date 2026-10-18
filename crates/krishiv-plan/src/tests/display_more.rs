@@ -142,6 +142,7 @@ fn resolved(id: FunctionId, args: Vec<Arc<Expr>>, filter: Option<Arc<Expr>>) -> 
             filter,
             data_type: DataType::Long,
             nullable: false,
+            deterministic: true,
         },
     )))
 }

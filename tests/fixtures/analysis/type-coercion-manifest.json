@@ -58,242 +58,242 @@
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-09-09 12:12:12.4' = timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-09-09 12:12:12.5' < timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-09-09 12:12:12.5' <= timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-09-09 12:12:12.5' <> timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-09-09 12:12:12.5' > timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-09-09 12:12:12.5' >= timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-09-09' = date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-9-10' < date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-9-10' <= date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-9-10' <> date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-9-10' > date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT '1996-9-10' >= date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string) < timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string) <= timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string) <> timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string) = date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string) = timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string) > timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string) >= timestamp('1996-09-09 12:12:12.4') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string)< date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string)<= date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string)<> date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string)> date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT cast(null as string)>= date('1996-09-09') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-09-09') = '1996-09-09' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-09-09') = cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-9-10') < '1996-09-09' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-9-10') < cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-9-10') <= '1996-09-09' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-9-10') <= cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-9-10') <> '1996-09-09' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-9-10') <> cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-9-10') > '1996-09-09' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-9-10') > cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-9-10') >= '1996-09-09' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT date('1996-9-10') >= cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.4' )= '1996-09-09 12:12:12.4' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.4' )= cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.5' )< '1996-09-09 12:12:12.4' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.5' )< cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.5' )<= '1996-09-09 12:12:12.4' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.5' )<= cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.5' )<> '1996-09-09 12:12:12.4' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.5' )<> cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.5' )> '1996-09-09 12:12:12.4' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.5' )> cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.5' )>= '1996-09-09 12:12:12.4' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/binaryComparison",
       "query": "SELECT timestamp('1996-09-09 12:12:12.5' )>= cast(null as string) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/concat",
@@ -693,437 +693,437 @@
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('1' as binary), cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('1' as binary), cast(1 as decimal(20, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('1' as binary), cast(1 as decimal(3, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('1' as binary), cast(1 as decimal(5, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('2017-12-11 09:30:00' as date), cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('2017-12-11 09:30:00' as date), cast(1 as decimal(20, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('2017-12-11 09:30:00' as date), cast(1 as decimal(3, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('2017-12-11 09:30:00' as date), cast(1 as decimal(5, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('2017-12-11 09:30:00.0' as timestamp), cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('2017-12-11 09:30:00.0' as timestamp), cast(1 as decimal(20, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('2017-12-11 09:30:00.0' as timestamp), cast(1 as decimal(3, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast('2017-12-11 09:30:00.0' as timestamp), cast(1 as decimal(5, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as bigint), cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as bigint), cast(1 as decimal(20, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as bigint), cast(1 as decimal(3, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as bigint), cast(1 as decimal(5, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast('1' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as decimal(20, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as decimal(3, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as decimal(5, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), cast(1 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast('1' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(20, 0)), cast(1 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast('1' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(3, 0)) , cast(1 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast('1' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as decimal(5, 0)) , cast(1 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as double), cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as double), cast(1 as decimal(20, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as double), cast(1 as decimal(3, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as double), cast(1 as decimal(5, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as float), cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as float), cast(1 as decimal(20, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as float), cast(1 as decimal(3, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as float), cast(1 as decimal(5, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as int), cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as int), cast(1 as decimal(20, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as int), cast(1 as decimal(3, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as int), cast(1 as decimal(5, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as smallint), cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as smallint), cast(1 as decimal(20, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as smallint), cast(1 as decimal(3, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as smallint), cast(1 as decimal(5, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as tinyint), cast(1 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as tinyint), cast(1 as decimal(20, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as tinyint), cast(1 as decimal(3, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/decimalPrecision",
       "query": "SELECT pmod(cast(1 as tinyint), cast(1 as decimal(5, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/elt",
@@ -1148,732 +1148,732 @@
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('1' as binary), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as bigint), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as boolean), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as double), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as float), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as int), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as smallint), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as string), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast('2' as binary)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast(2 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast(2 as boolean)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast(2 as decimal(10, 0))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast(2 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast(2 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast(2 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast(2 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast(2 as string)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/ifCoercion",
       "query": "SELECT IF(true, cast(1 as tinyint), cast(2 as tinyint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `IF`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function IF"
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
       "query": "SELECT '$' || date('1996-09-09') || '$' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
       "query": "SELECT '$' || timestamp('1996-09-09 10:11:12.4' )|| '$' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
@@ -1887,98 +1887,43 @@
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT day( '1996-01-10') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `day`"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
       "query": "SELECT hour( '10:11:12') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `hour`"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT length('four') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `length`"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT length(1.1) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `length`"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT length(cast(1 as bigint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `length`"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT length(cast(1 as int)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `length`"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT length(cast(1 as smallint)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `length`"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT length(cast(1.1 as decimal(8,3))) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `length`"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT length(cast(1.1 as double)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `length`"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT length(cast(1.1 as float)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `length`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function hour"
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
       "query": "SELECT length(date('1996-09-10')) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `length`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
       "query": "SELECT length(timestamp('1996-09-10 10:11:12.4')) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `length`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
       "query": "SELECT minute( '10:11:12') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `minute`"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT month( '1996-01-10') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `month`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function minute"
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
       "query": "SELECT second( '10:11:12') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `second`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function second"
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
       "query": "SELECT time_trunc('HOUR', '12:34:56') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `time_trunc`"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT year( '1996-01-10') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `year`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function time_trunc"
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
       "query": "select '1996-09-10' like date('1996-09-10') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
       "query": "select date('1996-09-10') like '19%' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `date`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
     {
       "file": "typeCoercion/native/mapZipWith",
@@ -2073,37 +2018,37 @@
     {
       "file": "typeCoercion/native/mapconcat",
       "query": "SELECT\n    map_concat(boolean_map1, boolean_map2) boolean_map,\n    map_concat(tinyint_map1, tinyint_map2) tinyint_map,\n    map_concat(smallint_map1, smallint_map2) smallint_map,\n    map_concat(int_map1, int_map2) int_map,\n    map_concat(bigint_map1, bigint_map2) bigint_map,\n    map_concat(decimal_map1, decimal_map2) decimal_map,\n    map_concat(float_map1, float_map2) float_map,\n    map_concat(double_map1, double_map2) double_map,\n    map_concat(date_map1, date_map2) date_map,\n    map_concat(timestamp_map1, timestamp_map2) timestamp_map,\n    map_concat(string_map1, string_map2) string_map,\n    map_concat(array_map1, array_map2) array_map,\n    map_concat(struct_map1, struct_map2) struct_map,\n    map_concat(string_int_map1, string_int_map2) string_int_map,\n    map_concat(int_string_map1, int_string_map2) int_string_map\nFROM various_maps",
-      "reason": "UNRESOLVED_ROUTINE: `map_concat`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_concat"
     },
     {
       "file": "typeCoercion/native/mapconcat",
       "query": "SELECT\n    map_concat(boolean_map1, int_map2) bi_map\nFROM various_maps",
-      "reason": "UNRESOLVED_ROUTINE: `map_concat`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_concat"
     },
     {
       "file": "typeCoercion/native/mapconcat",
       "query": "SELECT\n    map_concat(int_map1, array_map2) ms_map\nFROM various_maps",
-      "reason": "UNRESOLVED_ROUTINE: `map_concat`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_concat"
     },
     {
       "file": "typeCoercion/native/mapconcat",
       "query": "SELECT\n    map_concat(int_map1, struct_map2) is_map\nFROM various_maps",
-      "reason": "UNRESOLVED_ROUTINE: `map_concat`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_concat"
     },
     {
       "file": "typeCoercion/native/mapconcat",
       "query": "SELECT\n    map_concat(struct_map1, array_map2) ma_map\nFROM various_maps",
-      "reason": "UNRESOLVED_ROUTINE: `map_concat`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_concat"
     },
     {
       "file": "typeCoercion/native/mapconcat",
       "query": "SELECT\n    map_concat(tinyint_map1, array_map1) tm_map\nFROM various_maps",
-      "reason": "UNRESOLVED_ROUTINE: `map_concat`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_concat"
     },
     {
       "file": "typeCoercion/native/mapconcat",
       "query": "SELECT\n    map_concat(tinyint_map1, smallint_map2) ts_map,\n    map_concat(smallint_map1, int_map2) si_map,\n    map_concat(int_map1, bigint_map2) ib_map,\n    map_concat(bigint_map1, decimal_map2) bd_map,\n    map_concat(decimal_map1, float_map2) df_map,\n    map_concat(string_map1, date_map2) std_map,\n    map_concat(timestamp_map1, string_map2) tst_map,\n    map_concat(string_map1, int_map2) sti_map,\n    map_concat(int_string_map1, tinyint_map2) istt_map\nFROM various_maps",
-      "reason": "UNRESOLVED_ROUTINE: `map_concat`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_concat"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
@@ -2128,12 +2073,12 @@
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT + '1' FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `positive`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function positive"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT abs('1') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `abs`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function abs"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
@@ -2158,147 +2103,147 @@
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT kurtosis('1') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `kurtosis`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function kurtosis"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', '1')                                        FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', cast('1' as binary))                        FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', cast('2017-12-11 09:30:00' as date))        FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', cast(1 as bigint))                          FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', cast(1 as boolean))                         FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', cast(1 as decimal(10, 0)))                  FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', cast(1 as double))                          FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', cast(1 as float))                           FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', cast(1 as int))                             FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', cast(1 as smallint))                        FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod('1', cast(1 as tinyint))                         FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod(cast('1' as binary), '1')                        FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod(cast('2017-12-11 09:30:00' as date), '1')        FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod(cast('2017-12-11 09:30:00.0' as timestamp), '1') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod(cast(1 as bigint), '1')                          FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod(cast(1 as boolean), '1')                         FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod(cast(1 as decimal(10, 0)), '1')                  FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod(cast(1 as double), '1')                          FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod(cast(1 as float), '1')                           FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod(cast(1 as int), '1')                             FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod(cast(1 as smallint), '1')                        FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT pmod(cast(1 as tinyint), '1')                         FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `pmod`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function pmod"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT skewness('1') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `skewness`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function skewness"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT stddev_pop('1') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `stddev_pop`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function stddev_pop"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT stddev_samp('1') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `stddev_samp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function stddev_samp"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT var_pop('1') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `var_pop`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function var_pop"
     },
     {
       "file": "typeCoercion/native/promoteStrings",
       "query": "SELECT var_samp('1') FROM t",
-      "reason": "UNRESOLVED_ROUTINE: `var_samp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function var_samp"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
@@ -2318,37 +2263,37 @@
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select from_json(a, 'a INT') from t",
-      "reason": "UNRESOLVED_ROUTINE: `from_json`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_json"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select from_unixtime('2018-01-01', a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `from_unixtime`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_unixtime"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select from_unixtime(a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `from_unixtime`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_unixtime"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select get_json_object(a, a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `get_json_object`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function get_json_object"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select json_tuple(a, a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `json_tuple`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function json_tuple"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select next_day('2018-01-01', a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `next_day`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function next_day"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select next_day(a, 'MO') from t",
-      "reason": "UNRESOLVED_ROUTINE: `next_day`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function next_day"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
@@ -2358,32 +2303,32 @@
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select to_timestamp('2018-01-01', a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `to_timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select to_timestamp(a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `to_timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select to_unix_timestamp('2018-01-01', a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `to_unix_timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function to_unix_timestamp"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select to_unix_timestamp(a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `to_unix_timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function to_unix_timestamp"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select trunc('2018-01-01', a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `trunc`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function trunc"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select trunc(a, 'MM') from t",
-      "reason": "UNRESOLVED_ROUTINE: `trunc`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function trunc"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
@@ -2393,12 +2338,12 @@
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select unix_timestamp('2018-01-01', a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `unix_timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function unix_timestamp"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select unix_timestamp(a) from t",
-      "reason": "UNRESOLVED_ROUTINE: `unix_timestamp`"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function unix_timestamp"
     },
     {
       "file": "typeCoercion/native/widenSetOperationTypes",

@@ -6,7 +6,8 @@
 ## Purpose
 Krishiv's own logical-plan IR (unresolved and resolved relation/expression nodes, origins, structural hash,
 pretty-printer) and the analyzer (`analyzer`: catalog / function-registry / access-policy traits, Bind and
-Resolve stages); later physical plans. Front ends (SQL AST, Spark Connect
+Resolve stages; `BuiltinFunctions` is the production `FunctionRegistry` over `krishiv-functions`, also used by
+`analyzer::testing::context`); later physical plans. Front ends (SQL AST, Spark Connect
 decoder in `krishiv-connect`, native DataFrame APIs) lower into the IR.
 
 ## Invariants
