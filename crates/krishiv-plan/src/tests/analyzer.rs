@@ -1000,6 +1000,47 @@ fn no_relation_bypasses_the_policy() {
     assert_eq!(calls.calls.lock().unwrap().len(), 1);
 }
 
+/// Every scan of a table is checked, not only the first; a spelling of a
+/// name does not dodge a rule on another, existing table or not.
+#[test]
+fn every_scan_and_spelling_is_checked() {
+    let ctx = ctx();
+    let valid = scan(&["t"], &[("a", DataType::Integer)]);
+    let invented = scan(&["t"], &[("secret_column", DataType::Integer)]);
+    let crossed = valid
+        .clone()
+        .join(invented, JoinKind::Cross, JoinCondition::None);
+    assert_eq!(class(&run(crossed, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+    let mut versioned = scan(&["t"], &[("secret_column", DataType::Integer)]);
+    if let PlanNode::Scan(s) = &mut versioned.node {
+        s.version = Some(crate::TableVersion(3));
+    }
+    let crossed = valid.join(versioned, JoinKind::Cross, JoinCondition::None);
+    assert_eq!(class(&run(crossed, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+    let deny = |ident: &str| {
+        let mut c = ctx.clone();
+        c.policy = Arc::new(DenyOne(format!("table {ident}")));
+        c
+    };
+    let nosuch = "`spark_catalog`.`default`.`nosuch`";
+    for spelling in [["NoSuch"], ["NOSUCH"]] {
+        assert_eq!(
+            class(&run(LogicalPlan::table(spelling), &deny(nosuch))),
+            "KRISHIV_INSUFFICIENT_PERMISSIONS"
+        );
+    }
+}
+
+/// A shift over a plan that is not resolved is not a resolved plan.
+#[test]
+fn a_shift_over_an_unresolved_plan_is_rejected() {
+    let shifted = LogicalPlan::new(PlanNode::Shift {
+        input: Arc::new(LogicalPlan::table(["t"])),
+        offset: 10,
+    });
+    assert_eq!(class(&run(shifted, &ctx())), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
 /// A catalog that fails with a message of its own.
 struct Failing;
 

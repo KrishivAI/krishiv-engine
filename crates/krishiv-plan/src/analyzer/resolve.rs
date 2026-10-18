@@ -450,6 +450,11 @@ impl Resolver<'_> {
             }
             PlanNode::Shift { input, offset } => {
                 let c = self.child(input, env)?;
+                // The shifted node keeps its input: it may stand for the
+                // resolved plan only when resolving left the input as it was.
+                if !Arc::ptr_eq(&c.plan, input) && !input.is_resolved() {
+                    return Err(unsupported("a shift over an unresolved plan", o));
+                }
                 self.shifted(&c, *offset, Some(Arc::clone(p)))
             }
             PlanNode::Project { input, exprs } => self.project(p, input, exprs, env),

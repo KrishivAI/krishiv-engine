@@ -268,6 +268,18 @@ fn locate(ctx: &AnalysisContext, parts: &[String]) -> Option<(Arc<dyn Catalog>, 
     Some((catalog, ident))
 }
 
+/// `ident` as a catalog resolving case-insensitively sees it.
+fn fold(ident: &TableIdent, case_sensitive: bool) -> TableIdent {
+    if case_sensitive {
+        return ident.clone();
+    }
+    TableIdent {
+        catalog: ident.catalog.clone(),
+        namespace: ident.namespace.iter().map(|s| s.to_lowercase()).collect(),
+        name: ident.name.to_lowercase(),
+    }
+}
+
 /// Asks the policy about `securable` once per query; a denial or any policy
 /// error fails closed, without the policy's reason or error text, and row
 /// filters and column masks are rejected until they can be applied.
@@ -323,6 +335,10 @@ async fn load(
 ) -> Result<(), AnalysisError> {
     let cs = ctx.conf.case_sensitive;
     let mut checked: Vec<(Securable, usize)> = Vec::new();
+    // Scans already validated, by table: a scan of one table may differ from
+    // another in version and columns, and each is checked on its own.
+    type Seen<'a> = (Option<TableVersion>, &'a [BoundColumn]);
+    let mut validated: HashMap<&[String], Vec<Seen<'_>>> = HashMap::new();
     for f in found {
         let (name, version, columns, origin, scan) = match f {
             Found::Path(securable, origin) => {
@@ -332,7 +348,13 @@ async fn load(
             Found::Table(name, origin) => (name, None, &[][..], origin, false),
             Found::Scan(name, version, columns, origin) => (name, version, columns, origin, true),
         };
-        if !scan && b.tables.contains_key(name) || scan && b.scans.contains_key(name) {
+        if !scan && b.tables.contains_key(name)
+            || scan
+                && validated.get(name).is_some_and(|v| {
+                    v.iter()
+                        .any(|(ver, cols)| *ver == version && *cols == columns)
+                })
+        {
             continue;
         }
         let search_path = b.search_path.clone();
@@ -352,14 +374,12 @@ async fn load(
             b.tables.insert(name.to_vec(), BoundTable::Missing);
             continue;
         };
-        authorize(
-            ctx,
-            b,
-            &mut checked,
-            Securable::Table(ident.clone()),
-            origin,
-        )
-        .await?;
+        // Asked as written, and folded the way a case-insensitive catalog
+        // folds, so no spelling of a name dodges a rule on another (the
+        // catalog's own identifier is asked below once the table is loaded).
+        for first in [ident.clone(), fold(&ident, cs)] {
+            authorize(ctx, b, &mut checked, Securable::Table(first), origin).await?;
+        }
         let failed = |_| {
             AnalysisError::new(
                 KrishivCatalogFailure {
@@ -412,6 +432,7 @@ async fn load(
                 return Err(unsupported("a scan that does not match its table", origin));
             }
             b.scans.insert(name.to_vec(), securable);
+            validated.entry(name).or_default().push((version, columns));
         } else {
             b.tables.insert(
                 name.to_vec(),
