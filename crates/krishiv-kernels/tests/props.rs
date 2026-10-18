@@ -662,6 +662,58 @@ proptest! {
     }
 }
 
+/// Regression for `decimal_ops`: a quotient whose 39-decimal expansion does
+/// not fit 256 bits made the reference oracle saturate, then round to a value
+/// that fit, so it disagreed with the (correct) kernel. Spark 4.2 returns
+/// NULL for these divisions, or under ANSI raises with the value text below.
+#[test]
+fn decimal_divide_with_a_quotient_beyond_256_bits() {
+    let (l, r) = ((33, 1), (16, 8));
+    let col = |v: i128| Column {
+        values: vec![v],
+        valid: vec![true],
+        offset: 0,
+    };
+    // 99999999999999999999999999999999.9 / 0.00000001 and / 0.000001.
+    let dividend = 10_i128.pow(33) - 1;
+    for (divisor, out, want) in [
+        (1, (38, 6), None),
+        (1, (38, 0), None),
+        (100, (38, 6), None),
+        (
+            100,
+            (38, 0),
+            Some(99_999_999_999_999_999_999_999_999_999_999_900_000),
+        ),
+    ] {
+        let c = Case {
+            l: col(dividend),
+            r: col(divisor),
+            shape: Shape::ArrayArray,
+        };
+        let plan = DecimalPlan::new(DecimalOp::Divide, l, r, out).unwrap();
+        check_decimal_op(&plan, l, r, &c);
+        let (la, ra) = (decimal_array(&c.l, l), decimal_array(&c.r, r));
+        let got = reference::decimal_arith(
+            &plan,
+            OverflowMode::NullOnOverflow,
+            SparkVersion::V4_2,
+            Operand::Array(&la),
+            Operand::Array(&ra),
+        )
+        .unwrap();
+        assert_eq!(got.iter().next(), Some(want), "/ {divisor} as {out:?}");
+    }
+    let plan = DecimalPlan::new(DecimalOp::Divide, l, r, (38, 6)).unwrap();
+    let (la, ra) = (decimal_array(&col(dividend), l), decimal_array(&col(1), r));
+    let ctx = KernelCtx::default().with_spark_version(SparkVersion::V4_2);
+    let err = decimal_arith::<AnsiError>(Operand::Array(&la), Operand::Array(&ra), &plan, &ctx)
+        .unwrap_err();
+    let spark = " 9999999999999999999999999999999990000000.000000000000000000000000000000000000000 \
+                 cannot be represented as Decimal(38, 6).";
+    assert!(err.error().message().starts_with(spark), "{err:?}");
+}
+
 const KINDS: [CompareKind; 6] = [
     CompareKind::Equal,
     CompareKind::NotEqual,

@@ -331,10 +331,16 @@ pub fn decimal_arith(
             DecimalOp::Divide | DecimalOp::IntegralDivide => {
                 let (n, d) = (wa.wrapping_mul(pow(rs)), wb.wrapping_mul(pow(ls)));
                 let q39 = crate::decimal::quotient_text(n, d, 39);
-                let digits: String = q39.chars().filter(|c| *c != '.').collect();
-                // Beyond 256 bits it is far outside any decimal type.
-                let q: i256 = digits.parse().unwrap_or(i256::MAX);
-                Some((round_digits(q, usize::from(39 - os)), q39))
+                // HALF_UP to `os` decimals reads only the first `os + 1` of
+                // them (truncating the rest never moves that decision), so
+                // drop the others before parsing: the full 39-decimal
+                // quotient can exceed 256 bits even when the result fits.
+                let (int, frac) = q39.split_once('.').unwrap_or((q39.as_str(), ""));
+                let kept = frac.get(..=usize::from(os)).unwrap_or(frac);
+                // Beyond 256 bits it is far outside any decimal type:
+                // i256::MAX has more digits than any precision.
+                let q: i256 = format!("{int}{kept}").parse().unwrap_or(i256::MAX);
+                Some((round_digits(q, kept.len() - usize::from(os)), q39))
             }
         };
         let Some((v, text)) = computed else {
