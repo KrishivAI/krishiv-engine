@@ -3,10 +3,10 @@ source: crates/krishiv-sql/tests/analyzer.rs
 expression: a.plan.root().to_string()
 ---
 Sort [o_year#60 ASC NULLS FIRST], true
-+- Aggregate [o_year#60], [o_year#60, (sum(CASE WHEN (nation#62 == 'BRAZIL') THEN volume#61 ELSE 0 END) / sum(volume#61)) AS mkt_share#63]
++- Aggregate [o_year#60], [o_year#60, (sum(CASE WHEN (nation#62 == 'BRAZIL') THEN volume#61 ELSE CAST(0 AS DECIMAL(32,4)) END) / sum(volume#61)) AS mkt_share#63]
    +- SubqueryAlias all_nations
-      +- Project [extract('year', o_orderdate#36) AS o_year#60, (l_extendedprice#21 * (1 - l_discount#22)) AS volume#61, n_name#54 AS nation#62]
-         +- Filter (((((p_partkey#0 == l_partkey#17) and (s_suppkey#9 == l_suppkey#18)) and (l_orderkey#16 == o_orderkey#32)) and ((o_custkey#33 == c_custkey#41) and (c_nationkey#44 == n_nationkey#49))) and ((((n_regionkey#51 == r_regionkey#57) and (r_name#58 == 'AMERICA')) and (s_nationkey#12 == n_nationkey#53)) and ((o_orderdate#36 BETWEEN CAST('1995-01-01' AS DATE) AND CAST('1996-12-31' AS DATE)) and (p_type#4 == 'ECONOMY ANODIZED STEEL'))))
+      +- Project [extract('year', o_orderdate#36) AS o_year#60, (l_extendedprice#21 * (CAST(1 AS DECIMAL(1,0)) - l_discount#22)) AS volume#61, n_name#54 AS nation#62]
+         +- Filter (((((p_partkey#0 == l_partkey#17) and (s_suppkey#9 == l_suppkey#18)) and (l_orderkey#16 == o_orderkey#32)) and ((o_custkey#33 == c_custkey#41) and (c_nationkey#44 == n_nationkey#49))) and ((((n_regionkey#51 == r_regionkey#57) and (r_name#58 == 'AMERICA')) and (s_nationkey#12 == n_nationkey#53)) and (((o_orderdate#36 >= CAST('1995-01-01' AS DATE)) and (o_orderdate#36 <= CAST('1996-12-31' AS DATE))) and (p_type#4 == 'ECONOMY ANODIZED STEEL'))))
             +- Join Inner
                :- Join Inner
                :  :- Join Inner

@@ -4,7 +4,7 @@ expression: a.plan.root().to_string()
 ---
 Limit 10
 +- Sort [revenue#33 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST], true
-   +- Aggregate [l_orderkey#17, o_orderdate#12, o_shippriority#15], [l_orderkey#17, sum((l_extendedprice#22 * (1 - l_discount#23))) AS revenue#33, o_orderdate#12, o_shippriority#15]
+   +- Aggregate [l_orderkey#17, o_orderdate#12, o_shippriority#15], [l_orderkey#17, sum((l_extendedprice#22 * (CAST(1 AS DECIMAL(1,0)) - l_discount#23))) AS revenue#33, o_orderdate#12, o_shippriority#15]
       +- Filter ((((c_mktsegment#6 == 'BUILDING') and (c_custkey#0 == o_custkey#9)) and (l_orderkey#17 == o_orderkey#8)) and ((o_orderdate#12 < CAST('1995-03-15' AS DATE)) and (l_shipdate#27 > CAST('1995-03-15' AS DATE))))
          +- Join Inner
             :- Join Inner

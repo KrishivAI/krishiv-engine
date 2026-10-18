@@ -52,12 +52,16 @@ TABLES = {
     "u": "a INT, d STRING",
     "wide": "col1 INT, col2 INT, col3 INT, col4 INT, col5 INT, col6 INT, col7 INT, colx INT",
     "MixedCase": "Id INT, Name STRING",
+    "n": "ti TINYINT, si SMALLINT, i INT, l BIGINT, f FLOAT, d DOUBLE, dc DECIMAL(10,2), dw DECIMAL(38,10), "
+    "s STRING, bo BOOLEAN, dt DATE, ts TIMESTAMP, tn TIMESTAMP_NTZ, bi BINARY",
 }
 
 CASE_SENSITIVE = {"spark.sql.caseSensitive": "true"}
 NO_ALIASES = {"spark.sql.groupByAliases": "false"}
 NO_ORDINALS = {"spark.sql.groupByOrdinal": "false", "spark.sql.orderByOrdinal": "false"}
 NO_LCA = {"spark.sql.lateralColumnAlias.enableImplicitResolution": "false"}
+NO_ANSI = {"spark.sql.ansi.enabled": "false"}
+NO_LOSS = {"spark.sql.decimalOperations.allowPrecisionLoss": "false"}
 
 CORPUS = [
     # unresolved and ambiguous columns, suggestions and their order
@@ -252,6 +256,114 @@ CORPUS = [
     ("SELECT * FROM (SELECT a, d AS b FROM u) o WHERE EXISTS (SELECT a AS k, a AS k FROM t ORDER BY k LIMIT 1)", {}),
     ("SELECT max(c) FROM t GROUP BY a, b HAVING count(*) > 1 ORDER BY b", {}),
     ("SELECT max(c) AS m FROM t GROUP BY a HAVING count(*) > 1 ORDER BY a", {}),
+    # type coercion (n has a column of each type): arithmetic, decimals and literals
+    (
+        "SELECT ti + si, i + l, f + f, f + i, d * l, dc + i, dc * dc, dw + dw, dc / i, i / l, i % ti, dc % i, "
+        "1 + 1.5, dc + 1, dc * 2, 12345678901 + dc, -5 * dc, s + i, s * d, s / l, -s, -dc, NULL + i, NULL + NULL "
+        "FROM n",
+        {},
+    ),
+    ("SELECT dc * dw, dw / dc, dc + dw FROM n", NO_LOSS),
+    ("SELECT dc + i, i / 2, dc * 2, -s FROM n", NO_ANSI),
+    # comparisons, IN, BETWEEN, CASE, boolean and string operators, functions
+    (
+        "SELECT i = l, ti < dc, dc = 1, i = 1.5, s = i, s < dc, s = dt, dt < ts, ts = tn, s = bo, i = NULL, "
+        "NULL = NULL, l <=> s FROM n",
+        {},
+    ),
+    (
+        "SELECT i IN (1, 2L), i IN (1.5, 2), s IN (1, 2), dc IN (1, 2.55), i IN (NULL, 1), dt IN ('2020-01-01') FROM n",
+        {},
+    ),
+    ("SELECT i BETWEEN 1 AND 2L, dt BETWEEN '2020-01-01' AND ts, dc BETWEEN 1 AND 2.5, s BETWEEN 1 AND 'x' FROM n", {}),
+    (
+        "SELECT CASE WHEN bo THEN i ELSE l END, CASE WHEN bo THEN dc ELSE 0 END, CASE WHEN bo THEN s ELSE i END, "
+        "CASE WHEN bo THEN NULL ELSE dt END, CASE WHEN bo THEN f ELSE i END FROM n",
+        {},
+    ),
+    (
+        "SELECT NOT s, s AND bo, bo OR 'true', NOT NULL, i LIKE 1, dt LIKE '2020%', concat(i, s), concat(bi, bi), "
+        "concat(bo, NULL), i || s FROM n",
+        {},
+    ),
+    (
+        "SELECT sum(s), avg(i), sum(ti), sum(dc), avg(dw), sum(f), sum(NULL), substring(i, 1, 2), "
+        "substring(s, '1', 2L), upper(dt), coalesce(i, l), coalesce(dc, i), coalesce(1, 2.5), coalesce(dt, s) FROM n",
+        {},
+    ),
+    ("SELECT i IN (SELECT l FROM n), s IN (SELECT i FROM n), dc IN (SELECT i FROM n) FROM n", {}),
+    ("SELECT * FROM n x FULL JOIN (SELECT l AS i FROM n) y USING (i)", {}),
+    ("SELECT i FROM n GROUP BY i HAVING i", {}),
+    ("SELECT i FROM n GROUP BY i HAVING 'true'", {}),
+    # coercion errors
+    ("SELECT ti + bo FROM n", {}),
+    ("SELECT s + s FROM n", {}),
+    ("SELECT bo * bo FROM n", {}),
+    ("SELECT dt / dt FROM n", {}),
+    ("SELECT NULL + bo FROM n", {}),
+    ("SELECT NULL - s FROM n", {}),
+    ("SELECT i = dt FROM n", {}),
+    ("SELECT -bo FROM n", {}),
+    ("SELECT NOT i FROM n", {}),
+    ("SELECT i AND bo FROM n", {}),
+    ("SELECT i AND i FROM n", {}),
+    ("SELECT i IN (dt, dt) FROM n", {}),
+    ("SELECT CASE WHEN bo THEN 1 WHEN i THEN 2 END FROM n", {}),
+    ("SELECT CASE WHEN NULL THEN 1 END FROM n", {}),
+    ("SELECT CASE WHEN bo THEN 1 WHEN bo THEN dt ELSE s END FROM n", {}),
+    ("SELECT coalesce(i, dt, bo) FROM n", {}),
+    ("SELECT sum(bo) FROM n", {}),
+    ("SELECT substring(s, dt, 2) FROM n", {}),
+    ("SELECT * FROM n WHERE i", {}),
+    ("SELECT * FROM n WHERE NULL", {}),
+    ("SELECT count(*) FILTER (WHERE i) FROM n", {}),
+    ("SELECT * FROM n JOIN t ON i", {}),
+    ("SELECT i FROM n LIMIT 1L", {}),
+    ("SELECT i FROM n LIMIT CAST(1 AS SMALLINT)", {}),
+    ("SELECT i IN (SELECT dt FROM n) FROM n", {}),
+    ("SELECT (i, s) IN (SELECT i FROM n) FROM n", {}),
+    ("SELECT i IN (SELECT i, s FROM n) FROM n", {}),
+    ("SELECT (i, s) IN (SELECT i, dt FROM n) FROM n", {}),
+    ("SELECT * FROM n x JOIN (SELECT dt AS i FROM n) y USING (i)", {}),
+    ("SELECT i NOT IN (1, dt) FROM n", {}),
+    ("SELECT i NOT IN (SELECT dt FROM n) FROM n", {}),
+    ("SELECT i BETWEEN dt AND 1 FROM n", {}),
+    ("SELECT i NOT BETWEEN 1 AND dt FROM n", {}),
+    ("SELECT (i, s) NOT IN (SELECT i FROM n) FROM n", {}),
+    ("SELECT CAST('1' AS INT), CAST(1 AS DECIMAL(1,0)), CAST(1.55 AS DECIMAL(2,1)), TRY_CAST(1 AS BIGINT) FROM n", {}),
+    ("SELECT substring(NULL, 1, 2), upper(NULL), 1Y + dc, 1S * dc, ti * 2Y FROM n", {}),
+    ("SELECT substring(s, 1, dt) FROM n", {}),
+    ("SELECT CASE WHEN bo THEN 1 WHEN bo THEN 2 WHEN bo THEN 3 WHEN i THEN 4 END FROM n", {}),
+    ("SELECT (i + 1) IN (SELECT dt FROM n) FROM n", {}),
+    ("SELECT (l, s) IN (SELECT i, s FROM n) FROM n", {}),
+    ("SELECT * FROM n x JOIN (SELECT l AS i, s FROM n) y USING (i, s)", {}),
+    ("SELECT a FROM t GROUP BY a HAVING a IN (SELECT a FROM u)", {}),
+    # Spark resolves these; Krishiv rejects them explicitly for now
+    ("SELECT dt + i, dt - dt FROM n", {}),
+    ("SELECT s = 1 FROM n", NO_ANSI),
+]
+
+# Type coercion matrices over n's columns and some literals: every pair under `+`, `/` and `=`, and every
+# cast in each mode.
+OPERANDS = ["ti", "si", "i", "l", "f", "d", "dc", "dw", "s", "bo", "dt", "ts", "tn", "bi", "1", "1L", "1.5"]
+OPERANDS += ["CAST(1.5 AS DOUBLE)", "'1'", "NULL"]
+MATRIX = [(f"SELECT {x} {op} {y} FROM n", {}) for op in ["+", "/", "="] for x in OPERANDS for y in OPERANDS]
+CAST_TYPES = ["TINYINT", "SMALLINT", "INT", "BIGINT", "FLOAT", "DOUBLE", "DECIMAL(10,2)", "STRING", "BOOLEAN"]
+CAST_TYPES += ["DATE", "TIMESTAMP", "TIMESTAMP_NTZ", "BINARY"]
+# TRY_CAST and CAST of non-NULL values (nullability).
+LITERALS = ["1Y", "1S", "1", "1L", "CAST(1.5 AS FLOAT)", "1.5D", "CAST(1.5 AS DECIMAL(10,2))", "'1'", "true"]
+LITERALS += ["DATE'2020-01-01'", "CAST(DATE'2020-01-01' AS TIMESTAMP)", "X'01'"]
+CASTS = [
+    (f"SELECT {cast}({x} AS {t}) FROM n", conf)
+    for x in LITERALS
+    for t in [*CAST_TYPES, "DECIMAL(38,0)"]
+    for cast, conf in [("CAST", {}), ("TRY_CAST", {})]
+] + [
+    (f"SELECT {cast}({x} AS {t}) FROM n", conf)
+    for x in OPERANDS
+    if not x[0].isdigit()
+    for t in CAST_TYPES
+    for cast, conf in [("CAST", {}), ("CAST", NO_ANSI), ("TRY_CAST", {})]
 ]
 
 TPCH_DIR = Path(__file__).resolve().parents[2] / "bench" / "queries" / "tpch"
@@ -391,7 +503,7 @@ def main() -> None:
     for path in sorted(TPCH_DIR.glob("q*.sql")):
         sql = path.read_text(encoding="utf-8").strip().rstrip(";")
         tpch.append({"id": path.stem, **run_sql(sql, {})})
-    corpus = [{"sql": sql, "conf": conf, **run_sql(sql, conf)} for sql, conf in CORPUS]
+    corpus = [{"sql": sql, "conf": conf, **run_sql(sql, conf)} for sql, conf in CORPUS + MATRIX + CASTS]
     plan_ids = [{"id": i, "dataframe": d, **analyze(f)} for i, d, f in plan_id_cases(spark)]
     for name in TABLES:
         spark.sql(f"DROP TABLE IF EXISTS {name}")

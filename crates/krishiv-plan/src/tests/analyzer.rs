@@ -1512,11 +1512,11 @@ fn missing_references_come_before_outer_ones() {
     let shown = |name: &str| run(query(name), &ctx).unwrap().plan.root().to_string();
     // `d` is u's own column, dropped below the filter, not the outer alias.
     let own = shown("d");
-    assert!(own.contains("Filter (d#"), "{own}");
+    assert!(own.contains("Filter (CAST(d#"), "{own}");
     assert!(!own.contains("outer("), "{own}");
     // `b` exists only in the enclosing query.
     let outer = shown("b");
-    assert!(outer.contains("Filter (outer(b#"), "{outer}");
+    assert!(outer.contains("Filter (CAST(outer(b#"), "{outer}");
 }
 
 /// A subexpression shared through `Arc` inside a lateral alias item and a
@@ -1554,6 +1554,23 @@ fn shared_subexpressions_in_rewrites() {
     );
 }
 
+/// A registry entry prints its identity, kind and inputs (never its result
+/// closure).
+#[test]
+fn function_entries_print_their_signature() {
+    use crate::analyzer::{FunctionLookup, FunctionRegistry as _};
+    let FunctionLookup::Found(entry) = crate::analyzer::testing::TestFunctions
+        .lookup(&["substring".to_owned()], SparkProfile::default())
+    else {
+        panic!("substring is registered");
+    };
+    let text = format!("{entry:?}");
+    assert!(
+        text.contains("inputs: Expects([Exact(String), Exact(Integer)])"),
+        "{text}"
+    );
+}
+
 #[test]
 fn deep_plans_resolve_on_a_small_stack_and_added_nodes_count() {
     on_small_stack(|| {
@@ -1566,7 +1583,9 @@ fn deep_plans_resolve_on_a_small_stack_and_added_nodes_count() {
             });
         assert_eq!(class(&run(deep, &ctx)), "OK");
         // A column list on an alias adds a projection: one level too many.
-        let wide = (0..MAX_DEPTH - 2).fold(LogicalPlan::table(["t"]), |p, _| p.filter(c("a")));
+        let wide = (0..MAX_DEPTH - 2).fold(LogicalPlan::table(["t"]), |p, _| {
+            p.filter(gt(c("a"), int(0)))
+        });
         let renamed = LogicalPlan::new(PlanNode::SubqueryAlias {
             input: Arc::new(wide),
             alias: "x".to_owned(),

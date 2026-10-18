@@ -4,8 +4,8 @@
 //! - Analyzed, they and a name-resolution corpus give Spark's output names
 //!   and nullability, or Spark's error class, message parameters and query
 //!   context (`tests/fixtures/spark-4.2.0/analyzer-goldens.json`, generated
-//!   by `tests/scripts/gen_analyzer_goldens.py` from a real Spark run).
-//!   Output types are left to type coercion (T071b). The resolved TPC-H
+//!   by `tests/scripts/gen_analyzer_goldens.py` from a real Spark run), and
+//!   output types (Spark's type coercion, P2-T071b). The resolved TPC-H
 //!   plans are insta snapshots.
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 #![expect(clippy::unwrap_in_result, reason = "a malformed fixture is a test bug")]
@@ -75,18 +75,19 @@ fn compare(sql: &str, got: &Result<AnalyzedPlan, AnalysisError>, want: &Value) -
     let text = redact_sql(sql);
     match (got, want["ok"].as_bool().unwrap()) {
         (Ok(a), true) => {
-            let got: Vec<(String, bool)> = a
+            let got: Vec<(String, String, bool)> = a
                 .output
                 .iter()
-                .map(|c| (c.name.clone(), c.nullable))
+                .map(|c| (c.name.clone(), c.data_type.simple_string(), c.nullable))
                 .collect();
-            let want: Vec<(String, bool)> = want["output"]
+            let want: Vec<(String, String, bool)> = want["output"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .map(|f| {
                     (
                         f["name"].as_str().unwrap().to_owned(),
+                        f["type"].as_str().unwrap().to_owned(),
                         f["nullable"].as_bool().unwrap(),
                     )
                 })
@@ -166,16 +167,53 @@ fn tpch_resolves_as_spark_does() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Coercions Krishiv rejects explicitly (`KRISHIV_UNSUPPORTED_FEATURE`)
+/// where Spark resolves or fails with another class, never with a wrong
+/// result: `+` and `-` with a date or timestamp operand (`date_add`,
+/// intervals; owner: P2-T025a), and operators' string coercions with
+/// `spark.sql.ansi.enabled` off (owner: P2-T071d).
+const GAPS: [&str; 2] = [
+    "date and timestamp arithmetic",
+    "implicit string casts with spark.sql.ansi.enabled off",
+];
+
+/// Statements whose output is nullable where Spark's is not, by design
+/// (ADR 0023): a STRING is valid UTF-8, so `TRY_CAST` of binary bytes that
+/// are not yields NULL.
+const NULLABLE_BY_DESIGN: [&str; 1] = ["SELECT TRY_CAST(X'01' AS STRING) FROM n"];
+
+/// Whether `got` fails with one of the [`GAPS`].
+fn known_gap(got: &Result<AnalyzedPlan, AnalysisError>) -> bool {
+    got.as_ref().err().is_some_and(|e| {
+        e.error.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE"
+            && e.error
+                .message_parameters()
+                .iter()
+                .any(|(k, v)| *k == "feature" && GAPS.contains(&v.as_str()))
+    })
+}
+
 #[test]
 fn resolution_corpus_matches_spark() {
     let g = goldens();
     let mut failures = Vec::new();
     let mut raised = std::collections::BTreeSet::new();
+    let mut gaps = 0;
+    let mut by_design = 0;
     for case in g["corpus"].as_array().unwrap() {
         let sql = case["sql"].as_str().unwrap();
         let conf = conf(&case["conf"]);
         let got = analyze(&g, sql, conf);
-        if let Some(diff) = compare(sql, &got, case) {
+        if known_gap(&got) {
+            gaps += 1;
+            continue;
+        }
+        let mut case = case.clone();
+        if NULLABLE_BY_DESIGN.contains(&sql) {
+            by_design += 1;
+            case["output"][0]["nullable"] = serde_json::Value::Bool(true);
+        }
+        if let Some(diff) = compare(sql, &got, &case) {
             failures.push(format!("{sql} {}: {diff}", case["conf"]));
         }
         if let Err(e) = &got {
@@ -198,8 +236,11 @@ fn resolution_corpus_matches_spark() {
         failures.len(),
         failures.join("\n")
     );
-    // Classes of lateral aliases and ordinals, each matched against Spark
-    // above.
+    // The gaps stay the statements they are now.
+    assert_eq!(gaps, 113, "statements in documented gaps");
+    assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
+    // Classes of lateral aliases, ordinals and type coercion, each matched
+    // against Spark above.
     for class in [
         "AMBIGUOUS_LATERAL_COLUMN_ALIAS",
         "GROUP_BY_POS_AGGREGATE",
@@ -208,6 +249,20 @@ fn resolution_corpus_matches_spark() {
         "STAR_GROUP_BY_POS",
         "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_AGGREGATE_FUNC",
         "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_GROUP_BY",
+        // Type coercion and checks.
+        "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+        "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+        "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
+        "DATATYPE_MISMATCH.CAST_WITH_CONF_SUGGESTION",
+        "DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION",
+        "DATATYPE_MISMATCH.DATA_DIFF_TYPES",
+        "DATATYPE_MISMATCH.FILTER_NOT_BOOLEAN",
+        "DATATYPE_MISMATCH.IN_SUBQUERY_DATA_TYPE_MISMATCH",
+        "DATATYPE_MISMATCH.IN_SUBQUERY_LENGTH_MISMATCH",
+        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+        "INVALID_AGGREGATE_FILTER.NOT_BOOLEAN",
+        "INVALID_LIMIT_LIKE_EXPRESSION.DATA_TYPE",
+        "JOIN_CONDITION_IS_NOT_BOOLEAN_TYPE",
     ] {
         assert!(raised.contains(class), "{class} not raised");
     }
