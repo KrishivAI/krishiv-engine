@@ -99,6 +99,19 @@ impl KrishivError {
     pub fn message_parameters(&self) -> &[(&'static str, String)] {
         &self.parameters
     }
+
+    /// The same error with every message parameter replaced by
+    /// [`crate::secret::REDACTED`], for an error raised at a secret (a
+    /// syntax error at a password in query text).
+    #[must_use]
+    pub fn redacted(&self) -> Self {
+        let parameters = self
+            .parameters
+            .iter()
+            .map(|(k, _)| (*k, crate::secret::REDACTED.to_owned()))
+            .collect();
+        Self::from_parts(self.class, parameters)
+    }
 }
 
 /// Renders the error-class reference as Markdown (`cargo xtask docs-errors`).

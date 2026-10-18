@@ -138,6 +138,34 @@ pub fn has_spdx_header(text: &str) -> bool {
     })
 }
 
+/// An identifier allowed only in the listed files (paths from the repository
+/// root): `RedactedSql` is built only by the token redactor (ADR 0038).
+pub const CONFINED_IDENTS: &[(&str, &[&str])] = &[(
+    "from_marks_unchecked",
+    &[
+        "crates/krishiv-common/src/redact.rs",
+        "crates/krishiv-sql/src/redact.rs",
+    ],
+)];
+
+/// Confined identifiers used outside their files, as `(line, identifier)`.
+#[must_use]
+pub fn confined_idents_in(rel_path: &str, text: &str) -> Vec<(usize, &'static str)> {
+    let rel_path = rel_path.replace('\\', "/");
+    let mut out = Vec::new();
+    for (ident, allowed) in CONFINED_IDENTS {
+        if allowed.contains(&rel_path.as_str()) {
+            continue;
+        }
+        for (n, line) in text.lines().enumerate() {
+            if line.contains(ident) {
+                out.push((n + 1, *ident));
+            }
+        }
+    }
+    out
+}
+
 /// Banned identifiers found in `text` as `(line number, identifier)`.
 #[must_use]
 pub fn banned_idents_in(text: &str) -> Vec<(usize, &'static str)> {

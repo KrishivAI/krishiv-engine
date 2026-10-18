@@ -2,8 +2,8 @@
 //! Tests for the workflow, SPDX and banned-identifier lints.
 
 use xtask::lint::{
-    banned_idents_in, has_spdx_header, unsafe_allowed_in, unsafe_lines, unsafe_sites_per_crate,
-    workflow_violations,
+    banned_idents_in, confined_idents_in, has_spdx_header, unsafe_allowed_in, unsafe_lines,
+    unsafe_sites_per_crate, workflow_violations,
 };
 
 #[test]
@@ -305,4 +305,15 @@ fn unsafe_after_random_literals_is_always_found() {
         src.push_str("unsafe { f() }");
         assert!(unsafe_lines(&src).contains(&line), "{src:?} -> line {line}");
     }
+}
+
+#[test]
+fn redacted_sql_is_built_only_by_the_token_redactor() {
+    let call = "let r = RedactedSql::from_marks_unchecked(sql, marks);";
+    assert!(confined_idents_in("crates/krishiv-sql/src/redact.rs", call).is_empty());
+    assert!(confined_idents_in("crates\\krishiv-sql\\src\\redact.rs", call).is_empty());
+    assert_eq!(
+        confined_idents_in("crates/krishiv-plan/src/x.rs", call),
+        vec![(1, "from_marks_unchecked")]
+    );
 }

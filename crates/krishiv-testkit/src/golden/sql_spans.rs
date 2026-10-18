@@ -47,12 +47,16 @@ struct Frame {
 /// The node's `Debug` lines without spans, trimmed, as a comparable text.
 fn without_spans<'a>(lines: impl Iterator<Item = &'a str>) -> String {
     let mut out = String::new();
+    let mut ordinal = false;
     for line in lines
         .map(|l| l.trim().trim_end_matches(','))
         .filter(|l| !l.starts_with("span: "))
     {
         let line = line.rsplit_once(": Expr {").map_or(line, |_| "Expr {");
-        out.push_str(line);
+        // A `?` marker's ordinal is its position in the whole statement,
+        // so an expression parsed alone numbers it from 0.
+        out.push_str(if ordinal { "_" } else { line });
+        ordinal = line.ends_with("Parameter(");
         out.push('\n');
     }
     out
@@ -182,5 +186,7 @@ mod tests {
         q.span.end = 3;
         assert!(check_spans(sql, &q, &d).is_err());
         assert_eq!(respaced("SELECT -- c\n1"), "SELECT /* x */\n1");
+        let params = "SELECT ? - ?";
+        check_spans(params, &parse_query(params, &d).unwrap(), &d).unwrap();
     }
 }

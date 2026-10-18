@@ -142,15 +142,65 @@ fn options_print_as_typed_values() {
 }
 
 #[test]
-fn sql_text_is_redacted_as_free_text() {
+fn sql_text_and_literal_urls_never_print() {
     let plan = LogicalPlan::new(PlanNode::Sql {
         query: "select * from t where password = 'hunter2'".to_owned(),
         args: crate::SqlArgs::None,
     });
-    let shown = plan.to_string();
+    assert_eq!(plan.to_string(), "Sql [42 bytes]\n");
+    let url = crate::Expr::from(crate::Literal::String("https://u:hunter2@h/".to_owned()));
+    let shown = LogicalPlan::table(["t"]).project(vec![url]).to_string();
     assert!(!shown.contains("hunter2"), "{shown}");
     assert!(
-        shown.starts_with("Sql 'select * from t where password = "),
+        shown.contains("'https://u:*********(redacted)@h/'"),
         "{shown}"
     );
+}
+
+#[test]
+fn literal_debug_shows_every_kind_and_hides_url_credentials() {
+    use crate::{DayTimeField, Literal, YearMonthField};
+    let all = [
+        Literal::Null(None),
+        Literal::Boolean(true),
+        Literal::Byte(1),
+        Literal::Short(2),
+        Literal::Integer(3),
+        Literal::Long(4),
+        Literal::Float(1.5),
+        Literal::Double(2.5),
+        Literal::Decimal {
+            unscaled: 15,
+            data_type: krishiv_types::DecimalType::try_new(2, 1).unwrap(),
+        },
+        Literal::String("plain".to_owned()),
+        Literal::String("https://u:hunter2@h/".to_owned()),
+        Literal::Binary(vec![1]),
+        Literal::Date(1),
+        Literal::Timestamp(2),
+        Literal::TimestampNtz(3),
+        Literal::YearMonthInterval {
+            months: 13,
+            start: YearMonthField::Year,
+            end: YearMonthField::Month,
+        },
+        Literal::DayTimeInterval {
+            micros: 5,
+            start: DayTimeField::Day,
+            end: DayTimeField::Second,
+        },
+    ];
+    let shown = format!("{all:?}");
+    assert!(!shown.contains("hunter2"), "{shown}");
+    for kind in [
+        "Null",
+        "Decimal",
+        "plain",
+        "Binary",
+        "TimestampNtz",
+        "YearMonthInterval",
+        "DayTimeInterval",
+    ] {
+        assert!(shown.contains(kind), "{kind}: {shown}");
+    }
 }

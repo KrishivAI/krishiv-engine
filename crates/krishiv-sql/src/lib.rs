@@ -31,10 +31,14 @@ mod generated {
 }
 mod keywords;
 pub mod lexer;
+mod lower;
 mod parser;
+mod redact;
 mod types;
 
 pub use error::ParseError;
+pub use lower::{lower, parse_and_lower};
+pub use redact::redact_sql;
 
 /// The deepest tree the parser builds, counted in nested expressions,
 /// queries and relations; deeper statements fail with
@@ -89,7 +93,7 @@ impl ParserOptions {
 /// `INVALID_IDENTIFIER`, `FAILED_TO_PARSE_TOO_COMPLEX` or
 /// `SYNTAX_DISCONTINUED.BANG_EQUALS_NOT`.
 pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, ParseError> {
-    parser::parse_query(sql, *options)
+    parser::parse_query(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
 #[cfg(test)]

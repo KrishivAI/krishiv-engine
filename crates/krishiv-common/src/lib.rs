@@ -8,3 +8,4 @@ pub mod error;
 pub mod experimental;
 pub mod redact;
 pub mod secret;
+pub mod stack;

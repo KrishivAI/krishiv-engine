@@ -283,6 +283,11 @@ pub fn run_source_guard(root: &Path) -> Result<(), String> {
                 "{rel}:{line}: `{ident}` is banned (parquet's object_store feature is off; ADR 0028)"
             ));
         }
+        for (line, ident) in lint::confined_idents_in(&rel, &text) {
+            hits.push(format!(
+                "{rel}:{line}: `{ident}` is for the SQL token redactor only (ADR 0038): use `krishiv_sql::redact_sql`"
+            ));
+        }
         if !lint::unsafe_allowed_in(&rel) {
             for line in lint::unsafe_lines(&text) {
                 hits.push(format!(
