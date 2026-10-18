@@ -2,7 +2,7 @@
 source: crates/krishiv-optimizer/tests/it/rules.rs
 expression: SELECT a FROM (SELECT a FROM t WHERE rand() > 0.5) WHERE a > 1 AND rand() > 0.5 AND rand() > 0.5
 ---
-Filter ((rand() > 0.5) and (rand() > 0.5))
+Filter ((rand() > 0.5D) and (rand() > 0.5D))
 +- Filter (a#0 > 1)
-   +- Filter (rand() > 0.5)
+   +- Filter (rand() > 0.5D)
       +- Scan spark_catalog.default.t [a#0]

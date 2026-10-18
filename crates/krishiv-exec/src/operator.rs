@@ -103,6 +103,17 @@ pub enum OperatorOutput {
     Finished(Option<Batch>),
 }
 
+/// What [`Operator::flush`] produced.
+#[derive(Debug)]
+pub enum FlushOutput {
+    /// One output batch; call `flush` again.
+    Batch(Batch),
+    /// No output from this step (it read or built state); call `flush` again.
+    Continue,
+    /// Nothing left to flush.
+    Done,
+}
+
 /// A streaming operator in the middle of a pipeline.
 pub trait Operator: Send + Sync {
     /// A name for metrics and memory consumers.
@@ -154,6 +165,44 @@ pub trait Operator: Send + Sync {
     /// once when the query ends. Default: none.
     fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
         Vec::new()
+    }
+    /// Whether the operator has work left that needs **every** driver's
+    /// input first (a hash join's spilled partitions). If so, after
+    /// [`finish`](Self::finish) a driver calls [`end_input`](Self::end_input),
+    /// waits until every driver of the pipeline has (a barrier), then calls
+    /// [`flush`](Self::flush) until `Done`, pushing each batch downstream.
+    /// Drivers flush in parallel, so the operator shares out the work
+    /// itself. Default: `false`.
+    fn needs_flush(&self) -> bool {
+        false
+    }
+    /// This driver's input ended: publish what [`flush`](Self::flush) needs
+    /// from the local state (before the barrier; may await I/O and
+    /// [`TaskContext::run_blocking`]).
+    ///
+    /// # Errors
+    /// Any error fails the query.
+    fn end_input<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<()>> {
+        let _ = (local, ctx);
+        Box::pin(async { Ok(()) })
+    }
+    /// One bounded step of the work left after every driver's input ended.
+    /// May await I/O and [`TaskContext::run_blocking`]; the driver checks
+    /// cancellation, aborts and spill requests between steps.
+    ///
+    /// # Errors
+    /// Any error fails the query.
+    fn flush<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<FlushOutput>> {
+        let _ = (local, ctx);
+        Box::pin(async { Ok(FlushOutput::Done) })
     }
 }
 

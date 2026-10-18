@@ -1330,8 +1330,21 @@ pub fn cancellation(fx: &dyn FormatFixture) -> SuiteResult {
         DataType::BinaryView,
         true,
     )]));
+    // Incompressible bytes, so a compressing format still writes 6 MiB.
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
     let blob: Vec<Option<Vec<u8>>> = (0..24)
-        .map(|i| Some(vec![u8::try_from(i).unwrap_or(0); 256 << 10]))
+        .map(|_| {
+            Some(
+                (0..256 << 10)
+                    .map(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        state.to_le_bytes()[0]
+                    })
+                    .collect(),
+            )
+        })
         .collect();
     let big = RecordBatch::try_new(
         Arc::clone(&big_schema),

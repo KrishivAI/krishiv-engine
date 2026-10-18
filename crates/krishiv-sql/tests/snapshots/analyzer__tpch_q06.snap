@@ -3,5 +3,5 @@ source: crates/krishiv-sql/tests/analyzer.rs
 expression: a.plan.root().to_string()
 ---
 Aggregate [], [sum((l_extendedprice#5 * l_discount#6)) AS revenue#16]
-+- Filter (((l_shipdate#10 >= CAST('1994-01-01' AS DATE)) and (l_shipdate#10 < CAST('1995-01-01' AS DATE))) and ((l_discount#6 BETWEEN 0.05 AND 0.07) and (l_quantity#4 < 24)))
++- Filter (((l_shipdate#10 >= CAST('1994-01-01' AS DATE)) and (l_shipdate#10 < CAST('1995-01-01' AS DATE))) and (((l_discount#6 >= CAST(0.05 AS DECIMAL(15,2))) and (l_discount#6 <= CAST(0.07 AS DECIMAL(15,2)))) and (l_quantity#4 < CAST(24 AS DECIMAL(15,2)))))
    +- Scan spark_catalog.default.lineitem [l_orderkey#0, l_partkey#1, l_suppkey#2, l_linenumber#3, l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10, l_commitdate#11, l_receiptdate#12, l_shipinstruct#13, l_shipmode#14, l_comment#15]

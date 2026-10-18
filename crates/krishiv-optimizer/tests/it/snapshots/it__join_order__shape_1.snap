@@ -9,5 +9,5 @@ Project [n_name#1]
       +- Join Inner, (c_nationkey#14 == n_nationkey#0)
          :- Aggregate [c_nationkey#14], [c_nationkey#14]
          :  +- Scan spark_catalog.default.customer [c_nationkey#14]
-         +- Filter (5 > n_nationkey#0)
+         +- Filter (5L > n_nationkey#0)
             +- Scan spark_catalog.default.nation [n_nationkey#0, n_name#1]

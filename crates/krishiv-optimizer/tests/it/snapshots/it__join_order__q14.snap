@@ -2,7 +2,7 @@
 source: crates/krishiv-optimizer/tests/it/join_order.rs
 expression: optimized.root().to_string()
 ---
-Aggregate [], [((100.00 * sum(CASE WHEN (p_type#20 like 'PROMO%') THEN (l_extendedprice#5 * (1 - l_discount#6)) ELSE 0 END)) / sum((l_extendedprice#5 * (1 - l_discount#6)))) AS promo_revenue#25]
+Aggregate [], [((100.00 * sum(CASE WHEN (p_type#20 like 'PROMO%') THEN (l_extendedprice#5 * (1 - l_discount#6)) ELSE 0.0000 END)) / sum((l_extendedprice#5 * (1 - l_discount#6)))) AS promo_revenue#25]
 +- Project [l_extendedprice#5, l_discount#6, p_type#20]
    +- Join Inner, (l_partkey#1 == p_partkey#16)
       :- Project [l_partkey#1, l_extendedprice#5, l_discount#6]

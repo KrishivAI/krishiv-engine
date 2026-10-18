@@ -11,7 +11,9 @@
 //!   `let id = b.child_pipeline(agg.clone(), child)?; b.set_breaker_source(agg, id)`;
 //! - a hash join builds its build side as a child pipeline ending in the
 //!   join's build sink, then its probe side into the current pipeline, then
-//!   pushes the probe operator.
+//!   pushes the probe operator with
+//!   [`push_operator_reading`](PipelineBuilder::push_operator_reading), which
+//!   hands it the build's finalized state.
 //!
 //! A pipeline starts once every child pipeline it depends on has
 //! finalized. The executor owns breaker state: it keeps each finalized
@@ -39,6 +41,8 @@ pub trait ExecNode: Send + Sync {
 pub(crate) struct Pipeline {
     pub(crate) source: (OperatorId, Arc<dyn Source>),
     pub(crate) operators: Vec<(OperatorId, Arc<dyn Operator>)>,
+    /// Per operator: the breaker sink whose finalized state it reads.
+    pub(crate) operator_inputs: Vec<Option<OperatorId>>,
     pub(crate) sink: (OperatorId, Arc<dyn Sink>),
     /// Pipelines that must finalize first.
     pub(crate) deps: Vec<usize>,
@@ -52,6 +56,7 @@ struct Draft {
     source: Option<(OperatorId, Arc<dyn Source>)>,
     input: Option<OperatorId>,
     operators: Vec<(OperatorId, Arc<dyn Operator>)>,
+    operator_inputs: Vec<Option<OperatorId>>,
     sink: (OperatorId, Arc<dyn Sink>),
     deps: Vec<usize>,
     preserve_order: bool,
@@ -91,6 +96,7 @@ impl PipelineBuilder {
             source: None,
             input: None,
             operators: Vec::new(),
+            operator_inputs: Vec::new(),
             sink: (id, result),
             deps: Vec::new(),
             preserve_order: false,
@@ -138,11 +144,7 @@ impl PipelineBuilder {
         source: Arc<dyn Source>,
         sink: OperatorId,
     ) -> Result<OperatorId> {
-        let deps = &self.drafts[self.current].deps;
-        let child = deps.iter().any(|&d| self.drafts[d].sink.0 == sink);
-        if !child {
-            return Err(internal(format!("{sink:?} does not end a child pipeline")));
-        }
+        self.check_child(sink)?;
         let id = self.set_source(source)?;
         self.draft().input = Some(sink);
         Ok(id)
@@ -152,8 +154,39 @@ impl PipelineBuilder {
     /// source and the operators pushed before it).
     pub fn push_operator(&mut self, op: Arc<dyn Operator>) -> OperatorId {
         let id = self.id(op.name());
-        self.draft().operators.push((id, op));
+        let draft = self.draft();
+        draft.operators.push((id, op));
+        draft.operator_inputs.push(None);
         id
+    }
+
+    /// As [`push_operator`](Self::push_operator), for an operator that reads
+    /// the finalized global state of the breaker sink `sink` (a hash join's
+    /// probe reads its build) through
+    /// [`TaskContext::dependency`](crate::TaskContext::dependency).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if `sink` does not end a child pipeline of the
+    /// current one.
+    pub fn push_operator_reading(
+        &mut self,
+        op: Arc<dyn Operator>,
+        sink: OperatorId,
+    ) -> Result<OperatorId> {
+        self.check_child(sink)?;
+        let id = self.push_operator(op);
+        if let Some(input) = self.draft().operator_inputs.last_mut() {
+            *input = Some(sink);
+        }
+        Ok(id)
+    }
+
+    fn check_child(&self, sink: OperatorId) -> Result<()> {
+        let deps = &self.drafts[self.current].deps;
+        if deps.iter().any(|&d| self.drafts[d].sink.0 == sink) {
+            return Ok(());
+        }
+        Err(internal(format!("{sink:?} does not end a child pipeline")))
     }
 
     /// Runs the current pipeline with one driver, keeping its input order
@@ -178,6 +211,7 @@ impl PipelineBuilder {
             source: None,
             input: None,
             operators: Vec::new(),
+            operator_inputs: Vec::new(),
             sink: (id, sink),
             deps: Vec::new(),
             preserve_order: false,
@@ -202,6 +236,7 @@ impl PipelineBuilder {
                 Ok(Pipeline {
                     source,
                     operators: d.operators,
+                    operator_inputs: d.operator_inputs,
                     sink: d.sink,
                     deps: d.deps,
                     preserve_order: d.preserve_order,

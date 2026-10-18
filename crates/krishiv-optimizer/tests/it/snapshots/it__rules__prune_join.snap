@@ -6,5 +6,5 @@ Project [b#1]
 +- Join Inner, (a#0 == a#3)
    :- Scan spark_catalog.default.u [a#3]
    +- Project [a#0, b#1]
-      +- Filter (c#2 > 1)
+      +- Filter (c#2 > 1L)
          +- Scan spark_catalog.default.t [a#0, b#1, c#2]

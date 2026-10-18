@@ -35,6 +35,12 @@
     ],
     "sqlState" : "22023"
   },
+  "KRISHIV_JOIN_PARTITION_TOO_LARGE" : {
+    "message" : [
+      "A hash join partition with <buildRows> build rows still does not fit in memory after <depth> rounds of repartitioning: its build side is skewed on very few join keys. Increase \"krishiv.memory.limit\", or rewrite the query so the skewed keys are joined separately."
+    ],
+    "sqlState" : "53200"
+  },
   "KRISHIV_OBJECT_STORE_REQUEST_FAILED" : {
     "message" : [
       "Reading the file <path> failed: the object store did not complete the request after <attempts> attempt(s): <reason>. This is a storage failure, not a corrupt file, so it is never skipped by \"ignoreCorruptFiles\". Retry the query, or check the store's availability and permissions."

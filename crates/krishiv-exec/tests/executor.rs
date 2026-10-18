@@ -23,9 +23,9 @@ use krishiv_common::config::Config;
 use krishiv_common::error::{DivideByZero, ErrorClass, KrishivError};
 use krishiv_exec::testing::{Break, Buffer, Count, Filter, Limit, Pipe, RangeSource, Scan, schema};
 use krishiv_exec::{
-    DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, Executor, ExecutorConfig, LocalState, Operator,
-    OperatorOutput, PipelineBuilder, QueryContext, QueryId, QueryRunner, Result, Scheduler,
-    TaskContext, TokioClock, TokioExecutor, WorkloadClass,
+    DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, Executor, ExecutorConfig, FlushOutput, LocalState,
+    Operator, OperatorOutput, PipelineBuilder, QueryContext, QueryId, QueryRunner, Result,
+    Scheduler, TaskContext, TokioClock, TokioExecutor, WorkloadClass,
 };
 use krishiv_memory::{BoxFuture, MemoryConfig, MemoryError, MemoryPool, Spillable, TreePool};
 use krishiv_types::batch::Batch;
@@ -1172,5 +1172,155 @@ async fn a_spill_request_to_a_source_is_answered_and_never_hangs() {
         q.error().unwrap().error_class(),
         ErrorClass::OperationCanceled
     );
+    assert_released(&root);
+}
+
+/// A flush-phase operator. With `spin` it swallows its input, and the first
+/// driver to flush waits, like a grace join's exclusive driver, until no
+/// other driver holds this operator's state; the others emit batches.
+struct Gate {
+    spin: bool,
+    live: Arc<AtomicU64>,
+    claimed: std::sync::atomic::AtomicBool,
+}
+
+fn gate(spin: bool) -> Arc<Gate> {
+    Arc::new(Gate {
+        spin,
+        live: Arc::default(),
+        claimed: std::sync::atomic::AtomicBool::new(false),
+    })
+}
+
+struct GateState(Arc<AtomicU64>, Option<bool>);
+
+impl Drop for GateState {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl Operator for Gate {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        self.live.fetch_add(1, Ordering::AcqRel);
+        Ok(Box::new(GateState(Arc::clone(&self.live), None)))
+    }
+
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        Ok(OperatorOutput::NeedMoreInput(
+            (!self.spin).then(|| input.clone()),
+        ))
+    }
+
+    fn needs_flush(&self) -> bool {
+        true
+    }
+
+    fn flush<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        _ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<FlushOutput>> {
+        let state = local.downcast_mut::<GateState>().unwrap();
+        let claimer = *state
+            .1
+            .get_or_insert_with(|| !self.claimed.swap(true, Ordering::AcqRel));
+        let out = if !self.spin {
+            FlushOutput::Done
+        } else if claimer {
+            if self.live.load(Ordering::Acquire) > 1 {
+                FlushOutput::Continue
+            } else {
+                FlushOutput::Done
+            }
+        } else {
+            let values = arrow_array::Int64Array::from_iter_values(0..100);
+            let data = arrow_array::RecordBatch::try_new(schema(), vec![Arc::new(values)]);
+            FlushOutput::Batch(Batch::new(data.unwrap()))
+        };
+        Box::pin(std::future::ready(Ok(out)))
+    }
+}
+
+/// A driver whose output of a flushing operator is no longer wanted (a
+/// `LIMIT` above it finished) drops that operator's state before it waits
+/// at a later flush barrier, so a driver waiting for that state to go away
+/// (a grace join's exclusive driver) can finish instead of deadlocking.
+#[tokio::test]
+async fn an_unwanted_operator_gives_up_its_shared_flush_work() {
+    let runner = QueryRunner::new(executor(2));
+    let root = root(64 * MIB);
+    let config = ExecConfig {
+        morsel_rows: 4096,
+        ..ExecConfig::default()
+    };
+    let q = query(&root, 1, config);
+    let (_, scan) = scan(100_000);
+    let plan = pipe(pipe(pipe(scan, gate(true)), Limit::new(1_000)), gate(false));
+    let out = tokio::time::timeout(Duration::from_secs(30), run(&runner, plan, &q))
+        .await
+        .expect("the drivers deadlocked")
+        .unwrap();
+    assert_eq!(rows(&out), 1_000);
+    assert_released(&root);
+}
+
+/// Its flush step asks the downstream `Hold` of its own driver to spill and
+/// waits for the answer.
+struct AskSpill(Arc<Hold>);
+
+impl Operator for AskSpill {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+
+    fn needs_flush(&self) -> bool {
+        true
+    }
+
+    fn flush<'a>(
+        &'a self,
+        _local: &'a mut LocalState,
+        _ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<FlushOutput>> {
+        let signals = self.0.0.lock().unwrap().clone();
+        Box::pin(async move {
+            for s in signals {
+                assert_eq!(s.request_spill(MIB).await, MIB);
+            }
+            Ok(FlushOutput::Done)
+        })
+    }
+}
+
+/// While an operator's flush step waits (a grace join loading or
+/// repartitioning a partition), its driver still services spill requests
+/// for its other consumers; they no longer wait for the step to end.
+#[tokio::test(start_paused = true)]
+async fn a_driver_in_a_flush_step_services_spill_requests() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(8 * MIB);
+    let q = query(&root, 1, ExecConfig::default());
+    let hold = hold(MIB, true);
+    let (_, scan) = scan(10_000);
+    let ask: Arc<dyn Operator> = Arc::new(AskSpill(Arc::clone(&hold)));
+    let plan = pipe(pipe(scan, ask), Arc::clone(&hold) as Arc<dyn Operator>);
+    let out = tokio::time::timeout(Duration::from_secs(60), run(&runner, plan, &q))
+        .await
+        .expect("the spill request waited for the flush step")
+        .unwrap();
+    assert_eq!(rows(&out), 10_000);
     assert_released(&root);
 }

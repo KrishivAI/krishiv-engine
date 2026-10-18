@@ -3,5 +3,5 @@ source: crates/krishiv-optimizer/tests/it/rules.rs
 expression: SELECT a FROM t WHERE a > 1 + 2 * 3 AND c < 9223372036854775807 + 1
 ---
 Project [a#0]
-+- Filter ((a#0 > 7) and (c#2 < (9223372036854775807L + 1)))
++- Filter ((a#0 > 7) and (c#2 < (9223372036854775807L + 1L)))
    +- Scan spark_catalog.default.t [a#0, c#2]

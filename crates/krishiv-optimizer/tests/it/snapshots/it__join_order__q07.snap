@@ -8,7 +8,7 @@ Sort [supp_nation#48 ASC NULLS FIRST, cust_nation#49 ASC NULLS FIRST, l_year#50 
       +- Join Inner, ((s_nationkey#3 == n_nationkey#40) and (s_suppkey#0 == l_suppkey#9))
          :- Project [l_suppkey#9, l_extendedprice#12, l_discount#13, l_shipdate#17, n_nationkey#40, n_name#41, n_name#45]
          :  +- Join Inner, (o_orderkey#23 == l_orderkey#7)
-         :     :- Filter (l_shipdate#17 BETWEEN DATE '1995-01-01' AND DATE '1996-12-31')
+         :     :- Filter ((l_shipdate#17 >= DATE '1995-01-01') and (l_shipdate#17 <= DATE '1996-12-31'))
          :     :  +- Scan spark_catalog.default.lineitem [l_orderkey#7, l_suppkey#9, l_extendedprice#12, l_discount#13, l_shipdate#17]
          :     +- Project [o_orderkey#23, n_nationkey#40, n_name#41, n_name#45]
          :        +- Join Inner, (c_custkey#32 == o_custkey#24)

@@ -4,5 +4,5 @@ expression: optimized.root().to_string()
 ---
 Aggregate [], [sum((l_extendedprice#5 * l_discount#6)) AS revenue#16]
 +- Project [l_extendedprice#5, l_discount#6]
-   +- Filter (((l_shipdate#10 >= DATE '1994-01-01') and (l_shipdate#10 < DATE '1995-01-01')) and ((l_discount#6 BETWEEN 0.05 AND 0.07) and (l_quantity#4 < 24)))
+   +- Filter (((l_shipdate#10 >= DATE '1994-01-01') and (l_shipdate#10 < DATE '1995-01-01')) and (((l_discount#6 >= 0.05) and (l_discount#6 <= 0.07)) and (l_quantity#4 < 24.00)))
       +- Scan spark_catalog.default.lineitem [l_quantity#4, l_extendedprice#5, l_discount#6, l_shipdate#10]

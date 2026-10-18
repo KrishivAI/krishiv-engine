@@ -5,7 +5,7 @@ expression: optimized.root().to_string()
 Sort [cntrycode#26 ASC NULLS FIRST], true
 +- Aggregate [cntrycode#26], [cntrycode#26, count(1) AS numcust#27, sum(c_acctbal#5) AS totacctbal#28]
    +- Project [substring(c_phone#4, 1, 2) AS cntrycode#26, c_acctbal#5]
-      +- Filter (((substring(c_phone#4, 1, 2) IN ('13', '31', '23', '29', '30', '18', '17')) and (c_acctbal#5 > scalar-subquery)) and (NOT exists))
+      +- Filter (((substring(c_phone#4, 1, 2) IN ('13', '31', '23', '29', '30', '18', '17')) and (CAST(c_acctbal#5 AS DECIMAL(19,6)) > scalar-subquery)) and (NOT exists))
          :  :- Aggregate [], [avg(c_acctbal#13) AS avg(c_acctbal)#16]
          :  :  +- Project [c_acctbal#13]
          :  :     +- Shift +8

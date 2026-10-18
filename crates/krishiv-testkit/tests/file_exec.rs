@@ -24,11 +24,12 @@ use krishiv_exec::{
     TaskContext, TokioExecutor, WorkloadClass,
 };
 use krishiv_io::io::FaultStore;
+use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::split::{FilePartition, FileSplit, SplitConfig};
 use krishiv_io::{
-    ByteRange, CmpOp, ColumnPath, FileRef, IoConfig, IoCounters, IoScheduler, MetadataCols,
-    MetadataNeeds, PushdownExpr, RowSelection, ScalarValue, ScanOptions, StoreId, StorePolicy,
-    WriteOptions,
+    ByteRange, CmpOp, ColumnPath, FileFormat, FileRef, IoConfig, IoCounters, IoScheduler,
+    MetadataCols, MetadataNeeds, PushdownExpr, RowSelection, ScalarValue, ScanOptions, StoreId,
+    StorePolicy, WriteOptions,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
 use krishiv_testkit::file_format::mock::MockFormat;
@@ -880,4 +881,48 @@ fn concurrent_writers_never_share_a_file_name() {
             .collect::<Vec<_>>(),
     );
     assert_eq!(listed.len(), written, "a file overwrote another");
+}
+
+fn parquet_options(kv: &[(&str, &str)]) -> krishiv_io::FormatOptions {
+    let user = kv
+        .iter()
+        .map(|(k, v)| {
+            (
+                (*k).to_owned(),
+                krishiv_common::secret::OptionValue::from_user(k, (*v).to_owned()),
+            )
+        })
+        .collect();
+    ParquetFormat
+        .options()
+        .parse(&user, &krishiv_common::config::Config::new())
+        .unwrap()
+        .0
+}
+
+#[test]
+fn a_bad_write_setting_fails_when_the_write_is_planned() {
+    let env = Env::new(None).unwrap();
+    let e = FileWriteSink::try_new(
+        Arc::new(ParquetFormat),
+        env.io.clone(),
+        schema(),
+        parquet_options(&[("compression", "bogus")]),
+        write_options("x", 0, 0),
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion
+    );
+    let e = krishiv_io::FileWriter::new(
+        &env.io,
+        Arc::new(ParquetFormat),
+        schema(),
+        parquet_options(&[("compression", "lzo")]),
+        write_options("x", 0, 0),
+        env.reservation("w"),
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }

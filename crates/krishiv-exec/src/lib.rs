@@ -73,6 +73,7 @@ mod driver;
 mod error;
 mod executor;
 pub mod hash;
+mod join;
 mod metrics;
 mod morsel;
 mod operator;
@@ -91,9 +92,12 @@ pub use error::Result;
 pub use executor::{
     Executor, ExecutorConfig, TaskHandle, TokioClock, TokioExecutor, WorkloadClass,
 };
+pub use join::{HashJoin, HashJoinNode, JoinSpec, JoinType};
 pub use metrics::{DriverStats, OperatorEntry, OperatorMetrics, QueryMetrics};
 pub use morsel::MorselCursor;
-pub use operator::{GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source};
+pub use operator::{
+    FlushOutput, GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source,
+};
 pub use operators::{
     DEFAULT_MAX_MERGE_FAN_IN, FileScan, FileScanMetrics, FileScanSource, FileSelections, FileWrite,
     FileWriteSink, Filter, FilterPushdown, FnPredicate, Limit, METADATA_COLUMN, MemoryScan,

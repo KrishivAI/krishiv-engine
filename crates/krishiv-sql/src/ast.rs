@@ -1024,6 +1024,9 @@ pub enum ExprKind {
         high: Box<Expr>,
         /// `NOT`.
         negated: bool,
+        /// From `NOT` (or the keyword) to the end: the predicate as Spark's
+        /// errors cite it.
+        op: Span,
     },
     /// `expr [NOT] IN (list)`.
     InList {
@@ -1033,6 +1036,9 @@ pub enum ExprKind {
         list: Vec<Expr>,
         /// `NOT`.
         negated: bool,
+        /// From `NOT` (or the keyword) to the end: the predicate as Spark's
+        /// errors cite it.
+        op: Span,
     },
     /// `expr [NOT] IN (query)`.
     InSubquery {
@@ -1042,6 +1048,9 @@ pub enum ExprKind {
         query: Box<Query>,
         /// `NOT`.
         negated: bool,
+        /// From `NOT` (or the keyword) to the end: the predicate as Spark's
+        /// errors cite it.
+        op: Span,
     },
     /// `expr [NOT] LIKE | ILIKE pattern [ESCAPE 'c']`.
     Like {

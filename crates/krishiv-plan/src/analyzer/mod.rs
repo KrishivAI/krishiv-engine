@@ -30,6 +30,14 @@
 //!    sort names that a projection below dropped added back to it (Spark's
 //!    missing references) and dropped again above.
 //!
+//! Expressions are typed as Spark types them under ANSI as they are bound
+//! (`AnsiTypeCoercion`, `DecimalPrecision`): the canonical operators by
+//! Spark's operator rules, registry functions by their declared
+//! [`Inputs`]. Implicit casts are plain [`crate::ExprNode::Cast`] nodes in
+//! the pinned mode; names and error texts show expressions as written.
+//! `+` / `-` on dates and timestamps, and operators' string coercions with
+//! ANSI off, fail with `KRISHIV_UNSUPPORTED_FEATURE`.
+//!
 //! Resolution reads only the [`AnalysisContext`], whose configuration is a
 //! [`ResolutionConf`]: an input it does not hold cannot change the result,
 //! so `(input key, context fingerprint, pins)` is a sound cache key.
@@ -52,6 +60,7 @@
 
 mod bind;
 mod catalog;
+mod coerce;
 mod exprs;
 mod ops;
 mod resolve;
@@ -69,9 +78,9 @@ use twox_hash::XxHash3_128;
 
 pub use catalog::{
     AccessDecision, AccessPolicy, AllowAll, ArgType, BoxFuture, Catalog, CatalogResolver,
-    FunctionEntry, FunctionLookup, FunctionRegistry, MemoryCatalog, PolicyVersion, Principal,
-    PrincipalKind, Privilege, ResultType, RowColumnPolicy, Securable, SqlFrontend, TableColumn,
-    TableIdent, TableKind, TableMeta,
+    FunctionEntry, FunctionLookup, FunctionRegistry, InputType, Inputs, MemoryCatalog,
+    PolicyVersion, Principal, PrincipalKind, Privilege, ResultType, RowColumnPolicy, Securable,
+    SqlFrontend, TableColumn, TableIdent, TableKind, TableMeta,
 };
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
@@ -110,6 +119,9 @@ pub struct ResolutionConf {
     pub order_by_ordinal: bool,
     /// `spark.sql.lateralColumnAlias.enableImplicitResolution`.
     pub lateral_column_alias: bool,
+    /// `spark.sql.decimalOperations.allowPrecisionLoss`: decimal
+    /// arithmetic result types.
+    pub decimal_precision_loss: bool,
 }
 
 impl Default for ResolutionConf {
@@ -122,19 +134,21 @@ impl Default for ResolutionConf {
             group_by_ordinal: true,
             order_by_ordinal: true,
             lateral_column_alias: true,
+            decimal_precision_loss: true,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 6] = [
+    pub const KEYS: [&'static str; 7] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
         "spark.sql.groupByOrdinal",
         "spark.sql.orderByOrdinal",
         "spark.sql.lateralColumnAlias.enableImplicitResolution",
+        "spark.sql.decimalOperations.allowPrecisionLoss",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -148,8 +162,9 @@ impl ResolutionConf {
             d.group_by_ordinal,
             d.order_by_ordinal,
             d.lateral_column_alias,
+            d.decimal_precision_loss,
         ];
-        let mut v = [false; 6];
+        let mut v = [false; 7];
         for ((slot, key), default) in v.iter_mut().zip(Self::KEYS).zip(defaults) {
             *slot = conf(key).map_or(default, |s| s.trim().eq_ignore_ascii_case("true"));
         }
@@ -160,6 +175,7 @@ impl ResolutionConf {
             group_by_ordinal: v[3],
             order_by_ordinal: v[4],
             lateral_column_alias: v[5],
+            decimal_precision_loss: v[6],
         }
     }
 }
@@ -234,6 +250,7 @@ impl ContextFingerprint {
             c.group_by_ordinal,
             c.order_by_ordinal,
             c.lateral_column_alias,
+            c.decimal_precision_loss,
         ];
         num(
             &mut b,

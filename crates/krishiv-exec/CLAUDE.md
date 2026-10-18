@@ -25,6 +25,10 @@ morsels, footer read-ahead, `_metadata` struct column; filters stay `Inexact`) �
 (one writer task per driver behind a bounded channel; nothing visible after a failed or cancelled write) + FileWrite.
 End-to-end tests over the mock format: `krishiv-testkit/tests/file_exec.rs`; the conformance suite through the
 executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
+`join/` hash join (P2-T052a): `mod.rs` API + Spark semantics · `keys.rs` row-format keys, seeded foldhash,
+radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
+sink · `probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join.
+Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
 
 ## Invariants
 - All memory through krishiv-memory reservations; every spill path tested with tiny-memory tests.

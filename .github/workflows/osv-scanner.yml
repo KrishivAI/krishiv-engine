@@ -1,0 +1,62 @@
+name: OSV-Scanner
+
+# Known-vulnerability scan of the lock files (Cargo and uv) with OSV-Scanner.
+# Pull requests fail only on vulnerabilities they introduce (base vs head);
+# main and the weekly schedule scan everything and upload SARIF to code
+# scanning. The scan runs in Google's reusable workflows, so its jobs cannot
+# take a Harden-Runner step of ours.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1"
+
+concurrency:
+  group: osv-scanner-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  scan-pr:
+    if: github.event_name == 'pull_request'
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+    permissions:
+      # Required by the reusable workflow: read the code and its runs,
+      # upload SARIF to code scanning.
+      actions: read
+      contents: read
+      security-events: write
+    with:
+      # Fork pull requests get a read-only token: report in the job only.
+      upload-sarif: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+      scan-args: |-
+        --lockfile=Cargo.lock
+        --lockfile=fuzz/Cargo.lock
+        --lockfile=crates/krishiv-kernels/fuzz/Cargo.lock
+        --lockfile=tools/connect-protogen/Cargo.lock
+        --lockfile=python/uv.lock
+        --lockfile=bench/uv.lock
+        --lockfile=tests/scripts/uv.lock
+
+  scan:
+    if: github.event_name != 'pull_request'
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+    permissions:
+      # Required by the reusable workflow: read the code and its runs,
+      # upload SARIF to code scanning.
+      actions: read
+      contents: read
+      security-events: write
+    with:
+      scan-args: |-
+        --lockfile=Cargo.lock
+        --lockfile=fuzz/Cargo.lock
+        --lockfile=crates/krishiv-kernels/fuzz/Cargo.lock
+        --lockfile=tools/connect-protogen/Cargo.lock
+        --lockfile=python/uv.lock
+        --lockfile=bench/uv.lock
+        --lockfile=tests/scripts/uv.lock

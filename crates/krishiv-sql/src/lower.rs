@@ -341,7 +341,22 @@ impl Lowerer {
             s.span,
         );
         if let Some(h) = &s.having {
-            let predicate = arc(self.expr(h)?);
+            let predicate = self.expr(h)?;
+            // As Spark's AstBuilder: a `HAVING` that is not a predicate is
+            // cast to boolean.
+            let predicate = arc(if is_predicate(&predicate) {
+                predicate
+            } else {
+                let span = h.span;
+                self.ex(
+                    ExprNode::Cast {
+                        expr: arc(predicate),
+                        to: krishiv_types::DataType::Boolean,
+                        mode: CastMode::Default,
+                    },
+                    span,
+                )
+            });
             plan = self.node(
                 PlanNode::Filter {
                     input: arc(plan),
@@ -636,32 +651,36 @@ impl Lowerer {
                 let eq = self.op(Builtin::EqNullSafe, vec![l, r], sp);
                 self.not(eq, !negated, sp)
             }
+            // Spark's errors cite a predicate from its keyword (or `NOT`).
             ExprKind::Between {
                 expr,
                 low,
                 high,
                 negated,
+                op,
             } => {
                 let args = vec![self.expr(expr)?, self.expr(low)?, self.expr(high)?];
-                let b = self.op(Builtin::Between, args, sp);
-                self.not(b, *negated, sp)
+                let b = self.op(Builtin::Between, args, *op);
+                self.not(b, *negated, *op)
             }
             ExprKind::InList {
                 expr,
                 list,
                 negated,
+                op,
             } => {
                 let mut args = vec![self.arg(expr)?];
                 for item in list {
                     args.push(self.arg(item)?);
                 }
-                let b = self.call(Builtin::In.name(), args, sp);
-                self.not(b, *negated, sp)
+                let b = self.call(Builtin::In.name(), args, *op);
+                self.not(b, *negated, *op)
             }
             ExprKind::InSubquery {
                 expr,
                 query,
                 negated,
+                op,
             } => {
                 let values = match &expr.kind {
                     ExprKind::Row(items) if items.iter().all(|i| i.alias.is_none()) => {
@@ -675,9 +694,9 @@ impl Lowerer {
                         kind: SubqueryKind::In(values),
                         plan,
                     },
-                    sp,
+                    *op,
                 );
-                self.not(s, *negated, sp)
+                self.not(s, *negated, *op)
             }
             ExprKind::Like {
                 expr,
@@ -821,6 +840,37 @@ impl Lowerer {
 }
 
 /// A path written as a quoted name part (`parquet.`s3://b/k``).
+/// Whether `e` is one of Spark's `Predicate` expressions: a comparison,
+/// `AND` / `OR` / `NOT`, `IN`, `BETWEEN`, `LIKE`, `IS [NOT] NULL`,
+/// `EXISTS` or `IN (subquery)`.
+fn is_predicate(e: &IrExpr) -> bool {
+    match &e.node {
+        ExprNode::Function(f) => matches!(
+            Builtin::from_name(&f.name),
+            Some(
+                Builtin::Eq
+                    | Builtin::EqNullSafe
+                    | Builtin::Lt
+                    | Builtin::LtEq
+                    | Builtin::Gt
+                    | Builtin::GtEq
+                    | Builtin::And
+                    | Builtin::Or
+                    | Builtin::Not
+                    | Builtin::In
+                    | Builtin::Between
+                    | Builtin::Like
+                    | Builtin::ILike
+                    | Builtin::RLike
+                    | Builtin::IsNull
+                    | Builtin::IsNotNull
+            )
+        ),
+        ExprNode::Subquery { kind, .. } => !matches!(kind, SubqueryKind::Scalar),
+        _ => false,
+    }
+}
+
 fn is_path(s: &str) -> bool {
     s.contains('/') || s.contains(':')
 }

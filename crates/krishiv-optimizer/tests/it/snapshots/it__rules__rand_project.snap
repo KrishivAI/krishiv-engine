@@ -3,6 +3,6 @@ source: crates/krishiv-optimizer/tests/it/rules.rs
 expression: "SELECT a FROM (SELECT a, rand() AS r FROM t) WHERE r > 0.5 AND a > 1"
 ---
 Project [a#0]
-+- Filter ((r#3 > 0.5) and (a#0 > 1))
++- Filter ((r#3 > 0.5D) and (a#0 > 1))
    +- Project [a#0, rand() AS r#3]
       +- Scan spark_catalog.default.t [a#0]

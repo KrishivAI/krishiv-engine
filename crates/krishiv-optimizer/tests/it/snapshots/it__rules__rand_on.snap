@@ -3,6 +3,6 @@ source: crates/krishiv-optimizer/tests/it/rules.rs
 expression: SELECT t.a FROM t JOIN u ON t.a = u.a AND rand() > 0.5
 ---
 Project [a#0]
-+- Join Inner, ((a#0 == a#3) and (rand() > 0.5))
++- Join Inner, ((a#0 == a#3) and (rand() > 0.5D))
    :- Scan spark_catalog.default.t [a#0]
    +- Scan spark_catalog.default.u [a#3]

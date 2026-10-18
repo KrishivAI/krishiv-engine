@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Loom models of the executor's handoffs: morsel claims, the finalize
 //! countdown, cancellation wake-ups, the blocked result channel (woken by a
-//! read or by dropping the stream), the driver's spill-versus-cancel wait
-//! and the `blocking_done` handshake. Each protocol model was checked to
-//! fail with a planted bug (Relaxed countdown; check-before-listen in the
-//! wait loop and in `blocking_done`; `drop_receiver` not waking senders).
+//! read or by dropping the stream), the driver's spill-versus-cancel wait,
+//! the `blocking_done` handshake and the operator flush barrier. Each
+//! protocol model was checked to fail with a planted bug (Relaxed
+//! countdown; check-before-listen in the wait loop, in `blocking_done` and
+//! in `Barrier::wait`; `drop_receiver` not waking senders).
 //! `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release`.
 
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use loom::thread;
 
 use crate::cancel::CancellationToken;
 use crate::channel::Channel;
-use crate::morsel::{Countdown, MorselCursor};
+use crate::morsel::{Barrier, Countdown, MorselCursor};
 
 fn model(f: impl Fn() + Sync + Send + 'static) {
     let mut b = loom::model::Builder::new();
@@ -68,6 +69,28 @@ fn the_last_driver_finalizes_after_every_combine() {
         let other = thread::spawn(driver(0));
         let mine = driver(1)();
         assert_eq!(mine + other.join().unwrap_or(0), 1, "one finalize");
+    });
+}
+
+/// The flush barrier: neither driver passes it before both arrived, and
+/// each then sees what the other did before arriving (no lost wake-up).
+#[test]
+fn the_flush_barrier_waits_for_every_driver() {
+    model(|| {
+        let barrier = Arc::new(Barrier::new(2));
+        let published = Arc::new([AtomicBool::new(false), AtomicBool::new(false)]);
+        let driver = |i: usize| {
+            let (barrier, published) = (Arc::clone(&barrier), Arc::clone(&published));
+            move || {
+                published[i].store(true, Ordering::Relaxed);
+                barrier.arrive();
+                block_on(barrier.wait());
+                assert!(published.iter().all(|p| p.load(Ordering::Relaxed)));
+            }
+        };
+        let other = thread::spawn(driver(0));
+        driver(1)();
+        assert!(other.join().is_ok());
     });
 }
 

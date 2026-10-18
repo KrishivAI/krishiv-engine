@@ -131,19 +131,69 @@ pub struct ArgType {
     pub nullable: bool,
 }
 
-/// A function's result type for its argument types (implicit casts are a
-/// later pass's, P2-T071b). A closure, so catalog and session functions can
-/// carry state.
+/// A function's result type for its argument types, after the implicit
+/// casts its [`Inputs`] ask for. A closure, so catalog and session functions
+/// can carry state.
 pub type ResultType = Arc<dyn Fn(&[ArgType]) -> Result<ArgType, KrishivError> + Send + Sync>;
 
-/// A function the registry knows.
+/// A type an argument must have (Spark's `ExpectsInputTypes`); the analyzer
+/// casts an argument of another type to it where Spark's ANSI implicit
+/// casts allow, else fails with `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InputType {
+    /// Any type, as it is.
+    Any,
+    /// Exactly this type.
+    Exact(DataType),
+    /// Any numeric type; a string or untyped `NULL` becomes `DOUBLE`.
+    /// `intervals`: Spark also takes ANSI intervals (it names them in the
+    /// error; Krishiv has no interval values yet).
+    Numeric {
+        /// Whether Spark's required type names ANSI intervals.
+        intervals: bool,
+    },
+}
+
+impl InputType {
+    /// The required type as Spark's errors print it.
+    #[must_use]
+    pub fn sql(&self) -> String {
+        match self {
+            Self::Any => "\"ANY\"".to_owned(),
+            Self::Exact(t) => format!("\"{}\"", t.sql()),
+            Self::Numeric { intervals: false } => "\"NUMERIC\"".to_owned(),
+            Self::Numeric { intervals: true } => "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned(),
+        }
+    }
+}
+
+/// How a function's arguments are cast before its result type is computed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Inputs {
+    /// As they are.
+    Any,
+    /// Argument `i` takes `types[i]`; the last type repeats for further
+    /// arguments.
+    Expects(Vec<InputType>),
+    /// Every argument takes the type all of them meet at (`coalesce`);
+    /// `DATATYPE_MISMATCH.DATA_DIFF_TYPES` when there is none.
+    Common,
+}
+
+/// A function the registry knows. The canonical operators
+/// ([`crate::Builtin`]) are not registry functions: the analyzer types
+/// them as Spark types its operators.
 #[derive(Clone)]
 pub struct FunctionEntry {
     /// Its identity.
     pub id: FunctionId,
     /// Scalar, aggregate, ...
     pub kind: FunctionKind,
-    /// The result type for the argument types.
+    /// How its arguments are implicitly cast.
+    pub inputs: Inputs,
+    /// The result type for the (cast) argument types.
     pub result: ResultType,
 }
 
@@ -152,6 +202,7 @@ impl fmt::Debug for FunctionEntry {
         f.debug_struct("FunctionEntry")
             .field("id", &self.id)
             .field("kind", &self.kind)
+            .field("inputs", &self.inputs)
             .finish_non_exhaustive()
     }
 }
@@ -169,7 +220,8 @@ pub enum FunctionLookup {
 }
 
 /// The function registry: built-in functions resolve in-process, so the
-/// lookup is synchronous.
+/// lookup is synchronous. It is not asked about the canonical operators
+/// ([`crate::Builtin`] names).
 pub trait FunctionRegistry: Send + Sync {
     /// The function named by `name`'s parts (as written, case-insensitive;
     /// one part for a built-in, more for a qualified name) in `profile`.
