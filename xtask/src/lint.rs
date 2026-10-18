@@ -151,9 +151,10 @@ pub const CONFINED_IDENTS: &[(&str, &[&str])] = &[(
 /// Confined identifiers used outside their files, as `(line, identifier)`.
 #[must_use]
 pub fn confined_idents_in(rel_path: &str, text: &str) -> Vec<(usize, &'static str)> {
+    let rel_path = rel_path.replace('\\', "/");
     let mut out = Vec::new();
     for (ident, allowed) in CONFINED_IDENTS {
-        if allowed.contains(&rel_path) {
+        if allowed.contains(&rel_path.as_str()) {
             continue;
         }
         for (n, line) in text.lines().enumerate() {

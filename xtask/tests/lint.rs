@@ -311,6 +311,7 @@ fn unsafe_after_random_literals_is_always_found() {
 fn redacted_sql_is_built_only_by_the_token_redactor() {
     let call = "let r = RedactedSql::from_marks_unchecked(sql, marks);";
     assert!(confined_idents_in("crates/krishiv-sql/src/redact.rs", call).is_empty());
+    assert!(confined_idents_in("crates\\krishiv-sql\\src\\redact.rs", call).is_empty());
     assert_eq!(
         confined_idents_in("crates/krishiv-plan/src/x.rs", call),
         vec![(1, "from_marks_unchecked")]
