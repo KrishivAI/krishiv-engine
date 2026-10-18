@@ -344,8 +344,10 @@ mod tests {
     #[test]
     fn a_dropped_sleep_is_cancelled_and_others_still_fire() {
         let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
+        // Far enough away that a loaded machine cannot reach it before the
+        // first poll (it is dropped unfired).
         let mut cancelled = SystemClock::new()
-            .sleep_until(Instant::now() + Duration::from_millis(5))
+            .sleep_until(Instant::now() + Duration::from_secs(60))
             .unwrap();
         assert!(
             cancelled
