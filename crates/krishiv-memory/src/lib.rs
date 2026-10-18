@@ -34,7 +34,9 @@
 //! with its state unchanged; the driver then calls [`SpillOwner::reserve`],
 //! which spills the driver's own consumers first (the arbitrator never asks
 //! the requester's driver), then arbitrates while still servicing requests
-//! from other rounds.
+//! from other rounds. The bytes it obtained are parked as grant credit on
+//! the consumer's [`ConsumerHandle`] and taken by the operator's retried
+//! `try_grow`, so the retry never reserves twice.
 //!
 //! ```
 //! use std::sync::Arc;
@@ -62,6 +64,7 @@ use std::sync::Arc;
 
 mod arbitrate;
 mod clock;
+mod consumer;
 mod error;
 mod event;
 mod limit;
@@ -73,6 +76,7 @@ mod spillfile;
 mod sync;
 
 pub use clock::{Clock, SystemClock};
+pub use consumer::ConsumerHandle;
 pub use error::MemoryError;
 pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
 pub use pool::{ArbitrationStats, MemoryConfig, TreePool};
@@ -140,6 +144,13 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// # Errors
     /// The abort error, with its Spark-style error class.
     fn check_aborted(&self) -> Result<(), MemoryError>;
+    /// Completes with the abort error once the arbitrator aborts this
+    /// pool's query; never completes outside a query. Drivers race it
+    /// against their waits (source I/O, a blocked sink), so an aborted query
+    /// releases its memory without waiting for its next batch boundary.
+    fn aborted(&self) -> BoxFuture<'_, MemoryError> {
+        Box::pin(std::future::pending())
+    }
 }
 
 #[cfg(all(test, not(loom)))]

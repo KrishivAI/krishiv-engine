@@ -763,4 +763,25 @@ impl MemoryPool for TreePool {
     fn check_aborted(&self) -> Result<(), MemoryError> {
         self.node.group.as_ref().map_or(Ok(()), |g| g.check())
     }
+
+    fn aborted(&self) -> BoxFuture<'_, MemoryError> {
+        Box::pin(async move {
+            let Some(group) = self
+                .node
+                .group
+                .as_ref()
+                .filter(|g| g.kind == GroupKind::Query)
+            else {
+                return std::future::pending().await;
+            };
+            loop {
+                // Listen before checking: an abort in between still wakes us.
+                let listener = group.abort_event.listen();
+                if let Err(e) = group.check() {
+                    return e;
+                }
+                listener.await;
+            }
+        })
+    }
 }

@@ -1,0 +1,1176 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The morsel executor end to end (P2-T050 acceptance): throughput and
+//! exactness, cancellation, spill at batch boundaries, blocking-pool
+//! isolation, limit, backpressure, error and panic isolation, the memory
+//! contract and deterministic replay. Every test checks that the query's
+//! memory is fully released when it ends.
+#![cfg(not(loom))]
+#![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
+#![expect(
+    clippy::unwrap_in_result,
+    reason = "test operators unwrap their own state; a failure is a test bug"
+)]
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+use arrow_array::cast::AsArray;
+use arrow_array::types::Int64Type;
+use arrow_schema::SchemaRef;
+use futures::StreamExt;
+use krishiv_common::config::Config;
+use krishiv_common::error::{DivideByZero, ErrorClass, KrishivError};
+use krishiv_exec::testing::{Break, Buffer, Count, Filter, Limit, Pipe, RangeSource, Scan, schema};
+use krishiv_exec::{
+    DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, Executor, ExecutorConfig, LocalState, Operator,
+    OperatorOutput, PipelineBuilder, QueryContext, QueryId, QueryRunner, Result, Scheduler,
+    TaskContext, TokioClock, TokioExecutor, WorkloadClass,
+};
+use krishiv_memory::{BoxFuture, MemoryConfig, MemoryError, MemoryPool, Spillable, TreePool};
+use krishiv_types::batch::Batch;
+
+const MIB: usize = 1 << 20;
+
+fn root(limit: usize) -> Arc<TreePool> {
+    TreePool::with_clock(
+        &MemoryConfig {
+            limit: Some(limit),
+            quantum: 64 << 10,
+            spill_wait_timeout: Duration::from_secs(2),
+            abort_release_timeout: Duration::from_secs(30),
+        },
+        Arc::new(TokioClock),
+    )
+}
+
+/// Every test runs with the stall detector failing the query, with a
+/// threshold generous enough for unoptimised and instrumented builds; a
+/// test that sets its own threshold keeps it.
+fn query(root: &TreePool, id: u64, mut config: ExecConfig) -> Arc<QueryContext> {
+    if !config.fail_on_stall {
+        config.fail_on_stall = true;
+        config.stall_threshold = Duration::from_millis(500);
+    }
+    QueryContext::new(
+        QueryId(id),
+        WorkloadClass::Interactive,
+        config,
+        root.child(&format!("q{id}"), None),
+    )
+}
+
+fn executor(threads: usize) -> Arc<TokioExecutor> {
+    TokioExecutor::new(&ExecutorConfig {
+        compute_threads: threads,
+        io_threads: 1,
+        blocking_threads: threads,
+    })
+    .unwrap()
+}
+
+/// Runs `plan` to the end: every batch, or the query's error. Returns once
+/// every task has ended.
+async fn run(
+    runner: &QueryRunner,
+    plan: Arc<dyn ExecNode>,
+    q: &Arc<QueryContext>,
+) -> Result<Vec<Batch>> {
+    let mut stream = runner.submit(plan, Arc::clone(q)).await?;
+    let mut out = Vec::new();
+    let mut error = None;
+    while let Some(b) = stream.next().await {
+        match b {
+            Ok(b) => out.push(b),
+            Err(e) => error = Some(e),
+        }
+    }
+    drop(stream);
+    q.finished().await;
+    error.map_or(Ok(out), Err)
+}
+
+fn values(batches: &[Batch]) -> Vec<i64> {
+    batches
+        .iter()
+        .flat_map(|b| {
+            b.data()
+                .column(0)
+                .as_primitive::<Int64Type>()
+                .values()
+                .to_vec()
+        })
+        .collect()
+}
+
+fn rows(batches: &[Batch]) -> usize {
+    batches.iter().map(Batch::num_rows).sum()
+}
+
+fn scan(rows: u64) -> (Arc<RangeSource>, Arc<dyn ExecNode>) {
+    let source = RangeSource::new(rows);
+    (Arc::clone(&source), Arc::new(Scan(source)))
+}
+
+fn pipe(child: Arc<dyn ExecNode>, op: Arc<dyn Operator>) -> Arc<dyn ExecNode> {
+    Arc::new(Pipe(child, op))
+}
+
+/// Calls `f` with each input's index, then passes the input on.
+struct Hook<F>(F, AtomicU64);
+
+fn hook<F: Fn(u64) -> Result<()> + Send + Sync + 'static>(f: F) -> Arc<dyn Operator> {
+    Arc::new(Hook(f, AtomicU64::new(0)))
+}
+
+impl<F: Fn(u64) -> Result<()> + Send + Sync> Operator for Hook<F> {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        (self.0)(self.1.fetch_add(1, Ordering::Relaxed))?;
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+}
+
+fn assert_released(root: &TreePool) {
+    assert_eq!(
+        root.reserved(),
+        0,
+        "the query's memory is released at its end"
+    );
+}
+
+/// Acceptance: scan → filter → sink over 10 M rows, exact count and
+/// checksum, at 1 and N threads.
+#[tokio::test]
+async fn scan_filter_sink_over_ten_million_rows() {
+    const ROWS: u64 = 10_000_000;
+    for threads in [1, 4] {
+        let runner = QueryRunner::new(executor(threads));
+        let root = root(1 << 30);
+        let q = query(&root, 1, ExecConfig::default());
+        let (_, scan) = scan(ROWS);
+        let count = Count::new();
+        let plan = Arc::new(Break(
+            pipe(scan, Filter::new(|v| v % 2 == 0)),
+            Arc::clone(&count),
+            false,
+        ));
+        let out = run(&runner, plan, &q).await.unwrap();
+        let half = (ROWS / 2) as i64;
+        assert_eq!(
+            values(&out),
+            [half, half * (half - 1)],
+            "count and sum of the even values"
+        );
+        assert_eq!(count.finalized.load(Ordering::Relaxed), 1);
+        let m = q.metrics();
+        let filter = m
+            .operators
+            .values()
+            .find(|e| e.name.ends_with("Filter"))
+            .unwrap();
+        assert_eq!(
+            (filter.metrics.rows_in, filter.metrics.rows_out),
+            (ROWS, ROWS / 2)
+        );
+        assert_eq!(
+            m.drivers.batches,
+            ROWS.div_ceil(DEFAULT_BATCH_SIZE as u64) + 1
+        );
+        assert_eq!(m.drivers.drivers, threads as u64 + 1);
+        assert!(m.drivers.yields >= m.drivers.batches);
+        assert_released(&root);
+    }
+}
+
+/// Acceptance: a cancelled query stops within 100 ms and releases all its
+/// reservations.
+#[tokio::test]
+async fn a_cancelled_query_stops_within_100ms_and_releases_everything() {
+    let runner = QueryRunner::new(executor(4));
+    let root = root(1 << 30);
+    let q = query(&root, 7, ExecConfig::default());
+    let (_, scan) = scan(u64::MAX >> 8);
+    let buffer = Buffer::new(true, None);
+    let plan = Arc::new(Break(scan, Arc::clone(&buffer), false));
+    let mut stream = runner.submit(plan, Arc::clone(&q)).await.unwrap();
+    while buffer.sunk.load(Ordering::Relaxed) < 100 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert!(root.reserved() > 0, "the buffer holds memory");
+    let start = Instant::now();
+    runner.cancel(QueryId(7));
+    q.finished().await;
+    let took = start.elapsed();
+    assert!(took < Duration::from_millis(100), "stopped in {took:?}");
+    assert_released(&root);
+    let e = stream.next().await.unwrap().unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::OperationCanceled);
+    assert!(stream.next().await.is_none());
+    runner.cancel(QueryId(7)); // finished: ignored
+}
+
+/// Acceptance: the driver services a spill request at the next batch
+/// boundary.
+#[tokio::test(start_paused = true)]
+async fn a_spill_request_is_serviced_at_the_next_batch() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(1 << 30);
+    let q = query(&root, 1, ExecConfig::default());
+    let (_, scan) = scan(20 * DEFAULT_BATCH_SIZE as u64);
+    let buffer = Buffer::new(true, None);
+    let b = Arc::clone(&buffer);
+    let trigger = hook(move |i| {
+        if i == 5 {
+            drop(b.signals()[0].request_spill(1));
+        }
+        Ok(())
+    });
+    let plan = Arc::new(Break(pipe(scan, trigger), Arc::clone(&buffer), false));
+    let out = run(&runner, plan, &q).await.unwrap();
+    assert_eq!(rows(&out), 20 * DEFAULT_BATCH_SIZE);
+    // Batch 5 (the 6th) was sunk, then the boundary before batch 6 spilled.
+    assert_eq!(buffer.spilled_at(), [6]);
+    let sink = q
+        .metrics()
+        .operators
+        .values()
+        .find(|e| e.name.ends_with("Buffer"))
+        .cloned()
+        .unwrap();
+    assert_eq!(sink.metrics.spills, 1);
+    assert!(sink.metrics.spilled_bytes > 0);
+    assert_released(&root);
+}
+
+/// Acceptance: a 50 ms blocking call routed through the blocking pool does
+/// not delay a concurrent short query by more than 10 ms.
+#[tokio::test]
+async fn blocking_work_does_not_delay_a_short_query() {
+    let exec = executor(1);
+    let runner = QueryRunner::new(Arc::clone(&exec) as Arc<dyn Executor>);
+    let root = root(1 << 30);
+    let short = |id| {
+        let (_, scan) = scan(10 * DEFAULT_BATCH_SIZE as u64);
+        let plan: Arc<dyn ExecNode> = Arc::new(Break(scan, Count::new(), false));
+        (plan, query(&root, id, ExecConfig::default()))
+    };
+    let mut alone = Duration::MAX;
+    for id in 10..13 {
+        let (plan, q) = short(id);
+        let start = Instant::now();
+        run(&runner, plan, &q).await.unwrap();
+        alone = alone.min(start.elapsed());
+    }
+    let (_, scan) = scan(DEFAULT_BATCH_SIZE as u64);
+    let long = Buffer::new(false, Some(Duration::from_millis(50)));
+    let long_q = query(&root, 1, ExecConfig::default());
+    let mut long_stream = runner
+        .submit(Arc::new(Break(scan, long, false)), Arc::clone(&long_q))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(5)).await; // the long query is in its blocking finalize
+    let (plan, q) = short(2);
+    let start = Instant::now();
+    run(&runner, plan, &q).await.unwrap();
+    let concurrent = start.elapsed();
+    assert!(
+        concurrent <= alone + Duration::from_millis(10),
+        "short query took {concurrent:?} next to the blocking call, {alone:?} alone"
+    );
+    assert!(!long_q.is_finished(), "the blocking call was still running");
+    while long_stream.next().await.is_some() {}
+    long_q.finished().await;
+    assert_released(&root);
+}
+
+/// A panic in the blocking pool is an `INTERNAL_ERROR`; task handles
+/// report aborts as cancellations.
+#[tokio::test]
+async fn blocking_pool_panics_and_task_aborts() {
+    let exec = executor(2);
+    exec.spawn_blocking(Box::new(|| {})).await.unwrap();
+    let e = exec
+        .spawn_blocking(Box::new(|| panic!("boom")))
+        .await
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("boom"));
+    let io = exec.io_handle().spawn(async { 7 });
+    assert_eq!(io.await.unwrap(), 7);
+    assert!(format!("{exec:?}").contains("parallelism: 2"));
+    // Aborting a task reports a cancellation.
+    let t = exec.spawn(WorkloadClass::Batch, Box::pin(std::future::pending()));
+    t.abort();
+    assert_eq!(
+        t.await.unwrap_err().error_class(),
+        ErrorClass::OperationCanceled
+    );
+    // Dropping the executor inside async code does not block.
+    drop(exec);
+}
+
+/// A streaming LIMIT stops its upstream: at most one batch is read past it.
+#[tokio::test(start_paused = true)]
+async fn limit_stops_upstream() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(1 << 30);
+    let q = query(&root, 1, ExecConfig::default());
+    let (source, scan) = scan(1_000_000);
+    let plan = pipe(scan, Limit::new(10_000));
+    let out = run(&runner, plan, &q).await.unwrap();
+    assert_eq!(rows(&out), 10_000);
+    let read = source.produced.load(Ordering::Relaxed);
+    assert!(
+        read <= 10_000 + DEFAULT_BATCH_SIZE as u64,
+        "read {read} rows"
+    );
+    assert_released(&root);
+}
+
+/// The result channel is bounded: drivers stop pulling while the caller
+/// does not read; dropping the stream cancels the query.
+#[tokio::test(start_paused = true)]
+async fn backpressure_and_dropping_the_stream_cancels() {
+    const SLOTS: u64 = 2;
+    let runner = QueryRunner::new(TokioExecutor::deterministic(2).unwrap());
+    let root = root(1 << 30);
+    let q = query(
+        &root,
+        1,
+        ExecConfig {
+            morsel_rows: DEFAULT_BATCH_SIZE,
+            ..ExecConfig::default()
+        },
+    );
+    let (source, scan) = scan(u64::MAX >> 8);
+    let mut stream = runner.submit(scan, Arc::clone(&q)).await.unwrap();
+    assert!(stream.next().await.unwrap().is_ok());
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let read = source.produced.load(Ordering::Relaxed);
+    // Capacity 2 per slot, one more accepted per blocked driver, one read.
+    let bound = (2 * SLOTS + SLOTS + 1) * DEFAULT_BATCH_SIZE as u64;
+    assert!(read <= bound, "read {read} rows while the caller was idle");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        source.produced.load(Ordering::Relaxed),
+        read,
+        "drivers are parked"
+    );
+    drop(stream);
+    q.finished().await;
+    assert_eq!(
+        q.error().unwrap().error_class(),
+        ErrorClass::OperationCanceled
+    );
+    let sink = q
+        .metrics()
+        .operators
+        .values()
+        .find(|e| e.name == "Result")
+        .cloned()
+        .unwrap();
+    assert!(sink.metrics.blocked_on_sink > Duration::ZERO);
+    assert_released(&root);
+}
+
+/// The first error wins and cancels the other drivers; their secondary
+/// "cancelled" errors are not reported.
+#[tokio::test]
+async fn the_first_error_wins() {
+    let runner = QueryRunner::new(executor(4));
+    let root = root(1 << 30);
+    let q = query(
+        &root,
+        1,
+        ExecConfig {
+            morsel_rows: DEFAULT_BATCH_SIZE,
+            ..ExecConfig::default()
+        },
+    );
+    let (_, scan) = scan(1 << 24);
+    let fail = hook(|i| {
+        if i == 20 {
+            return Err(DivideByZero {
+                config: "\"spark.sql.ansi.enabled\"".into(),
+            }
+            .into());
+        }
+        Ok(())
+    });
+    let buffer = Buffer::new(true, None);
+    let plan = Arc::new(Break(pipe(scan, fail), buffer, false));
+    let e = run(&runner, plan, &q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert_eq!(q.error(), Some(e));
+    assert_released(&root);
+}
+
+/// A panic fails only its own query (`INTERNAL_ERROR`); a concurrent query
+/// on the same executor completes.
+#[tokio::test]
+async fn a_panic_fails_only_its_query() {
+    let runner = Arc::new(QueryRunner::new(executor(2)));
+    let root = root(1 << 30);
+    let bad = query(
+        &root,
+        1,
+        ExecConfig {
+            morsel_rows: DEFAULT_BATCH_SIZE,
+            ..ExecConfig::default()
+        },
+    );
+    let good = query(&root, 2, ExecConfig::default());
+    let (_, scan_bad) = scan(1 << 22);
+    let boom = hook(|i| {
+        if i == 10 {
+            panic!("operator bug")
+        } else {
+            Ok(())
+        }
+    });
+    let bad_plan = Arc::new(Break(pipe(scan_bad, boom), Buffer::new(true, None), false));
+    let (_, scan_good) = scan(1 << 20);
+    let good_plan = Arc::new(Break(scan_good, Count::new(), false));
+    let (r1, r2) = tokio::join!(run(&runner, bad_plan, &bad), run(&runner, good_plan, &good));
+    let e = r1.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("operator bug"), "{e}");
+    assert_eq!(values(&r2.unwrap())[0], 1 << 20);
+    assert_released(&root);
+}
+
+/// Two queries, one memory limit: the second needs memory while the first
+/// holds spillable memory; the first spills at its next batch boundary.
+/// `NeedMemory` retries take the grant credit, so nothing is reserved twice.
+#[tokio::test(start_paused = true)]
+async fn two_queries_one_limit_spill_while_allocating() {
+    const HELD: i64 = 64 * DEFAULT_BATCH_SIZE as i64; // ~2 MiB
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(4 * MIB);
+    let q1 = query(&root, 1, ExecConfig::default());
+    let q2 = query(&root, 2, ExecConfig::default());
+    // q1 buffers its first ~2 MiB, then keeps scanning (filtered out), so
+    // it passes batch boundaries while holding the memory.
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let g = Arc::clone(&gate);
+    let start_q2 = hook(move |i| {
+        if i == 64 {
+            g.notify_one();
+        }
+        Ok(())
+    });
+    let (_, scan1) = scan(400 * DEFAULT_BATCH_SIZE as u64);
+    let holder = Buffer::new(true, None);
+    let plan1 = Arc::new(Break(
+        pipe(pipe(scan1, start_q2), Filter::new(|v| v < HELD)),
+        Arc::clone(&holder),
+        false,
+    ));
+    let (_, scan2) = scan(80 * DEFAULT_BATCH_SIZE as u64);
+    let taker = Buffer::new(false, None);
+    let plan2 = Arc::new(Break(scan2, Arc::clone(&taker), false));
+    let first = async { rows(&run(&runner, plan1, &q1).await.unwrap()) };
+    let second = async {
+        gate.notified().await;
+        rows(&run(&runner, plan2, &q2).await.unwrap())
+    };
+    let (n1, n2) = tokio::join!(first, second);
+    assert_eq!((n1, n2), (64 * DEFAULT_BATCH_SIZE, 80 * DEFAULT_BATCH_SIZE));
+    assert!(!holder.spilled_at().is_empty(), "q1 spilled for q2");
+    assert!(taker.spilled_at().is_empty());
+    let stats = root.stats();
+    assert!(stats.spill_requests >= 1 && stats.aborts == 0, "{stats:?}");
+    assert_released(&root);
+}
+
+/// Seeded deterministic mode replays the morsel order; unseeded claims
+/// morsels in order.
+#[tokio::test(start_paused = true)]
+async fn deterministic_mode_replays_morsel_order() {
+    async fn firsts(seed: Option<u64>) -> Vec<i64> {
+        let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+        let root = root(1 << 30);
+        let config = ExecConfig {
+            morsel_rows: DEFAULT_BATCH_SIZE,
+            seed,
+            ..ExecConfig::default()
+        };
+        let q = query(&root, 1, config);
+        let (_, scan) = scan(16 * DEFAULT_BATCH_SIZE as u64);
+        let out = run(&runner, scan, &q).await.unwrap();
+        out.iter()
+            .map(|b| b.data().column(0).as_primitive::<Int64Type>().value(0))
+            .collect()
+    }
+    let a = firsts(Some(7)).await;
+    assert_eq!(a, firsts(Some(7)).await);
+    assert_ne!(a, firsts(Some(8)).await);
+    let ordered = firsts(None).await;
+    assert!(ordered.is_sorted());
+    let mut sorted = a.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, ordered, "same morsels, different order");
+}
+
+/// The stall detector fails a driver that does not yield for longer than
+/// the threshold (in fail-on-stall mode).
+#[tokio::test]
+async fn the_stall_detector_fails_a_non_yielding_driver() {
+    let runner = QueryRunner::new(executor(1));
+    let root = root(1 << 30);
+    let config = ExecConfig {
+        fail_on_stall: true,
+        ..ExecConfig::default()
+    };
+    let q = query(&root, 1, config);
+    let (_, scan) = scan(4 * DEFAULT_BATCH_SIZE as u64);
+    let spin = hook(|_| {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(30) {
+            std::hint::spin_loop();
+        }
+        Ok(())
+    });
+    let e = run(&runner, pipe(scan, spin), &q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("without yielding"), "{e}");
+    let stats = q.metrics().drivers;
+    assert!(stats.stalls >= 1 && stats.max_slice >= Duration::from_millis(30));
+    assert_released(&root);
+}
+
+/// Emits 16 outputs per input with `HaveMoreOutput`.
+struct Explode;
+
+impl Operator for Explode {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(0u32))
+    }
+
+    fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
+        let n = local.downcast_mut::<u32>().unwrap();
+        *n += 1;
+        if *n <= 16 {
+            return Ok(OperatorOutput::HaveMoreOutput(input.slice(0, 1)?));
+        }
+        *n = 0;
+        Ok(OperatorOutput::NeedMoreInput(None))
+    }
+}
+
+/// A driver yields once per source batch and once every 8 extra outputs.
+#[tokio::test(start_paused = true)]
+async fn yields_per_batch_and_every_eight_outputs() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(1 << 30);
+    let q = query(&root, 1, ExecConfig::default());
+    let (_, scan) = scan(3 * DEFAULT_BATCH_SIZE as u64);
+    let out = run(&runner, pipe(scan, Arc::new(Explode)), &q)
+        .await
+        .unwrap();
+    assert_eq!(rows(&out), 3 * 16);
+    let m = q.metrics();
+    assert_eq!((m.drivers.batches, m.drivers.yields), (3, 3 + 3 * 2));
+    let explode = m
+        .operators
+        .values()
+        .find(|e| e.name.ends_with("Explode"))
+        .unwrap();
+    assert_eq!(
+        (explode.metrics.batches_in, explode.metrics.batches_out),
+        (3, 48)
+    );
+    assert_released(&root);
+}
+
+/// Planning errors are returned by `submit`; source state errors fail the
+/// query; a deterministic executor needs a current-thread runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn planning_and_setup_errors() {
+    let e = TokioExecutor::deterministic(1).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    let runner = QueryRunner::new(executor(1));
+    let root = root(1 << 30);
+
+    struct NoSource;
+    impl ExecNode for NoSource {
+        fn build_pipelines(self: Arc<Self>, _b: &mut PipelineBuilder) -> Result<()> {
+            Ok(())
+        }
+    }
+    struct TwoSources;
+    impl ExecNode for TwoSources {
+        fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+            b.set_source(RangeSource::new(1))?;
+            b.set_source(RangeSource::new(1)).map(drop)
+        }
+    }
+    for plan in [
+        Arc::new(NoSource) as Arc<dyn ExecNode>,
+        Arc::new(TwoSources),
+    ] {
+        let e = runner
+            .submit(plan, query(&root, 1, ExecConfig::default()))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(e.error_class(), ErrorClass::InternalError);
+    }
+    // A breaker source that names no child pipeline.
+    struct BadBreaker;
+    impl ExecNode for BadBreaker {
+        fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+            let count = Count::new();
+            b.set_breaker_source(count, krishiv_exec::OperatorId(0))
+                .map(drop)
+        }
+    }
+    let e = runner
+        .submit(Arc::new(BadBreaker), query(&root, 1, ExecConfig::default()))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    // A query id that is already running is refused.
+    let running = query(&root, 5, ExecConfig::default());
+    let (_, scan5) = scan(u64::MAX >> 8);
+    let stream = runner.submit(scan5, Arc::clone(&running)).await.unwrap();
+    let (_, again) = scan(1);
+    let e = runner
+        .submit(again, query(&root, 5, ExecConfig::default()))
+        .await
+        .err()
+        .unwrap();
+    assert!(e.to_string().contains("already running"), "{e}");
+    drop(stream);
+    running.finished().await;
+    // A breaker read before it was built (its source used alone).
+    let buffer = Buffer::new(true, None);
+    let q = query(&root, 2, ExecConfig::default());
+    let e = run(&runner, Arc::new(Scan(buffer)), &q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert_released(&root);
+}
+
+/// `krishiv.exec.batchSize` sizes the batches; morsels feed several drivers;
+/// an order-preserving breaker output keeps its order.
+#[tokio::test]
+async fn config_batch_size_and_ordered_breaker() {
+    let (config, _) = Config::from_pairs([("krishiv.exec.batchSize", "1000")]).unwrap();
+    let exec_config = ExecConfig::from_config(&config);
+    assert_eq!(exec_config.batch_size, 1000);
+    assert_eq!(
+        ExecConfig::from_config(&Config::new()).batch_size,
+        DEFAULT_BATCH_SIZE
+    );
+    let runner = QueryRunner::new(executor(2));
+    let root = root(1 << 30);
+    let q = query(
+        &root,
+        1,
+        ExecConfig {
+            morsel_rows: 5000,
+            ..exec_config
+        },
+    );
+    let (_, scan) = scan(20_000);
+    let plan = Arc::new(Break(scan, Buffer::new(true, None), true));
+    let out = run(&runner, plan, &q).await.unwrap();
+    assert!(out.iter().all(|b| b.num_rows() == 1000));
+    let mut v = values(&out);
+    v.sort_unstable();
+    assert_eq!(v, (0..20_000).collect::<Vec<i64>>());
+    assert_released(&root);
+    let e = KrishivError::from(MemoryError::Aborted { held: 1 });
+    assert_eq!(e.error_class(), ErrorClass::KrishivQueryAbortedOutOfMemory);
+}
+
+/// Reserves `.1` bytes per driver up front and offers them for spilling if
+/// `.2`; records its spill signals.
+struct Hold(
+    std::sync::Mutex<Vec<Arc<krishiv_memory::SpillSignal>>>,
+    usize,
+    bool,
+);
+
+fn hold(bytes: usize, spillable: bool) -> Arc<Hold> {
+    Arc::new(Hold(std::sync::Mutex::default(), bytes, spillable))
+}
+
+impl Operator for Hold {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
+        let memory = ctx.consumer();
+        let mut r = memory.reservation();
+        r.try_grow(self.1)?;
+        if self.2 {
+            memory.signal().set_spillable_bytes(self.1);
+        }
+        self.0.lock().unwrap().push(Arc::clone(memory.signal()));
+        Ok(Box::new(r))
+    }
+
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+
+    fn spill<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        _target: usize,
+        _ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<usize>> {
+        let r = local.downcast_mut::<krishiv_memory::Reservation>().unwrap();
+        let freed = r.size();
+        r.shrink(freed);
+        Box::pin(async move { Ok(freed) })
+    }
+}
+
+/// A driver parked on a full result channel still services spill requests
+/// for its own consumers.
+#[tokio::test(start_paused = true)]
+async fn a_parked_driver_services_spill_requests() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(8 * MIB);
+    let q = query(&root, 1, ExecConfig::default());
+    let hold = hold(MIB, true);
+    let (_, scan) = scan(u64::MAX >> 8);
+    let plan = pipe(scan, Arc::clone(&hold) as Arc<dyn Operator>);
+    let stream = runner.submit(plan, Arc::clone(&q)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await; // the driver parks on the full channel
+    let signal = Arc::clone(&hold.0.lock().unwrap()[0]);
+    assert_eq!(
+        signal.request_spill(MIB).await,
+        MIB,
+        "serviced while parked"
+    );
+    assert!(root.reserved() < MIB);
+    drop(stream);
+    q.finished().await;
+    assert_eq!(
+        q.error().unwrap().error_class(),
+        ErrorClass::OperationCanceled
+    );
+    let m = q.metrics();
+    let op = m
+        .operators
+        .values()
+        .find(|e| e.name.ends_with("Hold"))
+        .unwrap();
+    assert_eq!(
+        (op.metrics.spills, op.metrics.peak_reserved),
+        (1, MIB as u64)
+    );
+    assert_released(&root);
+}
+
+/// A driver parked on a full result channel fails at once with the abort
+/// error when the arbitrator aborts its query, releasing its memory.
+#[tokio::test(start_paused = true)]
+async fn a_memory_abort_wakes_a_parked_driver() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(4 * MIB);
+    let q1 = query(&root, 1, ExecConfig::default());
+    let (_, scan) = scan(u64::MAX >> 8);
+    // Not spillable and above its fair share: the arbitrator aborts it.
+    let plan = pipe(scan, hold(3 * MIB, false) as Arc<dyn Operator>);
+    let mut stream = runner.submit(plan, Arc::clone(&q1)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let q2 = root.child("q2", None);
+    let id2 = q2.register("want", None);
+    let start = tokio::time::Instant::now();
+    q2.reserve(id2, 2 * MIB).await.unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(30),
+        "no release timeout"
+    );
+    assert_eq!(root.stats().aborts, 1);
+    q1.finished().await;
+    let mut last = None;
+    while let Some(b) = stream.next().await {
+        last = Some(b);
+    }
+    let e = last.unwrap().unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivQueryAbortedOutOfMemory);
+    q2.unregister(id2);
+    assert_released(&root);
+}
+
+/// Grows its reservation by every input's size; `NeedMemory` when the pool
+/// refuses; spills everything when asked.
+struct Greedy;
+
+impl Operator for Greedy {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
+        assert_eq!(ctx.executor().parallelism(), 1);
+        let memory = ctx.consumer();
+        assert_eq!(memory.id(), ctx.consumer().id(), "registered once");
+        Ok(Box::new((
+            memory.reservation(),
+            Arc::clone(memory.signal()),
+        )))
+    }
+
+    fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
+        let (r, signal) = local
+            .downcast_mut::<(
+                krishiv_memory::Reservation,
+                Arc<krishiv_memory::SpillSignal>,
+            )>()
+            .unwrap();
+        let bytes = input.data().get_array_memory_size();
+        if r.try_grow(bytes).is_err() {
+            return Ok(OperatorOutput::NeedMemory { bytes });
+        }
+        signal.set_spillable_bytes(r.size());
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+
+    fn spill<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        _target: usize,
+        _ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<usize>> {
+        let (r, signal) = local
+            .downcast_mut::<(
+                krishiv_memory::Reservation,
+                Arc<krishiv_memory::SpillSignal>,
+            )>()
+            .unwrap();
+        let freed = r.size();
+        r.shrink(freed);
+        signal.set_spillable_bytes(0);
+        Box::pin(async move { Ok(freed) })
+    }
+}
+
+/// An operator and a sink that outgrow the limit get `NeedMemory`; the
+/// driver spills their own state first, then retries the same input with
+/// the bytes as grant credit.
+#[tokio::test(start_paused = true)]
+async fn need_memory_self_spills_and_retries() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(MIB);
+    let q = query(&root, 1, ExecConfig::default());
+    let (_, scan) = scan(100 * DEFAULT_BATCH_SIZE as u64); // ~3 MiB through each
+    let buffer = Buffer::new(true, None);
+    let plan = Arc::new(Break(
+        pipe(scan, Arc::new(Greedy)),
+        Arc::clone(&buffer),
+        false,
+    ));
+    let out = run(&runner, plan, &q).await.unwrap();
+    assert_eq!(rows(&out), 100 * DEFAULT_BATCH_SIZE);
+    let m = q.metrics();
+    let greedy = m
+        .operators
+        .values()
+        .find(|e| e.name.ends_with("Greedy"))
+        .unwrap();
+    // Deterministic mode times on the paused clock: a wait that needs no
+    // timer costs no time, so check the spills, not the wait time.
+    assert!(greedy.metrics.spills > 0);
+    assert!(
+        greedy.metrics.peak_reserved <= MIB as u64,
+        "never double-reserved"
+    );
+    assert!(!buffer.spilled_at().is_empty());
+    assert_released(&root);
+}
+
+/// Takes the first batch only: its sink returns `Finished`.
+#[derive(Default)]
+struct First(std::sync::Mutex<Option<Batch>>);
+
+impl krishiv_exec::Sink for First {
+    fn global_state(&self, _ctx: &TaskContext) -> Result<krishiv_exec::GlobalState> {
+        Ok(Arc::new(()))
+    }
+
+    fn local_state(
+        &self,
+        _ctx: &TaskContext,
+        _g: &krishiv_exec::GlobalState,
+    ) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    fn sink(
+        &self,
+        input: Batch,
+        _local: &mut LocalState,
+        _g: &krishiv_exec::GlobalState,
+    ) -> Result<krishiv_exec::SinkStatus> {
+        self.0.lock().unwrap().get_or_insert(input);
+        Ok(krishiv_exec::SinkStatus::Finished)
+    }
+
+    fn combine(&self, _local: LocalState, _g: &krishiv_exec::GlobalState) -> Result<()> {
+        Ok(())
+    }
+
+    fn finalize<'a>(
+        &'a self,
+        _g: &'a krishiv_exec::GlobalState,
+        _ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+impl krishiv_exec::Source for First {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn max_parallelism(&self, _g: &krishiv_exec::GlobalState) -> usize {
+        1
+    }
+
+    fn global_state(&self, _ctx: &TaskContext) -> Result<krishiv_exec::GlobalState> {
+        Ok(Arc::new(()))
+    }
+
+    fn local_state(
+        &self,
+        _ctx: &TaskContext,
+        _g: &krishiv_exec::GlobalState,
+    ) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        _local: &'a mut LocalState,
+        _g: &'a krishiv_exec::GlobalState,
+    ) -> BoxFuture<'a, Result<Option<Batch>>> {
+        let b = self.0.lock().unwrap().take();
+        Box::pin(async move { Ok(b) })
+    }
+}
+
+/// A sink that returns `Finished` stops its driver's source.
+#[tokio::test(start_paused = true)]
+async fn a_finished_sink_stops_its_source() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(1 << 30);
+    let q = query(&root, 1, ExecConfig::default());
+    let (source, scan) = scan(1_000_000);
+    let out = run(
+        &runner,
+        Arc::new(Break(scan, Arc::new(First::default()), false)),
+        &q,
+    )
+    .await;
+    assert_eq!(values(&out.unwrap())[..2], [0, 1]);
+    assert_eq!(
+        source.produced.load(Ordering::Relaxed),
+        DEFAULT_BATCH_SIZE as u64
+    );
+    assert_released(&root);
+}
+
+/// Shutting the executor down ends its running queries (cancelled), and
+/// dropping the last handle to a runtime from inside it does not block.
+#[test]
+fn shutting_down_the_executor_ends_running_queries() {
+    let exec = executor(2);
+    let runner = QueryRunner::new(Arc::clone(&exec) as Arc<dyn Executor>);
+    let root = root(1 << 30);
+    let q = query(&root, 1, ExecConfig::default());
+    let caller = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (_, scan) = scan(u64::MAX >> 8);
+    let mut stream = caller
+        .block_on(runner.submit(scan, Arc::clone(&q)))
+        .unwrap();
+    drop(runner);
+    drop(exec); // the running tasks still hold the executor
+    caller.block_on(async {
+        assert!(stream.next().await.unwrap().is_ok());
+        drop(stream); // cancels; the last task drops the executor
+        q.finished().await;
+    });
+    assert_released(&root);
+}
+
+/// A breaker's `finalize` runs while another query needs memory: the
+/// arbitrator's request reaches the finalizing driver, which spills the
+/// global state through `Sink::spill_global`.
+#[tokio::test(start_paused = true)]
+async fn finalize_spills_global_state_under_memory_pressure() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(4 * MIB);
+    let q1 = query(&root, 1, ExecConfig::default());
+    let (_, scan) = scan(80 * DEFAULT_BATCH_SIZE as u64); // ~2.5 MiB
+    let buffer = Buffer::with_finalize_yields(true, None, 10_000);
+    let plan = Arc::new(Break(scan, Arc::clone(&buffer), false));
+    let mut stream = runner.submit(plan, Arc::clone(&q1)).await.unwrap();
+    while !buffer.finalizing.load(Ordering::Acquire) {
+        tokio::task::yield_now().await;
+    }
+    assert!(buffer.spilled_at().is_empty());
+    let q2 = root.child("q2", None);
+    let id = q2.register("want", None);
+    q2.reserve(id, 3 * MIB).await.unwrap();
+    assert_eq!(buffer.spilled_at(), [80], "spilled during finalize");
+    assert_eq!(root.stats().aborts, 0);
+    let mut n = 0;
+    while let Some(b) = stream.next().await {
+        n += b.unwrap().num_rows();
+    }
+    assert_eq!(n, 80 * DEFAULT_BATCH_SIZE);
+    q1.finished().await;
+    q2.unregister(id);
+    assert_released(&root);
+}
+
+/// Two child pipelines feed the root: a build side that finalizes and a
+/// sibling that fails. The executor owns the finalized build state and drops
+/// it at query end, so the pool is empty while the caller still holds the
+/// plan.
+#[tokio::test(start_paused = true)]
+async fn breaker_state_is_released_when_a_sibling_fails() {
+    struct Join(
+        Arc<dyn ExecNode>,
+        Arc<dyn ExecNode>,
+        Arc<Buffer>,
+        Arc<Count>,
+    );
+    impl ExecNode for Join {
+        fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+            let build = b.child_pipeline(
+                Arc::clone(&self.2) as Arc<dyn krishiv_exec::Sink>,
+                Arc::clone(&self.0),
+            )?;
+            b.child_pipeline(
+                Arc::clone(&self.3) as Arc<dyn krishiv_exec::Sink>,
+                Arc::clone(&self.1),
+            )?;
+            b.set_breaker_source(Arc::clone(&self.2) as Arc<dyn krishiv_exec::Source>, build)
+                .map(drop)
+        }
+    }
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(1 << 30);
+    let q = query(&root, 1, ExecConfig::default());
+    let (_, build_scan) = scan(2 * DEFAULT_BATCH_SIZE as u64);
+    let (_, probe_scan) = scan(64 * DEFAULT_BATCH_SIZE as u64);
+    let fail = hook(|i| {
+        if i == 32 {
+            return Err(DivideByZero {
+                config: String::new(),
+            }
+            .into());
+        }
+        Ok(())
+    });
+    let buffer = Buffer::new(true, None);
+    let plan = Arc::new(Join(
+        build_scan,
+        pipe(probe_scan, fail),
+        Arc::clone(&buffer),
+        Count::new(),
+    ));
+    let held: Arc<dyn ExecNode> = Arc::clone(&plan) as Arc<dyn ExecNode>;
+    let e = run(&runner, plan, &q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert_eq!(
+        buffer.sunk.load(Ordering::Relaxed),
+        2,
+        "the build side finished"
+    );
+    assert_released(&root);
+    drop(held);
+}
+
+/// A range scan whose drivers each register a memory consumer (an I/O
+/// buffer, say) and record its spill signal.
+struct BufferedScan(
+    Arc<RangeSource>,
+    std::sync::Mutex<Vec<Arc<krishiv_memory::SpillSignal>>>,
+);
+
+impl krishiv_exec::Source for BufferedScan {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn global_state(&self, ctx: &TaskContext) -> Result<krishiv_exec::GlobalState> {
+        self.0.global_state(ctx)
+    }
+
+    fn max_parallelism(&self, g: &krishiv_exec::GlobalState) -> usize {
+        self.0.max_parallelism(g)
+    }
+
+    fn local_state(&self, ctx: &TaskContext, g: &krishiv_exec::GlobalState) -> Result<LocalState> {
+        let memory = ctx.consumer();
+        memory.signal().set_spillable_bytes(MIB);
+        self.1.lock().unwrap().push(Arc::clone(memory.signal()));
+        self.0.local_state(ctx, g)
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        g: &'a krishiv_exec::GlobalState,
+    ) -> BoxFuture<'a, Result<Option<Batch>>> {
+        self.0.get_data(local, g)
+    }
+}
+
+/// A spill request to a source's consumer (a source has no spill hook) is
+/// completed with 0 bytes by the parked driver, which then still sees its
+/// query's cancellation: it neither spins on the request nor hangs.
+#[tokio::test]
+async fn a_spill_request_to_a_source_is_answered_and_never_hangs() {
+    let runner = QueryRunner::new(executor(1));
+    let root = root(1 << 30);
+    let q = query(&root, 1, ExecConfig::default());
+    let source = Arc::new(BufferedScan(
+        RangeSource::new(u64::MAX >> 8),
+        std::sync::Mutex::default(),
+    ));
+    let plan = Arc::new(Scan(Arc::clone(&source) as Arc<dyn krishiv_exec::Source>));
+    let stream = runner.submit(plan, Arc::clone(&q)).await.unwrap();
+    while source.1.lock().unwrap().is_empty() {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(20)).await; // parked on the full channel
+    let signal = Arc::clone(&source.1.lock().unwrap()[0]);
+    let freed = tokio::time::timeout(Duration::from_secs(5), signal.request_spill(MIB)).await;
+    assert_eq!(freed, Ok(0), "answered while parked");
+    drop(stream);
+    tokio::time::timeout(Duration::from_secs(5), q.finished())
+        .await
+        .unwrap();
+    assert_eq!(
+        q.error().unwrap().error_class(),
+        ErrorClass::OperationCanceled
+    );
+    assert_released(&root);
+}

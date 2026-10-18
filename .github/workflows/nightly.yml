@@ -140,7 +140,9 @@ jobs:
           fail_ci_if_error: false
 
   # P2-T010: loom models of the memory pool accounting, spill protocol, round
-  # admission and arbitration (`crates/krishiv-memory/src/loom_tests.rs`).
+  # admission and arbitration (`crates/krishiv-memory/src/loom_tests.rs`);
+  # P2-T050: the executor's morsel cursor, finalize countdown, cancellation
+  # and result channel (`crates/krishiv-exec/src/loom_tests.rs`).
   loom:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
@@ -156,6 +158,8 @@ jobs:
         run: rustup show active-toolchain
       - name: loom models (krishiv-memory)
         run: cargo test -p krishiv-memory --lib --release --locked
+      - name: loom models (krishiv-exec)
+        run: cargo test -p krishiv-exec --lib --release --locked
 
   # cargo-fuzz targets (`fuzz/`), one hour each on a GitHub-hosted runner, on
   # a pinned nightly. Seeds are the Spark golden statements, one per file; a

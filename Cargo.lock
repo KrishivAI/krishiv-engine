@@ -1131,6 +1131,17 @@ version = "0.1.0-dev"
 [[package]]
 name = "krishiv-exec"
 version = "0.1.0-dev"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "codspeed-criterion-compat",
+ "futures",
+ "krishiv-common",
+ "krishiv-memory",
+ "krishiv-types",
+ "loom",
+ "tokio",
+]
 
 [[package]]
 name = "krishiv-flight-sql"

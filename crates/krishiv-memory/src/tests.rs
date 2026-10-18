@@ -751,3 +751,129 @@ fn an_unavailable_timer_fails_the_request_without_hurting_anyone() {
     assert!(qa.check_aborted().is_err());
     assert!(SPAWNS.load(std::sync::atomic::Ordering::SeqCst) >= 2);
 }
+
+#[test]
+fn consumer_handles_unregister_after_their_last_reservation() {
+    let root = root(Some(4 * Q), 1);
+    let q: Arc<dyn MemoryPool> = root.child("q", None);
+    let h = ConsumerHandle::register(Arc::clone(&q), "op", None);
+    let id = h.id();
+    assert!(format!("{h:?}").contains("credit"));
+    let mut r = h.reservation();
+    r.try_grow(100).unwrap();
+    drop(h);
+    // The reservation keeps the consumer registered.
+    r.try_grow(10).unwrap();
+    assert_eq!(root.reserved(), 110);
+    drop(r);
+    assert_eq!(root.reserved(), 0);
+    assert_eq!(
+        q.try_reserve(id, 1),
+        Err(MemoryError::UnknownConsumer { id })
+    );
+}
+
+#[test]
+fn grant_credit_is_taken_once_and_refunded_on_failure() {
+    let root = root(Some(1000), 1);
+    let q: Arc<dyn MemoryPool> = root.child("q", None);
+    let h = ConsumerHandle::register(Arc::clone(&q), "op", None);
+    // The driver reserved 300 bytes for a NeedMemory retry.
+    q.try_reserve(h.id(), 300).unwrap();
+    h.add_credit(300);
+    let mut r = h.reservation();
+    r.try_grow(200).unwrap(); // all from credit
+    assert_eq!((r.size(), h.credit(), root.reserved()), (200, 100, 300));
+    r.try_grow(150).unwrap(); // 100 credit + 50 from the pool
+    assert_eq!((h.credit(), root.reserved()), (0, 350));
+    h.add_credit(0);
+    q.try_reserve(h.id(), 100).unwrap();
+    h.add_credit(100);
+    // A refused request puts its credit back.
+    assert!(r.try_grow(2000).is_err());
+    assert_eq!((h.credit(), root.reserved()), (100, 450));
+    h.release_credit();
+    h.release_credit();
+    assert_eq!((h.credit(), root.reserved()), (0, 350));
+    assert_eq!(h.peak(), 350);
+    drop(r);
+    assert_eq!(root.reserved(), 0);
+    let mut r2 = h.reservation();
+    r2.try_grow(10).unwrap();
+    assert_eq!(h.peak(), 350, "the peak is a high-water mark");
+}
+
+#[tokio::test(start_paused = true)]
+async fn aborted_completes_when_the_query_is_aborted() {
+    let root = root(Some(8 * Q), Q);
+    let a = root.child_pool("a", None);
+    let ida = a.register("held", None);
+    a.try_reserve(ida, 6 * Q).unwrap();
+    let b = root.child_pool("b", None);
+    let idb = b.register("agg", None);
+    let waiter = tokio::spawn({
+        let a = Arc::clone(&a);
+        async move { a.aborted().await }
+    });
+    // `a` holds the most and never spills, so the arbitrator aborts it.
+    let request = tokio::spawn({
+        let b = Arc::clone(&b);
+        async move { b.reserve(idb, 4 * Q).await }
+    });
+    let e = waiter.await.unwrap();
+    assert_eq!(e.error_class(), ErrorClass::KrishivQueryAbortedOutOfMemory);
+    assert_eq!(a.aborted().await, e, "already aborted: completes at once");
+    a.unregister(ida);
+    request.await.unwrap().unwrap();
+    // Pools outside a query never complete.
+    let ext = root.external("prefetch", Q);
+    let never = tokio::time::timeout(Duration::from_secs(60), ext.aborted()).await;
+    assert!(never.is_err());
+    let none = tokio::time::timeout(Duration::from_secs(60), root.aborted()).await;
+    assert!(none.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn grow_draws_credit_and_refunds_it_when_cancelled() {
+    let root = root(Some(10 * Q), 1);
+    let q = root.child_pool("q", None);
+    let h = ConsumerHandle::register(Arc::clone(&q) as Arc<dyn MemoryPool>, "op", None);
+    q.try_reserve(h.id(), Q).unwrap();
+    h.add_credit(Q);
+    let mut r = h.reservation();
+    r.grow(Q).await.unwrap(); // credit only
+    q.try_reserve(h.id(), Q).unwrap();
+    h.add_credit(Q);
+    r.grow(2 * Q).await.unwrap(); // credit + pool
+    assert_eq!((r.size(), h.credit(), root.reserved()), (3 * Q, 0, 3 * Q));
+    // Another query holds the rest and never releases, so `grow` waits.
+    let other = root.child_pool("other", None);
+    let held = other.register("held", None);
+    other.try_reserve(held, 6 * Q).unwrap();
+    q.try_reserve(h.id(), Q).unwrap();
+    h.add_credit(Q);
+    let pending = tokio::time::timeout(Duration::from_millis(10), r.grow(4 * Q)).await;
+    assert!(pending.is_err(), "the request is still waiting");
+    assert_eq!(h.credit(), Q, "dropping the wait refunded the credit");
+    // `other` is aborted but never releases, so the request fails.
+    let e = r.grow(4 * Q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert_eq!(h.credit(), Q);
+}
+
+#[tokio::test(start_paused = true)]
+async fn reserve_for_parks_the_grant_as_credit() {
+    let root = root(Some(4 * Q), 1);
+    let q = root.child_pool("q", None);
+    let owner = SpillOwner::new();
+    let h = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "op",
+        Some(owner.signal() as Arc<dyn Spillable>),
+    );
+    owner.reserve_for(&h, Q, || async {}).await.unwrap();
+    assert_eq!((h.credit(), root.reserved()), (Q, Q));
+    let e = owner.reserve_for(&h, 8 * Q, || async {}).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert_eq!(h.credit(), Q, "a refused request parks nothing");
+}

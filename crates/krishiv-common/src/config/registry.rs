@@ -14,6 +14,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SESSION_TIME_ZONE,
     &STORE_ASSIGNMENT_POLICY,
     &TARGET_PARTITION_BYTES,
+    &EXEC_BATCH_SIZE,
     &SHUFFLE_PARTITIONS_HINT,
     &NETWORK_TIMEOUT,
     &MEMORY_LIMIT,
@@ -37,6 +38,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.dir", &SPILL_DIR),
     ("krishiv.memory.limit", &MEMORY_LIMIT),
     ("spark.network.timeout", &NETWORK_TIMEOUT),
+    ("krishiv.exec.batchSize", &EXEC_BATCH_SIZE),
     ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
@@ -116,6 +118,18 @@ pub static TARGET_PARTITION_BYTES: ConfigEntry = ConfigEntry {
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(128 * MIB)),
     doc: "Target size of a partition for scans and exchanges.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Rows per execution batch.
+pub static EXEC_BATCH_SIZE: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.batchSize",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(4096)),
+    doc: "Rows per batch passed between operators. Operators do about a millisecond of work \
+          per batch, so the scheduler can switch tasks between batches.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

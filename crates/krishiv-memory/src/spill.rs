@@ -23,7 +23,7 @@ use std::task::{Context, Poll, Waker};
 
 use crate::event::Event;
 use crate::sync::{AtomicUsize, Mutex, Ordering, lock};
-use crate::{ConsumerId, MemoryError, MemoryPool};
+use crate::{ConsumerHandle, ConsumerId, MemoryError, MemoryPool};
 
 /// A memory consumer that can give memory back on request: hash join, hash
 /// aggregate, sort and window, and external consumers such as a UDF worker
@@ -276,9 +276,10 @@ impl SpillOwner {
 
     /// Whether any of this owner's signals has a pending request.
     pub fn pending(&self) -> bool {
-        self.live_signals()
+        // No allocation: drivers call this at every batch boundary.
+        lock(&self.signals)
             .iter()
-            .any(|s| s.spill_requested().is_some())
+            .any(|s| s.upgrade().is_some_and(|s| s.spill_requested().is_some()))
     }
 
     /// Completes after the next request to any of this owner's signals.
@@ -286,6 +287,28 @@ impl SpillOwner {
     /// between is not missed.
     pub fn requested(&self) -> impl Future<Output = ()> + Send + '_ {
         self.requested.listen()
+    }
+
+    /// [`reserve`](Self::reserve) for a [`ConsumerHandle`], parking the
+    /// granted bytes as its grant credit in the same step, so a caller
+    /// cancelled after the grant never leaves bytes untracked.
+    ///
+    /// # Errors
+    /// As [`MemoryPool::reserve`].
+    pub async fn reserve_for<F, Fut>(
+        &self,
+        consumer: &ConsumerHandle,
+        bytes: usize,
+        service: F,
+    ) -> Result<(), MemoryError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        self.reserve(&**consumer.pool(), consumer.id(), bytes, service)
+            .await?;
+        consumer.add_credit(bytes);
+        Ok(())
     }
 
     /// Reserves `bytes` for consumer `id` of `pool` the cooperative way:
@@ -339,9 +362,11 @@ impl SpillOwner {
         let mut arbitration = pool.reserve(id, bytes);
         loop {
             let mut requested = self.requested.listen();
+            // Service once, then always poll arbitration too: a request the
+            // service could not clear must not starve it (or a caller's
+            // cancellation).
             if self.pending() {
                 service().await;
-                continue;
             }
             let done = poll_fn(|cx| {
                 if let Poll::Ready(r) = arbitration.as_mut().poll(cx) {
@@ -350,9 +375,8 @@ impl SpillOwner {
                 Pin::new(&mut requested).poll(cx).map(|()| None)
             })
             .await;
-            match done {
-                Some(r) => return r,
-                None => service().await,
+            if let Some(r) = done {
+                return r;
             }
         }
     }
