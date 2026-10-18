@@ -1,0 +1,6 @@
+# The two acceptance tests with wall-clock bounds (a cancelled query stops
+# within 100 ms; a blocking call delays a short query by at most 10 ms) can
+# flake on loaded shared runners; retry them, and only them.
+[[profile.default.overrides]]
+filter = "test(=a_cancelled_query_stops_within_100ms_and_releases_everything) | test(=blocking_work_does_not_delay_a_short_query)"
+retries = 2

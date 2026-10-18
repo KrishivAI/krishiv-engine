@@ -13,8 +13,9 @@ repository = "https://github.com/krishiv/krishiv-engine"
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "deny"
-# `--cfg loom` builds the loom model tests (krishiv-memory).
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+# `--cfg loom` builds the loom model tests (krishiv-memory, krishiv-exec);
+# `cargo codspeed` builds benches with `--cfg codspeed`.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(codspeed)"] }
 # ADR 0029 (2026-10-17 lint set).
 unreachable_pub = "warn"
 missing_debug_implementations = "warn"

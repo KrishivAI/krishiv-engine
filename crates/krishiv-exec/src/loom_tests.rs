@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Loom models of the executor's handoffs: morsel claims, the finalize
-//! countdown, cancellation wake-ups and the blocked result channel.
+//! countdown, cancellation wake-ups, the blocked result channel (woken by a
+//! read or by dropping the stream), the driver's spill-versus-cancel wait
+//! and the `blocking_done` handshake. Each protocol model was checked to
+//! fail with a planted bug (Relaxed countdown; check-before-listen in the
+//! wait loop and in `blocking_done`; `drop_receiver` not waking senders).
 //! `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release`.
 
 use std::sync::Arc;
@@ -104,5 +108,108 @@ fn a_blocked_sender_is_woken_by_the_reader() {
         }));
         assert_eq!(got, 2);
         sender.join().unwrap_or(());
+    });
+}
+
+/// The driver's wait loop (`pause`): listen for spill requests, check
+/// `pending`, then wait for a request or cancellation. A canceller that
+/// cancels only after the request was serviced deadlocks the model if the
+/// wait could miss the request.
+#[test]
+fn a_spill_request_racing_a_wait_is_serviced_before_cancel() {
+    use crate::sync::Event;
+    model(|| {
+        let requested = Arc::new(Event::default());
+        let pending = Arc::new(AtomicBool::new(false));
+        let serviced = Arc::new(CancellationToken::new());
+        let token = Arc::new(CancellationToken::new());
+        let requester = {
+            let (requested, pending) = (Arc::clone(&requested), Arc::clone(&pending));
+            thread::spawn(move || {
+                pending.store(true, Ordering::Release);
+                requested.notify();
+            })
+        };
+        let canceller = {
+            let (serviced, token) = (Arc::clone(&serviced), Arc::clone(&token));
+            thread::spawn(move || {
+                block_on(serviced.cancelled());
+                token.cancel();
+            })
+        };
+        block_on(async {
+            loop {
+                let listener = requested.listen();
+                if pending.load(Ordering::Acquire) {
+                    pending.store(false, Ordering::Release);
+                    serviced.cancel();
+                    continue;
+                }
+                let cancelled = token.cancelled();
+                let mut listener = std::pin::pin!(listener);
+                let mut cancelled = std::pin::pin!(cancelled);
+                let woke = std::future::poll_fn(|cx| {
+                    if cancelled.as_mut().poll(cx).is_ready() {
+                        return std::task::Poll::Ready(true);
+                    }
+                    listener.as_mut().poll(cx).map(|()| false)
+                })
+                .await;
+                if woke {
+                    break;
+                }
+            }
+        });
+        assert!(serviced.is_cancelled());
+        requester.join().unwrap_or(());
+        canceller.join().unwrap_or(());
+    });
+}
+
+/// A driver blocked on a full result channel is woken when the stream is
+/// dropped.
+#[test]
+fn a_dropped_stream_wakes_a_blocked_sender() {
+    model(|| {
+        let channel = Channel::new(1);
+        let c = Arc::clone(&channel);
+        let sender = thread::spawn(move || {
+            // Full, unless the stream is already gone.
+            if c.send_for_test(batch()) == Some(true) {
+                block_on(Arc::clone(&c).space());
+                assert_eq!(c.send_for_test(batch()), None, "receiver gone");
+            }
+        });
+        channel.drop_receiver();
+        sender.join().unwrap_or(());
+    });
+}
+
+/// The coordinator's `blocking_done` returns only after the last blocking
+/// closure ended, and is never left waiting by a racing end.
+#[test]
+fn blocking_done_waits_for_the_last_closure() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    model(|| {
+        let root = TreePool::new(&MemoryConfig {
+            limit: Some(1 << 20),
+            ..MemoryConfig::default()
+        });
+        let query = crate::QueryContext::new(
+            crate::QueryId(1),
+            crate::WorkloadClass::Batch,
+            crate::ExecConfig::default(),
+            root.child("q", None),
+        );
+        let ended = Arc::new(AtomicBool::new(false));
+        let guard = query.blocking_started();
+        let e = Arc::clone(&ended);
+        let closure = thread::spawn(move || {
+            e.store(true, Ordering::Release);
+            drop(guard);
+        });
+        block_on(query.blocking_done());
+        assert!(ended.load(Ordering::Acquire));
+        closure.join().unwrap_or(());
     });
 }
