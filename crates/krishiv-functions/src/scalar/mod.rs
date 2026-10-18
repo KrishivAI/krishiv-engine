@@ -13,7 +13,9 @@
 //! `Timestamp(Microsecond, "UTC")` for `timestamp`.
 //!
 //! The canonical operators (`+`, `==`, `like`, `when`, `concat`, ...) and
-//! `CAST` are not registry functions; the evaluator implements them.
+//! `CAST` are not registry functions; the evaluator implements them, and the
+//! conditionals (`if`, `coalesce`, ...), which evaluate their arguments
+//! lazily ([`crate::registry::Execution::Evaluator`]).
 //!
 //! # Calling convention
 //!
@@ -22,7 +24,10 @@
 //! `rows` values, also when every argument is a literal.
 
 mod args;
+mod arith;
 mod datetime;
+mod hash;
+mod math;
 mod string;
 
 use std::fmt;
@@ -82,6 +87,9 @@ pub struct BindOptions {
     /// `current_date` and `current_timestamp` read it, so one query sees one
     /// clock.
     pub query_start_micros: i64,
+    /// `spark.sql.decimalOperations.allowPrecisionLoss`: the result types of
+    /// decimal arithmetic (`pmod`, `try_add`, ...).
+    pub decimal_precision_loss: bool,
 }
 
 impl BindOptions {
@@ -94,6 +102,7 @@ impl BindOptions {
             kernel: KernelCtx::new(),
             time_zone: Arc::new(FixedOffset(0)),
             query_start_micros: 0,
+            decimal_precision_loss: true,
         }
     }
 
@@ -115,6 +124,13 @@ impl BindOptions {
     #[must_use]
     pub fn with_time_zone(mut self, zone: Arc<dyn TimeZoneRules>) -> Self {
         self.time_zone = zone;
+        self
+    }
+
+    /// With `spark.sql.decimalOperations.allowPrecisionLoss = loss`.
+    #[must_use]
+    pub fn with_decimal_precision_loss(mut self, loss: bool) -> Self {
+        self.decimal_precision_loss = loss;
         self
     }
 
@@ -250,9 +266,12 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 2] = [
+const FAMILIES: [(&[&str], Binder); 5] = [
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
+    (math::NAMES, math::bind),
+    (arith::NAMES, arith::bind),
+    (hash::NAMES, hash::bind),
 ];
 
 /// The name of every scalar function [`bind_scalar`] binds, aliases
