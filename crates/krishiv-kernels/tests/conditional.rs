@@ -507,3 +507,50 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn an_error_names_the_row_in_the_callers_selection() {
+    // Rows 0 and 1 take the THEN branch; row 3 is the first to reach the ELSE and fails there.
+    let a = ints(&[Some(1), Some(2), Some(3), Some(4)]);
+    let b = ints(&[Some(1), Some(1), Some(0), Some(0)]);
+    let c = ints(&[Some(1), Some(1), Some(1), Some(0)]);
+    let all = Selection::all(4).unwrap();
+    let (mut cond, mut then, mut other) = (
+        |rows: &Selection| -> Result<ArrayRef, KernelError> {
+            let x = rows.gather(a.as_ref())?;
+            let out: BooleanArray = x
+                .as_primitive::<Int32Type>()
+                .iter()
+                .map(|v| v.map(|v| v < 3))
+                .collect();
+            Ok(Arc::new(out))
+        },
+        literal(0),
+        remainder(&a, &c),
+    );
+    let mut when = [When {
+        condition: &mut cond,
+        value: &mut then,
+    }];
+    let e = case_when(&all, &mut when, Some(&mut other), &DataType::Int32).unwrap_err();
+    assert_eq!(e.row(), Some(3));
+    // Inside a nested conditional the position maps through both levels.
+    let sub = Selection::from_indices(vec![1, 3]).unwrap();
+    let mut left = literal_true();
+    let mut right = |rows: &Selection| -> Result<ArrayRef, KernelError> {
+        let r = remainder(&a, &c)(rows)?;
+        let out: BooleanArray = r
+            .as_primitive::<Int32Type>()
+            .iter()
+            .map(|v| v.map(|v| v == 0))
+            .collect();
+        Ok(Arc::new(out))
+    };
+    let e = and(&sub, &mut left, &mut right).unwrap_err();
+    assert_eq!(e.row(), Some(1));
+    let _ = b;
+    // The identity selection shares the column's buffers.
+    let col = ints(&[Some(1), None]);
+    let same = Selection::all(2).unwrap().gather(col.as_ref()).unwrap();
+    assert_eq!(values(&same), [Some(1), None]);
+}

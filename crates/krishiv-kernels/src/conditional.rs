@@ -13,6 +13,11 @@
 //! kernel on the gathered rows; nested conditionals simply pass the selection
 //! they were given on to their own branches.
 //!
+//! An error raised by an operand names the failing row as a position in the
+//! selection the conditional was given (nested conditionals map it again).
+//! Branches run in branch order, so with two failing branches the error is the
+//! first in branch order, not the one of the lowest row.
+//!
 //! Semantics (Spark's):
 //! - `CASE WHEN c1 THEN v1 ... [ELSE e] END`: the first condition that is
 //!   true wins; a NULL condition is not true; no `ELSE` gives NULL.
@@ -88,6 +93,16 @@ impl Selection {
     /// # Errors
     /// `INTERNAL_ERROR` if a selected row is past the end of `column`.
     pub fn gather(&self, column: &dyn Array) -> Result<ArrayRef, KernelError> {
+        // Strictly ascending with as many rows as the column: every row, in
+        // order, so share the buffers instead of copying them.
+        let all = self.rows.len() == column.len()
+            && self
+                .rows
+                .last()
+                .is_none_or(|&r| usize::try_from(r).ok() == column.len().checked_sub(1));
+        if all {
+            return Ok(arrow_array::make_array(column.to_data()));
+        }
         let indices = UInt32Array::from(self.rows.clone());
         // `take` panics on an index past the end unless asked to check.
         let options = arrow_select::take::TakeOptions { check_bounds: true };
@@ -310,10 +325,22 @@ pub fn case_when(
         if live.len() == 0 {
             break;
         }
-        let cond = boolean(&branch.condition.eval(&live.rows)?, live.len())?;
+        let cond = boolean(
+            &branch
+                .condition
+                .eval(&live.rows)
+                .map_err(|e| e.in_selection(&live.pos))?,
+            live.len(),
+        )?;
         let (hit, rest) = live.split(|i| cond.is_valid(i) && cond.value(i));
         if hit.len() > 0 {
-            let value = typed(branch.value.eval(&hit.rows)?, ty)?;
+            let value = typed(
+                branch
+                    .value
+                    .eval(&hit.rows)
+                    .map_err(|e| e.in_selection(&hit.pos))?,
+                ty,
+            )?;
             zip.put_all(&hit, value)?;
         }
         live = rest;
@@ -321,7 +348,12 @@ pub fn case_when(
     if let Some(otherwise) = otherwise
         && live.len() > 0
     {
-        let value = typed(otherwise.eval(&live.rows)?, ty)?;
+        let value = typed(
+            otherwise
+                .eval(&live.rows)
+                .map_err(|e| e.in_selection(&live.pos))?,
+            ty,
+        )?;
         zip.put_all(&live, value)?;
     }
     zip.finish(ty)
@@ -362,7 +394,11 @@ pub fn coalesce(
         if live.len() == 0 {
             break;
         }
-        let value = typed(arg.eval(&live.rows)?, ty)?;
+        let value = typed(
+            arg.eval(&live.rows)
+                .map_err(|e| e.in_selection(&live.pos))?,
+            ty,
+        )?;
         expect_rows(&value, live.len())?;
         if k == last {
             zip.put_all(&live, value)?;
@@ -419,7 +455,12 @@ fn connective(
     let live = Live::root(rows)?;
     let (_, undecided) = live.split(|i| l.is_valid(i) && l.value(i) == dominant);
     let r = if undecided.len() > 0 {
-        boolean(&right.eval(&undecided.rows)?, undecided.len())?
+        boolean(
+            &right
+                .eval(&undecided.rows)
+                .map_err(|e| e.in_selection(&undecided.pos))?,
+            undecided.len(),
+        )?
     } else {
         BooleanArray::new_null(0)
     };

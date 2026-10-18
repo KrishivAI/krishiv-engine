@@ -42,11 +42,8 @@ pub(super) enum CondFn {
 }
 
 fn is_atomic(t: &DataType) -> bool {
-    is_numeric(t)
-        || matches!(
-            t,
-            DataType::Boolean | DataType::Binary | DataType::Date32 | DataType::Timestamp(..)
-        )
+    // Spark's `stringPromotion` excludes BOOLEAN and BINARY.
+    is_numeric(t) || matches!(t, DataType::Date32 | DataType::Timestamp(..))
 }
 
 /// The type the branches of a conditional take: the tightest common type;
@@ -264,6 +261,17 @@ impl Evaluator<'_> {
             1
         };
         Ok(Selection::all(rows)?)
+    }
+
+    /// A one-row constant repeated for each row of the current selection
+    /// (unchanged outside a conditional branch).
+    pub(super) fn per_selected_row(&self, one: ArrayRef) -> Result<ArrayRef, EvalError> {
+        let Some(sel) = self.frame.borrow().clone() else {
+            return Ok(one);
+        };
+        let zeros = arrow_array::UInt32Array::from(vec![0_u32; sel.len()]);
+        arrow_select::take::take(one.as_ref(), &zeros, None)
+            .map_err(|e| EvalError::other(e.to_string()))
     }
 
     /// `node` evaluated on the rows of `sel` only.
