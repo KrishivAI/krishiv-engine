@@ -223,3 +223,12 @@ fn greedy_ordering_scales() {
     assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
     no_cross_product(optimized.root(), "the chain");
 }
+
+#[test]
+fn subquery_conditions_keep_their_join() {
+    let optimized = same_rows(
+        "SELECT t.a, u.d FROM t JOIN u ON t.a = (SELECT max(x.a) FROM t x WHERE x.b = u.d) \
+         JOIN t y ON y.c = t.c",
+    );
+    no_cross_product(optimized.root(), "a subquery join condition");
+}

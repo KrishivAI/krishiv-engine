@@ -227,7 +227,14 @@ impl Reorder<'_> {
             return self.children(root);
         }
         let ests: Vec<Rc<Est>> = leaves.iter().map(|l| self.est.plan(l)).collect();
-        Graph::new(&leaves, &ests, preds).plan()
+        let graph = Graph::new(&leaves, &ests, preds);
+        if graph.parts(false) < graph.parts(true) {
+            // Inputs related only through a conjunct with a subquery: as
+            // written they meet in a join on it; re-planned they would meet
+            // in a cross product. Keep the tree as written.
+            return self.children(root);
+        }
+        graph.plan()
     }
 }
 
@@ -383,6 +390,26 @@ impl Graph {
             rows,
             preds: kept,
         }
+    }
+
+    /// The connected parts of the graph, through join conditions only
+    /// (`edges_only`) or through every conjunct.
+    fn parts(&self, edges_only: bool) -> usize {
+        let mut root: Vec<usize> = (0..self.n()).collect();
+        fn find(root: &mut [usize], mut x: usize) -> usize {
+            while root[x] != x {
+                root[x] = root[root[x]];
+                x = root[x];
+            }
+            x
+        }
+        for p in self.preds.iter().filter(|p| p.edge || !edges_only) {
+            for w in p.on.windows(2) {
+                let (a, b) = (find(&mut root, w[0]), find(&mut root, w[1]));
+                root[a] = b;
+            }
+        }
+        (0..self.n()).filter(|&x| find(&mut root, x) == x).count()
     }
 
     fn n(&self) -> usize {
