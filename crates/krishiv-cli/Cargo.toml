@@ -11,6 +11,9 @@ publish = false
 [[bin]]
 name = "krishiv"
 path = "src/main.rs"
+# The bin and the `krishiv` library would write the same rustdoc output
+# directory (cargo#6313), racing under `cargo doc --workspace`.
+doc = false
 
 [dependencies]
 clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }

@@ -185,6 +185,23 @@ impl FileWriteSink {
         })
     }
 
+    /// The schema of the rows written.
+    #[must_use]
+    pub fn input_schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    /// The format and the directory written, for `EXPLAIN`.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!(
+            "{} to {}/{}",
+            self.format.name(),
+            self.options.store,
+            self.options.dir
+        )
+    }
+
     /// The files written, with their statistics (for manifests and the
     /// optimizer), once the write has finished; empty before.
     #[must_use]

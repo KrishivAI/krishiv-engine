@@ -77,6 +77,7 @@
 mod build;
 mod grace;
 mod keys;
+mod nested;
 mod probe;
 mod table;
 
@@ -89,6 +90,8 @@ use arrow_schema::{Field, Schema, SchemaRef};
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_memory::SpillScope;
 use krishiv_types::batch::{Batch, Weights};
+
+pub use nested::{NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec};
 
 use crate::error::{Result, internal};
 use crate::operator::{Operator, Sink};
