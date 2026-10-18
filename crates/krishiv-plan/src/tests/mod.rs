@@ -10,6 +10,7 @@ mod display;
 mod display_more;
 mod dsl;
 mod encode;
+mod files;
 mod inventory;
 mod nodes;
 mod props;

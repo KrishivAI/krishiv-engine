@@ -93,6 +93,9 @@ impl Resolver<'_> {
             });
             return Ok(self.make(p.origin, node, out, &[]));
         }
+        if let Some(&BoundTable::Files(i)) = self.b.tables.get(name) {
+            return Ok(self.files(p, i));
+        }
         let Some(BoundTable::Found { meta, securable }) = self.b.tables.get(name) else {
             return Err(AnalysisError::new(
                 TableOrViewNotFound {
@@ -130,6 +133,33 @@ impl Resolver<'_> {
             version: meta.version,
         });
         Ok(self.make(p.origin, node, out, &[]))
+    }
+
+    /// The files of [`super::bind::Bindings::files`] entry `i`, read by
+    /// `p`: a scan without a qualifier (Spark names neither the path nor
+    /// the format), with fresh attributes.
+    pub(super) fn files(&mut self, p: &LogicalPlan, i: usize) -> Rel {
+        let bound = &self.b.files[i];
+        let out: Vec<Attr> = bound
+            .columns
+            .iter()
+            .map(|c| Attr {
+                col: BoundColumn {
+                    id: self.fresh(),
+                    name: c.name.clone(),
+                    data_type: c.data_type.clone(),
+                    nullable: c.nullable,
+                },
+                qual: no_qual(),
+                source: None,
+            })
+            .collect();
+        let node = PlanNode::Scan(Scan {
+            source: bound.read.clone(),
+            output: out.iter().map(|a| a.col.clone()).collect(),
+            version: None,
+        });
+        self.make(p.origin, node, out, &[])
     }
 
     /// `c` as an instance: every id inside shifted by `offset`; `plan` is
