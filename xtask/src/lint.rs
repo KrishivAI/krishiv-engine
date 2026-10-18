@@ -154,7 +154,8 @@ pub fn banned_idents_in(text: &str) -> Vec<(usize, &'static str)> {
 
 /// Lines (1-based) holding an `unsafe` keyword in code: the whole word
 /// `unsafe` outside comments (`//`, nested `/* */`), string literals (with
-/// escapes, byte and raw strings `r#"..."#`, across lines) and char
+/// escapes and line continuations, `b`/`c` strings and raw `r`/`br`/`cr`
+/// strings with any number of `#`, across lines) and char
 /// literals. `unsafe_code`, `unsafe_op_in_unsafe_fn` and
 /// `undocumented_unsafe_blocks` do not count. One site per line
 /// (`unsafe { .. }`, `unsafe fn`, `unsafe impl`).
@@ -180,10 +181,15 @@ pub fn unsafe_lines(text: &str) -> Vec<usize> {
     while i < chars.len() {
         let c = chars[i];
         if is_ident(c) {
-            // A raw or byte string prefix: `r"`, `r#"`, `br"`, `b"`.
-            let raw_start = (c == 'r' || (c == 'b' && at(i + 1) == 'r')) && word.is_empty();
-            if raw_start {
-                let mut j = if c == 'b' { i + 2 } else { i + 1 };
+            // Raw string prefixes: `r`, `br`, `cr`, each with any number of
+            // `#`. (`b"`/`c"` are normal strings, handled at the quote.)
+            let prefix = match (c, at(i + 1)) {
+                ('r', _) => 1,
+                ('b' | 'c', 'r') => 2,
+                _ => 0,
+            };
+            if prefix > 0 && word.is_empty() {
+                let mut j = i + prefix;
                 let mut hashes = 0;
                 while at(j) == '#' {
                     hashes += 1;
@@ -248,10 +254,14 @@ pub fn unsafe_lines(text: &str) -> Vec<usize> {
                 let mut k = i + 1;
                 let mut lines = 0;
                 while k < chars.len() && chars[k] != '"' {
-                    if chars[k] == '\n' {
+                    if chars[k] == '\\' {
+                        // The escaped char may be a newline (a line continuation).
+                        k += 1;
+                    }
+                    if at(k) == '\n' {
                         lines += 1;
                     }
-                    k += if chars[k] == '\\' { 2 } else { 1 };
+                    k += 1;
                 }
                 if k < chars.len() {
                     line += lines;

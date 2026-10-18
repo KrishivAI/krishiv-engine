@@ -173,6 +173,25 @@ fn unsafe_keyword_lines_only() {
     // Strings and nested block comments span lines.
     assert_eq!(unsafe_lines("let s = \"a\nunsafe\";\nunsafe {}"), vec![3]);
     assert_eq!(unsafe_lines("/* a /* b */\nunsafe */ unsafe {}"), vec![2]);
+    // C strings and raw C strings (review finding: exact example).
+    assert_eq!(unsafe_lines("let p = cr\"C:\\\"; unsafe { f() }"), vec![1]);
+    assert_eq!(
+        unsafe_lines("let p = cr#\"a \" unsafe\"#; unsafe {}"),
+        vec![1]
+    );
+    assert_eq!(
+        unsafe_lines("let p = c\"unsafe\"; f()"),
+        Vec::<usize>::new()
+    );
+    assert_eq!(
+        unsafe_lines("let p = br##\"\"# unsafe\"##;\nunsafe {}"),
+        vec![2]
+    );
+    // A line continuation inside a string still counts its newline.
+    assert_eq!(
+        unsafe_lines("let s = \"abc\\\n  def\";\nunsafe {}"),
+        vec![3]
+    );
     // An unterminated raw string is scanned as code (over-count, never hide).
     assert_eq!(unsafe_lines("r\"x unsafe"), vec![1]);
     assert_eq!(unsafe_lines("unsafe"), vec![1]);
@@ -231,4 +250,59 @@ fn unsafe_sites_are_counted_per_crate() {
     }
     assert!(unsafe_sites_per_crate(&root.join("missing")).is_err());
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Fuzz-style: an `unsafe` placed after arbitrary literals and comments is
+/// always found, on the right line.
+#[test]
+fn unsafe_after_random_literals_is_always_found() {
+    const PIECES: &[&str] = &[
+        "\"plain\"",
+        "\"esc \\\" q\"",
+        "\"bs \\\\\"",
+        "\"cont \\\n x\"",
+        "\"multi\nline\"",
+        "b\"bytes\"",
+        "c\"cstr\"",
+        "r\"C:\\\"",
+        "r#\"a \" b\"#",
+        "r##\"x \"# y\"##",
+        "br\"raw\\\"",
+        "cr\"C:\\\"",
+        "cr#\"q\"#",
+        "'\"'",
+        "'\\''",
+        "'\\\\'",
+        "b'\"'",
+        "'\\u{1F600}'",
+        "<'a>",
+        "&'static str",
+        "// line comment\n",
+        "/* block */",
+        "/* nested /* c */ \n */",
+        "x",
+        "1",
+        ";",
+        "(",
+        ")",
+        " ",
+        "\n",
+    ];
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = |n: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        usize::try_from(seed % u64::try_from(n).unwrap()).unwrap()
+    };
+    for _ in 0..5000 {
+        let mut src = String::new();
+        for _ in 0..next(12) {
+            src.push_str(PIECES[next(PIECES.len())]);
+            src.push(' ');
+        }
+        let line = src.matches('\n').count() + 1;
+        src.push_str("unsafe { f() }");
+        assert!(unsafe_lines(&src).contains(&line), "{src:?} -> line {line}");
+    }
 }
