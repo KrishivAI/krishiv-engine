@@ -40,6 +40,8 @@ tracing = { workspace = true, features = ["std"] }
 [dev-dependencies]
 arrow-buffer.workspace = true
 arrow-select.workspace = true
+# The local file system (directories, files in the way) in commit tests.
+object_store = { workspace = true, features = ["fs"] }
 criterion.workspace = true
 proptest = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }

@@ -27,6 +27,7 @@
 
 #![forbid(unsafe_code)]
 
+mod commit;
 mod error;
 mod format;
 pub mod io;
@@ -39,6 +40,7 @@ pub mod split;
 mod stats;
 mod write;
 
+pub use commit::{DirectoryWrite, SUCCESS_MARKER, SaveMode};
 pub use error::{FormatError, FormatResult, Result};
 pub use format::{
     AsyncDecoder, Capabilities, Decoder, Encoder, FileFormat, FileMetadata, MetadataNeeds,

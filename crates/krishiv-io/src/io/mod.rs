@@ -981,6 +981,113 @@ impl IoContext {
         }
     }
 
+    /// Writes `bytes` as the whole object `path` in `store` (a marker file,
+    /// an empty data file), retried like every request.
+    ///
+    /// # Errors
+    /// `TASK_WRITE_FAILED` if the store refuses.
+    pub async fn put_object(&self, store: &StoreId, path: &Path, bytes: Bytes) -> Result<()> {
+        let (s, lane) = self.sched.store(store)?;
+        let display = format!("{store}/{path}");
+        self.put(&s, &lane, path, &display, PutPayload::from_bytes(bytes))
+            .await
+    }
+
+    /// Every object under the directory `prefix` of `store`, at any depth.
+    ///
+    /// # Errors
+    /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
+    pub async fn list(&self, store: &StoreId, prefix: &Path) -> Result<Vec<ObjectMeta>> {
+        let (s, lane) = self.sched.store(store)?;
+        self.metadata_request(&lane, store, prefix, || {
+            futures::TryStreamExt::try_collect(s.list(Some(prefix)))
+        })
+        .await
+    }
+
+    /// The object `path` of `store`, if there is one (a directory is not
+    /// an object).
+    ///
+    /// # Errors
+    /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
+    pub async fn head(&self, store: &StoreId, path: &Path) -> Result<Option<ObjectMeta>> {
+        let (s, lane) = self.sched.store(store)?;
+        self.metadata_request(&lane, store, path, || async {
+            let opts = GetOptions {
+                head: true,
+                extensions: ScheduledRequest.into_extensions(),
+                ..GetOptions::default()
+            };
+            match s.get_opts(path, opts).await {
+                Ok(r) => Ok(Some(r.meta)),
+                Err(object_store::Error::NotFound { .. }) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+        .await
+    }
+
+    /// Whether the store lists `path` as a directory of its parent: the
+    /// only way to see an empty directory of a file system (object stores
+    /// have none).
+    ///
+    /// # Errors
+    /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
+    pub async fn is_directory(&self, store: &StoreId, path: &Path) -> Result<bool> {
+        let (s, lane) = self.sched.store(store)?;
+        let mut parts: Vec<_> = path.parts().collect();
+        if parts.pop().is_none() {
+            // The root always exists.
+            return Ok(true);
+        }
+        let parent = Path::from_iter(parts);
+        let listed = self
+            .metadata_request(&lane, store, &parent, || {
+                s.list_with_delimiter((parent.as_ref() != "").then_some(&parent))
+            })
+            .await?;
+        Ok(listed.common_prefixes.iter().any(|p| p == path))
+    }
+
+    /// A listing or `HEAD` request, admitted, counted and retried as reads
+    /// are; its failures are storage failures.
+    async fn metadata_request<T, F, Fut>(
+        &self,
+        lane: &Lane,
+        store: &StoreId,
+        path: &Path,
+        mut request: F,
+    ) -> Result<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = object_store::Result<T>>,
+    {
+        let cfg = &self.sched.config;
+        let display = format!("{store}/{path}");
+        let mut attempt = 0;
+        loop {
+            let outcome = {
+                let _permit = lane.admit(Direction::Read, path).await?;
+                self.count(|c| &c.requests, 1);
+                tokio::time::timeout(cfg.request_timeout, request()).await
+            };
+            let (retry_after, reason) = match outcome {
+                Ok(Ok(v)) => return Ok(v),
+                Ok(Err(e)) => match transient(&e) {
+                    Some(ra) => (ra, e.to_string()),
+                    None => return Err(store_failed(&display, attempt + 1, &e.to_string())),
+                },
+                Err(_elapsed) => (None, "the request timed out".to_owned()),
+            };
+            if attempt >= cfg.max_retries {
+                return Err(store_failed(&display, attempt + 1, &reason));
+            }
+            self.count(|c| &c.retries, 1);
+            tokio::time::sleep(self.sched.backoff(attempt, retry_after)).await;
+            attempt += 1;
+        }
+    }
+
     /// Deletes `path` in `store` (a staged file of an aborted write).
     ///
     /// # Errors
