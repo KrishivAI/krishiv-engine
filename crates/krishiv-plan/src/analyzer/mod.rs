@@ -11,7 +11,11 @@
 //!    query, and asks the [`AccessPolicy`] once per securable. Denials and
 //!    policy errors fail the query (`KRISHIV_INSUFFICIENT_PERMISSIONS`)
 //!    before the resolver sees any metadata; row filters and column masks
-//!    are rejected until their barrier semantics land (P5-T045).
+//!    are rejected until their barrier semantics land (P5-T045). Reads
+//!    by path (`spark.read.parquet(path)`, `` parquet.`path` `` when no
+//!    catalog has the name) are listed once through the
+//!    [`FileSchemaResolver`], after their paths are authorized; Spark's
+//!    `ResolveSQLOnFile` rules decide which SQL names read files.
 //! 2. **Resolve** (sync, pure): one bottom-up pass over the relations,
 //!    with explicit stacks; each operator is resolved once after its
 //!    children and yields its output scope. Names resolve in Spark 4.2's
@@ -79,9 +83,9 @@ use twox_hash::XxHash3_128;
 
 pub use catalog::{
     AccessDecision, AccessPolicy, AllowAll, ArgType, BoxFuture, Catalog, CatalogResolver,
-    FunctionEntry, FunctionLookup, FunctionRegistry, InputType, Inputs, MemoryCatalog,
-    PolicyVersion, Principal, PrincipalKind, Privilege, ResultType, RowColumnPolicy, Securable,
-    SqlFrontend, TableColumn, TableIdent, TableKind, TableMeta,
+    FileSchemaResolver, FunctionEntry, FunctionLookup, FunctionRegistry, InputType, Inputs,
+    MemoryCatalog, PolicyVersion, Principal, PrincipalKind, Privilege, ResultType, RowColumnPolicy,
+    Securable, SourceKind, SqlFrontend, TableColumn, TableIdent, TableKind, TableMeta,
 };
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
@@ -123,6 +127,8 @@ pub struct ResolutionConf {
     /// `spark.sql.decimalOperations.allowPrecisionLoss`: decimal
     /// arithmetic result types.
     pub decimal_precision_loss: bool,
+    /// `spark.sql.runSQLOnFiles`: `` format.`path` `` reads files.
+    pub run_sql_on_files: bool,
 }
 
 impl Default for ResolutionConf {
@@ -136,13 +142,14 @@ impl Default for ResolutionConf {
             order_by_ordinal: true,
             lateral_column_alias: true,
             decimal_precision_loss: true,
+            run_sql_on_files: true,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 7] = [
+    pub const KEYS: [&'static str; 8] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -150,6 +157,7 @@ impl ResolutionConf {
         "spark.sql.orderByOrdinal",
         "spark.sql.lateralColumnAlias.enableImplicitResolution",
         "spark.sql.decimalOperations.allowPrecisionLoss",
+        "spark.sql.runSQLOnFiles",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -164,8 +172,9 @@ impl ResolutionConf {
             d.order_by_ordinal,
             d.lateral_column_alias,
             d.decimal_precision_loss,
+            d.run_sql_on_files,
         ];
-        let mut v = [false; 7];
+        let mut v = [false; 8];
         for ((slot, key), default) in v.iter_mut().zip(Self::KEYS).zip(defaults) {
             *slot = conf(key).map_or(default, |s| s.trim().eq_ignore_ascii_case("true"));
         }
@@ -177,6 +186,7 @@ impl ResolutionConf {
             order_by_ordinal: v[4],
             lateral_column_alias: v[5],
             decimal_precision_loss: v[6],
+            run_sql_on_files: v[7],
         }
     }
 }
@@ -198,6 +208,9 @@ pub struct AnalysisContext {
     pub functions: Arc<dyn FunctionRegistry>,
     /// The SQL front end, for SQL text inside plans.
     pub sql: Option<Arc<dyn SqlFrontend>>,
+    /// Files read by path; without it such reads are
+    /// `KRISHIV_UNSUPPORTED_FEATURE`.
+    pub files: Option<Arc<dyn FileSchemaResolver>>,
 }
 
 /// The context inputs of a resolution: with the input key and the pins,
@@ -223,6 +236,8 @@ pub struct ContextFingerprint {
     pub principal: String,
     /// The access-policy version.
     pub policy: PolicyVersion,
+    /// Whether files can be read by path (a [`FileSchemaResolver`]).
+    pub files: bool,
 }
 
 impl ContextFingerprint {
@@ -252,6 +267,8 @@ impl ContextFingerprint {
             c.order_by_ordinal,
             c.lateral_column_alias,
             c.decimal_precision_loss,
+            c.run_sql_on_files,
+            self.files,
         ];
         num(
             &mut b,
@@ -317,6 +334,9 @@ pub struct AnalyzedPlan {
     pub context: ContextFingerprint,
     /// The query text, redacted, when the plan was SQL text.
     pub query_text: Option<RedactedSql>,
+    /// Whether the plan reads files by path: it then depends on the
+    /// files as listed, which [`Self::context`] does not capture.
+    pub reads_files: bool,
     /// Stage timings.
     pub timings: AnalysisTimings,
 }
@@ -330,6 +350,7 @@ impl PartialEq for AnalyzedPlan {
             && self.input_key == other.input_key
             && self.context == other.context
             && self.query_text == other.query_text
+            && self.reads_files == other.reads_files
     }
 }
 
@@ -426,6 +447,7 @@ pub(crate) fn fingerprint(
         sql: ctx.sql.as_ref().map(|f| f.fingerprint()),
         principal: ctx.principal.id(),
         policy: ctx.policy.version(),
+        files: ctx.files.is_some(),
     }
 }
 
@@ -461,6 +483,7 @@ impl Analyzer for DefaultAnalyzer {
                 pins,
                 epochs,
                 query_text,
+                reads_files,
                 ..
             } = bindings;
             Ok(AnalyzedPlan {
@@ -471,6 +494,7 @@ impl Analyzer for DefaultAnalyzer {
                 input_key: plan.structural_hash(),
                 context: fingerprint(ctx, epochs),
                 query_text,
+                reads_files,
                 timings: AnalysisTimings {
                     metadata,
                     resolve: resolving.elapsed(),

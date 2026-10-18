@@ -1,0 +1,268 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_file_read_probe.py",
+ "notes": "Reads by path on a tree laid out under <root>; schema or error per case.",
+ "cases": [
+  {
+   "name": "directory",
+   "kind": "read",
+   "input": [
+    "<root>/one"
+   ],
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "B",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "name": "hidden files are skipped",
+   "kind": "read",
+   "input": [
+    "<root>/h"
+   ],
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "name": "missing",
+   "kind": "read",
+   "input": [
+    "<root>/nope"
+   ],
+   "error_class": "PATH_NOT_FOUND",
+   "message_parameters": {
+    "path": "file:<root>/nope"
+   }
+  },
+  {
+   "name": "one path missing",
+   "kind": "read",
+   "input": [
+    "<root>/one",
+    "<root>/nope"
+   ],
+   "error_class": "PATH_NOT_FOUND",
+   "message_parameters": {
+    "path": "file:<root>/nope"
+   }
+  },
+  {
+   "name": "empty directory",
+   "kind": "read",
+   "input": [
+    "<root>/empty"
+   ],
+   "error_class": "UNABLE_TO_INFER_SCHEMA",
+   "message_parameters": {
+    "format": "Parquet"
+   }
+  },
+  {
+   "name": "only hidden files",
+   "kind": "read",
+   "input": [
+    "<root>/onlyhidden"
+   ],
+   "error_class": "UNABLE_TO_INFER_SCHEMA",
+   "message_parameters": {
+    "format": "Parquet"
+   }
+  },
+  {
+   "name": "hidden file named",
+   "kind": "read",
+   "input": [
+    "<root>/h/.hidden.parquet"
+   ],
+   "error_class": "UNABLE_TO_INFER_SCHEMA",
+   "message_parameters": {
+    "format": "Parquet"
+   }
+  },
+  {
+   "name": "no paths",
+   "kind": "read",
+   "input": [],
+   "error_class": "UNABLE_TO_INFER_SCHEMA",
+   "message_parameters": {
+    "format": "Parquet"
+   }
+  },
+  {
+   "name": "file URL",
+   "kind": "read",
+   "input": [
+    "file://<root>/one"
+   ],
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "B",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "name": "sql path",
+   "kind": "sql",
+   "input": "SELECT * FROM parquet.`<root>/one`",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "B",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "name": "sql upper-case format",
+   "kind": "sql",
+   "input": "SELECT * FROM PARQUET.`<root>/one`",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "B",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "name": "sql missing",
+   "kind": "sql",
+   "input": "SELECT * FROM parquet.`<root>/nope`",
+   "error_class": "PATH_NOT_FOUND",
+   "message_parameters": {
+    "path": "file:<root>/nope"
+   }
+  },
+  {
+   "name": "sql other file format, missing",
+   "kind": "sql",
+   "input": "SELECT * FROM json.`<root>/nope`",
+   "error_class": "PATH_NOT_FOUND",
+   "message_parameters": {
+    "path": "file:<root>/nope"
+   }
+  },
+  {
+   "name": "sql unknown format",
+   "kind": "sql",
+   "input": "SELECT * FROM foo.`<root>/one`",
+   "error_class": "TABLE_OR_VIEW_NOT_FOUND",
+   "message_parameters": {
+    "relationName": "`foo`.`<root>/one`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   }
+  },
+  {
+   "name": "sql non-file source",
+   "kind": "sql",
+   "input": "SELECT * FROM jdbc.`<root>/one`",
+   "error_class": "UNSUPPORTED_DATASOURCE_FOR_DIRECT_QUERY",
+   "message_parameters": {
+    "dataSourceType": "jdbc"
+   }
+  },
+  {
+   "name": "sql three parts",
+   "kind": "sql",
+   "input": "SELECT * FROM spark_catalog.parquet.`<root>/one`",
+   "error_class": "TABLE_OR_VIEW_NOT_FOUND",
+   "message_parameters": {
+    "relationName": "`spark_catalog`.`parquet`.`<root>/one`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   }
+  },
+  {
+   "name": "sql path as qualifier",
+   "kind": "sql",
+   "input": "SELECT `<root>/one`.a FROM parquet.`<root>/one`",
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "message_parameters": {
+    "objectName": "`<root>/one`.`a`",
+    "proposal": "`B`, `a`, `c`"
+   }
+  },
+  {
+   "name": "sql format as qualifier",
+   "kind": "sql",
+   "input": "SELECT parquet.a FROM parquet.`<root>/one`",
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "message_parameters": {
+    "objectName": "`parquet`.`a`",
+    "proposal": "`a`, `B`, `c`"
+   }
+  },
+  {
+   "name": "sql alias as qualifier",
+   "kind": "sql",
+   "input": "SELECT t.a FROM parquet.`<root>/one` t",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "name": "sql runSQLOnFiles off",
+   "kind": "sql-off",
+   "input": "SELECT * FROM parquet.`<root>/one`",
+   "error_class": "TABLE_OR_VIEW_NOT_FOUND",
+   "message_parameters": {
+    "relationName": "`parquet`.`<root>/one`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   }
+  }
+ ]
+}

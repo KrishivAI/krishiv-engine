@@ -450,8 +450,11 @@ impl Resolver<'_> {
         let o = p.origin;
         match &p.node {
             PlanNode::Read(ReadSource::Table { name, options }) => self.read(p, name, options, env),
-            PlanNode::Read(ReadSource::Files { .. }) => {
-                Err(unsupported("reading files by path", o))
+            PlanNode::Read(source @ ReadSource::Files { .. }) => {
+                match self.b.files.iter().position(|f| f.source == *source) {
+                    Some(i) => Ok(self.files(p, i)),
+                    None => Err(unsupported("reading files by path", o)),
+                }
             }
             PlanNode::Sql { .. } => {
                 let root = self.b.sql.get(&addr(&**p)).cloned();

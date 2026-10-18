@@ -1730,7 +1730,8 @@ fn stars_in_calls_and_elsewhere() {
             JoinCondition::Using(vec!["a".to_owned()]),
         );
     assert_eq!(class(&run(joined, &ctx)), "AMBIGUOUS_REFERENCE");
-    // An already resolved scan of files, allowed, keeps its output.
+    // An already resolved scan of files is checked against the files, which
+    // needs a file resolver (see `tests::files`).
     let scan = LogicalPlan::new(PlanNode::Scan(crate::Scan {
         source: ReadSource::Files {
             format: "parquet".to_owned(),
@@ -1740,7 +1741,7 @@ fn stars_in_calls_and_elsewhere() {
         output: Vec::new(),
         version: None,
     }));
-    assert_eq!(run(scan, &ctx).unwrap().output.len(), 0);
+    assert_eq!(class(&run(scan, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
 }
 
 #[test]

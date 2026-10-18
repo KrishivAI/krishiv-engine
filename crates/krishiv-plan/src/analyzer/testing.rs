@@ -202,6 +202,7 @@ pub fn context(catalog: MemoryCatalog, conf: ResolutionConf) -> AnalysisContext 
         catalogs: Arc::new(OneCatalog(Arc::new(catalog), vec!["default".to_owned()])),
         functions: Arc::new(TestFunctions),
         sql: None,
+        files: None,
     }
 }
 
