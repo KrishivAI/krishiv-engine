@@ -11,7 +11,7 @@
 //! | a stored type cannot be read as the requested type | `FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH` |
 //! | case-insensitive resolution matched several fields | `_LEGACY_ERROR_TEMP_2093` |
 //! | the file changed between planning and reading | `KRISHIV_FILE_CHANGED_DURING_READ` |
-//! | an upload failed | `TASK_WRITE_FAILED` |
+//! | an upload or an encoder failed | `TASK_WRITE_FAILED` |
 //! | unknown / invalid format option | `KRISHIV_UNKNOWN_FORMAT_OPTION` / `KRISHIV_INVALID_FORMAT_OPTION_VALUE` |
 //! | the scan was cancelled | `OPERATION_CANCELED` |
 //!
@@ -59,6 +59,8 @@ pub enum FormatError {
     /// A `STRING` value holds invalid UTF-8: Krishiv strings are always
     /// valid UTF-8, so the scan fails (the reason says where).
     InvalidUtf8(String),
+    /// A file cannot be written (the encoder failed); the reason is logged.
+    WriteFailed(String),
     /// Any other error, already classified (I/O through the
     /// [`IoContext`](crate::IoContext), memory, options, unsupported features).
     Other(KrishivError),
@@ -88,6 +90,7 @@ impl FormatError {
                 str: format!("a STRING value in {path} ({reason})"),
             }
             .into(),
+            Self::WriteFailed(reason) => write_failed(path, &reason),
             Self::TypeMismatch {
                 column,
                 expected,
@@ -110,6 +113,7 @@ impl fmt::Display for FormatError {
             Self::CorruptFooter(r) => write!(f, "cannot read footer: {r}"),
             Self::Corrupt(r) => write!(f, "corrupt data: {r}"),
             Self::InvalidUtf8(r) => write!(f, "invalid UTF-8 in a string: {r}"),
+            Self::WriteFailed(r) => write!(f, "cannot write: {r}"),
             Self::TypeMismatch {
                 column,
                 expected,

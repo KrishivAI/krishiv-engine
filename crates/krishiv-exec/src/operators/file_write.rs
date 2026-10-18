@@ -151,7 +151,8 @@ impl FileWriteSink {
     /// its drivers share the task number and the file counter).
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` if the format cannot write.
+    /// `KRISHIV_UNSUPPORTED_FEATURE` if the format cannot write; the
+    /// format's [`FileFormat::check_write`] error (an unknown codec, ...).
     pub fn try_new(
         format: Arc<dyn FileFormat>,
         io: IoContext,
@@ -165,6 +166,9 @@ impl FileWriteSink {
             }
             .into());
         }
+        format
+            .check_write(&schema, &format_options)
+            .map_err(|e| e.into_error(&format!("{}/{}", options.store, options.dir)))?;
         let output = Arc::new(Schema::new(vec![
             Field::new("path", krishiv_types::DataType::String.to_arrow(), false),
             Field::new("size", DataType::Int64, false),

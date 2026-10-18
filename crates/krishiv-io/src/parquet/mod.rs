@@ -25,20 +25,26 @@
 //!   change fail the scan (`KRISHIV_UNSUPPORTED_FEATURE`; the rebase is not
 //!   implemented) and ambiguous ones fail as Spark's `EXCEPTION` mode does;
 //!   every other value is read as stored.
-//! - Page indexes, bloom filters and dictionary pruning are P2-T080b;
-//!   writing is P2-T082a (the format reports `write = false`).
+//! - **Writing** (`write.rs`, P2-T082a): arrow-rs's `ArrowWriter` as a
+//!   sans-IO encoder, with Spark's codecs, file names and calendar markers,
+//!   page indexes always written.
+//! - Page indexes, bloom filters and dictionary pruning on read are
+//!   P2-T080b.
 
 mod calendar;
 mod decode;
 mod meta;
+mod write;
 
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
 use futures::future::BoxFuture;
+use parquet::file::properties::WriterPropertiesBuilder;
 
 pub use self::meta::ParquetMetadata;
 use self::meta::SchemaOptions;
+pub use self::write::SPARK_FILE_VERSION;
 use crate::error::{FormatError, FormatResult};
 use crate::format::{
     Capabilities, Decoder, Encoder, FileFormat, FileMetadata, MetadataNeeds, ScanUnit, Splittable,
@@ -84,6 +90,77 @@ static OPTIONS: OptionSchema = OptionSchema {
             metadata_key: false,
             doc: "Calendar of INT96 timestamps (only CORRECTED rebases nothing).",
         },
+        OptionSpec {
+            name: "compression",
+            kind: OptionKind::String,
+            default: OptionDefault::None,
+            conf_fallback: None,
+            metadata_key: false,
+            doc: "Write codec: none, uncompressed, snappy, gzip, lz4, lz4_raw, zstd, brotli \
+                  (before parquet.compression).",
+        },
+        OptionSpec {
+            name: "parquet.compression",
+            kind: OptionKind::String,
+            default: OptionDefault::Str("snappy"),
+            conf_fallback: Some("spark.sql.parquet.compression.codec"),
+            metadata_key: false,
+            doc: "Write codec when `compression` is not set.",
+        },
+        OptionSpec {
+            name: "parquet.block.size",
+            kind: OptionKind::Int {
+                min: 1,
+                max: i64::MAX,
+            },
+            default: OptionDefault::Int(128 << 20),
+            conf_fallback: None,
+            metadata_key: false,
+            doc: "Write: encoded bytes of a row group.",
+        },
+        OptionSpec {
+            name: "parquet.page.size",
+            kind: OptionKind::Int {
+                min: 1,
+                max: i64::MAX,
+            },
+            default: OptionDefault::Int(1 << 20),
+            conf_fallback: None,
+            metadata_key: false,
+            doc: "Write: encoded bytes of a data page.",
+        },
+        OptionSpec {
+            name: "parquet.enable.dictionary",
+            kind: OptionKind::Bool,
+            default: OptionDefault::Bool(true),
+            conf_fallback: None,
+            metadata_key: false,
+            doc: "Write: dictionary-encode columns.",
+        },
+        OptionSpec {
+            name: "parquet.writer.version",
+            kind: OptionKind::Enum(&["v1", "v2", "PARQUET_1_0", "PARQUET_2_0"]),
+            default: OptionDefault::Str("v1"),
+            conf_fallback: None,
+            metadata_key: false,
+            doc: "Write: data page version (v1 or v2).",
+        },
+        OptionSpec {
+            name: "outputTimestampType",
+            kind: OptionKind::Enum(&["INT96", "TIMESTAMP_MICROS", "TIMESTAMP_MILLIS"]),
+            default: OptionDefault::Str("TIMESTAMP_MICROS"),
+            conf_fallback: Some("spark.sql.parquet.outputTimestampType"),
+            metadata_key: false,
+            doc: "Write: physical type of timestamps (INT96 cannot be written).",
+        },
+        OptionSpec {
+            name: "datetimeRebaseModeInWrite",
+            kind: OptionKind::Enum(REBASE_MODES),
+            default: OptionDefault::Str("CORRECTED"),
+            conf_fallback: Some("spark.sql.parquet.datetimeRebaseModeInWrite"),
+            metadata_key: false,
+            doc: "Write: calendar of DATE and TIMESTAMP values (only CORRECTED writes ancient values).",
+        },
     ],
 };
 
@@ -99,6 +176,20 @@ impl ParquetFormat {
             binary_as_string: o.bool("binaryAsString").unwrap_or(false),
             int96_as_timestamp: o.bool("int96AsTimestamp").unwrap_or(true),
         }
+    }
+
+    /// An encoder of `schema` with `o`, its arrow-rs writer properties
+    /// adjusted by `tweak` (tests cut row groups or mimic other writers
+    /// this way); [`FileFormat::writer`] is this without a tweak.
+    ///
+    /// # Errors
+    /// As [`FileFormat::check_write`].
+    pub fn encoder_with(
+        schema: &SchemaRef,
+        o: &FormatOptions,
+        tweak: impl FnOnce(WriterPropertiesBuilder) -> WriterPropertiesBuilder,
+    ) -> FormatResult<Box<dyn Encoder>> {
+        Ok(Box::new(write::ParquetEncoder::new(schema, o, tweak)?))
     }
 
     /// Describes a footer already decoded (a writer's, for its statistics).
@@ -158,11 +249,16 @@ impl FileFormat for ParquetFormat {
         c.statistics = true;
         c.row_index = true;
         c.selection = true;
+        c.write = true;
         c
     }
 
-    fn file_suffix(&self, _o: &FormatOptions) -> String {
-        ".parquet".to_owned()
+    fn file_suffix(&self, o: &FormatOptions) -> String {
+        // An invalid codec fails `check_write` before a file is named.
+        let codec = write::Settings::new(&arrow_schema::Schema::empty(), o)
+            .map(|s| s.extension())
+            .unwrap_or_default();
+        format!("{codec}.parquet")
     }
 
     fn read_metadata<'a>(
@@ -231,17 +327,14 @@ impl FileFormat for ParquetFormat {
     fn writer<'a>(
         &'a self,
         _io: &'a IoContext,
-        _schema: SchemaRef,
-        _o: &'a FormatOptions,
+        schema: SchemaRef,
+        o: &'a FormatOptions,
     ) -> BoxFuture<'a, FormatResult<Box<dyn Encoder>>> {
-        Box::pin(async {
-            Err(FormatError::Other(
-                krishiv_common::error::KrishivUnsupportedFeature {
-                    feature: "writing Parquet files".to_owned(),
-                }
-                .into(),
-            ))
-        })
+        Box::pin(std::future::ready(Self::encoder_with(&schema, o, |p| p)))
+    }
+
+    fn check_write(&self, schema: &SchemaRef, o: &FormatOptions) -> FormatResult<()> {
+        write::Settings::new(schema, o).map(drop)
     }
 }
 

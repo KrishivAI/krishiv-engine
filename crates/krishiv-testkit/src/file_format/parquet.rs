@@ -1,28 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The Parquet reader's fixture for the conformance suite.
+//! The Parquet format's fixture for the conformance suite.
 //!
-//! The reader under test is `krishiv_io::parquet::ParquetFormat`. The suite
-//! also writes files, and the product writer is a later task, so the fixture
-//! wraps the reader with a **test-only** encoder: arrow-rs's `ArrowWriter`
-//! over a drained in-memory buffer, with options to cut row groups
+//! The format under test is `krishiv_io::parquet::ParquetFormat`, reads and
+//! writes. The fixture adds **test-only** write options on top of the
+//! product writer (`ParquetFormat::encoder_with`): cut row groups by rows
 //! (`rowGroupRows`), truncate statistics (`statsTruncateLength`) and claim
-//! an old writer (`createdBy`, for legacy-statistics files). Every read goes
-//! through the real format.
+//! an old writer (`createdBy`, for legacy-statistics files).
 
 use std::sync::{Arc, LazyLock};
 
-use arrow_array::RecordBatch;
 use arrow_schema::{DataType, SchemaRef};
-use bytes::Bytes;
 use futures::future::BoxFuture;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
-    ByteRange, Capabilities, Decoder, Encoder, FileFormat, FileMetadata, FileRef, FormatError,
-    FormatOptions, FormatResult, IoContext, MetadataNeeds, OptionDefault, OptionKind, OptionSchema,
-    OptionSpec, ScanRequest, UnitPlan, WrittenFile,
+    ByteRange, Capabilities, Decoder, Encoder, FileFormat, FileMetadata, FileRef, FormatOptions,
+    FormatResult, IoContext, MetadataNeeds, OptionDefault, OptionKind, OptionSchema, OptionSpec,
+    ScanRequest, UnitPlan,
 };
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
 
 use super::FormatFixture;
 
@@ -68,7 +62,7 @@ static SCHEMA: LazyLock<OptionSchema> = LazyLock::new(|| OptionSchema {
     options: SPECS.as_slice(),
 });
 
-/// Parquet reads through [`ParquetFormat`], writes through a test encoder.
+/// [`ParquetFormat`] with the fixture's test-only write options.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TestParquet;
 
@@ -80,9 +74,7 @@ impl FileFormat for TestParquet {
         &SCHEMA
     }
     fn capabilities(&self, o: &FormatOptions) -> Capabilities {
-        let mut c = ParquetFormat.capabilities(o);
-        c.write = true;
-        c
+        ParquetFormat.capabilities(o)
     }
     fn file_suffix(&self, o: &FormatOptions) -> String {
         ParquetFormat.file_suffix(o)
@@ -120,64 +112,33 @@ impl FileFormat for TestParquet {
         schema: SchemaRef,
         o: &'a FormatOptions,
     ) -> BoxFuture<'a, FormatResult<Box<dyn Encoder>>> {
-        let made = (|| {
-            let mut props = WriterProperties::builder().set_max_row_group_row_count(Some(
-                usize::try_from(o.int("rowGroupRows").unwrap_or(1 << 20)).unwrap_or(1 << 20),
-            ));
-            // 0 is "never" (arrow-rs would otherwise truncate at 64 bytes).
-            let truncate = o.int("statsTruncateLength").unwrap_or(0);
-            props = props
-                .set_statistics_truncate_length(usize::try_from(truncate).ok().filter(|n| *n > 0));
-            if let Some(by) = o.str("createdBy") {
-                props = props.set_created_by(by.to_owned());
-            }
-            let writer = ArrowWriter::try_new(Vec::new(), schema, Some(props.build()))
-                .map_err(|e| FormatError::Corrupt(e.to_string()))?;
-            Ok(Box::new(TestEncoder {
-                writer,
-                options: o.clone(),
-            }) as Box<dyn Encoder>)
-        })();
-        Box::pin(std::future::ready(made))
+        let rows = usize::try_from(o.int("rowGroupRows").unwrap_or(1 << 20)).unwrap_or(1 << 20);
+        // 0 is "never" (the product writer's footer statistics default).
+        let truncate = usize::try_from(o.int("statsTruncateLength").unwrap_or(0))
+            .ok()
+            .filter(|n| *n > 0);
+        let created_by = o.str("createdBy").map(str::to_owned);
+        Box::pin(std::future::ready(ParquetFormat::encoder_with(
+            &schema,
+            o,
+            |p| {
+                let p = p
+                    .set_max_row_group_row_count(Some(rows))
+                    .set_statistics_truncate_length(truncate);
+                match created_by {
+                    Some(by) => p.set_created_by(by),
+                    None => p,
+                }
+            },
+        )))
+    }
+
+    fn check_write(&self, schema: &SchemaRef, o: &FormatOptions) -> FormatResult<()> {
+        ParquetFormat.check_write(schema, o)
     }
 }
 
-struct TestEncoder {
-    writer: ArrowWriter<Vec<u8>>,
-    options: FormatOptions,
-}
-
-fn bad(e: impl std::fmt::Display) -> FormatError {
-    FormatError::Corrupt(e.to_string())
-}
-
-impl Encoder for TestEncoder {
-    fn write(&mut self, batch: &RecordBatch) -> FormatResult<()> {
-        self.writer.write(batch).map_err(bad)
-    }
-    fn flush(&mut self) -> FormatResult<()> {
-        self.writer.flush().map_err(bad)
-    }
-    fn take_bytes(&mut self) -> Option<Bytes> {
-        let buf = std::mem::take(self.writer.inner_mut());
-        (!buf.is_empty()).then(|| Bytes::from(buf))
-    }
-    fn finish(mut self: Box<Self>) -> FormatResult<WrittenFile> {
-        let meta = self.writer.finish().map_err(bad)?;
-        let size = self.writer.bytes_written() as u64;
-        let tail = Bytes::from(std::mem::take(self.writer.inner_mut()));
-        let described = ParquetFormat::describe(&Arc::new(meta), size, &self.options)?;
-        Ok(WrittenFile::new(tail, described.statistics()))
-    }
-    fn buffered_bytes(&self) -> usize {
-        self.writer.memory_size() + self.writer.inner().len()
-    }
-    fn written_bytes(&self) -> u64 {
-        self.writer.bytes_written() as u64
-    }
-}
-
-/// The Parquet reader's fixture (see the module docs).
+/// The Parquet format's fixture (see the module docs).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ParquetFixture;
 
