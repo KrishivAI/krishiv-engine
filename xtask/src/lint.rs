@@ -33,7 +33,9 @@ fn is_pinned(rest: &str) -> bool {
         .unwrap_or("")
         .trim()
         .trim_matches(['"', '\'']);
-    if target.starts_with("./") {
+    // `./path` and GitHub's self-repository form `$/path` both name a file in
+    // this repository at the workflow's own commit.
+    if target.starts_with("./") || target.starts_with("$/") {
         return true;
     }
     if let Some(image) = target.strip_prefix("docker://") {

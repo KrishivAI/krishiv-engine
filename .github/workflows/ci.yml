@@ -48,6 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      python: ${{ steps.python.outputs.python }}
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -73,6 +74,20 @@ jobs:
           else
             echo "rust=true" >> "$GITHUB_OUTPUT"
           fi
+      # P2-T103: the full wheel matrix runs only when the wheels can change.
+      - id: python
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python=true
+          if [ "$EVENT" = "pull_request" ] && ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
+            | grep -qE '^(crates/krishiv-python/|python/|xtask/|\.github/workflows/ci\.yml$|\.github/workflows/wheels\.yml$|\.github/scripts/(wheel-test|approval-label)\.sh$|Cargo\.(toml|lock)$|rust-toolchain\.toml$|budgets\.json$)'; then
+            python=false
+          fi
+          echo "python=$python" >> "$GITHUB_OUTPUT"
+          echo "wheel targets: $python"
 
   # Formatting and spelling of non-Rust files; no Rust toolchain needed.
   text-lint:
@@ -533,11 +548,21 @@ jobs:
           name: wheel-${{ matrix.name }}
           path: dist/*.whl
 
+  # P2-T103: every wheel target (wheels.yml), on PRs that can change them.
+  wheels-targets:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    uses: $/.github/workflows/wheels.yml
+
   # Required-check summary for the `wheels` matrix: a skipped matrix job reports
   # under an unexpanded name, so the legs themselves cannot be required. This job
   # always reports and passes when the wheels passed or were skipped (no Rust change).
   wheels-ok:
-    needs: [changes, wheels]
+    needs: [changes, wheels, wheels-targets]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -551,11 +576,14 @@ jobs:
         env:
           CHANGES: ${{ needs.changes.result }}
           RESULT: ${{ needs.wheels.result }}
+          TARGETS: ${{ needs.wheels-targets.result }}
         run: |
-          echo "changes: $CHANGES, wheels: $RESULT"
+          echo "changes: $CHANGES, wheels: $RESULT, wheel targets: $TARGETS"
           # A skip only counts when `changes` itself succeeded.
           [ "$CHANGES" = success ] || exit 1
-          case "$RESULT" in
-            success | skipped) ;;
-            *) exit 1 ;;
-          esac
+          for r in "$RESULT" "$TARGETS"; do
+            case "$r" in
+              success | skipped) ;;
+              *) exit 1 ;;
+            esac
+          done
