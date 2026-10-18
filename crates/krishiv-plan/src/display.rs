@@ -244,6 +244,14 @@ impl Display for NodeLine<'_> {
                 }
                 write!(f, " ({})", columns.join(", "))
             }
+            PlanNode::CteRef(r) => {
+                write!(f, "CteRef {} [", Name(std::slice::from_ref(&r.name)))?;
+                for (i, c) in r.output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
+            }
+            PlanNode::Shift { offset, .. } => write!(f, "Shift +{offset}"),
             PlanNode::WithCte { ctes, .. } => {
                 f.write_str("WithCte [")?;
                 for (i, c) in ctes.iter().enumerate() {

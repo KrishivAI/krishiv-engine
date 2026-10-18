@@ -1,0 +1,16 @@
+---
+source: crates/krishiv-sql/tests/analyzer.rs
+expression: a.plan.root().to_string()
+---
+Sort [value#16 DESC NULLS LAST], true
++- Filter (value#16 > scalar-subquery)
+   :  +- Aggregate [], [(sum((ps_supplycost#20 * ps_availqty#19)) * 0.0001000000) AS (sum((ps_supplycost * ps_availqty)) * 0.0001000000)#33]
+   :     +- Shift +17
+   :        +- Filter (((ps_suppkey#1 == s_suppkey#5) and (s_nationkey#8 == n_nationkey#12)) and (n_name#13 == 'GERMANY')) (shared #1)
+   :           +- Join Inner
+   :              :- Join Inner
+   :              :  :- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1, ps_availqty#2, ps_supplycost#3, ps_comment#4]
+   :              :  +- Scan spark_catalog.default.supplier [s_suppkey#5, s_name#6, s_address#7, s_nationkey#8, s_phone#9, s_acctbal#10, s_comment#11]
+   :              +- Scan spark_catalog.default.nation [n_nationkey#12, n_name#13, n_regionkey#14, n_comment#15]
+   +- Aggregate [ps_partkey#0], [ps_partkey#0, sum((ps_supplycost#3 * ps_availqty#2)) AS value#16]
+      +- Shared #1, printed above

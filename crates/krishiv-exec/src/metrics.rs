@@ -97,6 +97,9 @@ pub struct OperatorEntry {
     pub name: &'static str,
     /// Its counters.
     pub metrics: OperatorMetrics,
+    /// Operator-specific counters (`Operator::extra_metrics`,
+    /// `Sink::extra_metrics`), e.g. an aggregate's groups and spill runs.
+    pub extra: Vec<(&'static str, u64)>,
 }
 
 /// A query's metrics.

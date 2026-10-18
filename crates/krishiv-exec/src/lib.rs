@@ -65,12 +65,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aggregate;
 mod cancel;
 mod channel;
 mod context;
 mod driver;
 mod error;
 mod executor;
+pub mod hash;
 mod metrics;
 mod morsel;
 mod operator;

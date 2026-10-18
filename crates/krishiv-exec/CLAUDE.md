@@ -15,6 +15,10 @@ TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.r
 `operators/` (P2-T051) stateless operators: `scan.rs` MemoryScan + `ScanPushdown` (the hook file formats implement) ·
 `filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
 `expr.rs` the `Predicate`/`ScalarExpr` evaluator interface the physical planner plugs in.
+`hash.rs` shared hash-table blocks (seeded key hash, key normalization + row encoding, `KeyTable`, spill
+partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mod.rs` spec + Spark result types,
+`accumulator.rs` per-group states, `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
+`spill_global`), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION.
 
 ## Invariants
 - All memory through krishiv-memory reservations; every spill path tested with tiny-memory tests.

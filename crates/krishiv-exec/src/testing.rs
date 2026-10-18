@@ -140,6 +140,54 @@ impl RangeSource {
     }
 }
 
+/// Scans fixed batches, each batch one morsel (seeded order in
+/// deterministic mode).
+#[derive(Debug)]
+pub struct Batches {
+    schema: SchemaRef,
+    batches: Vec<Batch>,
+}
+
+impl Batches {
+    /// A scan of `batches` (all of `schema`).
+    pub fn new(schema: SchemaRef, batches: Vec<Batch>) -> Arc<Self> {
+        Arc::new(Self { schema, batches })
+    }
+}
+
+impl Source for Batches {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
+        let seed = ctx.query().config().seed;
+        Ok(Arc::new(MorselCursor::new(self.batches.len(), seed)))
+    }
+
+    fn max_parallelism(&self, global: &GlobalState) -> usize {
+        global
+            .downcast_ref::<MorselCursor>()
+            .map_or(1, MorselCursor::len)
+    }
+
+    fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        _local: &'a mut LocalState,
+        global: &'a GlobalState,
+    ) -> BoxFuture<'a, Result<Option<Batch>>> {
+        let next = global
+            .downcast_ref::<MorselCursor>()
+            .ok_or_else(|| internal("wrong global state for Batches".to_owned()))
+            .map(|c| c.claim().and_then(|i| self.batches.get(i).cloned()));
+        Box::pin(std::future::ready(next))
+    }
+}
+
 /// Emits one batch `count` times (shared buffers: no per-batch work), for
 /// measuring the driver itself.
 #[derive(Debug)]

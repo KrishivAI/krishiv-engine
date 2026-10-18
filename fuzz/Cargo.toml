@@ -15,8 +15,9 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4.10"
 prost = "0.14.4"
 krishiv-connect = { path = "../crates/krishiv-connect" }
-krishiv-plan = { path = "../crates/krishiv-plan" }
+krishiv-plan = { path = "../crates/krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../crates/krishiv-sql" }
+krishiv-types = { path = "../crates/krishiv-types" }
 krishiv-testkit = { path = "../crates/krishiv-testkit" }
 
 [[bin]]

@@ -1,0 +1,23 @@
+---
+source: crates/krishiv-sql/tests/analyzer.rs
+expression: a.plan.root().to_string()
+---
+Sort [supp_nation#48 ASC NULLS FIRST, cust_nation#49 ASC NULLS FIRST, l_year#50 ASC NULLS FIRST], true
++- Aggregate [supp_nation#48, cust_nation#49, l_year#50], [supp_nation#48, cust_nation#49, l_year#50, sum(volume#51) AS revenue#52]
+   +- SubqueryAlias shipping
+      +- Project [n_name#41 AS supp_nation#48, n_name#45 AS cust_nation#49, extract('year', l_shipdate#17) AS l_year#50, (l_extendedprice#12 * (1 - l_discount#13)) AS volume#51]
+         +- Filter ((((s_suppkey#0 == l_suppkey#9) and (o_orderkey#23 == l_orderkey#7)) and ((c_custkey#32 == o_custkey#24) and (s_nationkey#3 == n_nationkey#40))) and (((c_nationkey#35 == n_nationkey#44) and (((n_name#41 == 'FRANCE') and (n_name#45 == 'GERMANY')) or ((n_name#41 == 'GERMANY') and (n_name#45 == 'FRANCE')))) and (l_shipdate#17 BETWEEN CAST('1995-01-01' AS DATE) AND CAST('1996-12-31' AS DATE))))
+            +- Join Inner
+               :- Join Inner
+               :  :- Join Inner
+               :  :  :- Join Inner
+               :  :  :  :- Join Inner
+               :  :  :  :  :- Scan spark_catalog.default.supplier [s_suppkey#0, s_name#1, s_address#2, s_nationkey#3, s_phone#4, s_acctbal#5, s_comment#6]
+               :  :  :  :  +- Scan spark_catalog.default.lineitem [l_orderkey#7, l_partkey#8, l_suppkey#9, l_linenumber#10, l_quantity#11, l_extendedprice#12, l_discount#13, l_tax#14, l_returnflag#15, l_linestatus#16, l_shipdate#17, l_commitdate#18, l_receiptdate#19, l_shipinstruct#20, l_shipmode#21, l_comment#22]
+               :  :  :  +- Scan spark_catalog.default.orders [o_orderkey#23, o_custkey#24, o_orderstatus#25, o_totalprice#26, o_orderdate#27, o_orderpriority#28, o_clerk#29, o_shippriority#30, o_comment#31]
+               :  :  +- Scan spark_catalog.default.customer [c_custkey#32, c_name#33, c_address#34, c_nationkey#35, c_phone#36, c_acctbal#37, c_mktsegment#38, c_comment#39]
+               :  +- SubqueryAlias n1
+               :     +- Scan spark_catalog.default.nation [n_nationkey#40, n_name#41, n_regionkey#42, n_comment#43] (shared #1)
+               +- Shift +4
+                  +- SubqueryAlias n2
+                     +- Shared #1, printed above

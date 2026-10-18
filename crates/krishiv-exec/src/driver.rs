@@ -296,6 +296,8 @@ impl Driver {
     async fn run(mut self) -> Result<()> {
         let run = Arc::clone(&self.run);
         let source = &run.pipeline.source.1;
+        // The first operator whose buffered output is still wanted.
+        let mut finish_from = 0;
         loop {
             self.boundary().await?;
             let start = run.executor.now();
@@ -312,11 +314,13 @@ impl Driver {
             let Some(batch) = next else { break };
             self.metrics(0).output(batch.num_rows());
             self.batches += 1;
-            if self.push(batch).await? {
+            if let Some(from) = self.push(0, batch).await? {
+                finish_from = from;
                 break;
             }
             self.yield_now().await;
         }
+        self.finish_operators(finish_from).await?;
         let sink = &run.pipeline.sink.1;
         let k = run.pipeline.operators.len() + 1;
         let local = self.slots.get_mut().slot(k)?.local.take();
@@ -362,22 +366,61 @@ impl Driver {
         }
     }
 
-    /// Pushes one source batch through the operators into the sink;
-    /// `true` once the pipeline needs no more input.
-    async fn push(&mut self, batch: Batch) -> Result<bool> {
+    /// Drains the buffered output ([`Operator::finish`]) of operators
+    /// `from..` in pipeline order through the operators after each into the
+    /// sink. An operator upstream of one that returned `Finished` is not
+    /// asked; one downstream still is.
+    ///
+    /// [`Operator::finish`]: crate::Operator::finish
+    async fn finish_operators(&mut self, mut from: usize) -> Result<()> {
+        let run = Arc::clone(&self.run);
+        let ops = &run.pipeline.operators;
+        while let Some((_, op)) = ops.get(from) {
+            let i = from;
+            from += 1;
+            loop {
+                self.boundary().await?;
+                let out = {
+                    let slots = self.slots.get_mut();
+                    let local = slots.slots[i + 1].local.as_mut();
+                    let local =
+                        local.ok_or_else(|| internal("operator state missing".to_owned()))?;
+                    let start = run.executor.now();
+                    let out = op.finish(local);
+                    slots.metrics[i + 1].compute_time += since(&*run.executor, start);
+                    out?
+                };
+                let Some(b) = out else { break };
+                self.metrics(i + 1).output(b.num_rows());
+                if let Some(next) = self.push(i + 1, b).await? {
+                    from = next;
+                    break;
+                }
+                self.yield_now().await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Pushes a batch into operator `start` (the sink if `start` is the
+    /// operator count) and on through the pipeline. Once the pipeline needs
+    /// no more input, returns the first operator whose buffered output is
+    /// still wanted: the one after the last that returned `Finished`, or the
+    /// operator count when the sink finished.
+    async fn push(&mut self, start: usize, batch: Batch) -> Result<Option<usize>> {
         let run = Arc::clone(&self.run);
         let ops = &run.pipeline.operators;
         let n = ops.len();
-        let mut finished = false;
+        let mut finished: Option<usize> = None;
         let mut outputs = 0u32;
-        self.stack.push((0, batch));
+        self.stack.push((start, batch));
         while let Some(top) = self.stack.last() {
             let i = top.0;
             if i == n {
                 if let Some((_, b)) = self.stack.pop()
                     && self.sink(b).await?
                 {
-                    finished = true;
+                    finished = Some(n);
                     self.stack.clear();
                 }
                 continue;
@@ -416,7 +459,7 @@ impl Driver {
                     self.stack.clear();
                     self.metrics(i + 1).input(rows);
                     self.forward(i, b);
-                    finished = true;
+                    finished = Some(finished.map_or(i + 1, |f| f.max(i + 1)));
                 }
                 OperatorOutput::NeedMemory { .. } => {}
             }

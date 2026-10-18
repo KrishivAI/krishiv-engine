@@ -877,3 +877,64 @@ async fn reserve_for_parks_the_grant_as_credit() {
     assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
     assert_eq!(h.credit(), Q, "a refused request parks nothing");
 }
+
+#[test]
+fn transfer_moves_bytes_between_consumers_of_one_pool() {
+    let root = root(Some(1 << 20), 4096);
+    let q = root.child("q", None);
+    let a = ConsumerHandle::register(Arc::clone(&q), "a", None);
+    let b = ConsumerHandle::register(Arc::clone(&q), "b", None);
+    let mut r = a.reservation();
+    r.try_grow(10_000).unwrap();
+    let before = q.reserved();
+    r.transfer_to(&b).unwrap();
+    assert_eq!(
+        (r.consumer(), r.size(), q.reserved()),
+        (b.id(), 10_000, before)
+    );
+    assert_eq!(b.peak(), 10_000);
+    drop(a);
+    r.shrink(4_000);
+    drop(r);
+    assert_eq!(q.reserved(), 0);
+    // A consumer of another pool is refused; the reservation is unchanged.
+    let other = ConsumerHandle::register(root.child("q2", None), "c", None);
+    let mut r = b.reservation();
+    r.try_grow(100).unwrap();
+    assert!(matches!(
+        r.transfer_to(&other),
+        Err(MemoryError::UnknownConsumer { .. })
+    ));
+    assert_eq!(r.consumer(), b.id());
+}
+
+/// Bytes transferred to a spillable consumer are what the arbitrator sees:
+/// it asks that consumer to spill them (`min(spillable, used)`).
+#[tokio::test(start_paused = true)]
+async fn the_arbitrator_sees_transferred_bytes() {
+    let root = root(Some(64 * Q), Q);
+    let q = root.child_pool("q", Some(16 * Q));
+    let pool = Arc::clone(&q) as Arc<dyn MemoryPool>;
+    let gone = ConsumerHandle::register(Arc::clone(&pool), "finished-driver", None);
+    let mut state = gone.reservation();
+    state.try_grow(10 * Q).unwrap();
+    let owner = SpillOwner::new();
+    let signal = owner.signal();
+    let live = ConsumerHandle::register(
+        Arc::clone(&pool),
+        "finalizing-driver",
+        Some(Arc::clone(&signal) as Arc<dyn Spillable>),
+    );
+    state.transfer_to(&live).unwrap();
+    drop(gone);
+    signal.set_spillable_bytes(10 * Q);
+    let w = q.register("w", None);
+    let qc = Arc::clone(&q);
+    let waiting = tokio::spawn(async move { qc.reserve(w, 10 * Q).await });
+    tokio::task::yield_now().await;
+    let target = signal.spill_requested().expect("asked to spill");
+    assert!(target >= 4 * Q, "{target}");
+    state.shrink(target);
+    signal.complete(target);
+    waiting.await.unwrap().unwrap();
+}

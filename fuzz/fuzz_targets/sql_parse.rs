@@ -5,13 +5,18 @@
 //! memory: run with `-timeout` and `-rss_limit_mb`); an error's span must
 //! lie within the input; and a tree must pass the span checks and parse to
 //! an equal tree with other whitespace and comments. A tree is then
-//! lowered (a plan or an error, never a panic), and the text is redacted.
+//! lowered and analyzed against a small catalog (an error or a resolved
+//! plan, never a panic), and the text is redacted.
 //! A redaction oracle writes a secret built from the input into every
 //! option form: it never survives `redact_sql` or reaches an error.
 #![no_main]
 
 use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
 use krishiv_plan::SourceId;
+use krishiv_plan::analyzer::testing::{block_on, context};
+use krishiv_plan::analyzer::{
+    Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf, TableColumn,
+};
 use krishiv_sql::{ParserOptions, lower, parse_query, redact_sql};
 use krishiv_testkit::golden::sql_spans::{check_spans, respaced};
 use libfuzzer_sys::fuzz_target;
@@ -43,6 +48,18 @@ fuzz_target!(|data: &[u8]| {
             assert!(matches!(again, Ok(r) if r == q), "differential mismatch");
             if let Ok(plan) = lower(&q, SourceId(0)) {
                 assert!(!plan.root().is_resolved(), "a lowered plan is unresolved");
+                let col = |name: &str| TableColumn {
+                    name: name.to_owned(),
+                    data_type: krishiv_types::DataType::Integer,
+                    nullable: true,
+                };
+                let catalog = MemoryCatalog::new("spark_catalog")
+                    .with_table(&["default"], "t", vec![col("a"), col("b")], None);
+                let ctx = context(catalog, ResolutionConf::default());
+                if let Ok(a) = block_on(DefaultAnalyzer.analyze(&plan, &ctx)) {
+                    assert!(a.plan.root().is_resolved(), "unresolved node left");
+                    assert_eq!(a.plan.root().resolved_output(), Some(a.output));
+                }
             }
         }
         Err(e) => assert!(e.span.end <= sql.len()),

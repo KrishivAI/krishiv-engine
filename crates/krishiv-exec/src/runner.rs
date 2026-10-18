@@ -208,12 +208,29 @@ async fn run_pipelines(
             }
         }
         await_drivers(query, &mut handles).await;
+        record_extra_metrics(query, &runs);
         query.check_cancelled()?;
         for run in runs {
             finalized.insert(run.pipeline.sink.0, Arc::clone(&run.sink_global));
         }
     }
     Ok(())
+}
+
+/// Reads the operator-specific counters of each finished pipeline's
+/// operators and sink into the query's metrics.
+fn record_extra_metrics(query: &QueryContext, runs: &[Arc<PipelineRun>]) {
+    query.merge_metrics(|m| {
+        for run in runs {
+            let p = &run.pipeline;
+            let ops = p.operators.iter().map(|(id, op)| (*id, op.extra_metrics()));
+            for (id, extra) in ops.chain(std::iter::once((p.sink.0, p.sink.1.extra_metrics()))) {
+                if !extra.is_empty() {
+                    m.operators.entry(id).or_default().extra = extra;
+                }
+            }
+        }
+    });
 }
 
 fn start_pipeline(
