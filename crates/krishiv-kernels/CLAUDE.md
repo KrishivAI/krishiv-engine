@@ -31,6 +31,12 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   and `split_literal` (`string/split.rs`: delimiters without regex metacharacters; a regex delimiter is
   `KRISHIV_UNSUPPORTED_FEATURE` until the regex engine). Operands are columns or literals (`StrOperand`, `BinOperand`,
   `Operand<Int32Type>`); NULL rows are skipped, so these kernels have no has-nulls axis. Output offsets are checked.
+- `hash` (P2-T027): `hash` (Murmur3 x86_32, seed 42; the tail bytes are mixed one sign-extended byte at a time, as Spark does), `xxhash64`
+  (XXH64, seed 42; `hashInt`/`hashLong` written out), `md5`/`sha1`/`sha2`/`crc32` (`hash/digest.rs`; CRC table in-house, digests from
+  RustCrypto). `hash`/`xxhash64` take any number of columns of any type and chain per row (NULL leaves the hash unchanged; arrays hash
+  their elements, structs their fields, maps each key then value). A column is resolved to a `Col` plan once, rows only match on the variant. The
+  analyzer's MAP rejection (`DATATYPE_MISMATCH.HASH_MAP_TYPE` without `spark.sql.legacy.allowHashOnMapType`) is the caller's check.
+  Unsupported types (dictionary, 256-bit decimal, time of day, month-day-nano interval) are `KRISHIV_UNSUPPORTED_FEATURE`.
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.
 
 ## Invariants

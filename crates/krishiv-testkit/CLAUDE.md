@@ -17,6 +17,10 @@ runs the arithmetic/comparison/cast matrix cells and the literal statements of S
 `krishiv-kernels` with a minimal Spark 4.2 implicit-cast typer (tests `kernel_matrix`, `kernel_golden`); it is a
 harness, not the analyzer. P2-T023a adds the string functions (`kernel_eval/strings.rs`; `string_case` checks `upper`/`lower`
 over every Unicode scalar value against `tests/fixtures/spark-<ver>/case-mapping.json`).
+P2-T027 adds the hash functions (`kernel_eval/hash.rs`): `hash_fixture` keeps each case's `conf` and the
+`default_conf_errors`; `hash_fixture` (test) runs every case of `hash.json` (nested values built by the evaluator's
+`array`/`named_struct`/`map` constructors) and `hash_differential` the seeded random cases of
+`hash-differential.json` (`tests/scripts/gen_hash_differential.py`; Spark 4.0/4.1/4.2 agree).
 The generic `FileFormat` conformance suite (`file_format`, P2-T117: 12 checks over a `FormatFixture`,
 `file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it.
 

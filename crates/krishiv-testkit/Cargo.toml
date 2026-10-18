@@ -30,7 +30,7 @@ object_store.workspace = true
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-types = { path = "../krishiv-types" }
 regex-lite.workspace = true
-serde_json = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std", "float_roundtrip"] }
 sqllogictest.workspace = true
 thiserror.workspace = true
 # Paused time and a current-thread runtime for the file-format suite.

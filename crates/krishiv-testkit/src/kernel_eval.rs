@@ -13,6 +13,7 @@
 //! and constructs this evaluator does not type, are reported as not run with
 //! the reason.
 
+pub mod hash;
 mod strings;
 
 use std::sync::Arc;
@@ -45,6 +46,7 @@ use krishiv_sql::ast::{self, BinaryOp as Bop, ExprKind, Literal, NumKind};
 use serde_json::{Value, json};
 
 use crate::fn_matrix::{Expected, MatrixCase, Mode};
+use hash::HashFn;
 
 /// Functions (`SHOW FUNCTIONS` names) whose matrix cells this evaluator runs.
 pub const FUNCTIONS: &[&str] = &[
@@ -107,6 +109,14 @@ pub const FUNCTIONS: &[&str] = &[
     "||",
     "like",
     "split",
+    // P2-T027: hash functions.
+    "hash",
+    "xxhash64",
+    "md5",
+    "sha",
+    "sha1",
+    "sha2",
+    "crc32",
 ];
 
 /// The outcome of one cell.
@@ -145,6 +155,8 @@ enum Node {
     Unary(UnaryOp, Box<Node>),
     /// A string function (`strings`) with its result type.
     Str(strings::StrFn, Vec<Node>, DataType),
+    /// A hash function (`hash`) with its result type.
+    Hash(hash::HashFn, Vec<Node>, DataType),
 }
 
 /// Binary arithmetic operators.
@@ -162,7 +174,10 @@ impl Node {
     fn ty(&self) -> DataType {
         match self {
             Self::Lit(a) => a.data_type().clone(),
-            Self::Cast(_, t, _) | Self::Arith { ty: t, .. } | Self::Str(_, _, t) => t.clone(),
+            Self::Cast(_, t, _)
+            | Self::Arith { ty: t, .. }
+            | Self::Str(_, _, t)
+            | Self::Hash(_, _, t) => t.clone(),
             Self::Cmp(..) => DataType::Boolean,
             Self::Unary(_, c) => c.ty(),
         }
@@ -333,6 +348,9 @@ impl Binder {
             .unwrap_or_default();
         let args: Vec<&ast::Expr> = f.args.iter().map(|a| &a.expr).collect();
         if let Some(node) = self.string_function(&name, &args) {
+            return node;
+        }
+        if let Some(node) = self.hash_function(&name, &args) {
             return node;
         }
         let cast_to = match name.as_str() {
@@ -863,6 +881,7 @@ impl Evaluator {
                 self.unary(*op, &v)
             }
             Node::Str(f, args, _) => self.string_fn(f, args),
+            Node::Hash(f, args, _) => self.hash_fn(*f, args),
             Node::Arith { op, l, r, ty, try_ } => {
                 let (a, b) = (self.eval(l)?, self.eval(r)?);
                 self.arith(*op, &a, &b, ty, *try_)
@@ -1313,8 +1332,12 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
                 } else {
                     1
                 };
-                let null_safe = matches!(node, Node::Cmp(None, ..));
-                let odd = if null_safe { json!(true) } else { Value::Null };
+                // `<=>` of two NULLs is true; `hash` of NULLs is its seed.
+                let odd = match node {
+                    Node::Cmp(None, ..) => json!(true),
+                    Node::Hash(HashFn::Hash | HashFn::Xxhash64, ..) => json!(hash::SEED),
+                    _ => Value::Null,
+                };
                 let is_null = |i| a.data_type() == &DataType::Null || a.is_null(i);
                 let rows_ok = a.len() == want_len
                     && (0..a.len()).all(|i| match (i % 2, odd.is_null()) {

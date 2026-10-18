@@ -4,6 +4,7 @@
 //! The fixture is generated against a real Spark by `tests/scripts/gen_hash_goldens.py`.
 //! `hash` is Murmur3 x86_32 (seed 42), `xxhash64` is XXH64 (seed 42); both signed, as Spark returns them.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -63,6 +64,20 @@ pub struct HashCase {
     pub hash: i32,
     /// Expected `xxhash64(expr)`.
     pub xxhash64: i64,
+    /// Session configuration the case was generated under (for example the
+    /// legacy map-hash switch); empty for the defaults.
+    pub conf: BTreeMap<String, String>,
+}
+
+/// An expression Spark rejects under the default configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefaultConfError {
+    /// Spark SQL text of the argument list of `hash(...)`.
+    pub expr: String,
+    /// Type category of the case it mirrors.
+    pub category: String,
+    /// The error class Spark raised at analysis.
+    pub error_class: String,
 }
 
 /// The parsed fixture.
@@ -72,6 +87,8 @@ pub struct HashFixture {
     pub spark_version: String,
     /// All golden cases.
     pub cases: Vec<HashCase>,
+    /// Expressions Spark rejects with the default configuration.
+    pub default_conf_errors: Vec<DefaultConfError>,
 }
 
 impl HashFixture {
@@ -122,11 +139,32 @@ impl HashFixture {
                 spark_type: str_field(c, "spark_type")?,
                 hash,
                 xxhash64,
+                conf: conf_field(c)?,
             });
         }
+        let default_conf_errors = root
+            .get("default_conf_errors")
+            .map(|v| {
+                v.as_array()
+                    .ok_or_else(|| {
+                        FixtureError::Invalid("`default_conf_errors` not an array".into())
+                    })?
+                    .iter()
+                    .map(|e| {
+                        Ok(DefaultConfError {
+                            expr: str_field(e, "expr")?,
+                            category: str_field(e, "category")?,
+                            error_class: str_field(e, "error_class")?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, FixtureError>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
         Ok(Self {
             spark_version,
             cases,
+            default_conf_errors,
         })
     }
 
@@ -139,6 +177,22 @@ impl HashFixture {
             .filter(|cat| !self.cases.iter().any(|c| c.category == *cat))
             .collect()
     }
+}
+
+/// A case's `conf` object (absent means the defaults).
+fn conf_field(case: &Value) -> Result<BTreeMap<String, String>, FixtureError> {
+    let Some(conf) = case.get("conf") else {
+        return Ok(BTreeMap::new());
+    };
+    conf.as_object()
+        .ok_or_else(|| FixtureError::Invalid("case `conf` is not an object".into()))?
+        .iter()
+        .map(|(k, v)| {
+            v.as_str()
+                .map(|v| (k.clone(), v.to_owned()))
+                .ok_or_else(|| FixtureError::Invalid(format!("conf `{k}` is not a string")))
+        })
+        .collect()
 }
 
 fn str_field(v: &Value, key: &str) -> Result<String, FixtureError> {
@@ -173,15 +227,43 @@ mod tests {
         assert!(HashFixture::parse(r#"{"spark_version":"x","cases":[{"id":"a"}]}"#).is_err());
     }
 
-    /// Fails until `hash()` exists (P2): compares Krishiv's Murmur3 against every golden.
     #[test]
-    #[ignore = "P2: krishiv hash() not implemented"]
-    fn murmur3_spark_compat() -> R {
+    fn per_case_conf_and_default_conf_errors_are_kept() -> R {
         let fx = HashFixture::load_default()?;
-        Err(format!(
-            "krishiv hash() not implemented; {} golden cases await comparison",
-            fx.cases.len()
-        )
-        .into())
+        let legacy = "spark.sql.legacy.allowHashOnMapType";
+        let maps: Vec<_> = fx.cases.iter().filter(|c| c.category == "map").collect();
+        assert_eq!(maps.len(), 3);
+        assert!(
+            maps.iter()
+                .all(|c| c.conf.get(legacy).map(String::as_str) == Some("true"))
+        );
+        assert!(
+            fx.cases
+                .iter()
+                .filter(|c| c.category != "map")
+                .all(|c| c.conf.is_empty())
+        );
+        let [err] = fx.default_conf_errors.as_slice() else {
+            return Err("expected one default-conf error".into());
+        };
+        assert_eq!(err.category, "map");
+        assert_eq!(err.error_class, "DATATYPE_MISMATCH.HASH_MAP_TYPE");
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_conf_is_rejected() {
+        let case = |conf: &str| {
+            format!(
+                r#"{{"spark_version":"x","cases":[{{"id":"a","category":"int","expr":"1","spark_type":"t","hash":1,"xxhash64":1,"conf":{conf}}}]}}"#
+            )
+        };
+        assert!(HashFixture::parse(&case("{}")).is_ok());
+        assert!(HashFixture::parse(&case("[]")).is_err());
+        assert!(HashFixture::parse(&case(r#"{"k":1}"#)).is_err());
+        let bad = r#"{"spark_version":"x","cases":[],"default_conf_errors":{}}"#;
+        assert!(HashFixture::parse(bad).is_err());
+        let missing = r#"{"spark_version":"x","cases":[],"default_conf_errors":[{"expr":"e"}]}"#;
+        assert!(HashFixture::parse(missing).is_err());
     }
 }

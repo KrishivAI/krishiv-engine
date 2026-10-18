@@ -1495,8 +1495,11 @@ dependencies = [
  "arrow-schema",
  "codspeed-criterion-compat",
  "krishiv-common",
+ "md-5 0.11.0",
  "mimalloc",
  "proptest",
+ "sha1",
+ "sha2",
  "thiserror",
 ]
 
@@ -1755,6 +1758,16 @@ checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
 dependencies = [
  "cfg-if",
  "digest 0.10.7",
+]
+
+[[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -2431,6 +2444,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "sha2"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2510,7 +2534,7 @@ dependencies = [
  "humantime",
  "itertools 0.13.0",
  "libtest-mimic",
- "md-5",
+ "md-5 0.10.6",
  "owo-colors",
  "rand 0.8.8",
  "regex",

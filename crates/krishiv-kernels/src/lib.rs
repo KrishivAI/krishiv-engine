@@ -44,6 +44,7 @@ pub mod decimal;
 pub mod dispatch;
 pub mod error;
 pub mod float;
+pub mod hash;
 pub mod integer;
 pub mod ops;
 pub mod policy;
