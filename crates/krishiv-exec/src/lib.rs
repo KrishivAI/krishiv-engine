@@ -94,7 +94,7 @@ pub use morsel::MorselCursor;
 pub use operator::{GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source};
 pub use operators::{
     Filter, FilterPushdown, FnPredicate, Limit, MemoryScan, Predicate, Project, ProjectItem,
-    ScalarExpr, ScanPushdown,
+    ScalarExpr, ScanPushdown, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};

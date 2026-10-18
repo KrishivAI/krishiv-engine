@@ -422,6 +422,80 @@ fn schema_of(fields: &[(&str, DataType, bool)]) -> SchemaRef {
     ))
 }
 
+#[test]
+fn union_schema_unification() {
+    let a = schema_of(&[
+        ("c1", DataType::Int64, false),
+        ("c2", DataType::Utf8, false),
+    ]);
+    let b = schema_of(&[("x", DataType::Int64, true), ("y", DataType::Utf8, false)]);
+    let u = UnionAlign::unify(&[Arc::clone(&a), Arc::clone(&b)])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let fields: Vec<_> = u
+        .fields()
+        .iter()
+        .map(|f| (f.name().as_str(), f.is_nullable()))
+        .collect();
+    assert_eq!(fields, [("c1", true), ("c2", false)]);
+    // Errors: no branch, arity, type.
+    assert!(UnionAlign::unify(&[]).is_err());
+    let one = schema_of(&[("c1", DataType::Int64, false)]);
+    assert!(UnionAlign::unify(&[Arc::clone(&a), one]).is_err());
+    let typed = schema_of(&[
+        ("c1", DataType::Int32, false),
+        ("c2", DataType::Utf8, false),
+    ]);
+    assert!(UnionAlign::unify(&[Arc::clone(&a), typed]).is_err());
+    // A branch cannot be nullable where the output is not.
+    assert!(UnionAlign::try_new(&b, a).is_err());
+}
+
+#[test]
+fn union_align_relabels_without_touching_rows_or_weights() {
+    let first = schema_of(&[("c1", DataType::Int64, false), ("c2", DataType::Utf8, true)]);
+    let second = schema();
+    let out =
+        UnionAlign::unify(&[first, Arc::clone(&second)]).unwrap_or_else(|e| unreachable!("{e}"));
+    let op = UnionAlign::try_new(&second, Arc::clone(&out)).unwrap_or_else(|e| unreachable!("{e}"));
+    assert_eq!((op.name(), op.schema()), ("UnionAlign", Arc::clone(&out)));
+    let input = weighted(&[1, 2], &[2, -1]);
+    let aligned = out_batch(
+        op.execute(&input, &mut unlocal())
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    )
+    .unwrap_or_else(|| unreachable!("rows"));
+    assert_eq!(aligned.schema(), out);
+    assert_eq!(aligned.weights(), input.weights());
+    assert_eq!(col_a(&aligned), [Some(1), Some(2)]);
+    assert!(
+        out_batch(
+            op.execute(&ints(&[]), &mut unlocal())
+                .unwrap_or_else(|e| unreachable!("{e}"))
+        )
+        .is_none()
+    );
+    // An all-null branch column fits a nullable output.
+    assert!(
+        out_batch(
+            op.execute(&batch(&[None]), &mut unlocal())
+                .unwrap_or_else(|e| unreachable!("{e}"))
+        )
+        .is_some()
+    );
+    // A batch that does not match the declared branch schema is an engine bug.
+    let wrong = Batch::new(
+        RecordBatch::try_new(
+            schema_of(&[("a", DataType::Int32, true), ("s", DataType::Utf8, true)]),
+            vec![
+                Arc::new(arrow_array::Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["x"])),
+            ],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}")),
+    );
+    assert!(op.execute(&wrong, &mut unlocal()).is_err());
+}
+
 fn scan_of(sizes: &[usize]) -> MemoryScan {
     let mut next = 0i64;
     let batches = sizes

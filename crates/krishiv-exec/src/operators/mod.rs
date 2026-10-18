@@ -28,6 +28,7 @@ mod filter;
 mod limit;
 mod project;
 mod scan;
+mod union;
 
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
 pub use filter::Filter;
@@ -36,6 +37,7 @@ pub use project::{Project, ProjectItem};
 pub use scan::{FilterPushdown, MemoryScan, ScanPushdown};
 #[cfg(test)]
 use scan::{ScanGlobal, ScanLocal};
+pub use union::UnionAlign;
 
 use crate::error::{Result, internal};
 use crate::operator::{GlobalState, LocalState};
