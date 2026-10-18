@@ -65,8 +65,20 @@ impl KernelError {
         &self.error
     }
 
-    /// `INTERNAL_ERROR`: a caller broke a kernel precondition.
-    pub(crate) fn internal(message: impl Into<String>) -> Self {
+    /// This error with its row mapped from a gathered input back to the
+    /// caller's positions (`pos[row]`), for operands that ran on a subset.
+    pub(crate) fn in_selection(self, pos: &[u32]) -> Self {
+        let row = self.row.map(|r| {
+            pos.get(r)
+                .and_then(|&p| usize::try_from(p).ok())
+                .unwrap_or(r)
+        });
+        Self { row, ..self }
+    }
+
+    /// `INTERNAL_ERROR`: a caller broke a kernel precondition (also how a
+    /// [`crate::conditional::Lazy`] operand reports a failure of its own).
+    pub fn internal(message: impl Into<String>) -> Self {
         Self {
             row: None,
             error: InternalError {

@@ -35,6 +35,8 @@ fn literal_statements_match_spark() -> R {
         ("datetime-legacy.sql.out", true),
         ("math.sql.out", true),
         ("nonansi/math.sql.out", false),
+        ("conditional-functions.sql.out", true),
+        ("nonansi/conditional-functions.sql.out", false),
     ] {
         let t = run_golden(&std::fs::read_to_string(dir.join(file))?, ansi)?;
         writeln!(

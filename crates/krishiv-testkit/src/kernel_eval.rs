@@ -13,6 +13,7 @@
 //! and constructs this evaluator does not type, are reported as not run with
 //! the reason.
 
+mod conditional;
 mod datetime;
 pub mod hash;
 mod math;
@@ -156,6 +157,19 @@ pub const FUNCTIONS: &[&str] = &[
     "log2",
     "log1p",
     "sin",
+    // P2-T022: conditional functions.
+    "if",
+    "coalesce",
+    "ifnull",
+    "nvl",
+    "nvl2",
+    "nullif",
+    "nullifzero",
+    "zeroifnull",
+    "nanvl",
+    "when",
+    "and",
+    "or",
     "cos",
     "tan",
     "asin",
@@ -230,6 +244,8 @@ enum Node {
     Dt(datetime::DtFn, Vec<Node>, DataType),
     /// A math function (`math`) with its result type.
     Math(math::MathFn, Vec<Node>, DataType),
+    /// A conditional construct (`conditional`) with its result type.
+    Cond(conditional::CondFn, Vec<Node>, DataType),
 }
 
 /// Binary arithmetic operators.
@@ -252,7 +268,8 @@ impl Node {
             | Self::Str(_, _, t)
             | Self::Dt(_, _, t)
             | Self::Hash(_, _, t)
-            | Self::Math(_, _, t) => t.clone(),
+            | Self::Math(_, _, t)
+            | Self::Cond(_, _, t) => t.clone(),
             Self::Interval(datetime::IntervalVal::YearMonth(_)) => {
                 DataType::Interval(arrow_schema::IntervalUnit::YearMonth)
             }
@@ -401,6 +418,11 @@ impl Binder<'_> {
                 self.binary(*op, l, r)
             }
             ExprKind::Function(f) => self.function(f),
+            ExprKind::Case {
+                operand,
+                branches,
+                else_result,
+            } => self.case_expr(operand.as_deref(), branches, else_result.as_deref()),
             ExprKind::Like {
                 expr,
                 pattern,
@@ -445,6 +467,9 @@ impl Binder<'_> {
             return node;
         }
         if let Some(node) = self.math_function(&name, &args) {
+            return node;
+        }
+        if let Some(node) = self.conditional_function(&name, &args) {
             return node;
         }
         let cast_to = match name.as_str() {
@@ -539,6 +564,8 @@ impl Binder<'_> {
             Bop::GtEq => c(CompareKind::GreaterEq),
             Bop::NullSafeEq => self.compare(None, l, r),
             Bop::Concat => self.concat(vec![l, r]),
+            Bop::And => self.logical(true, l, r),
+            Bop::Or => self.logical(false, l, r),
             _ => Err("binary operator outside this task".to_owned()),
         }
     }
@@ -909,6 +936,8 @@ struct Evaluator<'z> {
     /// Set when ANSI day arithmetic on dates overflowed: Spark wraps there,
     /// Krishiv raises (documented divergence, ADR 0023).
     day_overflow: std::cell::Cell<bool>,
+    /// The rows a conditional branch is being evaluated on (`conditional`).
+    frame: std::cell::RefCell<Option<krishiv_kernels::conditional::Selection>>,
 }
 
 /// A scalar of a one-row primitive array.
@@ -919,6 +948,14 @@ fn scalar<T: ArrowPrimitiveType>(a: &dyn Array) -> Option<T::Native> {
 
 impl Evaluator<'_> {
     fn leaf(&self, a: &ArrayRef) -> Result<ArrayRef, EvalError> {
+        let base = self.base_leaf(a)?;
+        match self.frame.borrow().as_ref() {
+            Some(rows) => Ok(rows.gather(base.as_ref())?),
+            None => Ok(base),
+        }
+    }
+
+    fn base_leaf(&self, a: &ArrayRef) -> Result<ArrayRef, EvalError> {
         if self.shape != Shape::Padded {
             return Ok(Arc::clone(a));
         }
@@ -977,6 +1014,7 @@ impl Evaluator<'_> {
             Node::Interval(v) => self.interval_array(*v),
             Node::Dt(f, args, _) => self.datetime_fn(*f, args),
             Node::Math(f, args, _) => self.math_fn(*f, args),
+            Node::Cond(f, args, ty) => self.cond_fn(*f, args, ty),
         }
     }
 
@@ -1393,6 +1431,7 @@ pub fn run_cell(case: &MatrixCase) -> CellOutcome {
             shape,
             invalid_utf8: std::cell::Cell::new(false),
             day_overflow: std::cell::Cell::new(false),
+            frame: std::cell::RefCell::new(None),
         };
         let got = ev.eval(&node);
         let outcome = match (got, expected_rows, expected_error) {
@@ -1619,6 +1658,7 @@ pub fn run_golden(text: &str, ansi: bool) -> Result<GoldenTally, crate::golden::
             shape: Shape::Arrays,
             invalid_utf8: std::cell::Cell::new(false),
             day_overflow: std::cell::Cell::new(false),
+            frame: std::cell::RefCell::new(None),
         };
         let values: Result<Vec<ArrayRef>, EvalError> = nodes.iter().map(|n| ev.eval(n)).collect();
         if ev.day_overflow.get() && matches!(&st.expected, GoldenExpected::Rows(_)) {
@@ -2323,6 +2363,133 @@ mod tests {
             ("greatest", "SELECT greatest(array(1), array(2))"),
         ] {
             let outcome = cell(f, sql, on, rows("double", json!(1)));
+            assert!(
+                matches!(outcome, CellOutcome::NotRun(_)),
+                "{sql}: {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn conditional_functions_evaluate_branches_lazily() {
+        let on = Mode::AnsiOn;
+        let off = Mode::AnsiOff;
+        let dbl = |v: f64| json!({ "f64": format!("{:016x}", v.to_bits()), "repr": v.to_string() });
+        // `1 % 0` raises under ANSI wherever it is evaluated: these pass only
+        // because the branch holding it is never taken.
+        for (f, sql, ty, want) in [
+            ("if", "SELECT if(1 < 2, 1, 1 % 0)", "int", json!(1)),
+            ("if", "SELECT if(1 > 2, 1 % 0, 2)", "int", json!(2)),
+            (
+                "when",
+                "SELECT CASE WHEN 1 > 2 THEN 1 % 0 WHEN 2 > 1 THEN 7 ELSE 1 % 0 END",
+                "int",
+                json!(7),
+            ),
+            (
+                "when",
+                "SELECT CASE 2 WHEN 1 THEN 1 % 0 WHEN 2 THEN 20 END",
+                "int",
+                json!(20),
+            ),
+            (
+                "when",
+                "SELECT CASE WHEN 1 > 2 THEN 1 END",
+                "int",
+                Value::Null,
+            ),
+            (
+                "coalesce",
+                "SELECT coalesce(NULL, 3, 1 % 0)",
+                "int",
+                json!(3),
+            ),
+            (
+                "coalesce",
+                "SELECT coalesce(NULL, NULL, 1.5D)",
+                "double",
+                dbl(1.5),
+            ),
+            ("ifnull", "SELECT ifnull(2, 1 % 0)", "int", json!(2)),
+            ("nvl", "SELECT nvl(NULL, 4)", "int", json!(4)),
+            ("nvl2", "SELECT nvl2(1, 5, 1 % 0)", "int", json!(5)),
+            ("nvl2", "SELECT nvl2(NULL, 1 % 0, 6)", "int", json!(6)),
+            ("nullif", "SELECT nullif(2, 1)", "int", json!(2)),
+            (
+                "nullif",
+                "SELECT nullif(CAST(1 AS INT), 1)",
+                "int",
+                Value::Null,
+            ),
+            ("nullifzero", "SELECT nullifzero(0)", "int", Value::Null),
+            (
+                "zeroifnull",
+                "SELECT zeroifnull(CAST(NULL AS INT))",
+                "int",
+                json!(0),
+            ),
+            ("nanvl", "SELECT nanvl(1D, 1 % 0)", "double", dbl(1.0)),
+            (
+                "nanvl",
+                "SELECT nanvl(CAST('NaN' AS DOUBLE), 2)",
+                "double",
+                dbl(2.0),
+            ),
+            (
+                "and",
+                "SELECT false AND (1 % 0 = 0)",
+                "boolean",
+                json!(false),
+            ),
+            ("and", "SELECT NULL AND false", "boolean", json!(false)),
+            ("and", "SELECT true AND NULL", "boolean", Value::Null),
+            ("or", "SELECT true OR (1 % 0 = 0)", "boolean", json!(true)),
+            ("or", "SELECT NULL OR true", "boolean", json!(true)),
+        ] {
+            let outcome = cell(f, sql, on, rows(ty, want));
+            assert_eq!(outcome, CellOutcome::Pass, "{sql}");
+        }
+        // A taken branch still raises, and so does the right side where the left does not decide.
+        for (f, sql) in [
+            ("if", "SELECT if(1 > 2, 1, 1 % 0)"),
+            ("coalesce", "SELECT coalesce(NULL, 1 % 0)"),
+            ("and", "SELECT true AND (1 % 0 = 0)"),
+            ("or", "SELECT false OR (1 % 0 = 0)"),
+        ] {
+            let outcome = cell(f, sql, on, rows("int", json!(0)));
+            assert!(
+                matches!(outcome, CellOutcome::Fail(_)),
+                "{sql}: {outcome:?}"
+            );
+        }
+        // Legacy mode promotes a string and a number to string.
+        assert_eq!(
+            cell(
+                "coalesce",
+                "SELECT coalesce(NULL, 1L, 'a')",
+                off,
+                rows("string", json!("1"))
+            ),
+            CellOutcome::Pass
+        );
+        for (f, sql) in [
+            ("if", "SELECT if(1, 2, 3)"),
+            ("if", "SELECT if(true, 1)"),
+            ("if", "SELECT if(true, 1, 'a')"),
+            ("coalesce", "SELECT coalesce()"),
+            ("coalesce", "SELECT coalesce(NULL)"),
+            ("nvl2", "SELECT nvl2(1, 2)"),
+            ("nullif", "SELECT nullif(NULL, 1)"),
+            ("nullif", "SELECT nullif(1)"),
+            ("nullifzero", "SELECT nullifzero(true)"),
+            ("zeroifnull", "SELECT zeroifnull('1')"),
+            ("nanvl", "SELECT nanvl('a', 1D)"),
+            ("nanvl", "SELECT nanvl(1D)"),
+            ("and", "SELECT true AND 1"),
+            ("when", "SELECT CASE WHEN 1 THEN 2 END"),
+            ("when", "SELECT CASE WHEN true THEN 1 ELSE 'a' END"),
+        ] {
+            let outcome = cell(f, sql, on, rows("int", json!(1)));
             assert!(
                 matches!(outcome, CellOutcome::NotRun(_)),
                 "{sql}: {outcome:?}"

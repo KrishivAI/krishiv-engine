@@ -21,6 +21,8 @@ P2-T027 adds the hash functions (`kernel_eval/hash.rs`): `hash_fixture` keeps ea
 `default_conf_errors`; `hash_fixture` (test) runs every case of `hash.json` (nested values built by the evaluator's
 `array`/`named_struct`/`map` constructors) and `hash_differential` the seeded random cases of
 `hash-differential.json` (`tests/scripts/gen_hash_differential.py`; Spark 4.0/4.1/4.2 agree).
+P2-T022 adds the conditional functions (`kernel_eval/conditional.rs`): `Evaluator::eval_on` evaluates a node on a
+`Selection` (its leaves gather the rows), so `CASE`/`if`/`coalesce`/`nvl*`/`nullif*`/`nanvl`/`AND`/`OR` evaluate lazily.
 P2-T026 adds the math functions (`kernel_eval/math.rs`) and `math_differential` (seeded random cases of `math-differential.json`,
 `tests/scripts/gen_math_goldens.py`; Spark 4.0/4.1 differ from 4.2 in `asinh`/`acosh` only, so their fixtures hold just those groups).
 P2-T025a adds the datetime functions and ANSI interval literals (`kernel_eval/datetime.rs`),
