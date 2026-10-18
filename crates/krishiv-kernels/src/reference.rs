@@ -61,11 +61,19 @@ fn settle<T>(
     fault: Fault,
     wrapped: T,
     error: impl FnOnce() -> KernelError,
-) -> Result<Option<T>, KernelError> {
+) -> Result<Option<T>, Box<KernelError>> {
     match mode.action(fault) {
         Action::Wrap => Ok(Some(wrapped)),
         Action::Null => Ok(None),
-        Action::Raise => Err(error()),
+        Action::Raise => Err(Box::new(error())),
+    }
+}
+
+/// The reference loops carry a boxed error, so the per-row result stays
+/// small (the oracle doubles as the benchmarks' "generic path").
+impl From<Box<KernelError>> for KernelError {
+    fn from(e: Box<KernelError>) -> Self {
+        *e
     }
 }
 
@@ -73,7 +81,7 @@ fn settle<T>(
 fn rows<T: ArrowPrimitiveType, U: ArrowPrimitiveType>(
     l: Operand<'_, T>,
     r: Operand<'_, T>,
-    mut f: impl FnMut(usize, T::Native, T::Native) -> Result<Option<U::Native>, KernelError>,
+    mut f: impl FnMut(usize, T::Native, T::Native) -> Result<Option<U::Native>, Box<KernelError>>,
 ) -> Result<PrimitiveArray<U>, KernelError> {
     let len = length(l, r)?;
     let mut out = Vec::with_capacity(len);
