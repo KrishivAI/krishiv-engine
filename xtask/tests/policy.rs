@@ -254,7 +254,9 @@ fn security_workflows_are_wired() {
         "actions/dependency-review-action@",
         "fail-on-severity: high",
         "zizmorcore/zizmor-action@",
-        "advanced-security: ${{ github.event_name != 'pull_request' }}",
+        "fail-on-scopes: runtime, development, unknown",
+        "advanced-security: false",
+        "advanced-security: true",
     ] {
         assert!(sec.contains(needle), "security.yml lacks {needle:?}");
     }
