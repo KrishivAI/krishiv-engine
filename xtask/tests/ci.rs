@@ -2,7 +2,8 @@
 //! Tests for the PR size cap, path filters and DCO check.
 
 use xtask::ci::{
-    MAX_CHANGED_LINES, commits_missing_signoff, is_size_excluded, measure_numstat, rust_relevant,
+    MAX_CHANGED_LINES, TEST_LINE_DIVISOR, commits_missing_signoff, is_size_excluded, is_test_path,
+    measure_numstat, rust_relevant,
 };
 
 fn numstat(path: &str, added: u64) -> String {
@@ -11,8 +12,8 @@ fn numstat(path: &str, added: u64) -> String {
 
 #[test]
 fn diff_over_the_cap_in_non_fixture_lines_fails() {
-    let report = measure_numstat(&numstat("crates/krishiv-exec/src/lib.rs", 3100)).unwrap();
-    assert_eq!(report.counted, 3100);
+    let report = measure_numstat(&numstat("crates/krishiv-exec/src/lib.rs", 5100)).unwrap();
+    assert_eq!(report.counted, 5100);
     assert!(!report.within_cap());
 }
 
@@ -43,14 +44,14 @@ fn goldens_fixtures_vendored_and_generated_are_excluded() {
 
 #[test]
 fn deletions_count_binary_files_do_not_and_renames_resolve() {
-    let input = "0\t1700\tcrates/a.rs\x001300\t0\tcrates/b.rs\x00-\t-\tlogo.png\x005\t5\t\x00tests/old/data.json\x00tests/fixtures/data.json\x00";
+    let input = "0\t2700\tcrates/a.rs\x002300\t0\tcrates/b.rs\x00-\t-\tlogo.png\x005\t5\t\x00tests/old/data.json\x00tests/fixtures/data.json\x00";
     let mut report = measure_numstat(input).unwrap();
-    assert_eq!(report.counted, 3000);
+    assert_eq!(report.counted, 5000);
     assert_eq!(report.excluded, 10);
     assert_eq!(report.binaries, vec!["logo.png".to_owned()]);
     // A 6,401-byte binary counts as 101 lines and pushes the diff over the cap.
     report.add_binary(6401);
-    assert_eq!(report.counted, 3101);
+    assert_eq!(report.counted, 5101);
     assert!(!report.within_cap());
     assert!(measure_numstat("garbage").is_err());
     // Paths are taken verbatim: no quoting, and ` => ` in a name is literal.
@@ -133,4 +134,34 @@ fn dco_bot_exemption_is_an_explicit_allowlist_and_checks_committer() {
 fn license_is_not_counted_towards_the_size_cap() {
     assert!(is_size_excluded("LICENSE"));
     assert!(!is_size_excluded("NOTICE"));
+}
+
+#[test]
+fn test_code_counts_at_reduced_weight() {
+    assert_eq!(TEST_LINE_DIVISOR, 2);
+    assert!(is_test_path("crates/krishiv-exec/tests/join.rs"));
+    assert!(is_test_path("crates/krishiv-exec/src/aggregate/tests.rs"));
+    assert!(is_test_path("crates/krishiv-io/src/parquet/write_tests.rs"));
+    assert!(is_test_path("tests/scripts/gen_goldens.py"));
+    assert!(is_test_path("python/tests/test_session.py"));
+    assert!(!is_test_path("crates/krishiv-exec/src/join.rs"));
+    assert!(!is_test_path("crates/krishiv-exec/src/testing.rs"));
+    assert!(!is_test_path("xtask/src/ci.rs"));
+    let input = [
+        numstat("crates/x/src/lib.rs", 4000),
+        numstat("crates/x/tests/it.rs", 1999),
+        numstat("crates/x/src/tests.rs", 2),
+    ]
+    .concat();
+    let report = measure_numstat(&input).unwrap();
+    assert_eq!(report.test_lines, 2001);
+    // 4,000 + ceil(2,001 / 2)
+    assert_eq!(report.counted, 5001);
+    assert!(!report.within_cap());
+    // Fixtures stay excluded even though they sit under `tests/`.
+    let fixtures = measure_numstat(&numstat("tests/fixtures/a.json", 900)).unwrap();
+    assert_eq!(
+        (fixtures.counted, fixtures.test_lines, fixtures.excluded),
+        (0, 0, 900)
+    );
 }

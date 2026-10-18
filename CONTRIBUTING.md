@@ -92,8 +92,8 @@ CI fails on commits without a `Signed-off-by` line (`cargo xtask dco`).
 
 ## Pull requests
 
-- Keep a PR under 3,000 changed lines (lock files, snapshots, goldens, test fixtures and vendored data
-  excluded). Group related work into one PR with one commit per task. A maintainer can apply the
+- Keep a PR under 5,000 counted changed lines. Test code counts at half weight; lock files,
+  snapshots, goldens, test fixtures and vendored data are excluded. Group related work into one PR with one commit per task. A maintainer can apply the
   `size-approved` label to allow a larger one.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages (`feat:`, `fix:`, `chore:`).
 - Fill in the [pull request template](.github/pull_request_template.md), including the tests you ran.
