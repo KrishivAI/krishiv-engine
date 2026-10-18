@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Shared test support: the TPC-H catalog and queries, resolved by the
-//! analyzer.
+//! analyzer, a reference interpreter, generated data and a random number
+//! generator.
+
+pub(crate) mod data;
+pub(crate) mod eval;
 
 use std::sync::Arc;
 
@@ -90,4 +94,28 @@ pub(crate) fn resolve(sql: &str, ctx: &AnalysisContext) -> Plan {
 /// The text of TPC-H query `q` (1-based).
 pub(crate) fn tpch_sql(q: usize) -> String {
     std::fs::read_to_string(root().join(format!("bench/queries/tpch/q{q:02}.sql"))).unwrap()
+}
+
+/// A xorshift generator.
+#[derive(Debug, Clone)]
+pub(crate) struct Rng(pub(crate) u64);
+
+impl Rng {
+    /// The next value.
+    pub(crate) fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    /// A value in `lo..=hi`.
+    pub(crate) fn range(&mut self, lo: i64, hi: i64) -> i64 {
+        lo + i64::try_from(self.next() % u64::try_from(hi - lo + 1).unwrap()).unwrap()
+    }
+
+    /// One of `items`.
+    pub(crate) fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+        items[usize::try_from(self.range(0, i64::try_from(items.len()).unwrap() - 1)).unwrap()]
+    }
 }

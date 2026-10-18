@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! One query per rule and edge case, its optimised plan snapshotted.
+//! One query per rule and edge case: its optimised plan snapshotted, and
+//! (when the result is deterministic) the same rows as the unoptimised plan
+//! on generated data.
 
 use std::sync::Arc;
 
@@ -11,7 +13,7 @@ use krishiv_plan::{
 };
 use krishiv_types::DataType;
 
-use crate::support;
+use crate::support::{self, data, eval};
 
 /// `(name, query)` over `t(a int, b string, c bigint)` and `u(a int, d string)`.
 const CASES: &[(&str, &str)] = &[
@@ -321,6 +323,22 @@ fn rules() {
             again.root()
         );
         insta::assert_snapshot!(*name, optimized.root().to_string(), sql);
+        // Limits and nondeterministic calls choose rows; the interpreter
+        // keeps numbers in unbounded fixed point, without NaN or integral
+        // overflow (whose ANSI error or legacy wrap it does not model).
+        let skip = ["LIMIT", "rand()", "first(", "DOUBLE", "1.0F"];
+        let overflows = ["fold_arith", "fold_int_overflow", "fold_negative"];
+        if !skip.iter().any(|s| sql.contains(s)) && !overflows.contains(name) {
+            for seed in 1..=8 {
+                let db = data::small(seed);
+                let want = eval::rows(&db, plan.root());
+                assert_eq!(
+                    eval::rows(&db, optimized.root()),
+                    want,
+                    "{name}, seed {seed}"
+                );
+            }
+        }
     }
 }
 

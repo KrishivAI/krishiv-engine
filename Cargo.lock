@@ -1538,6 +1538,7 @@ dependencies = [
  "krishiv-plan",
  "krishiv-sql",
  "krishiv-types",
+ "proptest",
  "serde_json",
 ]
 

@@ -20,6 +20,7 @@ krishiv-types = { path = "../krishiv-types" }
 insta.workspace = true
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }
+proptest = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 
 [lints]
