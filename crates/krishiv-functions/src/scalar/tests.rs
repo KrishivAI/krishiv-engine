@@ -273,6 +273,13 @@ fn literal_arguments_are_broadcast() {
         owned(&[Some("AB")])
     );
     assert_eq!(f.invoke(&[lit(&s)], 0).unwrap().len(), 0);
+    // An empty batch computes nothing, so a literal that would overflow
+    // does not raise.
+    let (max, one) = (dates(&[Some(i32::MAX)]), ints(&[Some(1)]));
+    let add = bind("date_add", &[&max, &one]);
+    let out = add.invoke(&[lit(&max), lit(&one)], 0).unwrap();
+    assert_eq!((out.len(), out.data_type()), (0, &DataType::Date32));
+    assert!(add.invoke(&[lit(&max), lit(&one)], 1).is_err());
     let null = strs(&[None]);
     let p = ints(&[Some(1)]);
     let f = bind("substring", &[&null, &p]);
@@ -430,6 +437,18 @@ fn extract_rejects_unknown_or_unbound_fields() {
     assert!(bad(BindArg::Literal(strs(&[Some("fortnight")]))).contains("fortnight"));
     assert!(bad(BindArg::Literal(strs(&[None]))).contains("NULL"));
     assert!(bad(DataType::Utf8.into()).contains("not a literal"));
+    // A literal is one row.
+    for rows in [0, 2] {
+        let field = BindArg::Literal(strs(&vec![Some("year"); rows]));
+        let err = bind_scalar(
+            "extract",
+            &[field, DataType::Date32.into()],
+            &BindOptions::new(),
+        )
+        .unwrap_err();
+        assert_eq!(class(&err), ErrorClass::InternalError);
+        assert!(err.to_string().contains(&format!("{rows} rows")), "{err}");
+    }
 }
 
 #[test]

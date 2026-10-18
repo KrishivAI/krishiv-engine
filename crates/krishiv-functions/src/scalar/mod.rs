@@ -192,6 +192,10 @@ impl ScalarFunction for Bound {
         for (a, t) in args.iter().zip(&self.types) {
             a.check(t, rows, self.name)?;
         }
+        // No rows: nothing is computed, so nothing raises.
+        if rows == 0 {
+            return Ok(arrow_array::new_empty_array(&self.return_type));
+        }
         // Every argument a literal: compute one row, then repeat it.
         let all_literal = args.iter().all(|a| matches!(a, Arg::Scalar(_)));
         let out = if all_literal {
@@ -268,13 +272,23 @@ pub fn scalar_names() -> Vec<&'static str> {
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a name with no binding, or argument
 /// types the binding does not take (the analyzer's signatures make the
-/// latter unreachable for analyzed plans).
+/// latter unreachable for analyzed plans); `INTERNAL_ERROR` for a literal
+/// argument that is not one row.
 pub fn bind_scalar(
     name: &str,
     args: &[BindArg],
     opts: &BindOptions,
 ) -> Result<Arc<dyn ScalarFunction>, KrishivError> {
     let lower = name.to_ascii_lowercase();
+    if let Some(BindArg::Literal(a)) = args
+        .iter()
+        .find(|a| matches!(a, BindArg::Literal(a) if a.len() != 1))
+    {
+        return Err(internal(format!(
+            "{lower}: a literal argument of {} rows",
+            a.len()
+        )));
+    }
     let Some((name, binding)) = FAMILIES
         .iter()
         .find_map(|(_, bind)| bind(&lower, args, opts))
