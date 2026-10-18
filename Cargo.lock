@@ -1109,6 +1109,15 @@ version = "0.1.0-dev"
 [[package]]
 name = "krishiv-kernels"
 version = "0.1.0-dev"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "codspeed-criterion-compat",
+ "krishiv-common",
+ "mimalloc",
+ "proptest",
+ "thiserror",
+]
 
 [[package]]
 name = "krishiv-mcp"

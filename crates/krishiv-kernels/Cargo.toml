@@ -10,3 +10,19 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-buffer.workspace = true
+krishiv-common = { path = "../krishiv-common" }
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+# Benchmarks run under the shipped allocator (design note: relative, mimalloc).
+mimalloc.workspace = true
+proptest = { workspace = true, features = ["std"] }
+
+[[bench]]
+name = "binary_add"
+harness = false

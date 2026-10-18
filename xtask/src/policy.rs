@@ -260,7 +260,8 @@ pub fn run_spdx(root: &Path) -> Result<(), String> {
     }
 }
 
-/// `xtask source-guard`: bans the parquet `object_store` adapters in `crates/`.
+/// `xtask source-guard`: bans the parquet `object_store` adapters in `crates/`
+/// and confines `unsafe` in the kernel crates to `unsafe_*.rs` modules.
 ///
 /// # Errors
 /// Returns each banned use with its location.
@@ -272,11 +273,22 @@ pub fn run_source_guard(root: &Path) -> Result<(), String> {
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
         };
+        let rel = file
+            .strip_prefix(root)
+            .unwrap_or(file)
+            .display()
+            .to_string();
         for (line, ident) in lint::banned_idents_in(&text) {
             hits.push(format!(
-                "{}:{line}: `{ident}` is banned (parquet's object_store feature is off; ADR 0028)",
-                file.strip_prefix(root).unwrap_or(file).display()
+                "{rel}:{line}: `{ident}` is banned (parquet's object_store feature is off; ADR 0028)"
             ));
+        }
+        if !lint::unsafe_allowed_in(&rel) {
+            for line in lint::unsafe_lines(&text) {
+                hits.push(format!(
+                    "{rel}:{line}: `unsafe` belongs in an `unsafe_*.rs` helper module in this crate (ADR 0029)"
+                ));
+            }
         }
     }
     if hits.is_empty() {

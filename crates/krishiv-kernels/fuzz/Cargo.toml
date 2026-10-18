@@ -1,0 +1,28 @@
+# cargo-fuzz targets for krishiv-kernels (nightly CI job `fuzz-kernels`).
+# Not a workspace member: libFuzzer needs nightly and sanitizer flags, and its
+# dependencies stay out of the shipped dependency graph.
+[package]
+name = "krishiv-kernels-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arrow-array = { version = "60", default-features = false }
+arrow-buffer = { version = "60", default-features = false }
+krishiv-kernels = { path = ".." }
+libfuzzer-sys = "0.4.13"
+
+[[bin]]
+name = "differential"
+path = "fuzz_targets/differential.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

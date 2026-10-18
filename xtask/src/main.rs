@@ -246,6 +246,7 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
         transitive_crates_all_features: Some(transitive_crates_all_features),
         binary_bytes: Some(binary_bytes),
         clean_build_secs,
+        unsafe_sites: Some(xtask::lint::unsafe_sites_per_crate(&root)?),
     };
     let json = serde_json::to_string_pretty(&now).map_err(|e| e.to_string())? + "\n";
     let baseline_path = root.join("budgets.json");
@@ -276,15 +277,12 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
             .map_err(|e| format!("cannot open step summary: {e}"))?;
         writeln!(f, "{summary}").map_err(|e| e.to_string())?;
     }
-    if cmp.violations.is_empty() {
-        return Ok(());
+    let env_flag = |k: &str| std::env::var(k).is_ok_and(|v| v == "1");
+    for v in cmp.violations.iter().chain(&cmp.unsafe_violations) {
+        eprintln!("{v}");
     }
-    let approved = std::env::var("BUDGET_APPROVED").is_ok_and(|v| v == "1");
-    for v in &cmp.violations {
-        eprintln!("{}: {v}", if approved { "approved" } else { "error" });
-    }
-    if approved {
-        let note = "Budget exceeded but approved. Refresh the baseline: `cargo xtask budgets --write-baseline` and commit budgets.json.";
+    if cmp.verdict(env_flag("BUDGET_APPROVED"), env_flag("UNSAFE_APPROVED"))? {
+        let note = "Growth approved. Refresh the baseline: `cargo xtask budgets --write-baseline` and commit budgets.json.";
         println!("{note}");
         if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
             use std::io::Write;
@@ -297,9 +295,5 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
             }
         }
     }
-    if approved {
-        Ok(())
-    } else {
-        Err("budget exceeded; add the `budget-approved` label or set BUDGET_APPROVED=1".to_owned())
-    }
+    Ok(())
 }

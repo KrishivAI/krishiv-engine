@@ -4,8 +4,10 @@
 //! Measures are compared with the committed `budgets.json` baseline; growth
 //! of more than [`MAX_GROWTH_PERCENT`] in any metric is a failure unless the
 //! caller opts out (CI sets `BUDGET_APPROVED=1` for `budget-approved` PRs).
+//! Any growth of a crate's unsafe sites needs its own approval
+//! (`UNSAFE_APPROVED=1`, label `unsafe-reviewed`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +29,11 @@ pub struct Budgets {
     pub binary_bytes: Option<u64>,
     /// Clean release build wall time in seconds (CI only).
     pub clean_build_secs: Option<u64>,
+    /// Lines with an `unsafe` keyword per crate (`crates/<name>/src`), for
+    /// crates that have any. Any growth needs approval (ADR 0029: every new
+    /// unsafe site is reviewed); `None` means not measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsafe_sites: Option<BTreeMap<String, u64>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +131,34 @@ pub struct Comparison {
     pub markdown: String,
     /// Metrics that grew by more than the allowed percentage.
     pub violations: Vec<String>,
+    /// Crates whose unsafe-site count grew (reviewed separately, label
+    /// `unsafe-reviewed` / `UNSAFE_APPROVED=1`).
+    pub unsafe_violations: Vec<String>,
+}
+
+impl Comparison {
+    /// The outcome given the two approvals: `Ok(true)` when something grew
+    /// but was approved, `Ok(false)` when nothing grew, `Err` naming the
+    /// missing approval otherwise.
+    ///
+    /// # Errors
+    /// When a growth lacks its approval.
+    pub fn verdict(&self, budget_approved: bool, unsafe_approved: bool) -> Result<bool, String> {
+        let mut missing = Vec::new();
+        if !self.violations.is_empty() && !budget_approved {
+            missing
+                .push("budget exceeded; add the `budget-approved` label or set BUDGET_APPROVED=1");
+        }
+        if !self.unsafe_violations.is_empty() && !unsafe_approved {
+            missing
+                .push("new unsafe sites; add the `unsafe-reviewed` label or set UNSAFE_APPROVED=1");
+        }
+        if missing.is_empty() {
+            Ok(!self.violations.is_empty() || !self.unsafe_violations.is_empty())
+        } else {
+            Err(missing.join("\n"))
+        }
+    }
 }
 
 /// Compares `now` with `base`. Metrics missing on either side are skipped.
@@ -145,6 +180,7 @@ pub fn compare(base: &Budgets, now: &Budgets) -> Comparison {
     let mut markdown =
         String::from("| metric | baseline | current | change |\n|---|---|---|---|\n");
     let mut violations = Vec::new();
+    let mut unsafe_violations = Vec::new();
     for (name, b, n) in rows {
         match (b, n) {
             (Some(b), Some(n)) => {
@@ -169,9 +205,26 @@ pub fn compare(base: &Budgets, now: &Budgets) -> Comparison {
             }
         }
     }
+    if let (Some(b), Some(n)) = (&base.unsafe_sites, &now.unsafe_sites) {
+        for (krate, &count) in n {
+            let was = b.get(krate).copied().unwrap_or(0);
+            let flag = if count > was {
+                unsafe_violations.push(format!(
+                    "unsafe sites in {krate}: {was} -> {count}; new unsafe needs review"
+                ));
+                " NEEDS REVIEW"
+            } else {
+                ""
+            };
+            markdown.push_str(&format!(
+                "| unsafe sites: {krate} | {was} | {count} | {flag} |\n"
+            ));
+        }
+    }
     Comparison {
         markdown,
         violations,
+        unsafe_violations,
     }
 }
 
@@ -185,7 +238,48 @@ mod tests {
             transitive_crates_all_features: None,
             binary_bytes: bytes,
             clean_build_secs: None,
+            unsafe_sites: None,
         }
+    }
+
+    #[test]
+    fn any_unsafe_growth_is_a_violation() {
+        let with = |n: u64| Budgets {
+            unsafe_sites: Some(BTreeMap::from([("k".to_owned(), n)])),
+            ..b(1, None)
+        };
+        assert!(compare(&with(2), &with(2)).unsafe_violations.is_empty());
+        assert!(compare(&with(3), &with(2)).unsafe_violations.is_empty());
+        let c = compare(&with(2), &with(3));
+        assert_eq!((c.unsafe_violations.len(), c.violations.len()), (1, 0));
+        assert!(c.markdown.contains("NEEDS REVIEW"));
+        // Only the unsafe label approves unsafe growth.
+        assert!(
+            c.verdict(true, false)
+                .unwrap_err()
+                .contains("unsafe-reviewed")
+        );
+        assert_eq!(c.verdict(false, true), Ok(true));
+        // Unmeasured baseline: not compared.
+        assert_eq!(compare(&b(1, None), &with(1)).unsafe_violations.len(), 0);
+        let base = Budgets {
+            unsafe_sites: Some(BTreeMap::new()),
+            ..b(1, None)
+        };
+        assert_eq!(compare(&base, &with(1)).unsafe_violations.len(), 1);
+    }
+
+    #[test]
+    fn verdicts() {
+        let ok = compare(&b(100, None), &b(100, None));
+        assert_eq!(ok.verdict(false, false), Ok(false));
+        let grew = compare(&b(100, None), &b(200, None));
+        assert!(
+            grew.verdict(false, true)
+                .unwrap_err()
+                .contains("budget-approved")
+        );
+        assert_eq!(grew.verdict(true, false), Ok(true));
     }
 
     #[test]

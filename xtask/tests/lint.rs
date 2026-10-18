@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Tests for the workflow, SPDX and banned-identifier lints.
 
-use xtask::lint::{banned_idents_in, has_spdx_header, workflow_violations};
+use xtask::lint::{
+    banned_idents_in, has_spdx_header, unsafe_allowed_in, unsafe_lines, unsafe_sites_per_crate,
+    workflow_violations,
+};
 
 #[test]
 fn pull_request_target_fails_the_lint() {
@@ -138,4 +141,168 @@ fn parquet_object_adapters_are_found() {
         [(1, "ParquetObjectReader"), (3, "ParquetObjectWriter")]
     );
     assert!(banned_idents_in("fn fine() {}").is_empty());
+}
+
+#[test]
+fn unsafe_keyword_lines_only() {
+    let src = "#![forbid(unsafe_code)]\n#![deny(unsafe_op_in_unsafe_fn)]\n// unsafe in a comment\nlet s = \"unsafe\";\nunsafe { f() }\nfn g() {} // unsafe\npub unsafe fn h() {}\n";
+    assert_eq!(unsafe_lines(src), vec![5, 7]);
+    assert_eq!(
+        unsafe_lines("let s = \"a\\\" unsafe\";"),
+        Vec::<usize>::new()
+    );
+    // A '"' char literal does not hide a later unsafe.
+    assert_eq!(unsafe_lines("let q = '\"'; unsafe { f() }"), vec![1]);
+    assert_eq!(unsafe_lines("let q = b'\"'; unsafe { f() }"), vec![1]);
+    assert_eq!(unsafe_lines("let q = '\\''; unsafe { f() }"), vec![1]);
+    // A lifetime is not a char literal.
+    assert_eq!(
+        unsafe_lines("fn f<'a>(x: &'a str) { unsafe { g() } }"),
+        vec![1]
+    );
+    assert_eq!(unsafe_lines("x('\"abc\" unsafe"), vec![1]);
+    // An escaped backslash closes the string (review finding).
+    assert_eq!(unsafe_lines("let p = \"\\\\\"; unsafe { f() }"), vec![1]);
+    // Raw strings have no escapes; hashes delimit them.
+    assert_eq!(unsafe_lines("let p = r\"C:\\\"; unsafe { f() }"), vec![1]);
+    assert_eq!(
+        unsafe_lines("let p = r#\"a \" unsafe\"#; f()"),
+        Vec::<usize>::new()
+    );
+    assert_eq!(unsafe_lines("let p = br#\"unsafe\"#;\nunsafe {}"), vec![2]);
+    // Strings and nested block comments span lines.
+    assert_eq!(unsafe_lines("let s = \"a\nunsafe\";\nunsafe {}"), vec![3]);
+    assert_eq!(unsafe_lines("/* a /* b */\nunsafe */ unsafe {}"), vec![2]);
+    // C strings and raw C strings (review finding: exact example).
+    assert_eq!(unsafe_lines("let p = cr\"C:\\\"; unsafe { f() }"), vec![1]);
+    assert_eq!(
+        unsafe_lines("let p = cr#\"a \" unsafe\"#; unsafe {}"),
+        vec![1]
+    );
+    assert_eq!(
+        unsafe_lines("let p = c\"unsafe\"; f()"),
+        Vec::<usize>::new()
+    );
+    assert_eq!(
+        unsafe_lines("let p = br##\"\"# unsafe\"##;\nunsafe {}"),
+        vec![2]
+    );
+    // A line continuation inside a string still counts its newline.
+    assert_eq!(
+        unsafe_lines("let s = \"abc\\\n  def\";\nunsafe {}"),
+        vec![3]
+    );
+    // An unterminated raw string is scanned as code (over-count, never hide).
+    assert_eq!(unsafe_lines("r\"x unsafe"), vec![1]);
+    assert_eq!(unsafe_lines("unsafe"), vec![1]);
+}
+
+#[test]
+fn kernel_unsafe_only_in_unsafe_modules() {
+    assert!(unsafe_allowed_in(
+        "crates/krishiv-kernels/src/unsafe_dispatch.rs"
+    ));
+    assert!(!unsafe_allowed_in("crates/krishiv-kernels/src/chunk.rs"));
+    assert!(!unsafe_allowed_in("crates/krishiv-kernels/src/unsafe/x.rs"));
+    assert!(unsafe_allowed_in("crates/krishiv-memory/src/arena.rs"));
+}
+
+#[test]
+fn unsafe_sites_are_counted_per_crate() {
+    let root = std::env::temp_dir().join(format!("xtask-unsafe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let src = root.join("crates/k/src/inner");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(root.join("crates/clean/src")).unwrap();
+    std::fs::create_dir_all(root.join("crates/no-src")).unwrap();
+    std::fs::write(src.join("a.rs"), "unsafe { f() }\nunsafe fn g() {}\n").unwrap();
+    std::fs::write(
+        root.join("crates/k/src/b.rs"),
+        "unsafe impl Send for X {}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("crates/k/src/c.txt"), "unsafe\n").unwrap();
+    std::fs::write(root.join("crates/clean/src/lib.rs"), "fn f() {}\n").unwrap();
+    // Symlinks are not followed: no loop, no double count.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&src, src.join("loop")).unwrap();
+        std::os::unix::fs::symlink(src.join("a.rs"), root.join("crates/k/src/d.rs")).unwrap();
+    }
+    let sites = unsafe_sites_per_crate(&root).unwrap();
+    assert_eq!(sites.into_iter().collect::<Vec<_>>(), [("k".to_owned(), 3)]);
+    // Unreadable input is an error, not a lower count (fails closed).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let bad = root.join("crates/k/src/bad.rs");
+        std::fs::write(&bad, "unsafe {}\n").unwrap();
+        std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root can read anything; only check when the permission bites.
+        if std::fs::read_to_string(&bad).is_err() {
+            assert!(
+                unsafe_sites_per_crate(&root)
+                    .unwrap_err()
+                    .contains("bad.rs")
+            );
+        }
+        std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    assert!(unsafe_sites_per_crate(&root.join("missing")).is_err());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Fuzz-style: an `unsafe` placed after arbitrary literals and comments is
+/// always found, on the right line.
+#[test]
+fn unsafe_after_random_literals_is_always_found() {
+    const PIECES: &[&str] = &[
+        "\"plain\"",
+        "\"esc \\\" q\"",
+        "\"bs \\\\\"",
+        "\"cont \\\n x\"",
+        "\"multi\nline\"",
+        "b\"bytes\"",
+        "c\"cstr\"",
+        "r\"C:\\\"",
+        "r#\"a \" b\"#",
+        "r##\"x \"# y\"##",
+        "br\"raw\\\"",
+        "cr\"C:\\\"",
+        "cr#\"q\"#",
+        "'\"'",
+        "'\\''",
+        "'\\\\'",
+        "b'\"'",
+        "'\\u{1F600}'",
+        "<'a>",
+        "&'static str",
+        "// line comment\n",
+        "/* block */",
+        "/* nested /* c */ \n */",
+        "x",
+        "1",
+        ";",
+        "(",
+        ")",
+        " ",
+        "\n",
+    ];
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = |n: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        usize::try_from(seed % u64::try_from(n).unwrap()).unwrap()
+    };
+    for _ in 0..5000 {
+        let mut src = String::new();
+        for _ in 0..next(12) {
+            src.push_str(PIECES[next(PIECES.len())]);
+            src.push(' ');
+        }
+        let line = src.matches('\n').count() + 1;
+        src.push_str("unsafe { f() }");
+        assert!(unsafe_lines(&src).contains(&line), "{src:?} -> line {line}");
+    }
 }
