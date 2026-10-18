@@ -371,10 +371,11 @@ impl ConfigEntry {
 }
 
 /// Finds the entry for a `krishiv.*` key or a Spark alias: a binary search
-/// of the sorted [`registry::INDEX`], with no initialisation or allocation.
+/// of [`registry::INDEX`] ordered by (length, name): no initialisation or
+/// allocation, and most probes compare lengths only.
 pub fn lookup(key: &str) -> Option<&'static ConfigEntry> {
     registry::INDEX
-        .binary_search_by(|(name, _)| (*name).cmp(key))
+        .binary_search_by(|(name, _)| name.len().cmp(&key.len()).then_with(|| (*name).cmp(key)))
         .ok()
         .map(|i| registry::INDEX[i].1)
 }

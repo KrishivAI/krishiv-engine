@@ -375,14 +375,16 @@ fn unknown_spark_key_logs_exactly_one_warning_per_key() {
 fn the_lookup_index_is_sorted_and_complete() {
     use super::registry::{INDEX, REGISTRY};
     assert!(
-        INDEX.windows(2).all(|w| w[0].0 < w[1].0),
-        "INDEX must be strictly sorted by name"
+        INDEX
+            .windows(2)
+            .all(|w| (w[0].0.len(), w[0].0) < (w[1].0.len(), w[1].0)),
+        "INDEX must be strictly sorted by (length, name)"
     );
     let mut want: Vec<(&str, &str)> = REGISTRY
         .iter()
         .flat_map(|e| std::iter::once((e.key, e.key)).chain(e.spark_alias.map(|a| (a, e.key))))
         .collect();
-    want.sort_unstable();
+    want.sort_unstable_by_key(|(n, _)| (n.len(), *n));
     let got: Vec<(&str, &str)> = INDEX.iter().map(|(n, e)| (*n, e.key)).collect();
     assert_eq!(got, want, "INDEX must hold exactly every key and alias");
 }
