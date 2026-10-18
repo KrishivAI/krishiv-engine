@@ -53,3 +53,115 @@ pub(crate) enum Field {
 /// a value no bigger than a `String` (the value's own message, if it is
 /// one, is counted separately), with room for the tree's nodes.
 pub(crate) const MAP_ENTRY_SIZE: usize = 4 * size_of::<String>();
+
+/// A `oneof` variant: which field of its message is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Variant {
+    /// The field name in the `.proto` file.
+    pub(crate) field: &'static str,
+    /// The field number.
+    pub(crate) number: u32,
+    /// The full name of the field's message type (`spark.connect.Filter`), or
+    /// the scalar type.
+    pub(crate) type_name: &'static str,
+}
+
+impl Variant {
+    /// The message type without its package (`Filter`).
+    pub(crate) fn short_type(&self) -> &'static str {
+        self.type_name
+            .strip_prefix("spark.connect.")
+            .unwrap_or(self.type_name)
+    }
+}
+
+// `variant()` for every oneof enum of the generated types; the translator
+// calls it on the few it reports unsupported fields of.
+#[expect(
+    dead_code,
+    reason = "generated for every oneof; only the ones the translator reports on are called"
+)]
+mod oneofs {
+    include!("v4_2/oneofs.pb.rs");
+}
+
+/// What the generated `Debug` prints in place of a string, a byte string, a
+/// map or an `Any` payload: only how much there is. SQL text, literals,
+/// option values and paths can all carry credentials (ADR 0038).
+pub(crate) struct Redacted {
+    len: usize,
+    unit: &'static str,
+    type_url: Option<String>,
+}
+
+impl Redacted {
+    pub(crate) const fn len(len: usize, unit: &'static str) -> Self {
+        Self {
+            len,
+            unit,
+            type_url: None,
+        }
+    }
+
+    /// An `Any`: its type URL (which names a message type), not its payload.
+    pub(crate) fn any(any: &prost_types::Any) -> Self {
+        Self {
+            len: any.value.len(),
+            unit: "bytes",
+            type_url: Some(any.type_url.clone()),
+        }
+    }
+}
+
+impl std::fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.type_url {
+            Some(url) => write!(f, "<redacted: Any {url:?}, {} {}>", self.len, self.unit),
+            None => write!(f, "<redacted: {} {}>", self.len, self.unit),
+        }
+    }
+}
+
+/// An enum field (an `i32` in the message) printed by its variant name, or
+/// as its number when the version does not define it.
+pub(crate) struct EnumValue<E>(i32, std::marker::PhantomData<E>);
+
+impl<E> EnumValue<E> {
+    pub(crate) const fn of(value: i32) -> Self {
+        Self(value, std::marker::PhantomData)
+    }
+}
+
+impl<E: TryFrom<i32> + std::fmt::Debug> std::fmt::Debug for EnumValue<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match E::try_from(self.0) {
+            Ok(e) => e.fmt(f),
+            Err(_) => write!(f, "{}", self.0),
+        }
+    }
+}
+
+// `Debug` for every message, enum and oneof.
+mod debug {
+    include!("v4_2/debug.pb.rs");
+}
+
+/// Overwrites with zeros what a decoded message holds that can be a
+/// credential: option values, paths (a presigned URL) and `Any` payloads,
+/// in it and in every message it holds. [`crate::wire::Decoded`] does it
+/// before the message is dropped, so the plaintext of a decoded plan does
+/// not outlive the plan (the translation keeps its own copy as typed
+/// `OptionValue`s, ADR 0038).
+pub trait Scrub {
+    /// Overwrites the credentials with zeros, leaving them empty.
+    fn scrub(&mut self);
+}
+
+use krishiv_common::secret::{wipe, wipe_bytes};
+
+mod scrub {
+    include!("v4_2/scrub.pb.rs");
+}
+
+#[cfg(test)]
+mod tests;

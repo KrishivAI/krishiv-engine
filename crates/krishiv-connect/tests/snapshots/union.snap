@@ -1,0 +1,4 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+[KRISHIV_UNSUPPORTED_FEATURE] The feature Spark Connect relation SetOperation (spark.connect.Relation.set_op) is not supported by Krishiv yet. SQLSTATE: 0A000

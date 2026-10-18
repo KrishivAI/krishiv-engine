@@ -1,0 +1,22 @@
+{
+  "root": {
+    "common": {
+      "planId": "0"
+    },
+    "sql": {
+      "namedArguments": {
+        "lo": {
+          "literal": {
+            "integer": 5
+          }
+        },
+        "name": {
+          "literal": {
+            "string": "x"
+          }
+        }
+      },
+      "query": "SELECT * FROM t WHERE a > :lo AND b = :name"
+    }
+  }
+}

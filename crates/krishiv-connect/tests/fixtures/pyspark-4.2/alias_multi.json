@@ -1,0 +1,46 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "project": {
+      "expressions": [
+        {
+          "alias": {
+            "expr": {
+              "unresolvedFunction": {
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "isMetadataColumn": false,
+                      "unparsedIdentifier": "arr"
+                    }
+                  }
+                ],
+                "functionName": "posexplode"
+              }
+            },
+            "name": [
+              "pos",
+              "v"
+            ]
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

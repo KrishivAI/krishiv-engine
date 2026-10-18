@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Filter (a > 1)
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Filter plan_id=1
+  Read plan_id=0

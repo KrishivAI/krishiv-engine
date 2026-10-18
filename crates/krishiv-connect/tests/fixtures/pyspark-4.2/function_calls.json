@@ -1,0 +1,93 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "project": {
+      "expressions": [
+        {
+          "unresolvedFunction": {
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "isMetadataColumn": false,
+                  "unparsedIdentifier": "c"
+                }
+              }
+            ],
+            "functionName": "upper"
+          }
+        },
+        {
+          "unresolvedFunction": {
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "isMetadataColumn": false,
+                  "unparsedIdentifier": "a"
+                }
+              }
+            ],
+            "functionName": "abs"
+          }
+        },
+        {
+          "unresolvedFunction": {
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "isMetadataColumn": false,
+                  "unparsedIdentifier": "a"
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "isMetadataColumn": false,
+                  "unparsedIdentifier": "b"
+                }
+              }
+            ],
+            "functionName": "coalesce"
+          }
+        },
+        {
+          "unresolvedFunction": {
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "isMetadataColumn": false,
+                  "unparsedIdentifier": "c"
+                }
+              },
+              {
+                "literal": {
+                  "integer": 1
+                }
+              },
+              {
+                "literal": {
+                  "integer": 2
+                }
+              }
+            ],
+            "functionName": "substring"
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Read parquet [https://host.example/data.parquet?X-Amz-Signature=*********(redacted)&X-Amz-Expires=60]
+-- plan ids --
+Read plan_id=0

@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Project [true, 1, 1099511627776L, 1.5D, 'text', X'62696E', 12.345, DATE '2020-02-29', TIMESTAMP_MICROS(1582938123456789), TIMESTAMP_MICROS(1582938123456789)]
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Project plan_id=1
+  Read plan_id=0

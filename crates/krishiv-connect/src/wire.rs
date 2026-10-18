@@ -41,7 +41,7 @@ use krishiv_common::error::{
 use prost::Message;
 
 use crate::proto::v4_2::{Expression, Plan, Relation};
-use crate::proto::{Field, Layout, layout};
+use crate::proto::{Field, Layout, Scrub, layout};
 use crate::stack::{INLINE_LEVELS, on_deep_stack};
 
 /// The deepest message nesting accepted, counted below the decoded message:
@@ -76,16 +76,28 @@ const LEAF_SIZE: usize = 2 * size_of::<String>();
 /// What the walk counts for a scalar sent unpacked: the widest element.
 const SCALAR_SIZE: usize = 8;
 
-/// A decoded message. It dereferences to the message; when the message is
-/// deeply nested it is dropped on a thread with a big stack too, because
-/// dropping nested boxes recurses like decoding does.
-#[derive(Debug)]
-pub struct Decoded<M: Message + Default + Send> {
+/// A decoded message. It dereferences to the message. When it is dropped,
+/// its option values, paths and `Any` payloads are overwritten with zeros
+/// first ([`Scrub`], ADR 0038); when the message is deeply nested, that and
+/// the drop run on a thread with a big stack, because dropping nested boxes
+/// recurses like decoding does.
+pub struct Decoded<M: Message + Default + Send + Scrub> {
     message: M,
     deep: bool,
 }
 
-impl<M: Message + Default + Send> Deref for Decoded<M> {
+/// Prints only the size: a decoded plan can hold literals and SQL text that
+/// should not reach a log.
+impl<M: Message + Default + Send + Scrub> std::fmt::Debug for Decoded<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Decoded")
+            .field("encoded_len", &self.message.encoded_len())
+            .field("deep", &self.deep)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<M: Message + Default + Send + Scrub> Deref for Decoded<M> {
     type Target = M;
 
     fn deref(&self) -> &M {
@@ -93,12 +105,19 @@ impl<M: Message + Default + Send> Deref for Decoded<M> {
     }
 }
 
-impl<M: Message + Default + Send> Drop for Decoded<M> {
+impl<M: Message + Default + Send + Scrub> Drop for Decoded<M> {
     fn drop(&mut self) {
+        let mut message = std::mem::take(&mut self.message);
+        let scrub_and_drop = move || {
+            message.scrub();
+            drop(message);
+        };
         if self.deep {
-            let message = std::mem::take(&mut self.message);
-            // If the thread cannot start, the message drops on this stack.
-            let _ = on_deep_stack(move || drop(message));
+            // If the thread cannot start, the message drops on this stack,
+            // unscrubbed.
+            let _ = on_deep_stack(scrub_and_drop);
+        } else {
+            scrub_and_drop();
         }
     }
 }
@@ -131,7 +150,7 @@ pub fn decode_expression(bytes: &[u8]) -> Result<Decoded<Expression>, KrishivErr
     decode(layout::EXPRESSION, bytes)
 }
 
-fn decode<M: Message + Default + Send>(
+fn decode<M: Message + Default + Send + Scrub>(
     root: u16,
     bytes: &[u8],
 ) -> Result<Decoded<M>, KrishivError> {
@@ -199,6 +218,11 @@ impl From<Reject> for KrishivError {
             Reject::Malformed(why) => malformed(why),
         }
     }
+}
+
+/// The error for a plan with more than [`MAX_MESSAGES`] messages.
+pub(crate) fn too_many_messages() -> KrishivError {
+    Reject::TooManyMessages.into()
 }
 
 fn malformed(why: &str) -> KrishivError {

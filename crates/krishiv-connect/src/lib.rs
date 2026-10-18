@@ -6,4 +6,5 @@
 
 pub mod proto;
 mod stack;
+pub mod translate;
 pub mod wire;

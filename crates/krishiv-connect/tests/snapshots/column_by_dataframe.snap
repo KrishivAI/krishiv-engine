@@ -1,0 +1,12 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Project [a@plan0, b@plan1]
++- Join Inner, (id@plan0 == id@plan1)
+   :- Read parquet [/data/l.parquet]
+   +- Read parquet [/data/r.parquet]
+-- plan ids --
+Project plan_id=3
+  Join plan_id=2
+    Read plan_id=0
+    Read plan_id=1

@@ -1,0 +1,10 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+Join LeftAnti, (id@plan0 == id@plan1)
+:- Read parquet [/data/l.parquet]
++- Read parquet [/data/r.parquet]
+-- plan ids --
+Join plan_id=2
+  Read plan_id=0
+  Read plan_id=1

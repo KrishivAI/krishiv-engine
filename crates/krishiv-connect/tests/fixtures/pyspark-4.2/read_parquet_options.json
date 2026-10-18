@@ -1,0 +1,20 @@
+{
+  "root": {
+    "common": {
+      "planId": "0"
+    },
+    "read": {
+      "dataSource": {
+        "format": "parquet",
+        "options": {
+          "mergeSchema": "true",
+          "pathGlobFilter": "*.parquet"
+        },
+        "paths": [
+          "/data/p"
+        ],
+        "schema": ""
+      }
+    }
+  }
+}

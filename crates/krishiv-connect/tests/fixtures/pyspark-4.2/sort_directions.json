@@ -1,0 +1,66 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "sort": {
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      },
+      "isGlobal": true,
+      "order": [
+        {
+          "child": {
+            "unresolvedAttribute": {
+              "isMetadataColumn": false,
+              "unparsedIdentifier": "a"
+            }
+          },
+          "direction": "SORT_DIRECTION_DESCENDING",
+          "nullOrdering": "SORT_NULLS_LAST"
+        },
+        {
+          "child": {
+            "unresolvedAttribute": {
+              "isMetadataColumn": false,
+              "unparsedIdentifier": "b"
+            }
+          },
+          "direction": "SORT_DIRECTION_ASCENDING",
+          "nullOrdering": "SORT_NULLS_LAST"
+        },
+        {
+          "child": {
+            "unresolvedAttribute": {
+              "isMetadataColumn": false,
+              "unparsedIdentifier": "a"
+            }
+          },
+          "direction": "SORT_DIRECTION_DESCENDING",
+          "nullOrdering": "SORT_NULLS_FIRST"
+        },
+        {
+          "child": {
+            "unresolvedAttribute": {
+              "isMetadataColumn": false,
+              "unparsedIdentifier": "b"
+            }
+          },
+          "direction": "SORT_DIRECTION_ASCENDING",
+          "nullOrdering": "SORT_NULLS_FIRST"
+        }
+      ]
+    }
+  }
+}

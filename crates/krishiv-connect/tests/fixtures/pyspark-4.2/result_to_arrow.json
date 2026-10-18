@@ -1,0 +1,41 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "filter": {
+      "condition": {
+        "unresolvedFunction": {
+          "arguments": [
+            {
+              "unresolvedAttribute": {
+                "isMetadataColumn": false,
+                "unparsedIdentifier": "a"
+              }
+            },
+            {
+              "literal": {
+                "integer": 0
+              }
+            }
+          ],
+          "functionName": ">"
+        }
+      },
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

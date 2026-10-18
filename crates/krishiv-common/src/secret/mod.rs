@@ -151,9 +151,23 @@ impl Eq for SecretString {}
 
 impl Drop for SecretString {
     fn drop(&mut self) {
-        let mut bytes = std::mem::take(&mut self.0).into_bytes();
-        zero(&mut bytes);
+        wipe(&mut self.0);
     }
+}
+
+/// Overwrites `value`, over its whole allocation, with zeros (as a
+/// [`SecretString`] is on drop) and leaves it empty: for plaintext that
+/// cannot be typed where it is decoded, such as the option values of a
+/// decoded Spark Connect plan, once their typed copy exists.
+pub fn wipe(value: &mut String) {
+    let mut bytes = std::mem::take(value).into_bytes();
+    zero(&mut bytes);
+}
+
+/// [`wipe`] for bytes.
+pub fn wipe_bytes(value: &mut Vec<u8>) {
+    let mut bytes = std::mem::take(value);
+    zero(&mut bytes);
 }
 
 /// Overwrites the whole allocation of `bytes` (length and spare capacity)

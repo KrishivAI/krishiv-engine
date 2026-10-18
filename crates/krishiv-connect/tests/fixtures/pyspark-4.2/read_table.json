@@ -1,0 +1,12 @@
+{
+  "root": {
+    "common": {
+      "planId": "0"
+    },
+    "read": {
+      "namedTable": {
+        "unparsedIdentifier": "db.events"
+      }
+    }
+  }
+}

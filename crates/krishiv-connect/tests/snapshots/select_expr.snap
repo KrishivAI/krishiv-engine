@@ -1,0 +1,4 @@
+---
+source: crates/krishiv-connect/tests/goldens.rs
+---
+[KRISHIV_UNSUPPORTED_FEATURE] The feature SQL expression strings (spark.connect.Expression.expression_string, sent by selectExpr, where("...") and expr()) is not supported by Krishiv yet. SQLSTATE: 0A000

@@ -1,0 +1,38 @@
+{
+  "root": {
+    "common": {
+      "planId": "2"
+    },
+    "project": {
+      "expressions": [
+        {
+          "unresolvedStar": {
+            "unparsedTarget": "x.*"
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "1"
+        },
+        "subqueryAlias": {
+          "alias": "x",
+          "input": {
+            "common": {
+              "planId": "0"
+            },
+            "read": {
+              "dataSource": {
+                "format": "parquet",
+                "paths": [
+                  "/data/t.parquet"
+                ],
+                "schema": ""
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "filter": {
+      "condition": {
+        "unresolvedFunction": {
+          "arguments": [
+            {
+              "unresolvedFunction": {
+                "arguments": [
+                  {
+                    "unresolvedFunction": {
+                      "arguments": [
+                        {
+                          "unresolvedFunction": {
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "isMetadataColumn": false,
+                                  "unparsedIdentifier": "c"
+                                }
+                              },
+                              {
+                                "literal": {
+                                  "string": "a%"
+                                }
+                              }
+                            ],
+                            "functionName": "like"
+                          }
+                        },
+                        {
+                          "unresolvedFunction": {
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "isMetadataColumn": false,
+                                  "unparsedIdentifier": "c"
+                                }
+                              },
+                              {
+                                "literal": {
+                                  "string": "^a"
+                                }
+                              }
+                            ],
+                            "functionName": "rlike"
+                          }
+                        }
+                      ],
+                      "functionName": "or"
+                    }
+                  },
+                  {
+                    "unresolvedFunction": {
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "isMetadataColumn": false,
+                            "unparsedIdentifier": "c"
+                          }
+                        },
+                        {
+                          "literal": {
+                            "string": "A%"
+                          }
+                        }
+                      ],
+                      "functionName": "ilike"
+                    }
+                  }
+                ],
+                "functionName": "or"
+              }
+            },
+            {
+              "unresolvedFunction": {
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "isMetadataColumn": false,
+                      "unparsedIdentifier": "c"
+                    }
+                  },
+                  {
+                    "literal": {
+                      "string": "x"
+                    }
+                  },
+                  {
+                    "literal": {
+                      "string": "y"
+                    }
+                  }
+                ],
+                "functionName": "in"
+              }
+            }
+          ],
+          "functionName": "or"
+        }
+      },
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

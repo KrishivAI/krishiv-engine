@@ -1,0 +1,48 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "withColumns": {
+      "aliases": [
+        {
+          "expr": {
+            "unresolvedFunction": {
+              "arguments": [
+                {
+                  "unresolvedAttribute": {
+                    "isMetadataColumn": false,
+                    "unparsedIdentifier": "a"
+                  }
+                },
+                {
+                  "literal": {
+                    "integer": 1
+                  }
+                }
+              ],
+              "functionName": "+"
+            }
+          },
+          "name": [
+            "x"
+          ]
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

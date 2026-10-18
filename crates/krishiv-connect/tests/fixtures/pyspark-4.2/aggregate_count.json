@@ -1,0 +1,53 @@
+{
+  "root": {
+    "aggregate": {
+      "aggregateExpressions": [
+        {
+          "alias": {
+            "expr": {
+              "unresolvedFunction": {
+                "arguments": [
+                  {
+                    "literal": {
+                      "integer": 1
+                    }
+                  }
+                ],
+                "functionName": "count"
+              }
+            },
+            "name": [
+              "count"
+            ]
+          }
+        }
+      ],
+      "groupType": "GROUP_TYPE_GROUPBY",
+      "groupingExpressions": [
+        {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "unparsedIdentifier": "a"
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    },
+    "common": {
+      "planId": "1"
+    }
+  }
+}

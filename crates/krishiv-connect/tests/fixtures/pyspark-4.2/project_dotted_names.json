@@ -1,0 +1,43 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "project": {
+      "expressions": [
+        {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "unparsedIdentifier": "a.b.c"
+          }
+        },
+        {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "unparsedIdentifier": "`we.ird`.x"
+          }
+        },
+        {
+          "unresolvedAttribute": {
+            "isMetadataColumn": false,
+            "unparsedIdentifier": "`a``b`"
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

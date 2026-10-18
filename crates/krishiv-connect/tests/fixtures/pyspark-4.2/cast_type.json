@@ -1,0 +1,102 @@
+{
+  "root": {
+    "common": {
+      "planId": "1"
+    },
+    "project": {
+      "expressions": [
+        {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "isMetadataColumn": false,
+                "unparsedIdentifier": "a"
+              }
+            },
+            "typeStr": "int"
+          }
+        },
+        {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "isMetadataColumn": false,
+                "unparsedIdentifier": "a"
+              }
+            },
+            "type": {
+              "long": {}
+            }
+          }
+        },
+        {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "isMetadataColumn": false,
+                "unparsedIdentifier": "a"
+              }
+            },
+            "type": {
+              "decimal": {
+                "precision": 10,
+                "scale": 2
+              }
+            }
+          }
+        },
+        {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "isMetadataColumn": false,
+                "unparsedIdentifier": "a"
+              }
+            },
+            "typeStr": "timestamp_ntz"
+          }
+        },
+        {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "isMetadataColumn": false,
+                "unparsedIdentifier": "a"
+              }
+            },
+            "typeStr": "decimal(5)"
+          }
+        },
+        {
+          "cast": {
+            "expr": {
+              "unresolvedAttribute": {
+                "isMetadataColumn": false,
+                "unparsedIdentifier": "a"
+              }
+            },
+            "type": {
+              "string": {
+                "collation": "UTF8_BINARY"
+              }
+            }
+          }
+        }
+      ],
+      "input": {
+        "common": {
+          "planId": "0"
+        },
+        "read": {
+          "dataSource": {
+            "format": "parquet",
+            "paths": [
+              "/data/t.parquet"
+            ],
+            "schema": ""
+          }
+        }
+      }
+    }
+  }
+}

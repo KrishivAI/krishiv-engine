@@ -22,6 +22,6 @@ prost = { workspace = true, features = ["derive", "std", "no-recursion-limit"] }
 prost-types = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
-insta = { workspace = true, features = ["glob"] }
+insta.workspace = true
 prost-reflect = { workspace = true, features = ["serde"] }
 serde_json = { workspace = true, features = ["std"] }

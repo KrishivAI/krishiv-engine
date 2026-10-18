@@ -20,10 +20,19 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
   an iterative walk before prost recurses, and rejects fields the version does not define. Cargo unifies the feature,
   so it applies to every crate linked with this one: `clippy.toml` disallows prost's decoding methods everywhere else
   (a gRPC codec must call `wire`, not `prost::Message::decode`).
+- Deep messages (more than a few levels) decode, drop and translate on a thread with a big stack (`stack`): prost's
+  recursion costs about 3 KiB of stack per level in a debug build, more than the 2 MiB of a test or async worker. The
+  decoded `Decoded<M>` drops there too. Never hold or drop a deeply nested proto outside it.
 - `translate` turns the decoded proto into the IR: `plan_id` becomes the relation's `Origin` (and `ColumnRef::plan_id`
   for attributes and stars); canonical operator names go through `krishiv_plan::Builtin`; read options and paths go
-  through `OptionValue::from_user` (ADR 0038) and the proto's plaintext map is never logged or put in an error. The
-  proto types derive `Debug`, which prints option values: never format a decoded proto into an error or log.
+  through `OptionValue::from_user` (ADR 0038); nothing formats option values into an error. The generated `Debug` of
+  every message (`debug.pb.rs`) prints the plan's structure, but no string, byte string, map or `Any` payload (SQL
+  text, literals, names, options, paths), only their sizes. `Decoded<M>` wipes option values, paths and `Any` payloads
+  with zeros before it drops the message (`Scrub`, `scrub.pb.rs`); a proto built in Rust and passed to `translate_*`
+  stays the caller's to wipe.
+- SQL expression strings (`selectExpr`, `where("...")`, `expr()`) are unsupported until the analyzer lowers the SQL
+  parser's syntax tree into the IR (P2-T071a); `ToDF`, `OneRowRelation` (a `Project` without input), `Offset`, set
+  operations, pivots, user schemas and nested-type literals wait for IR nodes that do not exist yet.
 - Anything outside the supported subset fails with `KRISHIV_UNSUPPORTED_FEATURE` naming the proto message and field,
   or with Spark's own `CONNECT_INVALID_PLAN.*` class for an invalid plan; never a silent approximation.
 - Krishiv extensions only in `google.protobuf.Any` slots, package `krishiv.v1`.
