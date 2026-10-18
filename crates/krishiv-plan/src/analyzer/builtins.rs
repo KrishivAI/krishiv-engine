@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The production [`FunctionRegistry`]: Spark's built-in functions from
+//! `krishiv-functions`.
+
+use std::sync::Arc;
+
+use krishiv_functions::registry::{self, Lookup, Registry};
+
+use super::{FunctionEntry, FunctionLookup, FunctionRegistry, SparkProfile};
+use crate::FunctionId;
+
+/// The built-in functions (`krishiv_functions::registry::builtins`).
+#[derive(Debug, Clone, Copy)]
+pub struct BuiltinFunctions(&'static Registry);
+
+impl BuiltinFunctions {
+    /// The process-wide built-ins.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(registry::builtins())
+    }
+}
+
+impl Default for BuiltinFunctions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FunctionRegistry for BuiltinFunctions {
+    fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup {
+        // Built-ins are unqualified (`builtin.f` / `system.builtin.f` come
+        // with catalog functions).
+        let [name] = name else {
+            return FunctionLookup::NotFound;
+        };
+        match self.0.lookup(name, profile) {
+            Lookup::Found(def) => FunctionLookup::Found(FunctionEntry {
+                id: FunctionId::Registry {
+                    name: def.name.to_owned(),
+                    id: def.id,
+                },
+                kind: def.kind,
+                arity: def.arity.clone(),
+                inputs: def.inputs.clone(),
+                result: Arc::clone(&def.result),
+                deterministic: def.deterministic,
+            }),
+            Lookup::KnownUnsupported => FunctionLookup::KnownUnsupported,
+            _ => FunctionLookup::NotFound,
+        }
+    }
+
+    fn version(&self) -> u64 {
+        self.0.version()
+    }
+}

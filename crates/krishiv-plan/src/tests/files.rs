@@ -28,6 +28,22 @@ struct Files {
 }
 
 impl FileSchemaResolver for Files {
+    /// Relative paths live under `/data`.
+    fn qualify(&self, path: &OptionValue) -> Result<OptionValue, KrishivError> {
+        let text = path.to_string();
+        if text == "bad" {
+            return Err(UnableToInferSchema {
+                format: "bad".to_owned(),
+            }
+            .into());
+        }
+        Ok(if text.starts_with('/') {
+            path.clone()
+        } else {
+            OptionValue::from_user("path", format!("/data/{text}"))
+        })
+    }
+
     fn source_kind(&self, name: &str) -> SourceKind {
         match name.to_ascii_lowercase().as_str() {
             "parquet" | "json" => SourceKind::File,
@@ -391,4 +407,94 @@ fn reads_by_path_need_no_catalog_and_mark_the_plan() {
     assert_eq!(a, b);
     b.reads_files = false;
     assert_ne!(a, b);
+}
+
+/// Records the paths it is asked about; denies them all unless built to
+/// allow (`.1`).
+#[derive(Default)]
+struct AuditPaths(Mutex<Vec<String>>, bool);
+
+impl AccessPolicy for AuditPaths {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(2)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        s: &'a Securable,
+        _: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let decision = if let Securable::Path(p) = s {
+            self.0.lock().unwrap().push(p.to_string());
+            if self.1 {
+                AccessDecision::Allow
+            } else {
+                AccessDecision::Deny {
+                    reason: String::new(),
+                }
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+#[test]
+fn the_policy_sees_the_path_the_scan_reads() {
+    let files = Arc::new(Files::default());
+    // Allowed: the scan reads the qualified path.
+    let a = run(read("parquet", &["one"]), &ctx(&files)).unwrap();
+    let PlanNode::Scan(scan) = &a.plan.root().node else {
+        panic!("not a scan")
+    };
+    let ReadSource::Files { paths, .. } = &scan.source else {
+        panic!("not files")
+    };
+    assert_eq!(paths[0].to_string(), "/data/one");
+    // Denied: the policy was asked about the qualified path.
+    let audit = Arc::new(AuditPaths::default());
+    let mut denied = ctx(&files);
+    denied.policy = Arc::clone(&audit) as Arc<dyn AccessPolicy>;
+    let r = run(LogicalPlan::table(["parquet", "one"]), &denied);
+    assert_eq!(class(&r), ErrorClass::KrishivInsufficientPermissions);
+    assert_eq!(*audit.0.lock().unwrap(), ["/data/one"]);
+    // A crafted scan of files is asked about like a read.
+    let PlanNode::Scan(resolved) = &a.plan.root().node else {
+        panic!("not a scan")
+    };
+    let r = run(LogicalPlan::new(PlanNode::Scan(resolved.clone())), &denied);
+    assert_eq!(class(&r), ErrorClass::KrishivInsufficientPermissions);
+    audit.0.lock().unwrap().pop();
+    // A path read twice is asked about once: with a policy that allows both
+    // reads, the whole plan is checked, so the count shows the deduplication.
+    let allowing = Arc::new(AuditPaths(Mutex::default(), true));
+    let mut allowed = ctx(&files);
+    allowed.policy = Arc::clone(&allowing) as Arc<dyn AccessPolicy>;
+    let twice = read("parquet", &["one"]).join(
+        read("parquet", &["one"]),
+        crate::JoinKind::Cross,
+        crate::JoinCondition::None,
+    );
+    run(twice, &allowed).unwrap();
+    assert_eq!(*allowing.0.lock().unwrap(), ["/data/one"]);
+    let _ = run(read("parquet", &["one"]), &denied);
+    assert_eq!(audit.0.lock().unwrap().len(), 2);
+    // SQL names that read no files never reach the policy.
+    for format in ["foo", "jdbc"] {
+        let sql = read(format, &["/data/one"])
+            .with_origin(Origin::sql(crate::SourceId(0), crate::Span::new(0, 1)));
+        let r = run(sql, &denied);
+        assert_ne!(
+            class(&r),
+            ErrorClass::KrishivInsufficientPermissions,
+            "{format}"
+        );
+    }
+    assert_eq!(audit.0.lock().unwrap().len(), 2);
+    // A path the resolver cannot place fails before the policy.
+    let r = run(read("parquet", &["bad"]), &denied);
+    assert_eq!(class(&r), ErrorClass::UnableToInferSchema);
+    assert_eq!(audit.0.lock().unwrap().len(), 2);
 }

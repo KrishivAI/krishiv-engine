@@ -41,7 +41,10 @@ pub(super) enum BoundTable {
 /// A read by path and the columns its files have (nullable).
 #[derive(Debug)]
 pub(super) struct BoundFiles {
+    /// The read as the plan states it.
     pub(super) source: ReadSource,
+    /// The read as scanned: format in lower case, paths qualified.
+    pub(super) read: ReadSource,
     pub(super) columns: Vec<TableColumn>,
 }
 
@@ -152,10 +155,9 @@ enum Found<'a> {
         &'a [BoundColumn],
         Origin,
     ),
-    Path(Securable, Origin),
-    /// A read by path, after its paths.
+    /// A read by path.
     Files(&'a ReadSource, Origin),
-    /// An already-resolved scan of files, after its paths.
+    /// An already-resolved scan of files.
     FileScan(&'a ReadSource, &'a [BoundColumn], Origin),
 }
 
@@ -178,10 +180,7 @@ fn visit<'a>(
                         found.push(Found::Table(name, p.origin));
                     }
                 }
-                PlanNode::Read(source @ ReadSource::Files { paths, .. }) => {
-                    paths.iter().for_each(|v| {
-                        found.push(Found::Path(Securable::Path(v.clone()), p.origin));
-                    });
+                PlanNode::Read(source @ ReadSource::Files { .. }) => {
                     found.push(Found::Files(source, p.origin));
                 }
                 // A plan resolved elsewhere is checked like a fresh one.
@@ -189,10 +188,7 @@ fn visit<'a>(
                     ReadSource::Table { name, .. } => {
                         found.push(Found::Scan(name, s.version, &s.output, p.origin));
                     }
-                    source @ ReadSource::Files { paths, .. } => {
-                        paths.iter().for_each(|v| {
-                            found.push(Found::Path(Securable::Path(v.clone()), p.origin));
-                        });
+                    source @ ReadSource::Files { .. } => {
                         found.push(Found::FileScan(source, &s.output, p.origin));
                     }
                 },
@@ -371,21 +367,17 @@ async fn load(
     let mut validated: HashMap<&[String], Vec<Seen<'_>>> = HashMap::new();
     for f in found {
         let (name, version, columns, origin, scan) = match f {
-            Found::Path(securable, origin) => {
-                authorize(ctx, b, &mut checked, securable, origin).await?;
-                continue;
-            }
             Found::Files(source, origin) => {
                 if origin.sql.is_some()
                     && let ReadSource::Files { format, paths, .. } = source
                 {
                     sql_on_files(ctx, b, format, paths, origin)?;
                 }
-                bind_files(ctx, b, source, origin).await?;
+                bind_files(ctx, b, &mut checked, source, origin).await?;
                 continue;
             }
             Found::FileScan(source, columns, origin) => {
-                let i = bind_files(ctx, b, source, origin).await?;
+                let i = bind_files(ctx, b, &mut checked, source, origin).await?;
                 let known = columns.iter().all(|c| {
                     b.files[i]
                         .columns
@@ -529,15 +521,13 @@ async fn path_read(
         }
         SourceKind::Unknown => return Ok(BoundTable::Missing),
     }
-    let path = OptionValue::from_user("path", path);
-    authorize(ctx, b, checked, Securable::Path(path.clone()), origin).await?;
     let source = ReadSource::Files {
         format: format.clone(),
-        paths: vec![path],
+        paths: vec![OptionValue::from_user("path", path)],
         options: BTreeMap::new(),
     };
     Ok(BoundTable::Files(
-        bind_files(ctx, b, &source, origin).await?,
+        bind_files(ctx, b, checked, &source, origin).await?,
     ))
 }
 
@@ -581,11 +571,14 @@ fn sql_on_files(
     }
 }
 
-/// Infers the columns of the read by path `source` once per query (its
-/// paths are authorized already) and returns its [`Bindings::files`] index.
+/// Binds the read by path `source` once per query: qualifies its paths
+/// (the form the read uses), asks the policy about each qualified path
+/// before anything is listed, then infers the columns. Returns the
+/// [`Bindings::files`] index.
 async fn bind_files(
     ctx: &AnalysisContext,
     b: &mut Bindings,
+    checked: &mut Vec<(Securable, usize)>,
     source: &ReadSource,
     origin: Origin,
 ) -> Result<usize, AnalysisError> {
@@ -604,10 +597,19 @@ async fn bind_files(
     else {
         return Err(unsupported("reading files by path", origin));
     };
+    let fail = |e| AnalysisError::new(e, origin);
+    let qualified = paths
+        .iter()
+        .map(|p| files.qualify(p))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(fail)?;
+    for path in &qualified {
+        authorize(ctx, b, checked, Securable::Path(path.clone()), origin).await?;
+    }
     let columns = files
-        .infer(format, paths, options)
+        .infer(format, &qualified, options)
         .await
-        .map_err(|e| AnalysisError::new(e, origin))?
+        .map_err(fail)?
         .into_iter()
         // Spark reads every file column as nullable.
         .map(|c| TableColumn {
@@ -617,6 +619,11 @@ async fn bind_files(
         .collect();
     b.files.push(BoundFiles {
         source: source.clone(),
+        read: ReadSource::Files {
+            format: format.to_lowercase(),
+            paths: qualified,
+            options: options.clone(),
+        },
         columns,
     });
     Ok(b.files.len() - 1)

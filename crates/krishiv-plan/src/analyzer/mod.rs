@@ -63,6 +63,7 @@
 //! catalog functions exist before P3).
 
 mod bind;
+mod builtins;
 mod catalog;
 mod coerce;
 mod exprs;
@@ -81,29 +82,18 @@ use krishiv_common::error::KrishivError;
 use krishiv_common::redact::RedactedSql;
 use twox_hash::XxHash3_128;
 
+pub use builtins::BuiltinFunctions;
 pub use catalog::{
-    AccessDecision, AccessPolicy, AllowAll, ArgType, BoxFuture, Catalog, CatalogResolver,
-    FileSchemaResolver, FunctionEntry, FunctionLookup, FunctionRegistry, InputType, Inputs,
-    MemoryCatalog, PolicyVersion, Principal, PrincipalKind, Privilege, ResultType, RowColumnPolicy,
-    Securable, SourceKind, SqlFrontend, TableColumn, TableIdent, TableKind, TableMeta,
+    AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, CallTypes, Catalog,
+    CatalogResolver, Constant, FileSchemaResolver, FunctionEntry, FunctionLookup, FunctionRegistry,
+    InputBuilder, InputType, Inputs, MemoryCatalog, PolicyVersion, Principal, PrincipalKind,
+    Privilege, ResultType, RowColumnPolicy, Securable, SourceKind, SqlFrontend, TableColumn,
+    TableIdent, TableKind, TableMeta,
 };
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
 
-/// The Spark version whose behaviour a session follows (ADR 0003, 0008).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[non_exhaustive]
-pub enum SparkProfile {
-    /// Spark 3.5.
-    V3_5,
-    /// Spark 4.0.
-    V4_0,
-    /// Spark 4.1.
-    V4_1,
-    /// Spark 4.2 (the default).
-    #[default]
-    V4_2,
-}
+pub use krishiv_functions::signature::SparkProfile;
 
 /// The configuration resolution may read, and nothing else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -208,7 +198,8 @@ pub struct AnalysisContext {
     pub functions: Arc<dyn FunctionRegistry>,
     /// The SQL front end, for SQL text inside plans.
     pub sql: Option<Arc<dyn SqlFrontend>>,
-    /// Files read by path; without it such reads are
+    /// Files read by path, for this query only (see
+    /// [`FileSchemaResolver`]); without it such reads are
     /// `KRISHIV_UNSUPPORTED_FEATURE`.
     pub files: Option<Arc<dyn FileSchemaResolver>>,
 }
@@ -251,13 +242,7 @@ impl ContextFingerprint {
             b.extend_from_slice(&(s.len() as u64).to_le_bytes());
             b.extend_from_slice(s.as_bytes());
         };
-        let profile = match self.profile {
-            SparkProfile::V3_5 => 35,
-            SparkProfile::V4_0 => 40,
-            SparkProfile::V4_1 => 41,
-            SparkProfile::V4_2 => 42,
-        };
-        num(&mut b, profile);
+        num(&mut b, self.profile.code().into());
         let c = self.conf;
         let flags = [
             c.case_sensitive,

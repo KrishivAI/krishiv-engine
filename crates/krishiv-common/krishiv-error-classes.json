@@ -23,6 +23,12 @@
     ],
     "sqlState" : "42501"
   },
+  "KRISHIV_INVALID_ARROW_DATA" : {
+    "message" : [
+      "The Arrow data passed to Krishiv is invalid: <reason>."
+    ],
+    "sqlState" : "22000"
+  },
   "KRISHIV_INVALID_CONFIG_VALUE" : {
     "message" : [
       "The value <value> for config <key> is invalid: <reason>."

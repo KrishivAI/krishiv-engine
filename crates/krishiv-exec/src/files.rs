@@ -68,7 +68,9 @@ pub struct LocatedPath {
     pub display: String,
 }
 
-/// Maps user paths to stores.
+/// Maps user paths to stores. A path's [`LocatedPath::display`] must
+/// locate the same path again: it is the form the access policy is asked
+/// about and the scan reads.
 pub trait PathLocator: Send + Sync + fmt::Debug {
     /// Where `path` lives.
     ///
@@ -173,6 +175,7 @@ impl fmt::Debug for FileListing {
 type ReadKey = (String, Vec<OptionValue>, BTreeMap<String, OptionValue>);
 
 /// The reads by path of one query: lists each once and keeps the listing.
+/// Make one per query; the next query lists the files again.
 pub struct FileReads {
     io: IoContext,
     formats: Vec<Arc<dyn FileFormat>>,
@@ -347,6 +350,18 @@ impl FileReads {
 }
 
 impl FileSchemaResolver for FileReads {
+    /// The located path's qualified form (`file:/abs/path`); a path with
+    /// credentials stays as written (its read is refused).
+    fn qualify(&self, path: &OptionValue) -> std::result::Result<OptionValue, KrishivError> {
+        match path.as_plain() {
+            Some(text) => Ok(OptionValue::from_user(
+                "path",
+                self.paths.locate(text)?.display,
+            )),
+            None => Ok(path.clone()),
+        }
+    }
+
     fn source_kind(&self, name: &str) -> SourceKind {
         let name = name.to_ascii_lowercase();
         if SPARK_FILE_SOURCES.contains(&name.as_str())
@@ -430,6 +445,7 @@ mod tests {
             assert_eq!(at.path.as_ref(), path, "{input}");
             assert_eq!(at.display, display, "{input}");
             assert_eq!(at.store, StoreId::new("file"));
+            assert_eq!(locate(&at.display).unwrap(), at, "{input}");
         }
         for input in ["s3a://bucket/k", "ftp://x/y", "file://other/a"] {
             let e = locate(input).unwrap_err();

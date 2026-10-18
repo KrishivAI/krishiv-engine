@@ -8,10 +8,11 @@ pub(crate) mod eval;
 
 use std::sync::Arc;
 
-use krishiv_plan::analyzer::testing::{TestFunctions, block_on, context};
+use krishiv_plan::analyzer::testing::{block_on, context};
 use krishiv_plan::analyzer::{
-    AnalysisContext, Analyzer as _, ArgType, DefaultAnalyzer, FunctionEntry, FunctionLookup,
-    FunctionRegistry, Inputs, MemoryCatalog, ResolutionConf, ResultType, SparkProfile, TableColumn,
+    AnalysisContext, Analyzer as _, ArgType, Arity, BuiltinFunctions, CallTypes, DefaultAnalyzer,
+    FunctionEntry, FunctionLookup, FunctionRegistry, Inputs, MemoryCatalog, ResolutionConf,
+    ResultType, SparkProfile, TableColumn,
 };
 use krishiv_plan::{FunctionId, FunctionKind, Plan, SourceId};
 use krishiv_types::DataType;
@@ -43,7 +44,10 @@ pub(crate) fn catalog() -> MemoryCatalog {
     cat
 }
 
-/// The test registry, plus `rand` and `first` (nondeterministic).
+/// The built-in functions, plus two nondeterministic test doubles: `rand()`
+/// (Spark's, not implemented yet) and the aggregate
+/// `nondeterministic_first(expr)` (Spark 4.2's `first` is deterministic,
+/// so no built-in aggregate is not).
 #[derive(Debug)]
 struct Functions;
 
@@ -52,24 +56,18 @@ impl FunctionRegistry for Functions {
         let (kind, result): (_, ResultType) = match name {
             [n] if n == "rand" => (
                 FunctionKind::Scalar,
-                Arc::new(|_| {
-                    Ok(ArgType {
-                        data_type: Some(DataType::Double),
-                        nullable: false,
-                    })
-                }),
+                Arc::new(|_: &CallTypes<'_>| Ok(ArgType::new(DataType::Double, false))),
             ),
-            // `first(expr)`: the first value of `expr`, of its type.
-            [n] if n == "first" => (
+            [n] if n == "nondeterministic_first" => (
                 FunctionKind::Aggregate,
-                Arc::new(|args| {
+                Arc::new(|c: &CallTypes<'_>| {
                     Ok(ArgType {
-                        data_type: args.first().and_then(|a| a.data_type.clone()),
+                        data_type: c.data_type(0).cloned(),
                         nullable: true,
                     })
                 }),
             ),
-            _ => return TestFunctions.lookup(name, profile),
+            _ => return BuiltinFunctions::new().lookup(name, profile),
         };
         FunctionLookup::Found(FunctionEntry {
             id: FunctionId::Registry {
@@ -77,8 +75,10 @@ impl FunctionRegistry for Functions {
                 id: 1000,
             },
             kind,
+            arity: Arity::any(),
             inputs: Inputs::Any,
             result,
+            deterministic: false,
         })
     }
 

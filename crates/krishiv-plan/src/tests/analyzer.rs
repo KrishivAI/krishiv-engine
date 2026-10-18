@@ -1064,19 +1064,23 @@ fn no_relation_bypasses_the_policy() {
     for plan in [
         LogicalPlan::table(["t"]),
         LogicalPlan::table(["nosuch"]),
-        files(path()),
         scan(&["t"], &[("a", DataType::Integer)]),
-        LogicalPlan::new(PlanNode::Scan(crate::Scan {
-            source: ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: path(),
-                options: std::collections::BTreeMap::new(),
-            },
-            output: Vec::new(),
-            version: None,
-        })),
     ] {
         assert_eq!(class(&run(plan, &all)), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    }
+    // Without a file resolver nothing is read by path; with one, every path
+    // is asked about first (`tests::files`).
+    let file_scan = LogicalPlan::new(PlanNode::Scan(crate::Scan {
+        source: ReadSource::Files {
+            format: "parquet".to_owned(),
+            paths: path(),
+            options: std::collections::BTreeMap::new(),
+        },
+        output: Vec::new(),
+        version: None,
+    }));
+    for plan in [files(path()), file_scan] {
+        assert_eq!(class(&run(plan, &all)), "KRISHIV_UNSUPPORTED_FEATURE");
     }
     // Scans that name no table, a missing one, or invent columns fail closed.
     let ctx = ctx();
@@ -1089,11 +1093,6 @@ fn no_relation_bypasses_the_policy() {
     assert_eq!(class(&run(invented, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
     let retyped = scan(&["t"], &[("a", DataType::Long)]);
     assert_eq!(class(&run(retyped, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
-    // Repeated paths are asked about once.
-    let (allow, calls) = with_policy(Ok(AccessDecision::Allow));
-    let twice = files(path()).join(files(path()), JoinKind::Cross, JoinCondition::None);
-    let _ = run(twice, &allow);
-    assert_eq!(calls.calls.lock().unwrap().len(), 1);
 }
 
 /// Every scan of a table is checked, not only the first; a spelling of a
@@ -1246,7 +1245,7 @@ impl crate::analyzer::CatalogResolver for Epoch<crate::analyzer::testing::OneCat
     }
 }
 
-impl crate::analyzer::FunctionRegistry for Epoch<crate::analyzer::testing::TestFunctions> {
+impl crate::analyzer::FunctionRegistry for Epoch<crate::analyzer::BuiltinFunctions> {
     fn lookup(&self, name: &[String], profile: SparkProfile) -> crate::analyzer::FunctionLookup {
         self.0.lookup(name, profile)
     }
@@ -1260,7 +1259,8 @@ impl crate::analyzer::FunctionRegistry for Epoch<crate::analyzer::testing::TestF
 /// one changes the digest.
 #[test]
 fn every_context_input_changes_the_key() {
-    use crate::analyzer::testing::{OneCatalog, TestFunctions};
+    use crate::analyzer::BuiltinFunctions;
+    use crate::analyzer::testing::OneCatalog;
     use crate::analyzer::{PrincipalKind, fingerprint};
     let digest = |c: &AnalysisContext, epochs: &[(&str, u64)]| {
         let e = epochs.iter().map(|(n, v)| ((*n).to_owned(), *v)).collect();
@@ -1300,7 +1300,7 @@ fn every_context_input_changes_the_key() {
         c.catalogs = Arc::new(Epoch(inner, 9));
     });
     v("functions", &|c| {
-        c.functions = Arc::new(Epoch(TestFunctions, 9));
+        c.functions = Arc::new(Epoch(BuiltinFunctions::new(), 9));
     });
     v("sql front end", &|c| c.sql = Some(Arc::new(Frontend)));
     v("principal", &|c| {
@@ -1444,7 +1444,9 @@ fn unsupported_inputs_fail_explicitly() {
     let constant =
         LogicalPlan::table(["t"]).aggregate(vec![int(1)], vec![f("count", vec![star()])]);
     assert_eq!(class(&run(constant, &off)), "OK");
-    // A crafted, already resolved scan of files is checked like a read.
+    // A crafted, already resolved scan of files is checked like a read: with
+    // no file resolver, it is not read at all (`tests::files` covers the
+    // policy).
     let (deny, _) = with_policy(Ok(AccessDecision::Deny {
         reason: String::new(),
     }));
@@ -1457,13 +1459,26 @@ fn unsupported_inputs_fail_explicitly() {
         output: Vec::new(),
         version: None,
     }));
-    assert_eq!(class(&run(scan, &deny)), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    assert_eq!(class(&run(scan, &deny)), "KRISHIV_UNSUPPORTED_FEATURE");
     // A function newer than the session's Spark version does not exist.
     let mut old = ctx.clone();
     old.profile = SparkProfile::V3_5;
     let randstr = LogicalPlan::table(["t"]).project(vec![Expr::function("randstr", vec![int(3)])]);
     assert_eq!(class(&run(randstr.clone(), &old)), "UNRESOLVED_ROUTINE");
     assert_eq!(class(&run(randstr, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+    // The argument count is checked first, with Spark's `expectedNum` text.
+    let upper =
+        LogicalPlan::table(["t"]).project(vec![Expr::function("upper", vec![int(1), int(2)])]);
+    let err = run(upper, &ctx).unwrap_err();
+    assert_eq!(
+        err.error.error_class().name(),
+        "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+    );
+    let text = err.error.to_string();
+    assert!(
+        text.contains("The `upper` requires 1 parameters but the actual number is 2"),
+        "{text}"
+    );
 }
 
 /// A column a projection dropped comes back from below it, as Spark's
@@ -1560,16 +1575,29 @@ fn shared_subexpressions_in_rewrites() {
 #[test]
 fn function_entries_print_their_signature() {
     use crate::analyzer::{FunctionLookup, FunctionRegistry as _};
-    let FunctionLookup::Found(entry) = crate::analyzer::testing::TestFunctions
+    let FunctionLookup::Found(entry) = crate::analyzer::BuiltinFunctions::new()
         .lookup(&["substring".to_owned()], SparkProfile::default())
     else {
         panic!("substring is registered");
     };
     let text = format!("{entry:?}");
     assert!(
-        text.contains("inputs: Expects([Exact(String), Exact(Integer)])"),
+        text.contains("inputs: Expects([OneOf([String, Binary]), Exact(Integer), Exact(Integer)])"),
         "{text}"
     );
+    // Built-ins are unqualified; a name only Spark has is known.
+    let b = crate::analyzer::BuiltinFunctions::default();
+    let qualified = ["builtin".to_owned(), "upper".to_owned()];
+    assert!(matches!(
+        b.lookup(&qualified, SparkProfile::V4_2),
+        FunctionLookup::NotFound
+    ));
+    let uuid = ["uuid".to_owned()];
+    assert!(matches!(
+        b.lookup(&uuid, SparkProfile::V4_2),
+        FunctionLookup::KnownUnsupported
+    ));
+    assert_eq!(b.version(), 0);
 }
 
 #[test]
