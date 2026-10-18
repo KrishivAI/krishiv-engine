@@ -5,3 +5,6 @@
 # insta: pending snapshots awaiting review
 *.snap.new
 *.pending-snap
+
+# Python bytecode (generator scripts run in place)
+__pycache__/
