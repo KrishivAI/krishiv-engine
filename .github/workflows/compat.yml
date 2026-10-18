@@ -6,6 +6,11 @@ on:
   # schedule:
   #   - cron: "0 3 * * *"
 
+# One run at a time; a second dispatch queues instead of cancelling.
+concurrency:
+  group: compat-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

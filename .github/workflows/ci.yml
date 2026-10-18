@@ -461,7 +461,9 @@ jobs:
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - name: Install Python ${{ matrix.python }}
-        run: uv python install "${{ matrix.python }}"
+        env:
+          PY: ${{ matrix.python }}
+        run: uv python install "$PY"
       - name: maturin build
         working-directory: python
         env:
