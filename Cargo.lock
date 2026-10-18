@@ -1462,6 +1462,13 @@ version = "0.1.0-dev"
 [[package]]
 name = "krishiv-functions"
 version = "0.1.0-dev"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "arrow-select",
+ "krishiv-common",
+ "krishiv-kernels",
+]
 
 [[package]]
 name = "krishiv-io"

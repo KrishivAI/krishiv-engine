@@ -6,6 +6,14 @@
 ## Purpose
 Spark-compatible function library: scalar, aggregate, window and generator functions with version-keyed semantics.
 
+## Layout
+- `scalar` (P2-T153): the execution binding of registry scalar functions. `bind_scalar(name, &[BindArg], &BindOptions)` →
+  `Arc<dyn ScalarFunction>` (`return_type`, `invoke(&[Arg], rows)`), IR-free (Arrow types only) so the physical planner
+  (krishiv-exec) calls it per batch. Arguments arrive after the analyzer's implicit casts; strings/binary in any Arrow
+  carrier (read as `Utf8`/`Binary`), results in plain carriers. One family module per kernel family (`string`,
+  `datetime`), each with `NAMES` and a `bind` over the argument shape. `BindOptions` holds ANSI, `KernelCtx` (Spark
+  version), session zone and the query start instant. Operators, `CAST` and aggregates are not bound here.
+
 ## Invariants
 - Behaviour keyed by Spark version (3.5, 4.0, 4.1, 4.2), never ad-hoc flags.
 - Each function registered compatible / incompatible (opt-in `krishiv.expr.<name>.allowIncompatible`) / unsupported; no global switch.
