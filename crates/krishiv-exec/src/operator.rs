@@ -74,6 +74,14 @@ pub trait Source: Send + Sync {
         local: &'a mut LocalState,
         global: &'a GlobalState,
     ) -> BoxFuture<'a, Result<Option<Batch>>>;
+    /// Morsels this driver claimed so far. Sources own the morsel
+    /// boundaries, so they count them; the driver reads this once, when it
+    /// ends, into [`OperatorMetrics::morsels`](crate::OperatorMetrics::morsels).
+    /// Default: not counted.
+    fn morsels_claimed(&self, local: &LocalState) -> u64 {
+        let _ = local;
+        0
+    }
 }
 
 /// What [`Operator::execute`] did with its input.

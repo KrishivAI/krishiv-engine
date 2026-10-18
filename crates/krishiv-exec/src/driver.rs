@@ -543,6 +543,7 @@ impl Drop for Driver {
             .chain(std::iter::once(p.sink.0))
             .collect();
         let slots = self.slots.get_mut();
+        slots.metrics[0].morsels += p.source.1.morsels_claimed(&self.source_local);
         for (k, slot) in slots.slots.iter().enumerate() {
             if let Some(m) = slot.ctx.registered() {
                 slots.metrics[k].peak_reserved = m.consumer().peak() as u64;
