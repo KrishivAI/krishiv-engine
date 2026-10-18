@@ -1,0 +1,153 @@
+name: Mutation testing (nightly)
+
+# P2-T107. cargo-mutants on the kernels, the SQL parser, the hash functions
+# and the spill-file serialization, with the score per area tracked in the run
+# summary and in the `mutation-score` artifact (90 days). Nightly only, never
+# per PR; each night one seventh of the mutants per area (the full set once a
+# week, so a job stays inside the six-hour limit); GitHub-hosted runners only (`cargo xtask workflow-lint`). The
+# acceptance numbers are in `tests/mutation-floors.json`.
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      shard:
+        description: Slice 0-6 to run (default - the day of the year modulo 7)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutants
+  cancel-in-progress: false
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTC_WRAPPER: "" # every mutant is a different build; nothing to cache
+
+jobs:
+  mutants:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - area: kernels
+            package: krishiv-kernels
+            files: crates/krishiv-kernels/src/**/*.rs
+            skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
+          - area: hash
+            package: krishiv-kernels
+            files: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**/*.rs
+            skip: ""
+          - area: parser
+            package: krishiv-sql
+            files: crates/krishiv-sql/src/**/*.rs
+            skip: ""
+          - area: serialization
+            package: krishiv-memory
+            files: crates/krishiv-memory/src/spillfile/**/*.rs
+            skip: ""
+    env:
+      AREA: ${{ matrix.area }}
+      SHARDS: 7
+      SHARD_INPUT: ${{ inputs.shard }}
+      PACKAGE: ${{ matrix.package }}
+      FILES: ${{ matrix.files }}
+      SKIP: ${{ matrix.skip }}
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-mutants@27.1.0,cargo-nextest@0.9.148
+      # `--in-place`: the runner is disposable. A mutant that hangs is killed
+      # at three times the baseline test time (at least two minutes).
+      - name: cargo mutants
+        run: |
+          # One slice (every 7th mutant) per night: the full set is swept
+          # once a week, and a slice is a representative sample of it.
+          SHARD="${SHARD_INPUT:-$(( 10#$(date -u +%j) % SHARDS ))}"
+          echo "SHARD=$SHARD" >> "$GITHUB_ENV"
+          args=(--package "$PACKAGE" --test-tool nextest --in-place --no-shuffle
+                --shard "$SHARD/$SHARDS" --timeout-multiplier 3 --minimum-test-timeout 120
+                --output "$RUNNER_TEMP/out" --jobs 2)
+          set -f  # pass the globs to cargo-mutants literally (it expands them recursively)
+          for f in $FILES; do args+=(--file "$f"); done
+          for f in $SKIP; do args+=(--exclude "$f"); done
+          # Exit 2 (missed mutants) and 3 (timeouts) are results, scored below;
+          # anything else (usage error, failing baseline: 1, 4) fails the job.
+          rc=0
+          cargo mutants "${args[@]}" -- --locked || rc=$?
+          case "$rc" in 0|2|3) ;; *) exit "$rc" ;; esac
+      - name: Missed mutants
+        if: always()
+        run: |
+          missed="$RUNNER_TEMP/out/mutants.out/missed.txt"
+          {
+            echo "### Missed mutants: $AREA, slice $SHARD of $SHARDS"
+            echo
+            echo '```text'
+            head -n 200 "$missed" 2>/dev/null || echo "(none recorded)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Collect outcomes
+        if: always()
+        run: |
+          mkdir -p outcomes
+          cp "$RUNNER_TEMP/out/mutants.out/outcomes.json" "outcomes/$AREA.json"
+          cp "$RUNNER_TEMP/out/mutants.out/missed.txt" "outcomes/$AREA.missed.txt" || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mutants-${{ matrix.area }}
+          path: outcomes
+          retention-days: 30
+
+  score:
+    needs: mutants
+    if: always() && github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mutants-*
+          path: shards
+          merge-multiple: true
+      - name: Score per area
+        shell: bash # -eo pipefail: the scorer's status survives the tee
+        run: |
+          args=()
+          for f in shards/*.json; do
+            args+=("$(basename "$f" .json)=$f")
+          done
+          python3 tests/scripts/mutation_score.py --floors tests/mutation-floors.json \
+            --out mutation-score.json "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mutation-score
+          path: mutation-score.json
+          retention-days: 90

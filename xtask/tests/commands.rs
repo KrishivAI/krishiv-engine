@@ -429,7 +429,9 @@ esac
             .args(args)
             .env("CARGO", &fake)
             .env("FAKE_TARGET", &target)
-            .env_remove("GITHUB_STEP_SUMMARY");
+            .env_remove("GITHUB_STEP_SUMMARY")
+            // The measurement must land in FAKE_TARGET, whatever the caller exports.
+            .env_remove("CARGO_TARGET_DIR");
         if fail_build {
             c.env("FAKE_BUILD_FAIL", "1");
         }
