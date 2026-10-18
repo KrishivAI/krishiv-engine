@@ -3,6 +3,7 @@
 //!
 //! * [`hash_fixture`]: Spark `hash()`/`xxhash64()` golden fixtures (ADR 0010).
 //! * [`fn_matrix`]: Spark function-matrix fixtures and the coverage-matrix report (P2-T106a).
+//! * [`kernel_eval`]: runs the arithmetic/comparison/cast matrix cells on `krishiv-kernels` (P2-T021a).
 //! * [`batch_stream`]: batch == bounded-stream invariant harness (ADR 0015/0017).
 //! * [`golden`]: Spark `SQLQueryTestSuite` golden-file runner, exclusion manifest and three-number report.
 //! * [`slt`]: sqllogictest runner stub.
@@ -12,6 +13,7 @@ pub mod batch_stream;
 pub mod fn_matrix;
 pub mod golden;
 pub mod hash_fixture;
+pub mod kernel_eval;
 pub mod slt;
 
 use std::path::PathBuf;

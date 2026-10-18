@@ -58,6 +58,10 @@ fn renders_zero_and_partial_coverage() -> R {
     let (ok, md, err) = report(&["--fixtures", fixtures, "--results", res])?;
     assert!(ok, "{err}");
     assert!(md.contains("engine `k`): 50.0% green"), "{md}");
+
+    let (ok, md, err) = report(&["--fixtures", fixtures, "--kernel-eval"])?;
+    assert!(ok, "{err}");
+    assert!(md.contains("(kernel evaluator)`): 100% green"), "{md}");
     Ok(())
 }
 

@@ -1341,9 +1341,14 @@ version = "0.1.0-dev"
 name = "krishiv-testkit"
 version = "0.1.0-dev"
 dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-schema",
+ "arrow-select",
  "insta",
  "jiff",
  "krishiv-common",
+ "krishiv-kernels",
  "krishiv-plan",
  "krishiv-sql",
  "regex-lite",
