@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Spark's output masking: an in-order port of `SQLQueryTestHelper.replaceNotIncludedMsg`
-//! (Spark 4.2.0). The recorded golden files are already masked, so engine rows go through the
-//! same rules before they are compared.
+//! Spark's output masking: an in-order port of `SQLQueryTestHelper.replaceNotIncludedMsg` and of
+//! `normalizeTestResults` (Spark 4.2.0). The recorded golden files are already masked, so engine
+//! rows go through the same rules before they are compared.
 //!
 //! Spark applies the function to every row string of a result (`hiveResultString(..)
 //! .map(replaceNotIncludedMsg)`) and sorts afterwards, so callers must mask each row first.
@@ -103,6 +103,47 @@ impl Masker {
     }
 }
 
+/// Java's `\s`: the ASCII whitespace `[ \t\n\x0B\f\r]`.
+/// Java's `\\s`: ASCII whitespace only. Spark trims with it, so a trailing
+/// U+00A0 or U+3000 is kept.
+pub(crate) const JAVA_SPACE: [char; 6] = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
+
+/// `replaceAll("\\s+$", "")`: Java's `$` also matches before a final line terminator, so a
+/// trailing `U+0085`, `U+2028` or `U+2029` stays and the whitespace before it goes.
+fn trim_trailing_space(s: &str) -> String {
+    let (head, terminator) = match s.chars().next_back() {
+        Some(c @ ('\u{85}' | '\u{2028}' | '\u{2029}')) => s.split_at(s.len() - c.len_utf8()),
+        _ => (s, ""),
+    };
+    format!("{}{terminator}", head.trim_end_matches(JAVA_SPACE))
+}
+
+/// `SQLQueryTestHelper.normalizeTestResults`: drops every Python traceback (the line
+/// `Traceback (most recent call last):` and the lines after it that start with a space, which
+/// differ between machines) and the trailing whitespace. `SQLQueryTestSuite` applies it to the
+/// recorded and the actual output alike before comparing them.
+#[must_use]
+pub fn normalize_test_results(output: &str) -> String {
+    let mut traceback = false;
+    // Java's `String.split` drops trailing empty fields before the filter runs.
+    let mut lines: Vec<&str> = output.split('\n').collect();
+    while lines.last() == Some(&"") {
+        lines.pop();
+    }
+    let kept: Vec<&str> = lines
+        .into_iter()
+        .filter(|line| {
+            if *line == "Traceback (most recent call last):" {
+                traceback = true;
+            } else if !line.starts_with(' ') {
+                traceback = false;
+            }
+            !traceback
+        })
+        .collect();
+    trim_trailing_space(&kept.join("\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +243,76 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn tracebacks_are_stripped_up_to_the_first_unindented_line() {
+        let raw = "before\nTraceback (most recent call last):\n  File \"udf.py\", line 3, in f\n    raise\n\
+ValueError: bad\nafter\nTraceback (most recent call last):\n  File \"b.py\"\n";
+        assert_eq!(
+            normalize_test_results(raw),
+            "before\nValueError: bad\nafter"
+        );
+        // Only the exact header starts a traceback; indented lines elsewhere are kept.
+        let kept = "Traceback (most recent call last): \n  indented\n\ttab";
+        assert_eq!(normalize_test_results(kept), kept);
+        // An empty line ends a traceback.
+        assert_eq!(
+            normalize_test_results("Traceback (most recent call last):\n  x\n\ny"),
+            "\ny"
+        );
+        assert_eq!(normalize_test_results(""), "");
+        assert_eq!(
+            normalize_test_results("Traceback (most recent call last):"),
+            ""
+        );
+    }
+
+    /// `\s+$` is ASCII-only and its `$` also matches before a final line terminator.
+    #[test]
+    fn trailing_whitespace_follows_java_regex() {
+        assert_eq!(normalize_test_results("a \t\r\n\u{b}\u{c} "), "a");
+        assert_eq!(normalize_test_results("a\u{a0}"), "a\u{a0}");
+        assert_eq!(normalize_test_results("a\u{3000}\n"), "a\u{3000}");
+        assert_eq!(normalize_test_results("a  \u{85}"), "a\u{85}");
+        // Split drops the empty field after the final newline first.
+        assert_eq!(normalize_test_results("a \u{85}\n"), "a\u{85}");
+        assert_eq!(normalize_test_results("a \u{85}\n\n\n"), "a\u{85}");
+        assert_eq!(normalize_test_results("a \u{2028}"), "a\u{2028}");
+        assert_eq!(
+            normalize_test_results("a\u{2029}\u{2029}"),
+            "a\u{2029}\u{2029}"
+        );
+        assert_eq!(normalize_test_results("a \u{85} "), "a \u{85}");
+        assert_eq!(normalize_test_results("\n  \n"), "");
+    }
+
+    #[test]
+    fn normalising_a_recorded_golden_changes_nothing_but_trailing_space() -> R {
+        use crate::golden::parse::Expected;
+        use crate::golden::run::load_statements;
+        use crate::golden::{DEFAULT_TAG, GoldenSet};
+        let set = GoldenSet::scan(&GoldenSet::tag_dir(DEFAULT_TAG))?;
+        for pair in &set.pairs {
+            for s in load_statements(pair)? {
+                if let Expected::Rows(out) = s.expected {
+                    assert_eq!(
+                        normalize_test_results(&out),
+                        out.trim_end_matches(JAVA_SPACE),
+                        "{}",
+                        pair.name
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn trailing_non_ascii_whitespace_is_kept_like_java() {
+        // Java `\s` is ASCII-only: Spark keeps a trailing NBSP / ideographic space.
+        assert_eq!(normalize_test_results("a\u{a0}"), "a\u{a0}");
+        assert_eq!(normalize_test_results("a\u{3000}\n"), "a\u{3000}");
+        assert_eq!(normalize_test_results("a \t\n"), "a");
     }
 }

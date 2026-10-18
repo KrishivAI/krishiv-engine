@@ -14,6 +14,12 @@ extend-exclude = [
     "**/*.sql",
 ]
 
+[default]
+extend-ignore-re = [
+    '"(ECT|IST)"',         # Java's short time-zone IDs (Europe/Paris, Asia/Kolkata)
+    'spark\.implicits\._', # Spark's implicit-conversions import
+]
+
 [default.extend-words]
 # Spark / Arrow / project vocabulary that looks like a typo.
 nd = "nd"                   # "nondeterministic" shorthand in the function-matrix generator

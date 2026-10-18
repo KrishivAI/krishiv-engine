@@ -19,6 +19,10 @@ Apache Spark
   import them; keep this entry in sync).
   Vendored so far: crates/krishiv-common/vendored/spark-error-conditions.json, a verbatim
   copy of Spark 4.2.0's error/error-conditions.json (Apache-2.0, unmodified).
+  tests/fixtures/spark-4.2.0/golden-tables/: the rows of Spark 4.2.0's sql/core test-data
+  files postgresql/{agg,onek,tenk}.data and the TPC-DS table schemas of TPCDSSchema.scala, as
+  read back from a Spark 4.2.0 session by tests/scripts/gen_golden_fixtures.py (the generator
+  records the pinned Spark commit and the SHA-256 of each source file).
 
 --------------------------------------------------------------------------------
 (Further entries: DataFusion, Feldera and others, if code is copied. Currently

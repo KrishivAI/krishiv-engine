@@ -183,7 +183,12 @@ pub fn parse_results(text: &str) -> Result<Vec<Statement>, ParseError> {
         statements.push(Statement {
             query: query.trim().to_owned(),
             schema: schema.trim().to_owned(),
-            expected: classify(schema.trim(), output.trim_end()),
+            // Java `\s` (ASCII) trimming, as Spark: a trailing U+00A0 or
+            // U+3000 is part of the row.
+            expected: classify(
+                schema.trim(),
+                output.trim_end_matches(crate::golden::normalise::JAVA_SPACE),
+            ),
         });
     }
     Ok(statements)

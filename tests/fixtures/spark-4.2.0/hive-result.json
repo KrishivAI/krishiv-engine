@@ -1,0 +1,2507 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_golden_fixtures.py",
+ "image": "apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89",
+ "probes": [
+  {
+   "sql": "select true, false, cast(null as boolean), cast(null as int), null",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["boolean", "boolean", "boolean", "int", "void"],
+   "rows": [
+    [true, false, null, null, null]
+   ],
+   "hive": ["true\tfalse\tNULL\tNULL\tNULL"]
+  },
+  {
+   "sql": "select cast(-128 as tinyint), cast(127 as tinyint), cast(-32768 as smallint), cast(32767 as smallint)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["tinyint", "tinyint", "smallint", "smallint"],
+   "rows": [
+    [-128, 127, -32768, 32767]
+   ],
+   "hive": ["-128\t127\t-32768\t32767"]
+  },
+  {
+   "sql": "select 0, -1, 2147483647, -2147483648, 9223372036854775807L, -9223372036854775807L - 1L",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["int", "int", "int", "int", "bigint", "bigint"],
+   "rows": [
+    [0, -1, 2147483647, -2147483648, 9223372036854775807, -9223372036854775808]
+   ],
+   "hive": ["0\t-1\t2147483647\t-2147483648\t9223372036854775807\t-9223372036854775808"]
+  },
+  {
+   "sql": "select 0.0d, -0.0d, 1.0d, -1.0d, 100.0d, 123456.789d, 0.5d, 0.1d + 0.2d",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["double", "double", "double", "double", "double", "double", "double", "double"],
+   "rows": [
+    ["0.0", "-0.0", "1.0", "-1.0", "100.0", "123456.789", "0.5", "0.30000000000000004"]
+   ],
+   "hive": ["0.0\t-0.0\t1.0\t-1.0\t100.0\t123456.789\t0.5\t0.30000000000000004"]
+  },
+  {
+   "sql": "select double('NaN'), double('Infinity'), double('-Infinity')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["double", "double", "double"],
+   "rows": [
+    ["NaN", "Infinity", "-Infinity"]
+   ],
+   "hive": ["NaN\tInfinity\t-Infinity"]
+  },
+  {
+   "sql": "select 1.0E7d, 9999999.0d, 9999999.999999998d, 12345678.9d, 1.0E21d, 1.0E22d, 1.0E23d",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["double", "double", "double", "double", "double", "double", "double"],
+   "rows": [
+    ["1.0E7", "9999999.0", "9999999.999999998", "1.23456789E7", "1.0E21", "1.0E22", "1.0E23"]
+   ],
+   "hive": ["1.0E7\t9999999.0\t9999999.999999998\t1.23456789E7\t1.0E21\t1.0E22\t1.0E23"]
+  },
+  {
+   "sql": "select 0.001d, 0.00099d, 9.999E-4d, 1.0E-4d, 1.0E-5d, 5.0E-5d, 1.2345E-7d",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["double", "double", "double", "double", "double", "double", "double"],
+   "rows": [
+    ["0.001", "9.9E-4", "9.999E-4", "1.0E-4", "1.0E-5", "5.0E-5", "1.2345E-7"]
+   ],
+   "hive": ["0.001\t9.9E-4\t9.999E-4\t1.0E-4\t1.0E-5\t5.0E-5\t1.2345E-7"]
+  },
+  {
+   "sql": "select 1.7976931348623157E308d, 2.2250738585072014E-308d, 4.9E-324d, 1.0E-323d, 3.0E-323d, 2.0E-323d",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["double", "double", "double", "double", "double", "double"],
+   "rows": [
+    ["1.7976931348623157E308", "2.2250738585072014E-308", "4.9E-324", "9.9E-324", "3.0E-323", "2.0E-323"]
+   ],
+   "hive": ["1.7976931348623157E308\t2.2250738585072014E-308\t4.9E-324\t9.9E-324\t3.0E-323\t2.0E-323"]
+  },
+  {
+   "sql": "select 3.141592653589793d, 2.718281828459045d, 1.0d / 3.0d, 2.0d / 3.0d, 9007199254740993d",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["double", "double", "double", "double", "double"],
+   "rows": [
+    ["3.141592653589793", "2.718281828459045", "0.3333333333333333", "0.6666666666666666", "9.007199254740992E15"]
+   ],
+   "hive": ["3.141592653589793\t2.718281828459045\t0.3333333333333333\t0.6666666666666666\t9.007199254740992E15"]
+  },
+  {
+   "sql": "select 100.0d * 100.0d, 1.0E6d, 123456789012345.0d, 0.30000000000000004d, 4.35d * 100",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["double", "double", "double", "double", "double"],
+   "rows": [
+    ["10000.0", "1000000.0", "1.23456789012345E14", "0.30000000000000004", "434.99999999999994"]
+   ],
+   "hive": ["10000.0\t1000000.0\t1.23456789012345E14\t0.30000000000000004\t434.99999999999994"]
+  },
+  {
+   "sql": "select float(0), float(-0.0d), float(1), float(0.1), float(100), float(1.0E7), float(9999999)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["float", "float", "float", "float", "float", "float", "float"],
+   "rows": [
+    ["0.0", "-0.0", "1.0", "0.1", "100.0", "1.0E7", "9999999.0"]
+   ],
+   "hive": ["0.0\t-0.0\t1.0\t0.1\t100.0\t1.0E7\t9999999.0"]
+  },
+  {
+   "sql": "select float('NaN'), float('Infinity'), float('-Infinity'), float(0.001), float(0.0001), float(0.00099)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["float", "float", "float", "float", "float", "float"],
+   "rows": [
+    ["NaN", "Infinity", "-Infinity", "0.001", "1.0E-4", "9.9E-4"]
+   ],
+   "hive": ["NaN\tInfinity\t-Infinity\t0.001\t1.0E-4\t9.9E-4"]
+  },
+  {
+   "sql": "select float(3.4028235E38d), float(1.17549435E-38d), float(1.4E-45d), float(2.8E-45d), float(1.0E-44d)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["float", "float", "float", "float", "float"],
+   "rows": [
+    ["3.4028235E38", "1.1754944E-38", "1.4E-45", "2.8E-45", "9.8E-45"]
+   ],
+   "hive": ["3.4028235E38\t1.1754944E-38\t1.4E-45\t2.8E-45\t9.8E-45"]
+  },
+  {
+   "sql": "select float(16777216), float(16777217), float(3.3333333), float(1) / float(3), float(123456789)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["float", "float", "float", "double", "float"],
+   "rows": [
+    ["1.6777216E7", "1.6777216E7", "3.3333333", "0.3333333333333333", "1.2345679E8"]
+   ],
+   "hive": ["1.6777216E7\t1.6777216E7\t3.3333333\t0.3333333333333333\t1.2345679E8"]
+  },
+  {
+   "sql": "select float(0.1) + float(0.2), float(1.0E10), float(1.5E-3), float(8388608.5)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["float", "float", "float", "float"],
+   "rows": [
+    ["0.3", "1.0E10", "0.0015", "8388608.0"]
+   ],
+   "hive": ["0.3\t1.0E10\t0.0015\t8388608.0"]
+  },
+  {
+   "sql": "select 1.50bd, 0.000bd, 0bd, -0.5bd, 123.45bd, -123.45bd, 1.0bd, 0.00001bd",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["decimal(3,2)", "decimal(3,3)", "decimal(1,0)", "decimal(1,1)", "decimal(5,2)", "decimal(5,2)", "decimal(2,1)", "decimal(5,5)"],
+   "rows": [
+    ["150", "0", "0", "-5", "12345", "-12345", "10", "1"]
+   ],
+   "hive": ["1.50\t0.000\t0\t-0.5\t123.45\t-123.45\t1.0\t0.00001"]
+  },
+  {
+   "sql": "select cast(0 as decimal(5,2)), cast(-0.5 as decimal(10,3)), cast(1E+3 as decimal(10,0)), 1e30bd",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["decimal(5,2)", "decimal(10,3)", "decimal(10,0)", "decimal(31,0)"],
+   "rows": [
+    ["0", "-500", "1000", "1000000000000000000000000000000"]
+   ],
+   "hive": ["0.00\t-0.500\t1000\t1000000000000000000000000000000"]
+  },
+  {
+   "sql": "select cast(12345678901234567890123456789012345678 as decimal(38,0)), cast(-12345678901234567890123456789012345678 as decimal(38,0))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["decimal(38,0)", "decimal(38,0)"],
+   "rows": [
+    ["12345678901234567890123456789012345678", "-12345678901234567890123456789012345678"]
+   ],
+   "hive": ["12345678901234567890123456789012345678\t-12345678901234567890123456789012345678"]
+  },
+  {
+   "sql": "select cast(0.5 as decimal(38,38)), cast(-0.00000000000000000000000000000000000001 as decimal(38,38))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["decimal(38,38)", "decimal(38,38)"],
+   "rows": [
+    ["50000000000000000000000000000000000000", "-1"]
+   ],
+   "hive": ["0.50000000000000000000000000000000000000\t-0.00000000000000000000000000000000000001"]
+  },
+  {
+   "sql": "select cast(1 as decimal(20,10)), cast(123456789.123456789 as decimal(18,9)), cast(5 as decimal(3,0))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["decimal(20,10)", "decimal(18,9)", "decimal(3,0)"],
+   "rows": [
+    ["10000000000", "123456789123456789", "5"]
+   ],
+   "hive": ["1.0000000000\t123456789.123456789\t5"]
+  },
+  {
+   "sql": "select 'abc', '', ' ', 'a\\tb', 'x\\ny', 'na\\u00efve', '\\u20ac', '\\U0001F600', cast(null as string)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["string", "string", "string", "string", "string", "string", "string", "string", "string"],
+   "rows": [
+    ["abc", "", " ", "a\tb", "x\ny", "naïve", "€", "😀", null]
+   ],
+   "hive": ["abc\t\t \ta\tb\tx\ny\tnaïve\t€\t😀\tNULL"]
+  },
+  {
+   "sql": "select array('a', null, 'b', '', 'say \"hi\"'), array('x,y', '[1]', '{a:b}')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["array<string>", "array<string>"],
+   "rows": [
+    [["a", null, "b", "", "say \"hi\""], ["x,y", "[1]", "{a:b}"]]
+   ],
+   "hive": ["[\"a\",null,\"b\",\"\",\"say \"hi\"\"]\t[\"x,y\",\"[1]\",\"{a:b}\"]"]
+  },
+  {
+   "sql": "select date'1970-01-01', date'2000-02-29', date'0001-01-01', date'9999-12-31', date'1582-10-15'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["date", "date", "date", "date", "date"],
+   "rows": [
+    [0, 11016, -719162, 2932896, -141427]
+   ],
+   "hive": ["1970-01-01\t2000-02-29\t0001-01-01\t9999-12-31\t1582-10-15"]
+  },
+  {
+   "sql": "select date_add(date'9999-12-31', 1), date_add(date'9999-12-31', 366), date_add(date'9999-12-31', 3000000)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["date", "date", "date"],
+   "rows": [
+    [2932897, 2933262, 5932896]
+   ],
+   "hive": ["+10000-01-01\t+10000-12-31\t+18213-09-20"]
+  },
+  {
+   "sql": "select date_sub(date'0001-01-01', 1), date_sub(date'0001-01-01', 366), date_sub(date'0001-01-01', 367)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["date", "date", "date"],
+   "rows": [
+    [-719163, -719528, -719529]
+   ],
+   "hive": ["0000-12-31\t0000-01-01\t-0001-12-31"]
+  },
+  {
+   "sql": "select date_sub(date'0001-01-01', 3000), date_sub(date'1970-01-01', 719528), date_sub(date'0001-01-01', 365 * 4)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["date", "date", "date"],
+   "rows": [
+    [-722162, -719528, -720622]
+   ],
+   "hive": ["-0008-10-15\t0000-01-01\t-0003-01-02"]
+  },
+  {
+   "sql": "select date_sub(date'0001-01-01', 800000), date_add(date'9999-12-31', 36525000)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["date", "date"],
+   "rows": [
+    [-1519162, 39457896]
+   ],
+   "hive": ["-2190-09-05\t+110002-01-19"]
+  },
+  {
+   "sql": "select date'1970-01-01' + 1, date'1970-01-01' - 1, date'1900-03-01' - date'1900-02-28'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["date", "date", "interval day"],
+   "rows": [
+    [1, -1, 86400000000]
+   ],
+   "hive": ["1970-01-02\t1969-12-31\t1 00:00:00.000000000"]
+  },
+  {
+   "sql": "select timestamp_ntz'2021-03-14 02:30:00', timestamp_ntz'2021-03-14 02:30:00.1', timestamp_ntz'2021-03-14 02:30:00.123456', timestamp_ntz'2021-03-14 02:30:00.120000'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "timestamp_ntz", "timestamp_ntz", "timestamp_ntz"],
+   "rows": [
+    [1615689000000000, 1615689000100000, 1615689000123456, 1615689000120000]
+   ],
+   "hive": ["2021-03-14 02:30:00\t2021-03-14 02:30:00.1\t2021-03-14 02:30:00.123456\t2021-03-14 02:30:00.12"]
+  },
+  {
+   "sql": "select timestamp_ntz'0001-01-01 00:00:00', timestamp_ntz'9999-12-31 23:59:59.999999', timestamp_ntz'1969-12-31 23:59:59.999999', timestamp_ntz'1970-01-01 00:00:00.000001'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "timestamp_ntz", "timestamp_ntz", "timestamp_ntz"],
+   "rows": [
+    [-62135596800000000, 253402300799999999, -1, 1]
+   ],
+   "hive": ["0001-01-01 00:00:00\t9999-12-31 23:59:59.999999\t1969-12-31 23:59:59.999999\t1970-01-01 00:00:00.000001"]
+  },
+  {
+   "sql": "select timestamp_ntz'0001-01-01 00:00:00' - interval '1' second, timestamp_ntz'9999-12-31 23:59:59.999999' + interval '1' second",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "timestamp_ntz"],
+   "rows": [
+    [-62135596801000000, 253402300800999999]
+   ],
+   "hive": ["0000-12-31 23:59:59\t+10000-01-01 00:00:00.999999"]
+  },
+  {
+   "sql": "select timestamp_ntz'0001-01-01 00:00:00' - interval '1' year, timestamp_ntz'0001-01-01 00:00:00' - interval '2' year, timestamp_ntz'0001-01-01 00:00:00' - interval '5000' year, timestamp_ntz'0001-01-01 00:00:00' - interval '200000' year",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "timestamp_ntz", "timestamp_ntz", "timestamp_ntz"],
+   "rows": [
+    [-62167219200000000, -62198755200000000, -219920400000000000, -6373525996800000000]
+   ],
+   "hive": ["0000-01-01 00:00:00\t-0001-01-01 00:00:00\t-4999-01-01 00:00:00\t-199999-01-01 00:00:00"]
+  },
+  {
+   "sql": "select timestamp_ntz'9999-12-31 00:00:00' + interval '1' year, timestamp_ntz'9999-01-01 00:00:00' + interval '90000' year, timestamp_ntz'9999-01-01 00:00:00' + interval '200000' year",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "timestamp_ntz", "timestamp_ntz"],
+   "rows": [
+    [253433836800000000, 3093496444800000000, 6564761164800000000]
+   ],
+   "hive": ["+10000-12-31 00:00:00\t+99999-01-01 00:00:00\t+209999-01-01 00:00:00"]
+  },
+  {
+   "sql": "select array(x'0102', x'', x'ff')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["array<binary>"],
+   "rows": [
+    [["0102", "", "ff"]]
+   ],
+   "hive": ["[\u0001\u0002,,�]"]
+  },
+  {
+   "sql": "select named_struct('b', x'cafe')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["struct<b:binary>"],
+   "rows": [
+    [["cafe"]]
+   ],
+   "hive": ["{\"b\":��}"]
+  },
+  {
+   "sql": "select map(1, x'01')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["map<int,binary>"],
+   "rows": [
+    [[[1, "01"]]]
+   ],
+   "hive": ["{1:\u0001}"]
+  },
+  {
+   "sql": "select array(1, 2, 3), array(), array(null, 1), array(array(1, 2), array(), array(null))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["array<int>", "array<void>", "array<int>", "array<array<int>>"],
+   "rows": [
+    [[1, 2, 3], [], [null, 1], [[1, 2], [], [null]]]
+   ],
+   "hive": ["[1,2,3]\t[]\t[null,1]\t[[1,2],[],[null]]"]
+  },
+  {
+   "sql": "select array(1.5bd, null), array(double('NaN'), 1.0E10d, -0.0d), array(float(0.1), float(1.0E8))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["array<decimal(2,1)>", "array<double>", "array<float>"],
+   "rows": [
+    [["15", null], ["NaN", "1.0E10", "-0.0"], ["0.1", "1.0E8"]]
+   ],
+   "hive": ["[1.5,null]\t[NaN,1.0E10,-0.0]\t[0.1,1.0E8]"]
+  },
+  {
+   "sql": "select array(date'2020-01-01', null), array(true, false, null), array(cast(1 as tinyint))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["array<date>", "array<boolean>", "array<tinyint>"],
+   "rows": [
+    [[18262, null], [true, false, null], [1]]
+   ],
+   "hive": ["[2020-01-01,null]\t[true,false,null]\t[1]"]
+  },
+  {
+   "sql": "select map(1, 'a'), map(), map(1, null), map('k', array(1, 2)), map(array(1), 'x')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["map<int,string>", "map<void,void>", "map<int,void>", "map<string,array<int>>", "map<array<int>,string>"],
+   "rows": [
+    [[[1, "a"]], [], [[1, null]], [["k", [1, 2]]], [[[1], "x"]]]
+   ],
+   "hive": ["{1:\"a\"}\t{}\t{1:null}\t{\"k\":[1,2]}\t{[1]:\"x\"}"]
+  },
+  {
+   "sql": "select map(3, 'c', 1, 'a', 2, 'b'), map('b', 1, 'a', 2, 'B', 3), map(10, 1, 9, 2, 100, 3, 1, 4)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["map<int,string>", "map<string,int>", "map<int,int>"],
+   "rows": [
+    [[[3, "c"], [1, "a"], [2, "b"]], [["b", 1], ["a", 2], ["B", 3]], [[10, 1], [9, 2], [100, 3], [1, 4]]]
+   ],
+   "hive": ["{1:\"a\",2:\"b\",3:\"c\"}\t{\"B\":3,\"a\":2,\"b\":1}\t{100:3,10:1,1:4,9:2}"]
+  },
+  {
+   "sql": "select map('a b', 1, 'a', 2, 'a,b', 3, 'a\"', 4, 'A', 5, '\\u00e9', 6, 'z', 7)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["map<string,int>"],
+   "rows": [
+    [[["a b", 1], ["a", 2], ["a,b", 3], ["a\"", 4], ["A", 5], ["é", 6], ["z", 7]]]
+   ],
+   "hive": ["{\"A\":5,\"a b\":1,\"a\"\":4,\"a\":2,\"a,b\":3,\"z\":7,\"é\":6}"]
+  },
+  {
+   "sql": "select map(1.5bd, 2.5bd, 0.5bd, 1.5bd), map(true, 1, false, 2), map(double('NaN'), 1, 1.0d, 2, -1.0d, 3)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["map<decimal(2,1),decimal(2,1)>", "map<boolean,int>", "map<double,int>"],
+   "rows": [
+    [[["15", "25"], ["5", "15"]], [[true, 1], [false, 2]], [["NaN", 1], ["1.0", 2], ["-1.0", 3]]]
+   ],
+   "hive": ["{0.5:1.5,1.5:2.5}\t{false:2,true:1}\t{-1.0:3,1.0:2,NaN:1}"]
+  },
+  {
+   "sql": "select map(date'2020-01-02', 'b', date'2020-01-01', 'a'), map(1, map(2, map(3, 4)))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["map<date,string>", "map<int,map<int,map<int,int>>>"],
+   "rows": [
+    [[[18263, "b"], [18262, "a"]], [[1, [[2, [[3, 4]]]]]]]
+   ],
+   "hive": ["{2020-01-01:\"a\",2020-01-02:\"b\"}\t{1:{2:{3:4}}}"]
+  },
+  {
+   "sql": "select map('x', named_struct('a', 1, 'b', array('y'))), map(named_struct('a', 2), named_struct('a', 1))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["map<string,struct<a:int,b:array<string>>>", "map<struct<a:int>,struct<a:int>>"],
+   "rows": [
+    [[["x", [1, ["y"]]]], [[[2], [1]]]]
+   ],
+   "hive": ["{\"x\":{\"a\":1,\"b\":[\"y\"]}}\t{{\"a\":2}:{\"a\":1}}"]
+  },
+  {
+   "sql": "select named_struct('a', 1, 'b', 'x', 'c', cast(null as int)), named_struct('a', named_struct('b', array(1)))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["struct<a:int,b:string,c:int>", "struct<a:struct<b:array<int>>>"],
+   "rows": [
+    [[1, "x", null], [[[1]]]]
+   ],
+   "hive": ["{\"a\":1,\"b\":\"x\",\"c\":null}\t{\"a\":{\"b\":[1]}}"]
+  },
+  {
+   "sql": "select array(named_struct('a', 1), named_struct('a', cast(null as int))), named_struct('a b', 1, 'c\"d', 2)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["array<struct<a:int>>", "struct<a b:int,c\"d:int>"],
+   "rows": [
+    [[[1], [null]], [1, 2]]
+   ],
+   "hive": ["[{\"a\":1},{\"a\":null}]\t{\"a b\":1,\"c\"d\":2}"]
+  },
+  {
+   "sql": "select named_struct('s', 'he said \"hi\"', 'e', '', 'n', cast(null as string), 'd', 1.5bd, 'f', float(2.5))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["struct<s:string,e:string,n:string,d:decimal(2,1),f:float>"],
+   "rows": [
+    [["he said \"hi\"", "", null, "15", "2.5"]]
+   ],
+   "hive": ["{\"s\":\"he said \"hi\"\",\"e\":\"\",\"n\":null,\"d\":1.5,\"f\":2.5}"]
+  },
+  {
+   "sql": "select named_struct('d', date'2020-01-01', 'm', map(1, 'a'), 'a', array(1), 'z', named_struct())",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["struct<d:date,m:map<int,string>,a:array<int>,z:struct<>>"],
+   "rows": [
+    [[18262, [[1, "a"]], [1], []]]
+   ],
+   "hive": ["{\"d\":2020-01-01,\"m\":{1:\"a\"},\"a\":[1],\"z\":{}}"]
+  },
+  {
+   "sql": "select cast(null as array<int>), cast(null as map<int,int>), cast(null as struct<a:int>)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["array<int>", "map<int,int>", "struct<a:int>"],
+   "rows": [
+    [null, null, null]
+   ],
+   "hive": ["NULL\tNULL\tNULL"]
+  },
+  {
+   "sql": "select array(named_struct('a', map('k', array(1.5bd))))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["array<struct<a:map<string,array<decimal(2,1)>>>>"],
+   "rows": [
+    [[[[["k", ["15"]]]]]]
+   ],
+   "hive": ["[{\"a\":{\"k\":[1.5]}}]"]
+  },
+  {
+   "sql": "select * from values (1, 'a', 1.5d), (2, cast(null as string), cast(null as double)) as t(i, s, d)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["int", "string", "double"],
+   "rows": [
+    [1, "a", "1.5"],
+    [2, null, null]
+   ],
+   "hive": ["1\ta\t1.5", "2\tNULL\tNULL"]
+  },
+  {
+   "sql": "select 1 as a, 'x' as b, array(1) as c, map(1, 2) as d, named_struct('e', 1) as e",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["int", "string", "array<int>", "map<int,int>", "struct<e:int>"],
+   "rows": [
+    [1, "x", [1], [[1, 2]], [1]]
+   ],
+   "hive": ["1\tx\t[1]\t{1:2}\t{\"e\":1}"]
+  },
+  {
+   "sql": "select interval '1-2' year to month, interval '1' year, interval '14' month, interval -'1-2' year to month",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval year to month", "interval year", "interval month", "interval year to month"],
+   "rows": [
+    [14, 12, 14, -14]
+   ],
+   "hive": ["1-2\t1-0\t1-2\t-1-2"]
+  },
+  {
+   "sql": "select interval '0' month, interval '178956970-7' year to month, interval -'178956970-8' year to month",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval month", "interval year to month", "interval year to month"],
+   "rows": [
+    [0, 2147483647, -2147483648]
+   ],
+   "hive": ["0-0\t178956970-7\t-178956970-8"]
+  },
+  {
+   "sql": "select interval '1 2:3:4.005' day to second, interval '1' day, interval '2:3' hour to minute",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval day to second", "interval day", "interval hour to minute"],
+   "rows": [
+    [93784005000, 86400000000, 7380000000]
+   ],
+   "hive": ["1 02:03:04.005000000\t1 00:00:00.000000000\t0 02:03:00.000000000"]
+  },
+  {
+   "sql": "select interval '3' minute, interval '4.5' second, interval -'1 2:3:4.5' day to second, interval '0' second",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval minute", "interval second", "interval day to second", "interval second"],
+   "rows": [
+    [180000000, 4500000, -93784500000, 0]
+   ],
+   "hive": ["0 00:03:00.000000000\t0 00:00:04.500000000\t-1 02:03:04.500000000\t0 00:00:00.000000000"]
+  },
+  {
+   "sql": "select interval '106751991 04:00:54.775807' day to second, interval -'106751991 04:00:54.775808' day to second",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval day to second", "interval day to second"],
+   "rows": [
+    [9223372036854775807, -9223372036854775808]
+   ],
+   "hive": ["106751991 04:00:54.775807000\t-106751991 04:00:54.775808000"]
+  },
+  {
+   "sql": "select interval '0 0:0:0.000001' day to second, interval -'0 0:0:0.000001' day to second",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval day to second", "interval day to second"],
+   "rows": [
+    [1, -1]
+   ],
+   "hive": ["0 00:00:00.000001000\t-0 00:00:00.000001000"]
+  },
+  {
+   "sql": "select interval '100 10:20:30.123456' day to second, interval '1' hour, interval '36' hour",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval day to second", "interval hour", "interval hour"],
+   "rows": [
+    [8677230123456, 3600000000, 129600000000]
+   ],
+   "hive": ["100 10:20:30.123456000\t0 01:00:00.000000000\t1 12:00:00.000000000"]
+  },
+  {
+   "sql": "select cast(null as interval day), array(interval '1' day, null), map(1, interval '1' month)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval day", "array<interval day>", "map<int,interval month>"],
+   "rows": [
+    [null, [86400000000, null], [[1, 1]]]
+   ],
+   "hive": ["NULL\t[1 00:00:00.000000000,null]\t{1:0-1}"]
+  },
+  {
+   "sql": "select named_struct('a', interval '1-2' year to month, 'b', interval '1 2:3:4' day to second)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["struct<a:interval year to month,b:interval day to second>"],
+   "rows": [
+    [[14, 93784000000]]
+   ],
+   "hive": ["{\"a\":1-2,\"b\":1 02:03:04.000000000}"]
+  },
+  {
+   "sql": "select make_interval(), make_interval(1), make_interval(1, 2), make_interval(1, 2, 3, 4, 5, 6, 7.5)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval", "interval", "interval", "interval"],
+   "rows": [
+    [{"months": 0, "days": 0, "microseconds": 0}, {"months": 12, "days": 0, "microseconds": 0}, {"months": 14, "days": 0, "microseconds": 0}, {"months": 14, "days": 25, "microseconds": 18367500000}]
+   ],
+   "hive": ["0 seconds\t1 years\t1 years 2 months\t1 years 2 months 25 days 5 hours 6 minutes 7.5 seconds"]
+  },
+  {
+   "sql": "select make_interval(0, 1, 0, 2, 3, 0, 0), make_interval(0, 0, 0, 0, 0, 0, 0.000001)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval", "interval"],
+   "rows": [
+    [{"months": 1, "days": 2, "microseconds": 10800000000}, {"months": 0, "days": 0, "microseconds": 1}]
+   ],
+   "hive": ["1 months 2 days 3 hours\t0.000001 seconds"]
+  },
+  {
+   "sql": "select make_interval(-1, -2, 0, -3, -4, -5, -6.5), make_interval(0, 13), make_interval(0, -13)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval", "interval", "interval"],
+   "rows": [
+    [{"months": -14, "days": -3, "microseconds": -14706500000}, {"months": 13, "days": 0, "microseconds": 0}, {"months": -13, "days": 0, "microseconds": 0}]
+   ],
+   "hive": ["-1 years -2 months -3 days -4 hours -5 minutes -6.5 seconds\t1 years 1 months\t-1 years -1 months"]
+  },
+  {
+   "sql": "select make_interval(0, 0, 0, 0, 25, 61, 61.000001), make_interval(0, 0, 0, 0, 0, 0, 3600)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval", "interval"],
+   "rows": [
+    [{"months": 0, "days": 0, "microseconds": 93721000001}, {"months": 0, "days": 0, "microseconds": 3600000000}]
+   ],
+   "hive": ["26 hours 2 minutes 1.000001 seconds\t1 hours"]
+  },
+  {
+   "sql": "select make_interval(0, 0, 0, 0, 0, 0, -0.5), make_interval(0, 0, 0, 1, 0, 0, 0), make_interval(100)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["interval", "interval", "interval"],
+   "rows": [
+    [{"months": 0, "days": 0, "microseconds": -500000}, {"months": 0, "days": 1, "microseconds": 0}, {"months": 1200, "days": 0, "microseconds": 0}]
+   ],
+   "hive": ["-0.5 seconds\t1 days\t100 years"]
+  },
+  {
+   "sql": "select array(make_interval(1)), map(1, make_interval(0, 1)), named_struct('a', make_interval(0, 0, 0, 1))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["array<interval>", "map<int,interval>", "struct<a:interval>"],
+   "rows": [
+    [[{"months": 12, "days": 0, "microseconds": 0}], [[1, {"months": 1, "days": 0, "microseconds": 0}]], [{"months": 0, "days": 1, "microseconds": 0}]]
+   ],
+   "hive": ["[1 years]\t{1:1 months}\t{\"a\":1 days}"]
+  },
+  {
+   "sql": "select 1 where false",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["int"],
+   "rows": [],
+   "hive": []
+  },
+  {
+   "sql": "select timestamp_micros(0), timestamp_micros(1609459200000000), timestamp_micros(1500000)",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [0, 1609459200000000, 1500000]
+   ],
+   "hive": ["1970-01-01 00:00:00\t2021-01-01 00:00:00\t1970-01-01 00:00:01.5"]
+  },
+  {
+   "sql": "select timestamp_micros(0), timestamp_micros(1609459200000000), timestamp_micros(1500000)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [0, 1609459200000000, 1500000]
+   ],
+   "hive": ["1969-12-31 16:00:00\t2020-12-31 16:00:00\t1969-12-31 16:00:01.5"]
+  },
+  {
+   "sql": "select timestamp_micros(0), timestamp_micros(1609459200000000), timestamp_micros(1500000)",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [0, 1609459200000000, 1500000]
+   ],
+   "hive": ["1970-01-01 05:30:00\t2021-01-01 05:30:00\t1970-01-01 05:30:01.5"]
+  },
+  {
+   "sql": "select timestamp_micros(0), timestamp_micros(1609459200000000), timestamp_micros(1500000)",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [0, 1609459200000000, 1500000]
+   ],
+   "hive": ["1970-01-01 01:00:00\t2021-01-01 00:00:00\t1970-01-01 01:00:01.5"]
+  },
+  {
+   "sql": "select timestamp_micros(0), timestamp_micros(1609459200000000), timestamp_micros(1500000)",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [0, 1609459200000000, 1500000]
+   ],
+   "hive": ["1970-01-01 05:30:00\t2021-01-01 05:45:00\t1970-01-01 05:30:01.5"]
+  },
+  {
+   "sql": "select timestamp_micros(0), timestamp_micros(1609459200000000), timestamp_micros(1500000)",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [0, 1609459200000000, 1500000]
+   ],
+   "hive": ["1970-01-01 10:00:00\t2021-01-01 11:00:00\t1970-01-01 10:00:01.5"]
+  },
+  {
+   "sql": "select timestamp_micros(0), timestamp_micros(1609459200000000), timestamp_micros(1500000)",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [0, 1609459200000000, 1500000]
+   ],
+   "hive": ["1970-01-01 10:00:00\t2021-01-01 10:00:00\t1970-01-01 10:00:01.5"]
+  },
+  {
+   "sql": "select timestamp_micros(0), timestamp_micros(1609459200000000), timestamp_micros(1500000)",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [0, 1609459200000000, 1500000]
+   ],
+   "hive": ["1970-01-01 01:00:00\t2021-01-01 01:00:00\t1970-01-01 01:00:01.5"]
+  },
+  {
+   "sql": "select timestamp_micros(-1), timestamp_micros(1), timestamp_micros(-1000000), timestamp_micros(100000)",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [-1, 1, -1000000, 100000]
+   ],
+   "hive": ["1969-12-31 23:59:59.999999\t1970-01-01 00:00:00.000001\t1969-12-31 23:59:59\t1970-01-01 00:00:00.1"]
+  },
+  {
+   "sql": "select timestamp_micros(-1), timestamp_micros(1), timestamp_micros(-1000000), timestamp_micros(100000)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [-1, 1, -1000000, 100000]
+   ],
+   "hive": ["1969-12-31 15:59:59.999999\t1969-12-31 16:00:00.000001\t1969-12-31 15:59:59\t1969-12-31 16:00:00.1"]
+  },
+  {
+   "sql": "select timestamp_micros(-1), timestamp_micros(1), timestamp_micros(-1000000), timestamp_micros(100000)",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [-1, 1, -1000000, 100000]
+   ],
+   "hive": ["1970-01-01 05:29:59.999999\t1970-01-01 05:30:00.000001\t1970-01-01 05:29:59\t1970-01-01 05:30:00.1"]
+  },
+  {
+   "sql": "select timestamp_micros(-1), timestamp_micros(1), timestamp_micros(-1000000), timestamp_micros(100000)",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [-1, 1, -1000000, 100000]
+   ],
+   "hive": ["1970-01-01 00:59:59.999999\t1970-01-01 01:00:00.000001\t1970-01-01 00:59:59\t1970-01-01 01:00:00.1"]
+  },
+  {
+   "sql": "select timestamp_micros(-1), timestamp_micros(1), timestamp_micros(-1000000), timestamp_micros(100000)",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [-1, 1, -1000000, 100000]
+   ],
+   "hive": ["1970-01-01 05:29:59.999999\t1970-01-01 05:30:00.000001\t1970-01-01 05:29:59\t1970-01-01 05:30:00.1"]
+  },
+  {
+   "sql": "select timestamp_micros(-1), timestamp_micros(1), timestamp_micros(-1000000), timestamp_micros(100000)",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [-1, 1, -1000000, 100000]
+   ],
+   "hive": ["1970-01-01 09:59:59.999999\t1970-01-01 10:00:00.000001\t1970-01-01 09:59:59\t1970-01-01 10:00:00.1"]
+  },
+  {
+   "sql": "select timestamp_micros(-1), timestamp_micros(1), timestamp_micros(-1000000), timestamp_micros(100000)",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [-1, 1, -1000000, 100000]
+   ],
+   "hive": ["1970-01-01 09:59:59.999999\t1970-01-01 10:00:00.000001\t1970-01-01 09:59:59\t1970-01-01 10:00:00.1"]
+  },
+  {
+   "sql": "select timestamp_micros(-1), timestamp_micros(1), timestamp_micros(-1000000), timestamp_micros(100000)",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [-1, 1, -1000000, 100000]
+   ],
+   "hive": ["1970-01-01 00:59:59.999999\t1970-01-01 01:00:00.000001\t1970-01-01 00:59:59\t1970-01-01 01:00:00.1"]
+  },
+  {
+   "sql": "select timestamp_micros(1615708799000000), timestamp_micros(1615708800000000)",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1615708799000000, 1615708800000000]
+   ],
+   "hive": ["2021-03-14 07:59:59\t2021-03-14 08:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1615708799000000), timestamp_micros(1615708800000000)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1615708799000000, 1615708800000000]
+   ],
+   "hive": ["2021-03-13 23:59:59\t2021-03-14 00:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1615708799000000), timestamp_micros(1615708800000000)",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1615708799000000, 1615708800000000]
+   ],
+   "hive": ["2021-03-14 13:29:59\t2021-03-14 13:30:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1615708799000000), timestamp_micros(1615708800000000)",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1615708799000000, 1615708800000000]
+   ],
+   "hive": ["2021-03-14 07:59:59\t2021-03-14 08:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1615708799000000), timestamp_micros(1615708800000000)",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1615708799000000, 1615708800000000]
+   ],
+   "hive": ["2021-03-14 13:44:59\t2021-03-14 13:45:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1615708799000000), timestamp_micros(1615708800000000)",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1615708799000000, 1615708800000000]
+   ],
+   "hive": ["2021-03-14 18:59:59\t2021-03-14 19:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1615708799000000), timestamp_micros(1615708800000000)",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1615708799000000, 1615708800000000]
+   ],
+   "hive": ["2021-03-14 17:59:59\t2021-03-14 18:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1615708799000000), timestamp_micros(1615708800000000)",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1615708799000000, 1615708800000000]
+   ],
+   "hive": ["2021-03-14 08:59:59\t2021-03-14 09:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1636275599000000), timestamp_micros(1636279200000000)",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1636275599000000, 1636279200000000]
+   ],
+   "hive": ["2021-11-07 08:59:59\t2021-11-07 10:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1636275599000000), timestamp_micros(1636279200000000)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1636275599000000, 1636279200000000]
+   ],
+   "hive": ["2021-11-07 01:59:59\t2021-11-07 02:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1636275599000000), timestamp_micros(1636279200000000)",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1636275599000000, 1636279200000000]
+   ],
+   "hive": ["2021-11-07 14:29:59\t2021-11-07 15:30:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1636275599000000), timestamp_micros(1636279200000000)",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1636275599000000, 1636279200000000]
+   ],
+   "hive": ["2021-11-07 08:59:59\t2021-11-07 10:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1636275599000000), timestamp_micros(1636279200000000)",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1636275599000000, 1636279200000000]
+   ],
+   "hive": ["2021-11-07 14:44:59\t2021-11-07 15:45:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1636275599000000), timestamp_micros(1636279200000000)",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1636275599000000, 1636279200000000]
+   ],
+   "hive": ["2021-11-07 19:59:59\t2021-11-07 21:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1636275599000000), timestamp_micros(1636279200000000)",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1636275599000000, 1636279200000000]
+   ],
+   "hive": ["2021-11-07 18:59:59\t2021-11-07 20:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1636275599000000), timestamp_micros(1636279200000000)",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1636275599000000, 1636279200000000]
+   ],
+   "hive": ["2021-11-07 09:59:59\t2021-11-07 11:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(-62135596800000000), timestamp_micros(-62135596800000001)",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135596800000000, -62135596800000001]
+   ],
+   "hive": ["0001-01-01 00:00:00\t0000-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp_micros(-62135596800000000), timestamp_micros(-62135596800000001)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135596800000000, -62135596800000001]
+   ],
+   "hive": ["0000-12-31 16:07:02\t0000-12-31 16:07:01.999999"]
+  },
+  {
+   "sql": "select timestamp_micros(-62135596800000000), timestamp_micros(-62135596800000001)",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135596800000000, -62135596800000001]
+   ],
+   "hive": ["0001-01-01 05:53:28\t0001-01-01 05:53:27.999999"]
+  },
+  {
+   "sql": "select timestamp_micros(-62135596800000000), timestamp_micros(-62135596800000001)",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135596800000000, -62135596800000001]
+   ],
+   "hive": ["0000-12-31 23:58:45\t0000-12-31 23:58:44.999999"]
+  },
+  {
+   "sql": "select timestamp_micros(-62135596800000000), timestamp_micros(-62135596800000001)",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135596800000000, -62135596800000001]
+   ],
+   "hive": ["0001-01-01 05:41:16\t0001-01-01 05:41:15.999999"]
+  },
+  {
+   "sql": "select timestamp_micros(-62135596800000000), timestamp_micros(-62135596800000001)",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135596800000000, -62135596800000001]
+   ],
+   "hive": ["0001-01-01 10:36:20\t0001-01-01 10:36:19.999999"]
+  },
+  {
+   "sql": "select timestamp_micros(-62135596800000000), timestamp_micros(-62135596800000001)",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135596800000000, -62135596800000001]
+   ],
+   "hive": ["0001-01-01 10:00:00\t0001-01-01 09:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp_micros(-62135596800000000), timestamp_micros(-62135596800000001)",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135596800000000, -62135596800000001]
+   ],
+   "hive": ["0001-01-01 01:00:00\t0001-01-01 00:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp_micros(-3000000000000000), timestamp_micros(-2717640000000000)",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-3000000000000000, -2717640000000000]
+   ],
+   "hive": ["1874-12-07 18:40:00\t1883-11-18 20:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(-3000000000000000), timestamp_micros(-2717640000000000)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-3000000000000000, -2717640000000000]
+   ],
+   "hive": ["1874-12-07 10:47:02\t1883-11-18 12:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(-3000000000000000), timestamp_micros(-2717640000000000)",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-3000000000000000, -2717640000000000]
+   ],
+   "hive": ["1874-12-08 00:01:10\t1883-11-19 01:21:10"]
+  },
+  {
+   "sql": "select timestamp_micros(-3000000000000000), timestamp_micros(-2717640000000000)",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-3000000000000000, -2717640000000000]
+   ],
+   "hive": ["1874-12-07 18:40:00\t1883-11-18 20:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(-3000000000000000), timestamp_micros(-2717640000000000)",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-3000000000000000, -2717640000000000]
+   ],
+   "hive": ["1874-12-08 00:21:16\t1883-11-19 01:41:16"]
+  },
+  {
+   "sql": "select timestamp_micros(-3000000000000000), timestamp_micros(-2717640000000000)",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-3000000000000000, -2717640000000000]
+   ],
+   "hive": ["1874-12-08 05:16:20\t1883-11-19 06:36:20"]
+  },
+  {
+   "sql": "select timestamp_micros(-3000000000000000), timestamp_micros(-2717640000000000)",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-3000000000000000, -2717640000000000]
+   ],
+   "hive": ["1874-12-08 04:40:00\t1883-11-19 06:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(-3000000000000000), timestamp_micros(-2717640000000000)",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-3000000000000000, -2717640000000000]
+   ],
+   "hive": ["1874-12-07 19:40:00\t1883-11-18 21:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(253402300799999999), timestamp_micros(253402300800000000)",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [253402300799999999, 253402300800000000]
+   ],
+   "hive": ["9999-12-31 23:59:59.999999\t+10000-01-01 00:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(253402300799999999), timestamp_micros(253402300800000000)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [253402300799999999, 253402300800000000]
+   ],
+   "hive": ["9999-12-31 15:59:59.999999\t9999-12-31 16:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(253402300799999999), timestamp_micros(253402300800000000)",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [253402300799999999, 253402300800000000]
+   ],
+   "hive": ["+10000-01-01 05:29:59.999999\t+10000-01-01 05:30:00"]
+  },
+  {
+   "sql": "select timestamp_micros(253402300799999999), timestamp_micros(253402300800000000)",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [253402300799999999, 253402300800000000]
+   ],
+   "hive": ["9999-12-31 23:59:59.999999\t+10000-01-01 00:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(253402300799999999), timestamp_micros(253402300800000000)",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [253402300799999999, 253402300800000000]
+   ],
+   "hive": ["+10000-01-01 05:44:59.999999\t+10000-01-01 05:45:00"]
+  },
+  {
+   "sql": "select timestamp_micros(253402300799999999), timestamp_micros(253402300800000000)",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [253402300799999999, 253402300800000000]
+   ],
+   "hive": ["+10000-01-01 10:59:59.999999\t+10000-01-01 11:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(253402300799999999), timestamp_micros(253402300800000000)",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [253402300799999999, 253402300800000000]
+   ],
+   "hive": ["+10000-01-01 09:59:59.999999\t+10000-01-01 10:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(253402300799999999), timestamp_micros(253402300800000000)",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [253402300799999999, 253402300800000000]
+   ],
+   "hive": ["+10000-01-01 00:59:59.999999\t+10000-01-01 01:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(4102444800123456), timestamp_micros(2000000000000000000)",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [4102444800123456, 2000000000000000000]
+   ],
+   "hive": ["2100-01-01 00:00:00.123456\t+65347-06-24 03:33:20"]
+  },
+  {
+   "sql": "select timestamp_micros(4102444800123456), timestamp_micros(2000000000000000000)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [4102444800123456, 2000000000000000000]
+   ],
+   "hive": ["2099-12-31 16:00:00.123456\t+65347-06-23 20:33:20"]
+  },
+  {
+   "sql": "select timestamp_micros(4102444800123456), timestamp_micros(2000000000000000000)",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [4102444800123456, 2000000000000000000]
+   ],
+   "hive": ["2100-01-01 05:30:00.123456\t+65347-06-24 09:03:20"]
+  },
+  {
+   "sql": "select timestamp_micros(4102444800123456), timestamp_micros(2000000000000000000)",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [4102444800123456, 2000000000000000000]
+   ],
+   "hive": ["2100-01-01 00:00:00.123456\t+65347-06-24 04:33:20"]
+  },
+  {
+   "sql": "select timestamp_micros(4102444800123456), timestamp_micros(2000000000000000000)",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [4102444800123456, 2000000000000000000]
+   ],
+   "hive": ["2100-01-01 05:45:00.123456\t+65347-06-24 09:18:20"]
+  },
+  {
+   "sql": "select timestamp_micros(4102444800123456), timestamp_micros(2000000000000000000)",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [4102444800123456, 2000000000000000000]
+   ],
+   "hive": ["2100-01-01 11:00:00.123456\t+65347-06-24 14:03:20"]
+  },
+  {
+   "sql": "select timestamp_micros(4102444800123456), timestamp_micros(2000000000000000000)",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [4102444800123456, 2000000000000000000]
+   ],
+   "hive": ["2100-01-01 10:00:00.123456\t+65347-06-24 13:33:20"]
+  },
+  {
+   "sql": "select timestamp_micros(4102444800123456), timestamp_micros(2000000000000000000)",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [4102444800123456, 2000000000000000000]
+   ],
+   "hive": ["2100-01-01 01:00:00.123456\t+65347-06-24 04:33:20"]
+  },
+  {
+   "sql": "select timestamp_micros(-9000000000000000000)",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp"],
+   "rows": [
+    [-9000000000000000000]
+   ],
+   "hive": ["-283229-05-10 08:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(-9000000000000000000)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp"],
+   "rows": [
+    [-9000000000000000000]
+   ],
+   "hive": ["-283229-05-10 00:07:02"]
+  },
+  {
+   "sql": "select timestamp_micros(-9000000000000000000)",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp"],
+   "rows": [
+    [-9000000000000000000]
+   ],
+   "hive": ["-283229-05-10 13:53:28"]
+  },
+  {
+   "sql": "select timestamp_micros(-9000000000000000000)",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp"],
+   "rows": [
+    [-9000000000000000000]
+   ],
+   "hive": ["-283229-05-10 07:58:45"]
+  },
+  {
+   "sql": "select timestamp_micros(-9000000000000000000)",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp"],
+   "rows": [
+    [-9000000000000000000]
+   ],
+   "hive": ["-283229-05-10 13:41:16"]
+  },
+  {
+   "sql": "select timestamp_micros(-9000000000000000000)",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp"],
+   "rows": [
+    [-9000000000000000000]
+   ],
+   "hive": ["-283229-05-10 18:36:20"]
+  },
+  {
+   "sql": "select timestamp_micros(-9000000000000000000)",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp"],
+   "rows": [
+    [-9000000000000000000]
+   ],
+   "hive": ["-283229-05-10 18:00:00"]
+  },
+  {
+   "sql": "select timestamp_micros(-9000000000000000000)",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp"],
+   "rows": [
+    [-9000000000000000000]
+   ],
+   "hive": ["-283229-05-10 09:00:00"]
+  },
+  {
+   "sql": "select timestamp'2021-03-14 02:30:00', timestamp'2021-11-07 01:30:00', timestamp'2021-07-04 12:00:00.5'",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [1615689000000000, 1636248600000000, 1625400000500000]
+   ],
+   "hive": ["2021-03-14 02:30:00\t2021-11-07 01:30:00\t2021-07-04 12:00:00.5"]
+  },
+  {
+   "sql": "select timestamp'2021-03-14 02:30:00', timestamp'2021-11-07 01:30:00', timestamp'2021-07-04 12:00:00.5'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [1615717800000000, 1636273800000000, 1625425200500000]
+   ],
+   "hive": ["2021-03-14 03:30:00\t2021-11-07 01:30:00\t2021-07-04 12:00:00.5"]
+  },
+  {
+   "sql": "select timestamp'2021-03-14 02:30:00', timestamp'2021-11-07 01:30:00', timestamp'2021-07-04 12:00:00.5'",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [1615669200000000, 1636228800000000, 1625380200500000]
+   ],
+   "hive": ["2021-03-14 02:30:00\t2021-11-07 01:30:00\t2021-07-04 12:00:00.5"]
+  },
+  {
+   "sql": "select timestamp'2021-03-14 02:30:00', timestamp'2021-11-07 01:30:00', timestamp'2021-07-04 12:00:00.5'",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [1615689000000000, 1636248600000000, 1625396400500000]
+   ],
+   "hive": ["2021-03-14 02:30:00\t2021-11-07 01:30:00\t2021-07-04 12:00:00.5"]
+  },
+  {
+   "sql": "select timestamp'2021-03-14 02:30:00', timestamp'2021-11-07 01:30:00', timestamp'2021-07-04 12:00:00.5'",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [1615668300000000, 1636227900000000, 1625379300500000]
+   ],
+   "hive": ["2021-03-14 02:30:00\t2021-11-07 01:30:00\t2021-07-04 12:00:00.5"]
+  },
+  {
+   "sql": "select timestamp'2021-03-14 02:30:00', timestamp'2021-11-07 01:30:00', timestamp'2021-07-04 12:00:00.5'",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [1615649400000000, 1636209000000000, 1625362200500000]
+   ],
+   "hive": ["2021-03-14 02:30:00\t2021-11-07 01:30:00\t2021-07-04 12:00:00.5"]
+  },
+  {
+   "sql": "select timestamp'2021-03-14 02:30:00', timestamp'2021-11-07 01:30:00', timestamp'2021-07-04 12:00:00.5'",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [1615653000000000, 1636212600000000, 1625364000500000]
+   ],
+   "hive": ["2021-03-14 02:30:00\t2021-11-07 01:30:00\t2021-07-04 12:00:00.5"]
+  },
+  {
+   "sql": "select timestamp'2021-03-14 02:30:00', timestamp'2021-11-07 01:30:00', timestamp'2021-07-04 12:00:00.5'",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp", "timestamp"],
+   "rows": [
+    [1615685400000000, 1636245000000000, 1625396400500000]
+   ],
+   "hive": ["2021-03-14 02:30:00\t2021-11-07 01:30:00\t2021-07-04 12:00:00.5"]
+  },
+  {
+   "sql": "select timestamp'0001-01-01 00:00:00', timestamp'9999-12-31 23:59:59.999999'",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135596800000000, 253402300799999999]
+   ],
+   "hive": ["0001-01-01 00:00:00\t9999-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'0001-01-01 00:00:00', timestamp'9999-12-31 23:59:59.999999'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135568422000000, 253402329599999999]
+   ],
+   "hive": ["0001-01-01 00:00:00\t9999-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'0001-01-01 00:00:00', timestamp'9999-12-31 23:59:59.999999'",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135618008000000, 253402280999999999]
+   ],
+   "hive": ["0001-01-01 00:00:00\t9999-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'0001-01-01 00:00:00', timestamp'9999-12-31 23:59:59.999999'",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135596725000000, 253402300799999999]
+   ],
+   "hive": ["0001-01-01 00:00:00\t9999-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'0001-01-01 00:00:00', timestamp'9999-12-31 23:59:59.999999'",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135617276000000, 253402280099999999]
+   ],
+   "hive": ["0001-01-01 00:00:00\t9999-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'0001-01-01 00:00:00', timestamp'9999-12-31 23:59:59.999999'",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135634980000000, 253402261199999999]
+   ],
+   "hive": ["0001-01-01 00:00:00\t9999-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'0001-01-01 00:00:00', timestamp'9999-12-31 23:59:59.999999'",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135632800000000, 253402264799999999]
+   ],
+   "hive": ["0001-01-01 00:00:00\t9999-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'0001-01-01 00:00:00', timestamp'9999-12-31 23:59:59.999999'",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [-62135600400000000, 253402297199999999]
+   ],
+   "hive": ["0001-01-01 00:00:00\t9999-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'2021-01-01 00:00:00' + interval '1' second, timestamp'1969-12-31 23:59:59.999999'",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459201000000, -1]
+   ],
+   "hive": ["2021-01-01 00:00:01\t1969-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'2021-01-01 00:00:00' + interval '1' second, timestamp'1969-12-31 23:59:59.999999'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609488001000000, 28799999999]
+   ],
+   "hive": ["2021-01-01 00:00:01\t1969-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'2021-01-01 00:00:00' + interval '1' second, timestamp'1969-12-31 23:59:59.999999'",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609439401000000, -19800000001]
+   ],
+   "hive": ["2021-01-01 00:00:01\t1969-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'2021-01-01 00:00:00' + interval '1' second, timestamp'1969-12-31 23:59:59.999999'",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459201000000, -3600000001]
+   ],
+   "hive": ["2021-01-01 00:00:01\t1969-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'2021-01-01 00:00:00' + interval '1' second, timestamp'1969-12-31 23:59:59.999999'",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609438501000000, -19800000001]
+   ],
+   "hive": ["2021-01-01 00:00:01\t1969-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'2021-01-01 00:00:00' + interval '1' second, timestamp'1969-12-31 23:59:59.999999'",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609419601000000, -36000000001]
+   ],
+   "hive": ["2021-01-01 00:00:01\t1969-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'2021-01-01 00:00:00' + interval '1' second, timestamp'1969-12-31 23:59:59.999999'",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609423201000000, -36000000001]
+   ],
+   "hive": ["2021-01-01 00:00:01\t1969-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select timestamp'2021-01-01 00:00:00' + interval '1' second, timestamp'1969-12-31 23:59:59.999999'",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609455601000000, -3600000001]
+   ],
+   "hive": ["2021-01-01 00:00:01\t1969-12-31 23:59:59.999999"]
+  },
+  {
+   "sql": "select array(timestamp_micros(0)), map(1, timestamp_micros(1500000))",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["array<timestamp>", "map<int,timestamp>"],
+   "rows": [
+    [[0], [[1, 1500000]]]
+   ],
+   "hive": ["[1970-01-01 00:00:00]\t{1:1970-01-01 00:00:01.5}"]
+  },
+  {
+   "sql": "select array(timestamp_micros(0)), map(1, timestamp_micros(1500000))",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["array<timestamp>", "map<int,timestamp>"],
+   "rows": [
+    [[0], [[1, 1500000]]]
+   ],
+   "hive": ["[1969-12-31 16:00:00]\t{1:1969-12-31 16:00:01.5}"]
+  },
+  {
+   "sql": "select array(timestamp_micros(0)), map(1, timestamp_micros(1500000))",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["array<timestamp>", "map<int,timestamp>"],
+   "rows": [
+    [[0], [[1, 1500000]]]
+   ],
+   "hive": ["[1970-01-01 05:30:00]\t{1:1970-01-01 05:30:01.5}"]
+  },
+  {
+   "sql": "select array(timestamp_micros(0)), map(1, timestamp_micros(1500000))",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["array<timestamp>", "map<int,timestamp>"],
+   "rows": [
+    [[0], [[1, 1500000]]]
+   ],
+   "hive": ["[1970-01-01 01:00:00]\t{1:1970-01-01 01:00:01.5}"]
+  },
+  {
+   "sql": "select array(timestamp_micros(0)), map(1, timestamp_micros(1500000))",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["array<timestamp>", "map<int,timestamp>"],
+   "rows": [
+    [[0], [[1, 1500000]]]
+   ],
+   "hive": ["[1970-01-01 05:30:00]\t{1:1970-01-01 05:30:01.5}"]
+  },
+  {
+   "sql": "select array(timestamp_micros(0)), map(1, timestamp_micros(1500000))",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["array<timestamp>", "map<int,timestamp>"],
+   "rows": [
+    [[0], [[1, 1500000]]]
+   ],
+   "hive": ["[1970-01-01 10:00:00]\t{1:1970-01-01 10:00:01.5}"]
+  },
+  {
+   "sql": "select array(timestamp_micros(0)), map(1, timestamp_micros(1500000))",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["array<timestamp>", "map<int,timestamp>"],
+   "rows": [
+    [[0], [[1, 1500000]]]
+   ],
+   "hive": ["[1970-01-01 10:00:00]\t{1:1970-01-01 10:00:01.5}"]
+  },
+  {
+   "sql": "select array(timestamp_micros(0)), map(1, timestamp_micros(1500000))",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["array<timestamp>", "map<int,timestamp>"],
+   "rows": [
+    [[0], [[1, 1500000]]]
+   ],
+   "hive": ["[1970-01-01 01:00:00]\t{1:1970-01-01 01:00:01.5}"]
+  },
+  {
+   "sql": "select named_struct('t', timestamp_micros(1609459200000001), 'd', date'2021-01-01')",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["struct<t:timestamp,d:date>"],
+   "rows": [
+    [[1609459200000001, 18628]]
+   ],
+   "hive": ["{\"t\":2021-01-01 00:00:00.000001,\"d\":2021-01-01}"]
+  },
+  {
+   "sql": "select named_struct('t', timestamp_micros(1609459200000001), 'd', date'2021-01-01')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["struct<t:timestamp,d:date>"],
+   "rows": [
+    [[1609459200000001, 18628]]
+   ],
+   "hive": ["{\"t\":2020-12-31 16:00:00.000001,\"d\":2021-01-01}"]
+  },
+  {
+   "sql": "select named_struct('t', timestamp_micros(1609459200000001), 'd', date'2021-01-01')",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["struct<t:timestamp,d:date>"],
+   "rows": [
+    [[1609459200000001, 18628]]
+   ],
+   "hive": ["{\"t\":2021-01-01 05:30:00.000001,\"d\":2021-01-01}"]
+  },
+  {
+   "sql": "select named_struct('t', timestamp_micros(1609459200000001), 'd', date'2021-01-01')",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["struct<t:timestamp,d:date>"],
+   "rows": [
+    [[1609459200000001, 18628]]
+   ],
+   "hive": ["{\"t\":2021-01-01 00:00:00.000001,\"d\":2021-01-01}"]
+  },
+  {
+   "sql": "select named_struct('t', timestamp_micros(1609459200000001), 'd', date'2021-01-01')",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["struct<t:timestamp,d:date>"],
+   "rows": [
+    [[1609459200000001, 18628]]
+   ],
+   "hive": ["{\"t\":2021-01-01 05:45:00.000001,\"d\":2021-01-01}"]
+  },
+  {
+   "sql": "select named_struct('t', timestamp_micros(1609459200000001), 'd', date'2021-01-01')",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["struct<t:timestamp,d:date>"],
+   "rows": [
+    [[1609459200000001, 18628]]
+   ],
+   "hive": ["{\"t\":2021-01-01 11:00:00.000001,\"d\":2021-01-01}"]
+  },
+  {
+   "sql": "select named_struct('t', timestamp_micros(1609459200000001), 'd', date'2021-01-01')",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["struct<t:timestamp,d:date>"],
+   "rows": [
+    [[1609459200000001, 18628]]
+   ],
+   "hive": ["{\"t\":2021-01-01 10:00:00.000001,\"d\":2021-01-01}"]
+  },
+  {
+   "sql": "select named_struct('t', timestamp_micros(1609459200000001), 'd', date'2021-01-01')",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["struct<t:timestamp,d:date>"],
+   "rows": [
+    [[1609459200000001, 18628]]
+   ],
+   "hive": ["{\"t\":2021-01-01 01:00:00.000001,\"d\":2021-01-01}"]
+  },
+  {
+   "sql": "select cast(null as timestamp), timestamp_micros(0) - timestamp_micros(1)",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "interval day to second"],
+   "rows": [
+    [null, -1]
+   ],
+   "hive": ["NULL\t-0 00:00:00.000001000"]
+  },
+  {
+   "sql": "select cast(null as timestamp), timestamp_micros(0) - timestamp_micros(1)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "interval day to second"],
+   "rows": [
+    [null, -1]
+   ],
+   "hive": ["NULL\t-0 00:00:00.000001000"]
+  },
+  {
+   "sql": "select cast(null as timestamp), timestamp_micros(0) - timestamp_micros(1)",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "interval day to second"],
+   "rows": [
+    [null, -1]
+   ],
+   "hive": ["NULL\t-0 00:00:00.000001000"]
+  },
+  {
+   "sql": "select cast(null as timestamp), timestamp_micros(0) - timestamp_micros(1)",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "interval day to second"],
+   "rows": [
+    [null, -1]
+   ],
+   "hive": ["NULL\t-0 00:00:00.000001000"]
+  },
+  {
+   "sql": "select cast(null as timestamp), timestamp_micros(0) - timestamp_micros(1)",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "interval day to second"],
+   "rows": [
+    [null, -1]
+   ],
+   "hive": ["NULL\t-0 00:00:00.000001000"]
+  },
+  {
+   "sql": "select cast(null as timestamp), timestamp_micros(0) - timestamp_micros(1)",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "interval day to second"],
+   "rows": [
+    [null, -1]
+   ],
+   "hive": ["NULL\t-0 00:00:00.000001000"]
+  },
+  {
+   "sql": "select cast(null as timestamp), timestamp_micros(0) - timestamp_micros(1)",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "interval day to second"],
+   "rows": [
+    [null, -1]
+   ],
+   "hive": ["NULL\t-0 00:00:00.000001000"]
+  },
+  {
+   "sql": "select cast(null as timestamp), timestamp_micros(0) - timestamp_micros(1)",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "interval day to second"],
+   "rows": [
+    [null, -1]
+   ],
+   "hive": ["NULL\t-0 00:00:00.000001000"]
+  },
+  {
+   "sql": "select timestamp_ntz'2021-03-14 02:30:00.5', array(timestamp_ntz'2021-03-14 02:30:00')",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "array<timestamp_ntz>"],
+   "rows": [
+    [1615689000500000, [1615689000000000]]
+   ],
+   "hive": ["2021-03-14 02:30:00.5\t[2021-03-14 02:30:00]"]
+  },
+  {
+   "sql": "select timestamp_ntz'2021-03-14 02:30:00.5', array(timestamp_ntz'2021-03-14 02:30:00')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "array<timestamp_ntz>"],
+   "rows": [
+    [1615689000500000, [1615689000000000]]
+   ],
+   "hive": ["2021-03-14 02:30:00.5\t[2021-03-14 02:30:00]"]
+  },
+  {
+   "sql": "select timestamp_ntz'2021-03-14 02:30:00.5', array(timestamp_ntz'2021-03-14 02:30:00')",
+   "time_zone": "Asia/Kolkata",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "array<timestamp_ntz>"],
+   "rows": [
+    [1615689000500000, [1615689000000000]]
+   ],
+   "hive": ["2021-03-14 02:30:00.5\t[2021-03-14 02:30:00]"]
+  },
+  {
+   "sql": "select timestamp_ntz'2021-03-14 02:30:00.5', array(timestamp_ntz'2021-03-14 02:30:00')",
+   "time_zone": "Europe/London",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "array<timestamp_ntz>"],
+   "rows": [
+    [1615689000500000, [1615689000000000]]
+   ],
+   "hive": ["2021-03-14 02:30:00.5\t[2021-03-14 02:30:00]"]
+  },
+  {
+   "sql": "select timestamp_ntz'2021-03-14 02:30:00.5', array(timestamp_ntz'2021-03-14 02:30:00')",
+   "time_zone": "Asia/Kathmandu",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "array<timestamp_ntz>"],
+   "rows": [
+    [1615689000500000, [1615689000000000]]
+   ],
+   "hive": ["2021-03-14 02:30:00.5\t[2021-03-14 02:30:00]"]
+  },
+  {
+   "sql": "select timestamp_ntz'2021-03-14 02:30:00.5', array(timestamp_ntz'2021-03-14 02:30:00')",
+   "time_zone": "Australia/Lord_Howe",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "array<timestamp_ntz>"],
+   "rows": [
+    [1615689000500000, [1615689000000000]]
+   ],
+   "hive": ["2021-03-14 02:30:00.5\t[2021-03-14 02:30:00]"]
+  },
+  {
+   "sql": "select timestamp_ntz'2021-03-14 02:30:00.5', array(timestamp_ntz'2021-03-14 02:30:00')",
+   "time_zone": "+10:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "array<timestamp_ntz>"],
+   "rows": [
+    [1615689000500000, [1615689000000000]]
+   ],
+   "hive": ["2021-03-14 02:30:00.5\t[2021-03-14 02:30:00]"]
+  },
+  {
+   "sql": "select timestamp_ntz'2021-03-14 02:30:00.5', array(timestamp_ntz'2021-03-14 02:30:00')",
+   "time_zone": "GMT+1",
+   "binary_style": "UTF-8",
+   "types": ["timestamp_ntz", "array<timestamp_ntz>"],
+   "rows": [
+    [1615689000500000, [1615689000000000]]
+   ],
+   "hive": ["2021-03-14 02:30:00.5\t[2021-03-14 02:30:00]"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "PST",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2020-12-31 16:00:00\t1874-12-07 10:47:02"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "EST",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2020-12-31 19:00:00\t1874-12-07 13:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "MST",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2020-12-31 17:00:00\t1874-12-07 11:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "HST",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2020-12-31 14:00:00\t1874-12-07 08:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "IST",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 05:30:00\t1874-12-08 00:01:10"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "CST",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2020-12-31 18:00:00\t1874-12-07 12:49:24"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "JST",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 09:00:00\t1874-12-08 03:58:59"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "AET",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 11:00:00\t1874-12-08 04:44:52"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "+5:30",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 05:30:00\t1874-12-08 00:10:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "-9:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2020-12-31 15:00:00\t1874-12-07 09:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "+0530",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 05:30:00\t1874-12-08 00:10:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "-103045",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2020-12-31 13:29:15\t1874-12-07 08:09:15"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "+10:00:30",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 10:00:30\t1874-12-08 04:40:30"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "UTC+01:00",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 01:00:00\t1874-12-07 19:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "GMT-8",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2020-12-31 16:00:00\t1874-12-07 10:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "UT+2",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 02:00:00\t1874-12-07 20:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "UTC",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 00:00:00\t1874-12-07 18:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "GMT",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 00:00:00\t1874-12-07 18:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "UT",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 00:00:00\t1874-12-07 18:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "Z",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 00:00:00\t1874-12-07 18:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "GMT+1:30",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 01:30:00\t1874-12-07 20:10:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "Etc/GMT+5",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2020-12-31 19:00:00\t1874-12-07 13:40:00"]
+  },
+  {
+   "sql": "select timestamp_micros(1609459200000000), timestamp_micros(-3000000000000000)",
+   "time_zone": "Asia/Calcutta",
+   "binary_style": "UTF-8",
+   "types": ["timestamp", "timestamp"],
+   "rows": [
+    [1609459200000000, -3000000000000000]
+   ],
+   "hive": ["2021-01-01 05:30:00\t1874-12-08 00:01:10"]
+  },
+  {
+   "sql": "select x'', x'00', x'0a0b', x'DEADBEEF', x'48656C6C6F', cast(null as binary)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["", "00", "0a0b", "deadbeef", "48656c6c6f", null]
+   ],
+   "hive": ["\t\u0000\t\n\u000b\tޭ��\tHello\tNULL"]
+  },
+  {
+   "sql": "select x'', x'00', x'0a0b', x'DEADBEEF', x'48656C6C6F', cast(null as binary)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASIC",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["", "00", "0a0b", "deadbeef", "48656c6c6f", null]
+   ],
+   "hive": ["[]\t[0]\t[10, 11]\t[-34, -83, -66, -17]\t[72, 101, 108, 108, 111]\tNULL"]
+  },
+  {
+   "sql": "select x'', x'00', x'0a0b', x'DEADBEEF', x'48656C6C6F', cast(null as binary)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASE64",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["", "00", "0a0b", "deadbeef", "48656c6c6f", null]
+   ],
+   "hive": ["\tAA\tCgs\t3q2+7w\tSGVsbG8\tNULL"]
+  },
+  {
+   "sql": "select x'', x'00', x'0a0b', x'DEADBEEF', x'48656C6C6F', cast(null as binary)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["", "00", "0a0b", "deadbeef", "48656c6c6f", null]
+   ],
+   "hive": ["\t00\t0A0B\tDEADBEEF\t48656C6C6F\tNULL"]
+  },
+  {
+   "sql": "select x'', x'00', x'0a0b', x'DEADBEEF', x'48656C6C6F', cast(null as binary)",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX_DISCRETE",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["", "00", "0a0b", "deadbeef", "48656c6c6f", null]
+   ],
+   "hive": ["[]\t[00]\t[0A 0B]\t[DE AD BE EF]\t[48 65 6C 6C 6F]\tNULL"]
+  },
+  {
+   "sql": "select x'e282ac', x'c3a9', x'f09f9880', x'7f', x'80', x'ff'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["e282ac", "c3a9", "f09f9880", "7f", "80", "ff"]
+   ],
+   "hive": ["€\té\t😀\t\t�\t�"]
+  },
+  {
+   "sql": "select x'e282ac', x'c3a9', x'f09f9880', x'7f', x'80', x'ff'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASIC",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["e282ac", "c3a9", "f09f9880", "7f", "80", "ff"]
+   ],
+   "hive": ["[-30, -126, -84]\t[-61, -87]\t[-16, -97, -104, -128]\t[127]\t[-128]\t[-1]"]
+  },
+  {
+   "sql": "select x'e282ac', x'c3a9', x'f09f9880', x'7f', x'80', x'ff'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASE64",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["e282ac", "c3a9", "f09f9880", "7f", "80", "ff"]
+   ],
+   "hive": ["4oKs\tw6k\t8J+YgA\tfw\tgA\t/w"]
+  },
+  {
+   "sql": "select x'e282ac', x'c3a9', x'f09f9880', x'7f', x'80', x'ff'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["e282ac", "c3a9", "f09f9880", "7f", "80", "ff"]
+   ],
+   "hive": ["E282AC\tC3A9\tF09F9880\t7F\t80\tFF"]
+  },
+  {
+   "sql": "select x'e282ac', x'c3a9', x'f09f9880', x'7f', x'80', x'ff'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX_DISCRETE",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["e282ac", "c3a9", "f09f9880", "7f", "80", "ff"]
+   ],
+   "hive": ["[E2 82 AC]\t[C3 A9]\t[F0 9F 98 80]\t[7F]\t[80]\t[FF]"]
+  },
+  {
+   "sql": "select x'ff41c3', x'f0908d', x'c0af', x'eda080', x'f4908080', x'41e282', x'c328', x'e0a080', x'f0'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["ff41c3", "f0908d", "c0af", "eda080", "f4908080", "41e282", "c328", "e0a080", "f0"]
+   ],
+   "hive": ["�A�\t�\t��\t�\t����\tA�\t�(\tࠀ\t�"]
+  },
+  {
+   "sql": "select x'ff41c3', x'f0908d', x'c0af', x'eda080', x'f4908080', x'41e282', x'c328', x'e0a080', x'f0'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASIC",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["ff41c3", "f0908d", "c0af", "eda080", "f4908080", "41e282", "c328", "e0a080", "f0"]
+   ],
+   "hive": ["[-1, 65, -61]\t[-16, -112, -115]\t[-64, -81]\t[-19, -96, -128]\t[-12, -112, -128, -128]\t[65, -30, -126]\t[-61, 40]\t[-32, -96, -128]\t[-16]"]
+  },
+  {
+   "sql": "select x'ff41c3', x'f0908d', x'c0af', x'eda080', x'f4908080', x'41e282', x'c328', x'e0a080', x'f0'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASE64",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["ff41c3", "f0908d", "c0af", "eda080", "f4908080", "41e282", "c328", "e0a080", "f0"]
+   ],
+   "hive": ["/0HD\t8JCN\twK8\t7aCA\t9JCAgA\tQeKC\twyg\t4KCA\t8A"]
+  },
+  {
+   "sql": "select x'ff41c3', x'f0908d', x'c0af', x'eda080', x'f4908080', x'41e282', x'c328', x'e0a080', x'f0'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["ff41c3", "f0908d", "c0af", "eda080", "f4908080", "41e282", "c328", "e0a080", "f0"]
+   ],
+   "hive": ["FF41C3\tF0908D\tC0AF\tEDA080\tF4908080\t41E282\tC328\tE0A080\tF0"]
+  },
+  {
+   "sql": "select x'ff41c3', x'f0908d', x'c0af', x'eda080', x'f4908080', x'41e282', x'c328', x'e0a080', x'f0'",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX_DISCRETE",
+   "types": ["binary", "binary", "binary", "binary", "binary", "binary", "binary", "binary", "binary"],
+   "rows": [
+    ["ff41c3", "f0908d", "c0af", "eda080", "f4908080", "41e282", "c328", "e0a080", "f0"]
+   ],
+   "hive": ["[FF 41 C3]\t[F0 90 8D]\t[C0 AF]\t[ED A0 80]\t[F4 90 80 80]\t[41 E2 82]\t[C3 28]\t[E0 A0 80]\t[F0]"]
+  },
+  {
+   "sql": "select cast('abc' as binary), cast('na\\u00efve' as binary), encode('x', 'UTF-8'), unhex('4142')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["binary", "binary", "binary", "binary"],
+   "rows": [
+    ["616263", "6e61c3af7665", "78", "4142"]
+   ],
+   "hive": ["abc\tnaïve\tx\tAB"]
+  },
+  {
+   "sql": "select cast('abc' as binary), cast('na\\u00efve' as binary), encode('x', 'UTF-8'), unhex('4142')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASIC",
+   "types": ["binary", "binary", "binary", "binary"],
+   "rows": [
+    ["616263", "6e61c3af7665", "78", "4142"]
+   ],
+   "hive": ["[97, 98, 99]\t[110, 97, -61, -81, 118, 101]\t[120]\t[65, 66]"]
+  },
+  {
+   "sql": "select cast('abc' as binary), cast('na\\u00efve' as binary), encode('x', 'UTF-8'), unhex('4142')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASE64",
+   "types": ["binary", "binary", "binary", "binary"],
+   "rows": [
+    ["616263", "6e61c3af7665", "78", "4142"]
+   ],
+   "hive": ["YWJj\tbmHDr3Zl\teA\tQUI"]
+  },
+  {
+   "sql": "select cast('abc' as binary), cast('na\\u00efve' as binary), encode('x', 'UTF-8'), unhex('4142')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX",
+   "types": ["binary", "binary", "binary", "binary"],
+   "rows": [
+    ["616263", "6e61c3af7665", "78", "4142"]
+   ],
+   "hive": ["616263\t6E61C3AF7665\t78\t4142"]
+  },
+  {
+   "sql": "select cast('abc' as binary), cast('na\\u00efve' as binary), encode('x', 'UTF-8'), unhex('4142')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX_DISCRETE",
+   "types": ["binary", "binary", "binary", "binary"],
+   "rows": [
+    ["616263", "6e61c3af7665", "78", "4142"]
+   ],
+   "hive": ["[61 62 63]\t[6E 61 C3 AF 76 65]\t[78]\t[41 42]"]
+  },
+  {
+   "sql": "select array(x'0102', x'', x'ff', cast(null as binary)), named_struct('b', x'cafe'), map(1, x'01')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["array<binary>", "struct<b:binary>", "map<int,binary>"],
+   "rows": [
+    [["0102", "", "ff", null], ["cafe"], [[1, "01"]]]
+   ],
+   "hive": ["[\u0001\u0002,,�,null]\t{\"b\":��}\t{1:\u0001}"]
+  },
+  {
+   "sql": "select array(x'0102', x'', x'ff', cast(null as binary)), named_struct('b', x'cafe'), map(1, x'01')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASIC",
+   "types": ["array<binary>", "struct<b:binary>", "map<int,binary>"],
+   "rows": [
+    [["0102", "", "ff", null], ["cafe"], [[1, "01"]]]
+   ],
+   "hive": ["[[1, 2],[],[-1],null]\t{\"b\":[-54, -2]}\t{1:[1]}"]
+  },
+  {
+   "sql": "select array(x'0102', x'', x'ff', cast(null as binary)), named_struct('b', x'cafe'), map(1, x'01')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASE64",
+   "types": ["array<binary>", "struct<b:binary>", "map<int,binary>"],
+   "rows": [
+    [["0102", "", "ff", null], ["cafe"], [[1, "01"]]]
+   ],
+   "hive": ["[AQI,,/w,null]\t{\"b\":yv4}\t{1:AQ}"]
+  },
+  {
+   "sql": "select array(x'0102', x'', x'ff', cast(null as binary)), named_struct('b', x'cafe'), map(1, x'01')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX",
+   "types": ["array<binary>", "struct<b:binary>", "map<int,binary>"],
+   "rows": [
+    [["0102", "", "ff", null], ["cafe"], [[1, "01"]]]
+   ],
+   "hive": ["[0102,,FF,null]\t{\"b\":CAFE}\t{1:01}"]
+  },
+  {
+   "sql": "select array(x'0102', x'', x'ff', cast(null as binary)), named_struct('b', x'cafe'), map(1, x'01')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX_DISCRETE",
+   "types": ["array<binary>", "struct<b:binary>", "map<int,binary>"],
+   "rows": [
+    [["0102", "", "ff", null], ["cafe"], [[1, "01"]]]
+   ],
+   "hive": ["[[01 02],[],[FF],null]\t{\"b\":[CA FE]}\t{1:[01]}"]
+  },
+  {
+   "sql": "select named_struct('a', x'41'), map(x'41', x'42')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "UTF-8",
+   "types": ["struct<a:binary>", "map<binary,binary>"],
+   "rows": [
+    [["41"], [["41", "42"]]]
+   ],
+   "hive": ["{\"a\":A}\t{A:B}"]
+  },
+  {
+   "sql": "select named_struct('a', x'41'), map(x'41', x'42')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASIC",
+   "types": ["struct<a:binary>", "map<binary,binary>"],
+   "rows": [
+    [["41"], [["41", "42"]]]
+   ],
+   "hive": ["{\"a\":[65]}\t{[65]:[66]}"]
+  },
+  {
+   "sql": "select named_struct('a', x'41'), map(x'41', x'42')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "BASE64",
+   "types": ["struct<a:binary>", "map<binary,binary>"],
+   "rows": [
+    [["41"], [["41", "42"]]]
+   ],
+   "hive": ["{\"a\":QQ}\t{QQ:Qg}"]
+  },
+  {
+   "sql": "select named_struct('a', x'41'), map(x'41', x'42')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX",
+   "types": ["struct<a:binary>", "map<binary,binary>"],
+   "rows": [
+    [["41"], [["41", "42"]]]
+   ],
+   "hive": ["{\"a\":41}\t{41:42}"]
+  },
+  {
+   "sql": "select named_struct('a', x'41'), map(x'41', x'42')",
+   "time_zone": "America/Los_Angeles",
+   "binary_style": "HEX_DISCRETE",
+   "types": ["struct<a:binary>", "map<binary,binary>"],
+   "rows": [
+    [["41"], [["41", "42"]]]
+   ],
+   "hive": ["{\"a\":[41]}\t{[41]:[42]}"]
+  }
+ ]
+}
