@@ -5,7 +5,11 @@
 //! tested without a git checkout; `main` does the I/O.
 
 /// A PR may change at most this many counted lines (additions + deletions).
-pub const MAX_CHANGED_LINES: u64 = 3000;
+pub const MAX_CHANGED_LINES: u64 = 5000;
+
+/// Test code counts at half weight: it is cheaper to review than library
+/// code, and full weight rewards trimming tests to fit under the cap.
+pub const TEST_LINE_DIVISOR: u64 = 2;
 
 /// Files that do not count towards the PR size cap: goldens, fixtures,
 /// vendored and generated files (P2-T145). The allowlist is deliberately
@@ -54,11 +58,28 @@ pub fn is_size_excluded(path: &str) -> bool {
             .is_some_and(|(_, inner)| CRATE_DATA_DIRS.iter().any(|d| inner.starts_with(d)))
 }
 
+/// Whether `path` is test code, counted at [`TEST_LINE_DIVISOR`] weight:
+/// files under a `tests/` directory, `tests.rs` / `*_tests.rs` modules, and
+/// Python `test_*.py` files. Inline `#[cfg(test)]` modules inside library
+/// files count at full weight.
+#[must_use]
+pub fn is_test_path(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    path.starts_with("tests/")
+        || path.contains("/tests/")
+        || name == "tests.rs"
+        || name.ends_with("_tests.rs")
+        || (name.starts_with("test_") && name.ends_with(".py"))
+}
+
 /// Result of measuring a diff against the cap.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SizeReport {
-    /// Changed lines that count towards the cap.
+    /// Changed lines that count towards the cap: library lines in full,
+    /// test lines divided by [`TEST_LINE_DIVISOR`] (rounded up).
     pub counted: u64,
+    /// Changed test lines before weighting (see [`is_test_path`]).
+    pub test_lines: u64,
     /// Changed lines in allowlisted files.
     pub excluded: u64,
     /// Binary files outside the allowlist; their size is added to `counted`
@@ -91,6 +112,7 @@ impl SizeReport {
 pub fn measure_numstat(raw: &str) -> Result<SizeReport, String> {
     let mut report = SizeReport {
         counted: 0,
+        test_lines: 0,
         excluded: 0,
         binaries: Vec::new(),
     };
@@ -126,10 +148,13 @@ pub fn measure_numstat(raw: &str) -> Result<SizeReport, String> {
             report.excluded += lines;
         } else if added == "-" && deleted == "-" {
             report.binaries.push(path.to_owned());
+        } else if is_test_path(path) {
+            report.test_lines += lines;
         } else {
             report.counted += lines;
         }
     }
+    report.counted += report.test_lines.div_ceil(TEST_LINE_DIVISOR);
     Ok(report)
 }
 

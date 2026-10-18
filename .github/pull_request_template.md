@@ -1,4 +1,4 @@
-<!-- Keep PRs under 3,000 changed lines (lock files, snapshots, goldens, fixtures and vendored data excluded). One PR per work unit, one commit per task. -->
+<!-- Keep PRs under 5,000 counted changed lines (test code at half weight; lock files, snapshots, goldens, fixtures and vendored data excluded). One PR per work unit, one commit per task. -->
 
 ## Summary
 

@@ -121,9 +121,11 @@ pub fn run_pr_size(args: &DiffArgs) -> Result<(), String> {
         )
     };
     let summary = format!(
-        "## PR size\n\n{} counted changed lines (cap {}); {} more in allowlisted data files (lock files, snapshots, Spark goldens, test fixtures, vendored data; see `xtask/src/ci.rs`).{binaries}",
+        "## PR size\n\n{} counted changed lines (cap {}), including {} test lines at 1/{} weight; {} more in allowlisted data files (lock files, snapshots, Spark goldens, test fixtures, vendored data; see `xtask/src/ci.rs`).{binaries}",
         report.counted,
         ci::MAX_CHANGED_LINES,
+        report.test_lines,
+        ci::TEST_LINE_DIVISOR,
         report.excluded
     );
     println!("{summary}");

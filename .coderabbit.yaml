@@ -5,7 +5,8 @@ language: en-US
 tone_instructions: "Be concise and technical. Flag correctness, safety and Spark-compatibility issues first; skip style nits that rustfmt or clippy already enforce."
 early_access: false
 reviews:
-  profile: chill
+  # Assertive: more findings per review, at no extra cost on the OSS plan.
+  profile: assertive
   request_changes_workflow: false
   # Keep PR descriptions as written by the author.
   high_level_summary: false
