@@ -7,7 +7,7 @@ use std::sync::Arc;
 use krishiv_plan::analyzer::testing::{TestFunctions, block_on, context};
 use krishiv_plan::analyzer::{
     AnalysisContext, Analyzer as _, ArgType, DefaultAnalyzer, FunctionEntry, FunctionLookup,
-    FunctionRegistry, Inputs, MemoryCatalog, ResolutionConf, SparkProfile, TableColumn,
+    FunctionRegistry, Inputs, MemoryCatalog, ResolutionConf, ResultType, SparkProfile, TableColumn,
 };
 use krishiv_plan::{FunctionId, FunctionKind, Plan, SourceId};
 use krishiv_types::DataType;
@@ -45,9 +45,26 @@ struct Functions;
 
 impl FunctionRegistry for Functions {
     fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup {
-        let (kind, data_type) = match name {
-            [n] if n == "rand" => (FunctionKind::Scalar, DataType::Double),
-            [n] if n == "first" => (FunctionKind::Aggregate, DataType::String),
+        let (kind, result): (_, ResultType) = match name {
+            [n] if n == "rand" => (
+                FunctionKind::Scalar,
+                Arc::new(|_| {
+                    Ok(ArgType {
+                        data_type: Some(DataType::Double),
+                        nullable: false,
+                    })
+                }),
+            ),
+            // `first(expr)`: the first value of `expr`, of its type.
+            [n] if n == "first" => (
+                FunctionKind::Aggregate,
+                Arc::new(|args| {
+                    Ok(ArgType {
+                        data_type: args.first().and_then(|a| a.data_type.clone()),
+                        nullable: true,
+                    })
+                }),
+            ),
             _ => return TestFunctions.lookup(name, profile),
         };
         FunctionLookup::Found(FunctionEntry {
@@ -57,12 +74,7 @@ impl FunctionRegistry for Functions {
             },
             kind,
             inputs: Inputs::Any,
-            result: Arc::new(move |_| {
-                Ok(ArgType {
-                    data_type: Some(data_type.clone()),
-                    nullable: true,
-                })
-            }),
+            result,
         })
     }
 
