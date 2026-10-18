@@ -1,0 +1,316 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Hash aggregation (ADR 0011): `count`, `sum`, `avg`, `min`, `max` with
+//! Spark 4.2 result types, in two phases, with spill and `DISTINCT`.
+//!
+//! # Operators
+//! - [`HashAggregate`] is a pipeline breaker. Each driver aggregates into
+//!   its own table (thread-local pre-aggregation); `combine` hands the
+//!   tables to the global state and `finalize` merges them. Under memory
+//!   pressure a driver spills its table as one *run*: its groups, as
+//!   partial states, split into [`PARTITIONS`](crate::hash::PARTITIONS)
+//!   files by hash. `finalize` then merges partition by partition (a
+//!   partition that still does not fit is split again by the next hash bits),
+//!   and answers spill requests through [`Sink::spill_global`](crate::Sink::spill_global).
+//! - [`PartialAggregate`] is the streaming first phase (before an exchange):
+//!   it emits partial states, flushes its table when it is full instead of
+//!   spilling, and switches to pass-through (one state row per input row)
+//!   when it does not reduce its input (see [`BypassPolicy`]).
+//!
+//! # Plans
+//! An [`AggregateSpec`] lists the grouping columns and the aggregates. Each
+//! aggregate reads raw input columns ([`AggInput::Raw`]) or the partial
+//! states of a previous phase ([`AggInput::State`]); the node emits final
+//! values or partial states ([`AggregateOutput`]). Output columns are the
+//! keys, then one column per aggregate (final) or its state columns
+//! (partial, see [`AggregateExpr::state_fields`]). A global aggregate (no
+//! grouping columns) returns one row on empty input; a grouped one returns
+//! none.
+//!
+//! `DISTINCT` aggregates and `UNION` (distinct) reuse the same operator:
+//! [`distinct_plan`] groups by the keys and the distinct arguments first, then
+//! aggregates the distinct values; [`union_distinct`] is a grouping on every
+//! column with no aggregates.
+//!
+//! # Weights
+//! Rows carry Z-set weights ([`Weights`](krishiv_types::batch::Weights)):
+//! `count` adds the weight, `sum` adds `value × weight`, `avg` divides the
+//! weighted sum by the weighted count. `min`/`max` need retractions to be
+//! maintained incrementally (P4 IVM), so they and `DISTINCT` reject any weight
+//! other than 1 with `KRISHIV_UNSUPPORTED_FEATURE`. Output rows have weight 1;
+//! a group exists once it received a row.
+
+mod accumulator;
+mod node;
+mod partial;
+mod sink;
+mod table;
+
+#[cfg(test)]
+mod tests;
+
+use std::sync::Arc;
+
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use krishiv_common::error::{
+    ArithmeticOverflow, KrishivError, KrishivUnsupportedFeature,
+    NumericValueOutOfRangeWithSuggestion,
+};
+use krishiv_memory::SpillScope;
+
+pub use node::{AggregateNode, PartialNode, distinct_plan, union_distinct};
+pub use partial::{BypassPolicy, PartialAggregate};
+pub use sink::{AggregateMetrics, HashAggregate};
+
+use crate::error::{Result, internal};
+
+/// An aggregate function.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AggregateFunction {
+    /// `count(*)` (no arguments) or `count(a, …)`: rows whose arguments are
+    /// all non-NULL. `bigint`, never NULL.
+    Count,
+    /// `sum(x)`: `bigint` for integral input, `double` for floating point,
+    /// `decimal(min(38, p + 10), s)` for `decimal(p, s)`.
+    Sum,
+    /// `avg(x)`: `double`, or `decimal(min(38, p + 4), min(38, s + 4))` for
+    /// `decimal(p, s)`.
+    Avg,
+    /// `min(x)`: the input type (Spark ordering: NaN is largest, `-0.0 = 0.0`,
+    /// strings by UTF-8 bytes).
+    Min,
+    /// `max(x)`, as `min`.
+    Max,
+}
+
+/// Where an aggregate's arguments come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AggInput {
+    /// Raw input columns.
+    Raw,
+    /// The state columns of the same aggregate from a previous phase.
+    State,
+}
+
+/// What the node emits per aggregate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AggregateOutput {
+    /// Final values.
+    Final,
+    /// Partial states, for a later phase.
+    Partial,
+}
+
+/// One aggregate of an [`AggregateSpec`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct AggregateExpr {
+    /// The function.
+    pub function: AggregateFunction,
+    /// Argument column indices: raw columns, or the state columns in order.
+    pub args: Vec<usize>,
+    /// Where the arguments come from.
+    pub input: AggInput,
+    /// The type of the raw argument (`count` ignores it). Fixed by the
+    /// planner; state columns derive from it.
+    pub arg_type: DataType,
+    /// The output column name.
+    pub name: String,
+}
+
+impl AggregateExpr {
+    /// A raw-input aggregate of column `arg` of type `arg_type`.
+    pub fn new(
+        function: AggregateFunction,
+        arg: usize,
+        arg_type: DataType,
+        name: impl Into<String>,
+    ) -> Self {
+        Self {
+            function,
+            args: vec![arg],
+            input: AggInput::Raw,
+            arg_type,
+            name: name.into(),
+        }
+    }
+
+    /// `count(*)`.
+    pub fn count_star(name: impl Into<String>) -> Self {
+        Self {
+            function: AggregateFunction::Count,
+            args: Vec::new(),
+            input: AggInput::Raw,
+            arg_type: DataType::Null,
+            name: name.into(),
+        }
+    }
+
+    /// The same aggregate reading its state columns at `first..`.
+    pub fn merging(&self, first: usize) -> Self {
+        let n = self.state_fields().map_or(0, |f| f.len());
+        Self {
+            args: (first..first + n).collect(),
+            input: AggInput::State,
+            ..self.clone()
+        }
+    }
+
+    /// The Spark 4.2 result type.
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for an argument type the function does
+    /// not take here.
+    pub fn result_type(&self) -> Result<DataType> {
+        use AggregateFunction as F;
+        let t = &self.arg_type;
+        Ok(match (self.function, t) {
+            (F::Count, _) => DataType::Int64,
+            (F::Sum, t) if is_integral(t) => DataType::Int64,
+            (F::Sum | F::Avg, DataType::Float32 | DataType::Float64) => DataType::Float64,
+            (F::Avg, t) if is_integral(t) => DataType::Float64,
+            (F::Sum, DataType::Decimal128(p, s)) => sum_decimal(*p, *s),
+            (F::Avg, DataType::Decimal128(p, s)) => {
+                DataType::Decimal128((*p + 4).min(38), s.saturating_add(4).min(38))
+            }
+            (F::Min | F::Max, t) if accumulator::min_max_supported(t) => t.clone(),
+            (f, t) => return Err(unsupported(format!("{f:?} of {t}"))),
+        })
+    }
+
+    /// The partial-state columns (names derive from [`name`](Self::name)).
+    ///
+    /// # Errors
+    /// As [`result_type`](Self::result_type).
+    pub fn state_fields(&self) -> Result<Vec<Field>> {
+        use AggregateFunction as F;
+        let out = self.result_type()?;
+        let n = |suffix: &str| format!("{}#{suffix}", self.name);
+        Ok(match (self.function, &out) {
+            (F::Count, _) => vec![Field::new(n("count"), DataType::Int64, false)],
+            (F::Sum, DataType::Decimal128(..)) => vec![
+                Field::new(n("sum"), out.clone(), true),
+                Field::new(n("nonempty"), DataType::Boolean, false),
+            ],
+            (F::Sum, _) => vec![Field::new(n("sum"), out.clone(), true)],
+            (F::Avg, _) => vec![
+                Field::new(n("sum"), self.avg_sum_type(), true),
+                Field::new(n("count"), DataType::Int64, false),
+            ],
+            (F::Min | F::Max, _) => vec![Field::new(n("value"), out, true)],
+        })
+    }
+
+    /// The type `avg` sums in: `double`, or `sum`'s decimal type.
+    fn avg_sum_type(&self) -> DataType {
+        match self.arg_type {
+            DataType::Decimal128(p, s) => sum_decimal(p, s),
+            _ => DataType::Float64,
+        }
+    }
+}
+
+fn sum_decimal(p: u8, s: i8) -> DataType {
+    DataType::Decimal128((p + 10).min(38), s)
+}
+
+fn is_integral(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+    )
+}
+
+/// A hash aggregation: grouping columns, aggregates and the output kind.
+#[derive(Clone, Debug)]
+pub struct AggregateSpec {
+    /// The input schema.
+    pub input: SchemaRef,
+    /// Grouping column indices (empty: a global aggregate).
+    pub group_by: Vec<usize>,
+    /// The aggregates.
+    pub aggregates: Vec<AggregateExpr>,
+    /// Final values or partial states.
+    pub output: AggregateOutput,
+    /// `spark.sql.ansi.enabled`: overflow raises instead of wrapping (`sum`
+    /// of integers) or becoming NULL (decimals).
+    pub ansi: bool,
+    /// Where tables spill; `None` makes the aggregate unspillable.
+    pub spill: Option<SpillScope>,
+    /// Reject input weights other than 1 (`DISTINCT`, `UNION`: set
+    /// semantics over Z-sets need IVM).
+    pub require_unit_weights: bool,
+}
+
+impl AggregateSpec {
+    /// The output schema: keys, then each aggregate's value or states.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a grouping column outside the input; the
+    /// aggregates' typing errors.
+    pub fn output_schema(&self) -> Result<SchemaRef> {
+        let mut fields = Vec::new();
+        for &k in &self.group_by {
+            let f = self.input.fields().get(k);
+            let f = f.ok_or_else(|| internal(format!("grouping column {k} out of range")))?;
+            fields.push(f.as_ref().clone());
+        }
+        for a in &self.aggregates {
+            match self.output {
+                AggregateOutput::Final => {
+                    let nullable = a.function != AggregateFunction::Count;
+                    fields.push(Field::new(&a.name, a.result_type()?, nullable));
+                }
+                AggregateOutput::Partial => fields.extend(a.state_fields()?),
+            }
+        }
+        Ok(Arc::new(Schema::new(fields)))
+    }
+
+    /// The schema of the partial states (keys, then every state column):
+    /// what spill files and a partial phase hold.
+    pub(crate) fn state_schema(&self) -> Result<SchemaRef> {
+        Self {
+            output: AggregateOutput::Partial,
+            ..self.clone()
+        }
+        .output_schema()
+    }
+}
+
+/// `spark.sql.ansi.enabled` as Spark's error messages quote it.
+const ANSI_CONF: &str = "\"spark.sql.ansi.enabled\"";
+
+/// `KRISHIV_UNSUPPORTED_FEATURE`.
+pub(crate) fn unsupported(feature: String) -> KrishivError {
+    KrishivUnsupportedFeature { feature }.into()
+}
+
+/// Spark's ANSI `ARITHMETIC_OVERFLOW` of a `long` addition in `sum`.
+pub(crate) fn long_overflow() -> KrishivError {
+    ArithmeticOverflow {
+        message: "overflow".to_owned(),
+        alternative: " Use 'try_add' to tolerate overflow and return NULL instead.".to_owned(),
+        config: ANSI_CONF.to_owned(),
+    }
+    .into()
+}
+
+/// Spark's `overflowInSumOfDecimalError`; `function` is `sum` or `avg`.
+pub(crate) fn decimal_sum_overflow(function: &str) -> KrishivError {
+    ArithmeticOverflow {
+        message: "Overflow in sum of decimals".to_owned(),
+        alternative: format!(" Use 'try_{function}' to tolerate overflow and return NULL instead."),
+        config: ANSI_CONF.to_owned(),
+    }
+    .into()
+}
+
+/// `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION`.
+pub(crate) fn out_of_range(value: String, precision: u8, scale: i8) -> KrishivError {
+    NumericValueOutOfRangeWithSuggestion {
+        value,
+        precision: precision.to_string(),
+        scale: scale.to_string(),
+        config: ANSI_CONF.to_owned(),
+    }
+    .into()
+}

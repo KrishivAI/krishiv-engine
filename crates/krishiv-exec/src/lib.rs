@@ -65,6 +65,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aggregate;
 mod cancel;
 mod channel;
 mod context;
