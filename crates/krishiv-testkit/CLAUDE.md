@@ -18,7 +18,12 @@ runs the arithmetic/comparison/cast matrix cells and the literal statements of S
 harness, not the analyzer. P2-T023a adds the string functions (`kernel_eval/strings.rs`; `string_case` checks `upper`/`lower`
 over every Unicode scalar value against `tests/fixtures/spark-<ver>/case-mapping.json`).
 The generic `FileFormat` conformance suite (`file_format`, P2-T117: 12 checks over a `FormatFixture`,
-`file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it.
+`file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it, directly and
+through the executor (`file_format::drive::ThroughExecutor`, P2-T117b). `file_format::parquet::ParquetFixture`
+(P2-T080a) reads through the real Parquet reader and writes through a test-only `ArrowWriter` encoder.
+`tests/parquet_interop.rs`: other engines' Parquet files read to pyarrow's values; its TPC-H SF1 test is ignored
+until P2-T119 brings the datasets to the nightly box (~1 GB of generated data: `KRISHIV_TPCH_DIR`, see
+`tests/scripts/tpch_parquet_checksums.py`).
 
 ## Invariants
 - Golden data comes from a real Spark run or the vendored Spark tag, never hand-written (ADR 0008, 0010).

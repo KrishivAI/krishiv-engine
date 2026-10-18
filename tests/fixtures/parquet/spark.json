@@ -1,0 +1,50 @@
+{
+  "columns": {
+    "arr": {
+      "sha256": null,
+      "type": "list<element: int64>"
+    },
+    "d": {
+      "sha256": "3198754f8edc35eee5dddd02d2ed3a79747f46870087a8479a792fda7bd4d2af",
+      "type": "date32[day]"
+    },
+    "id": {
+      "sha256": "07e5457fd9af21708fa7c116417f201454f32c11dfcc00bd017e97f9fd76f615",
+      "type": "int32"
+    },
+    "large": {
+      "sha256": "ac6eb41747092de383c3200462b37e4d056a13447eb14ae8620c42321d87498e",
+      "type": "decimal128(38, 10)"
+    },
+    "m": {
+      "sha256": null,
+      "type": "map<string, int32 ('m')>"
+    },
+    "medium": {
+      "sha256": "066c64b2283fa4dae28fada184a2768ee9c3919c3cf5e9a2d009891bbd0d34b7",
+      "type": "decimal128(18, 4)"
+    },
+    "ntz": {
+      "sha256": "734b134b6fe97eddd606248b22c7e6075a46cf1fbf9a39a8d70394cceb4a03d1",
+      "type": "timestamp[us]"
+    },
+    "s": {
+      "sha256": "75df9f6bd55552a692605b0fa0ce7089e6defb220648be5f07bde82cb5f769a6",
+      "type": "string"
+    },
+    "small": {
+      "sha256": "086aad78ed5b3cb68b1c1d95e397d59ce875cfd44c4da96595b8094317f73553",
+      "type": "decimal128(9, 2)"
+    },
+    "st": {
+      "sha256": null,
+      "type": "struct<x: int32, y: string>"
+    },
+    "ts": {
+      "sha256": "7e97e9172609668b16458513f9f5870d744867a4e358f11b296b1d1372b07dfc",
+      "type": "timestamp[ns]"
+    }
+  },
+  "rows": 500,
+  "writer": "parquet-mr version 1.17.0 (build fac0c746532e133beb928a7f6a7e57b510b477a1)"
+}

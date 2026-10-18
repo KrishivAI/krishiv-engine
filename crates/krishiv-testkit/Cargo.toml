@@ -26,7 +26,8 @@ krishiv-io = { path = "../krishiv-io" }
 krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-memory = { path = "../krishiv-memory" }
 krishiv-plan = { path = "../krishiv-plan" }
-object_store.workspace = true
+object_store = { workspace = true, features = ["fs"] }
+parquet = { workspace = true, features = ["arrow"] }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-types = { path = "../krishiv-types" }
 regex-lite.workspace = true
@@ -38,3 +39,4 @@ tokio = { workspace = true, features = ["rt", "time", "test-util"] }
 
 [dev-dependencies]
 insta = { workspace = true }
+sha2.workspace = true

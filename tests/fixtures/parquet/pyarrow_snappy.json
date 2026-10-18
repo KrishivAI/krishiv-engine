@@ -1,0 +1,46 @@
+{
+  "columns": {
+    "b": {
+      "sha256": "e63b59e42f9dcd758cf56df595bf58d898f9f24dee83be2dc05907856a28724f",
+      "type": "binary"
+    },
+    "d": {
+      "sha256": "d6dc9670934160b113f4f3e57a8343516681cda5d31968693054d60f5b09ad83",
+      "type": "date32[day]"
+    },
+    "dec": {
+      "sha256": "e84653510e8d79bb9ebe86573fb53e974a7413ed5877aaeedbba2ac94acbdfb9",
+      "type": "decimal128(15, 2)"
+    },
+    "f64": {
+      "sha256": "95ece5bff440f10a5f66d24b518bffd39fca478f7f26133ae06b0e1171bd11bf",
+      "type": "double"
+    },
+    "flag": {
+      "sha256": "ac801e6d895e14d0ec87ff9f88f8ca7b357258ad886e585a794f00500e6b1476",
+      "type": "bool"
+    },
+    "i32": {
+      "sha256": "57af03d7f2847c61b87b9d0ef0acea1abbe719493bc9ef2382c08fce23cf751e",
+      "type": "int32"
+    },
+    "i64": {
+      "sha256": "ebb4ea7c1395aa15bde74930c59c916aef0ed1c8899a191e40be7ef291aa69ca",
+      "type": "int64"
+    },
+    "s": {
+      "sha256": "09e1cdccf33c61a119ad43f315728bf30bf5217e3a76fe31cc1ddf738b52ee18",
+      "type": "string"
+    },
+    "ts": {
+      "sha256": "be9179a2c44f27a554908f2bab024a8c3547c2ee0dda173df539750907bdbaa5",
+      "type": "timestamp[us, tz=UTC]"
+    },
+    "wide": {
+      "sha256": "3ee8aeae4968105c3d40044d1fe83a5249be82bd4697f3c9b59f965bc16783fa",
+      "type": "decimal128(38, 6)"
+    }
+  },
+  "rows": 600,
+  "writer": "parquet-cpp-arrow version 21.0.0"
+}
