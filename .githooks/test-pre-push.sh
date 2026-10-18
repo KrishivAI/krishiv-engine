@@ -16,9 +16,14 @@ mkdir "$tmp/bin"
 cat > "$tmp/bin/cargo" <<'STUB'
 #!/usr/bin/env sh
 echo "$*" >> "$CARGO_STUB_LOG"
-[ "${CARGO_STUB_FAIL:-0}" != 1 ]
+if [ "${CARGO_STUB_FAIL:-0}" = 1 ]; then exit 1; fi
+if [ "${CARGO_STUB_FAIL_DENY:-0}" = 1 ] && [ "$1" = deny ]; then exit 1; fi
+exit 0
 STUB
 chmod +x "$tmp/bin/cargo"
+# The hook runs `cargo deny` only when cargo-deny is installed.
+printf '#!/usr/bin/env sh\nexit 0\n' > "$tmp/bin/cargo-deny"
+chmod +x "$tmp/bin/cargo-deny"
 export PATH="$tmp/bin:$PATH" CARGO_STUB_LOG="$tmp/cargo.log"
 : > "$CARGO_STUB_LOG"
 
@@ -73,11 +78,14 @@ mkdir -p src && echo 'fn main() {}' > src/main.rs && git add src && git commit -
 echo x >> f && git commit -q -am more
 git push -q origin feature/rust >/dev/null 2>&1 || fail "Rust push was refused"
 [ "$(command grep -c '^clippy' "$CARGO_STUB_LOG")" = 1 ] || fail "clippy did not run exactly once: $(cat "$CARGO_STUB_LOG")"
-echo "ok: clippy runs once for a push of two commits with Rust changes"
+[ "$(command grep -c '^deny check$' "$CARGO_STUB_LOG")" = 1 ] || fail "deny did not run exactly once: $(cat "$CARGO_STUB_LOG")"
+echo "ok: clippy and deny run once for a push of two commits with Rust changes"
 : > "$CARGO_STUB_LOG"
 echo 'fn x() {}' >> src/main.rs && git commit -q -am rust2
 if CARGO_STUB_FAIL=1 git push -q origin feature/rust >/dev/null 2>&1; then fail "push with failing clippy was allowed"; fi
 echo "ok: failing clippy blocks the push"
+if CARGO_STUB_FAIL_DENY=1 git push -q origin feature/rust >/dev/null 2>&1; then fail "push with failing deny was allowed"; fi
+echo "ok: failing deny blocks the push"
 : > "$CARGO_STUB_LOG"
 SKIP_CLIPPY=1 CARGO_STUB_FAIL=1 git push -q origin feature/rust >/dev/null 2>&1 || fail "SKIP_CLIPPY=1 did not skip"
 [ ! -s "$CARGO_STUB_LOG" ] || fail "cargo ran under SKIP_CLIPPY=1"
