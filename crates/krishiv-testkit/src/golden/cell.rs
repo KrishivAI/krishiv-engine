@@ -155,15 +155,32 @@ const SHORT_IDS: [(&str, &str); 28] = [
     ("HST", "-10:00"),
 ];
 
-/// Spark's `replaceFirst("(\\+|\\-)(\\d):", "$10$2:")`: a one-digit hour before a colon gets a
-/// leading zero (`+5:30` is `+05:30`).
+/// Spark's two `getZoneId` normalizations (`SparkDateTimeUtils`), in order:
+/// `singleHourTz` `(\+|\-)(\d):` → `$10$2:` (`+5:30` is `+05:30`), then
+/// `singleMinuteTz` `(\+|\-)(\d\d):(\d)$` → `$1$2:0$3` (`+10:7` is
+/// `+10:07`). Each replaces the first match only.
 fn pad_hour(name: &str) -> String {
     let b = name.as_bytes();
-    let hit = (0..b.len().saturating_sub(2))
+    let hour = (0..b.len().saturating_sub(2))
         .find(|&i| matches!(b[i], b'+' | b'-') && b[i + 1].is_ascii_digit() && b[i + 2] == b':');
-    match hit {
+    let name = match hour {
         Some(i) => format!("{}0{}", &name[..=i], &name[i + 1..]),
         None => name.to_owned(),
+    };
+    // `(\+|\-)(\d\d):(\d)$`: the first sign followed by two digits, a colon
+    // and exactly one final digit.
+    let b = name.as_bytes();
+    let minute = (0..b.len().saturating_sub(4)).find(|&i| {
+        matches!(b[i], b'+' | b'-')
+            && b[i + 1].is_ascii_digit()
+            && b[i + 2].is_ascii_digit()
+            && b[i + 3] == b':'
+            && b[i + 4].is_ascii_digit()
+            && i + 5 == b.len()
+    });
+    match minute {
+        Some(i) => format!("{}0{}", &name[..i + 4], &name[i + 4..]),
+        None => name,
     }
 }
 
@@ -916,14 +933,15 @@ mod tests {
         assert_eq!(at("PST")?, "1969-12-31 16:00:00");
         assert_eq!(at("EST")?, "1969-12-31 19:00:00");
         assert_eq!(at("IST")?, "1970-01-01 05:30:00");
+        // Spark pads a one-digit hour and then a one-digit final minute.
+        assert_eq!(at("+10:7")?, at("+10:07")?);
+        assert_eq!(at("+1:3")?, at("+01:03")?);
         for bad in [
             "",
             "+",
             "+19",
             "+18:30",
             "+18:00:01",
-            "+10:7",
-            "+1:3",
             "+10::00",
             "+aa",
             "+10:60",
@@ -944,5 +962,20 @@ mod tests {
         assert_eq!(render(2_000_000_000_000_000_000), "+65347-06-23 20:33:20");
         assert_eq!(render(-9_000_000_000_000_000_000), "-283229-05-10 00:07:02");
         Ok(())
+    }
+
+    #[test]
+    fn zone_ids_get_both_spark_paddings() {
+        assert_eq!(pad_hour("+5:30"), "+05:30");
+        assert_eq!(pad_hour("+10:7"), "+10:07");
+        assert_eq!(pad_hour("-5:7"), "-05:07");
+        assert_eq!(pad_hour("GMT+10:7"), "GMT+10:07");
+        assert_eq!(pad_hour("+10:07"), "+10:07");
+        assert_eq!(
+            pad_hour("+10:7:00"),
+            "+10:7:00",
+            "only a final single minute digit"
+        );
+        assert_eq!(pad_hour("America/Los_Angeles"), "America/Los_Angeles");
     }
 }
