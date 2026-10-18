@@ -56,15 +56,24 @@ struct Frame {
     children: Vec<(usize, usize)>,
 }
 
-/// The node's `Debug` lines without spans (a predicate's `op` span
-/// included), trimmed, as a comparable text.
+/// An optional span, written over three lines: `order_span: Some(`, the
+/// range, `)`.
+const OPTIONAL_SPAN: &str = "order_span: Some(";
+
+/// The node's `Debug` lines without spans (a predicate's `op` span and a
+/// query's `order_span` included), trimmed, as a comparable text.
 fn without_spans<'a>(lines: impl Iterator<Item = &'a str>) -> String {
     let mut out = String::new();
     let mut ordinal = false;
-    for line in lines
-        .map(|l| l.trim().trim_end_matches(','))
-        .filter(|l| !l.starts_with("span: ") && op_span(l).is_none())
-    {
+    let mut skip = 0;
+    for line in lines.map(|l| l.trim().trim_end_matches(',')) {
+        if skip > 0 || line.starts_with(OPTIONAL_SPAN) {
+            skip = if skip > 0 { skip - 1 } else { 2 };
+            continue;
+        }
+        if line.starts_with("span: ") || line == "order_span: None" || op_span(line).is_some() {
+            continue;
+        }
         let line = line.rsplit_once(": Expr {").map_or(line, |_| "Expr {");
         // A `?` marker's ordinal is its position in the whole statement,
         // so an expression parsed alone numbers it from 0.
@@ -121,8 +130,15 @@ pub fn check_spans(sql: &str, q: &Query, options: &ParserOptions) -> Result<(), 
             if let Some(top) = stack.last_mut() {
                 top.span = Some(span);
             }
-        } else if let Some((a, b)) = op_span(line) {
-            // An operator keyword's span: on tokens, and inside its node.
+        } else if let Some((a, b)) = op_span(line).or_else(|| {
+            // The range inside `order_span: Some(..)`.
+            let after = i
+                .checked_sub(1)
+                .is_some_and(|p| lines[p].trim() == OPTIONAL_SPAN);
+            after.then(|| range(line)).flatten()
+        }) {
+            // An operator's or a clause's span: on tokens, and inside its
+            // node.
             if !(a < b && starts.contains(&a) && ends.contains(&b)) {
                 return Err(format!("operator span {a}..{b} not on tokens"));
             }
@@ -212,6 +228,12 @@ mod tests {
         };
         op.end = op.start + 1;
         assert!(check_spans(between, &q, &d).is_err());
+        let ordered = "SELECT a FROM t ORDER BY a";
+        let mut q = parse_query(ordered, &d).unwrap();
+        check_spans(ordered, &q, &d).unwrap();
+        let span = q.order_span.as_mut().unwrap();
+        span.end = span.start + 1;
+        assert!(check_spans(ordered, &q, &d).is_err());
         let params = "SELECT ? - ?";
         check_spans(params, &parse_query(params, &d).unwrap(), &d).unwrap();
     }

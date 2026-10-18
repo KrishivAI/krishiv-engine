@@ -676,6 +676,24 @@ impl Resolver<'_> {
                 _ => Ok(x),
             })?;
         }
+        // Grouping attributes a subquery reads from here.
+        for b in &bounds {
+            let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(&b.expr), |n| {
+                if let crate::walk::Node::Expr(e) = n
+                    && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+                    && !visible.contains(&c.id)
+                    && !pass.iter().any(|a| a.col.id == c.id)
+                    && let Some(k) = info.keys.iter().find(|k| k.col.id == c.id)
+                {
+                    if !grown.out.iter().any(|o| o.col.id == c.id) {
+                        grown.aggregates.push(col_expr(&k.col, Origin::UNKNOWN));
+                        grown.out.push(k.clone());
+                    }
+                    pass.push(k.clone());
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+        }
         if pass.is_empty() {
             return Ok((bounds, agg.clone(), false));
         }

@@ -5153,6 +5153,876 @@
    ]
   },
   {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE NOT EXISTS (SELECT 1 FROM u WHERE u.a = t.a AND d > b)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE a IN (SELECT a FROM u WHERE d = b)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE a NOT IN (SELECT a FROM u)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (a, b) NOT IN (SELECT a, d FROM u)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE a NOT IN (SELECT a FROM u WHERE d = b)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (SELECT max(a) FROM u WHERE u.a = t.a) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "scalarsubquery(a)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (SELECT count(*) FROM u WHERE u.a = t.a) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "scalarsubquery(a)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE a = (SELECT max(a) FROM u WHERE u.d = t.b AND u.a > 1)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE c = (SELECT sum(a) FROM u WHERE u.a = t.a) + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(u.a) FROM u WHERE u.d = t.b) IS NULL",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT sum(a) FROM t GROUP BY b HAVING sum(a) > (SELECT max(a) FROM u WHERE u.d = t.b)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "sum(a)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a, (SELECT max(u.a) FROM u WHERE u.d = t.b) + 1 AS x FROM t ORDER BY x",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "x",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE c IN (SELECT max(u.a) FROM u WHERE u.d = t.b)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) FROM u) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE EXISTS (SELECT 1 FROM n WHERE n.i = u.a))",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE EXISTS (SELECT 1 FROM n WHERE n.i = c))",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`c`",
+    "proposal": "`d`, `dc`, `f`, `i`, `l`"
+   },
+   "context": {
+    "start": 88,
+    "stop": 88,
+    "fragment": "c"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE EXISTS (SELECT 1 FROM n WHERE n.i = t.c))",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`t`.`c`",
+    "proposal": "`n`.`d`, `n`.`dc`, `n`.`f`, `n`.`i`, `n`.`l`"
+   },
+   "context": {
+    "start": 88,
+    "stop": 90,
+    "fragment": "t.c"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a ORDER BY t.c)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "sqlExprs": "\"c ASC NULLS FIRST\""
+   },
+   "context": {
+    "start": 62,
+    "stop": 73,
+    "fragment": "ORDER BY t.c"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a) OR c > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (SELECT a FROM u WHERE u.a = t.a) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "scalarsubquery(a)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (SELECT count(*) + 1 FROM u WHERE u.a = t.a) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "scalarsubquery(a)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE a > (SELECT max(a) FROM u WHERE u.a > t.a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u JOIN n ON u.a = n.i AND n.l = t.c)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT t.a FROM u)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(u.a) FROM u WHERE u.d = t.b) > 1 AND (SELECT max(u.a) FROM u WHERE u.d = t.b) < 5",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) FROM u WHERE CAST(u.a AS BIGINT) = t.c) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) FROM u WHERE u.a + 1 = t.a) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) FROM u WHERE u.a = t.a AND u.d = t.b) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) FROM u WHERE u.a > 0 AND u.a = t.a) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) FROM u WHERE u.a = t.a) BETWEEN 1 AND 5",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT count(a) FROM u WHERE u.a = t.a) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) - 1 FROM u WHERE u.a = t.a) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) + min(a) FROM u WHERE u.a = t.a) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT -max(a) FROM u WHERE u.a = t.a) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT CAST(max(a) AS BIGINT) FROM u WHERE u.a = t.a) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT coalesce(max(a), 0) FROM u WHERE u.a = t.a) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a), min(a) FROM u WHERE u.a = t.a) > 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_SUBQUERY_EXPRESSION.SCALAR_SUBQUERY_RETURN_MORE_THAN_ONE_OUTPUT_COLUMN",
+   "sql_state": "42823",
+   "message_parameters": {
+    "number": "2"
+   },
+   "context": {
+    "start": 22,
+    "stop": 67,
+    "fragment": "(SELECT max(a), min(a) FROM u WHERE u.a = t.a)"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) FROM u WHERE u.a = t.a GROUP BY d) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) FROM u WHERE u.a = t.a LIMIT 1) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) FROM (SELECT a FROM u) x WHERE x.a = t.a) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(x) FROM (SELECT a AS x FROM u) v WHERE v.x = t.a) > 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a) FROM u WHERE u.a = t.a) IN (SELECT a FROM u)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE a > (SELECT max(a) FROM u WHERE u.a = t.a AND EXISTS (SELECT 1 FROM n))",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE c > 0 AND (SELECT max(a) FROM u WHERE u.a = t.a) > 1 AND a NOT IN (SELECT a FROM u WHERE u.d = t.b)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a AND (SELECT max(i) FROM n WHERE n.i = u.a) > 0)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a AND EXISTS (SELECT 1 FROM n WHERE n.i = u.a))",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a AND u.a IN (SELECT i FROM n))",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a OR u.a IN (SELECT i FROM n))",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a ORDER BY u.d)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT * FROM u WHERE u.a = t.a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT a FROM (SELECT a, d FROM u) x WHERE x.a = t.a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u x(p, q) WHERE x.p = t.a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM t t2 WHERE t2.a = t.a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "WITH c AS (SELECT a, b FROM t) SELECT a FROM c WHERE EXISTS (SELECT 1 FROM c c2 WHERE c2.a = c.a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE a IN (SELECT a FROM t)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE a IN (SELECT a FROM (SELECT a, d FROM u WHERE d = t.b) x)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE a IN (SELECT x FROM (SELECT a AS x, d FROM u) v WHERE v.d = t.b)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE a IN (SELECT a FROM u x(a, d) WHERE x.d = t.b)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE c IN (SELECT t.c FROM u WHERE u.a = t.a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM t JOIN u ON t.a = (SELECT max(i) FROM n WHERE n.i = u.a)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.UNSUPPORTED_CORRELATED_SCALAR_SUBQUERY",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "treeNode": "Join Inner, (a#104991 = scalar-subquery#107494 [a#104995])\n:  +- Aggregate [max(i#105012) AS max(i)#107496]\n:     +- Filter (i#105012 = outer(a#104995))\n:        +- SubqueryAlias spark_catalog.default.n\n:           +- Relation spark_catalog.default.n[ti#105010,si#105011,i#105012,l#105013L,f#105014,d#105015,dc#105016,dw#105017,s#105018,bo#105019,dt#105020,ts#105021,tn#105022,bi#105023] parquet\n:- SubqueryAlias spark_catalog.default.t\n:  +- Relation spark_catalog.default.t[a#104991,b#104992,c#104993L] parquet\n+- SubqueryAlias spark_catalog.default.u\n   +- Relation spark_catalog.default.u[a#104995,d#104996] parquet\n"
+   },
+   "context": {
+    "start": 16,
+    "stop": 69,
+    "fragment": "JOIN u ON t.a = (SELECT max(i) FROM n WHERE n.i = u.a)"
+   }
+  },
+  {
+   "sql": "SELECT sum((SELECT max(a) FROM u WHERE u.a = t.a)) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "sum(scalarsubquery(a))",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT count(*) FROM t GROUP BY (SELECT max(a) FROM u WHERE u.a = t.a)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.MUST_AGGREGATE_CORRELATED_SCALAR_SUBQUERY",
+   "sql_state": "0A000",
+   "message_parameters": {},
+   "context": {
+    "start": 23,
+    "stop": 69,
+    "fragment": "GROUP BY (SELECT max(a) FROM u WHERE u.a = t.a)"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t ORDER BY (SELECT max(u.a) FROM u WHERE u.d = t.b)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`t`.`b`",
+    "proposal": "`u`.`a`, `u`.`d`"
+   },
+   "context": {
+    "start": 61,
+    "stop": 63,
+    "fragment": "t.b"
+   }
+  },
+  {
+   "sql": "SELECT a FROM t WHERE (SELECT max(a > 0) FROM u WHERE u.a = t.a)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.a = t.a ORDER BY t.c DESC NULLS LAST)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "sqlExprs": "\"c DESC NULLS LAST\""
+   },
+   "context": {
+    "start": 62,
+    "stop": 89,
+    "fragment": "ORDER BY t.c DESC NULLS LAST"
+   }
+  },
+  {
+   "sql": "SELECT EXISTS (SELECT 1 FROM u WHERE u.a = t.a) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "exists(a)",
+     "type": "boolean",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a IN (SELECT a FROM u) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "(a IN (listquery()))",
+     "type": "boolean",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a IN (SELECT a FROM u WHERE u.d = t.b) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "(a IN (listquery(b)))",
+     "type": "boolean",
+     "nullable": true
+    }
+   ]
+  },
+  {
    "sql": "SELECT dt + i, dt - dt FROM n",
    "conf": {},
    "ok": true,

@@ -5,40 +5,39 @@ expression: optimized.root().to_string()
 Limit 100
 +- Sort [s_acctbal#14 DESC NULLS LAST, n_name#22 ASC NULLS FIRST, s_name#10 ASC NULLS FIRST, p_partkey#0 ASC NULLS FIRST], true
    +- Project [s_acctbal#14, s_name#10, n_name#22, p_partkey#0, p_mfgr#2, s_address#11, s_phone#13, s_comment#15]
-      +- Join Inner, (n_regionkey#23 == r_regionkey#25)
-         :- Project [p_partkey#0, p_mfgr#2, s_name#10, s_address#11, s_phone#13, s_acctbal#14, s_comment#15, n_name#22, n_regionkey#23]
-         :  +- Join Inner, (s_nationkey#12 == n_nationkey#21)
-         :     :- Project [p_partkey#0, p_mfgr#2, s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15]
-         :     :  +- Filter (ps_supplycost#19 == scalar-subquery)
-         :     :     :  +- Aggregate [], [min(ps_supplycost#31) AS min(ps_supplycost)#47]
-         :     :     :     +- Project [ps_supplycost#31]
-         :     :     :        +- Join Inner, (n_regionkey#42 == r_regionkey#44)
-         :     :     :           :- Project [ps_supplycost#31, n_regionkey#42]
-         :     :     :           :  +- Join Inner, (s_nationkey#36 == n_nationkey#40)
-         :     :     :           :     :- Project [ps_supplycost#31, s_nationkey#36]
-         :     :     :           :     :  +- Join Inner, (s_suppkey#33 == ps_suppkey#29)
-         :     :     :           :     :     :- Project [ps_suppkey#29, ps_supplycost#31]
-         :     :     :           :     :     :  +- Filter (outer(p_partkey#0) == ps_partkey#28)
-         :     :     :           :     :     :     +- Shift +12
-         :     :     :           :     :     :        +- Scan spark_catalog.default.partsupp [ps_partkey#16, ps_suppkey#17, ps_supplycost#19] (shared #1)
-         :     :     :           :     :     +- Project [s_suppkey#33, s_nationkey#36]
-         :     :     :           :     :        +- Shift +24
-         :     :     :           :     :           +- Scan spark_catalog.default.supplier [s_suppkey#9, s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15] (shared #2)
-         :     :     :           :     +- Project [n_nationkey#40, n_regionkey#42]
-         :     :     :           :        +- Shift +19
-         :     :     :           :           +- Scan spark_catalog.default.nation [n_nationkey#21, n_name#22, n_regionkey#23] (shared #3)
-         :     :     :           +- Project [r_regionkey#44]
-         :     :     :              +- Shift +19
-         :     :     :                 +- Filter (r_name#26 == 'EUROPE')
-         :     :     :                    +- Scan spark_catalog.default.region [r_regionkey#25, r_name#26] (shared #4)
-         :     :     +- Join Inner, ((p_partkey#0 == ps_partkey#16) and (s_suppkey#9 == ps_suppkey#17))
-         :     :        :- Join Inner
-         :     :        :  :- Project [p_partkey#0, p_mfgr#2]
-         :     :        :  :  +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
-         :     :        :  :     +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5]
-         :     :        :  +- Shared #2, printed above
-         :     :        +- Shared #1, printed above
-         :     +- Shared #3, printed above
-         +- Project [r_regionkey#25]
-            +- Filter (r_name#26 == 'EUROPE')
-               +- Shared #4, printed above
+      +- Join Inner, ((p_partkey#0 == ps_partkey#28) and (ps_supplycost#19 == min(ps_supplycost)#47))
+         :- Project [p_partkey#0, p_mfgr#2, s_name#10, s_address#11, s_phone#13, s_acctbal#14, s_comment#15, ps_supplycost#19, n_name#22]
+         :  +- Join Inner, (n_regionkey#23 == r_regionkey#25)
+         :     :- Project [p_partkey#0, p_mfgr#2, s_name#10, s_address#11, s_phone#13, s_acctbal#14, s_comment#15, ps_supplycost#19, n_name#22, n_regionkey#23]
+         :     :  +- Join Inner, (s_nationkey#12 == n_nationkey#21)
+         :     :     :- Project [p_partkey#0, p_mfgr#2, s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15, ps_supplycost#19]
+         :     :     :  +- Join Inner, ((p_partkey#0 == ps_partkey#16) and (s_suppkey#9 == ps_suppkey#17))
+         :     :     :     :- Join Inner
+         :     :     :     :  :- Project [p_partkey#0, p_mfgr#2]
+         :     :     :     :  :  +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
+         :     :     :     :  :     +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5]
+         :     :     :     :  +- Scan spark_catalog.default.supplier [s_suppkey#9, s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15] (shared #1)
+         :     :     :     +- Scan spark_catalog.default.partsupp [ps_partkey#16, ps_suppkey#17, ps_supplycost#19] (shared #2)
+         :     :     +- Scan spark_catalog.default.nation [n_nationkey#21, n_name#22, n_regionkey#23] (shared #3)
+         :     +- Project [r_regionkey#25]
+         :        +- Filter (r_name#26 == 'EUROPE')
+         :           +- Scan spark_catalog.default.region [r_regionkey#25, r_name#26] (shared #4)
+         +- Aggregate [ps_partkey#28], [min(ps_supplycost#31) AS min(ps_supplycost)#47, ps_partkey#28]
+            +- Project [ps_partkey#28, ps_supplycost#31]
+               +- Join Inner, (n_regionkey#42 == r_regionkey#44)
+                  :- Project [ps_partkey#28, ps_supplycost#31, n_regionkey#42]
+                  :  +- Join Inner, (s_nationkey#36 == n_nationkey#40)
+                  :     :- Project [ps_partkey#28, ps_supplycost#31, s_nationkey#36]
+                  :     :  +- Join Inner, (s_suppkey#33 == ps_suppkey#29)
+                  :     :     :- Shift +12
+                  :     :     :  +- Shared #2, printed above
+                  :     :     +- Project [s_suppkey#33, s_nationkey#36]
+                  :     :        +- Shift +24
+                  :     :           +- Shared #1, printed above
+                  :     +- Project [n_nationkey#40, n_regionkey#42]
+                  :        +- Shift +19
+                  :           +- Shared #3, printed above
+                  +- Project [r_regionkey#44]
+                     +- Shift +19
+                        +- Filter (r_name#26 == 'EUROPE')
+                           +- Shared #4, printed above

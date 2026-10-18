@@ -10,13 +10,18 @@
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 #![expect(clippy::unwrap_in_result, reason = "a malformed fixture is a test bug")]
 
+use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Arc;
 
-use krishiv_plan::SourceId;
 use krishiv_plan::analyzer::testing::{block_on, context};
 use krishiv_plan::analyzer::{
     AnalysisError, AnalyzedPlan, Analyzer as _, DefaultAnalyzer, MemoryCatalog, QueryContext,
     ResolutionConf, TableColumn,
+};
+use krishiv_plan::{
+    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, LogicalPlan, PlanNode,
+    ResolvedExpr, SourceId,
 };
 use krishiv_sql::{ParserOptions, parse_and_lower, redact_sql};
 use serde_json::Value;
@@ -167,14 +172,120 @@ fn tpch_resolves_as_spark_does() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Coercions Krishiv rejects explicitly (`KRISHIV_UNSUPPORTED_FEATURE`)
-/// where Spark resolves or fails with another class, never with a wrong
-/// result: `+` and `-` with a date or timestamp operand (`date_add`,
-/// intervals; owner: P2-T025a), and operators' string coercions with
-/// `spark.sql.ansi.enabled` off (owner: P2-T071d).
-const GAPS: [&str; 2] = [
+/// `e`'s arguments when it is the operator `op`.
+fn operator(e: &Expr, op: Builtin) -> Option<&[Arc<Expr>]> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.id == FunctionId::Builtin(op) => {
+            Some(&f.args)
+        }
+        _ => None,
+    }
+}
+
+/// The attribute `e` reads directly, under any casts.
+fn column(e: &Expr) -> Option<AttrId> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+        ExprNode::Cast { expr, .. } => column(expr),
+        _ => None,
+    }
+}
+
+/// Whether `e` equates a column of `left` with one of `right`: `l = r`,
+/// or the NULL-aware `(l = r) OR isnull(l = r)` of a `NOT IN`.
+fn equi_key(e: &Expr, left: &BTreeSet<AttrId>, right: &BTreeSet<AttrId>) -> bool {
+    if let Some([eq, unknown]) = operator(e, Builtin::Or) {
+        return operator(unknown, Builtin::IsNull).is_some_and(|a| a.len() == 1 && a[0] == *eq)
+            && equi_key(eq, left, right);
+    }
+    let Some([a, b]) = operator(e, Builtin::Eq) else {
+        return false;
+    };
+    let (Some(a), Some(b)) = (column(a), column(b)) else {
+        return false;
+    };
+    (left.contains(&a) && right.contains(&b)) || (left.contains(&b) && right.contains(&a))
+}
+
+/// Every join of `plan` that is not a cross product, by its kind, and
+/// whether its condition has an equi-key conjunct; and whether any
+/// expression still reads an enclosing query's column.
+fn joins(plan: &Arc<LogicalPlan>, out: &mut Vec<(JoinKind, bool)>, outer: &mut bool) {
+    fn exprs(e: &Arc<Expr>, out: &mut Vec<(JoinKind, bool)>, outer: &mut bool) {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::OuterColumn(_)) => *outer = true,
+            ExprNode::Subquery { plan, .. } => joins(plan, out, outer),
+            _ => {}
+        }
+        e.for_each_child(&mut |c| exprs(c, out, outer));
+    }
+    if let PlanNode::Join {
+        left,
+        right,
+        kind,
+        condition: JoinCondition::On(on),
+    } = &plan.node
+    {
+        let ids = |p: &LogicalPlan| -> BTreeSet<AttrId> {
+            p.resolved_output().unwrap().iter().map(|c| c.id).collect()
+        };
+        let (l, r) = (ids(left), ids(right));
+        let mut stack = vec![Arc::clone(on)];
+        let mut keyed = false;
+        while let Some(c) = stack.pop() {
+            match operator(&c, Builtin::And) {
+                Some(args) => stack.extend(args.iter().cloned()),
+                None => keyed |= equi_key(&c, &l, &r),
+            }
+        }
+        out.push((*kind, keyed));
+    }
+    plan.for_each_expr(&mut |e| exprs(e, out, outer));
+    plan.for_each_child(&mut |c| joins(c, out, outer));
+}
+
+/// TPC-H's subqueries become joins with equi keys (or the NULL-aware key
+/// of a `NOT IN`), so none needs a nested loop, and no correlation is
+/// left behind (P2-T071c).
+#[test]
+fn tpch_subqueries_become_equi_joins() {
+    let g = goldens();
+    let mut kinds = BTreeSet::new();
+    for case in g["tpch"].as_array().unwrap() {
+        let id = case["id"].as_str().unwrap();
+        let a = analyze(&g, &tpch(id), ResolutionConf::default()).unwrap();
+        let (mut found, mut outer) = (Vec::new(), false);
+        joins(a.plan.root(), &mut found, &mut outer);
+        assert!(!outer, "{id}: an outer reference is left");
+        for (kind, keyed) in found {
+            assert!(keyed, "{id}: a {kind:?} join without an equi key");
+            kinds.insert(format!("{kind:?}"));
+        }
+    }
+    assert_eq!(
+        kinds.into_iter().collect::<Vec<_>>(),
+        ["LeftAnti", "LeftOuter", "LeftSemi"]
+    );
+}
+
+/// Shapes Krishiv rejects explicitly (`KRISHIV_UNSUPPORTED_FEATURE`) where
+/// Spark resolves or fails with another class, never with a wrong result:
+/// `+` and `-` with a date or timestamp operand (`date_add`, intervals;
+/// owner: P2-T025a), operators' string coercions with
+/// `spark.sql.ansi.enabled` off (owner: P2-T071d), and correlated
+/// subqueries beyond TPC-H's shapes (owner: P2-T115, general unnesting).
+const GAPS: [&str; 11] = [
     "date and timestamp arithmetic",
     "implicit string casts with spark.sql.ansi.enabled off",
+    "correlated EXISTS and IN subqueries inside OR, NOT or other expressions",
+    "correlated scalar subqueries without an aggregate",
+    "correlated scalar subqueries with GROUP BY",
+    "a correlated scalar subquery whose value over no rows is not NULL or a count",
+    "correlated scalar subqueries whose correlation is not an equality",
+    "correlated predicates with subqueries",
+    "outer references in a subquery's select list",
+    "outer references below a join, aggregate, limit or set operation",
+    "correlated subqueries outside a filter or a projection",
 ];
 
 /// Statements whose output is nullable where Spark's is not, by design
@@ -237,7 +348,7 @@ fn resolution_corpus_matches_spark() {
         failures.join("\n")
     );
     // The gaps stay the statements they are now.
-    assert_eq!(gaps, 113, "statements in documented gaps");
+    assert_eq!(gaps, 129, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.
@@ -263,6 +374,8 @@ fn resolution_corpus_matches_spark() {
         "INVALID_AGGREGATE_FILTER.NOT_BOOLEAN",
         "INVALID_LIMIT_LIKE_EXPRESSION.DATA_TYPE",
         "JOIN_CONDITION_IS_NOT_BOOLEAN_TYPE",
+        // Subqueries.
+        "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
     ] {
         assert!(raised.contains(class), "{class} not raised");
     }

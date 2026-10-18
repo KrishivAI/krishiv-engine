@@ -4,10 +4,11 @@ expression: a.plan.root().to_string()
 ---
 Sort [supplier_cnt#21 DESC NULLS LAST, p_brand#8 ASC NULLS FIRST, p_type#9 ASC NULLS FIRST, p_size#10 ASC NULLS FIRST], true
 +- Aggregate [p_brand#8, p_type#9, p_size#10], [p_brand#8, p_type#9, p_size#10, count(DISTINCT ps_suppkey#1) AS supplier_cnt#21]
-   +- Filter ((((p_partkey#5 == ps_partkey#0) and (NOT (p_brand#8 == 'Brand#45'))) and (NOT (p_type#9 like 'MEDIUM POLISHED%'))) and ((p_size#10 IN (49, 14, 23, 45, 19, 3, 36, 9)) and (NOT ((ps_suppkey#1) IN (list-query)))))
-      :  +- Project [s_suppkey#14]
-      :     +- Filter (s_comment#20 like '%Customer%Complaints%')
-      :        +- Scan spark_catalog.default.supplier [s_suppkey#14, s_name#15, s_address#16, s_nationkey#17, s_phone#18, s_acctbal#19, s_comment#20]
-      +- Join Inner
-         :- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1, ps_availqty#2, ps_supplycost#3, ps_comment#4]
-         +- Scan spark_catalog.default.part [p_partkey#5, p_name#6, p_mfgr#7, p_brand#8, p_type#9, p_size#10, p_container#11, p_retailprice#12, p_comment#13]
+   +- Join LeftAnti, ((ps_suppkey#1 == s_suppkey#14) or isnull((ps_suppkey#1 == s_suppkey#14)))
+      :- Filter ((((p_partkey#5 == ps_partkey#0) and (NOT (p_brand#8 == 'Brand#45'))) and (NOT (p_type#9 like 'MEDIUM POLISHED%'))) and (p_size#10 IN (49, 14, 23, 45, 19, 3, 36, 9)))
+      :  +- Join Inner
+      :     :- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1, ps_availqty#2, ps_supplycost#3, ps_comment#4]
+      :     +- Scan spark_catalog.default.part [p_partkey#5, p_name#6, p_mfgr#7, p_brand#8, p_type#9, p_size#10, p_container#11, p_retailprice#12, p_comment#13]
+      +- Project [s_suppkey#14]
+         +- Filter (s_comment#20 like '%Customer%Complaints%')
+            +- Scan spark_catalog.default.supplier [s_suppkey#14, s_name#15, s_address#16, s_nationkey#17, s_phone#18, s_acctbal#19, s_comment#20]

@@ -626,6 +626,7 @@ impl<'s> Parser<'s> {
             span: Span::new(start, body.span.end),
             body,
             order_by: vec![],
+            order_span: None,
             cluster_by: vec![],
             distribute_by: vec![],
             sort_by: vec![],
@@ -639,8 +640,10 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn organization(&mut self, q: &mut Query) -> PR<()> {
         if self.kw_at(0, "ORDER") && self.kw_at(1, "BY") {
+            let start = self.start();
             self.pos += 2;
             q.order_by = self.comma_sep(|p| p.sort_item(true))?;
+            q.order_span = Some(self.span_from(start));
         }
         for (kw, list) in [
             ("CLUSTER", &mut q.cluster_by),

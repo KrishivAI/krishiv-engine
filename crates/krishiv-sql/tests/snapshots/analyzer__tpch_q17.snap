@@ -3,11 +3,13 @@ source: crates/krishiv-sql/tests/analyzer.rs
 expression: a.plan.root().to_string()
 ---
 Aggregate [], [(sum(l_extendedprice#5) / 7.0) AS avg_yearly#42]
-+- Filter (((p_partkey#16 == l_partkey#1) and (p_brand#19 == 'Brand#23')) and ((p_container#22 == 'MED BOX') and (CAST(l_quantity#4 AS DECIMAL(21,7)) < scalar-subquery)))
-   :  +- Aggregate [], [(0.2 * avg(l_quantity#29)) AS (0.2 * avg(l_quantity))#41]
-   :     +- Filter (l_partkey#26 == outer(p_partkey#16))
-   :        +- Shift +25
-   :           +- Scan spark_catalog.default.lineitem [l_orderkey#0, l_partkey#1, l_suppkey#2, l_linenumber#3, l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10, l_commitdate#11, l_receiptdate#12, l_shipinstruct#13, l_shipmode#14, l_comment#15] (shared #1)
-   +- Join Inner
-      :- Shared #1, printed above
-      +- Scan spark_catalog.default.part [p_partkey#16, p_name#17, p_mfgr#18, p_brand#19, p_type#20, p_size#21, p_container#22, p_retailprice#23, p_comment#24]
++- Project [l_orderkey#0, l_partkey#1, l_suppkey#2, l_linenumber#3, l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10, l_commitdate#11, l_receiptdate#12, l_shipinstruct#13, l_shipmode#14, l_comment#15, p_partkey#16, p_name#17, p_mfgr#18, p_brand#19, p_type#20, p_size#21, p_container#22, p_retailprice#23, p_comment#24]
+   +- Filter (CAST(l_quantity#4 AS DECIMAL(21,7)) < (0.2 * avg(l_quantity))#41)
+      +- Join LeftOuter, (p_partkey#16 == l_partkey#26)
+         :- Filter (((p_partkey#16 == l_partkey#1) and (p_brand#19 == 'Brand#23')) and (p_container#22 == 'MED BOX'))
+         :  +- Join Inner
+         :     :- Scan spark_catalog.default.lineitem [l_orderkey#0, l_partkey#1, l_suppkey#2, l_linenumber#3, l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10, l_commitdate#11, l_receiptdate#12, l_shipinstruct#13, l_shipmode#14, l_comment#15] (shared #1)
+         :     +- Scan spark_catalog.default.part [p_partkey#16, p_name#17, p_mfgr#18, p_brand#19, p_type#20, p_size#21, p_container#22, p_retailprice#23, p_comment#24]
+         +- Aggregate [l_partkey#26], [(0.2 * avg(l_quantity#29)) AS (0.2 * avg(l_quantity))#41, l_partkey#26]
+            +- Shift +25
+               +- Shared #1, printed above

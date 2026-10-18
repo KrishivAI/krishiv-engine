@@ -224,13 +224,15 @@ impl Lowerer {
         for (items, global) in [(&q.order_by, true), (&q.sort_by, false)] {
             if !items.is_empty() {
                 let order = items.iter().map(|s| self.sort_item(s)).collect::<R<_>>()?;
+                // Spark's errors cite the ORDER BY clause.
+                let span = q.order_span.filter(|_| global).unwrap_or(q.span);
                 plan = self.node(
                     PlanNode::Sort {
                         input: arc(plan),
                         order,
                         global,
                     },
-                    q.span,
+                    span,
                 );
             }
         }
