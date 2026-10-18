@@ -533,7 +533,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    uses: ./.github/workflows/wheels.yml
+    uses: $/.github/workflows/wheels.yml
 
   # Required-check summary for the `wheels` matrix: a skipped matrix job reports
   # under an unexpanded name, so the legs themselves cannot be required. This job
