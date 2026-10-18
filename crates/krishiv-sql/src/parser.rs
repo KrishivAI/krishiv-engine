@@ -340,7 +340,7 @@ fn run<R: TopRule>(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<R
     // alternative to `ARRAY<...>` until one of them fails: when the bare
     // type reads on further (`x::array<int> > y` as a comparison), Spark
     // takes it.
-    for &keyword in &p.cast_types {
+    for keyword in retry_keywords(&p.cast_types, p.far) {
         let mut retry = Parser::new(src, p.toks.clone(), opts, Some(keyword));
         match R::parse(&mut retry) {
             Ok(out) => {
@@ -354,6 +354,25 @@ fn run<R: TopRule>(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<R
         }
     }
     Err(failed.into())
+}
+
+/// The most `::` complex-cast keywords [`run`] retries as bare types.
+const MAX_CAST_RETRIES: usize = 16;
+
+/// The cast keywords worth a bare-type retry after a parse that read up to
+/// token `far` failed, in
+/// position order. Backtracking records a cast once per attempt, so they
+/// are deduplicated. A keyword at or after the furthest token read cannot
+/// have shaped the failure. Over the cap, the casts nearest the failure
+/// are kept: forcing one bare changes the parse only from that token on,
+/// so the cast that matters is the one the failure sits behind.
+pub(crate) fn retry_keywords(cast_types: &[usize], far: usize) -> Vec<usize> {
+    let mut keywords: Vec<usize> = cast_types.iter().copied().filter(|&k| k < far).collect();
+    keywords.sort_unstable();
+    keywords.dedup();
+    let excess = keywords.len().saturating_sub(MAX_CAST_RETRIES);
+    keywords.drain(..excess);
+    keywords
 }
 
 /// `out` after Spark's post-parse checks ([`TopRule::validate`]), whose

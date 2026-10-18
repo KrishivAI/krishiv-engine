@@ -386,3 +386,34 @@ fn post_parse_checks_raise_spark_classes() {
     let e = parse_statement("SELECT * FROM t WITH ('secret')", &d).unwrap_err();
     assert!(!e.error.to_string().contains("secret"), "{}", e.error);
 }
+
+/// A statement of many `::` complex casts with a syntax error at its end is
+/// retried a bounded number of times (the bare-type retry in `run`), and
+/// its error is the one the same statement gets with few casts.
+#[test]
+fn many_complex_casts_fail_in_bounded_time() {
+    let options = ParserOptions::default();
+    let statement = |casts: usize| {
+        let items: Vec<String> = (0..casts).map(|i| format!("c{i}::array<int>")).collect();
+        format!("SELECT {} FROM t WHERE x +", items.join(", "))
+    };
+    let few = parse_statement(&statement(2), &options).unwrap_err();
+    let start = std::time::Instant::now();
+    let many = parse_statement(&statement(20_000), &options).unwrap_err();
+    // Generous: the cap makes this a handful of parses; the uncapped retry
+    // loop took minutes at this size.
+    assert!(start.elapsed().as_secs() < 30, "{:?}", start.elapsed());
+    assert_eq!(many.error.to_string(), few.error.to_string());
+    // The retry still finds the bare reading when a cast needs it.
+    assert!(parse_statement("SELECT x::array<int> > y", &options).is_ok());
+}
+
+/// The retried cast keywords are deduplicated, lie before the failure and
+/// are capped at the ones nearest it.
+#[test]
+fn retry_keywords_are_unique_bounded_and_before_the_failure() {
+    let casts: Vec<usize> = (0..40).flat_map(|k| [k, k]).chain([1_000, 2_000]).collect();
+    let kept = crate::parser::retry_keywords(&casts, 1_000);
+    assert_eq!(kept, (24..40).collect::<Vec<_>>());
+    assert_eq!(crate::parser::retry_keywords(&[5, 3, 5], 1_000), vec![3, 5]);
+}
