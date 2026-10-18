@@ -37,6 +37,18 @@ const SPANLESS: &[&str] = &[
     "TableFunction",
 ];
 
+/// A `Debug` range `a..b` (a trailing comma allowed).
+fn range(r: &str) -> Option<(usize, usize)> {
+    let (a, b) = r.trim_end_matches(',').split_once("..")?;
+    Some((a.parse().ok()?, b.parse().ok()?))
+}
+
+/// The span of a predicate's operator, from its `op: a..b` line (a set
+/// operation's `op` names the operation instead).
+fn op_span(line: &str) -> Option<(usize, usize)> {
+    line.strip_prefix("op: ").and_then(range)
+}
+
 struct Frame {
     name: String,
     first_line: usize,
@@ -51,7 +63,7 @@ fn without_spans<'a>(lines: impl Iterator<Item = &'a str>) -> String {
     let mut ordinal = false;
     for line in lines
         .map(|l| l.trim().trim_end_matches(','))
-        .filter(|l| !l.starts_with("span: ") && !l.starts_with("op: "))
+        .filter(|l| !l.starts_with("span: ") && op_span(l).is_none())
     {
         let line = line.rsplit_once(": Expr {").map_or(line, |_| "Expr {");
         // A `?` marker's ordinal is its position in the whole statement,
@@ -104,15 +116,17 @@ pub fn check_spans(sql: &str, q: &Query, options: &ParserOptions) -> Result<(), 
         children: vec![],
     }];
     for (i, line) in lines.iter().map(|l| l.trim()).enumerate() {
-        if let Some(range) = line.strip_prefix("span: ").map(|r| r.trim_end_matches(',')) {
-            let (a, b) = range.split_once("..").ok_or("bad span")?;
-            let span = (
-                a.parse().map_err(|_| "bad span")?,
-                b.parse().map_err(|_| "bad span")?,
-            );
+        if let Some(r) = line.strip_prefix("span: ") {
+            let span = range(r).ok_or("bad span")?;
             if let Some(top) = stack.last_mut() {
                 top.span = Some(span);
             }
+        } else if let Some((a, b)) = op_span(line) {
+            // An operator keyword's span: on tokens, and inside its node.
+            if !(a < b && starts.contains(&a) && ends.contains(&b)) {
+                return Err(format!("operator span {a}..{b} not on tokens"));
+            }
+            stack.last_mut().ok_or("unbalanced")?.children.push((a, b));
         } else if line.ends_with('{') || line.ends_with('(') || line.ends_with('[') {
             let struct_like = line.ends_with('{');
             let name = line.trim_end_matches(['{', '(', '[']).trim();
@@ -187,6 +201,17 @@ mod tests {
         q.span.end = 3;
         assert!(check_spans(sql, &q, &d).is_err());
         assert_eq!(respaced("SELECT -- c\n1"), "SELECT /* x */\n1");
+        let between = "SELECT a FROM t WHERE a NOT BETWEEN 1 AND 2";
+        let mut q = parse_query(between, &d).unwrap();
+        check_spans(between, &q, &d).unwrap();
+        let SetExprKind::Select(s) = &mut q.body.kind else {
+            unreachable!()
+        };
+        let ExprKind::Between { op, .. } = &mut s.selection.as_mut().unwrap().kind else {
+            unreachable!()
+        };
+        op.end = op.start + 1;
+        assert!(check_spans(between, &q, &d).is_err());
         let params = "SELECT ? - ?";
         check_spans(params, &parse_query(params, &d).unwrap(), &d).unwrap();
     }

@@ -5,7 +5,8 @@
 //! statement Spark fails only at run time must resolve. The statements
 //! that use what Krishiv does not have yet are listed, each with a reason,
 //! in `tests/fixtures/analysis/type-coercion-manifest.json`; the list must
-//! match the failures exactly, so a fix shrinks it and a regression fails.
+//! match the failures and their reasons exactly, so a fix shrinks it and a
+//! regression fails.
 //! Rows need the engine (P2-T074): this checks analysis only.
 //!
 //! `KRISHIV_UPDATE_MANIFEST=1` rewrites the manifest from the failures.
@@ -173,22 +174,32 @@ fn type_coercion_goldens_analyze_as_spark_does() {
         std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap() + "\n").unwrap();
     }
     let manifest: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    let listed: BTreeSet<(String, String)> = manifest["entries"]
+    let listed: BTreeMap<(String, String), String> = manifest["entries"]
         .as_array()
         .unwrap()
         .iter()
         .map(|e| {
-            (
-                e["file"].as_str().unwrap().to_owned(),
-                e["query"].as_str().unwrap().to_owned(),
-            )
+            let text = |k: &str| e[k].as_str().unwrap().to_owned();
+            ((text("file"), text("query")), text("reason"))
         })
         .collect();
-    let failed: BTreeSet<(String, String)> = failures.keys().cloned().collect();
-    let new: Vec<_> = failed.difference(&listed).collect();
-    let fixed: Vec<_> = listed.difference(&failed).collect();
+    let new: Vec<_> = failures
+        .iter()
+        .filter(|(k, _)| !listed.contains_key(*k))
+        .collect();
+    let fixed: Vec<_> = listed
+        .keys()
+        .filter(|k| !failures.contains_key(*k))
+        .collect();
+    // A listed statement that now fails otherwise: the reason changed.
+    let changed: Vec<_> = failures
+        .iter()
+        .filter(|(k, why)| listed.get(*k).is_some_and(|was| was != *why))
+        .map(|(k, why)| (k, &listed[k], why))
+        .collect();
     assert!(
-        new.is_empty() && fixed.is_empty(),
-        "unlisted failures: {new:#?}\nlisted but passing: {fixed:#?}"
+        new.is_empty() && fixed.is_empty() && changed.is_empty(),
+        "unlisted failures: {new:#?}\nlisted but passing: {fixed:#?}\n\
+         failing for another reason (listed, now): {changed:#?}"
     );
 }
