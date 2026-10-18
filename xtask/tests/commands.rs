@@ -457,3 +457,133 @@ esac
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("release build of krishiv-cli failed"));
 }
+
+/// `wheel-sizes`: records the wheel sizes, then gates growth past the
+/// budget and wheels with no recorded size (`BUDGET_APPROVED=1` approves).
+#[test]
+fn wheel_sizes_record_and_gate() {
+    let dir = tmp("wheel-sizes");
+    let wheels = dir.join("dist");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let budgets = dir.join("budgets.json");
+    std::fs::write(
+        &budgets,
+        r#"{"transitive_crates": 1, "binary_bytes": null, "clean_build_secs": null}"#,
+    )
+    .unwrap();
+    let wheel = wheels.join("krishiv-0.1.0-cp311-abi3-manylinux_2_28_x86_64.whl");
+    std::fs::write(&wheel, vec![0_u8; 1000]).unwrap();
+    std::fs::write(wheels.join("README.txt"), "ignored").unwrap();
+    let run = |extra: &[&str], approved: bool| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        c.arg("wheel-sizes")
+            .arg(&wheels)
+            .arg("--budgets")
+            .arg(&budgets)
+            .args(extra)
+            .env_remove("GITHUB_STEP_SUMMARY")
+            .env_remove("BUDGET_APPROVED");
+        if approved {
+            c.env("BUDGET_APPROVED", "1");
+        }
+        c.output().unwrap()
+    };
+    // No baseline at all yet: the gate only reports.
+    let out = run(&[], false);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("no baseline yet"),
+        "{out:?}"
+    );
+    // Record, then the same wheel passes.
+    assert!(run(&["--write"], false).status.success());
+    let recorded: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&budgets).unwrap()).unwrap();
+    assert_eq!(
+        recorded["wheel_bytes"]["cp311-abi3-manylinux_2_28_x86_64"],
+        1000
+    );
+    assert_eq!(recorded["transitive_crates"], 1);
+    // Recording a subset keeps the other targets' entries.
+    let other = dir.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(
+        other.join("krishiv-0.1.0-cp314-cp314t-macosx_11_0_arm64.whl"),
+        vec![0_u8; 7],
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .arg("wheel-sizes")
+        .arg(&other)
+        .arg("--budgets")
+        .arg(&budgets)
+        .arg("--write")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let merged: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&budgets).unwrap()).unwrap();
+    assert_eq!(
+        merged["wheel_bytes"]["cp311-abi3-manylinux_2_28_x86_64"],
+        1000
+    );
+    assert_eq!(merged["wheel_bytes"]["cp314-cp314t-macosx_11_0_arm64"], 7);
+    let out = run(&[], false);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .contains("| cp311-abi3-manylinux_2_28_x86_64 | 1000 | 1000 | +0.00% |")
+    );
+    // 10% larger: over budget.
+    std::fs::write(&wheel, vec![0_u8; 1100]).unwrap();
+    let out = run(&[], false);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("grew from 1000 to 1100"),
+        "{out:?}"
+    );
+    assert!(run(&[], true).status.success(), "approved growth passes");
+    std::fs::write(&wheel, vec![0_u8; 1000]).unwrap();
+    // A wheel with no recorded size once a baseline exists: a violation.
+    let new_target = wheels.join("krishiv-0.1.0-cp311-abi3-musllinux_1_2_x86_64.whl");
+    std::fs::write(&new_target, "x").unwrap();
+    let out = run(&[], false);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no recorded size"),
+        "{out:?}"
+    );
+    std::fs::remove_file(&new_target).unwrap();
+    // Usage and input errors.
+    assert!(!run(&["--bogus"], false).status.success());
+    assert!(!run(&["--budgets"], false).status.success());
+    std::fs::write(wheels.join("bad.whl"), "x").unwrap();
+    let out = run(&[], false);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("not a wheel file name"),
+        "{out:?}"
+    );
+    std::fs::remove_file(wheels.join("bad.whl")).unwrap();
+    std::fs::write(
+        wheels.join("krishiv-0.2.0-cp311-abi3-manylinux_2_28_x86_64.whl"),
+        "x",
+    )
+    .unwrap();
+    let out = run(&[], false);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("two wheels"),
+        "{out:?}"
+    );
+    let empty = dir.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .arg("wheel-sizes")
+        .arg(&empty)
+        .arg("--budgets")
+        .arg(&budgets)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no wheels"),
+        "{out:?}"
+    );
+}

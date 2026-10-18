@@ -40,8 +40,8 @@
 pub mod cast;
 mod chunk;
 pub mod compare;
-pub mod conditional;
 pub mod datetime;
+pub mod datetime_pattern;
 pub mod decimal;
 pub mod dispatch;
 pub mod error;

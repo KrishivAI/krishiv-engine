@@ -48,8 +48,9 @@ fn is_day_count(t: &DataType) -> bool {
     matches!(t, DataType::Int8 | DataType::Int16 | DataType::Int32)
 }
 
-/// The field a literal `extract` field argument (a string) names.
-fn field(arg: &BindArg) -> Result<DatePart, KrishivError> {
+/// The field a literal `extract` field argument (a string) names; `None`
+/// for a NULL field.
+fn field(arg: &BindArg) -> Result<Option<DatePart>, KrishivError> {
     let BindArg::Literal(a) = arg else {
         return Err(unsupported(
             "extract with a field that is not a literal".to_owned(),
@@ -57,10 +58,12 @@ fn field(arg: &BindArg) -> Result<DatePart, KrishivError> {
     };
     let name = to_utf8(a.as_ref())?;
     if name.is_null(0) {
-        return Err(unsupported("extract with a NULL field".to_owned()));
+        return Ok(None);
     }
     let name = name.value(0);
-    DatePart::parse(name).ok_or_else(|| unsupported(format!("extract field {name}")))
+    DatePart::parse(name)
+        .map(Some)
+        .ok_or_else(|| unsupported(format!("extract field {name}")))
 }
 
 /// Extracts `part` from the date or timestamp column `i`.
@@ -123,18 +126,20 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 extract(x, 0, part, &source, &o)
             })
         }
-        ("extract" | "date_part", [f, t])
-            if is_string(f) && (*t == DataType::Date32 || is_timestamp(t)) =>
-        {
-            let part = match field(&args[0]) {
-                Ok(p) => p,
-                Err(e) => return Some((listed, Err(e))),
-            };
-            let source = t.clone();
-            Binding::new(part.result_type(), move |x: &Inputs<'_>| {
-                extract(x, 1, part, &source, &o)
-            })
-        }
+        ("extract" | "date_part", [f, t]) if is_string(f) => match field(&args[0]) {
+            Err(e) => return Some((listed, Err(e))),
+            // `date_part(NULL, x)` is a NULL `double`, whatever `x` is.
+            Ok(None) => Binding::new(DataType::Float64, |x: &Inputs<'_>| {
+                Ok(arrow_array::new_null_array(&DataType::Float64, x.rows()))
+            }),
+            Ok(Some(part)) if *t == DataType::Date32 || is_timestamp(t) => {
+                let source = t.clone();
+                Binding::new(part.result_type(), move |x: &Inputs<'_>| {
+                    extract(x, 1, part, &source, &o)
+                })
+            }
+            Ok(Some(_)) => return Some((listed, Err(bad_types(listed, args)))),
+        },
         ("current_date" | "curdate", []) => {
             let day = match current_date(opts.query_start_micros, opts.time_zone.as_ref()) {
                 Ok(d) => d,

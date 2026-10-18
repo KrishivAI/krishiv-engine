@@ -43,5 +43,11 @@ krishiv-common = { path = "../krishiv-common" }
 pyo3 = { workspace = true, features = ["macros"] }
 mimalloc = { workspace = true, optional = true }
 
+# musl loads the extension with dlopen, where mimalloc's default initial-exec
+# TLS model crashes at import (musllinux wheels segfaulted in `import krishiv`):
+# use the local-dynamic model there.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { workspace = true, optional = true, features = ["local_dynamic_tls"] }
+
 [dev-dependencies]
 arrow-buffer.workspace = true
