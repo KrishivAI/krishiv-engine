@@ -6,7 +6,7 @@ Sort [s_name#1 ASC NULLS FIRST], true
 +- Project [s_name#1, s_address#2]
    +- Filter ((((s_suppkey#0) IN (list-query)) and (s_nationkey#3 == n_nationkey#7)) and (n_name#8 == 'CANADA'))
       :  +- Project [ps_suppkey#12]
-      :     +- Filter (((ps_partkey#11) IN (list-query)) and (ps_availqty#13 > scalar-subquery))
+      :     +- Filter (((ps_partkey#11) IN (list-query)) and (CAST(ps_availqty#13 AS DECIMAL(27,3)) > scalar-subquery))
       :        :  :- Project [p_partkey#16]
       :        :  :  +- Filter (p_name#17 like 'forest%')
       :        :  :     +- Scan spark_catalog.default.part [p_partkey#16, p_name#17, p_mfgr#18, p_brand#19, p_type#20, p_size#21, p_container#22, p_retailprice#23, p_comment#24]

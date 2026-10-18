@@ -3,7 +3,7 @@ source: crates/krishiv-sql/tests/analyzer.rs
 expression: a.plan.root().to_string()
 ---
 Sort [revenue#47 DESC NULLS LAST], true
-+- Aggregate [n_name#41], [n_name#41, sum((l_extendedprice#22 * (1 - l_discount#23))) AS revenue#47]
++- Aggregate [n_name#41], [n_name#41, sum((l_extendedprice#22 * (CAST(1 AS DECIMAL(1,0)) - l_discount#23))) AS revenue#47]
    +- Filter (((((c_custkey#0 == o_custkey#9) and (l_orderkey#17 == o_orderkey#8)) and (l_suppkey#19 == s_suppkey#33)) and ((c_nationkey#3 == s_nationkey#36) and (s_nationkey#36 == n_nationkey#40))) and (((n_regionkey#42 == r_regionkey#44) and (r_name#45 == 'ASIA')) and ((o_orderdate#12 >= CAST('1994-01-01' AS DATE)) and (o_orderdate#12 < CAST('1995-01-01' AS DATE)))))
       +- Join Inner
          :- Join Inner

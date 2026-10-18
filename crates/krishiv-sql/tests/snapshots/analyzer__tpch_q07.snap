@@ -5,8 +5,8 @@ expression: a.plan.root().to_string()
 Sort [supp_nation#48 ASC NULLS FIRST, cust_nation#49 ASC NULLS FIRST, l_year#50 ASC NULLS FIRST], true
 +- Aggregate [supp_nation#48, cust_nation#49, l_year#50], [supp_nation#48, cust_nation#49, l_year#50, sum(volume#51) AS revenue#52]
    +- SubqueryAlias shipping
-      +- Project [n_name#41 AS supp_nation#48, n_name#45 AS cust_nation#49, extract('year', l_shipdate#17) AS l_year#50, (l_extendedprice#12 * (1 - l_discount#13)) AS volume#51]
-         +- Filter ((((s_suppkey#0 == l_suppkey#9) and (o_orderkey#23 == l_orderkey#7)) and ((c_custkey#32 == o_custkey#24) and (s_nationkey#3 == n_nationkey#40))) and (((c_nationkey#35 == n_nationkey#44) and (((n_name#41 == 'FRANCE') and (n_name#45 == 'GERMANY')) or ((n_name#41 == 'GERMANY') and (n_name#45 == 'FRANCE')))) and (l_shipdate#17 BETWEEN CAST('1995-01-01' AS DATE) AND CAST('1996-12-31' AS DATE))))
+      +- Project [n_name#41 AS supp_nation#48, n_name#45 AS cust_nation#49, extract('year', l_shipdate#17) AS l_year#50, (l_extendedprice#12 * (CAST(1 AS DECIMAL(1,0)) - l_discount#13)) AS volume#51]
+         +- Filter ((((s_suppkey#0 == l_suppkey#9) and (o_orderkey#23 == l_orderkey#7)) and ((c_custkey#32 == o_custkey#24) and (s_nationkey#3 == n_nationkey#40))) and (((c_nationkey#35 == n_nationkey#44) and (((n_name#41 == 'FRANCE') and (n_name#45 == 'GERMANY')) or ((n_name#41 == 'GERMANY') and (n_name#45 == 'FRANCE')))) and ((l_shipdate#17 >= CAST('1995-01-01' AS DATE)) and (l_shipdate#17 <= CAST('1996-12-31' AS DATE)))))
             +- Join Inner
                :- Join Inner
                :  :- Join Inner

@@ -3,7 +3,7 @@ source: crates/krishiv-sql/tests/analyzer.rs
 expression: a.plan.root().to_string()
 ---
 WithCte [revenue]
-:- Aggregate [l_suppkey#2], [l_suppkey#2 AS supplier_no#16, sum((l_extendedprice#5 * (1 - l_discount#6))) AS total_revenue#17]
+:- Aggregate [l_suppkey#2], [l_suppkey#2 AS supplier_no#16, sum((l_extendedprice#5 * (CAST(1 AS DECIMAL(1,0)) - l_discount#6))) AS total_revenue#17]
 :  +- Filter ((l_shipdate#10 >= CAST('1996-01-01' AS DATE)) and (l_shipdate#10 < CAST('1996-04-01' AS DATE)))
 :     +- Scan spark_catalog.default.lineitem [l_orderkey#0, l_partkey#1, l_suppkey#2, l_linenumber#3, l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10, l_commitdate#11, l_receiptdate#12, l_shipinstruct#13, l_shipmode#14, l_comment#15]
 +- Sort [s_suppkey#18 ASC NULLS FIRST], true

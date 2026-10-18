@@ -44,13 +44,14 @@ struct Frame {
     children: Vec<(usize, usize)>,
 }
 
-/// The node's `Debug` lines without spans, trimmed, as a comparable text.
+/// The node's `Debug` lines without spans (a predicate's `op` span
+/// included), trimmed, as a comparable text.
 fn without_spans<'a>(lines: impl Iterator<Item = &'a str>) -> String {
     let mut out = String::new();
     let mut ordinal = false;
     for line in lines
         .map(|l| l.trim().trim_end_matches(','))
-        .filter(|l| !l.starts_with("span: "))
+        .filter(|l| !l.starts_with("span: ") && !l.starts_with("op: "))
     {
         let line = line.rsplit_once(": Expr {").map_or(line, |_| "Expr {");
         // A `?` marker's ordinal is its position in the whole statement,

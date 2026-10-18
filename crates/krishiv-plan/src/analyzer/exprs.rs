@@ -7,21 +7,27 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     AmbiguousColumnReference, AmbiguousLateralColumnAlias, AmbiguousReference,
-    CannotResolveDataframeColumn, CannotResolveStarExpand, InvalidExtractBaseFieldType,
+    CannotResolveDataframeColumn, CannotResolveStarExpand, DatatypeMismatchBinaryOpDiffTypes,
+    DatatypeMismatchBinaryOpWrongType, DatatypeMismatchCastWithConfSuggestion,
+    DatatypeMismatchCastWithFuncSuggestion, DatatypeMismatchCastWithoutSuggestion,
+    DatatypeMismatchDataDiffTypes, DatatypeMismatchInSubqueryDataTypeMismatch,
+    DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchUnexpectedInputType,
+    InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
-    InvalidUsageOfStarOrRegex, NestedAggregateFunction, UnresolvedColumnWithSuggestion,
-    UnresolvedColumnWithoutSuggestion, UnresolvedRoutine,
+    InvalidUsageOfStarOrRegex, KrishivError, NestedAggregateFunction,
+    UnresolvedColumnWithSuggestion, UnresolvedColumnWithoutSuggestion, UnresolvedRoutine,
 };
 use krishiv_types::DataType;
 use twox_hash::XxHash3_128;
 
 use super::bind::{addr, same, unsupported};
 use super::catalog::quoted;
+use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
 use super::resolve::{Attr, Env, Rel, Resolver};
 use super::{AnalysisError, ArgType, FunctionLookup};
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, FunctionId,
-    FunctionKind, Literal, Origin, ResolvedExpr, ResolvedFunction, Star, SubqueryKind,
+    FunctionKind, Literal, LogicalPlan, Origin, ResolvedExpr, ResolvedFunction, Star, SubqueryKind,
 };
 
 /// Where an operator's expressions resolve.
@@ -63,6 +69,97 @@ pub(super) struct Bound {
     pub(super) outer: Option<usize>,
     /// The lateral column aliases referenced (their attribute ids).
     pub(super) lateral: Vec<AttrId>,
+    /// The expression as Spark shows it in names and errors, when that is
+    /// not `expr`: before implicit casts and rewrites.
+    pub(super) shown: Option<Arc<Expr>>,
+}
+
+impl Bound {
+    /// The expression as Spark shows it.
+    pub(super) fn shown(&self) -> Arc<Expr> {
+        self.shown.clone().unwrap_or_else(|| Arc::clone(&self.expr))
+    }
+}
+
+/// `e` with its direct children replaced, in order, by `kids`.
+fn with_children(e: &Expr, kids: Vec<Arc<Expr>>) -> Arc<Expr> {
+    let mut x = e.clone();
+    let mut kids = kids.into_iter();
+    x.for_each_child_mut(&mut |slot| {
+        if let Some(k) = kids.next() {
+            *slot = k;
+        }
+    });
+    Arc::new(x)
+}
+
+/// The shown form of a call whose bound form is `expr`, the arguments
+/// `cast` of `kids`: the call over what `kids` show, when that differs.
+fn shown_call(expr: &Expr, kids: &[Bound], cast: &[Bound]) -> Option<Arc<Expr>> {
+    let differs = kids.iter().any(|k| k.shown.is_some())
+        || kids
+            .iter()
+            .zip(cast)
+            .any(|(k, c)| !Arc::ptr_eq(&k.expr, &c.expr));
+    differs.then(|| with_children(expr, kids.iter().map(Bound::shown).collect()))
+}
+
+/// Spark's error for a cast of `arg` to `to` it refuses.
+fn bad_cast(
+    bad: BadCast,
+    origin: Origin,
+    arg: &Bound,
+    to: &DataType,
+    mode: CastMode,
+) -> AnalysisError {
+    let shown = ExprNode::Cast {
+        expr: arg.shown(),
+        to: to.clone(),
+        mode,
+    };
+    let sql_expr = format!("\"{}\"", pretty(&Expr::new(shown)));
+    let src_type = quoted_type(arg.ty.data_type.as_ref());
+    let target_type = quoted_type(Some(to));
+    let error: KrishivError = match bad {
+        BadCast::Without => DatatypeMismatchCastWithoutSuggestion {
+            sql_expr,
+            src_type,
+            target_type,
+        }
+        .into(),
+        BadCast::Func(f) => DatatypeMismatchCastWithFuncSuggestion {
+            sql_expr,
+            src_type,
+            target_type,
+            function_names: f.to_owned(),
+        }
+        .into(),
+        BadCast::Conf => DatatypeMismatchCastWithConfSuggestion {
+            sql_expr,
+            src_type,
+            target_type,
+            config: "\"spark.sql.ansi.enabled\"".to_owned(),
+            config_val: "'false'".to_owned(),
+        }
+        .into(),
+    };
+    AnalysisError::new(error, origin)
+}
+
+/// A bound argument as coercion sees it.
+fn arg_of(b: &Bound) -> Arg<'_> {
+    let literal = match &b.expr.node {
+        ExprNode::Literal(Literal::Byte(v)) => Some(i128::from(*v)),
+        ExprNode::Literal(Literal::Short(v)) => Some(i128::from(*v)),
+        ExprNode::Literal(Literal::Integer(v)) => Some(i128::from(*v)),
+        ExprNode::Literal(Literal::Long(v)) => Some(i128::from(*v)),
+        _ => None,
+    };
+    Arg {
+        ty: b.ty.data_type.as_ref(),
+        nullable: b.ty.nullable,
+        literal,
+    }
 }
 
 fn column(c: &BoundColumn) -> ArgType {
@@ -263,10 +360,11 @@ impl Resolver<'_> {
             agg,
             outer,
             lateral: lateral.clone(),
+            shown: None,
         };
         let rebuilt = |node: ExprNode| Arc::new(Expr::new(node).with_origin(e.origin));
         let args: Vec<Arc<Expr>> = kids.iter().map(|k| Arc::clone(&k.expr)).collect();
-        Ok(match &e.node {
+        let mut b = match &e.node {
             ExprNode::Column(c) => self.column(c, e.origin, in_agg, cx)?,
             ExprNode::Literal(v) => keep(ArgType {
                 nullable: matches!(v, Literal::Null(_)),
@@ -282,6 +380,20 @@ impl Resolver<'_> {
                 ));
             }
             ExprNode::Function(f) => {
+                let n = f.args.len();
+                if let Some(filter) = kids.get(n)
+                    && filter.ty.data_type != Some(DataType::Boolean)
+                {
+                    return Err(AnalysisError::new(
+                        InvalidAggregateFilterNotBoolean {
+                            filter_expr: format!("\"{}\"", pretty(&filter.shown())),
+                        },
+                        e.origin,
+                    ));
+                }
+                if let Some(op) = Builtin::from_name(&f.name) {
+                    return self.operator_call(op, e.origin, &kids[..n]);
+                }
                 let entry = match self
                     .ctx
                     .functions
@@ -301,33 +413,43 @@ impl Resolver<'_> {
                         ));
                     }
                 };
-                let n = f.args.len();
                 if entry.kind == FunctionKind::Aggregate
                     && let Some(inner) = kids.iter().find_map(|k| k.agg)
                 {
                     return Err(AnalysisError::new(NestedAggregateFunction {}, inner));
                 }
-                let types: Vec<ArgType> = kids[..n].iter().map(|k| k.ty.clone()).collect();
+                let coerced: Vec<Arg<'_>> = kids[..n].iter().map(arg_of).collect();
+                let casts = coerce::inputs(&entry.inputs, &coerced)
+                    .map_err(|m| self.mismatch(m, e, &kids[..n], entry.id.name(), e.origin))?;
+                let mut call_kids: Vec<Bound> = kids[..n]
+                    .iter()
+                    .zip(casts)
+                    .map(|(k, to)| self.implicit_cast(k, to))
+                    .collect();
+                let types: Vec<ArgType> = call_kids.iter().map(|k| k.ty.clone()).collect();
                 let ty = (entry.result)(&types).map_err(|err| AnalysisError::new(err, e.origin))?;
                 let data_type = ty.data_type.clone().ok_or_else(|| {
                     unsupported("values of the NULL and interval types", e.origin)
                 })?;
+                call_kids.extend(kids.get(n).cloned());
                 let call = ResolvedFunction {
                     id: entry.id,
                     kind: entry.kind,
-                    args: args[..n].to_vec(),
+                    args: call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect(),
                     distinct: f.distinct,
-                    filter: args.get(n).cloned(),
+                    filter: call_kids.get(n).map(|k| Arc::clone(&k.expr)),
                     data_type,
                     nullable: ty.nullable,
                 };
+                let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
                 Bound {
                     agg: if entry.kind == FunctionKind::Aggregate {
                         Some(e.origin)
                     } else {
                         agg
                     },
-                    expr: rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call))),
+                    shown: shown_call(&expr, kids, &call_kids),
+                    expr,
                     ..keep(ty)
                 }
             }
@@ -338,10 +460,17 @@ impl Resolver<'_> {
                     m => *m,
                 };
                 let child = &kids[0].ty;
-                let changes = child.data_type.as_ref() != Some(to);
+                if let Err(bad) = coerce::can_cast(child.data_type.as_ref(), to, mode) {
+                    return Err(bad_cast(bad, e.origin, &kids[0], to, mode));
+                }
                 let nullable = child.nullable
-                    || mode == CastMode::Try
-                    || (mode == CastMode::Legacy && changes);
+                    || child.data_type.as_ref().is_some_and(|from| {
+                        if mode == CastMode::Try {
+                            coerce::try_nullable(from, to)
+                        } else {
+                            coerce::force_nullable(from, to)
+                        }
+                    });
                 Bound {
                     expr: rebuilt(ExprNode::Cast {
                         expr: Arc::clone(&args[0]),
@@ -382,16 +511,19 @@ impl Resolver<'_> {
                     SubqueryKind::Exists => (Some(DataType::Boolean), false),
                     SubqueryKind::In(_) => (Some(DataType::Boolean), true),
                 };
-                let kind = match kind {
-                    SubqueryKind::In(_) => SubqueryKind::In(args),
-                    k => k.clone(),
+                let (kind, plan, values) = match kind {
+                    SubqueryKind::In(_) => {
+                        let (values, plan) = self.in_subquery(e, kids, &rel, cx)?;
+                        let exprs = values.iter().map(|v| Arc::clone(&v.expr)).collect();
+                        (SubqueryKind::In(exprs), plan, values)
+                    }
+                    k => (k.clone(), Arc::clone(&rel.plan), Vec::new()),
                 };
                 let level = cx.env.outer.len();
+                let expr = rebuilt(ExprNode::Subquery { kind, plan });
                 Bound {
-                    expr: rebuilt(ExprNode::Subquery {
-                        kind,
-                        plan: Arc::clone(&rel.plan),
-                    }),
+                    shown: shown_call(&expr, kids, &values),
+                    expr,
                     outer: [outer, rel.outer.filter(|&l| l < level)]
                         .into_iter()
                         .flatten()
@@ -410,7 +542,328 @@ impl Resolver<'_> {
                     nullable: f.nullable,
                 },
             }),
+        };
+        if b.shown.is_none() && kids.iter().any(|k| k.shown.is_some()) {
+            b.shown = Some(with_children(
+                &b.expr,
+                kids.iter().map(Bound::shown).collect(),
+            ));
+        }
+        Ok(b)
+    }
+
+    /// `b` implicitly cast to `to`, if given (named and shown as `b`).
+    pub(super) fn implicit_cast(&self, b: &Bound, to: Option<DataType>) -> Bound {
+        let Some(to) = to else {
+            return b.clone();
+        };
+        let mode = if self.ctx.conf.ansi {
+            CastMode::Ansi
+        } else {
+            CastMode::Legacy
+        };
+        let cast = ExprNode::Cast {
+            expr: Arc::clone(&b.expr),
+            to: to.clone(),
+            mode,
+        };
+        Bound {
+            expr: Arc::new(Expr::new(cast).with_origin(b.expr.origin)),
+            ty: ArgType {
+                nullable: b.ty.nullable
+                    || b.ty
+                        .data_type
+                        .as_ref()
+                        .is_some_and(|f| coerce::force_nullable(f, &to)),
+                data_type: Some(to),
+            },
+            shown: Some(b.shown()),
+            ..b.clone()
+        }
+    }
+
+    /// A call of operator `op` on `kids`, typed as Spark types it.
+    /// `BETWEEN` is Spark's replacement, `>=` and `<=` joined by `AND`,
+    /// shown as written.
+    pub(super) fn operator_call(
+        &mut self,
+        op: Builtin,
+        origin: Origin,
+        kids: &[Bound],
+    ) -> Result<Bound, AnalysisError> {
+        if let (Builtin::Between, [v, lo, hi]) = (op, kids) {
+            // The value is shared, as Spark's errors show it.
+            let shared = Expr::function("commonexpressionref", Vec::new());
+            let v = Bound {
+                shown: Some(Arc::new(shared)),
+                ..v.clone()
+            };
+            let ge = self.operator_call(Builtin::GtEq, origin, &[v.clone(), lo.clone()])?;
+            let le = self.operator_call(Builtin::LtEq, origin, &[v, hi.clone()])?;
+            let both = self.operator_call(Builtin::And, origin, &[ge, le])?;
+            let shown = ResolvedFunction {
+                id: FunctionId::Builtin(op),
+                kind: FunctionKind::Scalar,
+                args: kids.iter().map(Bound::shown).collect(),
+                distinct: false,
+                filter: None,
+                data_type: DataType::Boolean,
+                nullable: both.ty.nullable,
+            };
+            let shown = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(shown)));
+            return Ok(Bound {
+                shown: Some(Arc::new(shown.with_origin(origin))),
+                ..both
+            });
+        }
+        let args: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
+        let conf = self.ctx.conf;
+        let typed = coerce::operator(op, &args, conf.ansi, conf.decimal_precision_loss);
+        let call = |args: Vec<Arc<Expr>>, data_type: DataType, nullable: bool| {
+            let f = ResolvedFunction {
+                id: FunctionId::Builtin(op),
+                kind: FunctionKind::Scalar,
+                args,
+                distinct: false,
+                filter: None,
+                data_type,
+                nullable,
+            };
+            Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))).with_origin(origin))
+        };
+        let typed = typed.map_err(|m| {
+            let shown = call(
+                kids.iter().map(Bound::shown).collect(),
+                DataType::Boolean,
+                true,
+            );
+            self.mismatch(m, &shown, kids, op.name(), origin)
+        })?;
+        let cast: Vec<Bound> = kids
+            .iter()
+            .zip(typed.casts)
+            .map(|(k, to)| self.implicit_cast(k, to))
+            .collect();
+        let expr = call(
+            cast.iter().map(|k| Arc::clone(&k.expr)).collect(),
+            typed.data_type.clone(),
+            typed.nullable,
+        );
+        let mut lateral: Vec<AttrId> = Vec::new();
+        for id in kids.iter().flat_map(|k| k.lateral.iter()) {
+            if !lateral.contains(id) {
+                lateral.push(*id);
+            }
+        }
+        Ok(Bound {
+            shown: shown_call(&expr, kids, &cast),
+            expr,
+            ty: ArgType {
+                data_type: Some(typed.data_type),
+                nullable: typed.nullable,
+            },
+            agg: kids.iter().find_map(|k| k.agg),
+            outer: kids.iter().filter_map(|k| k.outer).min(),
+            lateral,
         })
+    }
+
+    /// `(values) IN (subquery)`: the values and the subquery's columns, each
+    /// pair cast to the type it meets at (the subquery under a projection
+    /// that casts). Returns the values and the subquery plan.
+    fn in_subquery(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        rel: &Rel,
+        cx: &Cx<'_>,
+    ) -> Result<(Vec<Bound>, Arc<LogicalPlan>), AnalysisError> {
+        let shown = with_children(e, kids.iter().map(Bound::shown).collect());
+        let sql_expr = format!("\"{}\"", pretty(&shown));
+        let texts = |v: Vec<String>| v.join(", ");
+        if kids.len() != rel.out.len() {
+            return Err(AnalysisError::new(
+                DatatypeMismatchInSubqueryLengthMismatch {
+                    sql_expr,
+                    left_length: kids.len().to_string(),
+                    left_columns: texts(
+                        kids.iter()
+                            .map(|k| format!("\"{}\"", pretty(&k.shown())))
+                            .collect(),
+                    ),
+                    right_length: rel.out.len().to_string(),
+                    right_columns: texts(
+                        rel.out
+                            .iter()
+                            .map(|a| format!("\"{}\"", a.col.name))
+                            .collect(),
+                    ),
+                },
+                e.origin,
+            ));
+        }
+        let qualified = |qual: &[String], name: &str, ty: Option<&DataType>| {
+            let mut parts = qual.to_vec();
+            parts.push(name.to_owned());
+            let ty = ty.map_or_else(|| "void".to_owned(), DataType::simple_string);
+            format!("{}:{ty}", parts.join("."))
+        };
+        let mut targets = Vec::new();
+        let mut bad = Vec::new();
+        for (k, a) in kids.iter().zip(rel.out.iter()) {
+            let out = Arg {
+                ty: Some(&a.col.data_type),
+                nullable: a.col.nullable,
+                literal: None,
+            };
+            match coerce::common_type(&arg_of(k), &out) {
+                Some(t) => targets.push(t),
+                None => {
+                    let left = format!(
+                        "{}:{}",
+                        pretty(&super::ops::qualified(&k.shown(), cx.scope)),
+                        k.ty.data_type
+                            .as_ref()
+                            .map_or_else(|| "void".to_owned(), DataType::simple_string)
+                    );
+                    let right = qualified(&a.qual, &a.col.name, Some(&a.col.data_type));
+                    bad.push(format!("{left}, {right}"));
+                }
+            }
+        }
+        if !bad.is_empty() {
+            return Err(AnalysisError::new(
+                DatatypeMismatchInSubqueryDataTypeMismatch {
+                    sql_expr,
+                    mismatched_columns: format!("({})", bad.join(", ")),
+                    left_type: texts(
+                        kids.iter()
+                            .map(|k| quoted_type(k.ty.data_type.as_ref()))
+                            .collect(),
+                    ),
+                    right_type: texts(
+                        rel.out
+                            .iter()
+                            .map(|a| quoted_type(Some(&a.col.data_type)))
+                            .collect(),
+                    ),
+                },
+                e.origin,
+            ));
+        }
+        let values = kids
+            .iter()
+            .zip(&targets)
+            .map(|(k, t)| {
+                self.implicit_cast(k, coerce::cast_to(k.ty.data_type.as_ref(), t.as_ref()))
+            })
+            .collect();
+        let needs = rel
+            .out
+            .iter()
+            .zip(&targets)
+            .any(|(a, t)| t.as_ref().is_some_and(|t| *t != a.col.data_type));
+        if !needs {
+            return Ok((values, Arc::clone(&rel.plan)));
+        }
+        let mut exprs = Vec::new();
+        let mut out = Vec::new();
+        for (a, t) in rel.out.iter().zip(targets) {
+            let column = Bound {
+                expr: super::ops::col_expr(&a.col, Origin::UNKNOWN),
+                ty: column(&a.col),
+                agg: None,
+                outer: None,
+                lateral: Vec::new(),
+                shown: None,
+            };
+            let to = coerce::cast_to(Some(&a.col.data_type), t.as_ref());
+            if to.is_none() {
+                exprs.push(column.expr);
+                out.push(a.clone());
+                continue;
+            }
+            let cast = self.implicit_cast(&column, to);
+            let output = self.attr(&a.col.name, &cast.ty, Origin::UNKNOWN)?;
+            exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Alias {
+                    expr: cast.expr,
+                    output: output.clone(),
+                },
+            ))));
+            out.push(Attr {
+                col: output,
+                ..a.clone()
+            });
+        }
+        Ok((
+            values,
+            self.projection(Origin::UNKNOWN, rel, exprs, out).plan,
+        ))
+    }
+
+    /// The analysis error of a call that does not type.
+    fn mismatch(
+        &self,
+        m: Mismatch,
+        call: &Arc<Expr>,
+        kids: &[Bound],
+        function: &str,
+        origin: Origin,
+    ) -> AnalysisError {
+        let sql_expr = format!("\"{}\"", pretty(call));
+        let error: KrishivError = match m {
+            Mismatch::DiffTypes(left, right) => DatatypeMismatchBinaryOpDiffTypes {
+                sql_expr,
+                left: quoted_type(left.as_ref()),
+                right: quoted_type(right.as_ref()),
+            }
+            .into(),
+            Mismatch::WrongType(actual, input) => DatatypeMismatchBinaryOpWrongType {
+                sql_expr,
+                input_type: input.to_owned(),
+                actual_data_type: quoted_type(actual.as_ref()),
+            }
+            .into(),
+            Mismatch::Unexpected {
+                arg,
+                param,
+                ty,
+                required,
+            } => DatatypeMismatchUnexpectedInputType {
+                sql_expr,
+                param_index: ordinal(param),
+                required_type: required,
+                input_sql: format!(
+                    "\"{}\"",
+                    kids.get(arg)
+                        .map(|k| pretty(&k.shown()))
+                        .unwrap_or_default()
+                ),
+                input_type: quoted_type(ty.as_ref()),
+            }
+            .into(),
+            Mismatch::DataDiff(types, list) => {
+                let types: Vec<String> = types.iter().map(|t| quoted_type(t.as_ref())).collect();
+                let data_type = if list {
+                    format!("[{}]", types.join(", "))
+                } else {
+                    format!("({})", types.join(" or "))
+                };
+                let function_name = match function {
+                    "when" => "casewhen",
+                    other => other,
+                };
+                DatatypeMismatchDataDiffTypes {
+                    sql_expr,
+                    function_name: quoted(&[function_name.to_owned()]),
+                    data_type,
+                }
+                .into()
+            }
+            Mismatch::Unsupported(what) => return unsupported(what, origin),
+        };
+        AnalysisError::new(error, origin)
     }
 
     /// A new attribute named `name` of type `ty`.
@@ -448,6 +901,7 @@ impl Resolver<'_> {
             agg: None,
             outer,
             lateral: Vec::new(),
+            shown: None,
         };
         let renamed = |a: &Attr, parts: &[String], used: usize| {
             // A reference keeps the spelling it was written with.
@@ -774,19 +1228,29 @@ pub(super) fn pretty(e: &Expr) -> String {
 }
 
 fn pretty_node(x: &Expr, k: &[&str]) -> String {
-    let list = |v: &[&str]| v.join(", ");
     match &x.node {
         ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
             c.name.clone()
         }
         ExprNode::Column(c) => c.name.last().cloned().unwrap_or_default(),
         ExprNode::Literal(v) => pretty_literal(v),
-        ExprNode::Cast { to, .. } => format!("CAST({} AS {})", k[0], to.sql()),
+        ExprNode::Cast { to, mode, .. } => {
+            let cast = if *mode == CastMode::Try {
+                "TRY_CAST"
+            } else {
+                "CAST"
+            };
+            format!("{cast}({} AS {})", k[0], to.sql())
+        }
         ExprNode::Alias { .. } | ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
         ExprNode::Subquery { kind, .. } => match kind {
             SubqueryKind::Scalar => "scalarsubquery()".to_owned(),
             SubqueryKind::Exists => "exists()".to_owned(),
-            SubqueryKind::In(_) => format!("({} IN (listquery()))", list(k)),
+            SubqueryKind::In(_) if k.len() == 1 => format!("({} IN (listquery()))", k[0]),
+            SubqueryKind::In(_) => {
+                let fields: Vec<String> = k.iter().map(|v| format!("'{v}', {v}")).collect();
+                format!("(named_struct({}) IN (listquery()))", fields.join(", "))
+            }
         },
         ExprNode::Star(_) => "*".to_owned(),
         ExprNode::Function(FunctionCall { name, distinct, .. }) => call(name, None, *distinct, k),

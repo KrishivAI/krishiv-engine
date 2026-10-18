@@ -567,6 +567,16 @@ impl Resolver<'_> {
                 let c = self.child(input, env)?;
                 let cx = Self::cx(&[], &[], env, "Limit");
                 let b = self.bind(limit, &cx)?;
+                if b.ty.data_type != Some(krishiv_types::DataType::Integer) {
+                    return Err(AnalysisError::new(
+                        krishiv_common::error::InvalidLimitLikeExpressionDataType {
+                            expr: format!("\"{}\"", super::exprs::pretty(&b.shown())),
+                            name: "limit".to_owned(),
+                            data_type: super::coerce::quoted_type(b.ty.data_type.as_ref()),
+                        },
+                        limit.origin,
+                    ));
+                }
                 let node = PlanNode::Limit {
                     input: Arc::clone(&c.plan),
                     limit: b.expr,
