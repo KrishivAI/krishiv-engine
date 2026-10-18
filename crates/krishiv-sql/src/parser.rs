@@ -93,6 +93,7 @@ struct QueryRule;
 
 impl TopRule for QueryRule {
     type Out = Query;
+    /// One query statement.
     fn parse(p: &mut Parser<'_>) -> PR<Query> {
         p.statement()
     }
@@ -103,11 +104,13 @@ struct StatementRule;
 
 impl TopRule for StatementRule {
     type Out = Statement;
+    /// One statement.
     fn parse(p: &mut Parser<'_>) -> PR<Statement> {
         p.explainable()
     }
 }
 
+/// Lexes `src` and parses it with the top rule `R`.
 fn parse_with<R: TopRule>(src: &str, opts: ParserOptions) -> Result<R::Out, ParseError> {
     // Java's `String.trim`: Spark reports an empty statement only for these.
     if src.trim_matches(|c| c <= ' ').is_empty() {
@@ -139,6 +142,7 @@ struct Failed {
 }
 
 impl From<ParseError> for Failed {
+    /// An error raised while parsing.
     fn from(error: ParseError) -> Self {
         Self {
             error,
@@ -212,6 +216,7 @@ fn nesting_bound(src: &str, toks: &[Token]) -> usize {
     max + arrows
 }
 
+/// Parses `toks` with the top rule `R` on the current thread.
 fn run<R: TopRule>(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<R::Out, Failed> {
     let classes = toks
         .iter()

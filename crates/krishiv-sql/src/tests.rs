@@ -826,6 +826,7 @@ fn from_statement_shares_its_from_clause() {
     );
 }
 
+/// Modes, nesting and spans of `EXPLAIN`.
 #[test]
 fn explain_statements() {
     use ast::{ExplainMode, Statement};
@@ -869,6 +870,7 @@ fn explain_statements() {
     );
 }
 
+/// `EXPLAIN` errors, positions and precedence as Spark 4.2 raises them.
 #[test]
 fn explain_errors_follow_spark() {
     let d = ParserOptions::default();
@@ -896,6 +898,7 @@ fn explain_errors_follow_spark() {
     assert_eq!(e.span.range(), 17..25);
 }
 
+/// A long `EXPLAIN` chain is capped without deep recursion.
 #[test]
 fn explain_chains_are_capped_without_recursion() {
     let d = ParserOptions::default();

@@ -110,6 +110,7 @@ pub(crate) fn bang_equals_not(span: Span) -> ParseError {
     )
 }
 
+/// `INVALID_STATEMENT_OR_CLAUSE` for `operation` (e.g. `EXPLAIN LOGICAL`).
 pub(crate) fn invalid_statement(operation: &str, span: Span) -> ParseError {
     at(
         InvalidStatementOrClause {
