@@ -70,6 +70,8 @@ pub struct FaultStats {
 struct FaultState {
     fail_gets: u32,
     fail_puts: u32,
+    fail_lists: u32,
+    fail_deletes: u32,
     retry_after: Option<Duration>,
     latency: Duration,
     stats: FaultStats,
@@ -125,6 +127,16 @@ impl FaultStore {
     /// The next `n` PUTs or parts fail transiently.
     pub fn fail_next_puts(&self, n: u32) {
         lock(&self.state).fail_puts = n;
+    }
+
+    /// The next `n` listings fail transiently after their first object.
+    pub fn fail_next_lists(&self, n: u32) {
+        lock(&self.state).fail_lists = n;
+    }
+
+    /// The next `n` deletes fail transiently.
+    pub fn fail_next_deletes(&self, n: u32) {
+        lock(&self.state).fail_deletes = n;
     }
 
     /// Every GET and upload part waits `latency` first (Tokio time).
@@ -226,11 +238,35 @@ impl ObjectStore for FaultStore {
         &self,
         locations: BoxStream<'static, StoreResult<Path>>,
     ) -> BoxStream<'static, StoreResult<Path>> {
-        self.inner.delete_stream(locations)
+        let state = Arc::clone(&self.state);
+        let inner = self.inner.delete_stream(locations);
+        Box::pin(futures::StreamExt::map(inner, move |r| {
+            let mut st = lock(&state);
+            if st.fail_deletes > 0 {
+                st.fail_deletes -= 1;
+                return Err(transient(None));
+            }
+            r
+        }))
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, StoreResult<ObjectMeta>> {
-        self.inner.list(prefix)
+        let fail = {
+            let mut st = lock(&self.state);
+            let fail = st.fail_lists > 0;
+            st.fail_lists = st.fail_lists.saturating_sub(1);
+            fail
+        };
+        let inner = self.inner.list(prefix);
+        if fail {
+            // One object, then a transient failure mid-listing.
+            Box::pin(futures::StreamExt::chain(
+                futures::StreamExt::take(inner, 1),
+                futures::stream::once(std::future::ready(Err(transient(None)))),
+            ))
+        } else {
+            inner
+        }
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> StoreResult<ListResult> {

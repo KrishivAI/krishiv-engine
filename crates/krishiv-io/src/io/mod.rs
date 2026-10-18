@@ -999,10 +999,45 @@ impl IoContext {
     /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
     pub async fn list(&self, store: &StoreId, prefix: &Path) -> Result<Vec<ObjectMeta>> {
         let (s, lane) = self.sched.store(store)?;
-        self.metadata_request(&lane, store, prefix, || {
-            futures::TryStreamExt::try_collect(s.list(Some(prefix)))
-        })
-        .await
+        let cfg = &self.sched.config;
+        let display = format!("{store}/{prefix}");
+        let mut attempt = 0;
+        loop {
+            // The timeout bounds the wait for each object (and so each
+            // page), not the whole listing, which may take many pages. A
+            // failed listing starts again: resuming after the last object
+            // would assume a lexicographic order not every store keeps.
+            let (retry_after, reason) = {
+                let _permit = lane.admit(Direction::Read, prefix).await?;
+                self.count(|c| &c.requests, 1);
+                let mut listed = s.list(Some(prefix));
+                let mut out = Vec::new();
+                loop {
+                    match tokio::time::timeout(
+                        cfg.request_timeout,
+                        futures::StreamExt::next(&mut listed),
+                    )
+                    .await
+                    {
+                        Ok(None) => return Ok(out),
+                        Ok(Some(Ok(m))) => out.push(m),
+                        Ok(Some(Err(e))) => match transient(&e) {
+                            Some(ra) => break (ra, e.to_string()),
+                            None => {
+                                return Err(store_failed(&display, attempt + 1, &e.to_string()));
+                            }
+                        },
+                        Err(_elapsed) => break (None, "the listing timed out".to_owned()),
+                    }
+                }
+            };
+            if attempt >= cfg.max_retries {
+                return Err(store_failed(&display, attempt + 1, &reason));
+            }
+            self.count(|c| &c.retries, 1);
+            tokio::time::sleep(self.sched.backoff(attempt, retry_after)).await;
+            attempt += 1;
+        }
     }
 
     /// The object `path` of `store`, if there is one (a directory is not
@@ -1088,20 +1123,43 @@ impl IoContext {
         }
     }
 
-    /// Deletes `path` in `store` (a staged file of an aborted write).
+    /// Deletes `path` in `store` (a staged file of an aborted write, the
+    /// replaced objects of an overwrite), retried like every request; a
+    /// missing object is already deleted.
     ///
     /// # Errors
-    /// `TASK_WRITE_FAILED` if the store refuses.
+    /// `TASK_WRITE_FAILED` if the store refuses, or after retries.
     pub async fn delete(&self, store: &StoreId, path: &Path) -> Result<()> {
         let (s, lane) = self.sched.store(store)?;
-        let _permit = lane.admit(Direction::Write, path).await?;
-        self.count(|c| &c.requests, 1);
-        let mut deleted = s.delete_stream(Box::pin(futures::stream::once(std::future::ready(Ok(
-            path.clone(),
-        )))));
-        match futures::StreamExt::next(&mut deleted).await {
-            None | Some(Ok(_) | Err(object_store::Error::NotFound { .. })) => Ok(()),
-            Some(Err(e)) => Err(write_failed(&format!("{store}/{path}"), &e.to_string())),
+        let cfg = &self.sched.config;
+        let display = format!("{store}/{path}");
+        let mut attempt = 0;
+        loop {
+            let r = {
+                let _permit = lane.admit(Direction::Write, path).await?;
+                self.count(|c| &c.requests, 1);
+                tokio::time::timeout(cfg.request_timeout, async {
+                    let mut deleted = s.delete_stream(Box::pin(futures::stream::once(
+                        std::future::ready(Ok(path.clone())),
+                    )));
+                    futures::StreamExt::next(&mut deleted).await
+                })
+                .await
+            };
+            let retry_after = match r {
+                Ok(None | Some(Ok(_) | Err(object_store::Error::NotFound { .. }))) => return Ok(()),
+                Ok(Some(Err(e))) => match transient(&e) {
+                    Some(ra) => ra,
+                    None => return Err(write_failed(&display, &e.to_string())),
+                },
+                Err(_elapsed) => None,
+            };
+            if attempt >= cfg.max_retries {
+                return Err(write_failed(&display, "gave up after retries"));
+            }
+            self.count(|c| &c.retries, 1);
+            tokio::time::sleep(self.sched.backoff(attempt, retry_after)).await;
+            attempt += 1;
         }
     }
 }

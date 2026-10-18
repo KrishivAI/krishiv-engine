@@ -515,3 +515,65 @@ fn a_failing_store_request_is_not_retried() {
         ErrorClass::KrishivObjectStoreRequestFailed
     );
 }
+
+#[test]
+fn listings_and_deletes_are_retried() {
+    let inner = Arc::new(InMemory::new());
+    let fault = crate::io::FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
+    let env = Env::new(Arc::clone(&fault) as Arc<dyn ObjectStore>, STORE);
+    env.write("t", SaveMode::ErrorIfExists, "old", 4).unwrap();
+    // A listing failing midway starts again: nothing is lost or doubled.
+    fault.fail_next_lists(2);
+    assert_eq!(env.names("t").len(), 2);
+    // An overwrite whose deletes fail transiently still replaces the data.
+    fault.fail_next_deletes(3);
+    env.write("t", SaveMode::Overwrite, "new", 2).unwrap();
+    assert_eq!(
+        env.names("t"),
+        vec![
+            "t/_SUCCESS".to_owned(),
+            "t/part-00000-new-c000.snappy.parquet".to_owned()
+        ]
+    );
+    // Past the retries: store failures.
+    fault.fail_next_lists(1000);
+    let e = env
+        .rt
+        .block_on(env.io.list(&env.store, &Path::from("t")))
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivObjectStoreRequestFailed);
+    fault.fail_next_lists(0);
+    fault.fail_next_deletes(1000);
+    let e = env
+        .rt
+        .block_on(env.io.delete(&env.store, &Path::from("t/_SUCCESS")))
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TaskWriteFailed);
+    fault.fail_next_deletes(0);
+    // Deleting what is gone succeeds.
+    env.rt
+        .block_on(env.io.delete(&env.store, &Path::from("t/nothing")))
+        .unwrap();
+}
+
+#[test]
+fn a_store_refusing_a_listing_or_delete_is_not_retried() {
+    let tmp = TempDir::new("refuse");
+    std::fs::write(tmp.0.join("afile"), b"hi").unwrap();
+    let env = Env::new(
+        Arc::new(LocalFileSystem::new_with_prefix(&tmp.0).unwrap()),
+        "file://",
+    );
+    let e = env
+        .rt
+        .block_on(env.io.list(&env.store, &Path::from("afile/x")));
+    let d = env
+        .rt
+        .block_on(env.io.delete(&env.store, &Path::from("afile/x")));
+    // The local store reports these as missing or refuses them: never a
+    // retry loop, never a panic.
+    assert!(
+        e.is_ok() || e.unwrap_err().error_class() == ErrorClass::KrishivObjectStoreRequestFailed
+    );
+    assert!(d.is_ok() || d.unwrap_err().error_class() == ErrorClass::TaskWriteFailed);
+}
