@@ -13,7 +13,7 @@ use crate::error::KernelError;
 use crate::float::SparkFloat;
 use crate::integer::SparkIntegral;
 use crate::ops::Operand;
-use crate::policy::{AnsiError, NullOnOverflow, OverflowMode};
+use crate::policy::{NullOnOverflow, OverflowMode};
 use crate::version::IntWidth;
 
 /// Row `i` of an operand.
@@ -145,11 +145,9 @@ pub fn pmod_decimal(
 ) -> Result<Decimal128Array, KernelError> {
     let out = result_type(DecimalOp::Remainder, left, right, allow_precision_loss)?;
     let plan = DecimalPlan::new(DecimalOp::Remainder, left, right, out)?;
-    let rem = if overflow == OverflowMode::AnsiError {
-        decimal_arith::<AnsiError>(l, r, &plan, ctx)?
-    } else {
-        decimal_arith::<NullOnOverflow>(l, r, &plan, ctx)?
-    };
+    // A zero divisor is NULL here and raised in the row loop below, so the
+    // first failing row wins whether it is a zero divisor or a pmod overflow.
+    let rem = decimal_arith::<NullOnOverflow>(l, r, &plan, ctx)?;
     let scale = u32::from(out.1.unsigned_abs());
     let divisor_scale = u32::from(right.1.unsigned_abs());
     let limit = pow10_256(u32::from(out.0));
@@ -163,6 +161,9 @@ pub fn pmod_decimal(
         .map_err(|_| KernelError::out_of_memory(rem.len()))?;
     for (i, v) in rem.values().iter().enumerate() {
         let divisor = at(r, i);
+        if overflow == OverflowMode::AnsiError && divisor == Some(0) && at(l, i).is_some() {
+            return Err(KernelError::remainder_by_zero(i, ctx.spark_version()));
+        }
         let (value, ok) = match divisor {
             Some(d) if rem.is_valid(i) && *v < 0 => {
                 let n =

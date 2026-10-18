@@ -516,10 +516,17 @@ fn coerce_all(cols: &[ArrayRef]) -> Result<Vec<ArrayRef>, E> {
         // Wider decimal of all decimal arguments.
         let (mut int_digits, mut scale) = (0_i32, 0_i32);
         for c in cols {
-            if let DataType::Decimal128(p, s) = c.data_type() {
-                int_digits = int_digits.max(i32::from(*p) - i32::from(*s));
-                scale = scale.max(i32::from(*s));
-            }
+            // Integral arguments count as decimal(3|5|10|20, 0).
+            let (p, s) = match c.data_type() {
+                DataType::Decimal128(p, s) => (i32::from(*p), i32::from(*s)),
+                DataType::Int8 => (3, 0),
+                DataType::Int16 => (5, 0),
+                DataType::Int32 => (10, 0),
+                DataType::Int64 => (20, 0),
+                _ => continue,
+            };
+            int_digits = int_digits.max(p - s);
+            scale = scale.max(s);
         }
         DataType::Decimal128(
             u8::try_from(int_digits + scale).unwrap_or(38),
