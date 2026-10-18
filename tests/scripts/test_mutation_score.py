@@ -13,7 +13,7 @@ import mutation_score as m
 
 
 def _outcomes(path: Path, **n: int) -> Path:
-    rows = [{"scenario": "Baseline", "summary": "Success"}]
+    rows: list[dict] = [{"scenario": "Baseline", "summary": "Success"}]
     for summary, k in n.items():
         rows += [{"scenario": {"Mutant": {}}, "summary": summary} for _ in range(k)]
     path.write_text(json.dumps({"outcomes": rows}))

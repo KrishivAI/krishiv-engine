@@ -27,7 +27,7 @@ jobs:
     if: github.repository == 'KrishivAI/krishiv-engine'
     permissions:
       contents: read
-    uses: ./.github/workflows/fuzz.yml
+    uses: $/.github/workflows/fuzz.yml
     with:
       seconds: 16200
       minimize: true

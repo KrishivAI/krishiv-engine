@@ -90,6 +90,7 @@ fn actions_must_be_pinned_to_a_commit_sha() {
         "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
         "github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee",
         "./.github/actions/local",
+        "$/.github/workflows/reusable.yml",
         "docker://alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     ] {
         assert!(workflow_violations("ok.yml", &job(ok)).is_empty(), "{ok}");
