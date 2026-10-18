@@ -48,7 +48,8 @@ pub struct QueryOutput {
     /// NULL), cells joined by a tab.
     pub rows: Vec<Vec<String>>,
     /// Whether the result order is significant, as Spark's `isSemanticallySorted` decides on the
-    /// analyzed plan. An engine fills this from its own plan; `None` falls back to
+    /// analyzed plan. An engine fills this from its own resolved plan with
+    /// [`super::sorted::is_semantically_sorted`]; `None` falls back to
     /// [`Statement::text_sorted`], an approximation meant for stubs.
     pub sorted: Option<bool>,
 }

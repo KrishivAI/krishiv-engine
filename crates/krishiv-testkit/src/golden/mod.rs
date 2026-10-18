@@ -16,6 +16,7 @@ pub mod parse;
 pub mod report;
 pub mod run;
 pub mod setup;
+pub mod sorted;
 pub mod sql_parse;
 pub mod sql_spans;
 pub mod value;
