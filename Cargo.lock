@@ -1396,6 +1396,7 @@ dependencies = [
  "krishiv-types",
  "loom",
  "proptest",
+ "serde_json",
  "tokio",
 ]
 

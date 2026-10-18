@@ -1,0 +1,935 @@
+{
+  "spark_version": "4.2.0",
+  "generated_at": "2026-10-18T09:09:56+00:00",
+  "generator": "tests/scripts/gen_sort_goldens.py",
+  "notes": "Row ids in Spark's output order; every ORDER BY ends with `id ASC`; nulls_first null: default.",
+  "columns": [
+    "id",
+    "d",
+    "f",
+    "s",
+    "i"
+  ],
+  "rows": [
+    [
+      1,
+      "1.0",
+      "1.0",
+      "'b'",
+      "1"
+    ],
+    [
+      2,
+      "-0.0",
+      "-0.0",
+      "'a'",
+      "2"
+    ],
+    [
+      3,
+      "0.0",
+      "0.0",
+      "'B'",
+      "NULL"
+    ],
+    [
+      4,
+      "NaN",
+      "NaN",
+      "NULL",
+      "1"
+    ],
+    [
+      5,
+      "NULL",
+      "NULL",
+      "'aa'",
+      "3"
+    ],
+    [
+      6,
+      "-Infinity",
+      "-Infinity",
+      "''",
+      "2"
+    ],
+    [
+      7,
+      "Infinity",
+      "Infinity",
+      "'é'",
+      "NULL"
+    ],
+    [
+      8,
+      "-NaN",
+      "-NaN",
+      "'a'",
+      "1"
+    ],
+    [
+      9,
+      "-1.5",
+      "-1.5",
+      "'Z'",
+      "-2147483648"
+    ],
+    [
+      10,
+      "NULL",
+      "NULL",
+      "'b'",
+      "NULL"
+    ],
+    [
+      11,
+      "0.0",
+      "-0.0",
+      "'ab'",
+      "2"
+    ],
+    [
+      12,
+      "-0.0",
+      "0.0",
+      "'éa'",
+      "2147483647"
+    ],
+    [
+      13,
+      "1.7976931348623157E308",
+      "3.4028235E38",
+      "'😀'",
+      "0"
+    ],
+    [
+      14,
+      "4.9E-324",
+      "1.4E-45",
+      "'a\u0000'",
+      "-1"
+    ],
+    [
+      15,
+      "NaN",
+      "-NaN",
+      "'A'",
+      "3"
+    ]
+  ],
+  "cases": [
+    {
+      "sql": "SELECT id FROM t ORDER BY d ASC, id ASC",
+      "keys": [
+        {
+          "column": "d",
+          "descending": false,
+          "nulls_first": null
+        }
+      ],
+      "ids": [
+        5,
+        10,
+        6,
+        9,
+        2,
+        3,
+        11,
+        12,
+        14,
+        1,
+        13,
+        7,
+        4,
+        8,
+        15
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY d ASC NULLS FIRST, id ASC",
+      "keys": [
+        {
+          "column": "d",
+          "descending": false,
+          "nulls_first": true
+        }
+      ],
+      "ids": [
+        5,
+        10,
+        6,
+        9,
+        2,
+        3,
+        11,
+        12,
+        14,
+        1,
+        13,
+        7,
+        4,
+        8,
+        15
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY d ASC NULLS LAST, id ASC",
+      "keys": [
+        {
+          "column": "d",
+          "descending": false,
+          "nulls_first": false
+        }
+      ],
+      "ids": [
+        6,
+        9,
+        2,
+        3,
+        11,
+        12,
+        14,
+        1,
+        13,
+        7,
+        4,
+        8,
+        15,
+        5,
+        10
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY d DESC, id ASC",
+      "keys": [
+        {
+          "column": "d",
+          "descending": true,
+          "nulls_first": null
+        }
+      ],
+      "ids": [
+        4,
+        8,
+        15,
+        7,
+        13,
+        1,
+        14,
+        2,
+        3,
+        11,
+        12,
+        9,
+        6,
+        5,
+        10
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY d DESC NULLS FIRST, id ASC",
+      "keys": [
+        {
+          "column": "d",
+          "descending": true,
+          "nulls_first": true
+        }
+      ],
+      "ids": [
+        5,
+        10,
+        4,
+        8,
+        15,
+        7,
+        13,
+        1,
+        14,
+        2,
+        3,
+        11,
+        12,
+        9,
+        6
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY d DESC NULLS LAST, id ASC",
+      "keys": [
+        {
+          "column": "d",
+          "descending": true,
+          "nulls_first": false
+        }
+      ],
+      "ids": [
+        4,
+        8,
+        15,
+        7,
+        13,
+        1,
+        14,
+        2,
+        3,
+        11,
+        12,
+        9,
+        6,
+        5,
+        10
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY f ASC, id ASC",
+      "keys": [
+        {
+          "column": "f",
+          "descending": false,
+          "nulls_first": null
+        }
+      ],
+      "ids": [
+        5,
+        10,
+        6,
+        9,
+        2,
+        3,
+        11,
+        12,
+        14,
+        1,
+        13,
+        7,
+        4,
+        8,
+        15
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY f ASC NULLS FIRST, id ASC",
+      "keys": [
+        {
+          "column": "f",
+          "descending": false,
+          "nulls_first": true
+        }
+      ],
+      "ids": [
+        5,
+        10,
+        6,
+        9,
+        2,
+        3,
+        11,
+        12,
+        14,
+        1,
+        13,
+        7,
+        4,
+        8,
+        15
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY f ASC NULLS LAST, id ASC",
+      "keys": [
+        {
+          "column": "f",
+          "descending": false,
+          "nulls_first": false
+        }
+      ],
+      "ids": [
+        6,
+        9,
+        2,
+        3,
+        11,
+        12,
+        14,
+        1,
+        13,
+        7,
+        4,
+        8,
+        15,
+        5,
+        10
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY f DESC, id ASC",
+      "keys": [
+        {
+          "column": "f",
+          "descending": true,
+          "nulls_first": null
+        }
+      ],
+      "ids": [
+        4,
+        8,
+        15,
+        7,
+        13,
+        1,
+        14,
+        2,
+        3,
+        11,
+        12,
+        9,
+        6,
+        5,
+        10
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY f DESC NULLS FIRST, id ASC",
+      "keys": [
+        {
+          "column": "f",
+          "descending": true,
+          "nulls_first": true
+        }
+      ],
+      "ids": [
+        5,
+        10,
+        4,
+        8,
+        15,
+        7,
+        13,
+        1,
+        14,
+        2,
+        3,
+        11,
+        12,
+        9,
+        6
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY f DESC NULLS LAST, id ASC",
+      "keys": [
+        {
+          "column": "f",
+          "descending": true,
+          "nulls_first": false
+        }
+      ],
+      "ids": [
+        4,
+        8,
+        15,
+        7,
+        13,
+        1,
+        14,
+        2,
+        3,
+        11,
+        12,
+        9,
+        6,
+        5,
+        10
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY s ASC, id ASC",
+      "keys": [
+        {
+          "column": "s",
+          "descending": false,
+          "nulls_first": null
+        }
+      ],
+      "ids": [
+        4,
+        6,
+        15,
+        3,
+        9,
+        2,
+        8,
+        14,
+        5,
+        11,
+        1,
+        10,
+        7,
+        12,
+        13
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY s ASC NULLS FIRST, id ASC",
+      "keys": [
+        {
+          "column": "s",
+          "descending": false,
+          "nulls_first": true
+        }
+      ],
+      "ids": [
+        4,
+        6,
+        15,
+        3,
+        9,
+        2,
+        8,
+        14,
+        5,
+        11,
+        1,
+        10,
+        7,
+        12,
+        13
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY s ASC NULLS LAST, id ASC",
+      "keys": [
+        {
+          "column": "s",
+          "descending": false,
+          "nulls_first": false
+        }
+      ],
+      "ids": [
+        6,
+        15,
+        3,
+        9,
+        2,
+        8,
+        14,
+        5,
+        11,
+        1,
+        10,
+        7,
+        12,
+        13,
+        4
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY s DESC, id ASC",
+      "keys": [
+        {
+          "column": "s",
+          "descending": true,
+          "nulls_first": null
+        }
+      ],
+      "ids": [
+        13,
+        12,
+        7,
+        1,
+        10,
+        11,
+        5,
+        14,
+        2,
+        8,
+        9,
+        3,
+        15,
+        6,
+        4
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY s DESC NULLS FIRST, id ASC",
+      "keys": [
+        {
+          "column": "s",
+          "descending": true,
+          "nulls_first": true
+        }
+      ],
+      "ids": [
+        4,
+        13,
+        12,
+        7,
+        1,
+        10,
+        11,
+        5,
+        14,
+        2,
+        8,
+        9,
+        3,
+        15,
+        6
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY s DESC NULLS LAST, id ASC",
+      "keys": [
+        {
+          "column": "s",
+          "descending": true,
+          "nulls_first": false
+        }
+      ],
+      "ids": [
+        13,
+        12,
+        7,
+        1,
+        10,
+        11,
+        5,
+        14,
+        2,
+        8,
+        9,
+        3,
+        15,
+        6,
+        4
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY i ASC, id ASC",
+      "keys": [
+        {
+          "column": "i",
+          "descending": false,
+          "nulls_first": null
+        }
+      ],
+      "ids": [
+        3,
+        7,
+        10,
+        9,
+        14,
+        13,
+        1,
+        4,
+        8,
+        2,
+        6,
+        11,
+        5,
+        15,
+        12
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY i ASC NULLS FIRST, id ASC",
+      "keys": [
+        {
+          "column": "i",
+          "descending": false,
+          "nulls_first": true
+        }
+      ],
+      "ids": [
+        3,
+        7,
+        10,
+        9,
+        14,
+        13,
+        1,
+        4,
+        8,
+        2,
+        6,
+        11,
+        5,
+        15,
+        12
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY i ASC NULLS LAST, id ASC",
+      "keys": [
+        {
+          "column": "i",
+          "descending": false,
+          "nulls_first": false
+        }
+      ],
+      "ids": [
+        9,
+        14,
+        13,
+        1,
+        4,
+        8,
+        2,
+        6,
+        11,
+        5,
+        15,
+        12,
+        3,
+        7,
+        10
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY i DESC, id ASC",
+      "keys": [
+        {
+          "column": "i",
+          "descending": true,
+          "nulls_first": null
+        }
+      ],
+      "ids": [
+        12,
+        5,
+        15,
+        2,
+        6,
+        11,
+        1,
+        4,
+        8,
+        13,
+        14,
+        9,
+        3,
+        7,
+        10
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY i DESC NULLS FIRST, id ASC",
+      "keys": [
+        {
+          "column": "i",
+          "descending": true,
+          "nulls_first": true
+        }
+      ],
+      "ids": [
+        3,
+        7,
+        10,
+        12,
+        5,
+        15,
+        2,
+        6,
+        11,
+        1,
+        4,
+        8,
+        13,
+        14,
+        9
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY i DESC NULLS LAST, id ASC",
+      "keys": [
+        {
+          "column": "i",
+          "descending": true,
+          "nulls_first": false
+        }
+      ],
+      "ids": [
+        12,
+        5,
+        15,
+        2,
+        6,
+        11,
+        1,
+        4,
+        8,
+        13,
+        14,
+        9,
+        3,
+        7,
+        10
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY i ASC, d DESC, id ASC",
+      "keys": [
+        {
+          "column": "i",
+          "descending": false,
+          "nulls_first": null
+        },
+        {
+          "column": "d",
+          "descending": true,
+          "nulls_first": null
+        }
+      ],
+      "ids": [
+        7,
+        3,
+        10,
+        9,
+        14,
+        13,
+        4,
+        8,
+        1,
+        2,
+        11,
+        6,
+        15,
+        5,
+        12
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY i DESC NULLS FIRST, f ASC NULLS LAST, id ASC",
+      "keys": [
+        {
+          "column": "i",
+          "descending": true,
+          "nulls_first": true
+        },
+        {
+          "column": "f",
+          "descending": false,
+          "nulls_first": false
+        }
+      ],
+      "ids": [
+        3,
+        7,
+        10,
+        12,
+        15,
+        5,
+        6,
+        2,
+        11,
+        1,
+        4,
+        8,
+        13,
+        14,
+        9
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY s DESC, i ASC NULLS LAST, id ASC",
+      "keys": [
+        {
+          "column": "s",
+          "descending": true,
+          "nulls_first": null
+        },
+        {
+          "column": "i",
+          "descending": false,
+          "nulls_first": false
+        }
+      ],
+      "ids": [
+        13,
+        12,
+        7,
+        1,
+        10,
+        11,
+        5,
+        14,
+        8,
+        2,
+        9,
+        3,
+        15,
+        6,
+        4
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY d ASC NULLS LAST, s ASC NULLS FIRST, id ASC",
+      "keys": [
+        {
+          "column": "d",
+          "descending": false,
+          "nulls_first": false
+        },
+        {
+          "column": "s",
+          "descending": false,
+          "nulls_first": true
+        }
+      ],
+      "ids": [
+        6,
+        9,
+        3,
+        2,
+        11,
+        12,
+        14,
+        1,
+        13,
+        7,
+        4,
+        15,
+        8,
+        5,
+        10
+      ]
+    },
+    {
+      "sql": "SELECT id FROM t ORDER BY f DESC NULLS LAST, s DESC NULLS FIRST, i ASC, id ASC",
+      "keys": [
+        {
+          "column": "f",
+          "descending": true,
+          "nulls_first": false
+        },
+        {
+          "column": "s",
+          "descending": true,
+          "nulls_first": true
+        },
+        {
+          "column": "i",
+          "descending": false,
+          "nulls_first": null
+        }
+      ],
+      "ids": [
+        4,
+        8,
+        15,
+        7,
+        13,
+        1,
+        14,
+        12,
+        11,
+        2,
+        3,
+        9,
+        6,
+        10,
+        5
+      ]
+    }
+  ]
+}
