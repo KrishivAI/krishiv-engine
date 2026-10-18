@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 arrow-array.workspace = true
 arrow-buffer.workspace = true
+arrow-schema.workspace = true
 krishiv-common = { path = "../krishiv-common" }
 thiserror.workspace = true
 
@@ -25,4 +26,16 @@ proptest = { workspace = true, features = ["std"] }
 
 [[bench]]
 name = "binary_add"
+harness = false
+
+[[bench]]
+name = "arith"
+harness = false
+
+[[bench]]
+name = "compare"
+harness = false
+
+[[bench]]
+name = "cast"
 harness = false

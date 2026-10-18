@@ -5,6 +5,12 @@
     ],
     "sqlState" : "58030"
   },
+  "KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE" : {
+    "message" : [
+      "The remainder of <dividend> divided by <divisor> needs an integral quotient of more than 39 significant digits, so it cannot be computed (Spark raises `ArithmeticException: Division impossible` here in every mode)."
+    ],
+    "sqlState" : "22003"
+  },
   "KRISHIV_FILE_CHANGED_DURING_READ" : {
     "message" : [
       "The file <path> changed while it was being read: it no longer matches the version <version> seen when the scan was planned. Run REFRESH TABLE, or re-run the query to read the new version."

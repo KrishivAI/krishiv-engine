@@ -12,6 +12,7 @@
 use std::sync::OnceLock;
 
 use crate::error::KernelError;
+use crate::version::SparkVersion;
 
 /// A code-generation target for kernel loops.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -132,11 +133,13 @@ fn has_v4_extra() -> bool {
 }
 
 /// Per-call kernel context. Kernels never read configuration; the context
-/// only carries the code-generation target, which is always one the CPU
-/// supports (the invariant that makes dispatch sound).
+/// carries the code-generation target, which is always one the CPU supports
+/// (the invariant that makes dispatch sound), and the Spark version whose
+/// error classes and messages kernels raise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KernelCtx {
     target: Target,
+    version: SparkVersion,
 }
 
 impl KernelCtx {
@@ -145,6 +148,7 @@ impl KernelCtx {
     pub fn new() -> Self {
         Self {
             target: Target::best(),
+            version: SparkVersion::default(),
         }
     }
 
@@ -154,7 +158,10 @@ impl KernelCtx {
     /// `INTERNAL_ERROR` if this CPU cannot run `target`.
     pub fn with_target(target: Target) -> Result<Self, KernelError> {
         if target.is_available() {
-            Ok(Self { target })
+            Ok(Self {
+                target,
+                version: SparkVersion::default(),
+            })
         } else {
             Err(KernelError::internal(format!(
                 "kernel target {target:?} is not supported by this CPU"
@@ -166,6 +173,19 @@ impl KernelCtx {
     #[must_use]
     pub fn target(&self) -> Target {
         self.target
+    }
+
+    /// This context raising the errors of Spark `version`.
+    #[must_use]
+    pub fn with_spark_version(mut self, version: SparkVersion) -> Self {
+        self.version = version;
+        self
+    }
+
+    /// The Spark version whose errors kernels raise.
+    #[must_use]
+    pub fn spark_version(&self) -> SparkVersion {
+        self.version
     }
 }
 
@@ -185,6 +205,11 @@ mod tests {
         assert!(Target::best().is_available());
         assert_eq!(Target::available().next(), Some(Target::Baseline));
         assert_eq!(KernelCtx::default().target(), Target::best());
+        let v40 = KernelCtx::new().with_spark_version(SparkVersion::V4_0);
+        assert_eq!(
+            (v40.spark_version(), KernelCtx::new().spark_version()),
+            (SparkVersion::V4_0, SparkVersion::V4_2)
+        );
         for t in Target::ALL {
             match KernelCtx::with_target(t) {
                 Ok(ctx) => assert_eq!(ctx.target(), t),
