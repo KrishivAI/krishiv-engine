@@ -141,7 +141,7 @@ impl Resolver<'_> {
     fn is_aggregate(&self, e: &Expr) -> bool {
         match &e.node {
             ExprNode::Function(f) => matches!(
-                self.ctx.functions.lookup(&f.name, self.ctx.profile),
+                self.ctx.functions.lookup(std::slice::from_ref(&f.name), self.ctx.profile),
                 FunctionLookup::Found(entry) if entry.kind == FunctionKind::Aggregate
             ),
             ExprNode::Resolved(ResolvedExpr::Function(f)) => f.kind == FunctionKind::Aggregate,
@@ -265,7 +265,11 @@ impl Resolver<'_> {
                 ));
             }
             ExprNode::Function(f) => {
-                let entry = match self.ctx.functions.lookup(&f.name, self.ctx.profile) {
+                let entry = match self
+                    .ctx
+                    .functions
+                    .lookup(std::slice::from_ref(&f.name), self.ctx.profile)
+                {
                     FunctionLookup::Found(entry) => entry,
                     FunctionLookup::KnownUnsupported => {
                         return Err(unsupported(format!("function {}", f.name), e.origin));
@@ -484,7 +488,7 @@ impl Resolver<'_> {
     }
 
     /// `df["a"]`: the column `name` of the relations carrying `id` in the
-    /// operator's subtree, else in enclosing queries'.
+    /// operator's subtree.
     fn plan_column(
         &self,
         id: crate::PlanId,
@@ -508,21 +512,15 @@ impl Resolver<'_> {
             hits
         };
         let sql_name = format!("\"{}\"", name.join("."));
+        // The error names the DataFrame the reference belongs to.
+        let origin = match origin.plan_id {
+            Some(_) => origin,
+            None => origin.with_plan_id(id),
+        };
+        // Only the operator's own subtree: Spark 4.2 does not resolve a
+        // DataFrame reference against an enclosing query (golden case
+        // `outer`).
         let mut hits = pick(carriers(cx, id), cx.scope);
-        if hits.is_empty() {
-            for outer in cx.env.outer.iter().rev() {
-                let carried = outer
-                    .rels
-                    .iter()
-                    .flat_map(|r| r.carriers.get(&id).cloned().unwrap_or_default())
-                    .flat_map(|out| out.to_vec())
-                    .collect();
-                hits = pick(carried, &outer.scope);
-                if !hits.is_empty() {
-                    break;
-                }
-            }
-        }
         match hits.len() {
             1 => Ok(hits.remove(0)),
             0 => Err(AnalysisError::new(
@@ -602,9 +600,8 @@ impl Resolver<'_> {
         let mut outer = cx.env.outer.clone();
         outer.push(super::resolve::Level {
             scope: cx.scope.to_vec().into(),
-            rels: cx.rels.iter().map(|r| (*r).clone()).collect(),
         });
-        self.env(cx.env.ctes.clone(), outer)
+        self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }
 }
 
@@ -799,7 +796,9 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
 fn pretty_literal(v: &Literal) -> String {
     let text = v.to_string();
     match v {
-        Literal::String(s) => s.clone(),
+        // A URL's credentials never reach a name (ADR 0038).
+        Literal::String(s) => krishiv_common::secret::SecretUrl::parse(s)
+            .map_or_else(|| s.clone(), |url| url.to_string()),
         Literal::Null(_) => "NULL".to_owned(),
         Literal::Byte(_) | Literal::Short(_) | Literal::Long(_) => {
             text.trim_end_matches(['Y', 'S', 'L']).to_owned()

@@ -6,7 +6,8 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    KrishivInsufficientPermissions, KrishivUnsupportedFeature, UnresolvedRoutine,
+    KrishivCatalogFailure, KrishivInsufficientPermissions, KrishivUnsupportedFeature,
+    TableOrViewNotFound, UnresolvedRoutine,
 };
 use krishiv_common::redact::RedactedSql;
 
@@ -17,7 +18,8 @@ use super::{
 };
 use crate::walk::{self, Node};
 use crate::{
-    ExprNode, LogicalPlan, Origin, Plan, PlanNode, ReadSource, SourceId, SqlArgs, TableVersion,
+    BoundColumn, ExprNode, LogicalPlan, Origin, Plan, PlanNode, ReadSource, SourceId, SqlArgs,
+    TableVersion,
 };
 
 /// A table name as written in the plan, resolved.
@@ -64,7 +66,10 @@ pub(super) fn unsupported(feature: impl Into<String>, origin: Origin) -> Analysi
 }
 
 /// Whether `a` and `b` name the same thing: Java's `equalsIgnoreCase`
-/// unless `case_sensitive`.
+/// unless `case_sensitive`. Java compares UTF-16 units and Rust `char`s;
+/// they differ only for characters whose case mapping is several
+/// characters (`ß` and the like), which no identifier comparison of Spark's
+/// relies on.
 pub(super) fn same(a: &str, b: &str, case_sensitive: bool) -> bool {
     if case_sensitive {
         return a == b;
@@ -123,9 +128,15 @@ pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings,
     Ok(b)
 }
 
-enum Found {
-    Table(Vec<String>, Origin),
-    Scan(Vec<String>, Origin),
+enum Found<'a> {
+    Table(&'a [String], Origin),
+    /// An already-resolved scan: its name, version and columns.
+    Scan(
+        &'a [String],
+        Option<TableVersion>,
+        &'a [BoundColumn],
+        Origin,
+    ),
     Path(Securable, Origin),
 }
 
@@ -136,7 +147,7 @@ fn visit<'a>(
     env: &Arc<[String]>,
     ctx: &AnalysisContext,
     next: &mut Vec<(Node<'a>, Arc<[String]>)>,
-    found: &mut Vec<Found>,
+    found: &mut Vec<Found<'a>>,
 ) -> Result<(), AnalysisError> {
     let cs = ctx.conf.case_sensitive;
     match node {
@@ -145,7 +156,7 @@ fn visit<'a>(
                 PlanNode::Read(ReadSource::Table { name, .. }) => {
                     let shadowed = name.len() == 1 && env.iter().any(|c| same(c, &name[0], cs));
                     if !shadowed {
-                        found.push(Found::Table(name.clone(), p.origin));
+                        found.push(Found::Table(name, p.origin));
                     }
                 }
                 PlanNode::Read(ReadSource::Files { paths, .. }) => paths
@@ -154,7 +165,7 @@ fn visit<'a>(
                 // A plan resolved elsewhere is checked like a fresh one.
                 PlanNode::Scan(s) => match &s.source {
                     ReadSource::Table { name, .. } => {
-                        found.push(Found::Scan(name.clone(), p.origin));
+                        found.push(Found::Scan(name, s.version, &s.output, p.origin));
                     }
                     ReadSource::Files { paths, .. } => paths.iter().for_each(|v| {
                         found.push(Found::Path(Securable::Path(v.clone()), p.origin));
@@ -189,7 +200,10 @@ fn visit<'a>(
 }
 
 fn check_function(ctx: &AnalysisContext, name: &str, origin: Origin) -> Result<(), AnalysisError> {
-    match ctx.functions.lookup(name, ctx.profile) {
+    match ctx
+        .functions
+        .lookup(std::slice::from_ref(&name.to_owned()), ctx.profile)
+    {
         FunctionLookup::Found(_) => Ok(()),
         FunctionLookup::KnownUnsupported => Err(unsupported(format!("function {name}"), origin)),
         FunctionLookup::NotFound => Err(AnalysisError::new(
@@ -254,110 +268,158 @@ fn locate(ctx: &AnalysisContext, parts: &[String]) -> Option<(Arc<dyn Catalog>, 
     Some((catalog, ident))
 }
 
-/// Loads each distinct table once, pins one version per table, and asks
-/// the policy once per securable.
-async fn load(
+/// Asks the policy about `securable` once per query; a denial or any policy
+/// error fails closed, without the policy's reason or error text, and row
+/// filters and column masks are rejected until they can be applied.
+async fn authorize(
     ctx: &AnalysisContext,
     b: &mut Bindings,
-    found: Vec<Found>,
-) -> Result<(), AnalysisError> {
-    let cs = ctx.conf.case_sensitive;
-    let (mut names, mut scans, mut paths) = (Vec::new(), Vec::new(), Vec::new());
-    for f in found {
-        match f {
-            Found::Table(n, o) => names.push((n, o)),
-            Found::Scan(n, o) => scans.push((n, o)),
-            Found::Path(s, o) => paths.push((s, o)),
-        }
+    checked: &mut Vec<(Securable, usize)>,
+    securable: Securable,
+    origin: Origin,
+) -> Result<usize, AnalysisError> {
+    if let Some((_, i)) = checked.iter().find(|(s, _)| *s == securable) {
+        return Ok(*i);
     }
-    let mut index: HashMap<TableIdent, usize> = HashMap::new();
-    let mut origins: Vec<Origin> = Vec::new();
-    for (name, origin) in names {
-        if b.tables.contains_key(&name) {
-            continue;
+    let privilege = Privilege::Select;
+    let decision = ctx
+        .policy
+        .check(&ctx.principal, &securable, privilege)
+        .await;
+    match decision {
+        Ok(AccessDecision::Allow) => {}
+        Ok(AccessDecision::AllowWith(_)) => {
+            return Err(unsupported(
+                format!("row filters and column masks (on {securable})"),
+                origin,
+            ));
         }
-        let Some((catalog, ident)) = locate(ctx, &name) else {
-            b.tables.insert(name, BoundTable::Missing);
-            continue;
-        };
-        let err = |e| AnalysisError::new(e, origin);
-        let mut meta = catalog.load_table(&ident, None, cs).await.map_err(err)?;
-        if let Some(m) = &meta
-            && let Some(&pinned) = b.pins.get(&m.ident)
-            && m.version != Some(pinned)
-        {
-            // Another spelling of a table already pinned: read the pin.
-            meta = catalog
-                .load_table(&ident, Some(pinned), cs)
-                .await
-                .map_err(err)?;
-        }
-        b.epochs.insert(catalog.name().to_owned(), catalog.epoch());
-        let Some(meta) = meta else {
-            b.tables.insert(name, BoundTable::Missing);
-            continue;
-        };
-        if let Some(v) = meta.version {
-            b.pins.entry(meta.ident.clone()).or_insert(v);
-        }
-        let securable = *index.entry(meta.ident.clone()).or_insert_with(|| {
-            let securable = match meta.kind {
-                TableKind::Table => Securable::Table(meta.ident.clone()),
-                TableKind::View => Securable::View(meta.ident.clone()),
-            };
-            b.securables.push((securable, Privilege::Select));
-            origins.push(origin);
-            b.securables.len() - 1
-        });
-        b.tables.insert(
-            name,
-            BoundTable::Found {
-                meta: Arc::new(meta),
-                securable,
-            },
-        );
-    }
-    for (name, origin) in scans {
-        if let Some((_, ident)) = locate(ctx, &name) {
-            let i = *index.entry(ident.clone()).or_insert_with(|| {
-                b.securables
-                    .push((Securable::Table(ident), Privilege::Select));
-                origins.push(origin);
-                b.securables.len() - 1
-            });
-            b.scans.insert(name, i);
-        }
-    }
-    for (securable, origin) in paths {
-        b.securables.push((securable, Privilege::Select));
-        origins.push(origin);
-    }
-    for ((securable, privilege), origin) in b.securables.iter().zip(origins) {
-        let decision = ctx
-            .policy
-            .check(&ctx.principal, securable, *privilege)
-            .await;
-        let denied = || {
-            AnalysisError::new(
+        Ok(AccessDecision::Deny { .. }) | Err(_) => {
+            return Err(AnalysisError::new(
                 KrishivInsufficientPermissions {
                     principal: quoted(std::slice::from_ref(&ctx.principal.name)),
                     privilege: privilege.to_string(),
                     securable: securable.to_string(),
                 },
                 origin,
+            ));
+        }
+    }
+    b.securables.push((securable.clone(), privilege));
+    checked.push((securable, b.securables.len() - 1));
+    Ok(b.securables.len() - 1)
+}
+
+/// For every table a plan reads (`Read` or an already-resolved `Scan`): asks
+/// the policy about the name as located, before any metadata is read (so a
+/// denied principal learns nothing about existence); loads the table once,
+/// pinning one version per table; and asks the policy again under the
+/// catalog's own identifier when it differs. A scan must name a table that
+/// exists, at the pinned version, with columns the table has.
+async fn load(
+    ctx: &AnalysisContext,
+    b: &mut Bindings,
+    found: Vec<Found<'_>>,
+) -> Result<(), AnalysisError> {
+    let cs = ctx.conf.case_sensitive;
+    let mut checked: Vec<(Securable, usize)> = Vec::new();
+    for f in found {
+        let (name, version, columns, origin, scan) = match f {
+            Found::Path(securable, origin) => {
+                authorize(ctx, b, &mut checked, securable, origin).await?;
+                continue;
+            }
+            Found::Table(name, origin) => (name, None, &[][..], origin, false),
+            Found::Scan(name, version, columns, origin) => (name, version, columns, origin, true),
+        };
+        if !scan && b.tables.contains_key(name) || scan && b.scans.contains_key(name) {
+            continue;
+        }
+        let search_path = b.search_path.clone();
+        let not_found = || {
+            AnalysisError::new(
+                TableOrViewNotFound {
+                    relation_name: quoted(name),
+                    search_path: search_path.clone(),
+                },
+                origin,
             )
         };
-        match decision {
-            Ok(AccessDecision::Allow) => {}
-            Ok(AccessDecision::AllowWith(_)) => {
-                return Err(unsupported(
-                    format!("row filters and column masks (on {securable})"),
-                    origin,
-                ));
+        let Some((catalog, ident)) = locate(ctx, name) else {
+            if scan {
+                return Err(not_found());
             }
-            // Fail closed: a denial or any policy error stops the query,
-            // without the policy's reason or error text.
-            Ok(AccessDecision::Deny { .. }) | Err(_) => return Err(denied()),
+            b.tables.insert(name.to_vec(), BoundTable::Missing);
+            continue;
+        };
+        authorize(
+            ctx,
+            b,
+            &mut checked,
+            Securable::Table(ident.clone()),
+            origin,
+        )
+        .await?;
+        let failed = |_| {
+            AnalysisError::new(
+                KrishivCatalogFailure {
+                    catalog: quoted(std::slice::from_ref(&ident.catalog)),
+                    relation_name: quoted(name),
+                },
+                origin,
+            )
+        };
+        b.epochs.insert(catalog.name().to_owned(), catalog.epoch());
+        let mut meta = catalog
+            .load_table(&ident, version, cs)
+            .await
+            .map_err(failed)?;
+        if let Some(m) = &meta
+            && let Some(&pinned) = b.pins.get(&m.ident)
+            && m.version != Some(pinned)
+        {
+            if version.is_some() {
+                return Err(unsupported("two versions of one table in a query", origin));
+            }
+            // Another spelling of a table already pinned: read the pin.
+            meta = catalog
+                .load_table(&ident, Some(pinned), cs)
+                .await
+                .map_err(failed)?;
+        }
+        let Some(meta) = meta else {
+            if scan {
+                return Err(not_found());
+            }
+            b.tables.insert(name.to_vec(), BoundTable::Missing);
+            continue;
+        };
+        let securable = match meta.kind {
+            TableKind::Table => Securable::Table(meta.ident.clone()),
+            TableKind::View => Securable::View(meta.ident.clone()),
+        };
+        let securable = authorize(ctx, b, &mut checked, securable, origin).await?;
+        if let Some(v) = meta.version {
+            b.pins.entry(meta.ident.clone()).or_insert(v);
+        }
+        if scan {
+            let known = columns.iter().all(|c| {
+                meta.columns
+                    .iter()
+                    .any(|m| m.name == c.name && m.data_type == c.data_type)
+            });
+            if !known || version != meta.version {
+                return Err(unsupported("a scan that does not match its table", origin));
+            }
+            b.scans.insert(name.to_vec(), securable);
+        } else {
+            b.tables.insert(
+                name.to_vec(),
+                BoundTable::Found {
+                    meta: Arc::new(meta),
+                    securable,
+                },
+            );
         }
     }
     Ok(())

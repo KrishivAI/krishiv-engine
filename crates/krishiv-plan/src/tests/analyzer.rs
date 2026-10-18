@@ -21,8 +21,8 @@ use super::tpch::QUERIES;
 use crate::analyzer::testing::{block_on, context};
 use crate::analyzer::{
     AccessDecision, AccessPolicy, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
-    BoxFuture, DefaultAnalyzer, MemoryCatalog, PolicyVersion, Principal, Privilege, ResolutionConf,
-    RowColumnPolicy, Securable, SparkProfile, SqlFrontend, TableColumn,
+    BoxFuture, DefaultAnalyzer, MemoryCatalog, PolicyVersion, Principal, Privilege, QueryContext,
+    ResolutionConf, RowColumnPolicy, Securable, SparkProfile, SqlFrontend, TableColumn,
 };
 use crate::walk::{Node, visit_distinct};
 use crate::{
@@ -160,7 +160,7 @@ fn dataframes(base: i64) -> Vec<(&'static str, LogicalPlan)> {
     let shared = Arc::new(t.clone());
     let join_two = with_id(
         t.clone().join(
-            u,
+            u.clone(),
             JoinKind::Inner,
             JoinCondition::On(Arc::new(eq(col("a", base + 1), col("a", base + 2)))),
         ),
@@ -236,7 +236,18 @@ fn dataframes(base: i64) -> Vec<(&'static str, LogicalPlan)> {
                 base + 4,
             ),
         ),
-        ("missing", t.project(vec![col("x", base + 1)])),
+        ("missing", t.clone().project(vec![col("x", base + 1)])),
+        (
+            "outer",
+            t.filter(Expr::subquery(
+                crate::SubqueryKind::Exists,
+                with_id(
+                    u.filter(eq(col("a", base + 2), col("a", base + 1))),
+                    base + 3,
+                ),
+            ))
+            .project(vec![col("b", base + 1)]),
+        ),
     ]
 }
 
@@ -710,6 +721,81 @@ fn cte_chains_stay_linear() {
     );
 }
 
+/// `df = df.where(df.exists())` 30 times: each plan is reached both as a
+/// child and inside a subquery, 2^30 paths. Resolution reuses a relation
+/// without outer references across scopes, so it stays linear.
+#[test]
+fn subqueries_over_shared_plans_stay_linear() {
+    let plan = (0..30).fold(LogicalPlan::table(["t"]).project(vec![c("a")]), |p, _| {
+        let p = Arc::new(p);
+        LogicalPlan::new(PlanNode::Filter {
+            input: Arc::clone(&p),
+            predicate: Arc::new(Expr::new(ExprNode::Subquery {
+                kind: crate::SubqueryKind::Exists,
+                plan: p,
+            })),
+        })
+    });
+    let a = timed("30 nested EXISTS over one plan", || {
+        run(plan, &ctx()).unwrap()
+    });
+    assert!(
+        distinct_relations(&a.plan) <= 30 * 4,
+        "{}",
+        distinct_relations(&a.plan)
+    );
+    let again = block_on(DefaultAnalyzer.analyze(&a.plan, &ctx())).unwrap();
+    assert!(again.plan.structurally_eq(&a.plan), "a fixed point");
+}
+
+/// A deep copy: every relation and expression a new `Arc`.
+fn unshared(p: &LogicalPlan) -> LogicalPlan {
+    Arc::unwrap_or_clone(
+        Arc::new(p.clone())
+            .transform_up(&mut |n: Arc<LogicalPlan>| {
+                let n = Arc::unwrap_or_clone(n);
+                let n = Arc::new(n).map_expressions(|e| {
+                    Ok::<_, std::convert::Infallible>(Arc::new(Arc::unwrap_or_clone(e)))
+                })?;
+                Ok::<_, std::convert::Infallible>(Arc::new(Arc::unwrap_or_clone(n)))
+            })
+            .unwrap(),
+    )
+}
+
+/// Equal input keys give equal resolved plans, however the input shares
+/// its subtrees.
+#[test]
+fn resolution_ignores_how_the_input_shares() {
+    let ctx = ctx();
+    for (i, q) in QUERIES.iter().enumerate() {
+        let (shared, copied) = (run(q(), &ctx).unwrap(), run(unshared(&q()), &ctx).unwrap());
+        assert!(shared.plan.structurally_eq(&copied.plan), "q{:02}", i + 1);
+    }
+    let t = Arc::new(LogicalPlan::table(["t"]).alias("x"));
+    let join = |l: Arc<LogicalPlan>, r: Arc<LogicalPlan>| {
+        LogicalPlan::new(PlanNode::Join {
+            left: l,
+            right: r,
+            kind: JoinKind::Cross,
+            condition: JoinCondition::None,
+        })
+    };
+    let shared = join(Arc::clone(&t), Arc::clone(&t));
+    let copied = join(Arc::new(LogicalPlan::table(["t"]).alias("x")), t);
+    let (a, b) = (
+        Plan::try_new(shared).unwrap(),
+        Plan::try_new(copied).unwrap(),
+    );
+    assert_eq!(a.structural_hash(), b.structural_hash());
+    let (ra, rb) = (
+        block_on(DefaultAnalyzer.analyze(&a, &ctx)).unwrap(),
+        block_on(DefaultAnalyzer.analyze(&b, &ctx)).unwrap(),
+    );
+    assert!(ra.plan.structurally_eq(&rb.plan));
+    assert_eq!(ra.plan.root().resolved_output(), Some(ra.output.clone()));
+}
+
 /// A policy that records its calls and answers with `decision`.
 struct Policy {
     decision: Result<AccessDecision, KrishivError>,
@@ -787,6 +873,170 @@ fn the_policy_is_asked_once_per_table_and_fails_closed() {
     );
 }
 
+/// A policy that denies one identifier, exactly.
+struct DenyOne(String);
+
+impl AccessPolicy for DenyOne {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        s: &'a Securable,
+        _: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let decision = if s.to_string() == self.0 {
+            AccessDecision::Deny {
+                reason: String::new(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+fn scan(name: &[&str], columns: &[(&str, DataType)]) -> LogicalPlan {
+    LogicalPlan::new(PlanNode::Scan(crate::Scan {
+        source: ReadSource::Table {
+            name: name.iter().map(|s| (*s).to_owned()).collect(),
+            options: std::collections::BTreeMap::new(),
+        },
+        output: columns
+            .iter()
+            .enumerate()
+            .map(|(i, (n, t))| crate::BoundColumn {
+                id: crate::AttrId(i as u64),
+                name: (*n).to_owned(),
+                data_type: t.clone(),
+                nullable: true,
+            })
+            .collect(),
+        version: None,
+    }))
+}
+
+/// Every relation that reads data reaches the policy, under the catalog's
+/// own identifier; a scan must match its table; a denied principal learns
+/// nothing about existence; catalog failures carry no provider text.
+#[test]
+fn no_relation_bypasses_the_policy() {
+    let deny = |ident: &str| {
+        let mut c = ctx();
+        c.policy = Arc::new(DenyOne(format!("table {ident}")));
+        c
+    };
+    let lineitem = "`spark_catalog`.`default`.`lineitem`";
+    let files = |paths: Vec<krishiv_common::secret::OptionValue>| {
+        LogicalPlan::new(PlanNode::Read(ReadSource::Files {
+            format: "parquet".to_owned(),
+            paths,
+            options: std::collections::BTreeMap::new(),
+        }))
+    };
+    let key = [("l_orderkey", DataType::Long)];
+    let shifted = LogicalPlan::new(PlanNode::Shift {
+        input: Arc::new(scan(&["LINEITEM"], &key)),
+        offset: 10,
+    });
+    for plan in [
+        LogicalPlan::table(["LINEITEM"]),
+        LogicalPlan::table(["Default", "LineItem"]),
+        scan(&["lineitem"], &key),
+        scan(&["LINEITEM"], &key),
+        scan(&["spark_catalog", "Default", "LineItem"], &key),
+        shifted,
+    ] {
+        assert_eq!(
+            class(&run(plan, &deny(lineitem))),
+            "KRISHIV_INSUFFICIENT_PERMISSIONS"
+        );
+    }
+    // A denied name is denied whether it exists or not.
+    let nosuch = "`spark_catalog`.`default`.`nosuch`";
+    assert_eq!(
+        class(&run(LogicalPlan::table(["nosuch"]), &deny(nosuch))),
+        "KRISHIV_INSUFFICIENT_PERMISSIONS"
+    );
+    // Deny-all reaches every kind of relation.
+    let (all, _) = with_policy(Ok(AccessDecision::Deny {
+        reason: String::new(),
+    }));
+    let path = || vec![krishiv_common::secret::OptionValue::from_user("path", "/d")];
+    for plan in [
+        LogicalPlan::table(["t"]),
+        LogicalPlan::table(["nosuch"]),
+        files(path()),
+        scan(&["t"], &[("a", DataType::Integer)]),
+        LogicalPlan::new(PlanNode::Scan(crate::Scan {
+            source: ReadSource::Files {
+                format: "parquet".to_owned(),
+                paths: path(),
+                options: std::collections::BTreeMap::new(),
+            },
+            output: Vec::new(),
+            version: None,
+        })),
+    ] {
+        assert_eq!(class(&run(plan, &all)), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    }
+    // Scans that name no table, a missing one, or invent columns fail closed.
+    let ctx = ctx();
+    assert_eq!(class(&run(scan(&[], &[]), &ctx)), "TABLE_OR_VIEW_NOT_FOUND");
+    assert_eq!(
+        class(&run(scan(&["nosuch"], &[]), &ctx)),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+    let invented = scan(&["t"], &[("secret_column", DataType::Integer)]);
+    assert_eq!(class(&run(invented, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+    let retyped = scan(&["t"], &[("a", DataType::Long)]);
+    assert_eq!(class(&run(retyped, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+    // Repeated paths are asked about once.
+    let (allow, calls) = with_policy(Ok(AccessDecision::Allow));
+    let twice = files(path()).join(files(path()), JoinKind::Cross, JoinCondition::None);
+    let _ = run(twice, &allow);
+    assert_eq!(calls.calls.lock().unwrap().len(), 1);
+}
+
+/// A catalog that fails with a message of its own.
+struct Failing;
+
+impl crate::analyzer::Catalog for Failing {
+    fn name(&self) -> &str {
+        "spark_catalog"
+    }
+
+    fn epoch(&self) -> u64 {
+        0
+    }
+
+    fn load_table<'a>(
+        &'a self,
+        _: &'a crate::analyzer::TableIdent,
+        _: Option<TableVersion>,
+        _: bool,
+    ) -> BoxFuture<'a, Result<Option<crate::analyzer::TableMeta>, KrishivError>> {
+        let e = krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "Canary-7f3a9c".to_owned(),
+        };
+        Box::pin(std::future::ready(Err(e.into())))
+    }
+}
+
+#[test]
+fn catalog_failures_hide_the_provider_text() {
+    let mut ctx = ctx();
+    ctx.catalogs = Arc::new(crate::analyzer::testing::OneCatalog(
+        Arc::new(Failing),
+        vec!["default".to_owned()],
+    ));
+    let e = run(LogicalPlan::table(["t"]), &ctx).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivCatalogFailure);
+    assert!(!format!("{e} {e:?}").contains("Canary"));
+}
+
 #[test]
 fn already_resolved_plans_are_checked_too() {
     let resolved = run(QUERIES[5](), &ctx()).unwrap().plan;
@@ -809,8 +1059,11 @@ fn pins_securables_and_fingerprint() {
         pins,
         [("`spark_catalog`.`default`.`lineitem`".to_owned(), 7)]
     );
-    // Every scan of lineitem (three, one per alias) reads the pin.
-    assert_eq!(a.plan.root().to_string().matches("@ version 7").count(), 3);
+    // lineitem is read once at the pin; its other two uses (in subqueries)
+    // are instances of that scan.
+    let text = a.plan.root().to_string();
+    assert_eq!(text.matches("@ version 7").count(), 1, "{text}");
+    assert_eq!(text.matches("Shift +").count(), 2, "{text}");
     let used: std::collections::BTreeMap<String, Vec<String>> = a
         .securables
         .iter()
@@ -833,6 +1086,113 @@ fn pins_securables_and_fingerprint() {
     let b = run(QUERIES[20](), &other).unwrap();
     assert_ne!(a.context.digest(), b.context.digest());
     assert_eq!(a.context.catalog_epochs.len(), 1);
+}
+
+/// A resolver or registry wrapper that reports another epoch/version.
+struct Epoch<T>(T, u64);
+
+impl crate::analyzer::CatalogResolver for Epoch<crate::analyzer::testing::OneCatalog> {
+    fn current_catalog(&self) -> &str {
+        self.0.current_catalog()
+    }
+
+    fn current_namespace(&self) -> &[String] {
+        self.0.current_namespace()
+    }
+
+    fn catalog(&self, name: &str) -> Option<Arc<dyn crate::analyzer::Catalog>> {
+        self.0.catalog(name)
+    }
+
+    fn epoch(&self) -> u64 {
+        self.1
+    }
+}
+
+impl crate::analyzer::FunctionRegistry for Epoch<crate::analyzer::testing::TestFunctions> {
+    fn lookup(&self, name: &[String], profile: SparkProfile) -> crate::analyzer::FunctionLookup {
+        self.0.lookup(name, profile)
+    }
+
+    fn version(&self) -> u64 {
+        self.1
+    }
+}
+
+/// Every input of resolution enters the context fingerprint: changing any
+/// one changes the digest.
+#[test]
+fn every_context_input_changes_the_key() {
+    use crate::analyzer::testing::{OneCatalog, TestFunctions};
+    use crate::analyzer::{PrincipalKind, fingerprint};
+    let digest = |c: &AnalysisContext, epochs: &[(&str, u64)]| {
+        let e = epochs.iter().map(|(n, v)| ((*n).to_owned(), *v)).collect();
+        fingerprint(c, e).digest()
+    };
+    let base = ctx();
+    let one = |name: &str, ns: &str| -> Arc<dyn crate::analyzer::CatalogResolver> {
+        Arc::new(OneCatalog(
+            Arc::new(MemoryCatalog::new(name)),
+            vec![ns.to_owned()],
+        ))
+    };
+    let mut variants: Vec<(&str, AnalysisContext)> = Vec::new();
+    let mut v = |what, f: &dyn Fn(&mut AnalysisContext)| {
+        let mut c = base.clone();
+        f(&mut c);
+        variants.push((what, c));
+    };
+    v("profile", &|c| c.profile = SparkProfile::V4_1);
+    v("caseSensitive", &|c| c.conf.case_sensitive ^= true);
+    v("ansi", &|c| c.conf.ansi ^= true);
+    v("groupByAliases", &|c| c.conf.group_by_aliases ^= true);
+    v("groupByOrdinal", &|c| c.conf.group_by_ordinal ^= true);
+    v("orderByOrdinal", &|c| c.conf.order_by_ordinal ^= true);
+    v("lateralColumnAlias", &|c| {
+        c.conf.lateral_column_alias ^= true;
+    });
+    v("current catalog", &|c| c.catalogs = one("other", "default"));
+    v("current namespace", &|c| {
+        c.catalogs = one("spark_catalog", "db2");
+    });
+    v("catalogs epoch", &|c| {
+        let inner = OneCatalog(
+            Arc::new(MemoryCatalog::new("spark_catalog")),
+            vec!["default".to_owned()],
+        );
+        c.catalogs = Arc::new(Epoch(inner, 9));
+    });
+    v("functions", &|c| {
+        c.functions = Arc::new(Epoch(TestFunctions, 9));
+    });
+    v("sql front end", &|c| c.sql = Some(Arc::new(Frontend)));
+    v("principal", &|c| {
+        c.principal = Arc::new(Principal::new("other", PrincipalKind::User));
+    });
+    v("principal kind", &|c| {
+        c.principal = Arc::new(Principal::new("tester", PrincipalKind::Service));
+    });
+    v("groups", &|c| {
+        let mut p = Principal::new("tester", PrincipalKind::User);
+        p.groups = vec!["admins".to_owned()];
+        c.principal = Arc::new(p);
+    });
+    v("tenant", &|c| {
+        let mut p = Principal::new("tester", PrincipalKind::User);
+        p.tenant = Some("acme".to_owned());
+        c.principal = Arc::new(p);
+    });
+    v("policy", &|c| c.policy = Arc::new(DenyOne(String::new())));
+    let key = digest(&base, &[("spark_catalog", 1)]);
+    assert_ne!(
+        key,
+        digest(&base, &[("spark_catalog", 2)]),
+        "catalog epochs"
+    );
+    for (what, c) in &variants {
+        assert_ne!(key, digest(c, &[("spark_catalog", 1)]), "{what}");
+    }
+    assert_eq!(base.catalogs.epoch(), 0);
 }
 
 #[test]
@@ -879,10 +1239,11 @@ impl SqlFrontend for Frontend {
     }
 
     fn redact(&self, query: &str) -> RedactedSql {
-        RedactedSql::from_marks(
-            query,
-            vec![krishiv_common::redact::Mark::Secret(0..query.len())],
-        )
+        RedactedSql::opaque(query)
+    }
+
+    fn fingerprint(&self) -> u64 {
+        7
     }
 }
 
@@ -1008,14 +1369,11 @@ fn deep_plans_resolve_on_a_small_stack_and_added_nodes_count() {
 #[test]
 fn principals_securables_and_contexts_print_safely() {
     let local = Principal::local_user();
-    assert!(local.id().starts_with("user:/"));
-    let service = Principal {
-        name: "etl".to_owned(),
-        groups: Vec::new(),
-        tenant: Some("acme".to_owned()),
-        kind: crate::analyzer::PrincipalKind::Service,
-    };
-    assert_eq!(service.id(), "service:acme/etl");
+    assert!(local.id().starts_with("user:``/"));
+    let mut service = Principal::new("etl", crate::analyzer::PrincipalKind::Service);
+    service.tenant = Some("acme".to_owned());
+    service.groups = vec!["b".to_owned(), "a".to_owned(), "a".to_owned()];
+    assert_eq!(service.id(), "service:`acme`/`etl`[`a`.`b`]");
     let ident = crate::analyzer::TableIdent {
         catalog: "c".to_owned(),
         namespace: vec!["d".to_owned()],
@@ -1044,9 +1402,25 @@ fn principals_securables_and_contexts_print_safely() {
     let at = Origin::sql(crate::SourceId(0), crate::Span::new(7, 8));
     let plan = LogicalPlan::table(["t"]).project(vec![c("x").with_origin(at)]);
     let e = run(plan, &ctx()).unwrap_err();
-    let text = krishiv_common::redact::RedactedSql::from_marks(sql, Vec::new());
-    let q = e.query_context(&text).unwrap();
-    assert_eq!((q.start, q.stop, q.fragment.as_str()), (7, 7, "x"));
+    let q = e.query_context(&RedactedSql::opaque(sql)).unwrap();
+    assert!(
+        matches!(
+            q,
+            QueryContext::Sql {
+                start: 7,
+                stop: 7,
+                ..
+            }
+        ),
+        "{q:?}"
+    );
+    // A DataFrame error names the relation that raised it.
+    let df = LogicalPlan::table(["t"]).with_origin(Origin::plan(PlanId(5)));
+    let df_error = run(df.project(vec![col("x", 5)]), &ctx()).unwrap_err();
+    assert_eq!(
+        df_error.query_context(&RedactedSql::opaque(sql)),
+        Some(QueryContext::DataFrame { plan_id: PlanId(5) })
+    );
     assert_eq!(
         KrishivError::from(e).error_class(),
         ErrorClass::UnresolvedColumnWithSuggestion

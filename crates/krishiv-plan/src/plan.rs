@@ -524,6 +524,100 @@ impl LogicalPlan {
         }
     }
 
+    /// The output attributes of a resolved relation, as the analyzer
+    /// produced them; `None` when the relation (or a relation it reads) is
+    /// unresolved. Later passes use it rather than re-deriving outputs:
+    /// inside a [`PlanNode::Shift`], every attribute id reads `id +
+    /// offset`; a [`PlanNode::CteRef`] outputs its own attributes, one per
+    /// attribute of the definition its `source` names; outer joins make the
+    /// other side nullable. Attribute ids are unique within a plan but not
+    /// dense: never index by them.
+    #[must_use]
+    pub fn resolved_output(&self) -> Option<Vec<BoundColumn>> {
+        let mut p = self;
+        loop {
+            match &p.node {
+                PlanNode::Filter { input, .. }
+                | PlanNode::Sort { input, .. }
+                | PlanNode::Limit { input, .. }
+                | PlanNode::WithCte { input, .. } => p = input,
+                PlanNode::SubqueryAlias { input, columns, .. } => {
+                    let out = input.resolved_output()?;
+                    if columns.is_empty() {
+                        return Some(out);
+                    }
+                    if columns.len() != out.len() {
+                        return None;
+                    }
+                    let renamed = out.into_iter().zip(columns);
+                    return Some(
+                        renamed
+                            .map(|(c, name)| BoundColumn {
+                                name: name.clone(),
+                                ..c
+                            })
+                            .collect(),
+                    );
+                }
+                PlanNode::Scan(s) => return Some(s.output.clone()),
+                PlanNode::CteRef(r) => return Some(r.output.clone()),
+                PlanNode::Shift { input, offset } => {
+                    let out = input.resolved_output()?;
+                    return out
+                        .into_iter()
+                        .map(|c| {
+                            Some(BoundColumn {
+                                id: crate::AttrId(c.id.0.checked_add(*offset)?),
+                                ..c
+                            })
+                        })
+                        .collect();
+                }
+                PlanNode::Project { exprs, .. }
+                | PlanNode::Aggregate {
+                    aggregates: exprs, ..
+                } => {
+                    return exprs
+                        .iter()
+                        .map(|e| match &e.node {
+                            crate::ExprNode::Resolved(
+                                crate::ResolvedExpr::Column(c)
+                                | crate::ResolvedExpr::Alias { output: c, .. },
+                            ) => Some(c.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                }
+                PlanNode::Join {
+                    left, right, kind, ..
+                } => {
+                    let nullable = |v: Vec<BoundColumn>, yes: bool| {
+                        v.into_iter()
+                            .map(|c| BoundColumn {
+                                nullable: c.nullable || yes,
+                                ..c
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let (l, r) = (left.resolved_output()?, right.resolved_output()?);
+                    let mut out = nullable(
+                        l,
+                        matches!(kind, JoinKind::RightOuter | JoinKind::FullOuter),
+                    );
+                    if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                        let r =
+                            nullable(r, matches!(kind, JoinKind::LeftOuter | JoinKind::FullOuter));
+                        out.extend(r);
+                    }
+                    return Some(out);
+                }
+                PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::WithColumns { .. } => {
+                    return None;
+                }
+            }
+        }
+    }
+
     /// Whether no unresolved node remains anywhere in the plan, subquery
     /// plans included. It does not recurse.
     #[must_use]

@@ -55,14 +55,18 @@ pub(super) struct Rel {
 #[derive(Clone)]
 pub(super) struct Level {
     pub(super) scope: Arc<[Attr]>,
-    pub(super) rels: Vec<Rel>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.
 pub(super) struct Env {
     id: usize,
     pub(super) ctes: Vec<(String, Rel)>,
+    /// Identifies `ctes`: environments with one CTE scope resolve a
+    /// relation without outer references alike.
+    pub(super) ctes_id: usize,
     pub(super) outer: Vec<Level>,
+    /// The span of the ids the enclosing queries define.
+    pub(super) outer_ids: Option<(u64, u64)>,
 }
 
 pub(super) struct Resolver<'a> {
@@ -71,6 +75,14 @@ pub(super) struct Resolver<'a> {
     pub(super) next_id: u64,
     next_env: usize,
     memo: HashMap<(usize, usize), Rel>,
+    /// Relations without outer references, by (relation, CTE scope): they
+    /// resolve alike in every environment with that CTE scope, so a plan
+    /// reached both as a child and inside a subquery is resolved once.
+    closed: HashMap<(usize, usize), Rel>,
+    /// Each relation's representative among the relations equal to it
+    /// (`encode::identity_keys`): resolution does not depend on how the
+    /// input shares subtrees, so equal input keys give equal plans.
+    canon: HashMap<usize, Arc<LogicalPlan>>,
     pub(super) columns: Vec<BTreeSet<String>>,
     depth: usize,
     op_outer: Option<usize>,
@@ -90,12 +102,17 @@ pub(super) fn resolve(
         next_id: 0,
         next_env: 0,
         memo: HashMap::new(),
+        closed: HashMap::new(),
+        canon: HashMap::new(),
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
         op_outer: None,
         root_env: None,
     };
-    let env = r.env(Vec::new(), Vec::new());
+    // Fresh ids start past every id the input already holds (a plan that
+    // is resolved in part, or re-analysed).
+    r.next_id = first_free_id(plan.root())?;
+    let env = r.env(Vec::new(), 0, Vec::new());
     r.root_env = Some(Arc::clone(&env));
     let rel = r.rel(plan.root(), &env)?;
     let output = rel.out.iter().map(|a| a.col.clone()).collect();
@@ -112,6 +129,42 @@ pub(super) fn resolve(
     Ok((rel.plan, output, uses))
 }
 
+/// One past the largest attribute id in `root` (a `Shift` counted at its
+/// offset).
+fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
+    use crate::walk::{Node, visit_distinct};
+    use crate::{ExprNode, ResolvedExpr};
+    let mut top = 0_u64;
+    let mut shifts = 0_u64;
+    let _ = visit_distinct(Node::Plan(root), |node| {
+        let mut bump = |c: &BoundColumn| top = top.max(c.id.0.saturating_add(1));
+        match node {
+            Node::Plan(p) => match &p.node {
+                PlanNode::Scan(s) => s.output.iter().for_each(&mut bump),
+                PlanNode::CteRef(r) => r.output.iter().for_each(&mut bump),
+                PlanNode::Shift { offset, .. } => shifts = shifts.saturating_add(*offset),
+                _ => {}
+            },
+            Node::Expr(e) => {
+                if let ExprNode::Resolved(
+                    ResolvedExpr::Column(c)
+                    | ResolvedExpr::OuterColumn(c)
+                    | ResolvedExpr::Alias { output: c, .. },
+                ) = &e.node
+                {
+                    bump(c);
+                }
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    let next = top.saturating_add(shifts);
+    if next > super::ops::MAX_ID {
+        return Err(AnalysisError::new(FailedToParseTooComplex {}, root.origin));
+    }
+    Ok(next)
+}
+
 fn hull(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> Option<(u64, u64)> {
     match (a, b) {
         (Some(x), Some(y)) => Some((x.0.min(y.0), x.1.max(y.1))),
@@ -125,13 +178,71 @@ impl Resolver<'_> {
         AttrId(self.next_id - 1)
     }
 
-    pub(super) fn env(&mut self, ctes: Vec<(String, Rel)>, outer: Vec<Level>) -> Arc<Env> {
+    pub(super) fn env(
+        &mut self,
+        ctes: Vec<(String, Rel)>,
+        ctes_id: usize,
+        outer: Vec<Level>,
+    ) -> Arc<Env> {
         self.next_env += 1;
+        let outer_ids = outer
+            .iter()
+            .flat_map(|l| l.scope.iter())
+            .fold(None, |h, a| hull(h, Some((a.col.id.0, a.col.id.0))));
         Arc::new(Env {
             id: self.next_env,
             ctes,
+            ctes_id,
             outer,
+            outer_ids,
         })
+    }
+
+    /// A new CTE scope id.
+    pub(super) fn ctes_id(&mut self) -> usize {
+        self.next_env += 1;
+        self.next_env
+    }
+
+    /// Records the representative of every relation under `root`.
+    fn canonicalize(&mut self, root: &Arc<LogicalPlan>) {
+        if self.canon.contains_key(&addr(&**root)) {
+            return;
+        }
+        let keys = crate::encode::identity_keys(root);
+        let mut first: HashMap<u128, Arc<LogicalPlan>> = HashMap::new();
+        let mut stack = vec![Arc::clone(root)];
+        let mut exprs: Vec<Arc<crate::Expr>> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        while let Some(p) = stack.pop() {
+            if !seen.insert(addr(&*p)) {
+                continue;
+            }
+            let key = keys.get(&std::ptr::from_ref(&*p)).copied();
+            let rep = match key {
+                Some(k) => Arc::clone(first.entry(k).or_insert_with(|| Arc::clone(&p))),
+                None => Arc::clone(&p),
+            };
+            self.canon.insert(addr(&*p), rep);
+            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+            p.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
+            while let Some(e) = exprs.pop() {
+                if !seen.insert(addr(&*e)) {
+                    continue;
+                }
+                if let crate::ExprNode::Subquery { plan, .. } = &e.node {
+                    stack.push(Arc::clone(plan));
+                }
+                e.for_each_child(&mut |c| exprs.push(Arc::clone(c)));
+            }
+        }
+    }
+
+    fn rep(&self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+        self.canon
+            .get(&addr(&**p))
+            .cloned()
+            .unwrap_or_else(|| Arc::clone(p))
     }
 
     /// Resolves the relation `root` in `env`, every `STEP` nested calls on
@@ -159,17 +270,29 @@ impl Resolver<'_> {
         root: &Arc<LogicalPlan>,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
-        let mut stack = vec![(Arc::clone(root), false)];
+        self.canonicalize(root);
+        let root = self.rep(root);
+        let mut stack = vec![(Arc::clone(&root), false)];
         while let Some((p, expanded)) = stack.pop() {
             let key = (addr(&*p), env.id);
             if self.memo.contains_key(&key) {
                 continue;
             }
             if !expanded {
+                if let Some(r) = self.closed.get(&(key.0, env.ctes_id)).cloned() {
+                    // Resolved before in another environment: the same
+                    // relation, as a fresh instance where its ids would
+                    // meet an enclosing query's.
+                    let overlaps = matches!((r.ids, env.outer_ids),
+                        (Some(a), Some(b)) if a.0 <= b.1 && b.0 <= a.1);
+                    let r = if overlaps { self.instance(&r)? } else { r };
+                    self.memo.insert(key, r);
+                    continue;
+                }
                 stack.push((Arc::clone(&p), true));
                 if !matches!(p.node, PlanNode::WithCte { .. }) {
                     let mut kids = Vec::new();
-                    p.for_each_child(&mut |c| kids.push(Arc::clone(c)));
+                    p.for_each_child(&mut |c| kids.push(self.rep(c)));
                     stack.extend(kids.into_iter().rev().map(|c| (c, false)));
                 }
                 continue;
@@ -181,17 +304,20 @@ impl Resolver<'_> {
             }
             r.outer = [r.outer, self.op_outer].into_iter().flatten().min();
             self.op_outer = saved;
+            if r.outer.is_none() {
+                self.closed.insert((key.0, env.ctes_id), r.clone());
+            }
             self.memo.insert(key, r);
         }
         self.memo
-            .get(&(addr(&**root), env.id))
+            .get(&(addr(&*root), env.id))
             .cloned()
             .ok_or_else(|| unsupported("a plan shape", root.origin))
     }
 
     pub(super) fn child(&self, c: &Arc<LogicalPlan>, env: &Env) -> Result<Rel, AnalysisError> {
         self.memo
-            .get(&(addr(&**c), env.id))
+            .get(&(addr(&*self.rep(c)), env.id))
             .cloned()
             .ok_or_else(|| unsupported("a plan shape", c.origin))
     }
@@ -292,6 +418,11 @@ impl Resolver<'_> {
                     ReadSource::Files { .. } => Vec::new(),
                 };
                 let source = self.b.scans.get(&name).copied();
+                // Bind checked every scan of a table; one it did not bind
+                // never reaches a plan.
+                if matches!(s.source, ReadSource::Table { .. }) && source.is_none() {
+                    return Err(unsupported("a scan of an unchecked table", o));
+                }
                 let qual: Arc<[String]> = name.into();
                 let out = s
                     .output
@@ -390,19 +521,21 @@ impl Resolver<'_> {
             } => self.subquery_alias(p, input, alias, columns, env),
             PlanNode::WithCte { input, ctes } => {
                 let mut visible = env.ctes.clone();
+                let mut scope = env.ctes_id;
                 let mut defs = Vec::new();
                 let mut rels = Vec::new();
                 for c in ctes {
-                    let e = self.env(visible.clone(), env.outer.clone());
+                    let e = self.env(visible.clone(), scope, env.outer.clone());
                     let r = self.rel(&c.plan, &e)?;
                     defs.push(Cte {
                         name: c.name.clone(),
                         plan: Arc::clone(&r.plan),
                     });
                     visible.push((c.name.clone(), r.clone()));
+                    scope = self.ctes_id();
                     rels.push(r);
                 }
-                let e = self.env(visible, env.outer.clone());
+                let e = self.env(visible, scope, env.outer.clone());
                 let i = self.rel(input, &e)?;
                 let node = PlanNode::WithCte {
                     input: Arc::clone(&i.plan),

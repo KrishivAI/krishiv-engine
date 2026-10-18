@@ -163,6 +163,14 @@ CORPUS = [
     # WITH columns, views and others the analyzer rejects or handles
     ("SELECT * FROM t WHERE a = 1 AND b = 'x' OR c = 3", {}),
     ("SELECT a FROM t LIMIT 10", {}),
+    # inner before outer, case-distinct CTEs, 4-part names, HAVING aliases
+    ("SELECT a FROM t WHERE EXISTS (SELECT a FROM u WHERE a = 1)", {}),
+    ("SELECT b FROM t WHERE EXISTS (SELECT 1 FROM u WHERE b = 'x')", {}),
+    ("WITH T AS (SELECT 1 AS z FROM u) SELECT * FROM t", CASE_SENSITIVE),
+    ("WITH T AS (SELECT 1 AS z FROM u) SELECT * FROM t", {}),
+    ("SELECT spark_catalog.default.t.a FROM t", {}),
+    ("SELECT spark_catalog.default.t.* FROM t", {}),
+    ("SELECT a AS b, max(c) FROM t GROUP BY a HAVING b > 0", {}),
     ("SELECT a FROM t WHERE b LIKE 'x%' AND c IS NOT NULL ORDER BY a DESC NULLS FIRST", {}),
     ("SELECT t.a, d FROM t LEFT JOIN u ON t.a = u.a", {}),
     ("SELECT u.a, b FROM t RIGHT JOIN u ON t.a = u.a", {}),
@@ -202,6 +210,11 @@ def plan_id_cases(spark):
             lambda: t.withColumn("a", t["a"] + 1).withColumn("e", F.lit(1)),
         ),
         ("missing", 't.select(t["x"])', lambda: t.select(t["x"])),
+        (
+            "outer",
+            't.where(u.where(u["a"] == t["a"].outer()).exists()).select(t["b"])',
+            lambda: t.where(u.where(u["a"] == t["a"].outer()).exists()).select(t["b"]),
+        ),
     ]
 
 
@@ -246,6 +259,8 @@ def main() -> None:
     args = ap.parse_args()
 
     spark = SparkSession.builder.remote(args.remote).getOrCreate()
+    if spark.version != "4.2.0":
+        raise SystemExit(f"expected Spark 4.2.0, found {spark.version}")
     spark.sql("CREATE DATABASE IF NOT EXISTS default")
     for name, cols in TABLES.items():
         spark.sql(f"DROP TABLE IF EXISTS {name}")

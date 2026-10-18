@@ -117,6 +117,9 @@ pub trait CatalogResolver: Send + Sync {
     fn current_namespace(&self) -> &[String];
     /// The catalog named `name`.
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>>;
+    /// Changes whenever the set of catalogs or their names change; part of
+    /// the context fingerprint.
+    fn epoch(&self) -> u64;
 }
 
 /// The type of a value, as function signatures see it.
@@ -128,16 +131,29 @@ pub struct ArgType {
     pub nullable: bool,
 }
 
+/// A function's result type for its argument types (implicit casts are a
+/// later pass's, P2-T071b). A closure, so catalog and session functions can
+/// carry state.
+pub type ResultType = Arc<dyn Fn(&[ArgType]) -> Result<ArgType, KrishivError> + Send + Sync>;
+
 /// A function the registry knows.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FunctionEntry {
     /// Its identity.
     pub id: FunctionId,
     /// Scalar, aggregate, ...
     pub kind: FunctionKind,
-    /// The result type for the argument types (implicit casts are a later
-    /// pass's: T071b).
-    pub result: fn(&[ArgType]) -> Result<ArgType, KrishivError>,
+    /// The result type for the argument types.
+    pub result: ResultType,
+}
+
+impl fmt::Debug for FunctionEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FunctionEntry")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A registry lookup.
@@ -155,12 +171,18 @@ pub enum FunctionLookup {
 /// The function registry: built-in functions resolve in-process, so the
 /// lookup is synchronous.
 pub trait FunctionRegistry: Send + Sync {
-    /// The function `name` (as written, case-insensitive) in `profile`.
-    fn lookup(&self, name: &str, profile: SparkProfile) -> FunctionLookup;
+    /// The function named by `name`'s parts (as written, case-insensitive;
+    /// one part for a built-in, more for a qualified name) in `profile`.
+    fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup;
+    /// Changes whenever a lookup could answer differently (temporary and
+    /// session functions); part of the context fingerprint.
+    fn version(&self) -> u64;
 }
 
-/// Who runs a query.
+/// Who runs a query. Build it with [`Principal::new`]; more attributes
+/// arrive with authentication (P2-T136).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Principal {
     /// The user or service name.
     pub name: String,
@@ -183,6 +205,17 @@ pub enum PrincipalKind {
 }
 
 impl Principal {
+    /// A principal of `kind` named `name`, without groups or tenant.
+    #[must_use]
+    pub fn new(name: impl Into<String>, kind: PrincipalKind) -> Self {
+        Self {
+            name: name.into(),
+            groups: Vec::new(),
+            tenant: None,
+            kind,
+        }
+    }
+
     /// The embedded default: the local OS user.
     #[must_use]
     pub fn local_user() -> Self {
@@ -198,17 +231,28 @@ impl Principal {
         }
     }
 
-    /// The identity that enters the context fingerprint.
+    /// The identity that enters the context fingerprint: kind, tenant,
+    /// name and the sorted groups (a policy may decide by group).
     #[must_use]
     pub fn id(&self) -> String {
         let kind = match self.kind {
             PrincipalKind::User => "user",
             PrincipalKind::Service => "service",
         };
+        let mut groups = self.groups.clone();
+        groups.sort();
+        groups.dedup();
         format!(
-            "{kind}:{}/{}",
-            self.tenant.as_deref().unwrap_or(""),
-            self.name
+            "{kind}:{}/{}{}",
+            quoted(std::slice::from_ref(
+                &self.tenant.clone().unwrap_or_default()
+            )),
+            quoted(std::slice::from_ref(&self.name)),
+            if groups.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", quoted(&groups))
+            }
         )
     }
 }
@@ -329,6 +373,9 @@ pub trait SqlFrontend: Send + Sync {
     fn lower(&self, query: &str, source: SourceId) -> Result<Plan, AnalysisError>;
     /// `query` with its secrets replaced.
     fn redact(&self, query: &str) -> RedactedSql;
+    /// A digest of the options that change how text parses; part of the
+    /// context fingerprint.
+    fn fingerprint(&self) -> u64;
 }
 
 /// Tables in memory, by namespace and name, stored lower-case like Spark's

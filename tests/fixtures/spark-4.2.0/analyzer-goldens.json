@@ -2430,6 +2430,117 @@
    ]
   },
   {
+   "sql": "SELECT a FROM t WHERE EXISTS (SELECT a FROM u WHERE a = 1)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT b FROM t WHERE EXISTS (SELECT 1 FROM u WHERE b = 'x')",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "WITH T AS (SELECT 1 AS z FROM u) SELECT * FROM t",
+   "conf": {
+    "spark.sql.caseSensitive": "true"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "WITH T AS (SELECT 1 AS z FROM u) SELECT * FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "z",
+     "type": "int",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT spark_catalog.default.t.a FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT spark_catalog.default.t.* FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT a AS b, max(c) FROM t GROUP BY a HAVING b > 0",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "b",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "max(c)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
    "sql": "SELECT a FROM t WHERE b LIKE 'x%' AND c IS NOT NULL ORDER BY a DESC NULLS FIRST",
    "conf": {},
    "ok": true,
@@ -2719,6 +2830,19 @@
    "sql_state": "42704",
    "message_parameters": {
     "name": "\"x\""
+   }
+  },
+  {
+   "id": "outer",
+   "dataframe": "t.where(u.where(u[\"a\"] == t[\"a\"].outer()).exists()).select(t[\"b\"])",
+   "ok": false,
+   "error_class": "CANNOT_RESOLVE_DATAFRAME_COLUMN",
+   "sql_state": "42704",
+   "message_parameters": {
+    "name": "\"a\""
+   },
+   "context": {
+    "fragment": "__eq__"
    }
   }
  ]

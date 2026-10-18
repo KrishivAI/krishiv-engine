@@ -153,6 +153,23 @@ impl Plan {
     }
 }
 
+/// A 128-bit identity of every distinct relation under `root` (subquery
+/// plans included), by address: relations that are equal field by field,
+/// `plan_id`s included (as values) and origins otherwise excluded, get one
+/// identity. The analyzer resolves equal relations once, whether or not
+/// they share an `Arc`, so equal input keys give equal resolved plans.
+pub(crate) fn identity_keys(root: &LogicalPlan) -> HashMap<*const LogicalPlan, u128> {
+    let mut keys = Keys {
+        absolute: true,
+        ..Keys::default()
+    };
+    keys.plan(root, &[], 0);
+    keys.plans
+        .into_iter()
+        .map(|((p, _), (_, digest))| (p, digest))
+        .collect()
+}
+
 /// A record's index and digest.
 type Key = (u64, u128);
 
@@ -175,6 +192,13 @@ struct Keys {
     exprs: HashMap<(*const Expr, usize), Key>,
     /// Contexts and operator passes handed out so far.
     counter: usize,
+    /// Identity mode (see [`identity_keys`]): `plan_id`s are encoded as
+    /// themselves, not by where their carriers are.
+    absolute: bool,
+    /// Whether a relation's subtree (subquery plans included) holds a
+    /// `plan_id` reference: only then does its key depend on the enclosing
+    /// operators, so a subtree without one is encoded once.
+    refs: HashMap<*const LogicalPlan, bool>,
 }
 
 /// The operator whose expressions are being encoded.
@@ -236,6 +260,60 @@ impl Keys {
         let found = Some(self.intern(rec, &dig));
         self.carriers.insert(key, found);
         found
+    }
+
+    /// Whether the subtree of `p` holds a `plan_id` reference, memoised per
+    /// relation, without recursion.
+    fn has_refs(&mut self, root: &LogicalPlan) -> bool {
+        use crate::walk::{Node, children};
+        if let Some(&known) = self.refs.get(&std::ptr::from_ref(root)) {
+            return known;
+        }
+        // Post-order over relations and expressions; an expression's answer
+        // is folded into its relation's.
+        let mut stack = vec![(Node::Plan(root), false)];
+        let mut exprs: HashMap<*const Expr, bool> = HashMap::new();
+        let mut next = Vec::new();
+        while let Some((node, expanded)) = stack.pop() {
+            let known = match node {
+                Node::Plan(p) => self.refs.contains_key(&std::ptr::from_ref(p)),
+                Node::Expr(e) => exprs.contains_key(&std::ptr::from_ref(e)),
+            };
+            if known {
+                continue;
+            }
+            children(node, &mut next);
+            if !expanded {
+                stack.push((node, true));
+                stack.extend(next.drain(..).map(|c| (c, false)));
+                continue;
+            }
+            let below = next.drain(..).any(|c| match c {
+                Node::Plan(p) => self
+                    .refs
+                    .get(&std::ptr::from_ref(p))
+                    .copied()
+                    .unwrap_or(false),
+                Node::Expr(e) => exprs.get(&std::ptr::from_ref(e)).copied().unwrap_or(false),
+            });
+            match node {
+                Node::Plan(p) => {
+                    self.refs.insert(std::ptr::from_ref(p), below);
+                }
+                Node::Expr(e) => {
+                    let own = match &e.node {
+                        ExprNode::Column(c) => c.plan_id.is_some(),
+                        ExprNode::Star(s) => s.plan_id.is_some(),
+                        _ => false,
+                    };
+                    exprs.insert(std::ptr::from_ref(e), own || below);
+                }
+            }
+        }
+        self.refs
+            .get(&std::ptr::from_ref(root))
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Whether any relation in the subtree of `p` carries `id`.
@@ -338,17 +416,33 @@ impl Keys {
     /// The key of relation `p` under the enclosing operators `outer`
     /// (context `ctx`).
     fn plan<'a>(&mut self, p: &'a LogicalPlan, outer: &[&'a LogicalPlan], ctx: usize) -> Key {
+        let ctx = if self.has_refs(p) { ctx } else { 0 };
         if let Some(&key) = self.plans.get(&(std::ptr::from_ref(p), ctx)) {
             return key;
         }
+        let unbound = if self.absolute {
+            Vec::new()
+        } else {
+            self.unbound(p, outer)
+        };
         let op = Op {
             node: p,
             outer: outer.to_vec(),
-            unbound: self.unbound(p, outer),
+            unbound,
             pass: self.next_id(),
         };
         let mut enc = Encoder::new(self, &op, b'P');
         enc.plan_fields(p);
+        if enc.keys.absolute {
+            // The relation's own `plan_id` is part of its identity.
+            match p.origin.plan_id {
+                None => enc.u8(0),
+                Some(id) => {
+                    enc.u8(1);
+                    enc.i64(id.0);
+                }
+            }
+        }
         let mut children = Vec::new();
         p.for_each_child(&mut |c| children.push(&**c));
         for c in children {
@@ -696,6 +790,10 @@ impl<'k, 'a> Encoder<'k, 'a> {
         let Some(id) = id else {
             return self.u8(0);
         };
+        if self.keys.absolute {
+            self.u8(4);
+            return self.i64(id.0);
+        }
         match self.keys.locate(id, self.op.node, &self.op.outer) {
             Some((0, carriers)) => {
                 self.u8(1);
@@ -785,7 +883,11 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 let mut outer = self.op.outer.clone();
                 outer.push(self.op.node);
-                let ctx = self.keys.next_id();
+                let ctx = if self.keys.absolute {
+                    0
+                } else {
+                    self.keys.next_id()
+                };
                 let key = self.keys.plan(plan, &outer, ctx);
                 self.child(key);
             }

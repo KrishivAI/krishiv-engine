@@ -172,12 +172,19 @@ fn builtin(b: Builtin) -> Sig {
 }
 
 impl FunctionRegistry for TestFunctions {
-    fn lookup(&self, name: &str, profile: SparkProfile) -> FunctionLookup {
+    fn version(&self) -> u64 {
+        0
+    }
+
+    fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup {
+        let [name] = name else {
+            return FunctionLookup::NotFound;
+        };
         if let Some(b) = Builtin::from_name(name) {
             return FunctionLookup::Found(FunctionEntry {
                 id: FunctionId::Builtin(b),
                 kind: FunctionKind::Scalar,
-                result: builtin(b),
+                result: Arc::new(builtin(b)),
             });
         }
         let lower = name.to_lowercase();
@@ -192,7 +199,7 @@ impl FunctionRegistry for TestFunctions {
                     id: u32::try_from(i).unwrap_or(u32::MAX),
                 },
                 kind: *kind,
-                result: *result,
+                result: Arc::new(*result),
             });
         }
         // `randstr` stands for a function Spark added in 4.0 and Krishiv
@@ -223,6 +230,10 @@ impl CatalogResolver for OneCatalog {
         &self.1
     }
 
+    fn epoch(&self) -> u64 {
+        0
+    }
+
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
         (name.eq_ignore_ascii_case(self.0.name())).then(|| Arc::clone(&self.0))
     }
@@ -234,12 +245,7 @@ pub fn context(catalog: MemoryCatalog, conf: ResolutionConf) -> AnalysisContext 
     AnalysisContext {
         profile: SparkProfile::default(),
         conf,
-        principal: Arc::new(Principal {
-            name: "tester".to_owned(),
-            groups: Vec::new(),
-            tenant: None,
-            kind: PrincipalKind::User,
-        }),
+        principal: Arc::new(Principal::new("tester", PrincipalKind::User)),
         policy: Arc::new(AllowAll),
         catalogs: Arc::new(OneCatalog(Arc::new(catalog), vec!["default".to_owned()])),
         functions: Arc::new(TestFunctions),

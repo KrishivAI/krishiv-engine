@@ -26,7 +26,7 @@ type Keys = (Attr, Attr);
 /// The largest attribute id: ids are numbered densely from 0, and a
 /// self-join instance reserves its subtree's span; past this (about 2^62),
 /// a plan is too complex.
-const MAX_ID: u64 = 1 << 62;
+pub(super) const MAX_ID: u64 = 1 << 62;
 
 pub(super) fn col_expr(c: &BoundColumn, origin: Origin) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(c.clone()))).with_origin(origin))
@@ -176,9 +176,11 @@ impl Resolver<'_> {
     }
 
     /// A fresh instance of `c`, for the second side of a self-join.
-    fn instance(&mut self, c: &Rel) -> Result<Rel, AnalysisError> {
+    pub(super) fn instance(&mut self, c: &Rel) -> Result<Rel, AnalysisError> {
         let (lo, hi) = c.ids.unwrap_or((0, 0));
-        let offset = self.next_id - lo;
+        // `next_id` is past every id of the input plan, so the instance's
+        // ids are fresh.
+        let offset = self.next_id.saturating_sub(lo);
         let r = self.shifted(c, offset, None)?;
         self.next_id += hi - lo + 1;
         Ok(r)
@@ -227,14 +229,39 @@ impl Resolver<'_> {
         let rels = [c];
         let mut items = Vec::new();
         let cx = Self::cx(&c.out, &rels, env, op);
-        for e in exprs {
+        let cs = self.ctx.conf.case_sensitive;
+        for (i, e) in exprs.iter().enumerate() {
             if let ExprNode::Star(s) = &e.node {
                 for a in self.expand(s, &cx, e.origin)? {
                     items.push(column_bound(&a, e.origin));
                 }
                 continue;
             }
-            let b = self.bind(e, &cx)?;
+            let b = self.bind(e, &cx).map_err(|err| {
+                // A name only an earlier alias of this select list defines
+                // is a lateral column alias: not yet, and never a wrong
+                // UNRESOLVED_COLUMN where Spark resolves.
+                let lateral = self.ctx.conf.lateral_column_alias
+                    && err
+                        .error
+                        .error_class()
+                        .name()
+                        .starts_with("UNRESOLVED_COLUMN")
+                    && exprs[..i].iter().any(|prior| match &prior.node {
+                        ExprNode::Alias { name, .. } => {
+                            err.error.message_parameters().iter().any(|(k, v)| {
+                                *k == "objectName"
+                                    && same(v, &quoted(std::slice::from_ref(name)), cs)
+                            })
+                        }
+                        _ => false,
+                    });
+                if lateral {
+                    unsupported("lateral column aliases", err.origin)
+                } else {
+                    err
+                }
+            })?;
             items.push(self.named(b)?);
         }
         Ok(items)

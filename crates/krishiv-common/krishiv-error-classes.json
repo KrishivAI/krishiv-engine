@@ -1,4 +1,10 @@
 {
+  "KRISHIV_CATALOG_FAILURE" : {
+    "message" : [
+      "The catalog <catalog> failed while loading <relationName>."
+    ],
+    "sqlState" : "58030"
+  },
   "KRISHIV_FILE_CHANGED_DURING_READ" : {
     "message" : [
       "The file <path> changed while it was being read: it no longer matches the version <version> seen when the scan was planned. Run REFRESH TABLE, or re-run the query to read the new version."
