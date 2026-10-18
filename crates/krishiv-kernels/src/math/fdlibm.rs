@@ -238,3 +238,48 @@ pub(super) fn tanh(x: f64) -> f64 {
     };
     if high >= 0 { z } else { -z }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn special_values_and_ranges() {
+        assert_eq!(
+            (cbrt(0.0), cbrt(-27.0), cbrt(f64::INFINITY)),
+            (0.0, -3.0, f64::INFINITY)
+        );
+        assert!(cbrt(f64::NAN).is_nan());
+        assert!((cbrt(5e-324) - 1.7031839360032603e-108).abs() < 1e-120);
+        assert_eq!(
+            (log10(0.0), log10(1000.0), log10(f64::INFINITY)),
+            (f64::NEG_INFINITY, 3.0, f64::INFINITY)
+        );
+        assert!(log10(-1.0).is_nan() && log10(f64::NAN).is_nan());
+        assert!((log10(5e-324) + 323.306_215_343_115_9).abs() < 1e-9);
+        assert_eq!(
+            (hypot(3.0, 4.0), hypot(0.0, -5.0), hypot(1e-320, 0.0)),
+            (5.0, 5.0, 1e-320)
+        );
+        assert_eq!(hypot(f64::NAN, f64::INFINITY), f64::INFINITY);
+        assert!(hypot(f64::NAN, 1.0).is_nan());
+        assert_eq!(hypot(1e300, 1e300), 1e300 * std::f64::consts::SQRT_2);
+        assert!((hypot(3e-300, 4e-300) - 5e-300).abs() < 1e-312);
+        assert!((hypot(3e-320, 4e-320) - 5e-320).abs() < 1e-322);
+        assert_eq!(hypot(1e30, 1.0), 1e30);
+        assert!((hypot(1e10, 1e9) - 1.004_987_562_112_089e10).abs() < 1e-4);
+        assert!(acosh(0.5).is_nan() && acosh(f64::NAN).is_nan());
+        assert_eq!((acosh(1.0), acosh(f64::INFINITY)), (0.0, f64::INFINITY));
+        assert!((acosh(1.5) - 0.962_423_650_119_206_9).abs() < 1e-15);
+        assert!((acosh(3.0) - 1.762_747_174_039_086).abs() < 1e-15);
+        assert!((acosh(1e9) - 21.416_413_017_506_36).abs() < 1e-12);
+        assert_eq!(
+            (tanh(0.0), tanh(f64::INFINITY), tanh(f64::NEG_INFINITY)),
+            (0.0, 1.0, -1.0)
+        );
+        assert!(tanh(f64::NAN).is_nan());
+        assert_eq!((tanh(1e-300), tanh(50.0), tanh(-50.0)), (1e-300, 1.0, -1.0));
+        assert!((tanh(0.5) - 0.462_117_157_260_009_8).abs() < 1e-16);
+        assert!((tanh(2.0) - 0.964_027_580_075_816_9).abs() < 1e-16);
+    }
+}
