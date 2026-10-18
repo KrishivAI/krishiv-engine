@@ -955,6 +955,295 @@
    "conf": {}
   },
   {
+   "sql": "EXPLAIN SELECT 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "explain extended SELECT a FROM t WHERE a > 0",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN FORMATTED SELECT 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN CODEGEN SELECT 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN COST SELECT 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN LOGICAL SELECT 1",
+   "parses": false,
+   "error_class": "INVALID_STATEMENT_OR_CLAUSE",
+   "sql_state": "42601",
+   "message_parameters": {
+    "operation": "EXPLAIN LOGICAL"
+   },
+   "start": 0,
+   "stop": 23,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN LOGICAL SELECT (",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN ANALYZE SELECT 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'SELECT'",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN EXTENDED",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN SELECT",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN EXTENDED EXTENDED SELECT 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'EXTENDED'",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN SELECT 1;",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN (SELECT 1)",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN WITH x AS (SELECT 1) SELECT * FROM x",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN FROM t SELECT a",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN VALUES (1)",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN TABLE t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN EXPLAIN SELECT 1",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN SELECT 1 abc def",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'def'",
+    "hint": ": extra input 'def'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN SELECT 1; SELECT 2",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'SELECT'",
+    "hint": ": extra input 'SELECT'"
+   },
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN EXTENDED (SELECT 1) UNION SELECT 2",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN extended",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "SELECT explain FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT * FROM explain",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT extended, formatted, codegen, cost, logical FROM t",
+   "parses": true,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN a",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'a'",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN COST",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN SELECT 1 /* x",
+   "parses": false,
+   "error_class": "UNCLOSED_BRACKETED_COMMENT",
+   "sql_state": "42601",
+   "message_parameters": {},
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN LOGICAL SELECT 1 /* x",
+   "parses": false,
+   "error_class": "UNCLOSED_BRACKETED_COMMENT",
+   "sql_state": "42601",
+   "message_parameters": {},
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN LOGICAL SELECT 1;",
+   "parses": false,
+   "error_class": "INVALID_STATEMENT_OR_CLAUSE",
+   "sql_state": "42601",
+   "message_parameters": {
+    "operation": "EXPLAIN LOGICAL"
+   },
+   "start": 0,
+   "stop": 23,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN EXPLAIN LOGICAL SELECT 1",
+   "parses": false,
+   "error_class": "INVALID_STATEMENT_OR_CLAUSE",
+   "sql_state": "42601",
+   "message_parameters": {
+    "operation": "EXPLAIN LOGICAL"
+   },
+   "start": 8,
+   "stop": 31,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN LOGICAL SELECT a ! IN (1)",
+   "parses": false,
+   "error_class": "INVALID_STATEMENT_OR_CLAUSE",
+   "sql_state": "42601",
+   "message_parameters": {
+    "operation": "EXPLAIN LOGICAL"
+   },
+   "start": 0,
+   "stop": 32,
+   "conf": {}
+  },
+  {
+   "sql": "SELECT a ! IN (1) /* x",
+   "parses": false,
+   "error_class": "UNCLOSED_BRACKETED_COMMENT",
+   "sql_state": "42601",
+   "message_parameters": {},
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN ANALYZE",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ""
+   },
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN ANALYZE TABLE t COMPUTE STATISTICS",
+   "parses": true,
+   "conf": {}
+  },
+  {
    "sql": "SELECT 1 AS select",
    "parses": false,
    "error_class": "PARSE_SYNTAX_ERROR",
@@ -1141,6 +1430,28 @@
     "error": "'order'",
     "hint": ""
    },
+   "conf": {
+    "spark.sql.ansi.enabled": "true",
+    "spark.sql.ansi.enforceReservedKeywords": "true"
+   }
+  },
+  {
+   "sql": "EXPLAIN SELECT 1 AS select",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'select'",
+    "hint": ""
+   },
+   "conf": {
+    "spark.sql.ansi.enabled": "true",
+    "spark.sql.ansi.enforceReservedKeywords": "true"
+   }
+  },
+  {
+   "sql": "SELECT explain FROM t",
+   "parses": true,
    "conf": {
     "spark.sql.ansi.enabled": "true",
     "spark.sql.ansi.enforceReservedKeywords": "true"
