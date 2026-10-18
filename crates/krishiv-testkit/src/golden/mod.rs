@@ -9,6 +9,7 @@
 //! three separate numbers ([`report`]); [`manifest`] holds the exclusion manifest.
 
 pub mod cell;
+pub mod fixtures;
 pub mod manifest;
 pub mod normalise;
 pub mod parse;

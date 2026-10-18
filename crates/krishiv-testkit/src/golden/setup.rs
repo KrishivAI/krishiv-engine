@@ -9,8 +9,8 @@
 //!   once per element of the cartesian product of the dimensions. A statement counts as passed
 //!   only if it passes in every run (all runs share one golden file), and counts once in the
 //!   denominators.
-//! * Fixture tables the file references are declared in [`SessionSetup::fixtures`]. The table
-//!   data is not vendored yet; the declaration lets an engine load it (or skip the file).
+//! * Fixture tables the file references are declared in [`SessionSetup::fixtures`];
+//!   [`SessionSetup::load_fixtures`] loads their schemas and rows ([`super::fixtures`]).
 
 use std::collections::BTreeMap;
 
