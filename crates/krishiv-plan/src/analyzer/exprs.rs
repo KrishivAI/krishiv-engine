@@ -16,6 +16,7 @@ use krishiv_common::error::{
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, KrishivError, NestedAggregateFunction,
     UnresolvedColumnWithSuggestion, UnresolvedColumnWithoutSuggestion, UnresolvedRoutine,
+    WrongNumArgsWithoutSuggestion,
 };
 use krishiv_types::DataType;
 use twox_hash::XxHash3_128;
@@ -24,7 +25,7 @@ use super::bind::{addr, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
 use super::resolve::{Attr, Env, Rel, Resolver};
-use super::{AnalysisError, ArgType, FunctionLookup};
+use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup};
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, FunctionId,
     FunctionKind, Literal, LogicalPlan, Origin, ResolvedExpr, ResolvedFunction, Star, SubqueryKind,
@@ -160,6 +161,26 @@ fn arg_of(b: &Bound) -> Arg<'_> {
         nullable: b.ty.nullable,
         literal,
     }
+}
+
+/// Spark's documentation root, as its errors cite it.
+const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
+
+/// The value of a literal argument, for functions whose typing reads it.
+fn constant(b: &Bound) -> Option<Constant> {
+    let ExprNode::Literal(v) = &b.expr.node else {
+        return None;
+    };
+    Some(match v {
+        Literal::Null(_) => Constant::Null,
+        Literal::Boolean(v) => Constant::Boolean(*v),
+        Literal::Byte(v) => Constant::Integral(i64::from(*v)),
+        Literal::Short(v) => Constant::Integral(i64::from(*v)),
+        Literal::Integer(v) => Constant::Integral(i64::from(*v)),
+        Literal::Long(v) => Constant::Integral(*v),
+        Literal::String(v) => Constant::String(v.clone()),
+        _ => return None,
+    })
 }
 
 fn column(c: &BoundColumn) -> ArgType {
@@ -418,16 +439,7 @@ impl Resolver<'_> {
                 {
                     return Err(AnalysisError::new(NestedAggregateFunction {}, inner));
                 }
-                let coerced: Vec<Arg<'_>> = kids[..n].iter().map(arg_of).collect();
-                let casts = coerce::inputs(&entry.inputs, &coerced)
-                    .map_err(|m| self.mismatch(m, e, &kids[..n], entry.id.name(), e.origin))?;
-                let mut call_kids: Vec<Bound> = kids[..n]
-                    .iter()
-                    .zip(casts)
-                    .map(|(k, to)| self.implicit_cast(k, to))
-                    .collect();
-                let types: Vec<ArgType> = call_kids.iter().map(|k| k.ty.clone()).collect();
-                let ty = (entry.result)(&types).map_err(|err| AnalysisError::new(err, e.origin))?;
+                let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
                 let data_type = ty.data_type.clone().ok_or_else(|| {
                     unsupported("values of the NULL and interval types", e.origin)
                 })?;
@@ -440,6 +452,7 @@ impl Resolver<'_> {
                     filter: call_kids.get(n).map(|k| Arc::clone(&k.expr)),
                     data_type,
                     nullable: ty.nullable,
+                    deterministic: entry.deterministic,
                 };
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
                 Bound {
@@ -553,6 +566,53 @@ impl Resolver<'_> {
     }
 
     /// `b` implicitly cast to `to`, if given (named and shown as `b`).
+    /// A registry call's arguments after their implicit casts, and its
+    /// result type: Spark's arity check, then the function's input types
+    /// and result rule. Out of line: it keeps the recursive `expr` frame
+    /// small (deep plans resolve on a small stack).
+    #[inline(never)]
+    fn typed_call(
+        &self,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+    ) -> Result<(Vec<Bound>, ArgType), AnalysisError> {
+        let n = kids.len();
+        if !entry.arity.accepts(n) {
+            return Err(AnalysisError::new(
+                WrongNumArgsWithoutSuggestion {
+                    function_name: format!("`{}`", entry.id.name()),
+                    expected_num: entry.arity.expected().to_owned(),
+                    actual_num: n.to_string(),
+                    docroot: SPARK_DOC_ROOT.to_owned(),
+                },
+                e.origin,
+            ));
+        }
+        let constants: Vec<Option<Constant>> = kids.iter().map(constant).collect();
+        // Rendered only if a rule's error quotes an argument.
+        let sql = |i: usize| kids.get(i).map(|k| pretty(&k.shown()));
+        let given: Vec<ArgType> = kids.iter().map(|k| k.ty.clone()).collect();
+        let ansi = self.ctx.conf.ansi;
+        let call = CallTypes::new(&given, &constants)
+            .with_sql(&sql)
+            .with_ansi(ansi);
+        let coerced: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
+        let casts = coerce::inputs(&entry.inputs, &coerced, &call)
+            .map_err(|m| self.mismatch(m, e, kids, entry.id.name(), e.origin))?;
+        let call_kids: Vec<Bound> = kids
+            .iter()
+            .zip(casts)
+            .map(|(k, to)| self.implicit_cast(k, to))
+            .collect();
+        let types: Vec<ArgType> = call_kids.iter().map(|k| k.ty.clone()).collect();
+        let call = CallTypes::new(&types, &constants)
+            .with_sql(&sql)
+            .with_ansi(ansi);
+        let ty = (entry.result)(&call).map_err(|err| AnalysisError::new(err, e.origin))?;
+        Ok((call_kids, ty))
+    }
+
     pub(super) fn implicit_cast(&self, b: &Bound, to: Option<DataType>) -> Bound {
         let Some(to) = to else {
             return b.clone();
@@ -609,6 +669,7 @@ impl Resolver<'_> {
                 filter: None,
                 data_type: DataType::Boolean,
                 nullable: both.ty.nullable,
+                deterministic: true,
             };
             let shown = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(shown)));
             return Ok(Bound {
@@ -628,6 +689,7 @@ impl Resolver<'_> {
                 filter: None,
                 data_type,
                 nullable,
+                deterministic: true,
             };
             Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))).with_origin(origin))
         };

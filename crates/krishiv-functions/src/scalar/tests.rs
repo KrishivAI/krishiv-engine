@@ -427,6 +427,17 @@ fn extract_takes_a_literal_field() {
 }
 
 #[test]
+fn a_null_extract_field_is_a_null_double() {
+    let null = strs(&[None]);
+    let args = [BindArg::Literal(Arc::clone(&null)), DataType::Utf8.into()];
+    let f = bind_scalar("date_part", &args, &BindOptions::new()).unwrap();
+    assert_eq!(f.return_type(), &DataType::Float64);
+    let s = strs(&[Some("x"), None]);
+    let out = f.invoke(&[lit(&null), col(&s)], 2).unwrap();
+    assert_eq!((out.len(), out.null_count()), (2, 2));
+}
+
+#[test]
 fn extract_rejects_unknown_or_unbound_fields() {
     let bad = |field: BindArg| {
         let args = [field, DataType::Date32.into()];
@@ -435,7 +446,12 @@ fn extract_rejects_unknown_or_unbound_fields() {
         err.to_string()
     };
     assert!(bad(BindArg::Literal(strs(&[Some("fortnight")]))).contains("fortnight"));
-    assert!(bad(BindArg::Literal(strs(&[None]))).contains("NULL"));
+    let args = [
+        BindArg::Literal(strs(&[Some("year")])),
+        DataType::Int32.into(),
+    ];
+    let err = bind_scalar("extract", &args, &BindOptions::new()).unwrap_err();
+    assert!(err.to_string().contains("extract(Utf8, Int32)"), "{err}");
     assert!(bad(DataType::Utf8.into()).contains("not a literal"));
     // A literal is one row.
     for rows in [0, 2] {

@@ -10,6 +10,8 @@ publish = false
 
 [dependencies]
 krishiv-common = { path = "../krishiv-common" }
+# The built-in function registry and the signature types it shares.
+krishiv-functions = { path = "../krishiv-functions" }
 # Spark's decimal result types, shared with the kernels that compute them.
 krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-types = { path = "../krishiv-types" }

@@ -231,7 +231,6 @@ fn leaf(e: &ast::Expr) -> Result<ArrayRef, Skip> {
         shape: Shape::Arrays,
         invalid_utf8: std::cell::Cell::new(false),
         day_overflow: std::cell::Cell::new(false),
-        frame: std::cell::RefCell::new(None),
     };
     ev.eval(&node).map_err(|e| match e {
         EvalError::Kernel(k) => k.to_string(),

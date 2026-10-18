@@ -21,14 +21,15 @@ P2-T027 adds the hash functions (`kernel_eval/hash.rs`): `hash_fixture` keeps ea
 `default_conf_errors`; `hash_fixture` (test) runs every case of `hash.json` (nested values built by the evaluator's
 `array`/`named_struct`/`map` constructors) and `hash_differential` the seeded random cases of
 `hash-differential.json` (`tests/scripts/gen_hash_differential.py`; Spark 4.0/4.1/4.2 agree).
-P2-T022 adds the conditional functions (`kernel_eval/conditional.rs`): `Evaluator::eval_on` evaluates a node on a
-`Selection` (its leaves gather the rows), so `CASE`/`if`/`coalesce`/`nvl*`/`nullif*`/`nanvl`/`AND`/`OR` evaluate lazily.
 P2-T026 adds the math functions (`kernel_eval/math.rs`) and `math_differential` (seeded random cases of `math-differential.json`,
 `tests/scripts/gen_math_goldens.py`; Spark 4.0/4.1 differ from 4.2 in `asinh`/`acosh` only, so their fixtures hold just those groups).
 P2-T025a adds the datetime functions and ANSI interval literals (`kernel_eval/datetime.rs`),
 session time zones through `kernel_eval::JiffZone` (the tz database behind `TimeZoneRules`, test-side until the session
 layer has one), and the fixtures `cast-timestamp-differential`, `dst-transitions` (Los Angeles, Berlin) and
 `tpch-date-predicates` (tests `cast_timestamp_differential`, `dst_transitions`, `tpch_date_predicates`).
+`registry_matrix` (P2-T153) analyzes every matrix case of a registered built-in function with the production registry
+(type, nullability or analysis error class vs Spark, both ANSI modes); failures are listed with reasons in
+`tests/fixtures/analysis/registry-matrix-manifest.json` (`KRISHIV_UPDATE_MANIFEST=1` rewrites it).
 The generic `FileFormat` conformance suite (`file_format`, P2-T117: 12 checks over a `FormatFixture`,
 `file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it, directly and
 through the executor (`file_format::drive::ThroughExecutor`, P2-T117b). `file_format::parquet::ParquetFixture`

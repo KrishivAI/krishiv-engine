@@ -208,6 +208,7 @@ fn call(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType, nullable: bool) 
             filter: None,
             data_type,
             nullable,
+            deterministic: true,
         },
     ))))
 }

@@ -39,7 +39,9 @@ tokio = { workspace = true, features = ["rt", "time", "test-util"] }
 
 [dev-dependencies]
 insta = { workspace = true }
-# The analyzer's test registry, for the type-coercion goldens.
+# The built-in function registry, for its function-matrix coverage test.
+krishiv-functions = { path = "../krishiv-functions" }
+# The analyzer's test context, for the type-coercion goldens.
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-types = { path = "../krishiv-types" }
 sha2.workspace = true

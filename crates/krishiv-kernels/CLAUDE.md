@@ -52,11 +52,6 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   `-0.0 == 0.0`). The module docs list which functions are bit-identical to Spark's JVM results and the share of inputs where
   `sin`/`cos`/`tan`/`ln`/`atan2`/`log10` differ in the last bit (the JVM's intrinsics are not fdlibm); `tests/math_differential.rs` in
   `krishiv-testkit` holds that bound.
-- `conditional` (P2-T022): lazy `case_when`/`if_else`/`coalesce`/`and`/`or` over `Lazy` operands that compute only the `Selection`
-  (ascending row indices) they are given: a condition runs on the rows no earlier branch took, a value on the rows its condition
-  selected, results are zipped back with `interleave`. An error in a branch no row reaches never surfaces; NULL conditions are not
-  true; `AND`/`OR` run the right operand only where the left does not decide the row. A producer gathers its input columns with
-  `Selection::gather` (or is itself a conditional); the kernels never see the rows they skip.
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.
 
 ## Invariants
