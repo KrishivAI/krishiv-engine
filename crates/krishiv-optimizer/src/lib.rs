@@ -60,9 +60,9 @@ const REWRITE: [Rule; 6] = [
 /// Optimises a resolved plan.
 ///
 /// # Errors
-/// `INTERNAL_ERROR` when `plan` is not resolved;
-/// `FAILED_TO_PARSE_TOO_COMPLEX` when a rewrite nests deeper than
-/// [`krishiv_plan::MAX_DEPTH`].
+/// `INTERNAL_ERROR` when `plan` is not resolved or no optimizer thread can
+/// be started. A rewrite nesting deeper than [`krishiv_plan::MAX_DEPTH`] is
+/// not an error: the input plan is returned unoptimised.
 pub fn optimize(plan: &Plan) -> Result<Plan, KrishivError> {
     if !plan.root().is_resolved() {
         return Err(InternalError {
