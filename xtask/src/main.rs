@@ -19,7 +19,7 @@ use xtask::layering;
 use xtask::policy::{self, DiffArgs};
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--write-baseline] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse]>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -152,20 +152,78 @@ fn cargo_cmd() -> Command {
 }
 
 fn run_budgets(flags: &[&str]) -> Result<(), String> {
-    let mut build_time = false;
-    let mut write_baseline = false;
-    for f in flags {
-        match *f {
-            "--build-time" => build_time = true,
-            "--write-baseline" => write_baseline = true,
-            _ => return Err(USAGE.to_owned()),
-        }
-    }
+    let mode = budgets::parse_flags(flags).ok_or_else(|| USAGE.to_owned())?;
     let root = workspace_root();
+    let baseline_path = root.join("budgets.json");
+    let now = match &mode {
+        budgets::Mode::Compare(path) => read_budgets(path)?,
+        budgets::Mode::Check { build_time }
+        | budgets::Mode::Measure { build_time }
+        | budgets::Mode::WriteBaseline { build_time } => {
+            let (now, target_dir) = measure_budgets(&root, *build_time)?;
+            let json = serde_json::to_string_pretty(&now).map_err(|e| e.to_string())? + "\n";
+            if matches!(mode, budgets::Mode::WriteBaseline { .. }) {
+                std::fs::write(&baseline_path, &json)
+                    .map_err(|e| format!("cannot write budgets.json: {e}"))?;
+                println!("wrote {}\n{json}", baseline_path.display());
+                return Ok(());
+            }
+            // Machine-readable measurement for CI artifacts.
+            let current = target_dir.join("budgets-current.json");
+            std::fs::write(&current, &json)
+                .map_err(|e| format!("cannot write budgets-current.json: {e}"))?;
+            if matches!(mode, budgets::Mode::Measure { .. }) {
+                let summary = format!("## Budget measurement\n\n```json\n{json}```\n");
+                println!("{summary}");
+                append_step_summary(&summary);
+                println!("wrote {}", current.display());
+                return Ok(());
+            }
+            now
+        }
+    };
+    let base = read_budgets(&baseline_path)?;
+    let cmp = budgets::compare(&base, &now);
+    let summary = format!("## Budgets\n\n{}", cmp.markdown);
+    println!("{summary}");
+    append_step_summary(&summary);
+    let env_flag = |k: &str| std::env::var(k).is_ok_and(|v| v == "1");
+    for v in cmp.violations.iter().chain(&cmp.unsafe_violations) {
+        eprintln!("{v}");
+    }
+    if cmp.verdict(env_flag("BUDGET_APPROVED"), env_flag("UNSAFE_APPROVED"))? {
+        let note = "Growth approved. Refresh the baseline: `cargo xtask budgets --write-baseline` and commit budgets.json.";
+        println!("{note}");
+        append_step_summary(note);
+    }
+    Ok(())
+}
 
+/// Appends `text` to the GitHub job summary when running in Actions.
+fn append_step_summary(text: &str) {
+    use std::io::Write;
+    if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY")
+        && let Ok(mut f) = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)
+    {
+        let _ = writeln!(f, "{text}");
+    }
+}
+
+fn read_budgets(path: &Path) -> Result<Budgets, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    serde_json::from_str(&text).map_err(|e| format!("bad {}: {e}", path.display()))
+}
+
+/// Measures the budgets of the current checkout; returns them with the
+/// cargo target directory.
+fn measure_budgets(root: &Path, build_time: bool) -> Result<(Budgets, PathBuf), String> {
     let out = cargo_cmd()
         .args(["metadata", "--format-version", "1", "--color", "never"])
-        .current_dir(&root)
+        .current_dir(root)
         .output()
         .map_err(|e| format!("failed to run cargo metadata: {e}"))?;
     if !out.status.success() {
@@ -189,7 +247,7 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
             "--color",
             "never",
         ])
-        .current_dir(&root)
+        .current_dir(root)
         .output()
         .map_err(|e| format!("failed to run cargo tree: {e}"))?;
     if !tree.status.success() {
@@ -227,7 +285,7 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
             "--target-dir",
         ])
         .arg(&build_dir)
-        .current_dir(&root)
+        .current_dir(root)
         .status()
         .map_err(|e| format!("failed to run cargo build: {e}"))?;
     if !status.success() {
@@ -240,60 +298,12 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
     let binary_bytes = std::fs::metadata(&bin)
         .map_err(|e| format!("cannot stat {}: {e}", bin.display()))?
         .len();
-
     let now = Budgets {
         transitive_crates,
         transitive_crates_all_features: Some(transitive_crates_all_features),
         binary_bytes: Some(binary_bytes),
         clean_build_secs,
-        unsafe_sites: Some(xtask::lint::unsafe_sites_per_crate(&root)?),
+        unsafe_sites: Some(xtask::lint::unsafe_sites_per_crate(root)?),
     };
-    let json = serde_json::to_string_pretty(&now).map_err(|e| e.to_string())? + "\n";
-    let baseline_path = root.join("budgets.json");
-    if write_baseline {
-        std::fs::write(&baseline_path, &json)
-            .map_err(|e| format!("cannot write budgets.json: {e}"))?;
-        println!("wrote {}\n{json}", baseline_path.display());
-        return Ok(());
-    }
-    // Machine-readable measurement for CI artifacts.
-    std::fs::write(target_dir.join("budgets-current.json"), &json)
-        .map_err(|e| format!("cannot write budgets-current.json: {e}"))?;
-
-    let base: Budgets = serde_json::from_str(
-        &std::fs::read_to_string(&baseline_path)
-            .map_err(|e| format!("cannot read budgets.json: {e}"))?,
-    )
-    .map_err(|e| format!("bad budgets.json: {e}"))?;
-    let cmp = budgets::compare(&base, &now);
-    let summary = format!("## Budgets\n\n{}", cmp.markdown);
-    println!("{summary}");
-    if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(path)
-            .map_err(|e| format!("cannot open step summary: {e}"))?;
-        writeln!(f, "{summary}").map_err(|e| e.to_string())?;
-    }
-    let env_flag = |k: &str| std::env::var(k).is_ok_and(|v| v == "1");
-    for v in cmp.violations.iter().chain(&cmp.unsafe_violations) {
-        eprintln!("{v}");
-    }
-    if cmp.verdict(env_flag("BUDGET_APPROVED"), env_flag("UNSAFE_APPROVED"))? {
-        let note = "Growth approved. Refresh the baseline: `cargo xtask budgets --write-baseline` and commit budgets.json.";
-        println!("{note}");
-        if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(path)
-            {
-                let _ = writeln!(f, "{note}");
-            }
-        }
-    }
-    Ok(())
+    Ok((now, target_dir))
 }
