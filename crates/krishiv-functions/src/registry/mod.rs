@@ -55,6 +55,10 @@ pub enum Aggregate {
     Min,
     /// `max`.
     Max,
+    /// `first` / `first_value`; `ignoreNulls` is the second argument.
+    First,
+    /// `last` / `last_value`; `ignoreNulls` is the second argument.
+    Last,
 }
 
 /// A built-in function.

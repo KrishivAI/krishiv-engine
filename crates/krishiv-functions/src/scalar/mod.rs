@@ -28,6 +28,7 @@ mod arith;
 mod datetime;
 mod hash;
 mod math;
+mod session;
 mod string;
 
 use std::fmt;
@@ -90,6 +91,8 @@ pub struct BindOptions {
     /// `spark.sql.decimalOperations.allowPrecisionLoss`: the result types of
     /// decimal arithmetic (`pmod`, `try_add`, ...).
     pub decimal_precision_loss: bool,
+    /// The session's user (`current_user()`).
+    pub user: Arc<str>,
 }
 
 impl BindOptions {
@@ -103,6 +106,7 @@ impl BindOptions {
             time_zone: Arc::new(FixedOffset(0)),
             query_start_micros: 0,
             decimal_precision_loss: true,
+            user: Arc::from("unknown"),
         }
     }
 
@@ -131,6 +135,13 @@ impl BindOptions {
     #[must_use]
     pub fn with_decimal_precision_loss(mut self, loss: bool) -> Self {
         self.decimal_precision_loss = loss;
+        self
+    }
+
+    /// With this session user (`current_user()`, `user()`, `session_user()`).
+    #[must_use]
+    pub fn with_user(mut self, user: impl Into<Arc<str>>) -> Self {
+        self.user = user.into();
         self
     }
 
@@ -266,12 +277,13 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 5] = [
+const FAMILIES: [(&[&str], Binder); 6] = [
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
     (math::NAMES, math::bind),
     (arith::NAMES, arith::bind),
     (hash::NAMES, hash::bind),
+    (session::NAMES, session::bind),
 ];
 
 /// The name of every scalar function [`bind_scalar`] binds, aliases

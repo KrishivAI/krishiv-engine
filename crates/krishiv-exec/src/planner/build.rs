@@ -126,7 +126,7 @@ impl<'a> Planner<'a> {
     fn new(cx: &'a PlanningContext, root: &LogicalPlan) -> Self {
         Self {
             cx,
-            env: EvalEnv::new(&cx.config),
+            env: EvalEnv::new(&cx.config, Arc::clone(&cx.user)),
             warnings: Vec::new(),
             ctes: HashMap::new(),
             consumed_hints: HashSet::new(),

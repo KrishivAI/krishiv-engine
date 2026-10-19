@@ -411,8 +411,26 @@ fn math_signatures() {
         &[None, Some(Constant::Fractional(1))],
     );
     assert_eq!(r.unwrap(), nullable(dec(3, 1)));
+    // `round`/`bround` check the scale as an input (whatever the type of the
+    // value); `ceil`/`floor` raise NON_FOLDABLE_ARGUMENT.
     let err = result("round", &[ty(dec(2, 1)), i.clone()], &[]).unwrap_err();
-    assert_eq!(err.error_class(), ErrorClass::NonFoldableArgument);
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    let err = result("bround", &[ty(DataType::Double), i.clone()], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    // A cast of a literal that failed while folding is raised by the reader.
+    let failed = Constant::Error(KrishivError::from(krishiv_common::error::CastOverflow {
+        value: "1.0E30D".to_owned(),
+        source_type: "\"DOUBLE\"".to_owned(),
+        target_type: "\"INT\"".to_owned(),
+    }));
+    let err = result("round", &[ty(dec(2, 1)), i.clone()], &[None, Some(failed)]).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::CastOverflow);
     // `ceil`/`floor`: integral and floating input give `bigint`; with a scale
     // only an `int` literal is folded.
     assert_eq!(
@@ -577,4 +595,80 @@ fn conditional_signatures() {
         built(&[i.clone(), i]),
         Some(vec![InputType::Exact(DataType::Double)])
     );
+}
+
+#[test]
+fn first_and_last_take_a_boolean_literal_flag() {
+    for (name, shown) in [
+        ("first", "first"),
+        ("first_value", "first"),
+        ("last", "last"),
+        ("last_value", "last"),
+    ] {
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Aggregate);
+        assert!(d.arity.accepts(1) && d.arity.accepts(2) && !d.arity.accepts(0));
+        assert!(!d.arity.accepts(3));
+        let agg = if shown == "first" {
+            Aggregate::First
+        } else {
+            Aggregate::Last
+        };
+        assert_eq!(d.execution, Execution::Aggregate(agg));
+        // The type of the value, nullable (no rows), whatever the flag.
+        let flag = ty(DataType::Boolean);
+        let x = ty(DataType::Integer);
+        let nullable = ArgType::new(DataType::Integer, true);
+        assert_eq!(
+            result(name, std::slice::from_ref(&x), &[]).unwrap(),
+            nullable
+        );
+        let consts = [None, Some(Constant::Boolean(true))];
+        assert_eq!(
+            result(name, &[x.clone(), flag.clone()], &consts).unwrap(),
+            nullable
+        );
+        // Spark 4.2: anything but a boolean literal is refused.
+        for consts in [
+            &[None, None][..],
+            &[None, Some(Constant::Null)],
+            &[None, Some(Constant::Integral(1))],
+            &[None, Some(Constant::String("true".to_owned()))],
+        ] {
+            let err = result(name, &[x.clone(), flag.clone()], consts).unwrap_err();
+            assert_eq!(err.error_class(), ErrorClass::LegacyErrorTemp1210);
+            assert_eq!(
+                err.to_string(),
+                format!("The second argument in {shown} should be a boolean literal.")
+            );
+        }
+    }
+    // An untyped NULL stays untyped.
+    let r = result("first", &[null_ty()], &[]).unwrap();
+    assert_eq!(r.data_type, None);
+}
+
+#[test]
+fn session_and_clock_functions() {
+    for name in ["current_user", "user", "session_user"] {
+        let d = def(name);
+        assert_eq!(d.execution, Execution::Scalar);
+        assert!(d.arity.accepts(0) && !d.arity.accepts(1));
+        assert_eq!(result(name, &[], &[]).unwrap(), ty(DataType::String));
+    }
+    // `session_user` arrived in 4.0.
+    assert!(matches!(
+        builtins().lookup("session_user", SparkProfile::V3_5),
+        Lookup::NotFound
+    ));
+    assert_eq!(
+        result("localtimestamp", &[], &[]).unwrap(),
+        ty(DataType::TimestampNtz)
+    );
+    // `current_time` is a `TIME`, which Krishiv has no type for: it stays
+    // known-unsupported where Spark has it (4.1+).
+    assert!(matches!(
+        builtins().lookup("current_time", SparkProfile::V4_2),
+        Lookup::KnownUnsupported
+    ));
 }

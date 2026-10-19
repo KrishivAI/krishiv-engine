@@ -1,5 +1,5 @@
 {
-  "cases": 8822,
+  "cases": 9046,
   "entries": [
     {
       "id": "abs#23a3b7c1c876/ansi_off",
@@ -586,14 +586,6 @@
       "reason": "SELECT bround(map('a', 1), 0) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "bround#1c13fab10b6f/ansi_off",
-      "reason": "SELECT bround(2.5, CAST(1.5 AS DECIMAL(38,18))) | NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "bround#1c13fab10b6f/ansi_on",
-      "reason": "SELECT bround(2.5, CAST(1.5 AS DECIMAL(38,18))) | NON_FOLDABLE_ARGUMENT"
-    },
-    {
       "id": "bround#2dd9f9244d5b/ansi_off",
       "reason": "SELECT bround(named_struct('a', 1, 'b', 'x'), 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -626,28 +618,12 @@
       "reason": "SELECT bround(2.5, TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "bround#79e6fda0179d/ansi_off",
-      "reason": "SELECT bround(2.5, CAST(1.5 AS DECIMAL(10,2))) | NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "bround#79e6fda0179d/ansi_on",
-      "reason": "SELECT bround(2.5, CAST(1.5 AS DECIMAL(10,2))) | NON_FOLDABLE_ARGUMENT"
-    },
-    {
       "id": "bround#8139bd9fdb4c/ansi_off",
       "reason": "SELECT bround(2.5, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "bround#8139bd9fdb4c/ansi_on",
       "reason": "SELECT bround(2.5, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bround#8f7cc837be1d/ansi_off",
-      "reason": "SELECT bround(2.5, CAST(1.5 AS FLOAT)) | NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "bround#8f7cc837be1d/ansi_on",
-      "reason": "SELECT bround(2.5, CAST(1.5 AS FLOAT)) | NON_FOLDABLE_ARGUMENT"
     },
     {
       "id": "bround#95b0bc074263/ansi_off",
@@ -3450,6 +3426,438 @@
       "reason": "SELECT extract(MONTH FROM INTERVAL '2021-11' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
+      "id": "first#020dbe3f574a/ansi_off",
+      "reason": "SELECT first(col, map('a', 1)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#020dbe3f574a/ansi_on",
+      "reason": "SELECT first(col, map('a', 1)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#065b8defdf0b/ansi_off",
+      "reason": "SELECT first(col, CAST(1 AS SMALLINT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#065b8defdf0b/ansi_on",
+      "reason": "SELECT first(col, CAST(1 AS SMALLINT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#067cbe7e28bb/ansi_off",
+      "reason": "SELECT first(col, 1L) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#067cbe7e28bb/ansi_on",
+      "reason": "SELECT first(col, 1L) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#072a491c5c94/ansi_off",
+      "reason": "SELECT first(col, CAST(1.5 AS FLOAT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#072a491c5c94/ansi_on",
+      "reason": "SELECT first(col, CAST(1.5 AS FLOAT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#18eefe5ab9c3/ansi_off",
+      "reason": "SELECT first(col) FROM VALUES (10), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#18eefe5ab9c3/ansi_on",
+      "reason": "SELECT first(col) FROM VALUES (10), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#2c09bffba1c5/ansi_off",
+      "reason": "SELECT first(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#2c09bffba1c5/ansi_on",
+      "reason": "SELECT first(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#343a0d7130ea/ansi_off",
+      "reason": "SELECT first(col, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#343a0d7130ea/ansi_on",
+      "reason": "SELECT first(col, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#43ec43b7b2bd/ansi_off",
+      "reason": "SELECT first(col, NULL) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#43ec43b7b2bd/ansi_on",
+      "reason": "SELECT first(col, NULL) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#441274649c22/ansi_off",
+      "reason": "SELECT first(col) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#441274649c22/ansi_on",
+      "reason": "SELECT first(col) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#485dbd33812f/ansi_off",
+      "reason": "SELECT first(col) FROM VALUES (10), (5), (20) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#485dbd33812f/ansi_on",
+      "reason": "SELECT first(col) FROM VALUES (10), (5), (20) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#4da549abcf05/ansi_off",
+      "reason": "SELECT first(col, CAST(NULL AS boolean)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#4da549abcf05/ansi_on",
+      "reason": "SELECT first(col, CAST(NULL AS boolean)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#56d98a4528c8/ansi_off",
+      "reason": "SELECT first(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#56d98a4528c8/ansi_on",
+      "reason": "SELECT first(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#58b60a8472c9/ansi_off",
+      "reason": "SELECT first(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#58b60a8472c9/ansi_on",
+      "reason": "SELECT first(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#5e25397b5f31/ansi_off",
+      "reason": "SELECT first(col, 'abc') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#5e25397b5f31/ansi_on",
+      "reason": "SELECT first(col, 'abc') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#60f1688258f1/ansi_off",
+      "reason": "SELECT first(col, 1.5D) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#60f1688258f1/ansi_on",
+      "reason": "SELECT first(col, 1.5D) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#64070551472e/ansi_off",
+      "reason": "SELECT first(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#64070551472e/ansi_on",
+      "reason": "SELECT first(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#65800938e33d/ansi_off",
+      "reason": "SELECT first(col, CAST(1 AS TINYINT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#65800938e33d/ansi_on",
+      "reason": "SELECT first(col, CAST(1 AS TINYINT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#7142e82e71a1/ansi_off",
+      "reason": "SELECT first(col, array(1, 2)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#7142e82e71a1/ansi_on",
+      "reason": "SELECT first(col, array(1, 2)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#954c5ea92d09/ansi_off",
+      "reason": "SELECT first(col, X'01') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#954c5ea92d09/ansi_on",
+      "reason": "SELECT first(col, X'01') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#9e6ff96acfc0/ansi_off",
+      "reason": "SELECT first(col, 1) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#9e6ff96acfc0/ansi_on",
+      "reason": "SELECT first(col, 1) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#abfce65c012e/ansi_off",
+      "reason": "SELECT first(col, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#abfce65c012e/ansi_on",
+      "reason": "SELECT first(col, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#afee1bdce126/ansi_off",
+      "reason": "SELECT first(col, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#afee1bdce126/ansi_on",
+      "reason": "SELECT first(col, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#b55ccb866786/ansi_off",
+      "reason": "SELECT first(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#b55ccb866786/ansi_on",
+      "reason": "SELECT first(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#baf9fe65f4ca/ansi_off",
+      "reason": "SELECT first(col, true) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#baf9fe65f4ca/ansi_on",
+      "reason": "SELECT first(col, true) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first#bcf1472aab74/ansi_off",
+      "reason": "SELECT first(col, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#bcf1472aab74/ansi_on",
+      "reason": "SELECT first(col, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#ea2f3ec4cda3/ansi_off",
+      "reason": "SELECT first(col, DATE'2024-02-29') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#ea2f3ec4cda3/ansi_on",
+      "reason": "SELECT first(col, DATE'2024-02-29') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#ffc670047767/ansi_off",
+      "reason": "SELECT first(col, '1') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first#ffc670047767/ansi_on",
+      "reason": "SELECT first(col, '1') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#071d4bcb1eb0/ansi_off",
+      "reason": "SELECT first_value(col, NULL) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#071d4bcb1eb0/ansi_on",
+      "reason": "SELECT first_value(col, NULL) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#09990f542e34/ansi_off",
+      "reason": "SELECT first_value(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#09990f542e34/ansi_on",
+      "reason": "SELECT first_value(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#0e35783b59e8/ansi_off",
+      "reason": "SELECT first_value(col, array(1, 2)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#0e35783b59e8/ansi_on",
+      "reason": "SELECT first_value(col, array(1, 2)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#20b59a49e4ee/ansi_off",
+      "reason": "SELECT first_value(col, CAST(1 AS SMALLINT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#20b59a49e4ee/ansi_on",
+      "reason": "SELECT first_value(col, CAST(1 AS SMALLINT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#269112afbe19/ansi_off",
+      "reason": "SELECT first_value(col, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#269112afbe19/ansi_on",
+      "reason": "SELECT first_value(col, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#2e6100c83dd5/ansi_off",
+      "reason": "SELECT first_value(col) FROM VALUES (10), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#2e6100c83dd5/ansi_on",
+      "reason": "SELECT first_value(col) FROM VALUES (10), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#333de368fe4f/ansi_off",
+      "reason": "SELECT first_value(col, DATE'2024-02-29') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#333de368fe4f/ansi_on",
+      "reason": "SELECT first_value(col, DATE'2024-02-29') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#3f1dadd3e317/ansi_off",
+      "reason": "SELECT first_value(col, 1L) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#3f1dadd3e317/ansi_on",
+      "reason": "SELECT first_value(col, 1L) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#5f9c5c85c0ca/ansi_off",
+      "reason": "SELECT first_value(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#5f9c5c85c0ca/ansi_on",
+      "reason": "SELECT first_value(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#69818343345f/ansi_off",
+      "reason": "SELECT first_value(col, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#69818343345f/ansi_on",
+      "reason": "SELECT first_value(col, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#6a3c77cae004/ansi_off",
+      "reason": "SELECT first_value(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#6a3c77cae004/ansi_on",
+      "reason": "SELECT first_value(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#710063d1cce2/ansi_off",
+      "reason": "SELECT first_value(col, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#710063d1cce2/ansi_on",
+      "reason": "SELECT first_value(col, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#85c2346fc391/ansi_off",
+      "reason": "SELECT first_value(col, 'abc') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#85c2346fc391/ansi_on",
+      "reason": "SELECT first_value(col, 'abc') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#862a832e3479/ansi_off",
+      "reason": "SELECT first_value(col, CAST(NULL AS boolean)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#862a832e3479/ansi_on",
+      "reason": "SELECT first_value(col, CAST(NULL AS boolean)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#941eb00c2922/ansi_off",
+      "reason": "SELECT first_value(col, map('a', 1)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#941eb00c2922/ansi_on",
+      "reason": "SELECT first_value(col, map('a', 1)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#9e3771998651/ansi_off",
+      "reason": "SELECT first_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#9e3771998651/ansi_on",
+      "reason": "SELECT first_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#9e3a04e76393/ansi_off",
+      "reason": "SELECT first_value(col, 1.5D) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#9e3a04e76393/ansi_on",
+      "reason": "SELECT first_value(col, 1.5D) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#ab4da4f540cf/ansi_off",
+      "reason": "SELECT first_value(col, CAST(1.5 AS FLOAT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#ab4da4f540cf/ansi_on",
+      "reason": "SELECT first_value(col, CAST(1.5 AS FLOAT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#af08b292162a/ansi_off",
+      "reason": "SELECT first_value(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#af08b292162a/ansi_on",
+      "reason": "SELECT first_value(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#c4ae79b7608d/ansi_off",
+      "reason": "SELECT first_value(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#c4ae79b7608d/ansi_on",
+      "reason": "SELECT first_value(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#c749bcfc27c1/ansi_off",
+      "reason": "SELECT first_value(col, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#c749bcfc27c1/ansi_on",
+      "reason": "SELECT first_value(col, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#ca7c35e57939/ansi_off",
+      "reason": "SELECT first_value(col, X'01') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#ca7c35e57939/ansi_on",
+      "reason": "SELECT first_value(col, X'01') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#d8555cffac15/ansi_off",
+      "reason": "SELECT first_value(col) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#d8555cffac15/ansi_on",
+      "reason": "SELECT first_value(col) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#de333e2d0a3f/ansi_off",
+      "reason": "SELECT first_value(col, CAST(1 AS TINYINT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#de333e2d0a3f/ansi_on",
+      "reason": "SELECT first_value(col, CAST(1 AS TINYINT)) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#e20d1676e78e/ansi_off",
+      "reason": "SELECT first_value(col, '1') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#e20d1676e78e/ansi_on",
+      "reason": "SELECT first_value(col, '1') FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#f92808df2130/ansi_off",
+      "reason": "SELECT first_value(col) FROM VALUES (10), (5), (20) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#f92808df2130/ansi_on",
+      "reason": "SELECT first_value(col) FROM VALUES (10), (5), (20) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "first_value#f9f2b1e12d65/ansi_off",
+      "reason": "SELECT first_value(col, 1) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "first_value#f9f2b1e12d65/ansi_on",
+      "reason": "SELECT first_value(col, 1) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
       "id": "floor#0c6d71158a9a/ansi_off",
       "reason": "SELECT floor(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -4912,6 +5320,438 @@
     {
       "id": "ifnull#f5e830f1e7fe/ansi_on",
       "reason": "SELECT ifnull(CAST(1.5 AS DECIMAL(38,18)), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "last#03f68fa9443d/ansi_off",
+      "reason": "SELECT last(col, CAST(NULL AS boolean)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#03f68fa9443d/ansi_on",
+      "reason": "SELECT last(col, CAST(NULL AS boolean)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#14e29c30b9be/ansi_off",
+      "reason": "SELECT last(col, array(1, 2)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#14e29c30b9be/ansi_on",
+      "reason": "SELECT last(col, array(1, 2)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#18cbe748cf46/ansi_off",
+      "reason": "SELECT last(col, DATE'2024-02-29') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#18cbe748cf46/ansi_on",
+      "reason": "SELECT last(col, DATE'2024-02-29') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#3f96b3da5996/ansi_off",
+      "reason": "SELECT last(col, 1.5D) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#3f96b3da5996/ansi_on",
+      "reason": "SELECT last(col, 1.5D) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#4386b20830ec/ansi_off",
+      "reason": "SELECT last(col, 1L) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#4386b20830ec/ansi_on",
+      "reason": "SELECT last(col, 1L) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#45f71ced4199/ansi_off",
+      "reason": "SELECT last(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last#45f71ced4199/ansi_on",
+      "reason": "SELECT last(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last#518c687fe269/ansi_off",
+      "reason": "SELECT last(col, CAST(1 AS TINYINT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#518c687fe269/ansi_on",
+      "reason": "SELECT last(col, CAST(1 AS TINYINT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#51f062925315/ansi_off",
+      "reason": "SELECT last(col, true) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last#51f062925315/ansi_on",
+      "reason": "SELECT last(col, true) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last#55b3ccc90f0f/ansi_off",
+      "reason": "SELECT last(col, 'abc') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#55b3ccc90f0f/ansi_on",
+      "reason": "SELECT last(col, 'abc') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#5604fccdd88d/ansi_off",
+      "reason": "SELECT last(col) FROM VALUES (10), (5), (20) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last#5604fccdd88d/ansi_on",
+      "reason": "SELECT last(col) FROM VALUES (10), (5), (20) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last#5ece7cbdebfa/ansi_off",
+      "reason": "SELECT last(col, CAST(1 AS SMALLINT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#5ece7cbdebfa/ansi_on",
+      "reason": "SELECT last(col, CAST(1 AS SMALLINT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#63f16e2e35b3/ansi_off",
+      "reason": "SELECT last(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#63f16e2e35b3/ansi_on",
+      "reason": "SELECT last(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#6e3b48a50d72/ansi_off",
+      "reason": "SELECT last(col) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last#6e3b48a50d72/ansi_on",
+      "reason": "SELECT last(col) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last#8043a9ea738f/ansi_off",
+      "reason": "SELECT last(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#8043a9ea738f/ansi_on",
+      "reason": "SELECT last(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#8d76e63681f0/ansi_off",
+      "reason": "SELECT last(col, map('a', 1)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#8d76e63681f0/ansi_on",
+      "reason": "SELECT last(col, map('a', 1)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#903f35baac68/ansi_off",
+      "reason": "SELECT last(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#903f35baac68/ansi_on",
+      "reason": "SELECT last(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#911b5f242397/ansi_off",
+      "reason": "SELECT last(col, 1) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#911b5f242397/ansi_on",
+      "reason": "SELECT last(col, 1) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#983771ce941f/ansi_off",
+      "reason": "SELECT last(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last#983771ce941f/ansi_on",
+      "reason": "SELECT last(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last#9e95114418ef/ansi_off",
+      "reason": "SELECT last(col, '1') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#9e95114418ef/ansi_on",
+      "reason": "SELECT last(col, '1') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#a8870b96d63a/ansi_off",
+      "reason": "SELECT last(col, CAST(1.5 AS FLOAT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#a8870b96d63a/ansi_on",
+      "reason": "SELECT last(col, CAST(1.5 AS FLOAT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#a978208cde30/ansi_off",
+      "reason": "SELECT last(col, NULL) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#a978208cde30/ansi_on",
+      "reason": "SELECT last(col, NULL) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#b073c94af142/ansi_off",
+      "reason": "SELECT last(col, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#b073c94af142/ansi_on",
+      "reason": "SELECT last(col, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#b8bbefdf95cc/ansi_off",
+      "reason": "SELECT last(col, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#b8bbefdf95cc/ansi_on",
+      "reason": "SELECT last(col, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#c2f6229a0f11/ansi_off",
+      "reason": "SELECT last(col, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#c2f6229a0f11/ansi_on",
+      "reason": "SELECT last(col, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#c44a4a4f2264/ansi_off",
+      "reason": "SELECT last(col, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#c44a4a4f2264/ansi_on",
+      "reason": "SELECT last(col, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#de660c1e9fb2/ansi_off",
+      "reason": "SELECT last(col, X'01') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#de660c1e9fb2/ansi_on",
+      "reason": "SELECT last(col, X'01') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last#e36b7b496d1a/ansi_off",
+      "reason": "SELECT last(col) FROM VALUES (10), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last#e36b7b496d1a/ansi_on",
+      "reason": "SELECT last(col) FROM VALUES (10), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#009e600501a7/ansi_off",
+      "reason": "SELECT last_value(col, DATE'2024-02-29') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#009e600501a7/ansi_on",
+      "reason": "SELECT last_value(col, DATE'2024-02-29') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#10e4a83c613d/ansi_off",
+      "reason": "SELECT last_value(col, 'abc') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#10e4a83c613d/ansi_on",
+      "reason": "SELECT last_value(col, 'abc') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#1aa8a2bb1041/ansi_off",
+      "reason": "SELECT last_value(col, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#1aa8a2bb1041/ansi_on",
+      "reason": "SELECT last_value(col, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#2b628baff52d/ansi_off",
+      "reason": "SELECT last_value(col, array(1, 2)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#2b628baff52d/ansi_on",
+      "reason": "SELECT last_value(col, array(1, 2)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#2cb4b7602b42/ansi_off",
+      "reason": "SELECT last_value(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#2cb4b7602b42/ansi_on",
+      "reason": "SELECT last_value(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#2f1d6d567b2c/ansi_off",
+      "reason": "SELECT last_value(col, '1') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#2f1d6d567b2c/ansi_on",
+      "reason": "SELECT last_value(col, '1') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#300cc5d85e96/ansi_off",
+      "reason": "SELECT last_value(col, true) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#300cc5d85e96/ansi_on",
+      "reason": "SELECT last_value(col, true) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#416a28e824d7/ansi_off",
+      "reason": "SELECT last_value(col, CAST(NULL AS boolean)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#416a28e824d7/ansi_on",
+      "reason": "SELECT last_value(col, CAST(NULL AS boolean)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#4d10c4c0fb23/ansi_off",
+      "reason": "SELECT last_value(col, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#4d10c4c0fb23/ansi_on",
+      "reason": "SELECT last_value(col, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#546a562a6105/ansi_off",
+      "reason": "SELECT last_value(col, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#546a562a6105/ansi_on",
+      "reason": "SELECT last_value(col, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#55e9be4abb45/ansi_off",
+      "reason": "SELECT last_value(col) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#55e9be4abb45/ansi_on",
+      "reason": "SELECT last_value(col) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#59116f565aa7/ansi_off",
+      "reason": "SELECT last_value(col, map('a', 1)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#59116f565aa7/ansi_on",
+      "reason": "SELECT last_value(col, map('a', 1)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#622de0ac1241/ansi_off",
+      "reason": "SELECT last_value(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#622de0ac1241/ansi_on",
+      "reason": "SELECT last_value(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#6b2d01484c9d/ansi_off",
+      "reason": "SELECT last_value(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#6b2d01484c9d/ansi_on",
+      "reason": "SELECT last_value(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#6fd2396fcd6d/ansi_off",
+      "reason": "SELECT last_value(col, CAST(1.5 AS FLOAT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#6fd2396fcd6d/ansi_on",
+      "reason": "SELECT last_value(col, CAST(1.5 AS FLOAT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#8209fbfa2d67/ansi_off",
+      "reason": "SELECT last_value(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#8209fbfa2d67/ansi_on",
+      "reason": "SELECT last_value(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#9711f9a34d41/ansi_off",
+      "reason": "SELECT last_value(col) FROM VALUES (10), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#9711f9a34d41/ansi_on",
+      "reason": "SELECT last_value(col) FROM VALUES (10), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#9d06c2451202/ansi_off",
+      "reason": "SELECT last_value(col) FROM VALUES (10), (5), (20) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#9d06c2451202/ansi_on",
+      "reason": "SELECT last_value(col) FROM VALUES (10), (5), (20) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "last_value#a5aa4261ebd3/ansi_off",
+      "reason": "SELECT last_value(col, X'01') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#a5aa4261ebd3/ansi_on",
+      "reason": "SELECT last_value(col, X'01') FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#ab126df9f703/ansi_off",
+      "reason": "SELECT last_value(col, NULL) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#ab126df9f703/ansi_on",
+      "reason": "SELECT last_value(col, NULL) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#b5938021d2cc/ansi_off",
+      "reason": "SELECT last_value(col, 1L) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#b5938021d2cc/ansi_on",
+      "reason": "SELECT last_value(col, 1L) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#c422aa408cfe/ansi_off",
+      "reason": "SELECT last_value(col, CAST(1 AS SMALLINT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#c422aa408cfe/ansi_on",
+      "reason": "SELECT last_value(col, CAST(1 AS SMALLINT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#c7c59077b5a9/ansi_off",
+      "reason": "SELECT last_value(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#c7c59077b5a9/ansi_on",
+      "reason": "SELECT last_value(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#dcf49d52d2a9/ansi_off",
+      "reason": "SELECT last_value(col, 1) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#dcf49d52d2a9/ansi_on",
+      "reason": "SELECT last_value(col, 1) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#f40775a654af/ansi_off",
+      "reason": "SELECT last_value(col, 1.5D) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#f40775a654af/ansi_on",
+      "reason": "SELECT last_value(col, 1.5D) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#fc0c1a354edc/ansi_off",
+      "reason": "SELECT last_value(col, CAST(1 AS TINYINT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#fc0c1a354edc/ansi_on",
+      "reason": "SELECT last_value(col, CAST(1 AS TINYINT)) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#fcc3a7dc0a8f/ansi_off",
+      "reason": "SELECT last_value(col, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#fcc3a7dc0a8f/ansi_on",
+      "reason": "SELECT last_value(col, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has _LEGACY_ERROR_TEMP_1210"
     },
     {
       "id": "lcase#27bcd9b6a852/ansi_off",
@@ -7866,14 +8706,6 @@
       "reason": "SELECT round(2.5, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "round#19290e0924ae/ansi_off",
-      "reason": "SELECT round(2.5, CAST(1.5 AS DECIMAL(10,2))) | NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "round#19290e0924ae/ansi_on",
-      "reason": "SELECT round(2.5, CAST(1.5 AS DECIMAL(10,2))) | NON_FOLDABLE_ARGUMENT"
-    },
-    {
       "id": "round#1e8de844e85f/ansi_off",
       "reason": "SELECT round(2.5, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -7944,22 +8776,6 @@
     {
       "id": "round#b8d0c0f0d90a/ansi_on",
       "reason": "SELECT round(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "round#e101c9aa2d5f/ansi_off",
-      "reason": "SELECT round(2.5, CAST(1.5 AS DECIMAL(38,18))) | NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "round#e101c9aa2d5f/ansi_on",
-      "reason": "SELECT round(2.5, CAST(1.5 AS DECIMAL(38,18))) | NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "round#ea0c2be7633a/ansi_off",
-      "reason": "SELECT round(2.5, CAST(1.5 AS FLOAT)) | NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "round#ea0c2be7633a/ansi_on",
-      "reason": "SELECT round(2.5, CAST(1.5 AS FLOAT)) | NON_FOLDABLE_ARGUMENT"
     },
     {
       "id": "round#efef4a884ef2/ansi_off",
@@ -11620,7 +12436,7 @@
     {
       "cases": 106,
       "function": "bround",
-      "pass": 72
+      "pass": 78
     },
     {
       "cases": 182,
@@ -11708,6 +12524,11 @@
       "pass": 4
     },
     {
+      "cases": 2,
+      "function": "current_user",
+      "pass": 2
+    },
+    {
       "cases": 100,
       "function": "date_add",
       "pass": 72
@@ -11778,6 +12599,16 @@
       "pass": 2
     },
     {
+      "cases": 54,
+      "function": "first",
+      "pass": 0
+    },
+    {
+      "cases": 54,
+      "function": "first_value",
+      "pass": 0
+    },
+    {
       "cases": 158,
       "function": "floor",
       "pass": 116
@@ -11809,6 +12640,16 @@
     },
     {
       "cases": 54,
+      "function": "last",
+      "pass": 0
+    },
+    {
+      "cases": 54,
+      "function": "last_value",
+      "pass": 0
+    },
+    {
+      "cases": 54,
       "function": "lcase",
       "pass": 40
     },
@@ -11826,6 +12667,11 @@
       "cases": 48,
       "function": "ln",
       "pass": 34
+    },
+    {
+      "cases": 2,
+      "function": "localtimestamp",
+      "pass": 2
     },
     {
       "cases": 98,
@@ -11965,7 +12811,7 @@
     {
       "cases": 98,
       "function": "round",
-      "pass": 64
+      "pass": 70
     },
     {
       "cases": 270,
@@ -11981,6 +12827,11 @@
       "cases": 50,
       "function": "sec",
       "pass": 36
+    },
+    {
+      "cases": 2,
+      "function": "session_user",
+      "pass": 2
     },
     {
       "cases": 54,
@@ -12093,6 +12944,11 @@
       "pass": 40
     },
     {
+      "cases": 2,
+      "function": "user",
+      "pass": 2
+    },
+    {
       "cases": 150,
       "function": "xxhash64",
       "pass": 28
@@ -12108,5 +12964,5 @@
       "pass": 36
     }
   ],
-  "pass": 5930
+  "pass": 5950
 }
