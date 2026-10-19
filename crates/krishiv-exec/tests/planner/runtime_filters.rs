@@ -64,7 +64,7 @@ fn configured(tpch: &mut Tpch, mode: &[(&str, &str)]) {
 
 /// Rows and the runtime filter counters of one run.
 fn run(plan: &PhysicalPlan) -> (Vec<RecordBatch>, Counters) {
-    let root = TreePool::new(&MemoryConfig::default());
+    let root = TreePool::new(&limited(1 << 30));
     let (out, query) = super::run_in(plan, &root);
     let out = out.unwrap_or_else(|e| panic!("{e}\n{plan}"));
     let mut c = Counters::default();
@@ -79,6 +79,14 @@ fn run(plan: &PhysicalPlan) -> (Vec<RecordBatch>, Counters) {
         }
     }
     (out, c)
+}
+
+/// A memory configuration with an engine limit of `bytes`.
+fn limited(bytes: usize) -> MemoryConfig {
+    MemoryConfig {
+        limit: Some(bytes),
+        ..MemoryConfig::default()
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -439,7 +447,13 @@ fn runtime_filter_bench() {
             );
             continue;
         }
-        let root = TreePool::new(&MemoryConfig::default());
+        // An explicit engine budget: a plan that needs more fails instead
+        // of exhausting the machine (`KRISHIV_RF_BENCH_MEMORY_MIB`).
+        let mib: usize = std::env::var("KRISHIV_RF_BENCH_MEMORY_MIB")
+            .ok()
+            .and_then(|m| m.parse().ok())
+            .unwrap_or(8192);
+        let root = TreePool::new(&limited(mib << 20));
         let mut timed = |on: bool| {
             let plan = plan(on).unwrap();
             let start = std::time::Instant::now();
@@ -457,7 +471,10 @@ fn runtime_filter_bench() {
         for _ in 0..reps {
             for on_first in [false, true, true, false] {
                 let (out, query, secs) = timed(on_first);
-                let out = out.unwrap_or_else(|e| panic!("{q}: {e}"));
+                let Ok(out) = out else {
+                    println!("{q}|failed in a timed run");
+                    break;
+                };
                 if on_first {
                     t_on.push(secs);
                     if sorted(&out) != sorted(&base) {
@@ -480,6 +497,9 @@ fn runtime_filter_bench() {
                     t_off.push(secs);
                 }
             }
+        }
+        if t_on.len() != 2 * reps || t_off.len() != 2 * reps {
+            continue;
         }
         let median = |v: &mut Vec<f64>| {
             v.sort_by(f64::total_cmp);
