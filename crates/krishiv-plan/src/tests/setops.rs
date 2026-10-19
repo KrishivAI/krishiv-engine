@@ -260,6 +260,36 @@ fn set_operations_resolve_away() {
                 "{text}"
             );
             assert_eq!(text.contains("replicaterows"), all, "{text}");
+            let again = analyze(LogicalPlan::clone(a.plan.root()), false).unwrap();
+            assert_eq!(again.output, a.output);
+            assert_eq!(again.plan.to_string(), text);
         }
     }
+}
+
+#[test]
+fn set_operations_display_as_spark_names_them() {
+    use SetOperation::{Except, Intersect};
+    for (op, all, want) in [
+        (Intersect, false, "Intersect false"),
+        (Intersect, true, "Intersect All true"),
+        (Except, false, "Except false"),
+        (Except, true, "Except All true"),
+    ] {
+        let text = set_op("l", "n", op, all).to_string();
+        assert!(text.starts_with(want), "{text}");
+    }
+}
+
+#[test]
+fn union_by_name_duplicates_compare_as_the_session_does() {
+    // Case-sensitive, `K` and `k` are two columns; `k` twice is not.
+    assert_eq!(
+        summary(&analyze(by_name("f", "f", false), true)),
+        json!(["K int false", "k int false"])
+    );
+    assert_eq!(
+        summary(&analyze(by_name("e", "a", false), true)),
+        json!(["COLUMN_ALREADY_EXISTS", {"columnName": "`k`"}])
+    );
 }

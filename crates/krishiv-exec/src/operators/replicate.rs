@@ -20,7 +20,7 @@ use crate::operator::{LocalState, Operator, OperatorOutput};
 /// Repeats each input row as many times as its `count` (a `BIGINT`
 /// expression) says; a row whose count is NULL or below 1 is dropped. A
 /// row keeps its weight in every copy. Output batches hold at most
-/// `batch_size` rows (`krishiv.exec.batchSize`): a large count spreads
+/// the query's `ExecConfig::batch_size` rows: a large count spreads
 /// over several batches instead of one allocation.
 #[derive(Debug)]
 pub struct ReplicateRows {
