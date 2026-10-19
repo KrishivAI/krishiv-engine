@@ -5,8 +5,12 @@ Rules (values are the Python objects the engines return):
   * Decimal vs Decimal: compared at the *smaller* of the two scales (round half-up), so Spark's
     AVG(DECIMAL) -> DECIMAL(scale 6) matches an exact value that has more digits, but two
     DECIMALs of equal scale must be exactly equal.
-  * Decimal vs float: |d - f| <= 0.5 * 10^-scale(d) + 1e-9 * |f| (the double is rounded to the decimal's
-    declared scale).
+  * Decimal vs float: |d - f| <= 0.5 * 10^-scale(d) + 1e-6 * |f|. The double comes from another
+    computation, not just another type: DuckDB divides DECIMALs in double precision, while Spark
+    rounds each quotient to the result scale (HALF_UP) before an enclosing SUM adds them, so a sum
+    of N quotients may differ from the double by up to N half-units of the last place (TPC-DS q66:
+    Spark and Krishiv 11.694972, DuckDB 11.6949728724). The half-unit covers the rounding of one
+    value; the float-vs-float relative tolerance covers the rest, as for any double.
   * float vs float: relative tolerance 1e-6 (abs 1e-12 near zero).
   * int vs Decimal: exact numeric equality.
 Rows are compared *in order* when the query has a top-level ORDER BY, else as sorted multisets.
@@ -24,7 +28,6 @@ from decimal import Decimal
 from pathlib import Path
 
 REL_FLOAT = 1e-6
-REL_DEC_VS_FLOAT = 1e-9
 
 
 # ------------------------------------------------------------ encoding (sidecar JSON)
@@ -102,7 +105,7 @@ def values_equal(a, b) -> bool:
         a, b = b, a
     if isinstance(b, float):  # a is Decimal or int, b float
         da = Decimal(a)
-        tol = Decimal("0.5") * Decimal(1).scaleb(-_scale(da)) + Decimal(REL_DEC_VS_FLOAT) * Decimal(abs(b))
+        tol = Decimal("0.5") * Decimal(1).scaleb(-_scale(da)) + Decimal(REL_FLOAT) * Decimal(abs(b))
         return abs(da - Decimal(b)) <= tol
     da, db = Decimal(a), Decimal(b)  # Decimal/int mix
     s = min(_scale(da), _scale(db)) if (isinstance(a, Decimal) and isinstance(b, Decimal)) else None

@@ -214,6 +214,27 @@ pub(crate) fn recall(like: &ResolvedFunction, op: Builtin, args: Vec<Arc<Expr>>)
     ))))
 }
 
+/// From a predicate over both sides of an inner join, a predicate over
+/// `side` alone that it implies: for `(a1 and b1) or (a2 and b2)`, `a1 or
+/// a2` when each disjunct has a conjunct over `side` alone. Filter pushdown
+/// adds it below the join, and join ordering discounts it from the
+/// predicate's selectivity.
+pub(crate) fn implied(pred: &Arc<Expr>, side: &Attrs) -> Option<Arc<Expr>> {
+    let parts = disjuncts(pred);
+    if parts.len() < 2 || has_subquery(pred) {
+        return None;
+    }
+    let mut out = Vec::new();
+    for d in &parts {
+        let mine: Vec<_> = conjuncts(d)
+            .into_iter()
+            .filter(|c| references(c).is_subset(side))
+            .collect();
+        out.push(and_all(mine)?);
+    }
+    or_all(out)
+}
+
 /// `a and b and ...`, left-deep; `None` for no predicates.
 pub(crate) fn and_all(preds: impl IntoIterator<Item = Arc<Expr>>) -> Option<Arc<Expr>> {
     preds

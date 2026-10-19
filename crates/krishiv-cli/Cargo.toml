@@ -17,11 +17,14 @@ doc = false
 
 [dependencies]
 clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
+futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv = { path = "../krishiv" }
+krishiv-sql = { path = "../krishiv-sql" }
 krishiv-server = { path = "../krishiv-server", optional = true }
 mimalloc = { workspace = true, optional = true }
 
 [dev-dependencies]
+tempfile.workspace = true
 libmimalloc-sys = { workspace = true, features = ["extended"] }
 
 [lints]
@@ -44,7 +47,3 @@ ui = ["krishiv/ui", "dep:krishiv-server"]
 celeborn = ["krishiv/celeborn"]
 mimalloc = ["krishiv/mimalloc", "dep:mimalloc"]
 full = ["krishiv/full"]
-
-[package.metadata.cargo-machete]
-# The facade is linked for feature forwarding until the CLI calls into it.
-ignored = ["krishiv"]

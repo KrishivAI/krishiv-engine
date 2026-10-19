@@ -9,7 +9,8 @@ views at ``setup()`` (no pre-loading, for parity with the other adapters), then 
 * ``run(query)`` -> rows: ``DUMP`` (the result is written to Parquet outside the timed region, then read back),
   for correctness checks. The generic suite runner times this call, so use ``abba`` for Krishiv timings.
 
-Build the runner first: ``cargo build --profile dist -p krishiv-bench-runner`` (path override: ``$KRISHIV_BENCH_RUNNER``).
+Build the runner first: ``cargo build --profile dist -p krishiv-bench-runner``
+(path override: ``$KRISHIV_BENCH_RUNNER``).
 """
 
 from __future__ import annotations

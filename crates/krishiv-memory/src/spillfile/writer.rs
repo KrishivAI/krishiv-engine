@@ -12,6 +12,7 @@ use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::SpillError;
+use super::compact;
 use super::dir::{ScopeInner, create_new_file};
 use super::format::{
     Crc32, FRAME_HEADER_LEN, FrameHeader, KIND_FOOTER, KIND_PLAIN, KIND_WEIGHTED, WEIGHT_COLUMN,
@@ -41,8 +42,11 @@ const BUF_BYTES: usize = 64 << 10;
 /// the bytes go out; the charge is returned when the finished [`SpillFile`]
 /// is dropped, or at once when the writer fails or is dropped unfinished.
 /// Arrow encodes one batch at a time, so a write needs scratch memory of up
-/// to about twice the batch's size. The writer reserves it from the
-/// [`Reservation`] it was given and returns it after the write. Pass a
+/// to about twice the batch's size, plus, for view columns that share
+/// larger buffers, a compacted copy of the bytes their rows reference (only
+/// those are written, see [`frame_bytes`](Self::frame_bytes)). The writer
+/// reserves it from the [`Reservation`] it was given and returns it after
+/// the write. Pass a
 /// *dedicated scratch* reservation: whatever it already holds is not treated
 /// as free, so the reservation that holds the state being spilled would be
 /// charged on top of that state.
@@ -134,15 +138,51 @@ impl SpillWriter {
     /// if the batch's schema differs from the writer's.
     pub fn write(&mut self, batch: &Batch) -> Result<(), SpillError> {
         self.guarded(|w| w.scope.check_cancelled())?;
+        // View columns sharing larger buffers are first copied down to the
+        // bytes their rows reference (the copy is scratch too), so the frame
+        // holds this batch's rows, not the buffers it shares.
+        let copy = copy_bytes(batch);
+        self.reservation.try_grow(copy)?;
+        let compacted = if copy == 0 {
+            None
+        } else {
+            match self.guarded(|w| compact_batch(batch).map_err(|e| encode_error(&w.tmp, &e))) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    self.reservation.shrink(copy);
+                    return Err(e);
+                }
+            }
+        };
+        let batch = compacted.as_ref().unwrap_or(batch);
         let decoded = decoded_bytes(batch);
         let scratch = usize::try_from(decoded)
             .unwrap_or(usize::MAX)
             .saturating_mul(2)
             .saturating_add(BUF_BYTES);
-        self.reservation.try_grow(scratch)?;
+        if let Err(e) = self.reservation.try_grow(scratch) {
+            self.reservation.shrink(copy);
+            return Err(e.into());
+        }
         let result = self.guarded(|w| w.write_inner(batch, decoded));
-        self.reservation.shrink(scratch);
+        drop(compacted);
+        self.reservation.shrink(scratch.saturating_add(copy));
         result
+    }
+
+    /// Bytes `batch`'s rows take in a spill frame (weights included): view
+    /// columns count only the bytes their rows reference, as written. Size
+    /// write slices by this rather than by the batch's memory, which counts
+    /// buffers shared with other batches.
+    #[must_use]
+    pub fn frame_bytes(batch: &Batch) -> usize {
+        let columns: usize = batch
+            .data()
+            .columns()
+            .iter()
+            .map(|c| compact::frame_bytes(c.as_ref()))
+            .fold(0, usize::saturating_add);
+        columns.saturating_add(weight_bytes(batch))
     }
 
     /// Writes the footer and publishes the file under its final name.
@@ -326,21 +366,47 @@ fn encode_error(tmp: &Path, e: &ArrowError) -> SpillError {
 /// An upper bound of the memory the decoded batch needs (the bytes of the
 /// rows written, weights included): what the reader reserves beyond the frame.
 fn decoded_bytes(batch: &Batch) -> u64 {
-    let columns: usize = batch
+    let columns: usize = batch.data().columns().iter().map(column_bytes).sum();
+    columns.saturating_add(weight_bytes(batch)) as u64
+}
+
+/// The bytes of a column's rows, or of its whole buffers where Arrow cannot
+/// tell the rows' share (view arrays, which [`compact`] made compact first).
+fn column_bytes(c: &ArrayRef) -> usize {
+    c.to_data()
+        .get_slice_memory_size()
+        .unwrap_or_else(|_| c.get_array_memory_size())
+}
+
+fn weight_bytes(batch: &Batch) -> usize {
+    match batch.weights() {
+        Weights::Const(_) => 0,
+        Weights::Column(_) => batch.num_rows().saturating_mul(8),
+    }
+}
+
+/// Bytes compacting `batch`'s view columns copies (0: nothing to compact).
+fn copy_bytes(batch: &Batch) -> usize {
+    batch
         .data()
         .columns()
         .iter()
-        .map(|c| {
-            c.to_data()
-                .get_slice_memory_size()
-                .unwrap_or_else(|_| c.get_array_memory_size())
-        })
-        .sum();
-    let weights = match batch.weights() {
-        Weights::Const(_) => 0,
-        Weights::Column(_) => batch.num_rows() * 8,
-    };
-    (columns + weights) as u64
+        .map(|c| compact::copy_bytes(c.as_ref()))
+        .fold(0, usize::saturating_add)
+}
+
+/// `batch` with its view columns compacted (see [`compact`]).
+fn compact_batch(batch: &Batch) -> Result<Batch, ArrowError> {
+    let columns = batch
+        .data()
+        .columns()
+        .iter()
+        .map(|c| Ok(compact::compact(c)?.unwrap_or_else(|| Arc::clone(c))))
+        .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    let record = RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
+    Batch::with_weights(record, batch.weights().clone())
+        .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))
 }
 
 /// Streams frame payload to the file: charges the cap, checks for cancel,
