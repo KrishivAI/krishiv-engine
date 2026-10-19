@@ -75,7 +75,7 @@ impl std::fmt::Debug for ArrowStream {
 }
 
 impl ArrowStream {
-    fn new(reader: Box<dyn RecordBatchReader + Send>) -> Self {
+    pub(crate) fn new(reader: Box<dyn RecordBatchReader + Send>) -> Self {
         Self {
             schema: reader.schema(),
             reader: Mutex::new(Some(reader)),

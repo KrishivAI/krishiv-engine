@@ -5,13 +5,54 @@
 
 use std::sync::Arc;
 
-use krishiv_session::{DataFrame, GroupedData, JoinType, Session};
+use arrow_array::{RecordBatch, RecordBatchReader};
+use arrow_schema::{ArrowError, SchemaRef};
+use futures::StreamExt as _;
+use krishiv_session::{DataFrame, GroupedData, JoinType, RecordBatchStream, Session};
 use krishiv_types::DataType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::column::PyColumn;
 use crate::errors::{block_on, to_py};
+use crate::stream::ArrowStream;
+
+/// The result of a running query as an Arrow reader. It never touches Python,
+/// so a consumer may call it with the GIL held or from a foreign thread.
+/// Dropping it drops the engine stream, which cancels the query without
+/// waiting for it.
+struct QueryReader {
+    schema: SchemaRef,
+    /// The batch read to learn the schema, handed out first.
+    first: Option<RecordBatch>,
+    stream: RecordBatchStream,
+}
+
+impl Iterator for QueryReader {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let batch = match self.first.take() {
+            Some(batch) => batch,
+            None => match futures::executor::block_on(self.stream.next())? {
+                Ok(batch) => batch,
+                Err(e) => return Some(Err(ArrowError::ExternalError(Box::new(e)))),
+            },
+        };
+        // The schema was fixed by the first batch: a batch that differs is an
+        // engine bug, reported instead of exported under the wrong schema.
+        Some(RecordBatch::try_new(
+            SchemaRef::clone(&self.schema),
+            batch.columns().to_vec(),
+        ))
+    }
+}
+
+impl RecordBatchReader for QueryReader {
+    fn schema(&self) -> SchemaRef {
+        SchemaRef::clone(&self.schema)
+    }
+}
 
 /// A lazily evaluated query.
 #[pyclass(name = "DataFrame", module = "krishiv._native", frozen)]
@@ -161,6 +202,42 @@ impl PyDataFrame {
         PyColumn {
             inner: self.inner.col(name),
         }
+    }
+
+    /// Runs the query (the GIL released) and returns its result as a one-shot
+    /// `ArrowStream`; the batches are computed as the consumer reads them.
+    /// Releasing the stream cancels the query.
+    fn execute(&self, py: Python<'_>) -> PyResult<ArrowStream> {
+        let df = self.inner.clone();
+        let (schema, first, stream) = block_on(py, async move {
+            let analyzed = df.schema().await?;
+            let mut stream = df.execute_stream().await?;
+            // The operators' output types (not the analysis') are the data's
+            // schema; an empty result has no batch and takes the analysis'.
+            let first = stream.next().await.transpose()?;
+            let schema = first.as_ref().map_or(analyzed, RecordBatch::schema);
+            Ok((schema, first, stream))
+        })?;
+        Ok(ArrowStream::new(Box::new(QueryReader {
+            schema,
+            first,
+            stream,
+        })))
+    }
+
+    /// The number of result rows (executes the query, the GIL released).
+    fn count(&self, py: Python<'_>) -> PyResult<u64> {
+        let df = self.inner.clone();
+        block_on(py, async move { df.count().await })
+    }
+
+    /// Registers this DataFrame as the temporary view `name`.
+    fn create_or_replace_temp_view(&self, py: Python<'_>, name: &str) -> PyResult<()> {
+        let (df, name) = (self.inner.clone(), name.to_owned());
+        block_on(
+            py,
+            async move { df.create_or_replace_temp_view(&name).await },
+        )
     }
 
     /// `(name, Spark simple type string, nullable)` per column, by analysis.

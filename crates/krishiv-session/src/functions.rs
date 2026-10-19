@@ -29,6 +29,17 @@ pub fn lit(value: impl IntoLiteral) -> Column {
     Column::new(Expr::literal(value.into_literal()))
 }
 
+/// The untyped `NULL` literal (`lit(None)` in PySpark; Spark's `void` type).
+///
+/// ```
+/// use krishiv_session::functions::lit_null;
+/// let nothing = lit_null();
+/// ```
+#[must_use]
+pub fn lit_null() -> Column {
+    Column::new(Expr::literal(Literal::Null(None)))
+}
+
 /// Values [`lit`] accepts, with the Spark type each becomes.
 pub trait IntoLiteral {
     /// The literal.
