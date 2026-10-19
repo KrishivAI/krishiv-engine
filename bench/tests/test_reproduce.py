@@ -5,9 +5,9 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import select
 import signal
 import subprocess
-import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -282,15 +282,42 @@ def test_timeout_kills_descendants_in_the_worker_process_group(tiny, tmp_path: P
     eng.setup(tiny)
     monkeypatch.setattr(subprocess, "Popen", real_popen)
     pid = int(pidfile.read_text())
-    assert "sleep" in Path(f"/proc/{pid}/cmdline").read_text()  # identity: the recorded pid is the descendant
+    # A pidfd is an identity-bearing handle: it keeps referring to this process even if the pid number is reused.
+    fd = os.pidfd_open(pid)
     try:
+        assert "sleep" in Path(f"/proc/{pid}/cmdline").read_text()
         with pytest.raises(EngineTimeout):
             eng.run(q("SELECT count(*) FROM range(100000000000) a, range(100000000000) b"))
-        deadline = time.monotonic() + 10
-        while _proc_state(pid) not in (None, "Z") and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert _proc_state(pid) in (None, "Z")
+        exited, _, _ = select.select([fd], [], [], 10)  # a pidfd becomes readable when its process exits
+        assert exited, "descendant survived the worker's timeout kill"
     finally:
         with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
+            signal.pidfd_send_signal(fd, signal.SIGKILL)
+        os.close(fd)
         eng.teardown()
+
+
+class CountingEngine(Fake):
+    def __init__(self, counts):
+        super().__init__()
+        self.counts = iter(counts)
+
+    def timed_run(self, query: Query):
+        return next(self.counts), 0.1
+
+
+def test_theirs_query_rejects_row_count_drift(tiny, monkeypatch):
+    engines = iter([CountingEngine([3, 3]), CountingEngine([3, 4])])
+    monkeypatch.setattr(reproduce, "ProcessEngine", lambda *a, **k: next(engines))
+    ok = reproduce.theirs_query("x", q("SELECT 1"), tiny, 1, 1, 2, 60, nrows=3)
+    assert ok["status"] == "ok"
+    bad = reproduce.theirs_query("x", q("SELECT 1"), tiny, 1, 1, 2, 60, nrows=3)
+    assert bad["status"] == "error"
+    assert "expected 3" in bad["reason"]
+
+
+def test_run_reproduce_rejects_nonpositive_reps_and_runs():
+    with pytest.raises(SystemExit, match="at least 1"):
+        reproduce.run_reproduce("tpch", 1, reps=0)
+    with pytest.raises(SystemExit, match="at least 1"):
+        reproduce.run_reproduce("tpch", 1, runs=-1)

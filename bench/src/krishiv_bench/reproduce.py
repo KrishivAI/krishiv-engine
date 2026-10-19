@@ -158,14 +158,28 @@ def ours_query(qm: Mapping[str, Query], engines: Mapping[str, Engine], reps: int
     return entry
 
 
-def theirs_query(name: str, q: Query, ds: Dataset, threads: int, memory_gb: int, runs: int, timeout_s: float) -> dict:
-    """Published method: a fresh process, ``runs`` hot runs in it, best of them; per-run timeout."""
+def theirs_query(
+    name: str,
+    q: Query,
+    ds: Dataset,
+    threads: int,
+    memory_gb: int,
+    runs: int,
+    timeout_s: float,
+    nrows: int | None = None,
+) -> dict:
+    """Published method: a fresh process, ``runs`` hot runs in it, best of them; per-run timeout.
+
+    ``nrows``: the row count the correctness run produced; a timed run returning another count fails the pair."""
     eng = ProcessEngine(name, threads, memory_gb, timeout_s)
     try:
         eng.setup(ds)
         times: list[float] = []
         for _ in range(runs):
-            times.append(eng.timed_run(q)[1])
+            n, secs = eng.timed_run(q)
+            if nrows is not None and n != nrows:
+                raise EngineError(f"timed run returned {n} rows, expected {nrows}")
+            times.append(secs)
         return {"status": "ok", "runs_s": times, "first_s": times[0], "best_s": min(times)}
     except (EngineError, EngineTimeout, EngineCrashed) as e:
         return _fail(_status_of(e), e)
@@ -190,6 +204,8 @@ def run_reproduce(
     names = engines or DEFAULT_ENGINES
     if REFERENCE not in names:
         raise SystemExit(f"--engines must include {REFERENCE} (the correctness reference)")
+    if reps < 1 or (runs is not None and runs < 1):
+        raise SystemExit("--reps and --runs must be at least 1")
     ds = resolve_dataset(suite, dataset, sf)
     pub = PUBLISHED[suite]
     runs = runs or pub["runs"]
@@ -270,7 +286,7 @@ def _run_theirs(record, queries, ds, names, threads, memory_gb, runs, timeout_s,
         for n in names:
             if ent.get("engines", {}).get(n, {}).get("status") != "ok":
                 continue
-            t[n] = theirs_query(n, qm[n], ds, threads, memory_gb, runs, timeout_s)
+            t[n] = theirs_query(n, qm[n], ds, threads, memory_gb, runs, timeout_s, ent.get("rows"))
             ent["engines"][n]["theirs"] = t[n]
         ent["theirs_load"] = loadavg()
         print("  theirs " + qid + ": " + " ".join(f"{n}={_best(r)}" for n, r in t.items()), flush=True)
