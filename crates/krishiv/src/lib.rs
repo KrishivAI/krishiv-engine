@@ -31,8 +31,8 @@
 
 pub use krishiv_common::error::KrishivError as Error;
 pub use krishiv_session::{
-    Column, DataFrame, DataFrameReader, ExplainMode, GroupedData, JoinType, RecordBatchStream,
-    RuntimeConf, Session, SessionBuilder, functions,
+    Column, DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, GroupedData, JoinType,
+    RecordBatchStream, RuntimeConf, Session, SessionBuilder, functions,
 };
 /// Spark SQL data types, for [`Column::cast`].
 pub use krishiv_types::DataType;

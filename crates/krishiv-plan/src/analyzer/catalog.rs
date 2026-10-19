@@ -108,6 +108,13 @@ pub trait Catalog: Send + Sync {
     /// Bumped on every change made through Krishiv; part of the context
     /// fingerprint.
     fn epoch(&self) -> u64;
+    /// Whether table names in this catalog take exactly one namespace part
+    /// (Spark's session catalog): the analyzer raises
+    /// `REQUIRES_SINGLE_PART_NAMESPACE` for any other name, without
+    /// loading it.
+    fn single_part_namespace(&self) -> bool {
+        false
+    }
     /// The table `id` (as written; the catalog applies `form`, as Spark's
     /// catalogs do) at `version`, or the current one; `None` when it does
     /// not exist.
