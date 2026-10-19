@@ -52,11 +52,16 @@ impl FileTable {
         // limit (the scheduler bounds requests per store too); `buffered`
         // keeps file order, so the merged statistics do not depend on
         // which read finishes first.
+        // The read futures are built before the stream: a closure that
+        // borrows into `stream::iter` makes the future of `open` lose
+        // `Send` (the borrow's lifetime is not provably general enough),
+        // so it could not run on a multi-threaded runtime's task.
         let width = io.config().max_concurrent_requests.max(1);
-        let (fmt, opts) = (format.as_ref(), &options);
-        let mut footers = stream::iter(&files)
-            .map(|f| io.read_metadata(fmt, f, MetadataNeeds::default(), opts))
-            .buffered(width);
+        let reads: Vec<_> = files
+            .iter()
+            .map(|f| io.read_metadata(format.as_ref(), f, MetadataNeeds::default(), &options))
+            .collect();
+        let mut footers = stream::iter(reads).buffered(width);
         let mut stats: Option<FileStatistics> = None;
         let mut known = true;
         while let Some(meta) = footers.try_next().await? {
@@ -234,4 +239,29 @@ fn literal(v: &ScalarValue, t: &arrow_schema::DataType) -> Option<Literal> {
         },
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `FileTable::open`'s future is `Send`, so a multi-threaded runtime
+    /// can run it as a task: this function only compiles if it is.
+    fn open_on_any_thread(
+        format: Arc<dyn FileFormat>,
+        io: IoContext,
+        table: SchemaRef,
+        files: Vec<FileRef>,
+        options: FormatOptions,
+        config: &Config,
+    ) -> impl Future<Output = Result<FileTable>> + Send + '_ {
+        FileTable::open(format, io, table, files, options, config, 1)
+    }
+
+    #[test]
+    fn open_future_is_send() {
+        // A compile-time check: naming the function type-checks its
+        // `Send` bound; nothing runs.
+        let _ = open_on_any_thread;
+    }
 }
