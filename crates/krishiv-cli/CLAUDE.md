@@ -1,7 +1,7 @@
 # krishiv-cli
 
 **Layer:** L7 (may depend only on crates in L7 or lower; `cargo xtask layering`).  
-**Real code arrives:** P2 (sql), later phases add subcommands.
+`krishiv sql` (P2-T092): `-e`/`-f`/stdin, `-o table|csv|json`, `--conf`, `--table name=path`, `--timing`; exit 0 ok, 1 query/I/O error, 2 usage. REPL polish is P2-T132.
 
 ## Purpose
 The `krishiv` binary: sql, server, coordinator, worker, mcp, ui, doctor, migrate subcommands.
