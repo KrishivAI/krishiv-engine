@@ -63,6 +63,29 @@ jobs:
         run: |
           "out/$ARTIFACT" --version
           "out/$ARTIFACT" sql -e "SELECT 1"
+      # The old-CPU path: user-mode QEMU with a pre-AVX2 CPU (Nehalem). The
+      # v3 binary must exit cleanly with a message naming the missing
+      # features and the compat binary; the compat binary must start.
+      - name: Old CPU (QEMU Nehalem)
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user
+          if [ "$ARTIFACT" = krishiv-compat-linux-x86_64 ]; then
+            qemu-x86_64 -L / -cpu Nehalem "out/$ARTIFACT" --version
+          else
+            set +e
+            qemu-x86_64 -L / -cpu Nehalem "out/$ARTIFACT" --version >old-cpu.out 2>&1
+            code=$?
+            set -e
+            cat old-cpu.out
+            # 1 is the clean exit; 132 (SIGILL) or 139 would mean the check came too late.
+            test "$code" -eq 1
+            grep -q 'avx2' old-cpu.out
+            grep -q 'krishiv-compat' old-cpu.out
+            ! grep -qi 'illegal instruction' old-cpu.out
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}

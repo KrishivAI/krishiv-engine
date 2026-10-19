@@ -85,6 +85,27 @@ jobs:
             uv python install "$v"
             .github/scripts/wheel-test.sh "$(uv python find "$v")" dist "$FLAVOUR"
           done
+      # The old-CPU path: import the abi3 wheel under user-mode QEMU with a
+      # pre-AVX2 CPU; it must raise ImportError naming the compat package.
+      - name: Old CPU import (QEMU Nehalem)
+        if: matrix.libc == 'manylinux' && matrix.flavour == 'abi3'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user
+          uv python install 3.11
+          uv venv --python 3.11 "$RUNNER_TEMP/oldcpu"
+          uv pip install --python "$RUNNER_TEMP/oldcpu/bin/python" dist/*.whl
+          py=$(uv python find 3.11)
+          set +e
+          PYTHONPATH=$("$RUNNER_TEMP/oldcpu/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])') \
+            qemu-x86_64 -L / -cpu Nehalem "$py" -c 'import krishiv' >"$RUNNER_TEMP/old.out" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/old.out"
+          test "$code" -eq 1
+          grep -q 'ImportError' "$RUNNER_TEMP/old.out"
+          grep -q 'avx2' "$RUNNER_TEMP/old.out"
+          grep -q 'krishiv-compat' "$RUNNER_TEMP/old.out"
       - name: Test (musllinux, in the PyPA musllinux image)
         if: matrix.libc == 'musllinux'
         env:
