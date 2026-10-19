@@ -14,6 +14,7 @@ use krishiv_plan::{
 };
 use proptest::prelude::*;
 
+use crate::support::eval::V;
 use crate::support::{self, Rng, data, eval};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -378,11 +379,28 @@ fn implied_filters_reach_a_fixed_point() {
         optimized.root(),
         again.root()
     );
-    for seed in [1, 2, 3, 3_096_671_712_105_701_144] {
+    // (c0, c1) per data seed, from Spark 4.2.0 on the same rows.
+    let n = |v: i64| V::int(v);
+    let expected = [
+        (
+            1,
+            vec![vec![n(-1), n(3)], vec![n(0), n(6)], vec![n(1), n(6)]],
+        ),
+        (
+            2,
+            vec![vec![V::Null, n(2)], vec![n(-1), n(4)], vec![n(3), n(6)]],
+        ),
+        (
+            3_096_671_712_105_701_144,
+            vec![vec![V::Null, n(8)], vec![n(1), n(4)]],
+        ),
+    ];
+    for (seed, rows) in expected {
         let db = data::small(seed);
-        assert_eq!(
-            eval::rows(&db, optimized.root()),
-            eval::rows(&db, plan.root())
-        );
+        let got = eval::rows(&db, optimized.root());
+        assert_eq!(got, eval::rows(&db, plan.root()));
+        let mut want = rows;
+        want.sort();
+        assert_eq!(got, want, "seed {seed}");
     }
 }
