@@ -30,7 +30,7 @@ import json
 import math
 import statistics
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from importlib.metadata import version as dist_version
 from pathlib import Path
 from typing import Any
@@ -80,7 +80,7 @@ def _status_of(e: Exception) -> str:
     return "timeout" if isinstance(e, EngineTimeout) else "error"
 
 
-def setup_engines(engines: dict[str, Engine], ds: Dataset) -> dict[str, dict]:
+def setup_engines(engines: MutableMapping[str, Any], ds: Dataset) -> dict[str, dict]:
     """Set up every engine; one that fails is torn down, removed from ``engines`` and returned as a failure verdict.
 
     A failed reference engine is fatal for the run (nothing can be checked without it), so it raises.
