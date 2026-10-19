@@ -25,7 +25,7 @@ use super::bind::{addr, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
 use super::resolve::{Attr, Env, Rel, Resolver};
-use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup};
+use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, Inputs};
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, FunctionId,
     FunctionKind, Literal, LogicalPlan, Origin, ResolvedExpr, ResolvedFunction, Star, SubqueryKind,
@@ -74,6 +74,45 @@ pub(super) struct Bound {
     /// not `expr`: before implicit casts and rewrites.
     pub(super) shown: Option<Arc<Expr>>,
 }
+
+/// The function Spark rewrites `extract(field FROM x)` (or `date_part`)
+/// to, when `field` is a literal naming one.
+fn extract_function(function: &str, call: &Expr) -> Option<&'static str> {
+    use krishiv_kernels::datetime::DatePart as P;
+    if !matches!(function, "extract" | "date_part") {
+        return None;
+    }
+    let ExprNode::Function(f) = &call.node else {
+        return None;
+    };
+    let ExprNode::Literal(Literal::String(field)) = &f.args.first()?.node else {
+        return None;
+    };
+    Some(match P::parse(field)? {
+        P::Year => "year",
+        P::YearOfWeek => "yearofweek",
+        P::Quarter => "quarter",
+        P::Month => "month",
+        P::Week => "weekofyear",
+        P::Day => "dayofmonth",
+        P::DayOfWeek => "dayofweek",
+        P::DayOfWeekIso => "weekday",
+        P::DayOfYear => "dayofyear",
+        P::Hour => "hour",
+        P::Minute => "minute",
+        P::Second => "secondwithfraction",
+    })
+}
+
+/// Functions Spark resolves from a bare name no column matches, with the
+/// function each calls (`USER` and `SESSION_USER` are `current_user`).
+const LITERAL_FUNCTIONS: &[(&str, &str)] = &[
+    ("current_date", "current_date"),
+    ("current_timestamp", "current_timestamp"),
+    ("current_user", "current_user"),
+    ("user", "current_user"),
+    ("session_user", "current_user"),
+];
 
 impl Bound {
     /// The expression as Spark shows it.
@@ -166,10 +205,14 @@ fn arg_of(b: &Bound) -> Arg<'_> {
 /// Spark's documentation root, as its errors cite it.
 const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
 
-/// The value of a literal argument, for functions whose typing reads it.
+/// The value of a literal argument, for functions whose typing reads it: a
+/// literal, or an integral literal cast to an integral type (Spark folds
+/// those before it types `round(x, CAST(2 AS TINYINT))`).
 fn constant(b: &Bound) -> Option<Constant> {
-    let ExprNode::Literal(v) = &b.expr.node else {
-        return None;
+    let v = match &b.expr.node {
+        ExprNode::Literal(v) => v,
+        ExprNode::Cast { expr, to, .. } => return folded_cast(expr, to),
+        _ => return None,
     };
     Some(match v {
         Literal::Null(_) => Constant::Null,
@@ -179,20 +222,77 @@ fn constant(b: &Bound) -> Option<Constant> {
         Literal::Integer(v) => Constant::Integral(i64::from(*v)),
         Literal::Long(v) => Constant::Integral(*v),
         Literal::String(v) => Constant::String(v.clone()),
+        Literal::Float(_) | Literal::Double(_) | Literal::Decimal { .. } => {
+            Constant::Fractional(truncated(v)?)
+        }
         _ => return None,
     })
 }
 
+/// A fractional literal truncated toward zero, when it fits a `bigint`.
+fn truncated(v: &Literal) -> Option<i64> {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "bounded by the range check"
+    )]
+    let float = |f: f64| (f.is_finite() && f.abs() < 9.0e18).then(|| f.trunc() as i64);
+    match v {
+        Literal::Float(f) => float(f64::from(*f)),
+        Literal::Double(f) => float(*f),
+        Literal::Decimal {
+            unscaled,
+            data_type,
+        } => i64::try_from(unscaled / 10_i128.checked_pow(u32::from(data_type.scale()))?).ok(),
+        _ => None,
+    }
+}
+
+/// `CAST(literal AS integral type)` as its value: a number truncated toward
+/// zero, `None` when it does not fit or the cast is not a plain numeric one.
+fn folded_cast(inner: &Expr, to: &DataType) -> Option<Constant> {
+    let ExprNode::Literal(v) = &inner.node else {
+        return None;
+    };
+    let (lo, hi) = match to {
+        DataType::Byte => (i128::from(i8::MIN), i128::from(i8::MAX)),
+        DataType::Short => (i128::from(i16::MIN), i128::from(i16::MAX)),
+        DataType::Integer => (i128::from(i32::MIN), i128::from(i32::MAX)),
+        DataType::Long => (i128::from(i64::MIN), i128::from(i64::MAX)),
+        _ => return None,
+    };
+    let n: i128 = match v {
+        Literal::Null(_) => return Some(Constant::Null),
+        Literal::Byte(v) => i128::from(*v),
+        Literal::Short(v) => i128::from(*v),
+        Literal::Integer(v) => i128::from(*v),
+        Literal::Long(v) => i128::from(*v),
+        Literal::Float(_) | Literal::Double(_) | Literal::Decimal { .. } => {
+            i128::from(truncated(v)?)
+        }
+        Literal::String(s) => s.trim().parse().ok()?,
+        _ => return None,
+    };
+    (lo..=hi)
+        .contains(&n)
+        .then(|| i64::try_from(n).ok().map(Constant::Integral))?
+}
+
 fn column(c: &BoundColumn) -> ArgType {
+    arg_type(c.data_type.clone(), c.nullable)
+}
+
+/// The type of a value as typing sees it: `VOID` is an untyped `NULL`
+/// (`data_type: None`) everywhere but in plans and schemas.
+fn arg_type(data_type: DataType, nullable: bool) -> ArgType {
     ArgType {
-        data_type: Some(c.data_type.clone()),
-        nullable: c.nullable,
+        data_type: (data_type != DataType::Null).then_some(data_type),
+        nullable,
     }
 }
 
 pub(super) fn literal_type(v: &Literal) -> Option<DataType> {
     Some(match v {
-        Literal::Null(t) => return t.clone(),
+        Literal::Null(t) => return t.clone().filter(|t| *t != DataType::Null),
         Literal::Boolean(_) => DataType::Boolean,
         Literal::Byte(_) => DataType::Byte,
         Literal::Short(_) => DataType::Short,
@@ -387,6 +487,9 @@ impl Resolver<'_> {
         let args: Vec<Arc<Expr>> = kids.iter().map(|k| Arc::clone(&k.expr)).collect();
         let mut b = match &e.node {
             ExprNode::Column(c) => self.column(c, e.origin, in_agg, cx)?,
+            ExprNode::Literal(
+                Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. },
+            ) => return Err(unsupported("interval values", e.origin)),
             ExprNode::Literal(v) => keep(ArgType {
                 nullable: matches!(v, Literal::Null(_)),
                 data_type: literal_type(v),
@@ -440,9 +543,7 @@ impl Resolver<'_> {
                     return Err(AnalysisError::new(NestedAggregateFunction {}, inner));
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
-                let data_type = ty.data_type.clone().ok_or_else(|| {
-                    unsupported("values of the NULL and interval types", e.origin)
-                })?;
+                let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
                 call_kids.extend(kids.get(n).cloned());
                 let call = ResolvedFunction {
                     id: entry.id,
@@ -490,14 +591,11 @@ impl Resolver<'_> {
                         to: to.clone(),
                         mode,
                     }),
-                    ..keep(ArgType {
-                        data_type: Some(to.clone()),
-                        nullable,
-                    })
+                    ..keep(arg_type(to.clone(), nullable))
                 }
             }
             ExprNode::Alias { name, .. } => {
-                let output = self.attr(name, &kids[0].ty, e.origin)?;
+                let output = self.attr(name, &kids[0].ty);
                 Bound {
                     expr: rebuilt(ExprNode::Resolved(ResolvedExpr::Alias {
                         expr: Arc::clone(&args[0]),
@@ -519,7 +617,10 @@ impl Resolver<'_> {
                                 e.origin,
                             ));
                         }
-                        (Some(rel.out[0].col.data_type.clone()), true)
+                        (
+                            arg_type(rel.out[0].col.data_type.clone(), true).data_type,
+                            true,
+                        )
                     }
                     SubqueryKind::Exists => (Some(DataType::Boolean), false),
                     SubqueryKind::In(_) => (Some(DataType::Boolean), true),
@@ -550,10 +651,7 @@ impl Resolver<'_> {
             ExprNode::Resolved(r) => keep(match r {
                 ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) => column(c),
                 ResolvedExpr::Alias { output, .. } => column(output),
-                ResolvedExpr::Function(f) => ArgType {
-                    data_type: Some(f.data_type.clone()),
-                    nullable: f.nullable,
-                },
+                ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
             }),
         };
         if b.shown.is_none() && kids.iter().any(|k| k.shown.is_some()) {
@@ -594,33 +692,50 @@ impl Resolver<'_> {
         let sql = |i: usize| kids.get(i).map(|k| pretty(&k.shown()));
         let given: Vec<ArgType> = kids.iter().map(|k| k.ty.clone()).collect();
         let ansi = self.ctx.conf.ansi;
+        let loss = self.ctx.conf.decimal_precision_loss;
         let call = CallTypes::new(&given, &constants)
             .with_sql(&sql)
-            .with_ansi(ansi);
+            .with_ansi(ansi)
+            .with_decimal_loss(loss);
         let coerced: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
         let casts = coerce::inputs(&entry.inputs, &coerced, &call)
             .map_err(|m| self.mismatch(m, e, kids, entry.id.name(), e.origin))?;
+        // `try_add('x', 1)` casts its arguments in TRY mode: NULL, not an error.
+        let try_casts = matches!(entry.inputs, Inputs::TryOperator(_));
         let call_kids: Vec<Bound> = kids
             .iter()
             .zip(casts)
-            .map(|(k, to)| self.implicit_cast(k, to))
+            .map(|(k, to)| self.implicit_cast_as(k, to, try_casts))
             .collect();
         let types: Vec<ArgType> = call_kids.iter().map(|k| k.ty.clone()).collect();
         let call = CallTypes::new(&types, &constants)
             .with_sql(&sql)
-            .with_ansi(ansi);
+            .with_ansi(ansi)
+            .with_decimal_loss(loss);
         let ty = (entry.result)(&call).map_err(|err| AnalysisError::new(err, e.origin))?;
         Ok((call_kids, ty))
     }
 
     pub(super) fn implicit_cast(&self, b: &Bound, to: Option<DataType>) -> Bound {
+        self.implicit_cast_as(b, to, false)
+    }
+
+    /// [`Self::implicit_cast`], as a `TRY_CAST` when `try_cast`.
+    fn implicit_cast_as(&self, b: &Bound, to: Option<DataType>, try_cast: bool) -> Bound {
         let Some(to) = to else {
             return b.clone();
         };
-        let mode = if self.ctx.conf.ansi {
-            CastMode::Ansi
-        } else {
-            CastMode::Legacy
+        let mode = match (try_cast, self.ctx.conf.ansi) {
+            (true, _) => CastMode::Try,
+            (false, true) => CastMode::Ansi,
+            (false, false) => CastMode::Legacy,
+        };
+        let may_null = |f: &DataType| {
+            if try_cast {
+                coerce::try_nullable(f, &to)
+            } else {
+                coerce::force_nullable(f, &to)
+            }
         };
         let cast = ExprNode::Cast {
             expr: Arc::clone(&b.expr),
@@ -630,12 +745,8 @@ impl Resolver<'_> {
         Bound {
             expr: Arc::new(Expr::new(cast).with_origin(b.expr.origin)),
             ty: ArgType {
-                nullable: b.ty.nullable
-                    || b.ty
-                        .data_type
-                        .as_ref()
-                        .is_some_and(|f| coerce::force_nullable(f, &to)),
-                data_type: Some(to),
+                nullable: b.ty.nullable || b.ty.data_type.as_ref().is_some_and(may_null),
+                data_type: Some(to.clone()),
             },
             shown: Some(b.shown()),
             ..b.clone()
@@ -720,10 +831,7 @@ impl Resolver<'_> {
         Ok(Bound {
             shown: shown_call(&expr, kids, &cast),
             expr,
-            ty: ArgType {
-                data_type: Some(typed.data_type),
-                nullable: typed.nullable,
-            },
+            ty: arg_type(typed.data_type, typed.nullable),
             agg: kids.iter().find_map(|k| k.agg),
             outer: kids.iter().filter_map(|k| k.outer).min(),
             lateral,
@@ -846,7 +954,7 @@ impl Resolver<'_> {
                 continue;
             }
             let cast = self.implicit_cast(&column, to);
-            let output = self.attr(&a.col.name, &cast.ty, Origin::UNKNOWN)?;
+            let output = self.attr(&a.col.name, &cast.ty);
             exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Alias {
                     expr: cast.expr,
@@ -892,19 +1000,33 @@ impl Resolver<'_> {
                 param,
                 ty,
                 required,
-            } => DatatypeMismatchUnexpectedInputType {
-                sql_expr,
-                param_index: ordinal(param),
-                required_type: required,
-                input_sql: format!(
-                    "\"{}\"",
-                    kids.get(arg)
-                        .map(|k| pretty(&k.shown()))
-                        .unwrap_or_default()
-                ),
-                input_type: quoted_type(ty.as_ref()),
+            } => {
+                // `extract(year FROM x)` and `date_part('year', x)` are
+                // `year(x)` to Spark, which names that in the error.
+                let (sql_expr, param) = match extract_function(function, call) {
+                    Some(name) if param == 1 => (
+                        format!(
+                            "\"{name}({})\"",
+                            kids.get(1).map(|k| pretty(&k.shown())).unwrap_or_default()
+                        ),
+                        0,
+                    ),
+                    _ => (sql_expr, param),
+                };
+                DatatypeMismatchUnexpectedInputType {
+                    sql_expr,
+                    param_index: ordinal(param),
+                    required_type: required,
+                    input_sql: format!(
+                        "\"{}\"",
+                        kids.get(arg)
+                            .map(|k| pretty(&k.shown()))
+                            .unwrap_or_default()
+                    ),
+                    input_type: quoted_type(ty.as_ref()),
+                }
+                .into()
             }
-            .into(),
             Mismatch::DataDiff(types, list) => {
                 let types: Vec<String> = types.iter().map(|t| quoted_type(t.as_ref())).collect();
                 let data_type = if list {
@@ -929,22 +1051,14 @@ impl Resolver<'_> {
     }
 
     /// A new attribute named `name` of type `ty`.
-    pub(super) fn attr(
-        &mut self,
-        name: &str,
-        ty: &ArgType,
-        origin: Origin,
-    ) -> Result<BoundColumn, AnalysisError> {
-        let data_type = ty
-            .data_type
-            .clone()
-            .ok_or_else(|| unsupported("values of the NULL and interval types", origin))?;
-        Ok(BoundColumn {
+    pub(super) fn attr(&mut self, name: &str, ty: &ArgType) -> BoundColumn {
+        let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
+        BoundColumn {
             id: self.fresh(),
             name: name.to_owned(),
             data_type,
             nullable: ty.nullable,
-        })
+        }
     }
 
     /// A column reference, in Spark's order: the input, lateral column
@@ -997,6 +1111,27 @@ impl Resolver<'_> {
                     None,
                 ));
             }
+        }
+        // A name no input column has may be a function written without
+        // parentheses (what the parser leaves a column unless ANSI reserved
+        // keywords are on). Spark 4.2 tries it before lateral aliases,
+        // GROUP BY aliases and outer references.
+        if let [name] = &c.name[..]
+            && let Some(function) = LITERAL_FUNCTIONS
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, f)| *f)
+        {
+            let call = Arc::new(
+                Expr::new(ExprNode::Function(FunctionCall {
+                    name: function.to_owned(),
+                    args: Vec::new(),
+                    distinct: false,
+                    filter: None,
+                }))
+                .with_origin(origin),
+            );
+            return self.expr(&call, cx);
         }
         if let ([name], Some(lateral)) = (&c.name[..], cx.lateral) {
             let cs = self.ctx.conf.case_sensitive;
@@ -1384,6 +1519,7 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
         (Some(Builtin::Multiply), 2) => infix("*"),
         (Some(Builtin::Divide), 2) => infix("/"),
         (Some(Builtin::Remainder), 2) => infix("%"),
+        (Some(Builtin::IntegralDivide), 2) => infix("div"),
         (Some(Builtin::Like), 2) => format!("{} LIKE {}", k[0], k[1]),
         (Some(Builtin::Not), 1) => format!("(NOT {})", k[0]),
         (Some(Builtin::Negative), 1) => format!("(- {})", k[0]),
@@ -1401,6 +1537,12 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
             }
             s + " END"
         }
+        // Spark's own spellings of `if`, `positive` and `mod`.
+        _ if name.eq_ignore_ascii_case("if") && k.len() == 3 => {
+            format!("(IF({}, {}, {}))", k[0], k[1], k[2])
+        }
+        _ if name.eq_ignore_ascii_case("positive") && k.len() == 1 => format!("(+ {})", k[0]),
+        _ if name.eq_ignore_ascii_case("mod") && k.len() == 2 => infix("%"),
         _ if name.eq_ignore_ascii_case("extract") && k.len() == 2 => {
             format!("extract({} FROM {})", k[0], k[1])
         }
@@ -1466,4 +1608,54 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
         memo.insert(addr(x), XxHash3_128::oneshot(&b));
     }
     memo.get(&addr(e)).copied().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn folded(v: Literal, to: &DataType) -> Option<Constant> {
+        folded_cast(&Expr::new(ExprNode::Literal(v)), to)
+    }
+
+    /// Spark folds `CAST(literal AS integral)` for the scale of `round`.
+    #[test]
+    fn integral_casts_of_literals_fold() {
+        let n = |v: i64| Some(Constant::Integral(v));
+        assert_eq!(folded(Literal::Integer(7), &DataType::Byte), n(7));
+        assert_eq!(folded(Literal::Byte(-3), &DataType::Long), n(-3));
+        assert_eq!(folded(Literal::Short(9), &DataType::Short), n(9));
+        assert_eq!(folded(Literal::Long(5), &DataType::Integer), n(5));
+        // Out of the target's range: not a constant.
+        assert_eq!(folded(Literal::Integer(300), &DataType::Byte), None);
+        assert_eq!(folded(Literal::Long(i64::MAX), &DataType::Integer), None);
+        // Fractions truncate toward zero.
+        assert_eq!(folded(Literal::Double(1.9), &DataType::Integer), n(1));
+        assert_eq!(folded(Literal::Float(-1.9), &DataType::Integer), n(-1));
+        assert_eq!(folded(Literal::Double(f64::NAN), &DataType::Integer), None);
+        assert_eq!(folded(Literal::Double(1e30), &DataType::Long), None);
+        let dec = |unscaled, p, s| Literal::Decimal {
+            unscaled,
+            data_type: krishiv_types::DecimalType::try_new(p, s).unwrap(),
+        };
+        assert_eq!(folded(dec(-250, 4, 2), &DataType::Integer), n(-2));
+        assert_eq!(
+            folded(Literal::String(" 12 ".to_owned()), &DataType::Integer),
+            n(12)
+        );
+        assert_eq!(
+            folded(Literal::String("1.5".to_owned()), &DataType::Integer),
+            None
+        );
+        assert_eq!(
+            folded(Literal::Null(None), &DataType::Integer),
+            Some(Constant::Null)
+        );
+        // Other targets and sources are not folded.
+        assert_eq!(folded(Literal::Integer(1), &DataType::Double), None);
+        assert_eq!(folded(Literal::Boolean(true), &DataType::Integer), None);
+        assert_eq!(truncated(&Literal::Boolean(true)), None);
+        assert_eq!(truncated(&Literal::Double(-2.5)), Some(-2));
+        assert_eq!(truncated(&dec(15, 2, 1)), Some(1));
+    }
 }

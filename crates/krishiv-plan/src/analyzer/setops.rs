@@ -13,6 +13,7 @@
 use std::sync::Arc;
 
 use krishiv_common::error::{IncompatibleColumnType, NumColumnsMismatch};
+use krishiv_types::DataType;
 
 use super::bind::unsupported;
 use super::coerce::{self, Arg, ordinal, quoted_type};
@@ -69,22 +70,21 @@ impl Resolver<'_> {
             let mut acc = first.out[c].col.data_type.clone();
             for (i, k) in kids.iter().enumerate().skip(1) {
                 let here = &k.out[c].col.data_type;
-                let wider = coerce::common_type(&arg(Some(&acc)), &arg(Some(here)));
-                acc = wider
-                    .map(|t| t.unwrap_or_else(|| acc.clone()))
-                    .ok_or_else(|| {
-                        AnalysisError::new(
-                            IncompatibleColumnType {
-                                operator: "UNION".to_owned(),
-                                column_ordinal_number: ordinal(c),
-                                table_ordinal_number: ordinal(i),
-                                data_type1: quoted_type(Some(here)),
-                                data_type2: quoted_type(Some(&first.out[c].col.data_type)),
-                                hint: String::new(),
-                            },
-                            o,
-                        )
-                    })?;
+                let ansi = self.ctx.conf.ansi;
+                let wider = coerce::wider_type(&arg(Some(&acc)), &arg(Some(here)), ansi);
+                acc = wider.map(|t| t.unwrap_or(DataType::Null)).ok_or_else(|| {
+                    AnalysisError::new(
+                        IncompatibleColumnType {
+                            operator: "UNION".to_owned(),
+                            column_ordinal_number: ordinal(c),
+                            table_ordinal_number: ordinal(i),
+                            data_type1: quoted_type(Some(here)),
+                            data_type2: quoted_type(Some(&first.out[c].col.data_type)),
+                            hint: String::new(),
+                        },
+                        o,
+                    )
+                })?;
             }
             types.push(acc);
         }
@@ -116,11 +116,7 @@ impl Resolver<'_> {
     }
 
     /// `k` with its columns cast to `types` where they differ (same names).
-    fn cast_columns(
-        &mut self,
-        k: &Rel,
-        types: &[krishiv_types::DataType],
-    ) -> Result<Rel, AnalysisError> {
+    fn cast_columns(&mut self, k: &Rel, types: &[DataType]) -> Result<Rel, AnalysisError> {
         if k.out.iter().zip(types).all(|(a, t)| a.col.data_type == *t) {
             return Ok(k.clone());
         }
@@ -144,7 +140,7 @@ impl Resolver<'_> {
                 shown: None,
             };
             let cast = self.implicit_cast(&b, coerce::cast_to(Some(&a.col.data_type), Some(t)));
-            let output = self.attr(&a.col.name, &cast.ty, Origin::UNKNOWN)?;
+            let output = self.attr(&a.col.name, &cast.ty);
             exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Alias {
                     expr: cast.expr,
@@ -206,10 +202,10 @@ impl Resolver<'_> {
     }
 }
 
-/// A non-literal argument of type `t`.
-fn arg(t: Option<&krishiv_types::DataType>) -> Arg<'_> {
+/// A non-literal argument of type `t` (`VOID` is an untyped NULL).
+fn arg(t: Option<&DataType>) -> Arg<'_> {
     Arg {
-        ty: t,
+        ty: t.filter(|t| **t != DataType::Null),
         nullable: false,
         literal: None,
     }

@@ -97,6 +97,10 @@ pub enum Constant {
     Integral(i64),
     /// A `STRING`.
     String(String),
+    /// A `FLOAT`, `DOUBLE` or `DECIMAL`, as the integer it truncates to (what
+    /// a cast to `INT` gives: the scale of `round(x, 1.5)`); never for a
+    /// value outside the `BIGINT` range.
+    Fractional(i64),
 }
 
 /// The type of a value, as function signatures see it.
@@ -127,6 +131,7 @@ pub struct CallTypes<'a> {
     constants: &'a [Option<Constant>],
     sql: Option<&'a dyn Fn(usize) -> Option<String>>,
     ansi: bool,
+    decimal_loss: bool,
 }
 
 impl fmt::Debug for CallTypes<'_> {
@@ -135,6 +140,7 @@ impl fmt::Debug for CallTypes<'_> {
             .field("args", &self.args)
             .field("constants", &self.constants)
             .field("ansi", &self.ansi)
+            .field("decimal_loss", &self.decimal_loss)
             .finish_non_exhaustive()
     }
 }
@@ -149,6 +155,7 @@ impl<'a> CallTypes<'a> {
             constants,
             sql: None,
             ansi: true,
+            decimal_loss: true,
         }
     }
 
@@ -164,6 +171,20 @@ impl<'a> CallTypes<'a> {
     #[must_use]
     pub const fn ansi(&self) -> bool {
         self.ansi
+    }
+
+    /// With `spark.sql.decimalOperations.allowPrecisionLoss = loss` (on by
+    /// default): decimal arithmetic result types follow it.
+    #[must_use]
+    pub const fn with_decimal_loss(mut self, loss: bool) -> Self {
+        self.decimal_loss = loss;
+        self
+    }
+
+    /// `spark.sql.decimalOperations.allowPrecisionLoss`.
+    #[must_use]
+    pub const fn decimal_loss(&self) -> bool {
+        self.decimal_loss
     }
 
     /// With `sql(i)` rendering argument `i` as Spark's errors quote it
@@ -220,6 +241,10 @@ pub enum InputType {
     Any,
     /// Exactly this type.
     Exact(DataType),
+    /// This type and no other: an untyped `NULL` becomes it, any other
+    /// type is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE` (Spark's `if`
+    /// checks its condition's type instead of casting it).
+    Strict(DataType),
     /// Any numeric type; a string or untyped `NULL` becomes `DOUBLE`.
     /// `intervals`: Spark also takes ANSI intervals (it names them in the
     /// error; Krishiv has no interval values yet).
@@ -239,9 +264,18 @@ impl InputType {
     pub fn sql(&self) -> String {
         match self {
             Self::Any => "\"ANY\"".to_owned(),
-            Self::Exact(t) => format!("\"{}\"", t.sql()),
+            Self::Exact(t) | Self::Strict(t) => format!("\"{}\"", t.sql()),
             Self::Numeric { intervals: false } => "\"NUMERIC\"".to_owned(),
             Self::Numeric { intervals: true } => "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned(),
+            // Spark's `AnyTimestampType` names itself in words.
+            Self::OneOf(types)
+                if matches!(
+                    types.as_slice(),
+                    [DataType::Timestamp, DataType::TimestampNtz]
+                ) =>
+            {
+                "\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\"".to_owned()
+            }
             Self::OneOf(types) => {
                 let names: Vec<String> = types.iter().map(|t| format!("\"{}\"", t.sql())).collect();
                 format!("({})", names.join(" or "))
@@ -270,6 +304,21 @@ impl PartialEq for InputBuilder {
 
 impl Eq for InputBuilder {}
 
+/// An arithmetic operator whose argument typing a function reuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Operator {
+    /// `+`.
+    Add,
+    /// `-`.
+    Subtract,
+    /// `*`.
+    Multiply,
+    /// `/`.
+    Divide,
+    /// `%`.
+    Remainder,
+}
+
 /// How a function's arguments are cast before its result type is computed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -282,6 +331,30 @@ pub enum Inputs {
     /// Every argument takes the type all of them meet at (`coalesce`);
     /// `DATATYPE_MISMATCH.DATA_DIFF_TYPES` when there is none.
     Common,
+    /// As [`Inputs::Common`], but a string does not meet another type
+    /// (`greatest`, `least`): `DATATYPE_MISMATCH.DATA_DIFF_TYPES`.
+    CommonNoStrings,
+    /// The first arguments take these types, one entry each; the others
+    /// take the type they meet at (`if(cond, a, b)`, `nvl2(x, a, b)`).
+    Leading(Vec<InputType>),
+    /// As [`Inputs::Common`] with a hidden `0` argument (`zeroifnull(x)` is
+    /// `coalesce(x, 0)`).
+    CommonWithZero,
+    /// The arguments must be comparable with `=`
+    /// (`DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES` otherwise) but are not
+    /// cast: the evaluator compares them, and the result has the first
+    /// argument's type (`nullif(a, b)`). With `zero`, the single argument is
+    /// compared with a hidden `0` (`nullifzero`).
+    Comparable {
+        /// Compare the argument with `0`.
+        zero: bool,
+    },
+    /// The arguments of the arithmetic operator `op`: the implicit casts of
+    /// `a op b` (`mod`, `try_add`, ...).
+    Operator(Operator),
+    /// As [`Inputs::Operator`], with implicit casts that are `TRY_CAST`s:
+    /// `try_add('x', 1)` is NULL, not an error.
+    TryOperator(Operator),
     /// As [`Inputs::Expects`], with the types chosen from the arguments.
     Built(InputBuilder),
 }
@@ -292,7 +365,14 @@ impl Inputs {
     #[must_use]
     pub fn expected(&self, call: &CallTypes<'_>) -> Option<Vec<InputType>> {
         match self {
-            Self::Any | Self::Common => None,
+            Self::Any
+            | Self::Common
+            | Self::CommonNoStrings
+            | Self::Leading(_)
+            | Self::CommonWithZero
+            | Self::Comparable { .. }
+            | Self::Operator(_)
+            | Self::TryOperator(_) => None,
             Self::Expects(types) => Some(types.clone()),
             Self::Built(b) => Some((b.0)(call)),
         }

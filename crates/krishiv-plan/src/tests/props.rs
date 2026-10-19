@@ -208,7 +208,7 @@ impl Gen<'_> {
             },
             8 => {
                 let id = if self.flag() {
-                    FunctionId::Builtin(Builtin::ALL[usize::from(self.pick(24))])
+                    FunctionId::Builtin(Builtin::ALL[usize::from(self.pick(25))])
                 } else {
                     FunctionId::Registry {
                         name: self.name(),
@@ -288,7 +288,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 18 };
+        let kinds = if depth == 0 { 4 } else { 19 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -314,6 +314,7 @@ impl Gen<'_> {
                 source: self.many(0, 2, |g| AttrId(u64::from(g.pick(9)))),
                 output: self.many(0, 2, Gen::bound),
             }),
+            14 => PlanNode::OneRowRelation,
             12 => PlanNode::Shift {
                 input: self.input(d),
                 offset: u64::from(self.pick(9)),
@@ -387,12 +388,12 @@ impl Gen<'_> {
                 alias: self.name(),
                 columns: self.many(0, 1, Gen::name),
             },
-            14 => PlanNode::Hint {
+            15 => PlanNode::Hint {
                 input: self.input(d),
                 name: self.name(),
                 params: self.exprs(),
             },
-            15 => PlanNode::JoinHint {
+            16 => PlanNode::JoinHint {
                 input: self.input(d),
                 strategy: [
                     JoinStrategy::Broadcast,
@@ -401,12 +402,12 @@ impl Gen<'_> {
                     JoinStrategy::ShuffleReplicateNl,
                 ][usize::from(self.pick(4))],
             },
-            16 => PlanNode::Union {
+            17 => PlanNode::Union {
                 inputs: self.many(1, 3, |g| g.input(d)),
                 by_name: self.flag(),
                 allow_missing_columns: self.flag(),
             },
-            17 => PlanNode::Distinct {
+            18 => PlanNode::Distinct {
                 input: self.input(d),
             },
             _ => PlanNode::WithCte {
@@ -725,6 +726,7 @@ fn m_grouping(g: &mut Grouping, w: &mut Walk) -> bool {
 fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
     let p = Arc::make_mut(p);
     match &mut p.node {
+        PlanNode::OneRowRelation => false,
         PlanNode::Read(s) => m_source(s, w),
         PlanNode::Sql { query, args } => {
             site!(w, query.push('x'));
@@ -911,6 +913,8 @@ proptest! {
     #[test]
     fn any_single_field_mutation_changes_the_key(b in bytes(), at in any::<Index>()) {
         let p = build(&b, false);
+        // A lone `OneRowRelation` has no field to change.
+        prop_assume!(sites(&p) > 0);
         let mut root = Arc::clone(p.root());
         let mut walk = Walk { k: at.index(sites(&p)) };
         prop_assert!(m_plan(&mut root, &mut walk));

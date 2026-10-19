@@ -251,6 +251,7 @@ impl<'a> Planner<'a> {
                 self.plan(input)
             }
             PlanNode::Union { inputs, .. } => self.union(p, inputs),
+            PlanNode::OneRowRelation => one_row(),
             _ => {
                 let text = p.to_string();
                 let name = text.split_whitespace().next().unwrap_or_default();
@@ -724,6 +725,26 @@ pub(crate) fn select(planned: Planned, output: &[BoundColumn], name: &str) -> Re
     let op = Project::try_new(&planned.schema, items)?;
     let detail = columns(output);
     Ok(planned.operator(op, ids, (name, detail)))
+}
+
+/// One row without columns (`SELECT` without `FROM`).
+fn one_row() -> Result<Planned> {
+    let schema = Arc::new(Schema::empty());
+    let options = arrow_array::RecordBatchOptions::new().with_row_count(Some(1));
+    let batch =
+        arrow_array::RecordBatch::try_new_with_options(Arc::clone(&schema), Vec::new(), &options)
+            .map_err(|e| internal(&e.to_string()))?;
+    let scan = crate::operators::MemoryScan::try_new(
+        Arc::clone(&schema),
+        vec![krishiv_types::batch::Batch::new(batch)],
+    )?;
+    let source = crate::operators::ScanPushdown::build(&scan, ScanPushdowns::default())?;
+    Ok(Planned {
+        schema: source.schema(),
+        node: Arc::new(SourceNode(source)),
+        layout: Vec::new(),
+        explain: ExplainNode::leaf("OneRowRelation", ""),
+    })
 }
 
 /// The schema of `l`'s columns then `r`'s.

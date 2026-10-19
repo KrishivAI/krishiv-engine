@@ -196,7 +196,7 @@ impl Tpch {
 
 /// One value as Spark's answers render it.
 pub(crate) fn render(a: &dyn Array, row: usize) -> String {
-    if a.is_null(row) {
+    if a.is_null(row) || a.data_type() == &ArrowType::Null {
         return "NULL".to_owned();
     }
     match a.data_type() {

@@ -11,12 +11,14 @@ use crate::error::{self, Result};
 
 /// A Spark SQL data type.
 ///
-/// Covers boolean, integral, floating-point, string, binary, decimal, date and
+/// Covers void (the type of a bare `NULL`), boolean, integral, floating-point, string, binary, decimal, date and
 /// timestamp types. Nested, interval, char/varchar and variant types are not
 /// represented yet; parsing them yields `KRISHIV_UNSUPPORTED_FEATURE`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DataType {
+    /// `VOID`: the type of an untyped `NULL`; every value is null.
+    Null,
     /// `BOOLEAN`.
     Boolean,
     /// `TINYINT` (8-bit signed).
@@ -81,6 +83,7 @@ impl DataType {
     /// The `simpleString` keyword of a non-parameterized type.
     fn keyword(&self) -> &'static str {
         match self {
+            Self::Null => "void",
             Self::Boolean => "boolean",
             Self::Byte => "tinyint",
             Self::Short => "smallint",

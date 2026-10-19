@@ -80,6 +80,9 @@ pub enum PlanNode {
     },
     /// A resolved read with its output attributes and pinned version.
     Scan(Scan),
+    /// One row without columns: the input of a `SELECT` without `FROM`
+    /// (Spark's `OneRowRelation`).
+    OneRowRelation,
     /// `SELECT exprs`.
     Project {
         /// Input.
@@ -483,7 +486,11 @@ impl LogicalPlan {
     /// the main query. Plans inside subquery expressions are not children.
     pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Arc<Self>)) {
         match &self.node {
-            PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::Scan(_) | PlanNode::CteRef(_) => {}
+            PlanNode::Read(_)
+            | PlanNode::Sql { .. }
+            | PlanNode::Scan(_)
+            | PlanNode::CteRef(_)
+            | PlanNode::OneRowRelation => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
@@ -509,7 +516,11 @@ impl LogicalPlan {
 
     fn for_each_child_mut(&mut self, f: &mut dyn FnMut(&mut Arc<Self>)) {
         match &mut self.node {
-            PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::Scan(_) | PlanNode::CteRef(_) => {}
+            PlanNode::Read(_)
+            | PlanNode::Sql { .. }
+            | PlanNode::Scan(_)
+            | PlanNode::CteRef(_)
+            | PlanNode::OneRowRelation => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
@@ -542,6 +553,7 @@ impl LogicalPlan {
             | PlanNode::SubqueryAlias { .. }
             | PlanNode::WithCte { .. }
             | PlanNode::CteRef(_)
+            | PlanNode::OneRowRelation
             | PlanNode::Shift { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
@@ -585,6 +597,7 @@ impl LogicalPlan {
             | PlanNode::SubqueryAlias { .. }
             | PlanNode::WithCte { .. }
             | PlanNode::CteRef(_)
+            | PlanNode::OneRowRelation
             | PlanNode::Shift { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
@@ -673,6 +686,7 @@ impl LogicalPlan {
                             .collect(),
                     );
                 }
+                PlanNode::OneRowRelation => return Some(Vec::new()),
                 PlanNode::Scan(s) => return Some(s.output.clone()),
                 PlanNode::CteRef(r) => return Some(r.output.clone()),
                 PlanNode::Shift { input, offset } => {

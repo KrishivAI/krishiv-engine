@@ -6,7 +6,7 @@
 //! forms `TIMESTAMP WITH LOCAL TIME ZONE` and `TIMESTAMP WITHOUT TIME ZONE`.
 //! The lexer follows Spark's: case-insensitive keywords, Unicode whitespace,
 //! `--` and nested `/* */` comments, backquoted identifiers and numeric
-//! literal tokens. Nested, interval, char/varchar, variant, void, time and
+//! literal tokens. Nested, interval, char/varchar, variant, time and
 //! collated string types are recognized and rejected with
 //! `KRISHIV_UNSUPPORTED_FEATURE`.
 
@@ -364,7 +364,6 @@ impl<'a> Parser<'a> {
             "interval" => "interval data types",
             "char" | "character" | "varchar" => "char/varchar data types",
             "variant" => "the variant data type",
-            "void" => "the void data type",
             "time" => "the time data type",
             "string" if self.peek().is_some_and(|t| t.is_keyword("collate")) => "collated strings",
             _ => return None,
@@ -396,6 +395,7 @@ impl<'a> Parser<'a> {
 fn resolve(lower: &str, args: &[String]) -> Option<Result<DataType>> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let t = match (lower, args.as_slice()) {
+        ("void", []) => DataType::Null,
         ("boolean", []) => DataType::Boolean,
         ("tinyint" | "byte", []) => DataType::Byte,
         ("smallint" | "short", []) => DataType::Short,

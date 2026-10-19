@@ -18,6 +18,11 @@
  "decimal_divide_by_zero": "SELECT id, d / (d - d) FROM t ORDER BY id",
  "decimal_ops": "SELECT id, d - 1.5, d % 2, d / 0.5, d > 2, d = 2.25, d * d FROM t ORDER BY id",
  "distinct_mixed": "SELECT count(DISTINCT a), sum(DISTINCT a), count(*) FROM t",
+ "div": "SELECT id, a div 2, b div a, -b div 7, d div 0.3, a div d FROM t ORDER BY id",
+ "div_by_zero": "SELECT id div 0 FROM t",
+ "div_decimal_by_zero": "SELECT d div 0.0 FROM t",
+ "div_nonzero": "SELECT id, a div 2, -b div 7, d div 0.3, b div 3L FROM t ORDER BY id",
+ "div_overflow": "SELECT -9223372036854775808L div -1L",
  "divide_by_zero": "SELECT id, 10 / a, b % a FROM t ORDER BY id",
  "exists": "SELECT id FROM t WHERE EXISTS (SELECT 1 FROM u WHERE u.k = t.a) ORDER BY id",
  "expression_first_failing_row": "SELECT id, 10 / (id - 4) + CAST(s AS INT) FROM t ORDER BY id",
@@ -63,6 +68,7 @@
  "scalar_subquery_too_many": "SELECT id, (SELECT k FROM u) FROM t ORDER BY id",
  "select_distinct": "SELECT DISTINCT a FROM t ORDER BY a",
  "select_distinct_two": "SELECT DISTINCT a % 2, s IS NULL FROM t ORDER BY 1, 2",
+ "select_without_from": "SELECT 1, 'x', NULL, 7 div 2",
  "self_join": "SELECT x.id, y.id FROM t x JOIN t y ON x.a = y.a AND x.id < y.id ORDER BY x.id, y.id",
  "small_ints": "SELECT id, CAST(a AS TINYINT) + CAST(1 AS TINYINT), CAST(a AS SMALLINT) * CAST(2 AS SMALLINT), -CAST(a AS TINYINT), CAST(a AS SMALLINT) % CAST(2 AS SMALLINT), CAST(id AS TINYINT) < CAST(4 AS TINYINT) FROM t ORDER BY id",
  "strings_compare": "SELECT id, s < 'b', s <= 'abc', s > 'ab', s = 'apple', s <=> NULL, s <> 'xyz' FROM t ORDER BY id",
@@ -84,5 +90,8 @@
  "union_all_widens": "SELECT a, s FROM t UNION ALL SELECT uid, uid * 1.5 FROM u ORDER BY 1, 2",
  "union_columns_mismatch": "SELECT id, a FROM t UNION ALL SELECT uid FROM u",
  "union_distinct": "SELECT a FROM t UNION SELECT k FROM u ORDER BY a",
- "union_types_incompatible": "SELECT dt FROM t UNION ALL SELECT uid FROM u"
+ "union_types_incompatible": "SELECT dt FROM t UNION ALL SELECT uid FROM u",
+ "union_void_widens": "SELECT s FROM t UNION ALL SELECT NULL ORDER BY 1",
+ "void_column": "SELECT NULL AS n, id FROM t ORDER BY id",
+ "void_union": "SELECT NULL UNION ALL SELECT NULL"
 }

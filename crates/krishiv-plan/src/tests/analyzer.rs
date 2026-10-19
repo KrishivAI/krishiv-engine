@@ -1428,11 +1428,25 @@ fn unsupported_inputs_fail_explicitly() {
         grouping: Grouping::Rollup(vec![Arc::new(c("a"))]),
         aggregates: vec![Arc::new(c("a"))],
     });
-    let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("sha2", vec![c("b")])]);
-    let null = LogicalPlan::table(["t"]).project(vec![Literal::Null(None).into()]);
-    for plan in [files, rollup, sha, null] {
+    let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("factorial", vec![c("b")])]);
+    for plan in [files, rollup, sha] {
         assert_eq!(class(&run(plan, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
     }
+    // An untyped NULL is the void type; an interval is not supported yet.
+    let null = LogicalPlan::table(["t"]).project(vec![Literal::Null(None).into()]);
+    let out = run(null, &ctx).unwrap().output;
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].data_type, krishiv_types::DataType::Null);
+    assert!(out[0].nullable);
+    let interval = LogicalPlan::table(["t"]).project(vec![
+        Literal::YearMonthInterval {
+            months: 1,
+            start: crate::YearMonthField::Year,
+            end: crate::YearMonthField::Month,
+        }
+        .into(),
+    ]);
+    assert_eq!(class(&run(interval, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
     // With ordinals off, an integer key is a constant.
     let off = context(
         catalog(),
@@ -1857,4 +1871,42 @@ fn resolved_output_follows_the_contract() {
             .resolved_output()
             .is_none()
     );
+}
+
+/// `SELECT` without `FROM` reads one row of no columns; the plan resolves
+/// to itself, prints as Spark's `OneRowRelation` and has a key of its own.
+#[test]
+fn one_row_relation_has_no_columns() {
+    let ctx = ctx();
+    let one = LogicalPlan::new(PlanNode::OneRowRelation);
+    let a = run(one.clone(), &ctx).unwrap();
+    assert!(a.output.is_empty());
+    assert_eq!(a.plan.root().resolved_output(), Some(Vec::new()));
+    assert_eq!(a.plan.root().to_string(), "OneRowRelation\n");
+    let again = run(a.plan.root().as_ref().clone(), &ctx).unwrap();
+    assert!(again.plan.structurally_eq(&a.plan));
+    let projected = one.project(vec![int(1)]);
+    let p = run(projected, &ctx).unwrap();
+    assert_eq!(p.output.len(), 1);
+    assert_ne!(p.plan.structural_hash(), a.plan.structural_hash());
+}
+
+#[test]
+fn try_arithmetic_casts_its_arguments_in_try_mode() {
+    let ctx = ctx();
+    let project = |name: &str| {
+        let call = Expr::function(name, vec![s("x"), int(1)]);
+        run(LogicalPlan::table(["t"]).project(vec![call]), &ctx).unwrap()
+    };
+    let try_add = project("try_add");
+    let text = format!("{:?}", try_add.plan);
+    assert!(text.contains("mode: Try"), "{text}");
+    // `mod` casts as the operator does (ANSI here).
+    let text = format!("{:?}", project("mod").plan);
+    assert!(
+        text.contains("mode: Ansi") && !text.contains("mode: Try"),
+        "{text}"
+    );
+    // A TRY cast of a string may be NULL; `try_*` results are nullable anyway.
+    assert!(try_add.output[0].nullable);
 }

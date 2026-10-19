@@ -71,6 +71,7 @@ fn null_intolerant(op: Builtin) -> bool {
             | Builtin::Multiply
             | Builtin::Divide
             | Builtin::Remainder
+            | Builtin::IntegralDivide
             | Builtin::Negative
             | Builtin::Like
             | Builtin::ILike

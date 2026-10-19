@@ -607,6 +607,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(1);
                 self.source(s);
             }
+            PlanNode::OneRowRelation => self.u8(15),
             PlanNode::Sql { query, args } => {
                 self.u8(2);
                 self.str(query);

@@ -203,6 +203,59 @@
     "5|10|8"
    ]
   },
+  "div": {
+   "rows": [
+    "1|0|NULL|-1|5|0",
+    "2|0|20|-2|7|0",
+    "3|1|-15|4|NULL|NULL",
+    "4|NULL|NULL|-5|13|NULL",
+    "5|1|3074457345618258602|-1317624576693539401|-19|0",
+    "6|2|-12|7|20|0",
+    "7|NULL|NULL|-10|23|NULL",
+    "8|1|26|-11|29|0"
+   ]
+  },
+  "div_by_zero": {
+   "rows": [
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL"
+   ]
+  },
+  "div_decimal_by_zero": {
+   "rows": [
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL"
+   ]
+  },
+  "div_nonzero": {
+   "rows": [
+    "1|0|-1|5|3",
+    "2|0|-2|7|6",
+    "3|1|4|NULL|-10",
+    "4|NULL|-5|13|13",
+    "5|1|-1317624576693539401|-19|3074457345618258602",
+    "6|2|7|20|-16",
+    "7|NULL|-10|23|23",
+    "8|1|-11|29|26"
+   ]
+  },
+  "div_overflow": {
+   "rows": [
+    "-9223372036854775808"
+   ]
+  },
   "divide_by_zero": {
    "rows": [
     "1|NULL|NULL",
@@ -595,6 +648,11 @@
     "1|false"
    ]
   },
+  "select_without_from": {
+   "rows": [
+    "1|x|NULL|3"
+   ]
+  },
   "self_join": {
    "rows": [
     "5|8"
@@ -828,6 +886,37 @@
   },
   "union_types_incompatible": {
    "error": "INCOMPATIBLE_COLUMN_TYPE"
+  },
+  "union_void_widens": {
+   "rows": [
+    "NULL",
+    "NULL",
+    "42",
+    "a_b",
+    "ab",
+    "abc",
+    "apple",
+    "banana",
+    "xyz"
+   ]
+  },
+  "void_column": {
+   "rows": [
+    "NULL|1",
+    "NULL|2",
+    "NULL|3",
+    "NULL|4",
+    "NULL|5",
+    "NULL|6",
+    "NULL|7",
+    "NULL|8"
+   ]
+  },
+  "void_union": {
+   "rows": [
+    "NULL",
+    "NULL"
+   ]
   }
  },
  "spark_version": "4.2.0"

@@ -62,6 +62,8 @@ pub enum Builtin {
     Divide,
     /// `%`.
     Remainder,
+    /// `div`: integral division, a `bigint`.
+    IntegralDivide,
     /// `negative` (unary minus).
     Negative,
     /// `isnull`.
@@ -86,7 +88,7 @@ pub enum Builtin {
 
 impl Builtin {
     /// Every operator, in declaration order.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Eq,
         Self::EqNullSafe,
         Self::Lt,
@@ -101,6 +103,7 @@ impl Builtin {
         Self::Multiply,
         Self::Divide,
         Self::Remainder,
+        Self::IntegralDivide,
         Self::Negative,
         Self::IsNull,
         Self::IsNotNull,
@@ -131,6 +134,7 @@ impl Builtin {
             Self::Multiply => "*",
             Self::Divide => "/",
             Self::Remainder => "%",
+            Self::IntegralDivide => "div",
             Self::Negative => "negative",
             Self::IsNull => "isnull",
             Self::IsNotNull => "isnotnull",

@@ -149,7 +149,7 @@ pub(super) fn to_utf8(a: &dyn Array) -> Result<StringArray, KrishivError> {
     }
 }
 
-fn to_binary(a: &dyn Array) -> Result<BinaryArray, KrishivError> {
+pub(super) fn to_binary(a: &dyn Array) -> Result<BinaryArray, KrishivError> {
     match a.data_type() {
         DataType::Binary => Ok(a.as_binary::<i32>().clone()),
         DataType::BinaryView => Ok(a.as_binary_view().iter().collect()),
@@ -165,6 +165,40 @@ impl<'a> Inputs<'a> {
 
     pub(super) fn rows(&self) -> usize {
         self.rows
+    }
+
+    /// Argument `i` as a column of `rows` values, with string and binary
+    /// carriers read as `Utf8` and `Binary`.
+    pub(super) fn plain_column(&self, i: usize) -> Result<ArrayRef, KrishivError> {
+        let c = self.column(i)?;
+        Ok(match c.data_type() {
+            t if is_string(t) => Arc::new(to_utf8(c.as_ref())?),
+            t if is_binary(t) => Arc::new(to_binary(c.as_ref())?),
+            _ => c,
+        })
+    }
+
+    /// Argument `i` as a primitive column of `rows` values.
+    pub(super) fn array<T: ArrowPrimitiveType>(
+        &self,
+        i: usize,
+    ) -> Result<PrimitiveArray<T>, KrishivError> {
+        let c = self.column(i)?;
+        c.as_primitive_opt::<T>().cloned().ok_or_else(|| {
+            internal(format!(
+                "argument {i} of type {} read as {}",
+                c.data_type(),
+                T::DATA_TYPE
+            ))
+        })
+    }
+
+    /// Argument `i` as a boolean column of `rows` values.
+    pub(super) fn booleans(&self, i: usize) -> Result<arrow_array::BooleanArray, KrishivError> {
+        let c = self.column(i)?;
+        c.as_boolean_opt()
+            .cloned()
+            .ok_or_else(|| internal(format!("a boolean argument of type {}", c.data_type())))
     }
 
     /// Argument `i`.

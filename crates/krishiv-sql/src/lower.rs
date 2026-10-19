@@ -340,10 +340,10 @@ impl Lowerer {
                 return Err(unsupported(what, s.span));
             }
         }
-        let Some(from) = from else {
-            return Err(unsupported("SELECT without FROM", s.span));
+        let mut plan = match from {
+            Some(from) => self.from(from)?,
+            None => self.node(PlanNode::OneRowRelation, s.span),
         };
-        let mut plan = self.from(from)?;
         if let Some(w) = &s.selection {
             let predicate = arc(self.expr(w)?);
             plan = self.node(

@@ -6,7 +6,7 @@ use krishiv_types::{DataType, DecimalType};
 use super::{Aggregate, Execution, FunctionDef, Lookup, builtins};
 use crate::scalar::scalar_names;
 use crate::signature::{
-    ArgType, CallTypes, Constant, FunctionKind, InputType, Inputs, SparkProfile,
+    ArgType, CallTypes, Constant, FunctionKind, InputType, Inputs, Operator, SparkProfile,
 };
 
 fn def(name: &str) -> &'static FunctionDef {
@@ -108,7 +108,35 @@ fn kinds_determinism_and_execution() {
         assert_eq!(d.execution, Execution::Aggregate(agg));
         assert!(d.deterministic);
     }
-    assert_eq!(def("coalesce").execution, Execution::Evaluator);
+    for name in [
+        "if",
+        "coalesce",
+        "ifnull",
+        "nvl",
+        "nvl2",
+        "nullif",
+        "nullifzero",
+        "zeroifnull",
+        "nanvl",
+    ] {
+        let d = def(name);
+        assert_eq!(d.execution, Execution::Evaluator, "{name}");
+        assert_eq!(d.kind, FunctionKind::Scalar, "{name}");
+    }
+    for name in ["rand", "randn", "uuid", "shuffle"] {
+        // Not implemented here, but the optimizer's flag comes from Spark.
+        assert_eq!(
+            builtins().spark_function(name).unwrap().deterministic,
+            Some(false),
+            "{name}"
+        );
+    }
+    for name in [
+        "round", "pmod", "hash", "try_add", "greatest", "abs", "sha2",
+    ] {
+        assert!(def(name).deterministic, "{name}");
+        assert_eq!(def(name).execution, Execution::Scalar, "{name}");
+    }
     assert!(def("now").deterministic);
 }
 
@@ -316,4 +344,237 @@ fn legacy_day_counts_and_binary_predicates() {
     let b = ty(DataType::Binary);
     let r = result("startswith", &[b.clone(), b], &[]).unwrap();
     assert_eq!(r, ArgType::new(DataType::Boolean, true));
+}
+
+fn nullable(t: DataType) -> ArgType {
+    ArgType::new(t, true)
+}
+
+/// Spark 4.2 (`df.schema` over `spark.range(1)`, a non-nullable column):
+/// every unary math function is nullable, `pow`/`atan2`/`hypot` are
+/// nullable only with their inputs, `log(base, x)` is always nullable.
+#[test]
+fn unary_math_nullability_matches_spark() {
+    let d = ty(DataType::Double);
+    for name in [
+        "sqrt", "cbrt", "exp", "expm1", "ln", "log10", "log2", "log1p", "sin", "cos", "tan",
+        "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "cot", "csc",
+        "sec", "degrees", "radians", "rint", "sign", "signum", "log",
+    ] {
+        let r = result(name, std::slice::from_ref(&d), &[]).unwrap();
+        assert_eq!(r, nullable(DataType::Double), "{name}");
+    }
+    for name in ["pow", "power", "atan2", "hypot"] {
+        assert_eq!(
+            result(name, &[d.clone(), d.clone()], &[]).unwrap(),
+            d,
+            "{name}"
+        );
+    }
+    assert_eq!(result("pi", &[], &[]).unwrap(), d);
+}
+
+#[test]
+fn math_signatures() {
+    let (d, i, l) = (
+        ty(DataType::Double),
+        ty(DataType::Integer),
+        ty(DataType::Long),
+    );
+    // `double` functions are NULL outside their domain; `pow` only for NULLs.
+    assert_eq!(
+        result("sqrt", std::slice::from_ref(&d), &[]).unwrap(),
+        nullable(DataType::Double)
+    );
+    assert_eq!(result("pow", &[d.clone(), d.clone()], &[]).unwrap(), d);
+    assert_eq!(
+        result("hypot", &[d.clone(), nullable(DataType::Double)], &[]).unwrap(),
+        nullable(DataType::Double)
+    );
+    assert_eq!(result("pi", &[], &[]).unwrap(), d);
+    assert_eq!(
+        def("sqrt").inputs,
+        Inputs::Expects(vec![InputType::Exact(DataType::Double)])
+    );
+    // `round`: a decimal follows the (folded) scale, anything else keeps
+    // its type; always nullable.
+    let scale = |n: i64| [None, Some(Constant::Integral(n))];
+    let r = result("round", &[ty(dec(2, 1)), i.clone()], &scale(0)).unwrap();
+    assert_eq!(r, nullable(dec(2, 0)));
+    let r = result("bround", &[ty(dec(5, 4)), i.clone()], &scale(2)).unwrap();
+    assert_eq!(r, nullable(dec(4, 2)));
+    let r = result("round", &[i.clone(), i.clone()], &scale(-1)).unwrap();
+    assert_eq!(r, nullable(DataType::Integer));
+    let r = result(
+        "round",
+        &[ty(dec(2, 1)), i.clone()],
+        &[None, Some(Constant::Fractional(1))],
+    );
+    assert_eq!(r.unwrap(), nullable(dec(3, 1)));
+    let err = result("round", &[ty(dec(2, 1)), i.clone()], &[]).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::NonFoldableArgument);
+    // `ceil`/`floor`: integral and floating input give `bigint`; with a scale
+    // only an `int` literal is folded.
+    assert_eq!(
+        result("ceil", std::slice::from_ref(&l), &[]).unwrap(),
+        nullable(DataType::Long)
+    );
+    let r = result("floor", &[ty(dec(5, 4)), i.clone()], &scale(3)).unwrap();
+    assert_eq!(r, nullable(dec(5, 3)));
+    let err = result("ceil", &[ty(dec(5, 4)), l], &scale(3)).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::NonFoldableArgument);
+    let built =
+        |name: &str, args: &[ArgType]| def(name).inputs.expected(&CallTypes::new(args, &[]));
+    assert_eq!(
+        built("ceil", &[ty(DataType::Byte)]),
+        Some(vec![InputType::Exact(DataType::Long), InputType::Any])
+    );
+    assert_eq!(
+        built("ceil", &[ty(DataType::Double)]),
+        Some(vec![InputType::Exact(DataType::Double), InputType::Any])
+    );
+    // `greatest` is NULL only when every argument may be; `abs` keeps its
+    // argument's type and nullability.
+    let r = result("greatest", &[i.clone(), nullable(DataType::Integer)], &[]).unwrap();
+    assert_eq!(r, i);
+    assert_eq!(def("greatest").inputs, Inputs::CommonNoStrings);
+    assert_eq!(
+        result("abs", &[nullable(DataType::Short)], &[]).unwrap(),
+        nullable(DataType::Short)
+    );
+    assert_eq!(
+        result("abs", &[null_ty()], &[]).unwrap(),
+        nullable(DataType::Double)
+    );
+}
+
+#[test]
+fn arithmetic_signatures_follow_the_operators() {
+    let (i, l) = (ty(DataType::Integer), ty(DataType::Long));
+    // Always nullable: overflow and zero divisors are NULL.
+    assert_eq!(
+        result("try_add", &[l.clone(), l], &[]).unwrap(),
+        nullable(DataType::Long)
+    );
+    assert_eq!(
+        result("mod", &[i.clone(), i.clone()], &[]).unwrap(),
+        nullable(DataType::Integer)
+    );
+    assert_eq!(
+        result("pmod", &[i.clone(), i], &[]).unwrap(),
+        nullable(DataType::Integer)
+    );
+    assert_eq!(
+        result(
+            "try_divide",
+            &[ty(DataType::Double), ty(DataType::Double)],
+            &[]
+        )
+        .unwrap(),
+        nullable(DataType::Double)
+    );
+    // Decimals take the operator's precision rules, and the setting.
+    let args = [ty(dec(10, 2)), ty(dec(10, 2))];
+    assert_eq!(result("try_add", &args, &[]).unwrap(), nullable(dec(11, 2)));
+    assert_eq!(
+        result("try_multiply", &args, &[]).unwrap(),
+        nullable(dec(21, 4))
+    );
+    let divide = |args: &[ArgType], loss: bool| {
+        (def("try_divide").result)(&CallTypes::new(args, &[]).with_decimal_loss(loss)).unwrap()
+    };
+    assert_eq!(divide(&args, true), nullable(dec(23, 13)));
+    // Past 38 digits the setting decides how the scale is cut.
+    let wide = [ty(dec(30, 10)), ty(dec(30, 10))];
+    assert_ne!(divide(&wide, true), divide(&wide, false));
+    assert_eq!(def("try_add").inputs, Inputs::TryOperator(Operator::Add));
+    assert_eq!(def("mod").inputs, Inputs::Operator(Operator::Remainder));
+}
+
+#[test]
+fn hash_signatures() {
+    let (s, b) = (ty(DataType::String), ty(DataType::Binary));
+    assert_eq!(
+        result("hash", &[null_ty(), s.clone()], &[]).unwrap(),
+        ty(DataType::Integer)
+    );
+    assert_eq!(
+        result("xxhash64", std::slice::from_ref(&s), &[]).unwrap(),
+        ty(DataType::Long)
+    );
+    assert_eq!(def("hash").inputs, Inputs::Any);
+    // The digests take `binary`; NULL only for NULL input (`sha2` also for
+    // an unknown length).
+    assert_eq!(
+        def("md5").inputs,
+        Inputs::Expects(vec![InputType::Exact(DataType::Binary)])
+    );
+    assert_eq!(
+        result("md5", std::slice::from_ref(&b), &[]).unwrap(),
+        ty(DataType::String)
+    );
+    assert_eq!(
+        result("sha1", &[nullable(DataType::Binary)], &[]).unwrap(),
+        nullable(DataType::String)
+    );
+    assert_eq!(
+        result("crc32", std::slice::from_ref(&b), &[]).unwrap(),
+        ty(DataType::Long)
+    );
+    assert_eq!(
+        result("sha2", &[b, ty(DataType::Integer)], &[]).unwrap(),
+        nullable(DataType::String)
+    );
+}
+
+#[test]
+fn conditional_signatures() {
+    let (i, l, s) = (
+        ty(DataType::Integer),
+        ty(DataType::Long),
+        ty(DataType::String),
+    );
+    // `if` and `nvl2` are NULL when a branch may be.
+    let branches = [
+        ty(DataType::Boolean),
+        i.clone(),
+        nullable(DataType::Integer),
+    ];
+    assert_eq!(
+        result("if", &branches, &[]).unwrap(),
+        nullable(DataType::Integer)
+    );
+    assert_eq!(result("nvl2", &[s, i.clone(), l.clone()], &[]).unwrap(), i);
+    assert_eq!(
+        def("if").inputs,
+        Inputs::Leading(vec![InputType::Strict(DataType::Boolean)])
+    );
+    // `ifnull`/`nvl` are `coalesce`.
+    assert_eq!(
+        result("nvl", &[nullable(DataType::Long), l.clone()], &[]).unwrap(),
+        l
+    );
+    assert_eq!(def("ifnull").inputs, Inputs::Common);
+    // `nullif` keeps the first argument's type and may be NULL; `zeroifnull`
+    // never is.
+    assert_eq!(
+        result("nullif", &[i.clone(), l], &[]).unwrap(),
+        nullable(DataType::Integer)
+    );
+    assert_eq!(def("nullifzero").inputs, Inputs::Comparable { zero: true });
+    assert_eq!(
+        result("zeroifnull", std::slice::from_ref(&i), &[]).unwrap(),
+        i
+    );
+    // `nanvl` is `float` for two floats, else `double`.
+    let f = ty(DataType::Float);
+    let built = |args: &[ArgType]| def("nanvl").inputs.expected(&CallTypes::new(args, &[]));
+    assert_eq!(
+        built(&[f.clone(), f]),
+        Some(vec![InputType::Exact(DataType::Float)])
+    );
+    assert_eq!(
+        built(&[i.clone(), i]),
+        Some(vec![InputType::Exact(DataType::Double)])
+    );
 }

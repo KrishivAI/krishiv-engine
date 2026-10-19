@@ -26,11 +26,11 @@ pub(super) struct Spec {
 
 type Rule = fn(&CallTypes<'_>) -> Result<ArgType, KrishivError>;
 
-fn exact(t: DataType) -> InputType {
+pub(super) fn exact(t: DataType) -> InputType {
     InputType::Exact(t)
 }
 
-fn scalar(names: &[&'static str], inputs: &Inputs, result: Rule) -> Vec<Spec> {
+pub(super) fn scalar(names: &[&'static str], inputs: &Inputs, result: Rule) -> Vec<Spec> {
     names
         .iter()
         .map(|name| Spec {
@@ -55,15 +55,15 @@ fn aggregate(name: &'static str, inputs: Inputs, result: Rule, agg: Aggregate) -
 
 // ---- result rules ----
 
-fn typed(t: DataType, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn typed(t: DataType, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(t, c.any_nullable()))
 }
 
-fn string(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn string(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::String, c)
 }
 
-fn int(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn int(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Integer, c)
 }
 
@@ -342,32 +342,13 @@ fn aggregates() -> Vec<Spec> {
     ]
 }
 
-// ---- conditional (executed lazily by the expression evaluator) ----
-
-/// `coalesce`: the arguments share one type after their casts; NULL only
-/// when every argument may be.
-fn coalesce(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    Ok(ArgType {
-        data_type: c.args().iter().find_map(|t| t.data_type.clone()),
-        nullable: c.args().iter().all(|t| t.nullable),
-    })
-}
-
-fn conditional() -> Vec<Spec> {
-    vec![Spec {
-        name: "coalesce",
-        kind: FunctionKind::Scalar,
-        inputs: Inputs::Common,
-        result: coalesce,
-        execution: Execution::Evaluator,
-    }]
-}
-
 /// Every implemented function.
 pub(super) fn specs() -> Vec<Spec> {
     let mut out = strings();
     out.extend(datetime());
     out.extend(aggregates());
-    out.extend(conditional());
+    out.extend(super::conditional::specs());
+    out.extend(super::math::specs());
+    out.extend(super::hashing::specs());
     out
 }
