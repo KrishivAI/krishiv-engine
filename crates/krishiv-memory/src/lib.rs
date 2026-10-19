@@ -32,8 +32,8 @@
 //! [`SpillOwner::pending`] (atomic loads) and services spill requests on its
 //! own task. A sync operator whose `try_grow` fails returns `NeedMemory`
 //! with its state unchanged; the driver then calls [`SpillOwner::reserve`],
-//! which spills the driver's own consumers first (the arbitrator never asks
-//! the requester's driver), then arbitrates while still servicing requests
+//! which spills the driver's own consumers first (the arbitrator asks the
+//! requester's driver only after every other victim), then arbitrates while still servicing requests
 //! from other rounds. The bytes it obtained are parked as grant credit on
 //! the consumer's [`ConsumerHandle`] and taken by the operator's retried
 //! `try_grow`, so the retry never reserves twice.
@@ -79,9 +79,9 @@ pub use clock::{Clock, SystemClock};
 pub use consumer::ConsumerHandle;
 pub use error::MemoryError;
 pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
-pub use pool::{ArbitrationStats, MemoryConfig, TreePool};
+pub use pool::{ArbitrationStats, DEFAULT_SPILL_SCRATCH_RESERVE, MemoryConfig, TreePool};
 pub use reservation::Reservation;
-pub use spill::{OwnerId, SpillOwner, SpillSignal, SpillTicket, Spillable};
+pub use spill::{OwnerId, SpillOwner, SpillService, SpillSignal, SpillTicket, Spillable};
 pub use spillfile::{
     SpillCodec, SpillConfig, SpillError, SpillFile, SpillManager, SpillReader, SpillScope,
     SpillWriter,
@@ -93,7 +93,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Identifies a registered consumer. Ids are unique in the process, so an
 /// id used with the wrong pool is reported, never charged to another
 /// consumer.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ConsumerId(u64);
 
 /// A memory pool in the tree (spec 13 §3). [`TreePool`] is the
@@ -115,10 +115,21 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// [`MemoryError`] if a pool limit refuses the bytes, the query was
     /// aborted, or `id` is not registered with this pool.
     fn try_reserve(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError>;
+    /// [`try_reserve`](Self::try_reserve) for a spill writer's scratch
+    /// memory: it may also take the pools' spill-scratch floors, and it is
+    /// granted exactly. Only for memory freed again once the spill's I/O
+    /// ends ([`Reservation::for_spill_scratch`]).
+    ///
+    /// # Errors
+    /// As [`try_reserve`](Self::try_reserve).
+    fn try_reserve_scratch(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+        self.try_reserve(id, bytes)
+    }
     /// Slow path: may run arbitration. Called only by drivers between
     /// batches or from async code, never with a sync lock held; any executor
     /// works (deadlines use the pool's [`Clock`]). The arbitrator never asks the requester
-    /// (or its driver) to spill: drivers use [`SpillOwner::reserve`], which
+    /// to spill, and its driver's other consumers last (the driver services
+    /// them while it waits): drivers use [`SpillOwner::reserve`], which
     /// spills the driver's own consumers first. Consumers outside a query
     /// (external pools, the root) get the fast path only.
     ///
@@ -130,6 +141,21 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
         id: ConsumerId,
         bytes: usize,
     ) -> BoxFuture<'a, Result<(), MemoryError>>;
+    /// [`reserve`](Self::reserve) without the abort phase: when spills
+    /// cannot make room, fails with [`MemoryError::Exhausted`] instead of
+    /// aborting a query. For requests with a cheaper fallback than an abort
+    /// (a grace hash join partition that can be repartitioned instead).
+    ///
+    /// # Errors
+    /// [`MemoryError`] if spilling could not make room or the query was
+    /// aborted.
+    fn reserve_without_abort<'a>(
+        &'a self,
+        id: ConsumerId,
+        bytes: usize,
+    ) -> BoxFuture<'a, Result<(), MemoryError>> {
+        Box::pin(std::future::ready(self.try_reserve(id, bytes)))
+    }
     /// Returns up to `bytes` reserved by `id` (clamped to what it holds).
     fn release(&self, id: ConsumerId, bytes: usize);
     /// Moves `bytes` held by consumer `from` to consumer `to` of this pool

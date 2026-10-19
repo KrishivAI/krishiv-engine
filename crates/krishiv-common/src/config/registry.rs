@@ -21,6 +21,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_RESERVATION_QUANTUM,
     &MEMORY_SPILL_WAIT_TIMEOUT,
     &MEMORY_ABORT_RELEASE_TIMEOUT,
+    &MEMORY_SPILL_SCRATCH_RESERVE,
     &SPILL_DIR,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
@@ -113,6 +114,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.memory.abortReleaseTimeout",
         &MEMORY_ABORT_RELEASE_TIMEOUT,
+    ),
+    (
+        "krishiv.memory.spillScratchReserve",
+        &MEMORY_SPILL_SCRATCH_RESERVE,
     ),
     (
         "krishiv.sql.shuffle.partitionsHint",
@@ -250,8 +255,23 @@ pub static MEMORY_SPILL_WAIT_TIMEOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.memory.spillWaitTimeout",
     value_type: ValueType::Duration,
     default: Some(ConfigValue::Duration(Duration::from_secs(2))),
-    doc: "How long the memory arbitrator waits for requested spills to free memory before it \
-          aborts the query furthest above its fair share of memory.",
+    doc: "How long the memory arbitrator waits for a consumer asked to spill to begin spilling \
+          before it gives up on it and aborts the query furthest above its fair share of memory. \
+          A spill that has begun is awaited to its end.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Memory kept for spill writers' scratch buffers in every limited pool.
+pub static MEMORY_SPILL_SCRATCH_RESERVE: ConfigEntry = ConfigEntry {
+    key: "krishiv.memory.spillScratchReserve",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(512 * 1024)),
+    doc: "Memory at the top of every limited memory pool (at most 1/8 of its limit) that only \
+          spill writers' scratch buffers may use, so a full pool can still fund the spill that \
+          frees it. Shared by every spill under the pool and released when each write ends. \
+          `0` disables it.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
