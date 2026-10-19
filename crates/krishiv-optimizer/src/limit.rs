@@ -69,7 +69,11 @@ pub(crate) fn max_rows(plan: &LogicalPlan) -> Option<u64> {
         | PlanNode::Sort { input, .. }
         | PlanNode::SubqueryAlias { input, .. }
         | PlanNode::WithCte { input, .. }
-        | PlanNode::Shift { input, .. } => max_rows(input),
+        | PlanNode::Shift { input, .. }
+        | PlanNode::JoinHint { input, .. } => max_rows(input),
+        PlanNode::Union { inputs, .. } => inputs
+            .iter()
+            .try_fold(0_u64, |n, i| n.checked_add(max_rows(i)?)),
         PlanNode::Aggregate {
             grouping: Grouping::GroupBy(keys),
             ..

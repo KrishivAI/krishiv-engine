@@ -291,6 +291,11 @@ fn builtin(
             let l = args.pop().ok_or_else(arity)?;
             arith::binary(b, l, r, out, f.nullable, env)?
         }
+        (Builtin::IntegralDivide, 2) => {
+            let r = args.pop().ok_or_else(arity)?;
+            let l = args.pop().ok_or_else(arity)?;
+            arith::integral_divide(l, r, env)?
+        }
         (Builtin::Negative, 1) => arith::negative(args.pop().ok_or_else(arity)?, env)?,
         (Builtin::In, n) if n >= 2 => cond::in_list(args, env)?,
         (Builtin::Between, 3) => {

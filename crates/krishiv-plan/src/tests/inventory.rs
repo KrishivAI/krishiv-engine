@@ -35,6 +35,10 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::WithCte { .. } => "PlanNode::WithCte",
         PlanNode::CteRef(_) => "PlanNode::CteRef",
         PlanNode::Shift { .. } => "PlanNode::Shift",
+        PlanNode::Hint { .. } => "PlanNode::Hint",
+        PlanNode::JoinHint { .. } => "PlanNode::JoinHint",
+        PlanNode::Union { .. } => "PlanNode::Union",
+        PlanNode::Distinct { .. } => "PlanNode::Distinct",
     });
     plan.for_each_expr(&mut |e| expr_kinds(e, out));
     plan.for_each_child(&mut |c| kinds(c, out));
