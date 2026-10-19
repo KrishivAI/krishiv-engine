@@ -79,6 +79,8 @@
 //! | `PlanNode::JoinHint` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
+//! | `PlanNode::SetOp` | U | - | - |
+//! | `PlanNode::ReplicateRows` | R | - | - |
 //! | `ExprNode::Column` | U | all | `col`, `df["a"]` |
 //! | `ExprNode::Literal` | U, R | all | `lit` |
 //! | `ExprNode::Star` | U | Q1, Q4, Q13, Q21, Q22 | `select("*")` |
@@ -92,7 +94,7 @@
 //! | `ResolvedExpr::Alias` | R | - | - |
 //!
 //! Not in v1 (spec 13 §9; added with the features that need them):
-//! `Window`, `SetOp`, `Generate`, `Repartition`, `Hint`, `Pivot`, `Command`,
+//! `Window`, `Generate`, `Repartition`, `Hint`, `Pivot`, `Command`,
 //! `Extension`, `ToDF`, `Offset`, `Deduplicate`, `LocalRelation` and `Range`
 //! relations; lambda, window, extract-value and extension expressions.
 
@@ -121,6 +123,6 @@ pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use plan::{
     Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan, Plan,
-    PlanNode, ReadSource, Scan, SqlArgs, TableVersion,
+    PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TableVersion,
 };
 pub use walk::{MAX_DEPTH, check_depth};

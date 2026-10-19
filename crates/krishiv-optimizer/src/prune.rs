@@ -83,7 +83,8 @@ impl Graph {
             PlanNode::Filter { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
-            | PlanNode::JoinHint { input, .. } => {
+            | PlanNode::JoinHint { input, .. }
+            | PlanNode::ReplicateRows { input, .. } => {
                 let mut need = req.clone();
                 p.for_each_expr(&mut |e| references_into(e, &mut need));
                 child(input, Some(need));

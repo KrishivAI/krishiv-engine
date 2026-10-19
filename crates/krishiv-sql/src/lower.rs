@@ -225,31 +225,42 @@ impl Lowerer {
                 _ => return Err(unsupported("FROM with several SELECT bodies", f.span)),
             },
             SetExprKind::SetOp {
-                op: SetOperator::Union,
+                op,
                 quantifier,
                 left,
                 right,
             } => {
-                let inputs = vec![
-                    arc(self.deeper(|l| l.body(left))?),
-                    arc(self.deeper(|l| l.body(right))?),
-                ];
-                let union = self.node(
-                    PlanNode::Union {
-                        inputs,
-                        by_name: false,
-                        allow_missing_columns: false,
+                let left = arc(self.deeper(|l| l.body(left))?);
+                let right = arc(self.deeper(|l| l.body(right))?);
+                let all = *quantifier == Some(SetQuantifier::All);
+                let op = match op {
+                    SetOperator::Union => {
+                        let union = self.node(
+                            PlanNode::Union {
+                                inputs: vec![left, right],
+                                by_name: false,
+                                allow_missing_columns: false,
+                            },
+                            body.span,
+                        );
+                        return Ok(if all {
+                            union
+                        } else {
+                            self.node(PlanNode::Distinct { input: arc(union) }, body.span)
+                        });
+                    }
+                    SetOperator::Intersect => krishiv_plan::SetOperation::Intersect,
+                    SetOperator::Except => krishiv_plan::SetOperation::Except,
+                };
+                self.node(
+                    PlanNode::SetOp {
+                        left,
+                        right,
+                        op,
+                        all,
                     },
                     body.span,
-                );
-                if *quantifier == Some(SetQuantifier::All) {
-                    union
-                } else {
-                    self.node(PlanNode::Distinct { input: arc(union) }, body.span)
-                }
-            }
-            SetExprKind::SetOp { .. } => {
-                return Err(unsupported("INTERSECT and EXCEPT", body.span));
+                )
             }
             SetExprKind::Values(_) => return Err(unsupported("VALUES", body.span)),
         })

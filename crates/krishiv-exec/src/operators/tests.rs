@@ -722,3 +722,110 @@ fn scan_reports_inconsistent_state_as_internal_errors() {
     let mut wrong: LocalState = Box::new(());
     assert!(scan.next_batch(&mut wrong, &global).is_err());
 }
+
+/// Column `i` of the batch as a replication count.
+#[derive(Debug)]
+struct Column(usize);
+
+impl ScalarExpr for Column {
+    fn data_type(&self) -> DataType {
+        DataType::Int64
+    }
+
+    fn nullable(&self) -> bool {
+        true
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> crate::error::Result<ArrayRef> {
+        Ok(Arc::clone(batch.column(self.0)))
+    }
+}
+
+/// Every output batch of `op` over `input`, feeding it until it asks for
+/// more input.
+fn replicate_all(op: &ReplicateRows, input: &Batch, local: &mut LocalState) -> Vec<Batch> {
+    let mut out = Vec::new();
+    loop {
+        match op
+            .execute(input, local)
+            .unwrap_or_else(|e| unreachable!("{e}"))
+        {
+            OperatorOutput::HaveMoreOutput(b) => out.push(b),
+            OperatorOutput::NeedMoreInput(b) => {
+                out.extend(b);
+                return out;
+            }
+            other => unreachable!("unexpected {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn replicate_rows_repeats_each_row_its_count_times() {
+    let (_root, ctx) = ctx_with(ExecConfig {
+        batch_size: 3,
+        ..ExecConfig::default()
+    });
+    let op = ReplicateRows::new(schema(), Arc::new(Column(0)));
+    assert_eq!(op.name(), "ReplicateRows");
+    assert_eq!(op.schema(), schema());
+    let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    // NULL, 0 and negative counts drop the row; 4 copies span batches of 3.
+    let input = batch(&[Some(2), None, Some(0), Some(4), Some(-1), Some(1)]);
+    let out = replicate_all(&op, &input, &mut local);
+    assert_eq!(
+        out.iter().map(Batch::num_rows).collect::<Vec<_>>(),
+        [3, 3, 1]
+    );
+    let rows: Vec<Option<i64>> = out.iter().flat_map(col_a).collect();
+    assert_eq!(
+        rows,
+        [2, 2, 4, 4, 4, 4, 1].map(Some),
+        "each row its count times, in order"
+    );
+    let s: Vec<String> = out
+        .iter()
+        .flat_map(|b| {
+            b.data()
+                .column(1)
+                .as_string::<i32>()
+                .iter()
+                .map(|v| v.unwrap_or_default().to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(s, ["s2", "s2", "s4", "s4", "s4", "s4", "s1"]);
+    // The next input starts afresh; an empty one and one of only zero
+    // counts produce nothing.
+    assert!(replicate_all(&op, &ints(&[]), &mut local).is_empty());
+    assert!(replicate_all(&op, &ints(&[0, -5]), &mut local).is_empty());
+    let out = replicate_all(&op, &ints(&[1]), &mut local);
+    assert_eq!(out.iter().flat_map(col_a).collect::<Vec<_>>(), [Some(1)]);
+}
+
+#[test]
+fn replicate_rows_keeps_weights_and_rejects_non_bigint_counts() {
+    let (_root, ctx) = ctx();
+    let op = ReplicateRows::new(schema(), Arc::new(Column(0)));
+    let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let out = replicate_all(&op, &weighted(&[2, 1], &[5, -1]), &mut local);
+    let [b] = out.as_slice() else {
+        unreachable!("one batch: {out:?}")
+    };
+    assert_eq!(col_a(b), [2, 2, 1].map(Some));
+    assert_eq!(
+        b.weights(),
+        &Weights::Column(Int64Array::from(vec![5, 5, -1]))
+    );
+    let out = replicate_all(&op, &ints(&[2]), &mut local);
+    assert_eq!(out[0].weights(), &Weights::Const(1));
+    let strings = ReplicateRows::new(schema(), Arc::new(Column(1)));
+    let mut local = strings
+        .local_state(&ctx)
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let err = strings
+        .execute(&ints(&[1]), &mut local)
+        .err()
+        .unwrap_or_else(|| unreachable!("an error"));
+    assert_eq!(err.error_class(), ErrorClass::InternalError);
+}
