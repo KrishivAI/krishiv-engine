@@ -19,7 +19,7 @@ use xtask::layering;
 use xtask::policy::{self, DiffArgs};
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE | wheel-sizes DIR [--budgets FILE] [--write] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse]>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,6 +33,9 @@ fn main() -> ExitCode {
         ["golden", flags @ ..] => run_golden(flags),
         ["registry-coverage"] => registry_coverage::run(&workspace_root()),
         ["budgets", flags @ ..] => run_budgets(flags),
+        ["wheel-sizes", "--compare", file, flags @ ..] => {
+            run_wheel_sizes_compare(Path::new(file), flags)
+        }
         ["wheel-sizes", dir, flags @ ..] => run_wheel_sizes(Path::new(dir), flags),
         ["setup"] => dev::run_setup_full(&workspace_root(), false),
         ["setup", "--install"] => dev::run_setup_full(&workspace_root(), true),
@@ -205,18 +208,28 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// `wheel-sizes DIR [--budgets FILE] [--write]`: compares (or records) the
-/// size of every wheel in `DIR` with the `wheel_bytes` of `budgets.json`
-/// (or `FILE`) (P2-T103).
+/// `wheel-sizes DIR [--budgets FILE] [--write | --measure-only OUT]`: compares
+/// (or records) the size of every wheel in `DIR` with the `wheel_bytes` of
+/// `budgets.json` (or `FILE`) (P2-T103). `--measure-only OUT` writes the
+/// measured sizes as JSON to `OUT` and gates nothing: the wheels workflow
+/// uploads it, and the label-aware gate in pr-policy.yml compares it with
+/// `wheel-sizes --compare OUT`, so a label added later can approve growth.
 fn run_wheel_sizes(dir: &Path, flags: &[&str]) -> Result<(), String> {
     let (mut write, mut path) = (false, workspace_root().join("budgets.json"));
+    let mut measure_only: Option<PathBuf> = None;
     let mut it = flags.iter();
     while let Some(f) = it.next() {
         match *f {
             "--write" => write = true,
             "--budgets" => path = PathBuf::from(it.next().ok_or_else(|| USAGE.to_owned())?),
+            "--measure-only" => {
+                measure_only = Some(PathBuf::from(it.next().ok_or_else(|| USAGE.to_owned())?));
+            }
             _ => return Err(USAGE.to_owned()),
         }
+    }
+    if write && measure_only.is_some() {
+        return Err(USAGE.to_owned());
     }
     let mut measured = std::collections::BTreeMap::new();
     let entries =
@@ -243,6 +256,12 @@ fn run_wheel_sizes(dir: &Path, flags: &[&str]) -> Result<(), String> {
     if measured.is_empty() {
         return Err(format!("no wheels in {}", dir.display()));
     }
+    if let Some(out) = measure_only {
+        let json = serde_json::to_string_pretty(&measured).map_err(|e| e.to_string())? + "\n";
+        std::fs::write(&out, json).map_err(|e| format!("cannot write {}: {e}", out.display()))?;
+        println!("measured {} wheels into {}", measured.len(), out.display());
+        return Ok(());
+    }
     let mut base = read_budgets(&path)?;
     if write {
         // Merge: recording a subset of the targets keeps the others.
@@ -254,7 +273,37 @@ fn run_wheel_sizes(dir: &Path, flags: &[&str]) -> Result<(), String> {
         println!("wrote {}", path.display());
         return Ok(());
     }
-    let cmp = xtask::wheels::compare(&base.wheel_bytes.unwrap_or_default(), &measured);
+    gate_wheel_sizes(&base.wheel_bytes.unwrap_or_default(), &measured)
+}
+
+/// `wheel-sizes --compare FILE [--budgets FILE]`: gates the sizes measured by
+/// `--measure-only` (`FILE`) against the recorded budgets.
+fn run_wheel_sizes_compare(file: &Path, flags: &[&str]) -> Result<(), String> {
+    let mut path = workspace_root().join("budgets.json");
+    let mut it = flags.iter();
+    while let Some(f) = it.next() {
+        match *f {
+            "--budgets" => path = PathBuf::from(it.next().ok_or_else(|| USAGE.to_owned())?),
+            _ => return Err(USAGE.to_owned()),
+        }
+    }
+    let text = std::fs::read_to_string(file)
+        .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+    let measured: std::collections::BTreeMap<String, u64> =
+        serde_json::from_str(&text).map_err(|e| format!("bad {}: {e}", file.display()))?;
+    if measured.is_empty() {
+        return Err(format!("no wheel sizes in {}", file.display()));
+    }
+    let base = read_budgets(&path)?;
+    gate_wheel_sizes(&base.wheel_bytes.unwrap_or_default(), &measured)
+}
+
+/// Prints the comparison; a violation fails unless `BUDGET_APPROVED=1`.
+fn gate_wheel_sizes(
+    recorded: &std::collections::BTreeMap<String, u64>,
+    measured: &std::collections::BTreeMap<String, u64>,
+) -> Result<(), String> {
+    let cmp = xtask::wheels::compare(recorded, measured);
     let summary = format!("## Wheel sizes\n\n{}", cmp.markdown);
     println!("{summary}");
     append_step_summary(&summary);
