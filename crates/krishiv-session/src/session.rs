@@ -509,6 +509,7 @@ impl Session {
             io: self.state.io.context(),
             config: Arc::clone(&config),
             slots: u64::try_from(self.state.executor.parallelism().max(1)).unwrap_or(1),
+            runtime: self.state.executor.io_handle().clone(),
         };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),

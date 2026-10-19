@@ -121,6 +121,8 @@ pub(crate) struct FileScans {
     pub(crate) config: Arc<Config>,
     /// The executor's drivers, for split planning.
     pub(crate) slots: u64,
+    /// The executor's I/O runtime, which opens the file tables.
+    pub(crate) runtime: tokio::runtime::Handle,
 }
 
 /// The session catalog as one query sees it: the catalog resolver and the
@@ -272,8 +274,9 @@ impl QueryCatalog {
     }
 }
 
-/// [`FileTable::open`], on the caller's task: every action runs it on the
-/// session's executor, which provides the I/O runtime the footer reads use.
+/// [`FileTable::open`] on the executor's I/O runtime: footer reads are
+/// object-store requests, which belong there and not on the compute
+/// runtime. Dropping the returned future aborts the open.
 async fn open_table(
     format: Arc<dyn krishiv_io::FileFormat>,
     scans: FileScans,
@@ -281,16 +284,44 @@ async fn open_table(
     files: Vec<krishiv_io::FileRef>,
     options: krishiv_io::FormatOptions,
 ) -> Result<FileTable, KrishivError> {
-    FileTable::open(
-        format,
-        scans.io,
-        table,
-        files,
-        options,
-        &scans.config,
-        scans.slots,
-    )
+    let runtime = scans.runtime.clone();
+    run_on(&runtime, async move {
+        FileTable::open(
+            format,
+            scans.io,
+            table,
+            files,
+            options,
+            &scans.config,
+            scans.slots,
+        )
+        .await
+    })
     .await
+}
+
+/// Aborts its task when dropped.
+struct AbortGuard<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortGuard<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Runs `work` as a task of `runtime` and waits for it; dropping the
+/// returned future aborts the task.
+async fn run_on<T: Send + 'static>(
+    runtime: &tokio::runtime::Handle,
+    work: impl Future<Output = Result<T, KrishivError>> + Send + 'static,
+) -> Result<T, KrishivError> {
+    let mut guard = AbortGuard(runtime.spawn(work));
+    match (&mut guard.0).await {
+        Ok(result) => result,
+        Err(e) => Err(KrishivError::from(InternalError {
+            message: format!("reading file footers ended without a result: {e}"),
+        })),
+    }
 }
 
 /// The scans of `plan` and of the subqueries in its expressions.
@@ -445,6 +476,33 @@ impl TableProviderResolver for QueryCatalog {
 mod tests {
     use super::*;
     use krishiv_types::DataType;
+
+    #[test]
+    fn work_runs_on_the_given_runtime_and_a_drop_aborts_it() {
+        let io = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("test-io")
+            .enable_all()
+            .build()
+            .unwrap();
+        let name = futures::executor::block_on(run_on(io.handle(), async {
+            Ok(std::thread::current().name().map(str::to_owned))
+        }))
+        .unwrap();
+        assert_eq!(name.as_deref(), Some("test-io"));
+        // Dropping the waiting future aborts a task that never finishes.
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let mut waiting = Box::pin(run_on(io.handle(), async move {
+            let _held = tx;
+            std::future::pending::<Result<(), KrishivError>>().await
+        }));
+        let waker = futures::task::noop_waker();
+        let _ = waiting
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(&waker));
+        drop(waiting);
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(5)).is_err());
+    }
 
     fn files(col: &str) -> TempTable {
         TempTable::Files {

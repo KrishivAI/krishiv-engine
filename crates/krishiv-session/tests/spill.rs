@@ -96,9 +96,8 @@ fn rows(batches: &[RecordBatch]) -> Vec<(i64, i64, i64)> {
 /// Every file or directory below the per-query directories of `root`.
 fn leftovers(root: &Path) -> Vec<String> {
     let mut out = Vec::new();
-    let Ok(sessions) = std::fs::read_dir(root) else {
-        return out;
-    };
+    // A missing root is a failure, not a clean directory.
+    let sessions = std::fs::read_dir(root).expect("the spill root exists");
     for s in sessions.flatten().filter(|s| s.path().is_dir()) {
         for q in std::fs::read_dir(s.path()).unwrap().flatten() {
             out.push(q.path().display().to_string());
@@ -176,4 +175,11 @@ fn df_write_under_a_limit_spills_too() {
         u64::try_from(KEYS).unwrap()
     );
     wait_until_clean(&root(&dir));
+}
+
+#[test]
+#[should_panic(expected = "the spill root exists")]
+fn a_missing_spill_root_fails_the_cleanup_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let _ = leftovers(&root(&dir));
 }
