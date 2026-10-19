@@ -25,6 +25,9 @@ const ALLOCATOR: &str = "system";
 /// The `krishiv._native` module.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // First, so a CPU older than the build targets raises instead of dying with SIGILL.
+    krishiv_common::cpu::check()
+        .map_err(|e| pyo3::exceptions::PyImportError::new_err(e.to_string()))?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__allocator__", ALLOCATOR)?;
     m.add_class::<stream::ArrowStream>()?;

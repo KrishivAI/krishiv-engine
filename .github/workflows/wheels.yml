@@ -7,6 +7,15 @@ name: Wheels
 # arm64. mimalloc is linked into every wheel (P2-T012). Nothing is published
 # (P2-T147).
 #
+# CPU level: the x86_64 wheels are built for x86-64-v3 and the Linux aarch64
+# wheels for neoverse-n1, through RUSTFLAGS on the maturin step only (never in
+# .cargo/config.toml, so development, tests, regular CI and the benchmark jobs
+# keep the default target). The extra `linux-x86_64-compat` job builds the
+# plain x86-64 baseline wheel under the distribution name `krishiv-compat`
+# (same `krishiv` import name); it is uploaded as `compat-wheel-*`, outside the
+# `wheels-*` set the size budgets measure. The module checks the CPU at import
+# (krishiv_common::cpu) and points at that package.
+#
 # Called by ci.yml for pull requests that touch the Python package, the
 # extension crate or the packaging, and by nightly.yml; runnable by hand.
 # The size of every wheel is measured by the `sizes` job (artifact
@@ -30,6 +39,9 @@ env:
   # maturin build flags per flavour; `dist` is the LTO + stripped profile of the workspace Cargo.toml.
   ABI3_ARGS: --profile dist --locked
   FT_ARGS: --profile dist --locked --no-default-features --features mimalloc
+  # The shipped CPU levels (see README.md, "Supported CPUs").
+  X86_RUSTFLAGS: -C target-cpu=x86-64-v3
+  ARM_RUSTFLAGS: -C target-cpu=neoverse-n1
 
 jobs:
   # manylinux_2_28 and musllinux_1_2 on x86_64. The wheels are built in the
@@ -54,6 +66,8 @@ jobs:
           persist-credentials: false
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        env:
+          RUSTFLAGS: ${{ env.X86_RUSTFLAGS }}
         with:
           working-directory: python
           target: x86_64
@@ -88,6 +102,47 @@ jobs:
           path: dist/*.whl
           if-no-files-found: error
 
+  # The compat wheel: the plain x86-64 baseline (no RUSTFLAGS), distribution
+  # name `krishiv-compat`, for CPUs without the x86-64-v3 features. Only the
+  # abi3 manylinux flavour is built. The name is set on a CI checkout; the
+  # import name stays `krishiv`.
+  linux-x86_64-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    name: wheel (manylinux x86_64 compat)
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Name the distribution krishiv-compat
+        run: |
+          sed -i 's/^name = "krishiv"$/name = "krishiv-compat"/' python/pyproject.toml
+          grep -qx 'name = "krishiv-compat"' python/pyproject.toml
+      - name: Build
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          target: x86_64
+          manylinux: 2_28
+          args: ${{ env.ABI3_ARGS }} --out ../dist
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Test
+        run: |
+          ls dist | grep -q '^krishiv_compat-'
+          for v in 3.11 3.14; do
+            uv python install "$v"
+            .github/scripts/wheel-test.sh "$(uv python find "$v")" dist abi3
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compat-wheel-manylinux-x86_64
+          path: dist/*.whl
+          if-no-files-found: error
+
   # manylinux_2_28 aarch64, built and tested natively on an Arm runner.
   linux-aarch64:
     runs-on: ubuntu-24.04-arm
@@ -107,6 +162,8 @@ jobs:
           persist-credentials: false
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        env:
+          RUSTFLAGS: ${{ env.ARM_RUSTFLAGS }}
         with:
           working-directory: python
           target: aarch64

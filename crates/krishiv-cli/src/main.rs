@@ -54,6 +54,8 @@ enum Command {
 }
 
 fn main() {
+    // First, so a CPU older than the build targets gets a message instead of SIGILL.
+    krishiv_common::cpu::check_or_exit();
     let cli = Cli::parse();
     match cli.command {
         Command::Sql(args) => std::process::exit(sql::run(&args)),

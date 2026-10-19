@@ -21,6 +21,7 @@ futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv = { path = "../krishiv" }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-server = { path = "../krishiv-server", optional = true }
+krishiv-common = { path = "../krishiv-common" }
 mimalloc = { workspace = true, optional = true }
 
 [dev-dependencies]
