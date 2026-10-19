@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import shutil
 
 import duckdb
 
 from .base import Dataset, Engine, Measure, Query
+from ..paths import data_root
 from .proc_mem import LocalProc
 
 
@@ -34,6 +36,11 @@ class DuckDBEngine(Engine):
         self._p.check()
         con = self.con = duckdb.connect()
         con.execute(f"SET threads={self.threads}")
+        # An in-memory DuckDB spills to `.tmp` in the working directory (the repo checkout) by
+        # default; keep scratch under $KRISHIV_DATA, off the repo and off the small /tmp tmpfs.
+        scratch = data_root() / "tmp" / f"duckdb-{os.getpid()}"
+        scratch.mkdir(parents=True, exist_ok=True)
+        con.execute(f"SET temp_directory='{scratch}'")
         if self.memory_limit:
             con.execute(f"SET memory_limit='{self.memory_limit}'")
         for t in dataset.tables:
@@ -58,6 +65,7 @@ class DuckDBEngine(Engine):
     def teardown(self) -> None:
         if self.con:
             self.con.close()
+        shutil.rmtree(data_root() / "tmp" / f"duckdb-{os.getpid()}", ignore_errors=True)
 
 
 def table_source(root, table: str) -> str:
