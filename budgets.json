@@ -1,7 +1,7 @@
 {
-  "transitive_crates": 126,
+  "transitive_crates": 127,
   "transitive_crates_all_features": 222,
-  "binary_bytes": 1120240,
+  "binary_bytes": 33656872,
   "clean_build_secs": null,
   "unsafe_sites": {
     "krishiv-cli": 2,
