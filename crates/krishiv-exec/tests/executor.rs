@@ -21,7 +21,9 @@ use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use krishiv_common::config::Config;
 use krishiv_common::error::{DivideByZero, ErrorClass, KrishivError};
-use krishiv_exec::testing::{Break, Buffer, Count, Filter, Limit, Pipe, RangeSource, Scan, schema};
+use krishiv_exec::testing::{
+    BlockingGate, Break, Buffer, Count, Filter, Limit, Pipe, RangeSource, Scan, schema,
+};
 use krishiv_exec::{
     DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, Executor, ExecutorConfig, FlushOutput, LocalState,
     Operator, OperatorOutput, PipelineBuilder, QueryContext, QueryId, QueryRunner, Result,
@@ -251,42 +253,53 @@ async fn a_spill_request_is_serviced_at_the_next_batch() {
     assert_released(&root);
 }
 
-/// Acceptance: a 50 ms blocking call routed through the blocking pool does
-/// not delay a concurrent short query by more than 10 ms.
+/// Acceptance: a blocking call routed through the blocking pool does not
+/// hold up a concurrent short query. Deterministic: with one worker thread,
+/// the short query runs to completion while the long query's blocking call
+/// is parked at a gate the test opens only afterwards. Were the call run on
+/// the worker, the short query could not finish (the timeouts only turn
+/// that hang into a failure; nothing is timed).
 #[tokio::test]
 async fn blocking_work_does_not_delay_a_short_query() {
+    const HANG: Duration = Duration::from_secs(60);
     let exec = executor(1);
     let runner = QueryRunner::new(Arc::clone(&exec) as Arc<dyn Executor>);
     let root = root(1 << 30);
-    let short = |id| {
-        let (_, scan) = scan(10 * DEFAULT_BATCH_SIZE as u64);
-        let plan: Arc<dyn ExecNode> = Arc::new(Break(scan, Count::new(), false));
-        (plan, query(&root, id, ExecConfig::default()))
-    };
-    let mut alone = Duration::MAX;
-    for id in 10..13 {
-        let (plan, q) = short(id);
-        let start = Instant::now();
-        run(&runner, plan, &q).await.unwrap();
-        alone = alone.min(start.elapsed());
-    }
-    let (_, scan) = scan(DEFAULT_BATCH_SIZE as u64);
-    let long = Buffer::new(false, Some(Duration::from_millis(50)));
+    let gate = BlockingGate::new();
+    let (_, long_scan) = scan(DEFAULT_BATCH_SIZE as u64);
+    let long = Buffer::with_finalize_gate(Arc::clone(&gate));
     let long_q = query(&root, 1, ExecConfig::default());
     let mut long_stream = runner
-        .submit(Arc::new(Break(scan, long, false)), Arc::clone(&long_q))
+        .submit(Arc::new(Break(long_scan, long, false)), Arc::clone(&long_q))
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(5)).await; // the long query is in its blocking finalize
-    let (plan, q) = short(2);
-    let start = Instant::now();
-    run(&runner, plan, &q).await.unwrap();
-    let concurrent = start.elapsed();
+    let reached = tokio::time::timeout(HANG, async {
+        while !gate.reached() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await;
+    let short = async {
+        let (_, short_scan) = scan(10 * DEFAULT_BATCH_SIZE as u64);
+        let plan: Arc<dyn ExecNode> = Arc::new(Break(short_scan, Count::new(), false));
+        let q = query(&root, 2, ExecConfig::default());
+        tokio::time::timeout(HANG, run(&runner, plan, &q)).await
+    };
+    let short = if reached.is_ok() {
+        Some(short.await)
+    } else {
+        None
+    };
+    let long_blocked = !long_q.is_finished();
+    gate.open(); // before asserting, so a failure never leaves it shut
+    assert!(reached.is_ok(), "the long query's blocking call started");
+    let short = short.and_then(Result::ok);
     assert!(
-        concurrent <= alone + Duration::from_millis(10),
-        "short query took {concurrent:?} next to the blocking call, {alone:?} alone"
+        short.is_some(),
+        "the short query ran beside the blocking call"
     );
-    assert!(!long_q.is_finished(), "the blocking call was still running");
+    short.into_iter().for_each(|r| drop(r.unwrap()));
+    assert!(long_blocked, "the blocking call was still running");
     while long_stream.next().await.is_some() {}
     long_q.finished().await;
     assert_released(&root);
