@@ -327,3 +327,21 @@ fn a_new_page_reserves_a_few_rows_and_a_page_heap_stays_bounded() {
     assert_ne!(next >> pages.shift_for_test(), id >> pages.shift_for_test());
     assert_eq!(pages.row(id).1.len(), 17 << 20);
 }
+
+#[test]
+fn a_wide_row_page_starts_within_the_page_byte_budget() {
+    let types = vec![DataType::Int64; 1000];
+    let layout = RowLayout::new(&types, &vec![false; 1000]).unwrap_or_else(|e| panic!("{e}"));
+    let cols: Vec<ArrayRef> = (0..1000)
+        .map(|_| Arc::new(Int64Array::from(vec![1])) as ArrayRef)
+        .collect();
+    let keys = layout.encode(&cols, 0).unwrap_or_else(|e| panic!("{e}"));
+    let mut pages = RowPages::new(&layout);
+    assert_eq!(pages.push(&keys, 0).ok(), Some(0));
+    assert!(layout.stride() > 8000);
+    assert!(
+        pages.memory_size() <= 256 << 10,
+        "first reservation {} exceeds one page budget",
+        pages.memory_size()
+    );
+}

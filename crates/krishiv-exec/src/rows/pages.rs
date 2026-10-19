@@ -118,8 +118,11 @@ impl RowPages {
                 return Err(internal("row ids exhausted in one row table".to_owned()));
             }
             // Rows grow geometrically up to the page size.
+            let initial_rows = (PAGE_BYTES / stride)
+                .min(self.page_rows().min(FIRST_ROWS))
+                .max(1);
             self.pages.push(Page {
-                rows: Vec::with_capacity(self.page_rows().min(FIRST_ROWS) * stride),
+                rows: Vec::with_capacity(initial_rows * stride),
                 heap: Vec::new(),
                 len: 0,
             });
