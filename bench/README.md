@@ -57,6 +57,8 @@ Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (none neede
 cargo build --release -p krishiv-bench-runner
 KRISHIV_BENCH_RUNNER=${CARGO_TARGET_DIR:-../target}/release/krishiv-bench-runner \
   uv run krishiv-bench abba --sf 10 --dataset tpch-duckdb --reps 3 --threads 8 --memory-limit 12g
+  uv run krishiv-bench abba --suite clickbench --threads 12   # 43 queries over $KRISHIV_DATA/clickbench/hits.parquet
+  uv run krishiv-bench abba --suite tpcds --sf 1 --threads 12 # 99 queries; unsupported ones are reported as failed
 ```
 Per query: both engines run it once (untimed, warms the page cache) and Krishiv's rows must equal DuckDB's (type-aware
 `compare.rows_match`); a wrong result, an error or a timeout marks the query `failed` and it is never timed. Then `--reps` blocks of

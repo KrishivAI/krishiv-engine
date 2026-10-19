@@ -65,6 +65,7 @@ use arrow_ipc::CompressionType;
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::ArrowError;
 
+mod compact;
 mod dir;
 mod error;
 mod format;

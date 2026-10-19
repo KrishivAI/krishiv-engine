@@ -681,3 +681,68 @@ async fn probe_rows_are_counted_when_a_limit_skips_the_flush() {
     assert!(metric(&q, "HashJoinProbe", "probe_rows") >= 10);
     assert_released(&root);
 }
+
+/// The peak memory every operator of `q` reserved (an upper bound of the
+/// query's peak).
+fn peak(q: &krishiv_exec::QueryContext) -> usize {
+    let p: u64 = q
+        .metrics()
+        .operators
+        .values()
+        .map(|e| e.metrics.peak_reserved)
+        .sum();
+    usize::try_from(p).unwrap()
+}
+
+/// Runs an inner join of `build` with itself on one driver under `limit`,
+/// spilling into `spill`; returns the rendered rows or the error.
+async fn run_self_join(
+    build: &[Row],
+    chunk: usize,
+    limit: usize,
+    spill: Option<SpillScope>,
+) -> (Result<Vec<String>>, Arc<krishiv_exec::QueryContext>) {
+    let root = root(limit);
+    let q = query(&root, 1, ExecConfig::default());
+    let plan = join(
+        case(JoinType::Inner, 1, false, false).spec(spill),
+        scan(&schema(), batches(&data(build), chunk)),
+        scan(&schema(), batches(&data(&build[..100]), 512)),
+    );
+    let out = run(&runner_for(1, limit), plan, &q)
+        .await
+        .map(|b| render(&b));
+    assert_released(&root);
+    (out, q)
+}
+
+/// The build starts a partition's index only once its concatenation copy is
+/// reserved, so a build that fits with one copy beside every index
+/// completes, without a spill scope as with one (where it stays in memory
+/// instead of spilling). Reserving every copy at once needs about the
+/// build's size again.
+#[tokio::test(start_paused = true)]
+async fn a_build_that_fits_with_one_partition_copy_completes() {
+    let build = skewed(40_000, 40_000);
+    // One input batch: one chunk per partition, indexed without a copy.
+    let (expect, q) = run_self_join(&build, build.len(), 48 * MIB, None).await;
+    let expect = expect.unwrap();
+    let single = peak(&q);
+    // Many small chunks per partition: every partition needs a copy.
+    let (got, _) = run_self_join(&build, 512, 48 * MIB, None).await;
+    assert!(got.unwrap() == expect, "the in-memory join result differs");
+    // Every copy at once would add about the build's size again.
+    let limit = single + single / 8;
+    let (got, _) = run_self_join(&build, 512, limit, None).await;
+    assert!(got.unwrap() == expect, "the in-memory join result differs");
+
+    let (_manager, scope) = spill();
+    let (got, q) = run_self_join(&build, 512, limit, Some(scope.clone())).await;
+    assert!(got.unwrap() == expect, "the join result differs");
+    assert_eq!(
+        metric(&q, "HashJoinBuild", "spilled_partitions"),
+        0,
+        "the build fits without spilling"
+    );
+    assert_eq!(spill_files(&scope), 0);
+}
