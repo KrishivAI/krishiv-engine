@@ -117,11 +117,10 @@ pub(crate) fn imply_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     else {
         return node;
     };
-    let (lo, ro) = (ids(left), ids(right));
     let (mut l, mut r) = (Vec::new(), Vec::new());
     for c in conjuncts(cond).iter().filter(|c| is_deterministic(c)) {
-        l.extend(implied(c, &lo));
-        r.extend(implied(c, &ro));
+        l.extend(implied_by_input(c, left));
+        r.extend(implied_by_input(c, right));
     }
     if l.is_empty() && r.is_empty() {
         return node;
@@ -260,8 +259,8 @@ fn push_join(
                     // A join condition holds no subquery: it stays a filter.
                     stay.push(p);
                 } else {
-                    l.extend(implied(&p, &lo));
-                    r.extend(implied(&p, &ro));
+                    l.extend(implied_by_input(&p, left));
+                    r.extend(implied_by_input(&p, right));
                     on.push(p);
                 }
             }
@@ -355,6 +354,42 @@ fn rejects_nulls(pred: &Arc<Expr>, side: &LogicalPlan, ids: &Attrs) -> bool {
         fold(&substitute(pred, &nulls)).node,
         ExprNode::Literal(Literal::Null(_) | Literal::Boolean(false))
     )
+}
+
+/// What `pred` implies on each input of the inner-join tree under `side`
+/// ([`implied`]), one predicate per input that it constrains. Per input,
+/// not per side: the inputs stay the same however join ordering regroups
+/// the tree, so the filters derived before and after it agree (and
+/// optimizing an optimized plan derives nothing new); join ordering
+/// divides out exactly these per-input filters.
+fn implied_by_input(pred: &Arc<Expr>, side: &Arc<LogicalPlan>) -> Vec<Arc<Expr>> {
+    let mut out = Vec::new();
+    let mut stack = vec![side];
+    while let Some(n) = stack.pop() {
+        match &n.node {
+            PlanNode::Join {
+                left,
+                right,
+                kind: JoinKind::Inner | JoinKind::Cross,
+                condition,
+            } if !matches!(condition, JoinCondition::On(c) if !is_deterministic(c)) => {
+                stack.push(right);
+                stack.push(left);
+            }
+            PlanNode::Filter { input, predicate } if is_deterministic(predicate) => {
+                stack.push(input);
+            }
+            PlanNode::Project { input, exprs }
+                if exprs
+                    .iter()
+                    .all(|e| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_)))) =>
+            {
+                stack.push(input);
+            }
+            _ => out.extend(implied(pred, &ids(n))),
+        }
+    }
+    out
 }
 
 /// The output ids of a resolved relation (none for an unresolved one, so

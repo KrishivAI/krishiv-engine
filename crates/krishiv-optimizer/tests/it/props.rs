@@ -354,3 +354,35 @@ proptest! {
         prop_assert_eq!(eval::rows(&db, optimized.root()), eval::rows(&db, plan.root()), "{}", sql);
     }
 }
+
+/// Seed 3096671712105701144 of `random_queries_reach_the_lowest_operator`:
+/// join ordering regroups `x2 x x3 x x4` so the `WHERE` disjunction sits on
+/// a join with `x3 x x4` as one side, which implies `(x4.a IN (-2, 2) or
+/// coalesce(x3.a, 3) = 2) or x3.a >= 1` there. Derived per side, a second
+/// optimization added that predicate (the first had derived it for the
+/// written grouping, where it implied nothing), so the plan was not a fixed
+/// point. Implied filters are now derived per join input, which regrouping
+/// does not change.
+#[test]
+fn implied_filters_reach_a_fixed_point() {
+    let sql = "SELECT x1.c0 AS c0, count(*) AS c1 FROM (SELECT x2.a AS c0, x2.d AS c1 \
+               FROM u AS x2 CROSS JOIN t AS x3 JOIN u AS x4 ON x3.c = x4.a AND x4.d <> x2.d \
+               WHERE ((x4.a IN (-2, 2) OR coalesce(x3.a, 3) = 2) OR (x3.a >= 1 AND x2.d IS NULL))) \
+               AS x1 GROUP BY x1.c0";
+    let plan = support::resolve(sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    for seed in [1, 2, 3, 3_096_671_712_105_701_144] {
+        let db = data::small(seed);
+        assert_eq!(
+            eval::rows(&db, optimized.root()),
+            eval::rows(&db, plan.root())
+        );
+    }
+}
