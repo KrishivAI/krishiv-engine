@@ -1,7 +1,8 @@
 name: PR policy
 
 # Label-dependent repository policy (DCO, PR size cap with the `size-approved`
-# label; budget gate with the `budget-approved` and `unsafe-reviewed` labels).
+# label; budget and wheel-size gates with the `budget-approved` and
+# `unsafe-reviewed` labels).
 # Kept out of ci.yml so that label changes re-run only these small jobs
 # instead of cancelling and rebuilding the full CI run. The job name `policy`
 # is a required status check; do not rename it.
@@ -163,3 +164,76 @@ jobs:
       - name: Nothing measured
         if: steps.measure.outputs.result == 'skipped'
         run: echo "No Rust change in this PR; budgets-measure was skipped." >> "$GITHUB_STEP_SUMMARY"
+
+  # Wheel-size gate (pull requests only): compares the sizes measured by the
+  # `sizes` job of wheels.yml (called by ci.yml as `wheels-targets`) for this
+  # head with the base branch's budgets.json (`wheel_bytes`). Growth past the
+  # budget, or a wheel without a recorded size, needs `budget-approved` (same
+  # approval rule as `size-approved`). Adding a label re-runs only this job.
+  # The base branch's budgets are used, not the PR's: a PR that refreshes
+  # budgets.json must not approve its own growth. This replaces the gate that
+  # used to run inside wheels.yml, which read the label from the stale event
+  # payload of the CI run.
+  wheel-sizes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # Longer than the wait below: CI queueing plus the 60-minute wheel builds.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Wait for the wheel measurement
+        id: measure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OUT_DIR: ${{ runner.temp }}/wheel-sizes
+          JOB: wheels-targets / sizes
+          ARTIFACT: wheel-sizes
+          SKIP_JOB: wheels-targets
+          WAIT_SECS: 6300
+        run: |
+          result=$(.github/scripts/budgets-measurement.sh)
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+      - name: Use the base branch budgets
+        if: steps.measure.outputs.result == 'measured'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          git show FETCH_HEAD:budgets.json > "$RUNNER_TEMP/base-budgets.json"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        if: steps.measure.outputs.result == 'measured'
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.measure.outputs.result == 'measured'
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+        if: steps.measure.outputs.result == 'measured'
+      - name: Resolve budget-approved label
+        if: steps.measure.outputs.result == 'measured'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'budget-approved') }}
+          APPROVER: ${{ vars.SIZE_APPROVER }}
+        run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
+      - name: Compare with the budgets
+        if: steps.measure.outputs.result == 'measured'
+        run: cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" --budgets "$RUNNER_TEMP/base-budgets.json"
+      - name: Nothing measured
+        if: steps.measure.outputs.result == 'skipped'
+        run: echo "No Python or packaging change in this PR; the wheels were not built." >> "$GITHUB_STEP_SUMMARY"
