@@ -137,7 +137,12 @@ def main() -> None:
             # Parsed: any later (analysis) error is not a syntax matter.
             case = {"sql": sql, "parses": True}
         cases.append(case)
-    doc = {"format_version": 1, "spark_version": spark.version, "generator": "tests/scripts/gen_sql_parse_errors.py", "cases": cases}
+    doc = {
+        "format_version": 1,
+        "spark_version": spark.version,
+        "generator": "tests/scripts/gen_sql_parse_errors.py",
+        "cases": cases,
+    }
     with open(args.out, "w") as f:
         json.dump(doc, f, indent=1, sort_keys=True)
         f.write("\n")

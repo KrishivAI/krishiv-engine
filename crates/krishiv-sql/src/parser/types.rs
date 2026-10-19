@@ -291,15 +291,20 @@ impl Parser<'_> {
     /// `keyword`, or the bare type when ANTLR's prediction would fall back
     /// to it.
     fn complex_type(&mut self, c: Complex, keyword: usize) -> PR<DataTypeKind> {
-        let (far, extra, missing) = (self.far, self.extra, self.missing);
+        let (far, extra, missing, matched) = (self.far, self.extra, self.missing, self.matched);
         self.far = 0;
         let r = self.complex_body(c);
         let failed_at = self.far;
+        // The inner reset of `far` clears `matched`: the outer one stays when
+        // it reached at least as far.
+        if failed_at <= far {
+            self.matched = matched;
+        }
         self.far = self.far.max(far);
         match r {
             Err(Fail::Syntax) if self.bare_type_viable_until(keyword) >= failed_at => {
                 self.pos = keyword + 1;
-                (self.far, self.extra, self.missing) = (far, extra, missing);
+                (self.far, self.extra, self.missing, self.matched) = (far, extra, missing, matched);
                 Ok(c.bare())
             }
             r => r,

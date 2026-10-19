@@ -405,3 +405,22 @@ fn agrees_with_spark_on_the_syntax_error_fixture() {
     assert!(wrong.is_empty(), "{wrong:#?}");
     assert!(cases.len() >= 60);
 }
+
+/// A complex type read after a failure that reached further (backtracking
+/// re-reads it with `far` reset) leaves that failure's recovery hint intact.
+#[test]
+fn complex_type_rereads_keep_the_recovery_hint() {
+    let options = ParserOptions::default();
+    for (sql, hint) in [
+        (
+            "SELECT ((SELECT x::array<int> FROM t WHERE f(a b)",
+            ": extra input 'b'",
+        ),
+        ("SELECT c::array<int>, f(a b)", ": extra input 'b'"),
+        ("SELECT (SELECT a::map<int,int> FROM t", ": missing ')'"),
+    ] {
+        let e = parse_statement(sql, &options).unwrap_err();
+        let params = e.error.message_parameters();
+        assert_eq!(params[1].1.as_str(), hint, "{sql}");
+    }
+}
