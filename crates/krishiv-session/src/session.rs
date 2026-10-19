@@ -317,7 +317,7 @@ impl Session {
         let statement = krishiv_sql::parse_statement(query, &env.parser).map_err(|e| e.error)?;
         let q = match statement {
             Statement::Query(q) => q,
-            Statement::Explain(_) => return Err(unsupported_statement("EXPLAIN statements")),
+            Statement::Explain(e) => return self.explain_statement(&e).await,
             _ => return Err(unsupported_statement("statements other than queries")),
         };
         let plan = krishiv_sql::lower(&q, SourceId(0)).map_err(|e| e.error)?;

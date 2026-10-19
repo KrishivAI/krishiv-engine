@@ -49,6 +49,7 @@ pub use join_order::DP_LIMIT;
 pub use limit::TopN;
 pub use stats::{
     ColumnStats, DEFAULT_ROWS, DEFAULT_SELECTIVITY, NoStatistics, Statistics, TableStats,
+    estimated_rows,
 };
 
 /// The most rounds a rule batch runs before its result is taken as is.

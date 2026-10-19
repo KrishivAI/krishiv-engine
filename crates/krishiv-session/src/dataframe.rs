@@ -65,12 +65,19 @@ pub enum ExplainMode {
     Simple,
     /// The parsed, analyzed, optimized and physical plans.
     Extended,
+    /// The physical plan outline, then each node's details.
+    Formatted,
+    /// The optimized plan with statistics, then the physical plan.
+    Cost,
+    /// The physical plan's generated-code subtrees (none: operators are
+    /// vectorized, see ADR 0023).
+    Codegen,
 }
 
 /// An analysis and the query inputs it was made with.
 pub(crate) struct Analysis {
-    env: Arc<QueryEnv>,
-    analyzed: Arc<AnalyzedPlan>,
+    pub(crate) env: Arc<QueryEnv>,
+    pub(crate) analyzed: Arc<AnalyzedPlan>,
 }
 
 /// A lazy query: its rows are computed by actions (`collect`,
@@ -94,8 +101,8 @@ pub(crate) struct Analysis {
 /// ```
 #[derive(Clone)]
 pub struct DataFrame {
-    session: Session,
-    plan: Arc<LogicalPlan>,
+    pub(crate) session: Session,
+    pub(crate) plan: Arc<LogicalPlan>,
     analysis: Arc<Mutex<Option<Arc<Analysis>>>>,
     /// An error found while building the frame (an invalid table name),
     /// raised by its first action, as Spark Connect raises it.
@@ -435,7 +442,7 @@ impl DataFrame {
     /// The analysis to run with: the cached one while the configuration and
     /// the temporary tables are unchanged and no files are read, else a
     /// fresh one.
-    async fn analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
+    pub(crate) async fn analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
         let cached = self
             .analysis
             .lock()
@@ -596,33 +603,8 @@ impl DataFrame {
     pub async fn explain(&self, mode: ExplainMode) -> Result<String, KrishivError> {
         let df = self.clone();
         self.session
-            .on_executor(async move { df.explain_here(mode).await })
+            .on_executor(async move { df.explain_text(mode, false).await })
             .await
-    }
-
-    async fn explain_here(&self, mode: ExplainMode) -> Result<String, KrishivError> {
-        let a = self.analysis().await?;
-        let (optimized, physical) = self.session.physical(&a.analyzed, &a.env)?;
-        let physical = format!("== Physical Plan ==\n{physical}");
-        Ok(match mode {
-            ExplainMode::Simple => physical,
-            ExplainMode::Extended => {
-                let schema = a
-                    .analyzed
-                    .output
-                    .iter()
-                    .map(|c| format!("{}: {}", c.name, c.data_type.simple_string()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!(
-                    "== Parsed Logical Plan ==\n{}\n== Analyzed Logical Plan ==\n{schema}\n{}\n\
-                     == Optimized Logical Plan ==\n{}\n{physical}",
-                    self.plan,
-                    a.analyzed.plan.root(),
-                    optimized.root(),
-                )
-            }
-        })
     }
 
     /// Registers this DataFrame as the temporary view `name`, replacing any

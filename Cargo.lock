@@ -1617,6 +1617,7 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "futures",
+ "insta",
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
