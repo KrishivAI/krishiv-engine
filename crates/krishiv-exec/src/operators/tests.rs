@@ -700,6 +700,7 @@ fn scan_reports_inconsistent_state_as_internal_errors() {
         batches: 5..6,
         offset: 0,
         claimed: 0,
+        rows: super::RowStage::new(&[], &schema(), super::RowStageSettings::default()),
     };
     let e = scan.next_piece(&mut local, 4).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
@@ -709,6 +710,7 @@ fn scan_reports_inconsistent_state_as_internal_errors() {
         morsels: vec![],
         batch_rows: 4,
         returned: std::sync::atomic::AtomicU64::new(0),
+        runtime: Vec::new(),
     });
     let mut local = scan
         .local_state(&ctx, &global)

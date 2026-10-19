@@ -78,6 +78,21 @@
 //! Only a partition that does not fit even then is repartitioned; after
 //! that every driver claims in parallel again.
 //!
+//! # Runtime filters (design P2-T163)
+//! An inner or left semi join drops every probe row whose key matches no
+//! build key, so its build can publish what it learned about its keys to
+//! the scans feeding the probe side ([`HashJoin::with_runtime_filters`]).
+//! Each build driver keeps a partial per filter while it sinks rows (the
+//! rows it stores: a key compared with `=` that is NULL is not stored):
+//! min/max, a value set that stops past
+//! `krishiv.runtimeFilter.inList.maxValues`, and the XXH64 hashes of the
+//! normalized keys when a Bloom filter is planned, reserved in the driver's
+//! consumer (a failed reservation drops the Bloom, never the query).
+//! `combine` merges the partials, `finalize` builds each filter (a Bloom
+//! sized exactly for the hashes collected), reserves it with the build and
+//! publishes it before indexing the table. A build that fails or is
+//! cancelled publishes `Disabled`, so no consumer waits for it.
+//!
 //! # Metrics (`EXPLAIN ANALYZE`, [`OperatorEntry::extra`](crate::OperatorEntry::extra))
 //! Build sink: `build_rows`, `spilled_partitions`, `spill_file_bytes`. Probe:
 //! `probe_rows`, `probe_spilled_rows`, `spill_file_bytes`,
@@ -227,6 +242,18 @@ pub(crate) struct Shared {
     arena_schema: SchemaRef,
     spill: Option<SpillScope>,
     counters: Counters,
+    runtime: Vec<JoinRuntimeFilter>,
+}
+
+/// A runtime filter a hash join's build publishes (see the module docs).
+#[derive(Debug, Clone)]
+pub struct JoinRuntimeFilter {
+    /// The join key it describes (an index into the key lists).
+    pub key: usize,
+    /// The filter, shared with the scans it targets.
+    pub filter: Arc<krishiv_io::RuntimeFilter>,
+    /// What to collect (the cost model's decisions).
+    pub options: krishiv_io::KeyFilterOptions,
 }
 
 impl fmt::Debug for Shared {
@@ -343,6 +370,7 @@ impl Shared {
             probe_schema,
             spill,
             counters: Counters::default(),
+            runtime: Vec::new(),
         })
     }
 
@@ -399,6 +427,48 @@ impl HashJoin {
     /// residual filter (Spark plans those as a nested-loop join).
     pub fn try_new(spec: JoinSpec) -> Result<Self> {
         Ok(Self(Arc::new(Shared::new(spec)?)))
+    }
+
+    /// The same join publishing `filters` from its build (see the module
+    /// docs). Call before the join is shared.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a join whose build cannot filter its probe
+    /// side (only inner and left semi joins drop unmatched probe rows), a
+    /// key out of range or a filter of another key type, or a join already
+    /// shared.
+    pub fn with_runtime_filters(mut self, filters: Vec<JoinRuntimeFilter>) -> Result<Self> {
+        let shared = Arc::get_mut(&mut self.0)
+            .ok_or_else(|| internal("runtime filters added to a shared join".to_owned()))?;
+        if !filters.is_empty() && !matches!(shared.join_type, JoinType::Inner | JoinType::LeftSemi)
+        {
+            return Err(internal(format!(
+                "a {:?} join cannot filter its probe side",
+                shared.join_type
+            )));
+        }
+        for f in &filters {
+            // Key types are the same on both sides.
+            let key = shared
+                .probe_keys
+                .get(f.key)
+                .and_then(|&k| shared.probe_schema.fields().get(k).cloned())
+                .ok_or_else(|| internal(format!("runtime filter key {} out of range", f.key)))?;
+            if key.data_type() != f.filter.key_type() {
+                return Err(internal(format!(
+                    "runtime filter of type {} on a {} key",
+                    f.filter.key_type(),
+                    key.data_type()
+                )));
+            }
+        }
+        shared.runtime = filters;
+        Ok(self)
+    }
+
+    /// The runtime filters the build publishes.
+    pub fn runtime_filters(&self) -> &[JoinRuntimeFilter] {
+        &self.0.runtime
     }
 
     /// The output schema.

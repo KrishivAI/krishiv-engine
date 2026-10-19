@@ -7,6 +7,7 @@
 #![cfg(not(loom))]
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
+mod runtime_filter;
 mod tpch;
 mod util;
 
