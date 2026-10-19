@@ -121,8 +121,6 @@ pub(crate) struct FileScans {
     pub(crate) config: Arc<Config>,
     /// The executor's drivers, for split planning.
     pub(crate) slots: u64,
-    /// The I/O runtime, entered by the thread that opens file tables.
-    pub(crate) runtime: tokio::runtime::Handle,
 }
 
 /// The session catalog as one query sees it: the catalog resolver and the
@@ -274,14 +272,8 @@ impl QueryCatalog {
     }
 }
 
-/// [`FileTable::open`] on a thread of its own. Its future cannot be proven
-/// `Send` (a higher-ranked closure in its footer stream), so it cannot run
-/// on the session's executor; the thread enters the I/O runtime, whose
-/// tasks and timers its reads use (on a deterministic executor that is the
-/// caller's current-thread runtime, which drives them while the action
-/// awaits this thread). The
-/// thread only waits for footers, so no compute or blocking-pool slot is
-/// held. Dropping the returned future abandons the open.
+/// [`FileTable::open`], on the caller's task: every action runs it on the
+/// session's executor, which provides the I/O runtime the footer reads use.
 async fn open_table(
     format: Arc<dyn krishiv_io::FileFormat>,
     scans: FileScans,
@@ -289,34 +281,16 @@ async fn open_table(
     files: Vec<krishiv_io::FileRef>,
     options: krishiv_io::FormatOptions,
 ) -> Result<FileTable, KrishivError> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    std::thread::Builder::new()
-        .name("krishiv-file-table".to_owned())
-        .spawn(move || {
-            let _runtime = scans.runtime.enter();
-            let opened = futures::executor::block_on(FileTable::open(
-                format,
-                scans.io,
-                table,
-                files,
-                options,
-                &scans.config,
-                scans.slots,
-            ));
-            // The query may be gone; its table is then not needed.
-            let _ = tx.send(opened);
-        })
-        .map_err(|e| {
-            internal(format!(
-                "could not start a thread to read file footers: {e}"
-            ))
-        })?;
-    rx.await
-        .map_err(|_| internal("reading file footers ended without a result".to_owned()))?
-}
-
-fn internal(message: String) -> KrishivError {
-    InternalError { message }.into()
+    FileTable::open(
+        format,
+        scans.io,
+        table,
+        files,
+        options,
+        &scans.config,
+        scans.slots,
+    )
+    .await
 }
 
 /// The scans of `plan` and of the subqueries in its expressions.

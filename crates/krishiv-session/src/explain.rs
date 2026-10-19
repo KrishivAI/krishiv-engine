@@ -92,7 +92,7 @@ impl DataFrame {
         };
         let (optimized, physical) = match self
             .session
-            .physical(&analysis.analyzed, &analysis.env)
+            .physical_for_inspection(&analysis.analyzed, &analysis.env)
             .await
         {
             Ok((optimized, physical)) => (optimized, physical.explain().clone()),
