@@ -290,11 +290,13 @@ fn reads_by_path_and_their_views() {
     assert_eq!(s.temp_table_names(), ["ids"]);
     let df = block_on(s.sql("SELECT * FROM ids")).unwrap();
     assert_eq!(block_on(df.schema()).unwrap().fields().len(), 1);
-    // Running queries over files waits for the file table provider.
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), [1, 2]);
     assert_eq!(
-        class(block_on(df.collect())),
-        ErrorClass::KrishivUnsupportedFeature
+        block_on(s.read().parquet([root.as_str()]).count()).unwrap(),
+        2
     );
+    let df = block_on(s.sql(&format!("SELECT id FROM parquet.`{root}` WHERE id > 1"))).unwrap();
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), [2]);
 }
 
 #[test]
@@ -523,8 +525,8 @@ fn column_builders_and_functions_resolve_with_spark_types() {
 fn temp_views_resolve_for_unqualified_names_only() {
     // Spark 4.2.0 with a temp view `v`: `v` and `V` resolve; `default.v`,
     // `spark_catalog.default.v` and `global_temp.v` fail with
-    // TABLE_OR_VIEW_NOT_FOUND; `spark_catalog.v` fails with
-    // REQUIRES_SINGLE_PART_NAMESPACE (not modelled here: it also fails).
+    // TABLE_OR_VIEW_NOT_FOUND; `spark_catalog.v`, `spark_catalog.a.b.v`
+    // and `a.b.v` fail with REQUIRES_SINGLE_PART_NAMESPACE.
     let s = session();
     let (schema, batch) = people();
     s.register_batches("v", schema, vec![batch]).unwrap();
@@ -852,4 +854,238 @@ fn string_aggregates_over_utf8_tables() {
         ),
         ["b", "c", "c", "b"]
     );
+}
+
+#[test]
+fn names_outside_a_single_part_namespace_are_rejected() {
+    // Spark 4.2.0: "[REQUIRES_SINGLE_PART_NAMESPACE] spark_catalog requires
+    // a single-part namespace, but got identifier `a`.`b`.`v`." (42K05),
+    // for SQL and for `spark.table`, whether or not the table exists.
+    let s = session();
+    for (name, identifier) in [
+        ("spark_catalog.people", "`people`"),
+        ("SPARK_CATALOG.people", "`people`"),
+        ("spark_catalog.nosuch", "`nosuch`"),
+        ("spark_catalog.a.b.people", "`a`.`b`.`people`"),
+        ("a.b.people", "`a`.`b`.`people`"),
+    ] {
+        let sql = block_on(s.sql(&format!("SELECT * FROM {name}")))
+            .and_then(|df| block_on(df.schema()).map(|_| ()))
+            .unwrap_err();
+        assert_eq!(
+            sql.error_class(),
+            ErrorClass::RequiresSinglePartNamespace,
+            "{name}"
+        );
+        assert_eq!(
+            sql.to_string(),
+            format!(
+                "[REQUIRES_SINGLE_PART_NAMESPACE] spark_catalog requires a single-part \
+                 namespace, but got identifier {identifier}. SQLSTATE: 42K05"
+            ),
+            "{name}"
+        );
+        assert_eq!(
+            class(block_on(s.table(name).schema())),
+            ErrorClass::RequiresSinglePartNamespace,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn file_views_read_the_files_there_when_the_query_runs() {
+    // Krishiv lists a file view's files at every query, so overwritten
+    // files are read (Spark 4.2 keeps the listing from the view's
+    // creation and fails with FAILED_READ_FILE.FILE_NOT_EXIST; ADR 0023).
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("t");
+    let root = root.to_str().unwrap().to_owned();
+    let s = session();
+    block_on(s.table("people").select(["id"]).write().parquet(&root)).unwrap();
+    block_on(
+        s.read()
+            .parquet([root.as_str()])
+            .create_or_replace_temp_view("v"),
+    )
+    .unwrap();
+    let sorted =
+        |df: krishiv_session::DataFrame| ids(&block_on(df.order_by(["id"]).collect()).unwrap());
+    assert_eq!(sorted(s.table("v")), [1, 2, 3]);
+    // One DataFrame run before and after the overwrite lists the files
+    // again too.
+    let same = block_on(s.sql("SELECT id FROM v")).unwrap();
+    assert_eq!(ids(&block_on(same.collect()).unwrap()).len(), 3);
+    // A file added by another writer shows up in the next run.
+    parquet_file(&dir.path().join("t/extra.parquet"));
+    assert_eq!(ids(&block_on(same.collect()).unwrap()).len(), 5);
+    block_on(
+        s.table("people")
+            .filter(col("id").gt(lit(1)))
+            .select([(col("id") * lit(10)).alias("id")])
+            .write()
+            .mode("overwrite")
+            .parquet(&root),
+    )
+    .unwrap();
+    assert_eq!(sorted(s.table("v")), [20, 30]);
+    assert_eq!(
+        sorted(block_on(s.sql("SELECT id FROM v")).unwrap()),
+        [20, 30]
+    );
+}
+
+#[test]
+fn writes_follow_spark_save_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let out = out.to_str().unwrap().to_owned();
+    let s = session();
+    let people = s.table("people");
+    let count = || block_on(s.read().parquet([out.as_str()]).count()).unwrap();
+    // The default mode writes a new path, then refuses it.
+    block_on(people.write().parquet(&out)).unwrap();
+    assert!(dir.path().join("out/_SUCCESS").exists());
+    assert_eq!(count(), 3);
+    assert_eq!(
+        class(block_on(people.write().parquet(&out))),
+        ErrorClass::PathAlreadyExists
+    );
+    assert_eq!(
+        class(block_on(people.write().mode("ErrorIfExists").save(&out))),
+        ErrorClass::PathAlreadyExists
+    );
+    block_on(people.write().mode("ignore").parquet(&out)).unwrap();
+    assert_eq!(count(), 3);
+    block_on(people.write().mode("APPEND").parquet(&out)).unwrap();
+    assert_eq!(count(), 6);
+    block_on(people.limit(1).write().mode("overwrite").parquet(&out)).unwrap();
+    assert_eq!(count(), 1);
+    // The written columns and rows read back as they were.
+    let back = block_on(s.read().parquet([out.as_str()]).collect()).unwrap();
+    assert_eq!(back[0].schema().field(1).name(), "name");
+    assert_eq!(ids(&back).len(), 1);
+    // No rows: one empty file keeps the schema.
+    let empty = dir.path().join("empty");
+    let empty = empty.to_str().unwrap();
+    block_on(people.filter(col("id").lt(lit(0))).write().parquet(empty)).unwrap();
+    let schema = block_on(s.read().parquet([empty]).schema()).unwrap();
+    assert_eq!(schema.fields().len(), 2);
+    assert_eq!(block_on(s.read().parquet([empty]).count()).unwrap(), 0);
+    // Spark's errors for a bad mode, format or option.
+    assert_eq!(
+        class(block_on(people.write().mode("sometimes").parquet(&out))),
+        ErrorClass::InvalidSaveMode
+    );
+    assert_eq!(
+        class(block_on(people.write().format("avro").save(&out))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(count(), 1);
+    // Spark 4.2.0: a repeated column name fails with COLUMN_ALREADY_EXISTS,
+    // ignoring case unless `spark.sql.caseSensitive`.
+    let dup = dir.path().join("dup");
+    let dup = dup.to_str().unwrap();
+    for sql in [
+        "SELECT id, id FROM people",
+        "SELECT id AS a, name AS A FROM people",
+    ] {
+        let e = block_on(block_on(s.sql(sql)).unwrap().write().parquet(dup)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::ColumnAlreadyExists, "{sql}");
+    }
+    let e = block_on(
+        block_on(s.sql("SELECT id AS A, name AS a FROM people"))
+            .unwrap()
+            .write()
+            .parquet(dup),
+    )
+    .unwrap_err();
+    assert!(
+        e.to_string().contains("The column `a` already exists"),
+        "{e}"
+    );
+    assert!(!std::path::Path::new(dup).exists());
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    block_on(
+        block_on(s.sql("SELECT id AS a, name AS A FROM people"))
+            .unwrap()
+            .write()
+            .parquet(dup),
+    )
+    .unwrap();
+    s.conf().unset("spark.sql.caseSensitive").unwrap();
+    // Analysis errors come first.
+    assert_eq!(
+        class(block_on(s.table("missing").write().parquet(&out))),
+        ErrorClass::TableOrViewNotFound
+    );
+}
+
+#[test]
+fn writes_run_from_a_tokio_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("rt");
+    let out = out.to_str().unwrap().to_owned();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let s = session();
+    rt.block_on(async {
+        s.table("people").write().parquet(&out).await.unwrap();
+        assert_eq!(s.read().parquet([out.as_str()]).count().await.unwrap(), 3);
+    });
+}
+
+#[test]
+fn ignored_hints_come_back_as_warnings() {
+    let s = session();
+    let (schema, batch) = people();
+    s.register_batches("other", schema, vec![batch]).unwrap();
+    let warnings = |sql: &str| block_on(block_on(s.sql(sql)).unwrap().warnings()).unwrap();
+    // Analysis: an unknown hint and a hint naming no relation.
+    let w = warnings("SELECT /*+ NOPE, BROADCAST(missing) */ id FROM people");
+    assert!(
+        w.iter().any(|w| w.starts_with("Unrecognized hint: NOPE")),
+        "{w:?}"
+    );
+    assert!(w.iter().any(|w| w.contains("relation 'missing'")), "{w:?}");
+    // Planning: a join hint the join cannot follow.
+    let w = warnings("SELECT /*+ MERGE(o) */ p.id FROM people p JOIN other o ON p.id = o.id");
+    assert!(
+        w.iter().any(|w| w.starts_with("Hint (strategy=merge)")),
+        "{w:?}"
+    );
+    // The query still runs, and a query without hints has none.
+    assert!(warnings("SELECT id FROM people").is_empty());
+}
+
+#[test]
+fn file_scans_run_on_a_deterministic_current_thread_executor() {
+    // A deterministic executor runs everything, I/O included, on the
+    // caller's current-thread runtime: the footer reads made from the file
+    // table's own thread progress while that runtime drives the action.
+    let dir = tempfile::tempdir().unwrap();
+    parquet_file(&dir.path().join("part-0.parquet"));
+    let root = dir.path().to_str().unwrap().to_owned();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let executor = krishiv_exec::TokioExecutor::deterministic(2).unwrap();
+        let s = Session::builder().executor(executor).build().unwrap();
+        let df = s.read().parquet([root.as_str()]);
+        assert_eq!(df.count().await.unwrap(), 2);
+        view_over_files(&s, &root).await;
+    });
+}
+
+async fn view_over_files(s: &Session, root: &str) {
+    s.read()
+        .parquet([root])
+        .create_or_replace_temp_view("d")
+        .await
+        .unwrap();
+    let df = s.sql("SELECT id FROM d WHERE id > 1").await.unwrap();
+    assert_eq!(ids(&df.collect().await.unwrap()), [2]);
 }

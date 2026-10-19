@@ -13,9 +13,12 @@ use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use krishiv_common::config::Config;
-use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    ColumnAlreadyExists, InternalError, KrishivError, KrishivUnsupportedFeature,
+};
 use krishiv_common::secret::OptionValue;
-use krishiv_exec::files::{FileReads, LocalPaths};
+use krishiv_exec::FileWriteSink;
+use krishiv_exec::files::{FileReads, LocalPaths, PathLocator as _};
 use krishiv_exec::planner::{
     DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
 };
@@ -24,7 +27,7 @@ use krishiv_exec::{
     TokioExecutor, WorkloadClass,
 };
 use krishiv_io::parquet::ParquetFormat;
-use krishiv_io::{FileFormat, IoConfig, IoScheduler, StoreId};
+use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
 use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
 use krishiv_plan::analyzer::{
     AllowAll, AnalysisContext, AnalyzedPlan, Analyzer as _, BuiltinFunctions, DefaultAnalyzer,
@@ -38,7 +41,7 @@ use krishiv_types::batch::{Batch, Weights};
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
-use crate::catalog::{QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
+use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
 
@@ -498,9 +501,16 @@ impl Session {
             )),
             Arc::clone(&config),
         ));
+        let scans = FileScans {
+            io: self.state.io.context(),
+            config: Arc::clone(&config),
+            slots: u64::try_from(self.state.executor.parallelism().max(1)).unwrap_or(1),
+            runtime: self.state.executor.io_handle().clone(),
+        };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
             Arc::clone(&files),
+            scans,
         ));
         let resolution = {
             let values = conf_values(&config, &ResolutionConf::KEYS);
@@ -543,12 +553,14 @@ impl Session {
             .map_err(|e| e.error)
     }
 
-    /// The physical plan of `analyzed`.
-    pub(crate) fn physical(
+    /// The physical plan of `analyzed`, once the files it scans are
+    /// listed and their footers read.
+    pub(crate) async fn physical(
         &self,
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        env.catalog.open_files(analyzed.plan.root()).await?;
         let tables =
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>;
         let optimized = krishiv_optimizer::optimize_with(
@@ -558,6 +570,11 @@ impl Session {
         let cx = PlanningContext::new(tables, Arc::clone(&env.config))
             .with_user(self.state.principal.name.as_str());
         let physical = self.state.planner.plan(&optimized, &cx)?;
+        // Spark logs what analysis and planning ignore (hints) as
+        // warnings; `DataFrame::warnings` returns them too.
+        for w in analyzed.warnings.iter().chain(physical.warnings()) {
+            tracing::warn!(target: "krishiv::session", "{w}");
+        }
         Ok((optimized, physical))
     }
 
@@ -582,6 +599,135 @@ impl Session {
             .await?;
         Ok(Box::pin(stream.map(|b| b.and_then(into_record_batch))))
     }
+}
+
+impl Session {
+    /// Writes the result of `physical` to the directory `path` in
+    /// `format` with `mode` (`df.write`): the files under their final
+    /// names, then the directory's commit (`_SUCCESS`, and the removal of
+    /// what an overwrite replaces). A failed or cancelled write deletes its
+    /// files and leaves the directory as it was.
+    pub(crate) async fn write_files(
+        &self,
+        physical: PhysicalPlan,
+        env: &QueryEnv,
+        target: WriteTarget,
+    ) -> Result<(), KrishivError> {
+        let WriteTarget {
+            format,
+            mode,
+            path,
+            options,
+        } = target;
+        let mode = SaveMode::parse(&mode)?;
+        unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
+        let Some(format) = self
+            .state
+            .formats
+            .iter()
+            .find(|f| f.name().eq_ignore_ascii_case(&format))
+            .cloned()
+        else {
+            return Err(KrishivUnsupportedFeature {
+                feature: format!("writing the {format} format"),
+            }
+            .into());
+        };
+        let (options, _) = format.options().parse(&options, &env.config)?;
+        let Some(text) = path.as_plain() else {
+            return Err(KrishivUnsupportedFeature {
+                feature: "write paths with credentials".to_owned(),
+            }
+            .into());
+        };
+        let at = LocalPaths::new(StoreId::new(LOCAL_STORE), self.state.cwd.clone()).locate(text)?;
+        let io = self.state.io.context();
+        let Some(write) = DirectoryWrite::begin(&io, at.store, at.path, mode, job_uuid()).await?
+        else {
+            // `ignore` found the path: nothing is written.
+            return Ok(());
+        };
+        let schema = Arc::clone(physical.schema());
+        let sink = Arc::new(FileWriteSink::try_new(
+            Arc::clone(&format),
+            io.clone(),
+            Arc::clone(&schema),
+            options.clone(),
+            write.write_options(0),
+        )?);
+        let plan = physical.into_write(Arc::clone(&sink))?;
+        let mut rows = self.run(&plan, env).await?;
+        while let Some(batch) = rows.next().await {
+            batch?;
+        }
+        drop(rows);
+        write
+            .commit(&io, format.as_ref(), schema, &options, sink.files())
+            .await?;
+        Ok(())
+    }
+}
+
+/// Spark's `COLUMN_ALREADY_EXISTS` for a written schema with a repeated
+/// name (ignoring case unless `case_sensitive`, then named in lower case,
+/// as Spark 4.2 reports it).
+fn unique_columns(schema: &SchemaRef, case_sensitive: bool) -> Result<(), KrishivError> {
+    let mut seen = std::collections::HashSet::new();
+    for f in schema.fields() {
+        let name = if case_sensitive {
+            f.name().clone()
+        } else {
+            f.name().to_lowercase()
+        };
+        if !seen.insert(name.clone()) {
+            return Err(ColumnAlreadyExists {
+                column_name: format!("`{}`", name.replace('`', "``")),
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Where and how `df.write` writes.
+pub(crate) struct WriteTarget {
+    pub(crate) format: String,
+    pub(crate) mode: String,
+    pub(crate) path: OptionValue,
+    pub(crate) options: BTreeMap<String, OptionValue>,
+}
+
+/// A fresh job id naming a write's files (`part-00000-<id>-c000...`), in
+/// UUID form. Its bits come from the standard library's per-process
+/// random hash keys, a clock reading and a counter, so two writes never
+/// share one, within or across processes.
+fn job_uuid() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    static WRITES: AtomicU64 = AtomicU64::new(0);
+    let n = WRITES.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let half = |salt: u64| {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(salt);
+        h.write_u64(n);
+        h.write_u128(nanos);
+        h.write_u32(std::process::id());
+        h.finish()
+    };
+    let (hi, lo) = (half(1), half(2));
+    // Version 4, RFC 4122 variant.
+    let hi = (hi & !0xF000) | 0x4000;
+    let lo = (lo & !(0xC << 60)) | (0x8 << 60);
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        hi >> 32,
+        (hi >> 16) & 0xFFFF,
+        hi & 0xFFFF,
+        lo >> 48,
+        lo & 0xFFFF_FFFF_FFFF
+    )
 }
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
