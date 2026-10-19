@@ -20,8 +20,11 @@ bytes.workspace = true
 chrono.workspace = true
 futures = { workspace = true, features = ["alloc", "std"] }
 krishiv-common = { path = "../krishiv-common" }
+# Spark value text conversions and datetime patterns (CSV, JSON, text).
+krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-memory = { path = "../krishiv-memory" }
 krishiv-types = { path = "../krishiv-types" }
+memchr.workspace = true
 object_store.workspace = true
 # The Parquet reader (P2-T080a): arrow-rs's push decoder and the codecs files
 # are written with. Never the `object_store` feature (ADR 0014, deny.toml).

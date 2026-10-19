@@ -61,6 +61,9 @@ pub enum FormatError {
     InvalidUtf8(String),
     /// A file cannot be written (the encoder failed); the reason is logged.
     WriteFailed(String),
+    /// A record or file Spark fails with `FAILED_READ_FILE.NO_HINT` caused
+    /// by this classified error (a malformed CSV record in `FAILFAST` mode).
+    Failed(KrishivError),
     /// Any other error, already classified (I/O through the
     /// [`IoContext`](crate::IoContext), memory, options, unsupported features).
     Other(KrishivError),
@@ -91,6 +94,10 @@ impl FormatError {
             }
             .into(),
             Self::WriteFailed(reason) => write_failed(path, &reason),
+            Self::Failed(cause) => KrishivError::from(FailedReadFileNoHint {
+                path: path.to_owned(),
+            })
+            .with_cause(cause),
             Self::TypeMismatch {
                 column,
                 expected,
@@ -114,6 +121,7 @@ impl fmt::Display for FormatError {
             Self::Corrupt(r) => write!(f, "corrupt data: {r}"),
             Self::InvalidUtf8(r) => write!(f, "invalid UTF-8 in a string: {r}"),
             Self::WriteFailed(r) => write!(f, "cannot write: {r}"),
+            Self::Failed(e) => write!(f, "cannot read: {e}"),
             Self::TypeMismatch {
                 column,
                 expected,
