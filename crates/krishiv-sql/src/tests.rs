@@ -900,3 +900,37 @@ fn depth_limit_is_exact_and_reported_at_the_statement() {
     let e = on_small_stack(move || parse_query(&sql, &ParserOptions::default())).unwrap_err();
     assert_eq!(e.span.range(), 10..end);
 }
+
+#[test]
+fn multipart_identifiers_parse_like_spark() {
+    // Spark 4.2.0, `spark.table(name)` (`parseMultipartIdentifier`).
+    let d = ParserOptions::default();
+    let parts = |name: &str| -> Vec<String> {
+        parse_multipart_identifier(name, &d)
+            .unwrap()
+            .parts
+            .into_iter()
+            .map(|p| p.value)
+            .collect()
+    };
+    assert_eq!(parts("`x.y`"), ["x.y"]);
+    assert_eq!(parts("x.y"), ["x", "y"]);
+    assert_eq!(parts("`a``b`"), ["a`b"]);
+    assert_eq!(parts(" default.`my.table` "), ["default", "my.table"]);
+    for (name, message, at) in [
+        ("`unclosed", "Syntax error at or near '`'", 0),
+        ("a..b", "Syntax error at or near '.'", 1),
+        ("a b", "Syntax error at or near 'b': extra input 'b'", 2),
+        ("`x.y`.", "Syntax error at or near '.': extra input '.'", 5),
+    ] {
+        let e = parse_multipart_identifier(name, &d).unwrap_err();
+        assert_eq!(
+            e.error.to_string(),
+            format!("[PARSE_SYNTAX_ERROR] {message}. SQLSTATE: 42601"),
+            "{name}"
+        );
+        assert_eq!(e.span.start, at, "{name}");
+    }
+    let e = parse_multipart_identifier("", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseEmptyStatement);
+}

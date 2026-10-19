@@ -479,6 +479,19 @@ impl Config {
         }
     }
 
+    /// Removes the value of `key` (a `krishiv.*` key, a Spark alias or
+    /// another key), so the entry has its default again.
+    pub fn unset(&mut self, key: &str) {
+        match lookup(key) {
+            Some(entry) => {
+                self.values.remove(entry.key);
+            }
+            None => {
+                self.unregistered.remove(key);
+            }
+        }
+    }
+
     /// The value of `entry`: the set value, else its default.
     pub fn get<'a>(&'a self, entry: &'a ConfigEntry) -> Option<&'a ConfigValue> {
         self.values.get(entry.key).or(entry.default.as_ref())

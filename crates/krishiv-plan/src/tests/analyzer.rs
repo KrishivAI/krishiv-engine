@@ -1152,7 +1152,7 @@ impl crate::analyzer::Catalog for Failing {
         &'a self,
         _: &'a crate::analyzer::TableIdent,
         _: Option<TableVersion>,
-        _: bool,
+        _: crate::analyzer::NameForm,
     ) -> BoxFuture<'a, Result<Option<crate::analyzer::TableMeta>, KrishivError>> {
         let e = krishiv_common::error::KrishivUnsupportedFeature {
             feature: "Canary-7f3a9c".to_owned(),
@@ -1716,14 +1716,14 @@ impl crate::analyzer::Catalog for Committing {
         &'a self,
         id: &'a crate::analyzer::TableIdent,
         version: Option<TableVersion>,
-        case_sensitive: bool,
+        form: crate::analyzer::NameForm,
     ) -> BoxFuture<'a, Result<Option<crate::analyzer::TableMeta>, KrishivError>> {
         let version = version.or_else(|| {
             let mut v = self.1.lock().ok()?;
             *v += 1;
             Some(TableVersion(*v))
         });
-        self.0.load_table(id, version, case_sensitive)
+        self.0.load_table(id, version, form)
     }
 }
 

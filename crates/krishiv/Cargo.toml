@@ -12,7 +12,15 @@ publish = false
 workspace = true
 
 [dependencies]
+arrow-array.workspace = true
+arrow-schema.workspace = true
+krishiv-common = { path = "../krishiv-common" }
 krishiv-server = { path = "../krishiv-server", optional = true }
+krishiv-session = { path = "../krishiv-session" }
+krishiv-types = { path = "../krishiv-types" }
+
+[dev-dependencies]
+futures = { workspace = true, features = ["alloc", "executor"] }
 
 [features]
 # Strictly additive (ADR 0027). Forwarded to crates as they gain code.
@@ -28,4 +36,7 @@ wasm-udf = []
 ui = ["dep:krishiv-server"]
 celeborn = []
 mimalloc = []
+# The logical-plan IR (`Session::from_plan`, `DataFrame::plan`): for embedders
+# that build plans themselves; not covered by semver.
+unstable-ir = ["krishiv-session/unstable-ir"]
 full = ["kafka", "iceberg", "delta", "cdc", "connect", "flight-sql", "mcp", "python", "wasm-udf", "ui", "celeborn", "mimalloc"]
