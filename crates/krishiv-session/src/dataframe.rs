@@ -579,6 +579,36 @@ impl DataFrame {
         Ok(rows)
     }
 
+    /// The warnings analysing and planning the query raise: hints Spark
+    /// ignores (an unknown hint, a hint naming no relation, a join hint
+    /// the join cannot follow), analysis first. Planning logs them too,
+    /// at `WARN` (target `krishiv::session`), as Spark logs them.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// let df = futures::executor::block_on(s.sql("SELECT /*+ NOPE */ a FROM t"))?;
+    /// let warnings = futures::executor::block_on(df.warnings())?;
+    /// assert!(warnings[0].starts_with("Unrecognized hint: NOPE"));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Analysis and planning errors.
+    pub async fn warnings(&self) -> Result<Vec<String>, KrishivError> {
+        let df = self.clone();
+        self.session
+            .on_executor(async move {
+                let a = df.analysis().await?;
+                let (_, physical) = df.session.physical(&a.analyzed, &a.env).await?;
+                let mut all = a.analyzed.warnings.clone();
+                all.extend(physical.warnings().iter().cloned());
+                Ok(all)
+            })
+            .await
+    }
+
     /// The query's plans as text (PySpark's `explain(mode)`).
     ///
     /// ```

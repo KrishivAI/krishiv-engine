@@ -569,6 +569,11 @@ impl Session {
         )?;
         let cx = PlanningContext::new(tables, Arc::clone(&env.config));
         let physical = self.state.planner.plan(&optimized, &cx)?;
+        // Spark logs what analysis and planning ignore (hints) as
+        // warnings; `DataFrame::warnings` returns them too.
+        for w in analyzed.warnings.iter().chain(physical.warnings()) {
+            tracing::warn!(target: "krishiv::session", "{w}");
+        }
         Ok((optimized, physical))
     }
 

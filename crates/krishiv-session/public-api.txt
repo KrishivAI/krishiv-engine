@@ -146,6 +146,7 @@ pub fn krishiv_session::DataFrame::order_by(&self, impl core::iter::traits::coll
 pub async fn krishiv_session::DataFrame::schema(&self) -> core::result::Result<arrow_schema::schema::SchemaRef, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::select(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
 pub fn krishiv_session::DataFrame::sort(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub async fn krishiv_session::DataFrame::warnings(&self) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::where_(&self, krishiv_session::Column) -> Self
 pub fn krishiv_session::DataFrame::with_column(&self, &str, krishiv_session::Column) -> Self
 pub fn krishiv_session::DataFrame::write(&self) -> krishiv_session::DataFrameWriter

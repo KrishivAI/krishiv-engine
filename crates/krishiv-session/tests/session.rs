@@ -737,3 +737,28 @@ fn writes_run_from_a_tokio_runtime_and_relative_paths_resolve() {
         assert_eq!(s.read().parquet([out.as_str()]).count().await.unwrap(), 3);
     });
 }
+
+#[test]
+fn ignored_hints_come_back_as_warnings() {
+    let s = session();
+    let (schema, batch) = people();
+    s.register_batches("other", schema, vec![batch]).unwrap();
+    let warnings = |sql: &str| block_on(block_on(s.sql(sql)).unwrap().warnings()).unwrap();
+    // Analysis: an unknown hint and a hint naming no relation.
+    let w = warnings("SELECT /*+ NOPE, BROADCAST(missing) */ id FROM people");
+    eprintln!("{w:?}");
+    assert!(
+        w.iter().any(|w| w.starts_with("Unrecognized hint: NOPE")),
+        "{w:?}"
+    );
+    assert!(w.iter().any(|w| w.contains("relation 'missing'")), "{w:?}");
+    // Planning: a join hint the join cannot follow.
+    let w = warnings("SELECT /*+ MERGE(o) */ p.id FROM people p JOIN other o ON p.id = o.id");
+    eprintln!("{w:?}");
+    assert!(
+        w.iter().any(|w| w.starts_with("Hint (strategy=merge)")),
+        "{w:?}"
+    );
+    // The query still runs, and a query without hints has none.
+    assert!(warnings("SELECT id FROM people").is_empty());
+}

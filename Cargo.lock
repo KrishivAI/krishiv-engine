@@ -1630,6 +1630,7 @@ dependencies = [
  "parquet",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
