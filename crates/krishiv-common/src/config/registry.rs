@@ -43,6 +43,14 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_MULTIPART_PART_BYTES,
     &IO_MAX_RETRIES,
     &IO_REQUEST_TIMEOUT,
+    &RUNTIME_FILTER_ENABLED,
+    &RUNTIME_FILTER_BLOOM_ENABLED,
+    &RUNTIME_FILTER_IN_LIST_MAX_VALUES,
+    &RUNTIME_FILTER_BLOOM_MAX_ITEMS,
+    &RUNTIME_FILTER_BLOOM_MAX_BYTES,
+    &RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
+    &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
+    &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -74,6 +82,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
+    ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
     (
         "krishiv.memory.spillWaitTimeout",
         &MEMORY_SPILL_WAIT_TIMEOUT,
@@ -128,8 +137,24 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &FILES_MAX_PARTITION_BYTES,
     ),
     (
+        "krishiv.runtimeFilter.bloom.maxBytes",
+        &RUNTIME_FILTER_BLOOM_MAX_BYTES,
+    ),
+    (
+        "krishiv.runtimeFilter.bloom.maxItems",
+        &RUNTIME_FILTER_BLOOM_MAX_ITEMS,
+    ),
+    (
         "spark.sql.leafNodeDefaultParallelism",
         &LEAF_NODE_DEFAULT_PARALLELISM,
+    ),
+    (
+        "krishiv.runtimeFilter.adaptive.minRows",
+        &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
+    ),
+    (
+        "krishiv.runtimeFilter.inList.maxValues",
+        &RUNTIME_FILTER_IN_LIST_MAX_VALUES,
     ),
     (
         "krishiv.sql.leafNodeDefaultParallelism",
@@ -138,6 +163,22 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.experimental.unalignedCheckpoints",
         &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    ),
+    (
+        "krishiv.runtimeFilter.adaptive.maxPassPercent",
+        &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
+    ),
+    (
+        "krishiv.runtimeFilter.bloom.minApplicationRows",
+        &RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
+    ),
+    (
+        "spark.sql.optimizer.runtime.bloomFilter.enabled",
+        &RUNTIME_FILTER_BLOOM_ENABLED,
+    ),
+    (
+        "krishiv.sql.optimizer.runtime.bloomFilter.enabled",
+        &RUNTIME_FILTER_BLOOM_ENABLED,
     ),
 ];
 
@@ -540,6 +581,104 @@ pub static IO_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Duration(Duration::from_secs(30))),
     doc: "Timeout of one object-store request attempt; a timed-out attempt is retried.",
     scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.runtimeFilter.enabled`.
+pub static RUNTIME_FILTER_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Plan runtime filters (design P2-T163): the build side of an inner or left semi hash join \
+          publishes the min/max, a small value set or a Bloom filter of its keys to the scans \
+          feeding the probe side, which skip splits, row groups and rows no build key can match. \
+          Results are the same either way.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.sql.optimizer.runtime.bloomFilter.enabled`.
+pub static RUNTIME_FILTER_BLOOM_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.optimizer.runtime.bloomFilter.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Allow Bloom filters among the runtime filters a join build publishes (min/max and value \
+          sets are not affected). Krishiv's cost model decides when one is built; Spark's creation \
+          and application size thresholds are not used.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.optimizer.runtime.bloomFilter.enabled"),
+};
+
+/// `krishiv.runtimeFilter.inList.maxValues`.
+pub static RUNTIME_FILTER_IN_LIST_MAX_VALUES: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.inList.maxValues",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(50)),
+    doc: "Most distinct build keys a runtime filter keeps as a value set; with more, a Bloom \
+          filter (when planned) or only the min/max range is published.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.runtimeFilter.bloom.maxItems`.
+pub static RUNTIME_FILTER_BLOOM_MAX_ITEMS: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.bloom.maxItems",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(4_000_000)),
+    doc: "Most build keys a runtime Bloom filter is built for: a build estimated larger plans \
+          none, and one that turns out larger publishes none.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.runtimeFilter.bloom.maxBytes`.
+pub static RUNTIME_FILTER_BLOOM_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.bloom.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(8 * MIB)),
+    doc: "Largest runtime Bloom filter. A filter capped below its 1% false-positive size is still \
+          built unless its expected false-positive rate exceeds 5%.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.runtimeFilter.bloom.minApplicationRows`.
+pub static RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.bloom.minApplicationRows",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(1_000_000)),
+    doc: "A runtime Bloom filter is planned only for a scan estimated at this many rows or more \
+          (and at least four times the build).",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.runtimeFilter.adaptive.maxPassPercent`.
+pub static RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.adaptive.maxPassPercent",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(90)),
+    doc: "A scan driver stops evaluating a runtime filter on rows once it passes more than this \
+          percentage of a measurement window (pruning splits and row groups with it continues).",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.runtimeFilter.adaptive.minRows`.
+pub static RUNTIME_FILTER_ADAPTIVE_MIN_ROWS: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.adaptive.minRows",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(65_536)),
+    doc: "Rows per window over which a scan driver measures a runtime filter's pass rate.",
+    scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
 };

@@ -12,6 +12,7 @@
 
 mod hints;
 mod listing;
+mod runtime_filters;
 mod semantics;
 mod tpch;
 mod write;

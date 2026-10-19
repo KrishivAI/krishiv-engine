@@ -6,7 +6,7 @@ Sort [o_orderpriority#5 ASC NULLS FIRST]
 +- Project [o_orderpriority#5, count(1)#4611686018427387923 AS order_count#25]
    +- HashAggregate keys=[o_orderpriority#5], functions=[count(1)]
       +- Project [o_orderpriority#5]
-         +- HashJoin LeftSemi, [o_orderkey#0] = [l_orderkey#9]
+         +- HashJoin LeftSemi, [o_orderkey#0] = [l_orderkey#9], RuntimeFilter #1: o_orderkey#0 -> spark_catalog.default.orders.o_orderkey
             :- Project [o_orderkey#0, o_orderpriority#5]
             :  +- Filter ((o_orderdate#4 >= DATE '1993-07-01') and (o_orderdate#4 < DATE '1993-10-01'))
             :     +- Scan spark_catalog.default.orders [o_orderkey#0, o_orderdate#4, o_orderpriority#5], PushedFilters: [((o_orderdate#4 >= DATE '1993-07-01') and (o_orderdate#4 < DATE '1993-10-01'))]

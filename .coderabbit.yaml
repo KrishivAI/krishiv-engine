@@ -29,7 +29,32 @@ reviews:
         thiserror with Spark error classes. Lint suppressions use #[expect] with a
         reason, never #[allow]. Check Spark 4.x semantics (nulls, overflow, ANSI
         mode, decimal precision, time zones) and that Arrow buffers are not copied
-        needlessly.
+        needlessly. When a finding claims what Spark does, cite the Spark 4.2 source
+        or a reproducible query; state it as a question if unverified.
+        Flag: memory grown in one large reservation instead of incrementally, or
+        reserved without a spill/decline path; memory reservations not released on
+        error, cancel or early return; object-store calls without the scheduler's
+        retry and timeout; unbounded fan-out (futures, tasks, buffers) proportional
+        to input size; results that depend on hash order, thread timing or
+        wall-clock time; NaN/-0.0 and NULL handling in keys and comparisons;
+        integer and size arithmetic on untrusted input without checked operations.
+    - path: "crates/krishiv-exec/**"
+      instructions: >-
+        Operators run in morsel-driven pipelines: flag per-row dynamic dispatch or
+        per-row allocation in hot loops, work done on a single thread that could
+        run per partition, and quadratic copying or re-scanning of buffered data.
+        Spill and grace paths must keep correctness under every memory limit.
+    - path: "crates/krishiv-python/**"
+      instructions: >-
+        Review every unsafe block against its SAFETY comment: capsule and FFI
+        pointer ownership, single release, behaviour on free-threaded Python
+        (critical sections), no panics across extern "C", no Python calls while
+        the engine holds the GIL released.
+    - path: "**/tests/**"
+      instructions: >-
+        Tests must assert exact expected values (taken from Spark or a stated
+        oracle), not just success; flag tests that would pass without the fix,
+        wall-clock-sensitive assertions, and shared temp paths.
     - path: "xtask/**"
       instructions: "Developer tooling: prefer clear error messages naming the fix."
     - path: ".github/workflows/**"

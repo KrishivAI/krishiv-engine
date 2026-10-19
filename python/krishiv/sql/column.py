@@ -6,21 +6,19 @@ from __future__ import annotations
 from typing import Any
 
 from krishiv import _native
-from krishiv.errors import PySparkTypeError, PySparkValueError, not_expected_type, not_implemented
+from krishiv.errors import PySparkTypeError, PySparkValueError, not_expected_type
 from krishiv.sql.types import DataType, _simple_string_of
 
 
 def _literal(value: Any) -> _native.Column:
     """The native column for a Python value used as a literal."""
     # bool is an int subclass; the native side tells them apart.
-    if isinstance(value, bool | int | float | str):
+    if value is None or isinstance(value, bool | int | float | str):
         try:
             return _native.lit(value)
         except OverflowError as e:
             raise PySparkValueError(f"integer literal out of the 64-bit range: {value}") from e
-    if value is None:
-        raise not_implemented("A NULL literal")
-    raise not_expected_type("value", "bool, int, float or str", value)
+    raise not_expected_type("value", "None, bool, int, float or str", value)
 
 
 def _operand(value: Any) -> _native.Column:

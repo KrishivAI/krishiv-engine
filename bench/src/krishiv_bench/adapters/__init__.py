@@ -1,4 +1,4 @@
-"""Engine adapter registry. Add Sail/Polars/Flink here (see base.Engine)."""
+"""Engine adapter registry. Add Flink etc. here (see base.Engine)."""
 
 from __future__ import annotations
 
@@ -18,8 +18,24 @@ def make_engine(name: str, **kw) -> Engine:
         from .krishiv import KrishivEngine
 
         return KrishivEngine(**kw)
-    raise ValueError(f"unknown engine {name!r}; available: duckdb, spark-connect, krishiv")
+    if name == "polars":
+        from .polars_engine import PolarsEngine
+
+        return PolarsEngine(**kw)
+    if name == "datafusion":
+        from .datafusion_engine import DataFusionEngine
+
+        return DataFusionEngine(**kw)
+    if name == "spark-local":
+        from .spark_local import SparkLocalEngine
+
+        return SparkLocalEngine(**kw)
+    if name == "sail":
+        from .spark_local import SailEngine
+
+        return SailEngine(**kw)
+    raise ValueError(f"unknown engine {name!r}; available: {', '.join(ENGINES)}")
 
 
-ENGINES = ["duckdb", "spark-connect", "krishiv"]
+ENGINES = ["duckdb", "spark-connect", "krishiv", "polars", "datafusion", "spark-local", "sail"]
 __all__ = ["ENGINES", "Dataset", "Engine", "Measure", "Query", "make_engine"]

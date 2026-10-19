@@ -38,6 +38,8 @@ parquet = { workspace = true, features = [
     "zstd",
 ] }
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
+# Runtime-filter Bloom filters hash as Parquet's (XXH64, P2-T163).
+twox-hash = { workspace = true, features = ["xxhash64"] }
 tracing = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
@@ -50,6 +52,13 @@ proptest = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
 
+[target.'cfg(loom)'.dev-dependencies]
+loom.workspace = true
+
 [[bench]]
 name = "io"
+harness = false
+
+[[bench]]
+name = "runtime_filter"
 harness = false

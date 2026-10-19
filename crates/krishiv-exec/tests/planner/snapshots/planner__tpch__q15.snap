@@ -4,7 +4,7 @@ expression: tpch.plan(q).to_string()
 ---
 Sort [s_suppkey#18 ASC NULLS FIRST]
 +- Project [s_suppkey#18, s_name#19, s_address#20, s_phone#22, total_revenue#26]
-   +- HashJoin Inner, [s_suppkey#18] = [supplier_no#25]
+   +- HashJoin Inner, [s_suppkey#18] = [supplier_no#25], RuntimeFilter #1: s_suppkey#18 -> spark_catalog.default.supplier.s_suppkey
       :- Scan spark_catalog.default.supplier [s_suppkey#18, s_name#19, s_address#20, s_phone#22]
       +- Filter (total_revenue#26 == scalar-subquery)
          :- Project revenue [supplier_no#25, total_revenue#26]

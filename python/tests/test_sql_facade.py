@@ -243,8 +243,7 @@ def test_functions_and_literals(df: DataFrame) -> None:
     assert [t for _, t in out.dtypes[:5]] == ["int", "bigint", "double", "string", "boolean"]
     with pytest.raises(errors.PySparkTypeError):
         F.lit([1])
-    with pytest.raises(errors.PySparkNotImplementedError):
-        F.lit(None)
+    assert dict(df.select(F.lit(None).alias("n"), "id").dtypes) == {"n": "void", "id": "bigint"}
     with pytest.raises(errors.PySparkValueError):
         F.lit(2**70)
     with pytest.raises(errors.PySparkNotImplementedError):

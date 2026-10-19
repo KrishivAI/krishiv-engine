@@ -35,6 +35,7 @@ pub mod io;
 mod options;
 pub mod parquet;
 mod request;
+pub mod runtime_filter;
 mod scan;
 mod schema_map;
 pub mod split;
@@ -58,9 +59,13 @@ pub use options::{
     OptionWarning,
 };
 pub use request::{
-    CmpOp, Collation, ColumnPath, DynamicFilter, FieldMapping, MetadataCols, PushdownExpr,
+    CmpOp, Collation, ColumnPath, FieldMapping, MembershipFilter, MetadataCols, PushdownExpr,
     ROW_INDEX_COLUMN, RowFilterPolicy, RowSelection, ScalarValue, ScanRequest, project_batch,
     project_schema,
+};
+pub use runtime_filter::{
+    DisabledReason, FilterCounts, FilterId, FilterSnapshot, KeyFilter, KeyFilterBuilder,
+    KeyFilterOptions, Published, RuntimeFilter, ScanFilter,
 };
 pub use scan::{ScanOptions, ScanStream};
 pub use schema_map::{FIELD_ID_KEY, SchemaMapper};

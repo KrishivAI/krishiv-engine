@@ -7,6 +7,8 @@ from .adapters import ENGINES
 from .report import write_report
 from .runner import run_suite
 
+ABBA_DATASET = {"tpch": "tpch-duckdb", "tpcds": "tpcds", "clickbench": "clickbench"}
+
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="krishiv-bench")
@@ -25,14 +27,33 @@ def main(argv=None) -> None:
     r.add_argument("--duckdb-threads", type=int)
     r.add_argument("--duckdb-memory-limit", default="12GB")
     r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
-    ab = sub.add_parser("abba", help="interleaved ABBA Krishiv vs DuckDB (P2-T142); needs the release runner binary")
+    ab = sub.add_parser(
+        "abba", help="interleaved ABBA Krishiv vs DuckDB (P2-T142); needs the dist-profile runner binary"
+    )
+    ab.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
     ab.add_argument("--sf", type=float, default=10)
-    ab.add_argument("--dataset", default="tpch-duckdb")
+    ab.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
     ab.add_argument("--reps", type=int, default=3, help="ABBA blocks per query (2 samples per engine each)")
     ab.add_argument("--queries", help="comma list, e.g. q01,q05")
     ab.add_argument("--threads", type=int, default=8, help="threads for both engines")
     ab.add_argument("--memory-limit", default="12g", help="memory limit for both engines")
     ab.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
+    rr = sub.add_parser(
+        "reproduce",
+        help="reference engines side by side: correctness vs DuckDB, then ours (interleaved) and/or theirs (best of N)",
+    )
+    rr.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    rr.add_argument("--sf", type=float, default=10)
+    rr.add_argument("--dataset", help="dataset dir under $KRISHIV_DATA (default per suite)")
+    rr.add_argument("--engines", help="comma list (default: krishiv,duckdb,polars,datafusion,sail,spark-local)")
+    rr.add_argument("--methods", default="ours,theirs", help="comma list of: ours, theirs")
+    rr.add_argument("--reps", type=int, default=3, help="interleaved blocks per query (2 samples per engine each)")
+    rr.add_argument("--queries", help="comma list, e.g. q01,q05")
+    rr.add_argument("--threads", type=int, default=12)
+    rr.add_argument("--memory-gb", type=int, default=32)
+    rr.add_argument("--timeout", type=float, default=600, help="per-run timeout for the ours method (seconds)")
+    rr.add_argument("--runs", type=int, help="hot runs per process for theirs (default: the published source's)")
+    rr.add_argument("--their-timeout", type=float, help="per-run timeout for theirs (default: the source's)")
     rp = sub.add_parser("report", help="Markdown comparison of the newest result per engine")
     rp.add_argument("--suite", default="tpch")
     rp.add_argument("--sf", type=float, default=1)
@@ -40,17 +61,38 @@ def main(argv=None) -> None:
     rp.add_argument("--baseline", default="duckdb")
     rp.add_argument("files", nargs="*", type=Path, help="explicit result JSONs (default: newest per engine)")
     a = ap.parse_args(argv)
-    if a.cmd == "abba":
+    if a.cmd == "reproduce":
+        from .reproduce import run_reproduce
+
+        methods = tuple(m.strip() for m in a.methods.split(",") if m.strip())
+        if not methods or set(methods) - {"ours", "theirs"}:
+            ap.error(f"--methods must be a comma list of: ours, theirs (got {a.methods!r})")
+        run_reproduce(
+            a.suite,
+            a.sf,
+            a.dataset,
+            a.engines.split(",") if a.engines else None,
+            methods,
+            a.reps,
+            a.queries.split(",") if a.queries else None,
+            a.threads,
+            a.memory_gb,
+            a.timeout,
+            a.runs,
+            a.their_timeout,
+        )
+    elif a.cmd == "abba":
         from .abba import run_abba
 
         run_abba(
             a.sf,
-            a.dataset,
+            a.dataset or ABBA_DATASET[a.suite],
             a.reps,
             a.queries.split(",") if a.queries else None,
             a.threads,
             a.memory_limit,
             a.timeout,
+            a.suite,
         )
     elif a.cmd == "run":
         kw = {}

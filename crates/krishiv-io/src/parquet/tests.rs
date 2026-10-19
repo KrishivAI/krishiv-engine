@@ -981,3 +981,81 @@ fn upcoming_ranges_respect_the_budget() {
     assert!(crate::Decoder::upcoming(&d, one - 1).is_empty());
     assert_eq!(crate::Decoder::buffered_bytes(&d), 0);
 }
+
+/// Runtime filters (P2-T163): a filter published before the split opens
+/// prunes row groups at planning; one published while the split is read
+/// prunes the row groups not started yet at the next boundary. The table
+/// types the key `bigint` over an `int` file column (keys compare widened).
+#[test]
+#[cfg(not(loom))] // Runtime filters use loom's primitives under `--cfg loom`.
+fn runtime_filters_prune_row_groups_at_open_and_at_boundaries() {
+    use crate::{FilterId, FilterSnapshot, KeyFilterBuilder, KeyFilterOptions, RuntimeFilter};
+
+    let env = Env::new();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(1000))
+        .build();
+    let bytes = write(&[ints("k", 0..100_000)], props);
+    let file = env.put("sorted.parquet", bytes);
+    let o = env.options(&[]);
+    let table = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, true)]));
+    let mut b = KeyFilterBuilder::new(DataType::Int64, KeyFilterOptions::default()).unwrap();
+    b.add(&arrow_array::Int64Array::from(vec![41_500, 77_000]), None)
+        .unwrap();
+    let keys = Arc::new(b.finish());
+    let request = |filter: &Arc<RuntimeFilter>| {
+        let mut req = ScanRequest::all(Arc::clone(&table));
+        req.dynamic
+            .push(crate::ScanFilter::new(Arc::clone(filter), &table).unwrap());
+        req
+    };
+
+    // Published before the split opens: two row groups are read.
+    let early = Arc::new(RuntimeFilter::new(
+        FilterId(1),
+        ColumnPath::new("k"),
+        DataType::Int64,
+    ));
+    early.publish(FilterSnapshot::Final(Arc::clone(&keys)));
+    let out = env.scan(&file, &request(&early), &o).unwrap();
+    assert_eq!(rows(&out), 2000);
+    let c = early.stats().counts();
+    assert_eq!(c.units_pruned, 98);
+    assert!(c.bytes_pruned > 0);
+
+    // Published after the first row group was read: the rest are pruned
+    // at the next boundary.
+    let late = Arc::new(RuntimeFilter::new(
+        FilterId(2),
+        ColumnPath::new("k"),
+        DataType::Int64,
+    ));
+    let req = request(&late);
+    let read = env.rt.block_on(async {
+        let pool: Arc<dyn krishiv_memory::MemoryPool> =
+            krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+        let id = pool.register("scan", None);
+        let mut s = ScanStream::open(
+            &env.io,
+            &ParquetFormat,
+            file.clone(),
+            ByteRange::whole(file.size),
+            &req,
+            &o,
+            krishiv_memory::Reservation::new(pool, id),
+            ScanOptions::default(),
+        )
+        .await
+        .unwrap();
+        let first = s.next_batch().await.unwrap().unwrap();
+        assert_eq!(first.num_rows(), 1000, "row group 0, before the filter");
+        late.publish(FilterSnapshot::Final(Arc::clone(&keys)));
+        let mut total = first.num_rows();
+        while let Some(b) = s.next_batch().await.unwrap() {
+            total += b.num_rows();
+        }
+        (total, s.metrics().units_pruned)
+    });
+    assert_eq!(read, (3000, 97));
+    assert_eq!(late.stats().counts().units_pruned, 97);
+}

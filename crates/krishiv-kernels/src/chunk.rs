@@ -28,15 +28,19 @@ use crate::unsafe_dispatch::{Kernel, run};
 /// Rows per chunk: one validity word.
 pub(crate) const CHUNK: usize = 64;
 
-/// An elementwise operation on two lanes.
+/// An elementwise operation on two lanes of native `T`, with results of
+/// native [`LaneOp::Out`] (the same as `T` except for decimal lanes, whose
+/// inputs and result may use different carriers).
 pub(crate) trait LaneOp<T>: Copy {
+    /// The result native.
+    type Out: Copy + Default;
     /// Whether the operation can fault with [`Fault::DivideByZero`].
     const MAY_DIVIDE_BY_ZERO: bool = false;
     /// The result without checks. Total: never panics.
-    fn wrapping(self, a: T, b: T) -> T;
+    fn wrapping(self, a: T, b: T) -> Self::Out;
     /// The result and a cheap flag that is set for every faulting row (it
     /// may also be set for a good one; [`LaneOp::fault`] decides).
-    fn checked(self, a: T, b: T) -> (T, bool);
+    fn checked(self, a: T, b: T) -> (Self::Out, bool);
     /// The exact verdict for a row whose flag was set (slow path). For a row
     /// without a fault, the value [`LaneOp::checked`] returned must be exact.
     fn fault(self, a: T, b: T) -> Option<Fault>;
@@ -127,13 +131,13 @@ pub(crate) fn compute<T, L, O>(
     len: usize,
     op: L,
     raise: impl FnOnce(usize, Fault) -> KernelError,
-) -> Result<Computed<T>, KernelError>
+) -> Result<Computed<L::Out>, KernelError>
 where
     T: Copy + Default,
     L: LaneOp<T>,
     O: Overflow,
 {
-    let mut out = with_capacity::<T>(len)?;
+    let mut out = with_capacity::<L::Out>(len)?;
     let n_words = len.div_ceil(CHUNK);
     // Space for one NULL-row word per chunk, reserved up front so the loop
     // never allocates. Only policies that can turn a row NULL need it.
@@ -197,12 +201,12 @@ fn low_bits(n: usize) -> u64 {
 }
 
 /// The chunk loop for one monomorph; `run` compiles it per CPU target.
-struct Chunks<'a, T, L, O, const L_SCALAR: bool, const R_SCALAR: bool> {
+struct Chunks<'a, T, L: LaneOp<T>, O, const L_SCALAR: bool, const R_SCALAR: bool> {
     l: Side<'a, T>,
     r: Side<'a, T>,
     validity: Option<&'a NullBuffer>,
     /// Empty, with capacity for `len` values.
-    out: &'a mut Vec<T>,
+    out: &'a mut Vec<L::Out>,
     /// Empty, with capacity for one word per chunk when the policy can
     /// turn rows NULL.
     null_words: &'a mut Vec<u64>,
@@ -320,7 +324,7 @@ fn chunk<T, L, const L_SCALAR: bool, const R_SCALAR: bool>(
     ls: T,
     b: &[T; CHUNK],
     rs: T,
-    out: &mut Vec<T>,
+    out: &mut Vec<L::Out>,
     take: usize,
     op: L,
     checks: bool,
@@ -427,6 +431,7 @@ mod tests {
     struct Div;
 
     impl LaneOp<i32> for Div {
+        type Out = i32;
         const MAY_DIVIDE_BY_ZERO: bool = true;
         fn wrapping(self, a: i32, b: i32) -> i32 {
             a.checked_div(b).unwrap_or(0)

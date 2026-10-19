@@ -17,6 +17,9 @@ def test_scalars_exact_and_tolerant():
     assert c.values_equal(D("0.049985"), D("0.049985295838397614"))
     assert c.values_equal(D("0.049985"), 0.049985295838397614)
     assert not c.values_equal(D("0.049985"), 0.05)
+    # TPC-DS q66: Spark (and Krishiv) sum quotients rounded to scale 6, DuckDB sums doubles.
+    assert c.values_equal(D("11.694972"), 11.694972872414953)
+    assert not c.values_equal(D("11.694960"), 11.694972872414953)
     assert c.values_equal(1.0, 1.0000001)
     assert not c.values_equal(1.0, 1.001)
     assert c.values_equal(5, D("5.00"))

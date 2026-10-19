@@ -5,19 +5,25 @@
 //! Rules run in batches, each batch to a fixed point (at most
 //! [`MAX_ITERATIONS`] rounds, as Spark's `spark.sql.optimizer.maxIterations`):
 //!
+//! 0. **Implied join filters**, once: each input of an inner join is
+//!    filtered with what its condition's disjunctions imply on it alone.
 //! 1. **Rewrite**: constant folding and boolean simplification, filter
 //!    pushdown (through projections, aggregates onto their grouping keys,
 //!    sorts, aliases, CTE bodies, self-join instances and joins, turning
 //!    outer joins inner where a filter rejects their NULL rows), join
 //!    conditions into the side they read, projection collapse and removal,
 //!    limit pushdown.
-//! 2. **Join order**: each tree of inner joins is re-planned from
+//! 2. **Restrict**, once: an aggregate below a join that drops its
+//!    unmatched groups groups only the input rows whose keys the join's
+//!    other side holds (a semi join on that side's key domain, see
+//!    `restrict`), when estimates say the domain is small.
+//! 3. **Join order**: each tree of inner joins is re-planned from
 //!    cardinality estimates ([`Statistics`]): exact dynamic programming up
 //!    to [`DP_LIMIT`] inputs, greedy above, never a cross product the query
 //!    does not have.
-//! 3. **Prune**: column pruning over the whole plan (projection pushdown
+//! 4. **Prune**: column pruning over the whole plan (projection pushdown
 //!    into scans), once.
-//! 4. **Tidy**: the rewrite batch again over the pruned plan.
+//! 5. **Tidy**: the rewrite batch again over the pruned plan.
 //!
 //! Every rule applies inside subquery plans too, and rewrites a subtree
 //! shared through `Arc` once, so the plan stays a DAG. A rule that changes
@@ -38,6 +44,7 @@ mod limit;
 mod project;
 mod prune;
 mod pushdown;
+mod restrict;
 mod stats;
 
 use std::sync::Arc;
@@ -104,7 +111,10 @@ fn run(plan: &Plan, stats: Option<&dyn Statistics>) -> Result<Plan, KrishivError
     }
     let root = Arc::clone(plan.root());
     let run = move || -> Result<Arc<LogicalPlan>, KrishivError> {
+        let root = dag::rewrite_up(root, &mut |p| Ok(pushdown::imply_join_condition(p)))?;
         let root = batch(root)?;
+        // Before join ordering, which then sees the restricted estimates.
+        let root = restrict::restrict(root, stats.unwrap_or(&NoStatistics))?;
         let root = match stats {
             Some(stats) => join_order::reorder(&root, stats),
             None => root,

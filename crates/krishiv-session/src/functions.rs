@@ -29,6 +29,17 @@ pub fn lit(value: impl IntoLiteral) -> Column {
     Column::new(Expr::literal(value.into_literal()))
 }
 
+/// The untyped `NULL` literal (`lit(None)` in PySpark; Spark's `void` type).
+///
+/// ```
+/// use krishiv_session::functions::lit_null;
+/// let nothing = lit_null();
+/// ```
+#[must_use]
+pub fn lit_null() -> Column {
+    Column::new(Expr::literal(Literal::Null(None)))
+}
+
 /// Values [`lit`] accepts, with the Spark type each becomes.
 pub trait IntoLiteral {
     /// The literal.
@@ -177,4 +188,18 @@ pub fn count_distinct(cols: impl IntoIterator<Item = Column>) -> Column {
 #[must_use]
 pub fn coalesce(cols: impl IntoIterator<Item = Column>) -> Column {
     call_function("coalesce", cols)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lit_null_is_the_untyped_null_literal() {
+        let null = lit_null();
+        assert_eq!(
+            format!("{null:?}"),
+            format!("{:?}", Column::new(Expr::literal(Literal::Null(None))))
+        );
+    }
 }

@@ -82,6 +82,11 @@ pub trait Source: Send + Sync {
         let _ = local;
         0
     }
+    /// Source-specific `EXPLAIN ANALYZE` counters (name, value), read once
+    /// the pipeline ended. Default: none.
+    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+        Vec::new()
+    }
 }
 
 /// What [`Operator::execute`] did with its input.

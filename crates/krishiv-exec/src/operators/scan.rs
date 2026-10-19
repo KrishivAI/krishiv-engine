@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use arrow_schema::SchemaRef;
 use futures::future::BoxFuture;
 use krishiv_io::{
-    ColumnPath, DynamicFilter, FieldMapping, FileRef, MetadataCols, PushdownExpr, RowSelection,
+    ColumnPath, FieldMapping, FileRef, MetadataCols, PushdownExpr, RowSelection, ScanFilter,
 };
 use krishiv_types::batch::Batch;
 
@@ -97,9 +97,11 @@ pub struct ScanPushdowns {
     /// whole batches. Ignored while filters are pushed (the `Filter` above
     /// the scan may drop rows).
     pub limit: Option<u64>,
-    /// Runtime filters (join build sides, Top-N bounds) that tighten while
-    /// the scan runs; file formats prune with them at unit boundaries.
-    pub dynamic: Vec<Arc<dyn DynamicFilter>>,
+    /// Runtime filters (join build sides; design P2-T163), attached by the
+    /// planner after the scan is built and read when it starts running:
+    /// file scans prune splits, row groups and rows with them, the
+    /// in-memory scan rows.
+    pub dynamic: super::RuntimeFilters,
     /// Rows to read per file; only for scans that
     /// [support](ScanPushdown::supports_selection) it.
     pub selection: Option<Arc<dyn FileSelections>>,
@@ -137,8 +139,9 @@ pub trait ScanPushdown: Send + Sync {
 /// never reads more than one such batch past its limit. Pushed filters are
 /// applied before the projection and honoured exactly; nested projections
 /// prune struct fields; a pushed limit stops the scan once that many rows
-/// were returned. Dynamic filters and field mapping do not apply to
-/// in-memory data; row selections and `_metadata` columns are refused.
+/// were returned. Runtime filters drop rows before the projection (the
+/// row stage, with its adaptive switch-off); field mapping does not apply
+/// to in-memory data; row selections and `_metadata` columns are refused.
 ///
 /// One piece is returned per call, possibly with no rows after a pushed
 /// filter, so the driver reaches a batch boundary after every piece read.
@@ -153,6 +156,7 @@ pub struct MemoryScan {
     limit: Option<u64>,
     output: SchemaRef,
     rows_read: AtomicU64,
+    runtime: super::RuntimeFilters,
 }
 
 pub(super) struct ScanGlobal {
@@ -161,6 +165,8 @@ pub(super) struct ScanGlobal {
     pub(super) batch_rows: usize,
     /// Rows returned by every driver (for a pushed limit).
     pub(super) returned: AtomicU64,
+    /// Runtime filters on the table's columns.
+    pub(super) runtime: Vec<ScanFilter>,
 }
 
 pub(super) struct ScanLocal {
@@ -169,6 +175,8 @@ pub(super) struct ScanLocal {
     /// Rows already read of `batches.start`.
     pub(super) offset: usize,
     pub(super) claimed: u64,
+    /// The runtime filters' row stage.
+    pub(super) rows: super::RowStage,
 }
 
 impl MemoryScan {
@@ -197,6 +205,7 @@ impl MemoryScan {
             filters: Vec::new(),
             limit: None,
             rows_read: AtomicU64::new(0),
+            runtime: super::RuntimeFilters::default(),
         })
     }
 
@@ -234,6 +243,7 @@ impl MemoryScan {
             filters,
             output,
             rows_read: AtomicU64::new(0),
+            runtime: pushdowns.dynamic,
         })
     }
 
@@ -263,6 +273,9 @@ impl MemoryScan {
         }
         self.rows_read.fetch_add(take as u64, Ordering::Relaxed);
         let mut piece = piece;
+        if let Some(mask) = local.rows.mask(piece.data())? {
+            piece = piece.filter(&mask)?;
+        }
         for filter in &self.filters {
             if piece.num_rows() == 0 {
                 break;
@@ -358,6 +371,7 @@ impl Source for MemoryScan {
             morsels,
             batch_rows: config.batch_size.max(1),
             returned: AtomicU64::new(0),
+            runtime: self.runtime.scan_filters(&self.table),
         }))
     }
 
@@ -365,11 +379,13 @@ impl Source for MemoryScan {
         global_ref::<ScanGlobal>(global, "MemoryScan").map_or(1, |g| g.morsels.len().max(1))
     }
 
-    fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
+    fn local_state(&self, _ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
+        let g = global_ref::<ScanGlobal>(global, "MemoryScan")?;
         Ok(Box::new(ScanLocal {
             batches: 0..0,
             offset: 0,
             claimed: 0,
+            rows: super::RowStage::new(&g.runtime, &self.table, self.runtime.settings()),
         }))
     }
 
@@ -383,5 +399,9 @@ impl Source for MemoryScan {
 
     fn morsels_claimed(&self, local: &LocalState) -> u64 {
         local.downcast_ref::<ScanLocal>().map_or(0, |l| l.claimed)
+    }
+
+    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+        self.runtime.extra_metrics()
     }
 }

@@ -20,17 +20,20 @@
 
 use std::fmt::Debug;
 
+use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type,
 };
-use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, PrimitiveArray};
+use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, BooleanArray, PrimitiveArray};
 use arrow_buffer::{NullBuffer, ScalarBuffer, ToByteSlice};
 use krishiv_kernels::compare::{
     self, BoolOperand, BytesOperand, CompareKind, CompareOp, Equal, Greater, GreaterEq, Less,
     LessEq, NotEqual, SparkOrd, Validity,
 };
 use krishiv_kernels::decimal::{
-    DecimalOp, DecimalPlan, DecimalStorage, decimal_arith, decimal_integral_divide, result_type,
+    DecimalCarrier, DecimalOp, DecimalOperand, DecimalPlan, DecimalStorage, decimal_arith,
+    decimal_arith_any, decimal_integral_divide, decimal_integral_divide_any, result_type,
 };
 use krishiv_kernels::float::{self, SparkFloat};
 use krishiv_kernels::integer::{SparkIntegral, UnaryOp, binary, integral_divide, remainder, unary};
@@ -552,6 +555,7 @@ fn check_decimal<O: krishiv_kernels::decimal::DecimalOverflow>(
             }
         }
     }
+    check_decimal_carriers::<O>(plan, l, r, c, &la, &ra);
     if plan.types_op() == DecimalOp::Divide {
         let slow = c.with_decimal(&la, &ra, |a, b| {
             reference::decimal_integral_divide(l, r, O::MODE, a, b)
@@ -561,6 +565,108 @@ fn check_decimal<O: krishiv_kernels::decimal::DecimalOverflow>(
                 decimal_integral_divide::<O>(a, b, l, r, &ctx)
             });
             assert_same(&fast, &slow);
+        }
+    }
+}
+
+/// A `Decimal64` column of a case's values (valid ones are within
+/// precision 18; garbage under NULL slots saturates to `i64::MIN`/`MAX`).
+fn decimal64_array(c: &Column<i128>, t: (u8, i8)) -> PrimitiveArray<Decimal64Type> {
+    let sat = |v: i128| i64::try_from(v).unwrap_or(if v < 0 { i64::MIN } else { i64::MAX });
+    let narrow = Column {
+        values: c.values.iter().map(|&v| sat(v)).collect(),
+        valid: c.valid.clone(),
+        offset: c.offset,
+    };
+    narrow
+        .array::<Decimal64Type>()
+        .with_precision_and_scale(t.0, t.1)
+        .unwrap()
+}
+
+/// A result of either carrier as `Decimal128`, checking its Arrow type.
+fn as_decimal128(
+    a: Result<ArrayRef, KernelError>,
+    carrier: DecimalCarrier,
+    out: (u8, i8),
+) -> DecResult {
+    let a = a?;
+    assert_eq!(*a.data_type(), carrier.data_type(out));
+    Ok(match carrier {
+        DecimalCarrier::Decimal128 => a.as_primitive::<Decimal128Type>().clone(),
+        DecimalCarrier::Decimal64 => a
+            .as_primitive::<Decimal64Type>()
+            .unary::<_, Decimal128Type>(i128::from)
+            .with_data_type(DecimalCarrier::Decimal128.data_type(out)),
+    })
+}
+
+/// The case on every other carrier combination the types allow
+/// (`Decimal64` for a side or result of precision at most 18): the same
+/// values, NULLs and errors as the `Decimal128` reference.
+fn check_decimal_carriers<O: krishiv_kernels::decimal::DecimalOverflow>(
+    plan: &DecimalPlan,
+    l: (u8, i8),
+    r: (u8, i8),
+    c: &Case<i128>,
+    la: &PrimitiveArray<Decimal128Type>,
+    ra: &PrimitiveArray<Decimal128Type>,
+) {
+    let narrow = |p: u8| {
+        if p <= 18 {
+            vec![false, true]
+        } else {
+            vec![false]
+        }
+    };
+    let d64 = |col: &Column<i128>, t: (u8, i8)| (t.0 <= 18).then(|| decimal64_array(col, t));
+    let (l64, r64) = (d64(&c.l, l), d64(&c.r, r));
+    let side = |use64: bool, w: &'static str, s: Option<i128>| -> DecimalOperand<'_> {
+        match (w, use64, &l64, &r64) {
+            ("s", ..) => DecimalOperand::Scalar(s),
+            ("l", true, Some(a), _) => DecimalOperand::Decimal64(a),
+            ("l", ..) => DecimalOperand::Decimal128(la),
+            (_, true, _, Some(b)) => DecimalOperand::Decimal64(b),
+            _ => DecimalOperand::Decimal128(ra),
+        }
+    };
+    let out = plan.out();
+    for ctx in contexts() {
+        let slow = c.with_decimal(la, ra, |a, b| {
+            reference::decimal_arith(plan, O::MODE, ctx.spark_version(), a, b)
+        });
+        for lw in narrow(l.0) {
+            for rw in narrow(r.0) {
+                let (a, b) = match c.shape {
+                    Shape::ArrayArray => (side(lw, "l", None), side(rw, "r", None)),
+                    Shape::ArrayScalar(s) => (side(lw, "l", None), side(rw, "s", s)),
+                    Shape::ScalarArray(s) => (side(lw, "s", s), side(rw, "r", None)),
+                };
+                for carrier in [DecimalCarrier::Decimal128, DecimalCarrier::Decimal64] {
+                    if (carrier == DecimalCarrier::Decimal64 && out.0 > 18)
+                        || (!lw && !rw && carrier == DecimalCarrier::Decimal128)
+                    {
+                        continue;
+                    }
+                    let fast = as_decimal128(
+                        decimal_arith_any::<O>(a, b, plan, carrier, &ctx),
+                        carrier,
+                        out,
+                    );
+                    if O::MODE == OverflowMode::Unchecked && slow.is_ok() {
+                        assert_eq!(fast.unwrap(), slow.clone().unwrap());
+                    } else {
+                        assert_same(&fast, &slow);
+                    }
+                }
+                if plan.types_op() == DecimalOp::Divide && (lw || rw) {
+                    let slow = c.with_decimal(la, ra, |x, y| {
+                        reference::decimal_integral_divide(l, r, O::MODE, x, y)
+                    });
+                    let fast = decimal_integral_divide_any::<O>(a, b, l, r, &ctx);
+                    assert_same(&fast, &slow);
+                }
+            }
         }
     }
 }
@@ -605,6 +711,8 @@ proptest! {
     #[test]
     fn i64_compare(c in case(i64_value())) {
         check_cmp_all::<Int64Type>(&c, &reference::compare_ord);
+        // A `Decimal64` column compares as its unscaled longs.
+        check_cmp_all::<Decimal64Type>(&c, &reference::compare_ord);
     }
 
     #[test]
@@ -657,6 +765,82 @@ proptest! {
                 (out_p.max(s).max(1), i8::try_from(s).unwrap())
             }
         };
+        let plan = DecimalPlan::new(op, l, r, out).unwrap();
+        check_decimal_op(&plan, l, r, &c);
+    }
+}
+
+/// Values bounded by `10^k - 1` for a random `k`, so whole batches fall
+/// under the per-batch range proof (P2-T160) or just above it: the proof
+/// path (unchecked 64- or 128-bit lanes) must equal the reference.
+fn decimal_proof_case() -> impl Strategy<Value = DecimalCase> {
+    let ty = (1..=38_u8)
+        .prop_flat_map(|p| (Just(p), 0..=p))
+        .prop_map(|(p, s)| (p, i8::try_from(s).unwrap()));
+    let op =
+        proptest::sample::select(&[DecimalOp::Add, DecimalOp::Subtract, DecimalOp::Multiply][..]);
+    // A magnitude cap per side: `10^k - 1`, or `2^j - 1` near 2^63 (the
+    // 64-bit lanes' edge), where the proof's `OR + 1` bound is tight, so
+    // products and sums land just above or below the result bound.
+    let cap = prop_oneof![
+        (0..=38_u32).prop_map(|k| 10_i128.pow(k).saturating_sub(1).max(1)),
+        (60..=66_u32).prop_map(|j| (1_i128 << j) - 1),
+    ];
+    let two63 = 1_i128 << 63;
+    let v = prop_oneof![
+        Just(i128::MAX),
+        Just(i128::MIN + 1),
+        Just(0_i128),
+        Just(1),
+        Just(two63 - 1),
+        Just(two63),
+        (two63 - 4)..=(two63 + 4),
+        any::<i128>(),
+        any::<i64>().prop_map(i128::from),
+        any::<i32>().prop_map(i128::from),
+    ];
+    (op, ty.clone(), ty, 0..2_u8, cap.clone(), cap, any::<bool>()).prop_flat_map(
+        move |(op, l, r, choice, cap_l, cap_r, junk)| {
+            let max = |p: u8, cap: i128| (10_i128.pow(u32::from(p)) - 1).min(cap);
+            let (ml, mr) = (max(l.0, cap_l), max(r.0, cap_r));
+            // Halving keeps more values below the cap; `±(m/2 + 1)` pairs
+            // overflow a sum at the cap.
+            let fit = |x: i128, m: i128| match x.rem_euclid(4) {
+                0 => x.clamp(-m, m),
+                1 => (x / 2).clamp(-m, m),
+                2 => (m / 2 + 1) * x.signum(),
+                _ => x % m.max(1),
+            };
+            case(v.clone()).prop_map(move |mut c| {
+                // Valid values within the cap; NULL slots hold garbage
+                // (`i128::MIN`/`MAX` when `junk`), which no proof or lane
+                // may act on wrongly.
+                for (col, m) in [(&mut c.l, ml), (&mut c.r, mr)] {
+                    for (i, (x, ok)) in col.values.iter_mut().zip(&col.valid).enumerate() {
+                        *x = match (ok, junk, i % 2) {
+                            (false, true, 0) => i128::MIN,
+                            (false, true, _) => i128::MAX,
+                            _ => fit(*x, m),
+                        };
+                    }
+                }
+                c.shape = match c.shape {
+                    Shape::ArrayScalar(s) => Shape::ArrayScalar(s.map(|x| fit(x, mr))),
+                    Shape::ScalarArray(s) => Shape::ScalarArray(s.map(|x| fit(x, ml))),
+                    s => s,
+                };
+                (op, l, r, (choice, 0, 0), c)
+            })
+        },
+    )
+}
+
+proptest! {
+    #![proptest_config(config())]
+
+    #[test]
+    fn decimal_batch_proof((op, l, r, (choice, _, _), c) in decimal_proof_case()) {
+        let out = result_type(op, l, r, choice == 0).unwrap();
         let plan = DecimalPlan::new(op, l, r, out).unwrap();
         check_decimal_op(&plan, l, r, &c);
     }

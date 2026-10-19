@@ -149,3 +149,13 @@ libmimalloc-sys = { version = "0.1.49", default-features = false }
 clap = { version = "4.6", default-features = false }
 reedline = { version = "0.52", default-features = false }
 uuid = { version = "1.28", default-features = false }
+
+# Distribution artifacts (Python wheels, size budget, benchmark runner). `release` stays
+# the fast developer profile. Thin LTO: fat saved ~5% size for ~1.8x clean build time, no measurable speed. panic stays "unwind": the Python bridge catches panics at
+# the FFI boundary with `catch_unwind`.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "unwind"

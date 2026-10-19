@@ -2,17 +2,21 @@
 source: crates/krishiv-exec/tests/planner/tpch.rs
 expression: tpch.plan(q).to_string()
 ---
-Project [(sum(l_extendedprice#5)#4611686018427387911 / 7.0) AS avg_yearly#42]
+Project [(sum(l_extendedprice#5)#4611686018427387917 / 7.0) AS avg_yearly#42]
 +- HashAggregate keys=[], functions=[sum(l_extendedprice#5)]
    +- Project [l_extendedprice#5]
-      +- HashJoin Inner, [l_partkey#1] = [p_partkey#16], residual: (CAST(l_quantity#4 AS DECIMAL(21,7)) < (0.2 * avg(l_quantity))#41)
+      +- HashJoin Inner, [l_partkey#1] = [p_partkey#16], residual: (CAST(l_quantity#4 AS DECIMAL(21,7)) < (0.2 * avg(l_quantity))#41), RuntimeFilter #3: l_partkey#1 -> spark_catalog.default.lineitem.l_partkey
          :- Scan spark_catalog.default.lineitem [l_partkey#1, l_quantity#4, l_extendedprice#5]
          +- Project [(0.2 * avg(l_quantity))#41, p_partkey#16]
-            +- HashJoin Inner, [l_partkey#26] = [p_partkey#16]
-               :- Project [(0.2 * avg(l_quantity#29)#4611686018427387904) AS (0.2 * avg(l_quantity))#41, l_partkey#26]
+            +- HashJoin Inner, [l_partkey#26] = [p_partkey#16], RuntimeFilter #2: l_partkey#26 -> spark_catalog.default.lineitem.l_partkey
+               :- Project [(0.2 * avg(l_quantity#29)#4611686018427387910) AS (0.2 * avg(l_quantity))#41, l_partkey#26]
                :  +- HashAggregate keys=[l_partkey#26], functions=[avg(l_quantity#29)]
-               :     +- Project [l_partkey#26, l_quantity#29]
-               :        +- Scan spark_catalog.default.lineitem [l_partkey#1, l_quantity#4, l_extendedprice#5] (ids +25)
+               :     +- HashJoin LeftSemi, [l_partkey#26] = [p_partkey#59], RuntimeFilter #1: l_partkey#26 -> spark_catalog.default.lineitem.l_partkey
+               :        :- Project [l_partkey#26, l_quantity#29]
+               :        :  +- Scan spark_catalog.default.lineitem [l_partkey#1, l_quantity#4, l_extendedprice#5] (ids +25)
+               :        +- Project [p_partkey#16] (ids +43)
+               :           +- Filter ((p_brand#19 == 'Brand#23') and (p_container#22 == 'MED BOX'))
+               :              +- Scan spark_catalog.default.part [p_partkey#16, p_brand#19, p_container#22], PushedFilters: [((p_brand#19 == 'Brand#23') and (p_container#22 == 'MED BOX'))]
                +- Project [p_partkey#16]
                   +- Filter ((p_brand#19 == 'Brand#23') and (p_container#22 == 'MED BOX'))
                      +- Scan spark_catalog.default.part [p_partkey#16, p_brand#19, p_container#22], PushedFilters: [((p_brand#19 == 'Brand#23') and (p_container#22 == 'MED BOX'))]

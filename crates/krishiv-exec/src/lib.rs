@@ -95,7 +95,8 @@ pub use executor::{
     Executor, ExecutorConfig, TaskHandle, TokioClock, TokioExecutor, WorkloadClass,
 };
 pub use join::{
-    HashJoin, HashJoinNode, JoinSpec, JoinType, NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec,
+    HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType, NestedLoopJoin,
+    NestedLoopJoinNode, NestedLoopSpec,
 };
 pub use metrics::{DriverStats, OperatorEntry, OperatorMetrics, QueryMetrics};
 pub use morsel::MorselCursor;
@@ -105,8 +106,8 @@ pub use operator::{
 pub use operators::{
     DEFAULT_MAX_MERGE_FAN_IN, FileScan, FileScanMetrics, FileScanSource, FileSelections, FileWrite,
     FileWriteSink, Filter, FilterPushdown, FnPredicate, Limit, METADATA_COLUMN, MemoryScan,
-    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, ScalarExpr, ScanPushdown,
-    ScanPushdowns, Sort, SortKey, SortMetrics, TopN, UnionAlign,
+    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RowStageSettings, RuntimeFilters,
+    ScalarExpr, ScanPushdown, ScanPushdowns, Sort, SortKey, SortMetrics, TopN, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};

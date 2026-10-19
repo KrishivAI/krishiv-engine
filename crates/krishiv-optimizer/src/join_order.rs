@@ -22,7 +22,9 @@ use krishiv_plan::{
     AttrId, Expr, ExprNode, JoinCondition, JoinKind, LogicalPlan, PlanNode, ResolvedExpr,
 };
 
-use crate::expr::{and_all, column, conjuncts, has_subquery, is_deterministic, references};
+use crate::expr::{
+    Attrs, and_all, column, conjuncts, has_subquery, implied, is_deterministic, references,
+};
 use crate::stats::{Est, Estimator, Statistics, equi_columns, selectivity};
 
 /// An original relation (kept alive) and its rewrite.
@@ -288,6 +290,35 @@ fn composite_keys(
     }
 }
 
+/// The selectivity `sel` of a conjunct over the inputs `on`, given the
+/// filters it implies on each of them. Filter pushdown adds, below the
+/// join, what a disjunction implies on each input alone (`(a1 and b1) or
+/// (a2 and b2)` implies `a1 or a2` on `a`'s input; [`implied`]), so the
+/// inputs' estimates already hold those factors: counting them again in
+/// the conjunct would square them. TPC-DS q85 is the case in point: its
+/// `ca_state`/`ws_net_profit` disjunction keeps about 60% of the pairs
+/// that pass the implied filters, but the unconditional product estimated
+/// a tiny fraction, so a nested-loop join of `web_sales` and
+/// `customer_address` was planned first and produced 148M rows at SF1. Dividing
+/// by the implied filters' selectivities gives the conditional
+/// selectivity (at most 1); if pushdown did not add such a filter, the
+/// estimate errs high, the cheaper mistake for ordering.
+fn conditional<'e>(
+    pred: &Arc<Expr>,
+    sel: f64,
+    on: &[usize],
+    attrs: &[Attrs],
+    est: impl Fn(usize) -> &'e Est,
+) -> f64 {
+    let implied: f64 = on
+        .iter()
+        .filter_map(|&i| implied(pred, &attrs[i]).map(|f| selectivity(&f, est(i))))
+        .product();
+    // An implied filter estimated to keep nothing leaves its input at one
+    // row (estimates are at least one), and the conjunct at most 1.
+    (sel / implied.max(f64::MIN_POSITIVE)).min(1.0)
+}
+
 /// Row counts stay finite and at least one: estimates overflow on large
 /// trees, and NaN would compare as anything.
 fn rows(x: f64) -> f64 {
@@ -357,6 +388,18 @@ impl Graph {
         for e in ests {
             all.cols.extend(e.cols.iter().map(|(k, v)| (*k, v.clone())));
         }
+        // Each input's attributes, by its position in `sorted`.
+        let attrs: Vec<Attrs> = order
+            .iter()
+            .map(|&i| {
+                leaves[i]
+                    .resolved_output()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|c| c.id)
+                    .collect()
+            })
+            .collect();
         let mut kept = Vec::new();
         for (p, r) in preds.into_iter().zip(&refs) {
             let mut on: Vec<usize> = r
@@ -375,7 +418,7 @@ impl Graph {
                 }));
                 continue;
             }
-            let sel = selectivity(&p, &all);
+            let sel = conditional(&p, selectivity(&p, &all), &on, &attrs, |i| &ests[order[i]]);
             let edge = !has_subquery(&p);
             kept.push(Pred {
                 expr: p,

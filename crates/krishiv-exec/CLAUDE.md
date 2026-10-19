@@ -27,7 +27,10 @@ End-to-end tests over the mock format: `krishiv-testkit/tests/file_exec.rs`; the
 executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 `join/` hash join (P2-T052a): `mod.rs` API + Spark semantics · `keys.rs` row-format keys, seeded foldhash,
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
-sink · `probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join.
+sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
+`probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join.
+Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
+(adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model.
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
 
 ## Invariants

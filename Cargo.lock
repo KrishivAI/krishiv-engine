@@ -1521,6 +1521,7 @@ dependencies = [
  "krishiv-kernels",
  "krishiv-memory",
  "krishiv-types",
+ "loom",
  "memchr",
  "object_store",
  "parquet",
@@ -1528,6 +1529,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "twox-hash",
 ]
 
 [[package]]

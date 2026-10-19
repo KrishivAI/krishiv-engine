@@ -31,6 +31,7 @@ mod file_table;
 mod join;
 mod nodes;
 mod pushdown;
+mod runtime_filter;
 mod subquery;
 mod table;
 

@@ -1089,3 +1089,41 @@ async fn view_over_files(s: &Session, root: &str) {
     let df = s.sql("SELECT id FROM d WHERE id > 1").await.unwrap();
     assert_eq!(ids(&df.collect().await.unwrap()), [2]);
 }
+
+/// TPC-DS q66 (`sum(jan_sales / w_warehouse_sq_ft)`), reduced to one
+/// group: Spark 4.2 types `DECIMAL(38,2) / BIGINT` as `DECIMAL(38,6)` and
+/// rounds each quotient HALF_UP to that scale before `sum` adds them
+/// (11.450440 + 0.244532), so the result is 11.694972, not the exact sum
+/// 11.6949728... rounded (11.694973) that a double-precision division gives.
+#[test]
+fn decimal_quotients_round_before_they_are_summed() {
+    use arrow_array::{Decimal128Array, Int64Array};
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("sales", ArrowType::Decimal128(38, 2), false),
+        Field::new("sq_ft", ArrowType::Int64, false),
+    ]));
+    let sales = Decimal128Array::from(vec![1_119_609_176, 23_910_068])
+        .with_precision_and_scale(38, 2)
+        .unwrap();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(sales),
+            Arc::new(Int64Array::from(vec![977_787, 977_787])),
+        ],
+    )
+    .unwrap();
+    s.register_batches("warehouse_sales", schema, vec![batch])
+        .unwrap();
+    let df = block_on(s.sql("SELECT sum(sales / sq_ft) FROM warehouse_sales")).unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    assert_eq!(
+        batches[0].schema().field(0).data_type(),
+        &ArrowType::Decimal128(38, 6)
+    );
+    assert_eq!(
+        row(&s, "SELECT sum(sales / sq_ft) FROM warehouse_sales"),
+        ["11694972e-6"]
+    );
+}
