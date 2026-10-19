@@ -229,6 +229,15 @@ const CASES: &[(&str, &str)] = &[
         "restrict_not_subquery_key",
         "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON t.a + (SELECT max(a) FROM u) = g.a WHERE t.b = 'x'",
     ),
+    // A key that can raise is never evaluated on rows the join skips.
+    (
+        "restrict_not_raising_key_above_having",
+        "SELECT t.a FROM t JOIN (SELECT d, count(*) AS n FROM u GROUP BY d HAVING count(*) > 1) g ON t.a = CAST(g.d AS INT) WHERE t.b = 'x'",
+    ),
+    (
+        "restrict_not_raising_domain_key",
+        "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON CAST(t.b AS INT) = g.a WHERE t.c = 1",
+    ),
     (
         "restrict_not_inequality",
         "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON t.a < g.a WHERE t.b = 'x'",

@@ -40,8 +40,9 @@
 //!   scans, filters, projections, joins, aggregates and shifts (`D` is
 //!   computed twice and must agree);
 //! - each restricting equality is a plain `=` (never `<=>`; NULL keys
-//!   match nothing either way) whose aggregate side reads only grouping
-//!   keys of types whose grouping and equality agree (no floating point:
+//!   match nothing either way) of columns or integral widenings (the semi
+//!   join evaluates them on rows the join never reads, so they must not
+//!   raise) whose aggregate side reads only grouping keys of types whose grouping and equality agree (no floating point:
 //!   grouping normalizes `-0.0` and NaN); other conjuncts, non-equality
 //!   correlation included, are left alone, and without an equality the
 //!   rule does nothing;
@@ -90,15 +91,19 @@ pub(crate) fn restrict(
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let mut r = Restrict {
         est: Estimator::new(stats),
-        next: max_id(&root, &mut HashMap::new()).saturating_add(1),
+        root: Arc::clone(&root),
+        next: None,
     };
     dag::rewrite_up(root, &mut |p| Ok(r.join(p)))
 }
 
 struct Restrict<'a> {
     est: Estimator<'a>,
-    /// One past every attribute id the plan holds, Shift ranges included.
-    next: u64,
+    /// The plan being rewritten, for [`Self::next`].
+    root: Arc<LogicalPlan>,
+    /// One past every attribute id the plan holds, Shift ranges included:
+    /// computed at the first restriction (most plans have none).
+    next: Option<u64>,
 }
 
 /// One restricting equality: `agg = other`, each over its own side.
@@ -251,7 +256,10 @@ impl Restrict<'_> {
                     .and_then(|g| crate::expr::data_type(g))
                     .is_some_and(|t| key_type(&t))
             });
-            if ok && !reads.is_empty() && is_deterministic(key) && is_deterministic(pair.other) {
+            // The semi join evaluates both sides on rows the join never
+            // reads (groups a HAVING drops, domain rows below a filter), so
+            // neither may raise: columns and integral widenings only.
+            if ok && !reads.is_empty() && cannot_raise(key) && cannot_raise(pair.other) {
                 inner.push(substitute(key, &by_output));
                 kept.push(pair);
             }
@@ -283,12 +291,17 @@ impl Restrict<'_> {
             return None;
         }
         // Fresh ids for the domain's instance.
-        let offset = self.next;
+        let offset = match self.next {
+            Some(n) => n,
+            None => max_id(&self.root, &mut HashMap::new()).saturating_add(1),
+        };
         let top = max_id(&domain, &mut HashMap::new());
-        self.next = offset
-            .checked_add(top)?
-            .checked_add(1)
-            .filter(|n| *n <= MAX_ID)?;
+        self.next = Some(
+            offset
+                .checked_add(top)?
+                .checked_add(1)
+                .filter(|n| *n <= MAX_ID)?,
+        );
         let cols: Vec<BoundColumn> = output(&domain)?
             .into_iter()
             .filter(|c| want.contains(&c.id))
@@ -423,6 +436,27 @@ fn restricted(input: &Arc<LogicalPlan>, keys: &[Arc<Expr>]) -> bool {
             }
             _ => return false,
         }
+    }
+}
+
+/// Whether evaluating `e` can never raise: a column, or a widening of an
+/// integral value to a wider integral type (deterministic by construction).
+fn cannot_raise(e: &Arc<Expr>) -> bool {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(_)) => true,
+        ExprNode::Cast { expr, to, .. } => {
+            let rank = |t: &DataType| match t {
+                DataType::Byte => Some(1),
+                DataType::Short => Some(2),
+                DataType::Integer => Some(3),
+                DataType::Long => Some(4),
+                _ => None,
+            };
+            let from = crate::expr::data_type(expr);
+            matches!((from.as_ref().and_then(rank), rank(to)), (Some(a), Some(b)) if a <= b)
+                && cannot_raise(expr)
+        }
+        _ => false,
     }
 }
 
