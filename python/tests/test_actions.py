@@ -407,7 +407,7 @@ def test_release_does_not_hang_and_the_session_survives(spark: SparkSession, big
         del reader
         gc.collect()
 
-    worker = threading.Thread(target=release)
+    worker = threading.Thread(target=release, daemon=True)
     worker.start()
     worker.join(timeout=120)  # no timing assertion: only a hang fails
     assert not worker.is_alive(), "releasing the stream hung"
