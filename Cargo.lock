@@ -1384,6 +1384,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "krishiv-bench-runner"
+version = "0.1.0-dev"
+dependencies = [
+ "futures",
+ "krishiv-exec",
+ "krishiv-session",
+ "mimalloc",
+ "tempfile",
+]
+
+[[package]]
 name = "krishiv-cli"
 version = "0.1.0-dev"
 dependencies = [

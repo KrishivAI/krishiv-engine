@@ -1,0 +1,26 @@
+[package]
+name = "krishiv-bench-runner"
+description = "Bench-only query runner: drives krishiv-session for the bench harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "krishiv-bench-runner"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+futures = { workspace = true, features = ["alloc", "executor"] }
+krishiv-exec = { path = "../krishiv-exec" }
+krishiv-session = { path = "../krishiv-session" }
+mimalloc.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -45,9 +45,26 @@ returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket
   spill = null (Spark spill is available via the REST API :14040 but not collected yet). Host data path is rewritten to `/data`.
   Spark runs with Spark 4 defaults (ANSI mode on) and `spark.sql.shuffle.partitions=24`. The JVM retains its heap, so Spark peaks are cumulative/order-dependent.
   Probes run outside the timed region (a few ms; no sampler thread).
-- `krishiv`: **stub** raising `NotImplementedError` (implemented in P2; the docstring lists the planned shape).
+- `krishiv`: drives `krishiv-bench-runner` (release build of `krishiv-session`, bench-only crate, not the public CLI) over a stdin/stdout
+  line protocol until the Python facade can execute queries. Tables are Parquet views registered at `setup()`; `timed_run` reports
+  runner-side seconds, `run` dumps the result to Parquet (outside the timed region) and returns the rows for correctness checks.
+  Build: `cargo build --release -p krishiv-bench-runner`; override the path with `$KRISHIV_BENCH_RUNNER`.
 - Adding Sail/Polars/Flink: subclass `Engine`, register in `adapters/__init__.py`.
 Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (none needed so far).
+
+## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
+```bash
+cargo build --release -p krishiv-bench-runner
+KRISHIV_BENCH_RUNNER=$CARGO_TARGET_DIR/release/krishiv-bench-runner \
+  uv run krishiv-bench abba --sf 10 --dataset tpch-duckdb --reps 3 --threads 8 --memory-limit 12g
+```
+Per query: both engines run it once (untimed, warms the page cache) and Krishiv's rows must equal DuckDB's (type-aware
+`compare.rows_match`); a wrong result, an error or a timeout marks the query `failed` and it is never timed. Then `--reps` blocks of
+Krishiv, DuckDB, DuckDB, Krishiv give `2 * reps` samples per engine. Same Parquet files, same thread count and memory limit
+(DuckDB `threads`/`memory_limit`, Krishiv executor threads/`krishiv.memory.limit`); the OS page cache is never dropped.
+Reported: median per engine, ratio of medians with a bootstrap 95% CI, the geomean of the ratios (bootstrap CI) and the worst query.
+`/proc/loadavg` is recorded around every query; a run whose maximum exceeds 4 is marked indicative. The run holds
+`$KRISHIV_DATA/.bench.lock` (`flock`). Output: `$KRISHIV_DATA/results/<ts>_abba_tpch_sf<N>.json` plus the Markdown table on stdout.
 
 ## Result JSON (`$KRISHIV_DATA/results/<ts>_<engine>_<suite>_sf<N>.json`)
 `machine` (CPU model, cores, RAM, OS, governor), `git` (krishiv-engine commit/branch/dirty), `engine` (name, version, config, build, and `allocator` when the engine reports it, e.g. `mimalloc`; the CLI prints it as `allocator=<name>` in `krishiv --version`, the wheel via `krishiv.build_info()`),
