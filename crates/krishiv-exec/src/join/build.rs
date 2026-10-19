@@ -354,18 +354,18 @@ impl Sink for BuildSink {
                     .map(|(i, p)| (i, std::mem::take(&mut p.chunks)))
                     .collect()
             };
-            let shared = Arc::clone(&self.0);
-            let tables = ctx
-                .run_blocking(move || {
-                    let mut tables = Vec::with_capacity(jobs.len());
-                    for (p, chunks) in jobs {
-                        let arena = RowArena::concat(&shared.arena_schema, &chunks)?;
-                        drop(chunks);
-                        tables.push((p, JoinTable::build(arena)?));
-                    }
-                    Ok(tables)
+            // One blocking task per partition: the executor's blocking pool
+            // bounds how many run at once, and a large build no longer
+            // builds every partition's table on one thread.
+            let builds = jobs.into_iter().map(|(p, chunks)| {
+                let shared = Arc::clone(&self.0);
+                ctx.run_blocking(move || {
+                    let arena = RowArena::concat(&shared.arena_schema, &chunks)?;
+                    drop(chunks);
+                    Ok((p, JoinTable::build(arena)?))
                 })
-                .await?;
+            });
+            let tables = futures::future::try_join_all(builds).await?;
             index.shrink(concat);
             let mut c = lock(&g.collect);
             // Spilled partitions that hold rows: the probe defers only these
