@@ -44,6 +44,23 @@ reviews:
         per-row allocation in hot loops, work done on a single thread that could
         run per partition, and quadratic copying or re-scanning of buffered data.
         Spill and grace paths must keep correctness under every memory limit.
+    - path: "crates/krishiv-exec/**"
+      instructions: &distributed >-
+        Distributed execution readiness: flag anything that assumes one process.
+        Operators must not depend on shared in-process state (counters, cells,
+        tables shared across drivers or partitions) instead of partition-local
+        state combined by an explicit merge; plans must stay serializable: no
+        Arc<dyn ...> service handles, locks, atomics, closures or other live
+        resources in plan nodes (resources are resolved when a worker instantiates
+        the plan). Also flag partitioning or routing by a per-process or
+        per-operator random seed, state formats keyed by in-process hashes,
+        type-erased state (GlobalState, Any) passed across an exchange or the
+        Scheduler boundary, stateful operators without a stated snapshot and
+        retraction behaviour, task output that depends on the attempt number,
+        exchange or broadcast buffers not reserved from the memory pool, and
+        UDF code or credentials embedded in a plan instead of referenced.
+    - path: "crates/krishiv-plan/**"
+      instructions: *distributed
     - path: "crates/krishiv-python/**"
       instructions: >-
         Review every unsafe block against its SAFETY comment: capsule and FFI
