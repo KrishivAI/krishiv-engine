@@ -684,6 +684,38 @@ fn writes_follow_spark_save_modes() {
         ErrorClass::KrishivUnsupportedFeature
     );
     assert_eq!(count(), 1);
+    // Spark 4.2.0: a repeated column name fails with COLUMN_ALREADY_EXISTS,
+    // ignoring case unless `spark.sql.caseSensitive`.
+    let dup = dir.path().join("dup");
+    let dup = dup.to_str().unwrap();
+    for sql in [
+        "SELECT id, id FROM people",
+        "SELECT id AS a, name AS A FROM people",
+    ] {
+        let e = block_on(block_on(s.sql(sql)).unwrap().write().parquet(dup)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::ColumnAlreadyExists, "{sql}");
+    }
+    let e = block_on(
+        block_on(s.sql("SELECT id AS A, name AS a FROM people"))
+            .unwrap()
+            .write()
+            .parquet(dup),
+    )
+    .unwrap_err();
+    assert!(
+        e.to_string().contains("The column `a` already exists"),
+        "{e}"
+    );
+    assert!(!std::path::Path::new(dup).exists());
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    block_on(
+        block_on(s.sql("SELECT id AS a, name AS A FROM people"))
+            .unwrap()
+            .write()
+            .parquet(dup),
+    )
+    .unwrap();
+    s.conf().unset("spark.sql.caseSensitive").unwrap();
     // Analysis errors come first.
     assert_eq!(
         class(block_on(s.table("missing").write().parquet(&out))),

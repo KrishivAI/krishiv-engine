@@ -854,7 +854,8 @@ impl DataFrameWriter {
     }
 
     /// Writes the rows to the directory `path` in the format. Dropping
-    /// the future cancels the write and deletes its files.
+    /// the future before the write commits cancels it and deletes its
+    /// files.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;

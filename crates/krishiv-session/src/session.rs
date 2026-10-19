@@ -13,7 +13,9 @@ use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use krishiv_common::config::Config;
-use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    ColumnAlreadyExists, InternalError, KrishivError, KrishivUnsupportedFeature,
+};
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::FileWriteSink;
 use krishiv_exec::files::{FileReads, LocalPaths, PathLocator as _};
@@ -612,6 +614,7 @@ impl Session {
             options,
         } = target;
         let mode = SaveMode::parse(&mode)?;
+        unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
         let Some(format) = self
             .state
             .formats
@@ -657,6 +660,27 @@ impl Session {
             .await?;
         Ok(())
     }
+}
+
+/// Spark's `COLUMN_ALREADY_EXISTS` for a written schema with a repeated
+/// name (ignoring case unless `case_sensitive`, then named in lower case,
+/// as Spark 4.2 reports it).
+fn unique_columns(schema: &SchemaRef, case_sensitive: bool) -> Result<(), KrishivError> {
+    let mut seen = std::collections::HashSet::new();
+    for f in schema.fields() {
+        let name = if case_sensitive {
+            f.name().clone()
+        } else {
+            f.name().to_lowercase()
+        };
+        if !seen.insert(name.clone()) {
+            return Err(ColumnAlreadyExists {
+                column_name: format!("`{}`", name.replace('`', "``")),
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// Where and how `df.write` writes.
