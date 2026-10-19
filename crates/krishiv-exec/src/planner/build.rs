@@ -124,7 +124,7 @@ impl<'a> Planner<'a> {
     fn new(cx: &'a PlanningContext, root: &LogicalPlan) -> Self {
         Self {
             cx,
-            env: EvalEnv::new(&cx.config),
+            env: EvalEnv::new(&cx.config, Arc::clone(&cx.user)),
             warnings: Vec::new(),
             ctes: HashMap::new(),
             next_id: max_id(root).saturating_add(1).max(1 << 62),

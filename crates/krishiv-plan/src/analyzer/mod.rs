@@ -67,6 +67,7 @@ mod builtins;
 mod catalog;
 mod coerce;
 mod exprs;
+mod fold;
 mod ops;
 mod resolve;
 mod subquery;

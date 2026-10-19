@@ -85,7 +85,7 @@ fn constructs_lower_or_are_named_as_unsupported() {
         "SELECT db.f(a) FROM t",
         "SELECT f(x => 1) FROM t",
         "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a) FROM t",
-        "SELECT first(a) IGNORE NULLS FROM t",
+        "SELECT sum(a) IGNORE NULLS FROM t",
         "SELECT a FROM t PIVOT (sum(a) FOR b IN (1))",
         "SELECT * FROM t WITH (k = x)",
         "FROM t SELECT a SELECT b",
@@ -109,6 +109,28 @@ fn constructs_lower_or_are_named_as_unsupported() {
         "SELECT (t.a).b, ((a)).c.d FROM t",
         "SELECT 1BD, 1e3BD FROM t",
     ]));
+}
+
+/// `first(x) IGNORE NULLS` is `first(x, true)`; `RESPECT NULLS` is `false`,
+/// whatever flag was written; a flag that is not a literal stays for the
+/// analyzer to refuse.
+#[test]
+fn null_treatment_sets_the_ignore_nulls_argument() {
+    let shown = |sql: &str| lower(sql).unwrap().root().to_string();
+    let cases = [
+        ("first(a) IGNORE NULLS", "first(a, true)"),
+        ("LAST_VALUE(a) RESPECT NULLS", "LAST_VALUE(a, false)"),
+        ("first(a, false) IGNORE NULLS", "first(a, true)"),
+        ("last(a, true) RESPECT NULLS", "last(a, false)"),
+        ("first(a, b) IGNORE NULLS", "first(a, b)"),
+    ];
+    for (call, shown_call) in cases {
+        let plan = shown(&format!("SELECT {call} FROM t"));
+        assert!(
+            plan.contains(&format!("Project [{shown_call}]")),
+            "{call}: {plan}"
+        );
+    }
 }
 
 #[test]

@@ -63,6 +63,46 @@ enum Values {
     Bytes(Vec<Box<[u8]>>),
 }
 
+impl Values {
+    /// No groups yet, of the physical kind of Spark type `t`.
+    fn empty(t: &DataType) -> Self {
+        match t {
+            DataType::Float32 | DataType::Float64 => Self::Float(Vec::new()),
+            DataType::Utf8 | DataType::Utf8View | DataType::Binary | DataType::BinaryView => {
+                Self::Bytes(Vec::new())
+            }
+            _ => Self::Int(Vec::new()),
+        }
+    }
+
+    fn resize(&mut self, n: usize) {
+        match self {
+            Self::Int(v) => v.resize(n, 0),
+            Self::Float(v) => v.resize(n, 0.0),
+            Self::Bytes(v) => v.resize(n, Box::default()),
+        }
+    }
+
+    fn reserve(&mut self, n: usize) {
+        match self {
+            Self::Int(v) => v.reserve(n),
+            Self::Float(v) => v.reserve(n),
+            Self::Bytes(v) => v.reserve(n),
+        }
+    }
+
+    fn vec(&self) -> (usize, usize, usize) {
+        fn v<T>(x: &Vec<T>) -> (usize, usize, usize) {
+            (x.len(), x.capacity(), size_of::<T>())
+        }
+        match self {
+            Self::Int(x) => v(x),
+            Self::Float(x) => v(x),
+            Self::Bytes(x) => v(x),
+        }
+    }
+}
+
 #[derive(Debug)]
 enum Kind {
     Count(Vec<i64>),
@@ -93,6 +133,15 @@ enum Kind {
         values: Values,
         set: Vec<bool>,
         /// Heap bytes of `Values::Bytes`.
+        heap: usize,
+    },
+    /// `first` / `last`: `set` = a row was taken, `null` = its value is NULL.
+    Pick {
+        last: bool,
+        ignore_nulls: bool,
+        values: Values,
+        set: Vec<bool>,
+        null: Vec<bool>,
         heap: usize,
     },
 }
@@ -373,15 +422,16 @@ impl Accumulator {
             },
             (f @ (F::Min | F::Max), t) => Kind::MinMax {
                 max: f == F::Max,
-                values: match t {
-                    DataType::Float32 | DataType::Float64 => Values::Float(Vec::new()),
-                    DataType::Utf8
-                    | DataType::Utf8View
-                    | DataType::Binary
-                    | DataType::BinaryView => Values::Bytes(Vec::new()),
-                    _ => Values::Int(Vec::new()),
-                },
+                values: Values::empty(t),
                 set: Vec::new(),
+                heap: 0,
+            },
+            (f @ (F::First { ignore_nulls } | F::Last { ignore_nulls }), t) => Kind::Pick {
+                last: matches!(f, F::Last { .. }),
+                ignore_nulls,
+                values: Values::empty(t),
+                set: Vec::new(),
+                null: Vec::new(),
                 heap: 0,
             },
         };
@@ -414,21 +464,17 @@ impl Accumulator {
                 count,
                 overflow,
             } => vec![v(sum), v(count), v(overflow)],
-            Kind::MinMax { values, set, .. } => vec![
-                match values {
-                    Values::Int(x) => v(x),
-                    Values::Float(x) => v(x),
-                    Values::Bytes(x) => v(x),
-                },
-                v(set),
-            ],
+            Kind::MinMax { values, set, .. } => vec![values.vec(), v(set)],
+            Kind::Pick {
+                values, set, null, ..
+            } => vec![values.vec(), v(set), v(null)],
         }
     }
 
     /// Bytes held.
     pub(crate) fn size(&self) -> usize {
         let heap = match &self.kind {
-            Kind::MinMax { heap, .. } => *heap,
+            Kind::MinMax { heap, .. } | Kind::Pick { heap, .. } => *heap,
             _ => 0,
         };
         heap + self.vecs().iter().map(|(_, c, e)| c * e).sum::<usize>()
@@ -456,8 +502,13 @@ impl Accumulator {
                 values: Values::Bytes(_),
                 heap,
                 ..
+            }
+            | Kind::Pick {
+                values: Values::Bytes(_),
+                heap,
+                ..
             } => heap + arg.map_or(0, value_bytes),
-            Kind::MinMax { heap, .. } => *heap,
+            Kind::MinMax { heap, .. } | Kind::Pick { heap, .. } => *heap,
             _ => 0,
         };
         vecs + heap
@@ -494,11 +545,14 @@ impl Accumulator {
             }
             Kind::MinMax { values, set, .. } => {
                 set.resize(n, false);
-                match values {
-                    Values::Int(v) => v.resize(n, 0),
-                    Values::Float(v) => v.resize(n, 0.0),
-                    Values::Bytes(v) => v.resize(n, Box::default()),
-                }
+                values.resize(n);
+            }
+            Kind::Pick {
+                values, set, null, ..
+            } => {
+                set.resize(n, false);
+                null.resize(n, false);
+                values.resize(n);
             }
         }
     }
@@ -534,11 +588,14 @@ impl Accumulator {
             }
             Kind::MinMax { values, set, .. } => {
                 set.reserve(new);
-                match values {
-                    Values::Int(v) => v.reserve(new),
-                    Values::Float(v) => v.reserve(new),
-                    Values::Bytes(v) => v.reserve(new),
-                }
+                values.reserve(new);
+            }
+            Kind::Pick {
+                values, set, null, ..
+            } => {
+                set.reserve(new);
+                null.reserve(new);
+                values.reserve(new);
             }
         }
     }
@@ -575,7 +632,7 @@ impl Accumulator {
                 args.len()
             )));
         }
-        if (state || matches!(self.kind, Kind::MinMax { .. })) && !is_unit(w) {
+        if (state || matches!(self.kind, Kind::MinMax { .. } | Kind::Pick { .. })) && !is_unit(w) {
             return Err(unsupported(format!(
                 "{:?} over rows with weights other than 1 (needs incremental view maintenance)",
                 self.expr.function
@@ -776,6 +833,74 @@ impl Accumulator {
                     }
                 }
             }
+            (
+                Kind::Pick {
+                    last,
+                    ignore_nulls,
+                    values,
+                    set,
+                    null,
+                    heap,
+                },
+                _,
+            ) => {
+                let a = args[0];
+                let (last, ignore_nulls) = (*last, *ignore_nulls);
+                // A partial state's row is taken when its `valueSet` says so
+                // (its value may be NULL); a raw row unless it is a NULL to
+                // skip.
+                let taken = if state {
+                    Some(booleans_of(args[1])?)
+                } else {
+                    None
+                };
+                let take = |i: usize, g: usize, set: &[bool]| {
+                    let present = taken.map_or(valid(i) || !ignore_nulls, |t| t.value(i));
+                    present && (last || !set[g])
+                };
+                match values {
+                    Values::Int(vals) => {
+                        let v = int_like(a)?;
+                        for (i, &g) in groups.iter().enumerate() {
+                            let g = g as usize;
+                            if take(i, g, set) {
+                                set[g] = true;
+                                null[g] = !valid(i);
+                                if valid(i) {
+                                    vals[g] = v[i];
+                                }
+                            }
+                        }
+                    }
+                    Values::Float(vals) => {
+                        let v = floats(a)?;
+                        for (i, &g) in groups.iter().enumerate() {
+                            let g = g as usize;
+                            if take(i, g, set) {
+                                set[g] = true;
+                                null[g] = !valid(i);
+                                if valid(i) {
+                                    vals[g] = v[i];
+                                }
+                            }
+                        }
+                    }
+                    Values::Bytes(vals) => {
+                        let v = byte_values(a)?;
+                        for (i, &g) in groups.iter().enumerate() {
+                            let g = g as usize;
+                            if take(i, g, set) {
+                                set[g] = true;
+                                null[g] = !valid(i);
+                                if valid(i) {
+                                    *heap = heap.saturating_sub(vals[g].len()) + v[i].len();
+                                    vals[g] = v[i].into();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -789,7 +914,10 @@ impl Accumulator {
     pub(crate) fn state_len(&self) -> usize {
         match self.kind {
             Kind::Count(_) | Kind::SumInt { .. } | Kind::SumFloat { .. } | Kind::MinMax { .. } => 1,
-            Kind::SumDec { .. } | Kind::AvgFloat { .. } | Kind::AvgDec { .. } => 2,
+            Kind::SumDec { .. }
+            | Kind::AvgFloat { .. }
+            | Kind::AvgDec { .. }
+            | Kind::Pick { .. } => 2,
         }
     }
 
@@ -838,7 +966,17 @@ impl Accumulator {
                     ids.iter().map(|i| count[pick(i)]),
                 )),
             ],
-            Kind::MinMax { .. } => vec![self.min_max(ids)?],
+            Kind::MinMax { values, set, .. } => {
+                vec![self.value_array(values, |i| set[i], ids)?]
+            }
+            Kind::Pick {
+                values, set, null, ..
+            } => vec![
+                self.value_array(values, |i| set[i] && !null[i], ids)?,
+                Arc::new(BooleanArray::from_iter(
+                    ids.iter().map(|i| Some(set[pick(i)])),
+                )),
+            ],
         })
     }
 
@@ -847,13 +985,17 @@ impl Accumulator {
         Ok(Arc::new(a))
     }
 
-    fn min_max(&self, ids: &[u32]) -> Result<ArrayRef> {
-        let Kind::MinMax { values, set, .. } = &self.kind else {
-            return Err(internal("not min/max".to_owned()));
-        };
-        let t = &self.result;
-        let on = |i: &u32| set[*i as usize];
+    /// `values` of groups `ids` as the result type; `on(group)` says
+    /// whether the group has a value (else NULL).
+    fn value_array(
+        &self,
+        values: &Values,
+        on: impl Fn(usize) -> bool,
+        ids: &[u32],
+    ) -> Result<ArrayRef> {
+        let on = |i: &u32| on(*i as usize);
         let at = |i: &u32| *i as usize;
+        let t = &self.result;
         Ok(match values {
             Values::Float(v) => {
                 let it = ids.iter().map(|i| on(i).then(|| v[at(i)]));
@@ -955,7 +1097,11 @@ impl Accumulator {
                 }
                 self.decimal(out.into_iter(), &self.result)?
             }
-            Kind::Count(_) | Kind::SumInt { .. } | Kind::SumFloat { .. } | Kind::MinMax { .. } => {
+            Kind::Count(_)
+            | Kind::SumInt { .. }
+            | Kind::SumFloat { .. }
+            | Kind::MinMax { .. }
+            | Kind::Pick { .. } => {
                 let mut s = self.state(ids)?;
                 s.swap_remove(0)
             }

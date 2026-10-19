@@ -555,7 +555,8 @@ impl Session {
             &analyzed.plan,
             &ProviderStatistics(Arc::clone(&tables)),
         )?;
-        let cx = PlanningContext::new(tables, Arc::clone(&env.config));
+        let cx = PlanningContext::new(tables, Arc::clone(&env.config))
+            .with_user(self.state.principal.name.as_str());
         let physical = self.state.planner.plan(&optimized, &cx)?;
         Ok((optimized, physical))
     }

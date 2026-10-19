@@ -76,6 +76,8 @@ pub struct PlanningContext {
     /// The query's spill scope, shared by its spilling operators; `None`
     /// makes them unspillable.
     pub spill: Option<SpillScope>,
+    /// The session's user (`current_user()`).
+    pub user: Arc<str>,
 }
 
 impl PlanningContext {
@@ -85,7 +87,15 @@ impl PlanningContext {
             tables,
             config,
             spill: None,
+            user: Arc::from(krishiv_plan::analyzer::Principal::local_user().name),
         }
+    }
+
+    /// The same context for the session user `user`.
+    #[must_use]
+    pub fn with_user(mut self, user: impl Into<Arc<str>>) -> Self {
+        self.user = user.into();
+        self
     }
 
     /// The same context spilling into `scope` (one per query).

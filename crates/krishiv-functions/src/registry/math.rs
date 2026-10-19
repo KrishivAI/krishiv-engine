@@ -4,7 +4,7 @@
 //! and the `try_*` arithmetic. The arithmetic ones are typed as the
 //! operators are ([`Inputs::Operator`]).
 
-use krishiv_common::error::{KrishivError, NonFoldableArgument};
+use krishiv_common::error::{DatatypeMismatchNonFoldableInput, KrishivError, NonFoldableArgument};
 use krishiv_kernels::decimal::{DecimalOp, result_type};
 use krishiv_kernels::math::round_decimal_type;
 use krishiv_types::{DataType, DecimalType};
@@ -45,8 +45,24 @@ fn scale_of(c: &CallTypes<'_>, function: &str, i: usize) -> Result<i32, KrishivE
             clamp(v as i64)
         })),
         Some(Constant::Null) => Ok(0),
-        _ => Err(non_foldable(function)),
+        Some(Constant::Error(e)) => Err(e.clone()),
+        _ => Err(non_foldable_input(c, function, i)),
     }
+}
+
+/// `DATATYPE_MISMATCH.NON_FOLDABLE_INPUT`: `round`/`bround` check their
+/// scale as an input type (`ceil`/`floor` raise `NON_FOLDABLE_ARGUMENT`).
+fn non_foldable_input(c: &CallTypes<'_>, function: &str, i: usize) -> KrishivError {
+    let args: Vec<String> = (0..c.args().len())
+        .map(|n| c.sql(n).unwrap_or_default())
+        .collect();
+    DatatypeMismatchNonFoldableInput {
+        sql_expr: format!("\"{function}({})\"", args.join(", ")),
+        input_name: "`scale`".to_owned(),
+        input_type: "\"INT\"".to_owned(),
+        input_expr: format!("\"{}\"", c.sql(i).unwrap_or_default()),
+    }
+    .into()
 }
 
 /// The scale of `ceil`/`floor`: an `int` literal.
@@ -81,15 +97,14 @@ fn rounded(d: DecimalType, scale: i32) -> Result<DataType, KrishivError> {
 /// `round(x, d)`, `bround(x, d)`: the type of `x`; a decimal's precision
 /// follows the scale. NULL for a NULL scale or argument: always nullable.
 fn round_type(function: &str, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    // The scale is checked whatever the type of `x`.
+    let scale = if c.args().len() > 1 {
+        scale_of(c, function, 1)?
+    } else {
+        0
+    };
     let t = match c.data_type(0) {
-        Some(DataType::Decimal(d)) => {
-            let scale = if c.args().len() > 1 {
-                scale_of(c, function, 1)?
-            } else {
-                0
-            };
-            rounded(*d, scale)?
-        }
+        Some(DataType::Decimal(d)) => rounded(*d, scale)?,
         Some(t) => t.clone(),
         None => DataType::Double,
     };

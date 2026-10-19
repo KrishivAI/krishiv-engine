@@ -4,7 +4,8 @@
 //! Arity, determinism and availability come from Spark's catalog.
 
 use krishiv_common::error::{
-    InvalidExtractField, KrishivError, NonFoldableArgument, SecondFunctionArgumentNotInteger,
+    InvalidExtractField, KrishivError, LegacyErrorTemp1210, NonFoldableArgument,
+    SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{DataType, DecimalType};
@@ -129,6 +130,14 @@ fn clock_date(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 
 fn clock_timestamp(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Timestamp, false))
+}
+
+fn clock_timestamp_ntz(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::TimestampNtz, false))
+}
+
+fn user(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::String, false))
 }
 
 // ---- strings ----
@@ -281,6 +290,16 @@ fn datetime() -> Vec<Spec> {
         &Inputs::Any,
         clock_timestamp,
     ));
+    out.extend(scalar(
+        &["current_user", "user", "session_user"],
+        &Inputs::Any,
+        user,
+    ));
+    out.extend(scalar(
+        &["localtimestamp"],
+        &Inputs::Any,
+        clock_timestamp_ntz,
+    ));
     out
 }
 
@@ -330,6 +349,26 @@ fn min_max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     })
 }
 
+/// `first(x [, ignoreNulls])`: the type of `x`; the flag must be a boolean
+/// literal.
+fn pick(c: &CallTypes<'_>, function: &str) -> Result<ArgType, KrishivError> {
+    if c.args().len() > 1 && !matches!(c.constant(1), Some(Constant::Boolean(_))) {
+        return Err(LegacyErrorTemp1210 {
+            func_name: function.to_owned(),
+        }
+        .into());
+    }
+    min_max(c)
+}
+
+fn first(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    pick(c, "first")
+}
+
+fn last(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    pick(c, "last")
+}
+
 fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
     vec![
@@ -339,6 +378,10 @@ fn aggregates() -> Vec<Spec> {
         aggregate("mean", numeric(), avg, Aggregate::Avg),
         aggregate("min", Inputs::Any, min_max, Aggregate::Min),
         aggregate("max", Inputs::Any, min_max, Aggregate::Max),
+        aggregate("first", Inputs::Any, first, Aggregate::First),
+        aggregate("first_value", Inputs::Any, first, Aggregate::First),
+        aggregate("last", Inputs::Any, last, Aggregate::Last),
+        aggregate("last_value", Inputs::Any, last, Aggregate::Last),
     ]
 }
 
