@@ -8,6 +8,9 @@ import os
 import select
 import signal
 import subprocess
+import sys
+import threading
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -16,7 +19,7 @@ import pytest
 from krishiv_bench import reproduce, worker
 from krishiv_bench.adapters import Dataset, Engine, Query, make_engine
 from krishiv_bench.adapters.base import table_path
-from krishiv_bench.adapters.process import EngineError, EngineTimeout, ProcessEngine
+from krishiv_bench.adapters.process import EngineCrashed, EngineError, EngineTimeout, ProcessEngine
 
 
 @pytest.fixture(scope="module")
@@ -26,6 +29,48 @@ def tiny(tmp_path_factory) -> Dataset:
     root = tmp_path_factory.mktemp("tiny")
     duckdb.sql(f"COPY (SELECT range AS a, range % 3 AS g FROM range(1000)) TO '{root / 't.parquet'}' (FORMAT parquet)")
     return Dataset("tiny", 1, root, ["t"])
+
+
+_BLOCKING_WORKER = """
+import os, subprocess, sys, time
+from krishiv_bench import worker
+
+ready, pidfile = sys.argv[1], sys.argv[2]
+out = os.fdopen(os.dup(1), "wb")
+os.dup2(2, 1)
+inp = sys.stdin.buffer
+while True:
+    req = worker.recv(inp)
+    if req["op"] == "quit":
+        break
+    if req["op"] == "setup":
+        worker.send(out, {"ok": {"version": "blocking", "config": {}, "build": {}}})
+    elif req["query"].sql == "block":
+        child = subprocess.Popen(["sleep", "300"])  # a descendant in the worker's process group
+        open(pidfile, "w").write(str(child.pid))
+        open(ready, "w").write("1")  # in flight: signal readiness, then block until killed
+        time.sleep(3600)
+    else:
+        worker.send(out, {"ok": [(7,)] if req["op"] == "run" else (1, 0.001)})
+"""
+
+
+@pytest.fixture
+def blocking_worker(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+    """Make ProcessEngine start a test worker that blocks on the query ``block`` until it is killed.
+
+    Returns (ready file, descendant pid file). No timing assumption: the worker signals that it is blocked, and
+    the engine's timeout is the only thing that ends it.
+    """
+    script, ready, pidfile = tmp_path / "blocking_worker.py", tmp_path / "ready", tmp_path / "descendant.pid"
+    script.write_text(_BLOCKING_WORKER)
+    real_popen = subprocess.Popen
+
+    def popen(argv, **kw):
+        return real_popen([sys.executable, "-I", str(script), str(ready), str(pidfile)], **kw)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    return ready, pidfile
 
 
 def q(sql: str, qid: str = "q01") -> Query:
@@ -79,12 +124,14 @@ def test_process_engine_runs_and_reports_errors(tiny):
         eng.teardown()
 
 
-def test_process_engine_timeout_kills_and_restarts(tiny):
+def test_process_engine_timeout_kills_and_restarts(tiny, blocking_worker):
+    ready, _ = blocking_worker
     eng = ProcessEngine("duckdb", 2, 1, 1.0)
     eng.setup(tiny)
     try:
         with pytest.raises(EngineTimeout):
-            eng.run(q("SELECT count(*) FROM range(100000000000) a, range(100000000000) b"))
+            eng.run(q("block"))
+        assert ready.exists()  # the query was in flight (blocked), not finished
         assert eng._proc is None
         assert eng.run(q("SELECT 7")) == [(7,)]  # restarted lazily
     finally:
@@ -187,16 +234,19 @@ def test_ours_query_interleaves_and_summarizes(tiny):
     )
 
 
-def test_theirs_query_best_of_runs_and_timeout(tiny):
+def test_theirs_query_best_of_runs(tiny):
     ok = reproduce.theirs_query("duckdb", q("SELECT count(*) FROM t"), tiny, 2, 1, 3, 60, 1)
     assert ok["status"] == "ok"
     assert len(ok["runs_s"]) == 3
     assert ok["best_s"] == min(ok["runs_s"])
     assert ok["first_s"] == ok["runs_s"][0]
-    slow = reproduce.theirs_query(
-        "duckdb", q("SELECT count(*) FROM range(100000000000) a, range(100000000000) b"), tiny, 2, 1, 3, 1.0, 1
-    )
+
+
+def test_theirs_query_timeout(tiny, blocking_worker):
+    ready, _ = blocking_worker
+    slow = reproduce.theirs_query("duckdb", q("block"), tiny, 2, 1, 3, 1.0, 1)
     assert slow["status"] == "timeout"
+    assert ready.exists()
 
 
 def test_summarize_theirs_and_krishiv_gap():
@@ -260,42 +310,47 @@ def test_cli_rejects_bad_methods(capsys):
     assert "--methods" in capsys.readouterr().err
 
 
-def _proc_state(pid: int) -> str | None:
-    """Kernel state letter of ``pid`` (None once it is gone); 'Z' means dead but not yet reaped."""
-    try:
-        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
-    except FileNotFoundError:
-        return None
+def _wait_for(path: Path) -> None:
+    """Block until the worker signals readiness (an event, not a duration; the bound only stops a hung test)."""
+    deadline = time.monotonic() + 60
+    while not path.exists():
+        assert time.monotonic() < deadline, "worker never signalled readiness"
+        time.sleep(0.01)
 
 
 @pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="needs Linux pidfd and /proc")
-def test_timeout_kills_descendants_in_the_worker_process_group(tiny, tmp_path: Path, monkeypatch):
-    pidfile = tmp_path / "descendant.pid"
-    real_popen = subprocess.Popen
-
-    def popen_with_descendant(argv, **kw):
-        # The shell starts a background `sleep` (same session and group), then becomes the worker.
-        script = f'sleep 300 & echo $! > "{pidfile}"; exec "$@"'
-        return real_popen(["sh", "-c", script, "sh", *argv], **kw)
-
-    monkeypatch.setattr(subprocess, "Popen", popen_with_descendant)
-    eng = ProcessEngine("duckdb", 2, 1, 1.0)
+def test_kill_takes_down_descendants_in_the_worker_process_group(tiny, blocking_worker):
+    """``ProcessEngine.kill`` is what the timeout path runs; it must reach the worker's descendants too."""
+    ready, pidfile = blocking_worker
+    eng = ProcessEngine("duckdb", 2, 1, None)  # no timeout: only the explicit kill below ends the worker
     eng.setup(tiny)
-    monkeypatch.setattr(subprocess, "Popen", real_popen)
-    pid = int(pidfile.read_text())
-    # A pidfd is an identity-bearing handle: it keeps referring to this process even if the pid number is reused.
-    fd = os.pidfd_open(pid)
+    errors: list[BaseException] = []
+
+    def run_blocked():
+        try:
+            eng.run(q("block"))
+        except EngineCrashed as e:  # the killed worker's pipe closes
+            errors.append(e)
+
+    t = threading.Thread(target=run_blocked)
+    t.start()
+    fd = -1
     try:
-        assert "sleep" in Path(f"/proc/{pid}/cmdline").read_text()
-        with pytest.raises(EngineTimeout):
-            eng.run(q("SELECT count(*) FROM range(100000000000) a, range(100000000000) b"))
+        _wait_for(ready)
+        # The worker is alive and holds its child, so the pid is that child; a pidfd keeps naming it even if the
+        # number is reused later.
+        fd = os.pidfd_open(int(pidfile.read_text()))
+        eng.kill()
         exited, _, _ = select.select([fd], [], [], 10)  # a pidfd becomes readable when its process exits
-        assert exited, "descendant survived the worker's timeout kill"
+        assert exited, "descendant survived the process-group kill"
     finally:
-        with contextlib.suppress(ProcessLookupError):
-            signal.pidfd_send_signal(fd, signal.SIGKILL)
-        os.close(fd)
-        eng.teardown()
+        if fd >= 0:
+            with contextlib.suppress(ProcessLookupError):
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+            os.close(fd)
+        eng.kill()
+        t.join(30)
+    assert len(errors) == 1
 
 
 class CountingEngine(Fake):
