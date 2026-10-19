@@ -987,6 +987,7 @@ fn upcoming_ranges_respect_the_budget() {
 /// prunes the row groups not started yet at the next boundary. The table
 /// types the key `bigint` over an `int` file column (keys compare widened).
 #[test]
+#[cfg(not(loom))] // Runtime filters use loom's primitives under `--cfg loom`.
 fn runtime_filters_prune_row_groups_at_open_and_at_boundaries() {
     use crate::{FilterId, FilterSnapshot, KeyFilterBuilder, KeyFilterOptions, RuntimeFilter};
 
