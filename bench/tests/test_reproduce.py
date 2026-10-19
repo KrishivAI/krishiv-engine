@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import signal
+import subprocess
 from decimal import Decimal
 from pathlib import Path
 
@@ -253,3 +255,20 @@ def test_cli_rejects_bad_methods(capsys):
             cli.main(["reproduce", "--methods", bad])
         assert exc.value.code == 2
     assert "--methods" in capsys.readouterr().err
+
+
+def test_timeout_kills_descendants_in_the_worker_process_group(tiny):
+    eng = ProcessEngine("duckdb", 2, 1, 1.0)
+    eng.setup(tiny)
+    assert eng._proc is not None
+    # A descendant that joins the worker's process group, as a JVM or helper process would.
+    child = subprocess.Popen(["sleep", "300"], process_group=eng._proc.pid)
+    try:
+        with pytest.raises(EngineTimeout):
+            eng.run(q("SELECT count(*) FROM range(100000000000) a, range(100000000000) b"))
+        # The Popen handle pins the identity (no PID reuse); wait() is bounded and reaps the zombie.
+        assert child.wait(timeout=10) == -signal.SIGKILL
+    finally:
+        child.kill()
+        child.wait()
+        eng.teardown()
