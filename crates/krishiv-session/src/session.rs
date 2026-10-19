@@ -19,6 +19,7 @@ use krishiv_common::error::{
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::FileWriteSink;
 use krishiv_exec::files::{FileReads, LocalPaths, PathLocator as _};
+use krishiv_exec::physical::WorkerContext;
 use krishiv_exec::planner::{
     DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
 };
@@ -584,6 +585,16 @@ impl Session {
         physical: &PhysicalPlan,
         env: &QueryEnv,
     ) -> Result<RecordBatchStream, KrishivError> {
+        self.run_on(physical, worker(env), env).await
+    }
+
+    /// Runs `physical` instantiated with `worker`.
+    async fn run_on(
+        &self,
+        physical: &PhysicalPlan,
+        worker: WorkerContext,
+        env: &QueryEnv,
+    ) -> Result<RecordBatchStream, KrishivError> {
         let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
         let pool = self.state.memory.child(&format!("query-{}", id.0), None);
         let query = QueryContext::new(
@@ -595,7 +606,7 @@ impl Session {
         let stream = self
             .state
             .runner
-            .submit(Arc::clone(physical.root()), query)
+            .submit(physical.clone(), worker, query)
             .await?;
         Ok(Box::pin(stream.map(|b| b.and_then(into_record_batch))))
     }
@@ -655,8 +666,9 @@ impl Session {
             options.clone(),
             write.write_options(0),
         )?);
-        let plan = physical.into_write(Arc::clone(&sink))?;
-        let mut rows = self.run(&plan, env).await?;
+        let plan = physical.into_write(&sink)?;
+        let worker = worker(env).with_write_sink(Arc::clone(&sink));
+        let mut rows = self.run_on(&plan, worker, env).await?;
         while let Some(batch) = rows.next().await {
             batch?;
         }
@@ -666,6 +678,14 @@ impl Session {
             .await?;
         Ok(())
     }
+}
+
+/// What a query's plans are instantiated with in this process: the
+/// query's tables.
+fn worker(env: &QueryEnv) -> WorkerContext {
+    WorkerContext::new(
+        Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
+    )
 }
 
 /// Spark's `COLUMN_ALREADY_EXISTS` for a written schema with a repeated

@@ -131,6 +131,15 @@ pub trait ScanPushdown: Send + Sync {
     /// `INTERNAL_ERROR` for a projection path that does not exist or a
     /// selection the scan cannot honour.
     fn build(&self, pushdowns: ScanPushdowns) -> Result<Arc<dyn Source>>;
+    /// The schema of the batches a source built with `pushdowns` returns,
+    /// without building it (planning reads it; the source is built when the
+    /// plan is instantiated). The default builds the source.
+    ///
+    /// # Errors
+    /// As [`Self::build`].
+    fn output_schema(&self, pushdowns: &ScanPushdowns) -> Result<SchemaRef> {
+        Ok(self.build(pushdowns.clone())?.schema())
+    }
 }
 
 /// Scans batches held in memory. A morsel is a run of consecutive batches
@@ -339,6 +348,13 @@ impl ScanPushdown for MemoryScan {
 
     fn build(&self, pushdowns: ScanPushdowns) -> Result<Arc<dyn Source>> {
         Ok(Arc::new(self.with_pushdowns(pushdowns)?))
+    }
+
+    fn output_schema(&self, pushdowns: &ScanPushdowns) -> Result<SchemaRef> {
+        match &pushdowns.projection {
+            Some(paths) => krishiv_io::project_schema(&self.table, paths),
+            None => Ok(Arc::clone(&self.table)),
+        }
     }
 }
 

@@ -21,7 +21,7 @@ use krishiv_exec::testing::Scan;
 use krishiv_exec::{
     ExecConfig, ExecutorConfig, FnPredicate, JoinType, MemoryScan, NestedLoopJoin,
     NestedLoopJoinNode, NestedLoopSpec, Predicate, QueryContext, QueryId, QueryRunner,
-    ScanPushdown as _, ScanPushdowns, Scheduler as _, TokioExecutor, WorkloadClass,
+    ScanPushdown as _, ScanPushdowns, TokioExecutor, WorkloadClass,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool as _, TreePool};
 use krishiv_types::batch::{Batch, Weights};
@@ -91,7 +91,7 @@ fn run(
         .build()
         .unwrap();
     let out = rt.block_on(async {
-        let mut stream = runner.submit(plan, Arc::clone(&query)).await?;
+        let mut stream = runner.execute(plan, Arc::clone(&query)).await?;
         let mut rows = Vec::new();
         while let Some(b) = stream.next().await {
             let b = b?.into_parts().0;

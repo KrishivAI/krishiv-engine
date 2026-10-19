@@ -581,9 +581,7 @@ async fn cancelling_a_spilling_join_releases_everything() {
         scan(&schema(), batches(&data(&probe), 1024)),
     );
     let runner = runner_for(2, 1536 << 10);
-    let mut stream = krishiv_exec::Scheduler::submit(&runner, plan, Arc::clone(&q))
-        .await
-        .unwrap();
+    let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
     let first = futures::StreamExt::next(&mut stream).await;
     assert!(first.is_some_and(|b| b.is_ok()));
     q.cancel();

@@ -20,8 +20,8 @@ use krishiv_exec::testing::Break;
 use krishiv_exec::{
     ExecConfig, ExecNode, FileScan, FileSelections, FileWrite, FileWriteSink, FilterPushdown,
     FnPredicate, GlobalState, LocalState, MemoryScan, PipelineBuilder, PushedFilter, QueryContext,
-    QueryId, QueryRunner, ScanPushdown, ScanPushdowns, Scheduler, Sink, SinkStatus, Source,
-    TaskContext, TokioExecutor, WorkloadClass,
+    QueryId, QueryRunner, ScanPushdown, ScanPushdowns, Sink, SinkStatus, Source, TaskContext,
+    TokioExecutor, WorkloadClass,
 };
 use krishiv_io::io::FaultStore;
 use krishiv_io::parquet::ParquetFormat;
@@ -94,7 +94,7 @@ async fn run_with(
 ) -> Result<Vec<RecordBatch>, KrishivError> {
     let runner = QueryRunner::new(TokioExecutor::deterministic(slots)?);
     let query = QueryContext::new(QueryId(7), WorkloadClass::Batch, config, Arc::clone(pool));
-    let mut stream = runner.submit(plan, Arc::clone(&query)).await?;
+    let mut stream = runner.execute(plan, Arc::clone(&query)).await?;
     let mut out = Vec::new();
     let mut error = None;
     while let Some(b) = stream.next().await {

@@ -32,7 +32,7 @@
 //! use futures::StreamExt;
 //! use krishiv_exec::testing::{Filter, Pipe, RangeSource, Scan};
 //! use krishiv_exec::{
-//!     ExecConfig, ExecutorConfig, QueryContext, QueryId, QueryRunner, Scheduler, TokioExecutor,
+//!     ExecConfig, ExecutorConfig, QueryContext, QueryId, QueryRunner, TokioExecutor,
 //!     WorkloadClass,
 //! };
 //! use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
@@ -50,7 +50,7 @@
 //! let plan = Arc::new(Pipe(scan, Filter::new(|v| v % 2 == 0)));
 //! let caller = tokio::runtime::Builder::new_current_thread().build().map_err(|e| e.to_string())?;
 //! let rows = caller.block_on(async {
-//!     let mut stream = runner.submit(plan, Arc::clone(&query)).await?;
+//!     let mut stream = runner.execute(plan, Arc::clone(&query)).await?;
 //!     let mut rows = 0;
 //!     while let Some(batch) = stream.next().await {
 //!         rows += batch?.num_rows();
@@ -79,6 +79,7 @@ mod metrics;
 mod morsel;
 mod operator;
 mod operators;
+pub mod physical;
 mod pipeline;
 pub mod planner;
 mod runner;

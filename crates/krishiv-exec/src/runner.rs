@@ -2,7 +2,9 @@
 //! Running a query in process: [`Scheduler`] and its embedded
 //! implementation, [`QueryRunner`].
 //!
-//! `submit` splits the plan into pipelines and spawns a coordinator task,
+//! `submit` instantiates the [`PhysicalPlan`] with the caller's
+//! [`WorkerContext`] ([`instantiate`](crate::physical::instantiate)),
+//! splits the operator graph into pipelines and spawns a coordinator task,
 //! which starts each pipeline once its dependencies have finalized:
 //! `min(worker slots, source parallelism)` drivers per pipeline (one if it
 //! must keep order). The pipelines of a fan-in (`UNION ALL`) end in one
@@ -29,6 +31,7 @@ use crate::executor::{Executor, TaskHandle};
 use crate::metrics::OperatorEntry;
 use crate::morsel::{Barrier, Countdown};
 use crate::operator::GlobalState;
+use crate::physical::{PhysicalPlan, WorkerContext, instantiate};
 use crate::pipeline::{ExecNode, Pipeline, PipelineBuilder};
 use crate::sync::{Mutex, lock};
 
@@ -36,13 +39,16 @@ use crate::sync::{Mutex, lock};
 /// [`QueryRunner`]; distributed: the coordinator (P5).
 pub trait Scheduler: Send + Sync {
     /// Starts `plan` and returns its result stream. Dropping the stream
-    /// cancels the query.
+    /// cancels the query. The plan is data; `worker` holds what this
+    /// process resolves its references with (tables, spill scope, write
+    /// sink) for the parts of the plan that run here.
     ///
     /// # Errors
-    /// Planning errors; execution errors arrive on the stream.
+    /// Instantiation errors; execution errors arrive on the stream.
     fn submit(
         &self,
-        plan: Arc<dyn ExecNode>,
+        plan: PhysicalPlan,
+        worker: WorkerContext,
         query: Arc<QueryContext>,
     ) -> BoxFuture<'static, Result<BoxStream<'static, Result<Batch>>>>;
     /// Cancels a running query; unknown or finished ids are ignored.
@@ -123,13 +129,32 @@ impl QueryRunner {
     }
 }
 
+impl QueryRunner {
+    /// Runs an instantiated operator graph (worker-local; a [`Scheduler`]
+    /// takes plans) and returns its result stream. Dropping the stream
+    /// cancels the query.
+    ///
+    /// # Errors
+    /// Pipeline construction errors; execution errors arrive on the
+    /// stream.
+    pub fn execute(
+        &self,
+        node: Arc<dyn ExecNode>,
+        query: Arc<QueryContext>,
+    ) -> BoxFuture<'static, Result<BoxStream<'static, Result<Batch>>>> {
+        let started = self.start(node, query);
+        Box::pin(async move { started })
+    }
+}
+
 impl Scheduler for QueryRunner {
     fn submit(
         &self,
-        plan: Arc<dyn ExecNode>,
+        plan: PhysicalPlan,
+        worker: WorkerContext,
         query: Arc<QueryContext>,
     ) -> BoxFuture<'static, Result<BoxStream<'static, Result<Batch>>>> {
-        let started = self.start(plan, query);
+        let started = instantiate(&plan, &worker).and_then(|node| self.start(node, query));
         Box::pin(async move { started })
     }
 

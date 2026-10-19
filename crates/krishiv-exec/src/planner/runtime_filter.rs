@@ -48,26 +48,26 @@ use krishiv_common::config::{
     RUNTIME_FILTER_BLOOM_MAX_ITEMS, RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
     RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
 };
-use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions, RuntimeFilter};
+use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{AttrId, Expr, ExprNode, ResolvedExpr};
 
 use super::build::{Planned, Planner, column_of};
-use crate::join::JoinRuntimeFilter;
-use crate::operators::{RowStageSettings, RuntimeFilters};
+use crate::operators::RowStageSettings;
+use crate::physical::{JoinFilterPlan, ScanId, ScanRuntimeFilter};
 
 /// A scan column a runtime filter from above may target.
 #[derive(Debug, Clone)]
 pub(crate) struct Site {
     /// The column's attribute in the relation's output.
     pub(crate) attr: AttrId,
-    /// The scan's table column and its type.
+    /// The scan's table column.
     pub(crate) column: ColumnPath,
-    /// The scan's filter list.
-    pub(crate) slot: RuntimeFilters,
+    /// The scan.
+    pub(crate) scan: ScanId,
     /// The scan's estimated rows.
     pub(crate) scan_rows: f64,
-    /// The scan, for `EXPLAIN`.
-    pub(crate) scan: String,
+    /// The scan's source, for `EXPLAIN`.
+    pub(crate) scan_name: String,
 }
 
 /// The settings planning reads (see the module docs).
@@ -120,6 +120,11 @@ impl Settings {
     pub(crate) fn enabled(&self) -> bool {
         self.enabled
     }
+
+    /// The scans' row-stage settings.
+    pub(crate) fn row_stage(&self) -> RowStageSettings {
+        self.row
+    }
 }
 
 /// The attribute `e` reads when it is a column or a widening cast of one
@@ -149,7 +154,7 @@ pub(crate) fn column_type(p: &Planned, id: AttrId) -> Option<DataType> {
 
 /// What one join publishes.
 pub(crate) struct JoinFilters {
-    pub(crate) filters: Vec<JoinRuntimeFilter>,
+    pub(crate) filters: Vec<JoinFilterPlan>,
     /// `EXPLAIN` text.
     pub(crate) explain: Vec<String>,
 }
@@ -190,22 +195,23 @@ impl Planner<'_> {
                     && site.scan_rows >= (4.0 * build_rows).max(s.min_application_rows as f64);
                 let id = FilterId(self.next_filter);
                 self.next_filter += 1;
-                let filter = Arc::new(RuntimeFilter::new(
-                    id,
-                    site.column.clone(),
-                    key_type.clone(),
-                ));
-                site.slot.push(Arc::clone(&filter));
-                site.slot.set_settings(s.row);
+                self.scan_filters
+                    .entry(site.scan)
+                    .or_default()
+                    .push(ScanRuntimeFilter {
+                        id,
+                        column: site.column.clone(),
+                        key_type: key_type.clone(),
+                    });
                 out.explain.push(format!(
                     "RuntimeFilter {id}: {e} -> {}.{}{}",
-                    site.scan,
+                    site.scan_name,
                     site.column.0.join("."),
                     if bloom { " (bloom)" } else { "" }
                 ));
-                out.filters.push(JoinRuntimeFilter {
+                out.filters.push(JoinFilterPlan {
+                    id,
                     key,
-                    filter,
                     options: KeyFilterOptions {
                         max_values: s.max_values,
                         bloom,

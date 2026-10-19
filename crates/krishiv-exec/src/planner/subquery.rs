@@ -29,11 +29,7 @@ use crate::pipeline::{ExecNode, PipelineBuilder};
 pub(crate) struct Slot(OnceLock<ArrayRef>);
 
 /// Scalar (the first column of at most one row) or `EXISTS`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Kind {
-    Scalar,
-    Exists,
-}
+pub(crate) use crate::physical::SubqueryValueKind as Kind;
 
 /// Collects a subquery's rows and publishes its value.
 #[derive(Debug)]

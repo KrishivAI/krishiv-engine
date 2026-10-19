@@ -32,6 +32,10 @@ sink (also the runtime filter producer, P2-T163: per-driver partials, published 
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
 (adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model.
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
+`physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
+`PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
+worker that runs it; the planner validates nodes with the same builders). `Scheduler::submit` takes a
+`PhysicalPlan`; `QueryRunner::execute` runs an already instantiated `ExecNode` graph.
 
 ## Invariants
 - All memory through krishiv-memory reservations; every spill path tested with tiny-memory tests.
@@ -39,6 +43,9 @@ Operators with work after their input (`needs_flush`) get `end_input` + a per-pi
 - At query end (success, error, cancel) the query pool is empty: tests assert it.
 - Cancellation-safe, no blocking in async; metrics feed EXPLAIN ANALYZE.
 - New operators follow skill `krishiv-operator`.
+- Physical plans are serializable data: plan types in `physical/` hold no `Arc<dyn …>`, locks, atomics or cells
+  (`PlanData`, `cargo xtask source-guard`); scan sources, spill scopes, runtime-filter and subquery cells are
+  created at instantiation. Review question for every change: does this assume one process?
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 

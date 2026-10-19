@@ -5,11 +5,13 @@
 //! # The seam
 //! - A session analyzes and optimizes a query, then calls
 //!   [`PhysicalPlanner::plan`] with a [`PlanningContext`]: the query's
-//!   configuration snapshot, its spill scope and the tables it reads
-//!   ([`TableProviderResolver`]).
-//! - The result's [`PhysicalPlan::root`] goes to a
-//!   [`Scheduler`](crate::Scheduler) (`QueryRunner::submit`); its
-//!   [`Display`](std::fmt::Display) is the physical section of `EXPLAIN`.
+//!   configuration snapshot and the tables it reads
+//!   ([`TableProviderResolver`]), whose metadata planning reads.
+//! - The result is a [`PhysicalPlan`]: data (see [`crate::physical`]). It
+//!   goes to a [`Scheduler`](crate::Scheduler) with the
+//!   [`WorkerContext`](crate::physical::WorkerContext) it is instantiated
+//!   with (tables, spill scope); its [`Display`](std::fmt::Display) is the
+//!   physical section of `EXPLAIN`.
 //! - [`DefaultPlanner`] is the embedded implementation.
 //! - Tables are opened through [`TableProvider`]s (spec 13 §7): the
 //!   scan factory with its pushdowns ([`ScanPushdown`](crate::ScanPushdown))
@@ -25,25 +27,24 @@
 
 mod aggregate;
 mod build;
-mod eval;
+pub(crate) mod eval;
 mod explain;
 mod file_table;
 mod join;
-mod nodes;
-mod pushdown;
+pub(crate) mod nodes;
+pub(crate) mod pushdown;
 mod runtime_filter;
-mod subquery;
+pub(crate) mod subquery;
 mod table;
 
 use std::fmt;
 use std::sync::Arc;
 
-use arrow_schema::SchemaRef;
 use krishiv_common::config::Config;
-use krishiv_memory::SpillScope;
 use krishiv_plan::Plan;
 
 pub use build::DefaultPlanner;
+pub(crate) use build::concat_schemas;
 pub use explain::ExplainNode;
 pub use file_table::FileTable;
 pub use table::{
@@ -51,8 +52,7 @@ pub use table::{
 };
 
 use crate::error::Result;
-use crate::operators::{FileWrite, FileWriteSink};
-use crate::pipeline::ExecNode;
+pub use crate::physical::PhysicalPlan;
 
 /// Turns an optimized, resolved logical plan into an executable plan.
 pub trait PhysicalPlanner: Send + Sync + fmt::Debug {
@@ -65,29 +65,28 @@ pub trait PhysicalPlanner: Send + Sync + fmt::Debug {
     fn plan(&self, plan: &Plan, cx: &PlanningContext) -> Result<PhysicalPlan>;
 }
 
-/// What planning one query needs besides its plan.
+/// What planning one query needs besides its plan. Only metadata: the
+/// worker resources a plan runs with (spill scope, scan sources) come at
+/// instantiation ([`WorkerContext`](crate::physical::WorkerContext)).
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct PlanningContext {
-    /// The tables the plan's scans read.
+    /// The tables the plan's scans read: their schemas, statistics and
+    /// filter pushdown.
     pub tables: Arc<dyn TableProviderResolver>,
     /// The query's configuration snapshot (`spark.sql.ansi.enabled`, the
     /// session time zone, ...).
     pub config: Arc<Config>,
-    /// The query's spill scope, shared by its spilling operators; `None`
-    /// makes them unspillable.
-    pub spill: Option<SpillScope>,
     /// The session's user (`current_user()`).
     pub user: Arc<str>,
 }
 
 impl PlanningContext {
-    /// A context over `tables` and `config`, without spilling.
+    /// A context over `tables` and `config`.
     pub fn new(tables: Arc<dyn TableProviderResolver>, config: Arc<Config>) -> Self {
         Self {
             tables,
             config,
-            spill: None,
             user: Arc::from(krishiv_plan::analyzer::Principal::local_user().name),
         }
     }
@@ -98,113 +97,12 @@ impl PlanningContext {
         self.user = user.into();
         self
     }
-
-    /// The same context spilling into `scope` (one per query).
-    #[must_use]
-    pub fn with_spill(mut self, scope: SpillScope) -> Self {
-        self.spill = Some(scope);
-        self
-    }
 }
 
 impl fmt::Debug for PlanningContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlanningContext")
             .field("tables", &self.tables)
-            .field("spill", &self.spill.is_some())
             .finish_non_exhaustive()
-    }
-}
-
-/// An executable plan: the root node to submit, the schema of its result
-/// batches and a printable tree.
-#[derive(Clone)]
-pub struct PhysicalPlan {
-    root: Arc<dyn ExecNode>,
-    schema: SchemaRef,
-    explain: ExplainNode,
-    warnings: Vec<String>,
-}
-
-impl PhysicalPlan {
-    /// A plan of `root`, whose result batches have `schema`, printed as
-    /// `explain`.
-    pub fn new(root: Arc<dyn ExecNode>, schema: SchemaRef, explain: ExplainNode) -> Self {
-        Self {
-            root,
-            schema,
-            explain,
-            warnings: Vec::new(),
-        }
-    }
-
-    /// The root node, for [`Scheduler::submit`](crate::Scheduler::submit).
-    /// A plan runs once: its nodes hold per-query state.
-    pub fn root(&self) -> &Arc<dyn ExecNode> {
-        &self.root
-    }
-
-    /// The schema of the result batches: the logical plan's output names.
-    pub fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-
-    /// The printable tree.
-    pub fn explain(&self) -> &ExplainNode {
-        &self.explain
-    }
-
-    /// Warnings planning produced (an ignored hint, as Spark logs it).
-    pub fn warnings(&self) -> &[String] {
-        &self.warnings
-    }
-
-    /// The plan writing this plan's rows through `sink` (`df.write`): its
-    /// result is one row per file written (`path`, `size`, `rows`). The
-    /// caller starts the write before (`DirectoryWrite::begin`, whose
-    /// write options built `sink` over [`Self::schema`]) and commits it
-    /// with [`FileWriteSink::files`] once the plan has run.
-    ///
-    /// # Errors
-    /// `INTERNAL_ERROR` if `sink` writes another schema.
-    pub fn into_write(self, sink: Arc<FileWriteSink>) -> Result<Self> {
-        if sink.input_schema().fields() != self.schema.fields() {
-            return Err(crate::error::internal(
-                "a write sink of another schema than its plan".to_owned(),
-            ));
-        }
-        let explain = ExplainNode::new("WriteFiles", sink.describe(), vec![self.explain]);
-        Ok(Self {
-            schema: crate::operator::Source::schema(sink.as_ref()),
-            root: Arc::new(FileWrite {
-                input: self.root,
-                sink,
-            }),
-            explain,
-            warnings: self.warnings,
-        })
-    }
-
-    /// The same plan with `warnings` added.
-    #[must_use]
-    pub fn with_warnings(mut self, warnings: Vec<String>) -> Self {
-        self.warnings.extend(warnings);
-        self
-    }
-}
-
-impl fmt::Debug for PhysicalPlan {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PhysicalPlan")
-            .field("schema", &self.schema)
-            .field("explain", &self.explain.to_string())
-            .field("warnings", &self.warnings)
-            .finish_non_exhaustive()
-    }
-}
-
-impl fmt::Display for PhysicalPlan {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.explain.fmt(f)
     }
 }

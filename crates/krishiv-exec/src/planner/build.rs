@@ -12,32 +12,42 @@
 //!
 //! A `WITH` definition is planned again at each reference (Spark inlines
 //! deterministic CTEs too); a shared subtree (`Arc`) is planned once per
-//! parent, because plan nodes hold per-query state.
+//! parent.
+//!
+//! The planner produces data ([`PhysNode`]s); it validates each node and
+//! learns its schema with the operator builders instantiation uses
+//! ([`crate::physical`]), over throw-away runtime-filter and subquery
+//! cells, and opens no scan.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
-use krishiv_io::ColumnPath;
+use krishiv_io::{ColumnPath, FilterId};
 use krishiv_plan::{
     AttrId, BoundColumn, Expr, ExprNode, Literal, LogicalPlan, NullOrdering, Plan, PlanNode,
     ResolvedExpr, SortDirection, SortOrder, SubqueryKind,
 };
 
-use super::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
+use super::eval::{self, EvalEnv, PhysExpr};
 use super::explain::ExplainNode;
-use super::nodes::{BreakerNode, FanInNode, OperatorNode, SourceNode};
 use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
-use super::subquery::{Kind, Slot, SubquerySink, SubqueryValue, WithSubqueries};
-use super::{PhysicalPlan, PhysicalPlanner, PlanningContext, pushdown};
+use super::subquery::{Slot, SubqueryValue};
+use super::{PhysicalPlanner, PlanningContext};
 use crate::error::Result;
-use crate::operator::{Operator, Sink, Source};
-use crate::operators::{
-    Filter, FilterPushdown, Limit, Project, ProjectItem, PushedFilter, ReplicateRows,
-    RuntimeFilters, ScanPushdowns, Sort, SortKey, TopN,
+use crate::operator::{Operator, Source};
+use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
+use crate::physical::{
+    PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
+    SubqueryId, SubqueryPlan, SubqueryValueKind, Values, filter_op, project_op, replicate_op,
+    scan_filter, sort_op, top_n_op,
 };
-use crate::pipeline::ExecNode;
+
+/// How far above the planner's first fresh attribute subquery ids start:
+/// subquery values are read as attributes of these numbers, so they must
+/// never meet an attribute of the plan or one the planner adds.
+const SUBQUERY_GAP: u64 = 1 << 62;
 
 /// The embedded physical planner.
 #[derive(Debug, Clone, Copy, Default)]
@@ -57,10 +67,16 @@ impl PhysicalPlanner for DefaultPlanner {
         let run = || {
             let mut planner = Planner::new(cx, root);
             let planned = planner.plan(root)?;
-            let planned = select(planned, &output, "Project")?;
+            let mut planned = select(planned, &output, "Project")?;
+            planner.attach_runtime_filters(&mut planned.node);
             Ok::<_, KrishivError>(
-                PhysicalPlan::new(planned.node, planned.schema, planned.explain)
-                    .with_warnings(planner.warnings),
+                PhysicalPlan::new(
+                    planned.node,
+                    planned.schema,
+                    planned.explain,
+                    planner.env.to_plan(),
+                )
+                .with_warnings(planner.warnings),
             )
         };
         krishiv_common::stack::on_big_stack(run)
@@ -70,7 +86,7 @@ impl PhysicalPlanner for DefaultPlanner {
 
 /// A planned relation.
 pub(crate) struct Planned {
-    pub(crate) node: Arc<dyn ExecNode>,
+    pub(crate) node: PhysNode,
     pub(crate) schema: SchemaRef,
     /// The attribute id of each column of `schema`.
     pub(crate) layout: Vec<AttrId>,
@@ -88,19 +104,18 @@ impl Planned {
             .ok_or_else(|| internal(&format!("attribute #{} is not an input column", id.0)))
     }
 
-    /// `op` streaming over this relation.
-    pub(crate) fn operator(
+    /// The node `make` builds over this relation, with output `schema`
+    /// and `layout`.
+    pub(crate) fn wrap(
         self,
-        op: Arc<dyn Operator>,
+        make: impl FnOnce(Box<PhysNode>) -> PhysNode,
+        schema: SchemaRef,
         layout: Vec<AttrId>,
         explain: (&str, String),
     ) -> Self {
         Self {
-            schema: op.schema(),
-            node: Arc::new(OperatorNode {
-                input: self.node,
-                op,
-            }),
+            schema,
+            node: make(Box::new(self.node)),
             sites: kept(&self.sites, &layout),
             layout,
             explain: ExplainNode::new(explain.0, explain.1, vec![self.explain]),
@@ -108,11 +123,14 @@ impl Planned {
     }
 }
 
-/// Compiled expressions and the subqueries they read.
-pub(crate) struct CompiledExprs {
-    pub(crate) exprs: Vec<Arc<dyn PhysExpr>>,
-    pub(crate) subqueries: Vec<(Arc<dyn ExecNode>, Arc<SubquerySink>)>,
-    pub(crate) explain: Vec<ExplainNode>,
+/// Expressions ready for a node: subqueries replaced by the columns of
+/// their values, and the subqueries planned.
+pub(crate) struct Prepared {
+    pub(crate) exprs: Vec<Arc<Expr>>,
+    pub(crate) subqueries: Vec<SubqueryPlan>,
+    /// Placeholder values the planner validates the expressions with.
+    values: Vec<(AttrId, Arc<dyn PhysExpr>)>,
+    explain: Vec<ExplainNode>,
 }
 
 pub(crate) struct Planner<'a> {
@@ -128,19 +146,29 @@ pub(crate) struct Planner<'a> {
     pub(crate) rf: Settings,
     /// The next runtime filter's id.
     pub(crate) next_filter: u64,
+    /// The next scan's id.
+    next_scan: u64,
+    /// The next subquery's id.
+    next_subquery: u64,
+    /// The runtime filters each scan receives, by scan.
+    pub(crate) scan_filters: HashMap<ScanId, Vec<ScanRuntimeFilter>>,
 }
 
 impl<'a> Planner<'a> {
     fn new(cx: &'a PlanningContext, root: &LogicalPlan) -> Self {
+        let next_id = max_id(root).saturating_add(1).max(1 << 62);
         Self {
             cx,
             env: EvalEnv::new(&cx.config, Arc::clone(&cx.user)),
             warnings: Vec::new(),
             ctes: HashMap::new(),
             consumed_hints: HashSet::new(),
-            next_id: max_id(root).saturating_add(1).max(1 << 62),
+            next_id,
             rf: Settings::new(&cx.config),
             next_filter: 1,
+            next_scan: 0,
+            next_subquery: next_id.saturating_add(SUBQUERY_GAP),
+            scan_filters: HashMap::new(),
         }
     }
 
@@ -149,6 +177,44 @@ impl<'a> Planner<'a> {
         let id = AttrId(self.next_id);
         self.next_id = self.next_id.saturating_add(1);
         id
+    }
+
+    /// The values expressions are validated with at planning.
+    pub(crate) fn values<'p>(&'p self, prepared: &'p Prepared) -> Values<'p> {
+        Values {
+            env: &self.env,
+            subqueries: &prepared.values,
+        }
+    }
+
+    /// A placeholder cell of the runtime filter `id` (planning validates
+    /// joins with it).
+    pub(crate) fn filter_cell(&self, id: FilterId) -> Result<Arc<krishiv_io::RuntimeFilter>> {
+        self.scan_filters
+            .values()
+            .flatten()
+            .find(|f| f.id == id)
+            .map(|f| {
+                Arc::new(krishiv_io::RuntimeFilter::new(
+                    f.id,
+                    f.column.clone(),
+                    f.key_type.clone(),
+                ))
+            })
+            .ok_or_else(|| internal(&format!("runtime filter {id} has no scan")))
+    }
+
+    /// Hands each scan of `node` the runtime filters joins publish to it.
+    fn attach_runtime_filters(&mut self, node: &mut PhysNode) {
+        let mut stack = vec![node];
+        while let Some(n) = stack.pop() {
+            if let PhysNode::Scan(s) = n
+                && let Some(filters) = self.scan_filters.remove(&s.id)
+            {
+                s.runtime_filters = filters;
+            }
+            stack.extend(n.children_mut());
+        }
     }
 
     pub(crate) fn plan(&mut self, p: &Arc<LogicalPlan>) -> Result<Planned> {
@@ -252,9 +318,14 @@ impl<'a> Planner<'a> {
                     return self.top_n(input, order, n);
                 }
                 let input = self.plan(input)?;
-                let op = Limit::new(Arc::clone(&input.schema), n);
+                let schema = Limit::new(Arc::clone(&input.schema), n).schema();
                 let layout = input.layout.clone();
-                let mut planned = input.operator(op, layout, ("Limit", n.to_string()));
+                let mut planned = input.wrap(
+                    |input| PhysNode::Limit { input, limit: n },
+                    schema,
+                    layout,
+                    ("Limit", n.to_string()),
+                );
                 // A filter below a limit would change which rows it keeps.
                 planned.sites.clear();
                 Ok(planned)
@@ -277,7 +348,7 @@ impl<'a> Planner<'a> {
                 let input = self.plan(input)?;
                 self.replicate(input, count)
             }
-            PlanNode::OneRowRelation => one_row(),
+            PlanNode::OneRowRelation => Ok(one_row()),
             _ => {
                 let text = p.to_string();
                 let name = text.split_whitespace().next().unwrap_or_default();
@@ -312,12 +383,36 @@ impl<'a> Planner<'a> {
             let items = cols
                 .iter()
                 .zip(&out)
-                .map(|(c, o)| Ok(ProjectItem::aliased(planned.column(c.id)?, &o.name)))
+                .map(|(c, o)| {
+                    Ok(ProjectItemPlan::Column {
+                        index: planned.column(c.id)?,
+                        name: Some(o.name.clone()),
+                    })
+                })
                 .collect::<Result<Vec<_>>>()?;
-            let op = Project::try_new_nullable(&planned.schema, items, &nullable)?;
+            let op = project_op(
+                &planned.schema,
+                &planned.layout,
+                &items,
+                Some(&nullable),
+                &self.no_values(),
+            )?;
             let branch: Vec<AttrId> = cols.iter().map(|c| c.id).collect();
             sites.extend(renamed(&planned.sites, &branch, &layout));
-            let planned = planned.operator(op, layout.clone(), ("Project", columns(&cols)));
+            let input_layout = planned.layout.clone();
+            let nullable = nullable.clone();
+            let planned = planned.wrap(
+                |input| PhysNode::Project {
+                    input,
+                    layout: input_layout,
+                    items,
+                    nullable: Some(nullable),
+                    subqueries: Vec::new(),
+                },
+                op.schema(),
+                layout.clone(),
+                ("Project", columns(&cols)),
+            );
             match &schema {
                 None => schema = Some(Arc::clone(&planned.schema)),
                 Some(s) if s.fields() != planned.schema.fields() => {
@@ -330,7 +425,7 @@ impl<'a> Planner<'a> {
         }
         let schema = schema.ok_or_else(|| internal("a union without inputs"))?;
         Ok(Planned {
-            node: Arc::new(FanInNode { inputs: nodes }),
+            node: PhysNode::Union { inputs: nodes },
             schema,
             layout,
             explain: ExplainNode::new("Union", columns(&out), explain),
@@ -338,94 +433,115 @@ impl<'a> Planner<'a> {
         })
     }
 
-    /// Compiles `exprs` over `input`, planning the uncorrelated subqueries
-    /// they read.
-    pub(crate) fn compile(&mut self, exprs: &[&Expr], input: &Planned) -> Result<CompiledExprs> {
+    /// Values for expressions that read no subquery.
+    pub(crate) fn no_values(&self) -> Values<'_> {
+        Values {
+            env: &self.env,
+            subqueries: &[],
+        }
+    }
+
+    /// Plans the uncorrelated subqueries `exprs` read and replaces each by
+    /// the column of its value.
+    pub(crate) fn prepare(&mut self, exprs: &[&Expr]) -> Result<Prepared> {
         let mut found = Vec::new();
         for e in exprs {
             subqueries(e, &mut found);
         }
-        let mut slots: Vec<(usize, Arc<dyn PhysExpr>)> = Vec::new();
-        let mut plans = Vec::new();
-        let mut explain = Vec::new();
+        let mut by_plan: HashMap<usize, BoundColumn> = HashMap::new();
+        let mut prepared = Prepared {
+            exprs: Vec::with_capacity(exprs.len()),
+            subqueries: Vec::new(),
+            values: Vec::new(),
+            explain: Vec::new(),
+        };
         for (kind, plan) in found {
             let key = Arc::as_ptr(&plan) as usize;
-            if slots.iter().any(|(k, _)| *k == key) {
+            if by_plan.contains_key(&key) {
                 continue;
             }
             let out = plan
                 .resolved_output()
                 .ok_or_else(|| internal("a subquery without output"))?;
             let (kind, data_type) = match (kind, out.as_slice()) {
-                (Kind::Scalar, [c]) => (Kind::Scalar, c.data_type.to_arrow()),
-                (Kind::Exists, _) => (Kind::Exists, arrow_schema::DataType::Boolean),
+                (SubqueryValueKind::Scalar, [c]) => {
+                    (SubqueryValueKind::Scalar, c.data_type.clone())
+                }
+                (SubqueryValueKind::Exists, _) => {
+                    (SubqueryValueKind::Exists, krishiv_types::DataType::Boolean)
+                }
                 _ => return Err(internal("a scalar subquery of several columns")),
             };
             let planned = self.plan(&plan)?;
-            let planned = select(
-                planned,
-                &out[..usize::from(kind == Kind::Scalar)],
-                "Project",
-            )?;
-            let slot = Arc::new(Slot::default());
-            let sink = SubquerySink::new(kind, data_type.clone(), Arc::clone(&slot));
-            explain.push(ExplainNode::new(
+            let scalar = kind == SubqueryValueKind::Scalar;
+            let planned = select(planned, &out[..usize::from(scalar)], "Project")?;
+            let id = SubqueryId(self.next_subquery);
+            self.next_subquery = self
+                .next_subquery
+                .checked_add(1)
+                .ok_or_else(|| internal("subquery id overflow"))?;
+            let arrow = data_type.to_arrow();
+            prepared.explain.push(ExplainNode::new(
                 "Subquery",
-                if kind == Kind::Scalar {
-                    "scalar"
-                } else {
-                    "exists"
-                },
+                if scalar { "scalar" } else { "exists" },
                 vec![planned.explain],
             ));
-            plans.push((planned.node, sink));
-            slots.push((
-                key,
+            prepared.subqueries.push(SubqueryPlan {
+                id,
+                kind,
+                data_type: arrow.clone(),
+                plan: planned.node,
+            });
+            prepared.values.push((
+                id.attr(),
                 Arc::new(SubqueryValue {
                     kind,
-                    slot,
-                    data_type,
+                    slot: Arc::new(Slot::default()),
+                    data_type: arrow,
                 }),
             ));
+            by_plan.insert(
+                key,
+                BoundColumn {
+                    id: id.attr(),
+                    name: if scalar {
+                        "scalarsubquery()"
+                    } else {
+                        "exists()"
+                    }
+                    .to_owned(),
+                    data_type,
+                    nullable: scalar,
+                },
+            );
         }
-        let at = Input {
-            layout: &input.layout,
-            schema: &input.schema,
-            env: &self.env,
-            subqueries: &slots,
-        };
-        let exprs = exprs
-            .iter()
-            .map(|e| eval::compile(e, at))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(CompiledExprs {
-            exprs,
-            subqueries: plans,
-            explain,
-        })
+        for e in exprs {
+            let e = Arc::new((*e).clone());
+            prepared.exprs.push(if by_plan.is_empty() {
+                e
+            } else {
+                with_subquery_columns(e, &by_plan)?
+            });
+        }
+        Ok(prepared)
     }
 
-    /// `op` over `input`, after the subqueries its expressions read.
+    /// The node `make` builds over `input` from `prepared`'s subqueries:
+    /// `make` gets the input, its layout and the subqueries.
     pub(crate) fn attach(
         input: Planned,
-        op: Arc<dyn Operator>,
-        compiled: CompiledExprs,
+        prepared: Prepared,
+        schema: SchemaRef,
         layout: Vec<AttrId>,
         explain: (&str, String),
+        make: impl FnOnce(Box<PhysNode>, Vec<AttrId>, Vec<SubqueryPlan>) -> PhysNode,
     ) -> Planned {
-        if compiled.subqueries.is_empty() {
-            return input.operator(op, layout, explain);
-        }
         let mut children = vec![input.explain];
-        children.extend(compiled.explain);
+        children.extend(prepared.explain);
         Planned {
             sites: kept(&input.sites, &layout),
-            schema: op.schema(),
-            node: Arc::new(WithSubqueries {
-                subqueries: compiled.subqueries,
-                input: input.node,
-                op,
-            }),
+            schema,
+            node: make(Box::new(input.node), input.layout, prepared.subqueries),
             layout,
             explain: ExplainNode::new(explain.0, explain.1, children),
         }
@@ -443,6 +559,8 @@ impl<'a> Planner<'a> {
         scan: &krishiv_plan::Scan,
         filter: Option<&Arc<Expr>>,
     ) -> Result<Planned> {
+        // Table metadata only: the scan itself is built when the plan is
+        // instantiated.
         let provider = self.cx.tables.provider(scan)?;
         let factory = provider.scan()?;
         let table = factory.table_schema();
@@ -455,8 +573,8 @@ impl<'a> Planner<'a> {
                 .ok_or_else(|| internal(&format!("the table has no column {}", c.name)))?;
             projection.push(ColumnPath::new(field.name().clone()));
         }
-        let mut filters = Vec::new();
-        let mut exact = false;
+        let mut pushed = Vec::new();
+        let mut scan_filter_plan = None;
         let mut detail = format!("{} [{}]", source_name(scan), columns(&scan.output));
         if let Some(predicate) = filter {
             // The scan evaluates pushed filters over its table schema.
@@ -468,51 +586,54 @@ impl<'a> Planner<'a> {
                     None => self.fresh_id(),
                 })
                 .collect();
-            let compiled = eval::compile(
-                predicate,
-                Input {
-                    layout: &layout,
-                    schema: &table,
-                    env: &self.env,
-                    subqueries: &[],
-                },
-            )?;
-            let typed = pushdown::translate(predicate, &scan.output);
-            let pushed = PushedFilter {
-                predicate: Arc::new(Compiled(compiled)),
-                expr: typed,
-            };
-            exact = factory.filter_pushdown(&pushed) == FilterPushdown::Exact;
+            let filter = scan_filter(&table, &layout, predicate, scan, &self.env)?;
+            let exact = factory.filter_pushdown(&filter) == FilterPushdown::Exact;
             detail.push_str(&format!(", PushedFilters: [{predicate}]"));
-            filters.push(pushed);
+            pushed.push(filter);
+            scan_filter_plan = Some(ScanFilter {
+                layout,
+                predicate: Arc::clone(predicate),
+                exact,
+            });
         }
-        let slot = RuntimeFilters::default();
-        let source = factory.build(ScanPushdowns {
+        let schema = factory.output_schema(&ScanPushdowns {
             projection: Some(projection.clone()),
-            filters,
-            dynamic: slot.clone(),
+            filters: pushed,
             ..ScanPushdowns::default()
         })?;
+        let id = ScanId(self.next_scan);
+        self.next_scan = self
+            .next_scan
+            .checked_add(1)
+            .ok_or_else(|| internal("scan id overflow"))?;
         let sites = if self.rf.enabled() {
             let scan_rows = self.estimated_rows(plan);
             let name = source_name(scan);
             scan.output
                 .iter()
-                .zip(projection)
+                .zip(&projection)
                 .map(|(c, column)| Site {
                     attr: c.id,
-                    column,
-                    slot: slot.clone(),
+                    column: column.clone(),
+                    scan: id,
                     scan_rows,
-                    scan: name.clone(),
+                    scan_name: name.clone(),
                 })
                 .collect()
         } else {
             Vec::new()
         };
+        let exact = scan_filter_plan.as_ref().is_some_and(|f| f.exact);
         let planned = Planned {
-            schema: source.schema(),
-            node: Arc::new(SourceNode(source)),
+            schema,
+            node: PhysNode::Scan(ScanNode {
+                id,
+                scan: scan.clone(),
+                projection,
+                filter: scan_filter_plan,
+                runtime_filters: Vec::new(),
+                row_stage: self.rf.row_stage(),
+            }),
             layout: scan.output.iter().map(|c| c.id).collect(),
             explain: ExplainNode::leaf("Scan", detail),
             sites,
@@ -524,37 +645,51 @@ impl<'a> Planner<'a> {
     }
 
     fn filter(&mut self, input: Planned, predicate: &Expr) -> Result<Planned> {
-        let mut compiled = self.compile(&[predicate], &input)?;
-        let e = compiled
+        let prepared = self.prepare(&[predicate])?;
+        let e = prepared
             .exprs
-            .pop()
+            .first()
+            .cloned()
             .ok_or_else(|| internal("a filter without a predicate"))?;
-        let op = Filter::new(Arc::clone(&input.schema), Arc::new(Compiled(e)));
+        let op = filter_op(&input.schema, &input.layout, &e, &self.values(&prepared))?;
         let layout = input.layout.clone();
         Ok(Self::attach(
             input,
-            op,
-            compiled,
+            prepared,
+            op.schema(),
             layout,
             ("Filter", predicate.to_string()),
+            |input, layout, subqueries| PhysNode::Filter {
+                input,
+                layout,
+                predicate: e,
+                subqueries,
+            },
         ))
     }
 
     /// Each row `count` times (`INTERSECT ALL` / `EXCEPT ALL`).
     fn replicate(&mut self, input: Planned, count: &Expr) -> Result<Planned> {
-        let mut compiled = self.compile(&[count], &input)?;
-        let e = compiled
+        let prepared = self.prepare(&[count])?;
+        let e = prepared
             .exprs
-            .pop()
+            .first()
+            .cloned()
             .ok_or_else(|| internal("a replication without a count"))?;
-        let op = ReplicateRows::new(Arc::clone(&input.schema), Arc::new(Compiled(e)));
+        let op = replicate_op(&input.schema, &input.layout, &e, &self.values(&prepared))?;
         let layout = input.layout.clone();
         let mut planned = Self::attach(
             input,
-            op,
-            compiled,
+            prepared,
+            op.schema(),
             layout,
             ("ReplicateRows", count.to_string()),
+            |input, layout, subqueries| PhysNode::ReplicateRows {
+                input,
+                layout,
+                count: e,
+                subqueries,
+            },
         );
         // The replication count is computed over groups the filter cuts.
         planned.sites.clear();
@@ -568,8 +703,8 @@ impl<'a> Planner<'a> {
             .filter(|e| column_of(e).is_none())
             .map(AsRef::as_ref)
             .collect();
-        let compiled = self.compile(&computed, &input)?;
-        let mut values = compiled.exprs.iter();
+        let prepared = self.prepare(&computed)?;
+        let mut values = prepared.exprs.iter();
         let mut items = Vec::with_capacity(exprs.len());
         let mut layout = Vec::with_capacity(exprs.len());
         for e in exprs {
@@ -581,18 +716,27 @@ impl<'a> Planner<'a> {
                 _ => (e.to_string(), self.fresh_id()),
             };
             match column_of(e) {
-                Some(c) => items.push(ProjectItem::aliased(input.column(c)?, name)),
+                Some(c) => items.push(ProjectItemPlan::Column {
+                    index: input.column(c)?,
+                    name: Some(name),
+                }),
                 None => {
                     let value = values.next().ok_or_else(|| internal("projection arity"))?;
-                    items.push(ProjectItem::expr(
+                    items.push(ProjectItemPlan::Expr {
                         name,
-                        Arc::new(Compiled(Arc::clone(value))),
-                    ));
+                        expr: Arc::clone(value),
+                    });
                 }
             }
             layout.push(id);
         }
-        let op = Project::try_new(&input.schema, items)?;
+        let op = project_op(
+            &input.schema,
+            &input.layout,
+            &items,
+            None,
+            &self.values(&prepared),
+        )?;
         // A site passes as each output that is its column (renamed) or a
         // widening cast of it.
         let types = |id: AttrId| column_type(&input, id);
@@ -605,7 +749,20 @@ impl<'a> Planner<'a> {
                 }));
             }
         }
-        let mut planned = Self::attach(input, op, compiled, layout, ("Project", list(exprs)));
+        let mut planned = Self::attach(
+            input,
+            prepared,
+            op.schema(),
+            layout,
+            ("Project", list(exprs)),
+            |input, layout, subqueries| PhysNode::Project {
+                input,
+                layout,
+                items,
+                nullable: None,
+                subqueries,
+            },
+        );
         planned.sites = sites;
         Ok(planned)
     }
@@ -652,12 +809,13 @@ impl<'a> Planner<'a> {
                 .collect::<Result<Vec<_>>>()?;
             return Ok((input, columns));
         }
-        let compiled = self.compile(&computed, &input)?;
-        let mut items: Vec<ProjectItem> =
-            (0..input.layout.len()).map(ProjectItem::column).collect();
+        let prepared = self.prepare(&computed)?;
+        let mut items: Vec<ProjectItemPlan> = (0..input.layout.len())
+            .map(|index| ProjectItemPlan::Column { index, name: None })
+            .collect();
         let mut layout = input.layout.clone();
         let mut columns = Vec::with_capacity(exprs.len());
-        let mut values = compiled.exprs.iter();
+        let mut values = prepared.exprs.iter();
         for e in exprs {
             match column_of(e).and_then(|id| input.column(id).ok()) {
                 Some(c) => columns.push(c),
@@ -665,48 +823,69 @@ impl<'a> Planner<'a> {
                     let value = values.next().ok_or_else(|| internal("key arity"))?;
                     columns.push(items.len());
                     let id = self.fresh_id();
-                    items.push(ProjectItem::expr(
-                        format!("_key{}", items.len()),
-                        Arc::new(Compiled(Arc::clone(value))),
-                    ));
+                    items.push(ProjectItemPlan::Expr {
+                        name: format!("_key{}", items.len()),
+                        expr: Arc::clone(value),
+                    });
                     layout.push(id);
                 }
             }
         }
         let detail = list(exprs);
-        let op = Project::try_new(&input.schema, items)?;
+        let op = project_op(
+            &input.schema,
+            &input.layout,
+            &items,
+            None,
+            &self.values(&prepared),
+        )?;
         Ok((
-            Self::attach(input, op, compiled, layout, ("Project", detail)),
+            Self::attach(
+                input,
+                prepared,
+                op.schema(),
+                layout,
+                ("Project", detail),
+                |input, layout, subqueries| PhysNode::Project {
+                    input,
+                    layout,
+                    items,
+                    nullable: None,
+                    subqueries,
+                },
+            ),
             columns,
         ))
     }
 
     fn sort(&mut self, input: Planned, order: &[SortOrder]) -> Result<Planned> {
         let (input, keys) = self.sort_keys(input, order)?;
-        let sort = Arc::new(Sort::new(
-            Arc::clone(&input.schema),
-            &keys,
-            self.cx.spill.clone(),
-        )?);
-        Ok(breaker(
-            input,
-            Arc::clone(&sort) as Arc<dyn Sink>,
-            sort,
+        let schema = sort_op(&input.schema, &keys, None)?.schema();
+        let layout = input.layout.clone();
+        let sites = input.sites.clone();
+        let mut planned = input.wrap(
+            |input| PhysNode::Sort { input, keys },
+            schema,
+            layout,
             ("Sort", orders(order)),
-            true,
-        ))
+        );
+        planned.sites = sites;
+        Ok(planned)
     }
 
     fn top_n(&mut self, input: Planned, order: &[SortOrder], n: u64) -> Result<Planned> {
         let (input, keys) = self.sort_keys(input, order)?;
-        let limit = usize::try_from(n).map_err(|_| internal("top-N limit out of range"))?;
-        let top = Arc::new(TopN::new(Arc::clone(&input.schema), &keys, 0, limit)?);
-        let mut planned = breaker(
-            input,
-            Arc::clone(&top) as Arc<dyn Sink>,
-            top,
+        let schema = top_n_op(&input.schema, &keys, n)?.schema();
+        let layout = input.layout.clone();
+        let mut planned = input.wrap(
+            |input| PhysNode::TopN {
+                input,
+                keys,
+                limit: n,
+            },
+            schema,
+            layout,
             ("TopN", format!("{n}, {}", orders(order))),
-            true,
         );
         planned.sites.clear();
         Ok(planned)
@@ -758,11 +937,11 @@ pub(crate) fn column_of(e: &Expr) -> Option<AttrId> {
 }
 
 /// The uncorrelated subqueries `e` reads (not inside subquery plans).
-fn subqueries(e: &Expr, out: &mut Vec<(Kind, Arc<LogicalPlan>)>) {
+fn subqueries(e: &Expr, out: &mut Vec<(SubqueryValueKind, Arc<LogicalPlan>)>) {
     if let ExprNode::Subquery { kind, plan } = &e.node {
         match kind {
-            SubqueryKind::Scalar => out.push((Kind::Scalar, Arc::clone(plan))),
-            SubqueryKind::Exists => out.push((Kind::Exists, Arc::clone(plan))),
+            SubqueryKind::Scalar => out.push((SubqueryValueKind::Scalar, Arc::clone(plan))),
+            SubqueryKind::Exists => out.push((SubqueryValueKind::Exists, Arc::clone(plan))),
             // `IN (subquery)` is a semi join after analysis; one left here
             // fails when compiled.
             _ => {}
@@ -771,32 +950,25 @@ fn subqueries(e: &Expr, out: &mut Vec<(Kind, Arc<LogicalPlan>)>) {
     e.for_each_child(&mut |c| subqueries(c, out));
 }
 
+/// `e` with each subquery of `columns` (by the address of its plan)
+/// replaced by the column of its value.
+fn with_subquery_columns(e: Arc<Expr>, columns: &HashMap<usize, BoundColumn>) -> Result<Arc<Expr>> {
+    e.transform_down(&mut |x: Arc<Expr>| {
+        if let ExprNode::Subquery { plan, .. } = &x.node
+            && let Some(c) = columns.get(&(Arc::as_ptr(plan) as usize))
+        {
+            return Ok::<_, KrishivError>(Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Column(c.clone()),
+            ))));
+        }
+        Ok(x)
+    })
+}
+
 pub(crate) fn has_subquery(e: &Expr) -> bool {
     let mut found = Vec::new();
     subqueries(e, &mut found);
     !found.is_empty()
-}
-
-/// A breaker over `input`.
-pub(crate) fn breaker(
-    input: Planned,
-    sink: Arc<dyn Sink>,
-    source: Arc<dyn Source>,
-    explain: (&str, String),
-    ordered: bool,
-) -> Planned {
-    Planned {
-        schema: source.schema(),
-        layout: input.layout.clone(),
-        sites: input.sites,
-        node: Arc::new(BreakerNode {
-            input: input.node,
-            sink,
-            source,
-            ordered,
-        }),
-        explain: ExplainNode::new(explain.0, explain.1, vec![input.explain]),
-    }
 }
 
 /// Exactly `output`'s columns of `planned`, in order, under their names.
@@ -812,34 +984,43 @@ pub(crate) fn select(planned: Planned, output: &[BoundColumn], name: &str) -> Re
     if planned.layout == ids && named {
         return Ok(planned);
     }
-    let items = output
-        .iter()
-        .map(|c| Ok(ProjectItem::aliased(planned.column(c.id)?, &c.name)))
-        .collect::<Result<Vec<_>>>()?;
-    let op = Project::try_new(&planned.schema, items)?;
+    let mut items = Vec::with_capacity(output.len());
+    let mut columns_only = Vec::with_capacity(output.len());
+    for c in output {
+        let index = planned.column(c.id)?;
+        items.push(ProjectItemPlan::Column {
+            index,
+            name: Some(c.name.clone()),
+        });
+        columns_only.push(ProjectItem::aliased(index, &c.name));
+    }
+    // Columns only: the schema needs no expression environment.
+    let schema = Project::try_new(&planned.schema, columns_only)?.schema();
     let detail = columns(output);
-    Ok(planned.operator(op, ids, (name, detail)))
+    let input_layout = planned.layout.clone();
+    Ok(planned.wrap(
+        |input| PhysNode::Project {
+            input,
+            layout: input_layout,
+            items,
+            nullable: None,
+            subqueries: Vec::new(),
+        },
+        schema,
+        ids,
+        (name, detail),
+    ))
 }
 
 /// One row without columns (`SELECT` without `FROM`).
-fn one_row() -> Result<Planned> {
-    let schema = Arc::new(Schema::empty());
-    let options = arrow_array::RecordBatchOptions::new().with_row_count(Some(1));
-    let batch =
-        arrow_array::RecordBatch::try_new_with_options(Arc::clone(&schema), Vec::new(), &options)
-            .map_err(|e| internal(&e.to_string()))?;
-    let scan = crate::operators::MemoryScan::try_new(
-        Arc::clone(&schema),
-        vec![krishiv_types::batch::Batch::new(batch)],
-    )?;
-    let source = crate::operators::ScanPushdown::build(&scan, ScanPushdowns::default())?;
-    Ok(Planned {
-        schema: source.schema(),
-        node: Arc::new(SourceNode(source)),
+fn one_row() -> Planned {
+    Planned {
+        schema: Arc::new(Schema::empty()),
+        node: PhysNode::OneRow,
         layout: Vec::new(),
         explain: ExplainNode::leaf("OneRowRelation", ""),
         sites: Vec::new(),
-    })
+    }
 }
 
 /// The schema of `l`'s columns then `r`'s.

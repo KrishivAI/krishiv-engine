@@ -180,6 +180,10 @@ impl ScanPushdown for FileScan {
     fn build(&self, pushdowns: ScanPushdowns) -> Result<Arc<dyn Source>> {
         Ok(Arc::new(self.source(pushdowns)?))
     }
+
+    fn output_schema(&self, pushdowns: &ScanPushdowns) -> Result<SchemaRef> {
+        Ok(table_request(self, pushdowns)?.2)
+    }
 }
 
 /// Counters of a file scan, summed over every split read.
@@ -266,6 +270,36 @@ struct FileScanLocal {
     rows: super::RowStage,
 }
 
+/// The table-level request of a scan of `scan` with `p`, the schema its
+/// columns map to (the mapped output does not depend on the file: it maps
+/// onto the table) and the output schema (with `_metadata`).
+fn table_request(
+    scan: &FileScan,
+    p: &ScanPushdowns,
+) -> Result<(ScanRequest, SchemaRef, SchemaRef)> {
+    let projection = p.projection.clone().unwrap_or_else(|| {
+        scan.table
+            .fields()
+            .iter()
+            .map(|f| ColumnPath::new(f.name()))
+            .collect()
+    });
+    let exprs: Vec<PushdownExpr> = p.filters.iter().filter_map(|f| f.expr.clone()).collect();
+    let mut request = ScanRequest::new(Arc::clone(&scan.table), projection);
+    request.predicate = match exprs.len() {
+        0 => None,
+        1 => exprs.into_iter().next(),
+        _ => Some(PushdownExpr::And(exprs)),
+    };
+    request.limit = p.limit.filter(|_| p.filters.is_empty());
+    request.metadata_cols = p.metadata;
+    request.mapping = p.mapping.clone();
+    let mapped =
+        Arc::clone(SchemaMapper::new(&request, Arc::clone(&scan.table), "")?.output_schema());
+    let output = with_metadata_column(&mapped, &request.metadata_cols);
+    Ok((request, mapped, output))
+}
+
 impl FileScanSource {
     fn new(scan: &FileScan, p: ScanPushdowns) -> Result<Self> {
         let caps = scan.format.capabilities(&scan.format_options);
@@ -281,28 +315,7 @@ impl FileScanSource {
                 scan.format.name()
             )));
         }
-        let projection = p.projection.unwrap_or_else(|| {
-            scan.table
-                .fields()
-                .iter()
-                .map(|f| ColumnPath::new(f.name()))
-                .collect()
-        });
-        let exprs: Vec<PushdownExpr> = p.filters.iter().filter_map(|f| f.expr.clone()).collect();
-        let mut request = ScanRequest::new(Arc::clone(&scan.table), projection);
-        request.predicate = match exprs.len() {
-            0 => None,
-            1 => exprs.into_iter().next(),
-            _ => Some(PushdownExpr::And(exprs)),
-        };
-        request.limit = p.limit.filter(|_| p.filters.is_empty());
-        request.metadata_cols = p.metadata;
-        request.mapping = p.mapping;
-        // The mapped output does not depend on the file: map onto the table.
-        let mapped =
-            Arc::clone(SchemaMapper::new(&request, Arc::clone(&scan.table), "")?.output_schema());
-        let output = with_metadata_column(&mapped, &request.metadata_cols);
-        let mapped = Arc::clone(&mapped);
+        let (request, mapped, output) = table_request(scan, &p)?;
         Ok(Self {
             format: Arc::clone(&scan.format),
             io: scan.io.clone(),

@@ -15,8 +15,7 @@ use arrow_schema::DataType as ArrowType;
 use krishiv_common::config::Config;
 use krishiv_common::error::KrishivError;
 use krishiv_exec::planner::{
-    DefaultPlanner, FileTable, MemoryTables, PhysicalPlan, PhysicalPlanner, PlanningContext,
-    ProviderStatistics,
+    DefaultPlanner, FileTable, MemoryTables, PhysicalPlanner, PlanningContext, ProviderStatistics,
 };
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
@@ -28,6 +27,8 @@ use krishiv_plan::analyzer::{
     AnalysisContext, Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf, TableColumn,
 };
 use krishiv_plan::{Plan, SourceId};
+
+use super::Runnable;
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
@@ -161,23 +162,19 @@ pub(crate) enum Order {
 }
 
 impl Tpch {
-    pub(crate) fn plan(&self, q: usize) -> PhysicalPlan {
+    pub(crate) fn plan(&self, q: usize) -> Runnable {
         self.plan_sql(&sql(q))
             .unwrap_or_else(|e| panic!("q{q:02}: {e}"))
     }
 
     /// Parses, analyzes, optimizes (ordering joins by the tables'
     /// statistics) and plans `text`.
-    pub(crate) fn plan_sql(&self, text: &str) -> Result<PhysicalPlan, KrishivError> {
+    pub(crate) fn plan_sql(&self, text: &str) -> Result<Runnable, KrishivError> {
         self.plan_sql_with(text, Order::Statistics)
     }
 
     /// As [`Self::plan_sql`], ordering the joins by `order`.
-    pub(crate) fn plan_sql_with(
-        &self,
-        text: &str,
-        order: Order,
-    ) -> Result<PhysicalPlan, KrishivError> {
+    pub(crate) fn plan_sql_with(&self, text: &str, order: Order) -> Result<Runnable, KrishivError> {
         self.plan_sql_in(text, order, None)
     }
 
@@ -187,7 +184,7 @@ impl Tpch {
         text: &str,
         order: Order,
         spill: Option<&SpillScope>,
-    ) -> Result<PhysicalPlan, KrishivError> {
+    ) -> Result<Runnable, KrishivError> {
         let plan =
             krishiv_sql::parse_and_lower(text, &krishiv_sql::ParserOptions::default(), SourceId(0))
                 .map_err(KrishivError::from)?;
@@ -200,11 +197,15 @@ impl Tpch {
             Order::Defaults => krishiv_optimizer::optimize(&plan)?,
             Order::Written => krishiv_optimizer::optimize_as_written(&plan)?,
         };
-        let mut cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        let mut runnable = Runnable::new(
+            DefaultPlanner.plan(&plan, &cx)?,
+            Arc::clone(&self.tables) as _,
+        );
         if let Some(scope) = spill {
-            cx = cx.with_spill(scope.clone());
+            runnable = runnable.with_spill(scope.clone());
         }
-        DefaultPlanner.plan(&plan, &cx)
+        Ok(runnable)
     }
 }
 

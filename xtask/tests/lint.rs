@@ -2,8 +2,8 @@
 //! Tests for the workflow, SPDX and banned-identifier lints.
 
 use xtask::lint::{
-    banned_idents_in, confined_idents_in, has_spdx_header, unsafe_allowed_in, unsafe_lines,
-    unsafe_sites_per_crate, workflow_violations,
+    banned_idents_in, confined_idents_in, has_spdx_header, plan_handles_in, unsafe_allowed_in,
+    unsafe_lines, unsafe_sites_per_crate, workflow_violations,
 };
 
 #[test]
@@ -317,4 +317,21 @@ fn redacted_sql_is_built_only_by_the_token_redactor() {
         confined_idents_in("crates/krishiv-plan/src/x.rs", call),
         vec![(1, "from_marks_unchecked")]
     );
+}
+
+#[test]
+fn physical_plan_types_hold_no_live_handles() {
+    let node = "pub struct N {\n    a: Arc<dyn Operator>,\n    b: Mutex<u64>,\n}\n";
+    assert_eq!(
+        plan_handles_in("crates/krishiv-exec/src/physical/mod.rs", node),
+        [(2, "Arc<dyn"), (3, "Mutex")]
+    );
+    assert_eq!(
+        plan_handles_in("crates\\krishiv-exec\\src\\physical\\data.rs", node).len(),
+        2
+    );
+    // Comments may name them; instantiation and other files may use them.
+    assert!(plan_handles_in("crates/krishiv-exec/src/physical/mod.rs", "// a Mutex\n").is_empty());
+    assert!(plan_handles_in("crates/krishiv-exec/src/physical/instantiate.rs", node).is_empty());
+    assert!(plan_handles_in("crates/krishiv-exec/src/runner.rs", node).is_empty());
 }
