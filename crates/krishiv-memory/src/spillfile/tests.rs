@@ -1529,3 +1529,58 @@ fn a_sliced_view_column_writes_only_its_rows_bytes() {
     assert_eq!(class(&err), ErrorClass::UnableToAcquireMemory);
     assert_eq!(pool.root.reserved(), 0);
 }
+
+/// A nested column with a sliced view child counts its non-view siblings,
+/// validity and offsets too, not only the compacted view bytes.
+#[test]
+fn frame_bytes_of_nested_columns_with_a_sliced_view_child() {
+    let (_dir, _manager, scope, pool) = env(SpillCodec::None);
+    let n = 20_000;
+    let strings: ArrayRef = Arc::new(StringViewArray::from_iter_values(
+        (0..n).map(|i| format!("a string well over twelve bytes {i:06}")),
+    ));
+    let ints: ArrayRef = Arc::new(Int64Array::from_iter_values(0..n as i64));
+    let fields = [
+        Arc::new(Field::new("i", DataType::Int64, false)),
+        Arc::new(Field::new("s", DataType::Utf8View, false)),
+    ];
+    let structs = StructArray::from(vec![
+        (Arc::clone(&fields[0]), Arc::clone(&ints)),
+        (Arc::clone(&fields[1]), Arc::clone(&strings)),
+    ]);
+    let item = Arc::new(Field::new("item", structs.data_type().clone(), false));
+    let lists = ListArray::new(
+        Arc::clone(&item),
+        OffsetBuffer::from_lengths(std::iter::repeat_n(2, n / 2)),
+        Arc::new(structs.clone()),
+        None,
+    );
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("st", structs.data_type().clone(), false),
+        Field::new("l", lists.data_type().clone(), false),
+    ]));
+    let whole = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(structs.slice(0, n / 2)) as ArrayRef,
+            Arc::new(lists),
+        ],
+    )
+    .unwrap();
+    let slice = Batch::new(whole.slice(1000, 10));
+    // Each referenced string is 38 bytes, beside its 16-byte view.
+    let st = 10 * 8 + 10 * (16 + 38);
+    let list = 11 * 4 + 20 * 8 + 20 * (16 + 38);
+    assert_eq!(SpillWriter::frame_bytes(&slice), st + list);
+
+    let mut w = scope.writer(schema, pool.reservation()).unwrap();
+    w.write(&slice).unwrap();
+    let file = w.finish().unwrap();
+    let back = read_all(&file, &pool).unwrap();
+    assert_eq!(back[0].data(), slice.data());
+    assert!(
+        file.bytes() < 4 * (st + list) as u64,
+        "{} bytes written",
+        file.bytes()
+    );
+}

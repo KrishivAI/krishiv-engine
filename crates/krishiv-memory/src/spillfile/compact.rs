@@ -52,6 +52,47 @@ pub(crate) fn copy_bytes(array: &dyn Array) -> usize {
     }
 }
 
+/// Bytes `array`'s rows take once [`compact`]ed (what a spill frame of it
+/// decodes to): a view array that holds more buffer bytes than its views
+/// reference counts only those, and nested arrays add their own validity
+/// and offsets to their children's (non-view siblings included).
+pub(crate) fn frame_bytes(array: &dyn Array) -> usize {
+    let validity = || array.nulls().map_or(0, |_| array.len().div_ceil(8));
+    match array.data_type() {
+        DataType::Utf8View | DataType::BinaryView => match copy_bytes(array) {
+            0 => array.get_array_memory_size(),
+            copied => copied,
+        },
+        DataType::Struct(_) => array
+            .as_struct()
+            .columns()
+            .iter()
+            .map(|c| frame_bytes(c))
+            .fold(validity(), usize::saturating_add),
+        DataType::List(_) => list_frame(array.as_list::<i32>()).saturating_add(validity()),
+        DataType::LargeList(_) => list_frame(array.as_list::<i64>()).saturating_add(validity()),
+        DataType::FixedSizeList(..) => {
+            frame_bytes(array.as_fixed_size_list().values()).saturating_add(validity())
+        }
+        DataType::Map(..) => {
+            let map = array.as_map();
+            let (first, len) = value_range(map.value_offsets());
+            frame_bytes(&map.entries().slice(first, len))
+                .saturating_add(offsets_bytes::<i32>(map.len()))
+                .saturating_add(validity())
+        }
+        _ => array
+            .to_data()
+            .get_slice_memory_size()
+            .unwrap_or_else(|_| array.get_array_memory_size()),
+    }
+}
+
+fn list_frame<O: OffsetSizeTrait>(l: &GenericListArray<O>) -> usize {
+    let (first, len) = value_range(l.value_offsets());
+    frame_bytes(&l.values().slice(first, len)).saturating_add(offsets_bytes::<O>(l.len()))
+}
+
 /// `array` with every view array in it (nested ones included) holding only
 /// the bytes its views reference, or `None` if it is compact already.
 ///

@@ -180,11 +180,8 @@ impl SpillWriter {
             .data()
             .columns()
             .iter()
-            .map(|c| match compact::copy_bytes(c.as_ref()) {
-                0 => column_bytes(c),
-                copied => copied,
-            })
-            .sum();
+            .map(|c| compact::frame_bytes(c.as_ref()))
+            .fold(0, usize::saturating_add);
         columns.saturating_add(weight_bytes(batch))
     }
 
