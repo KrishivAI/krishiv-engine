@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //! What the line-oriented text formats share (CSV, JSON lines, `text`):
 //!
-//! - [`LineReader`]: a sans-IO reader of the lines of one split, with
+//! - `LineReader`: a sans-IO reader of the lines of one split, with
 //!   Hadoop's `LineRecordReader` split rule (a split that does not start at
 //!   byte 0 skips its first, partial line; a split reads every line that
 //!   starts at or before its end), so any split boundaries read each line
 //!   exactly once.
-//! - [`WholeReader`]: a whole file, for formats whose records may span lines
+//! - `WholeReader`: a whole file, for formats whose records may span lines
 //!   (`multiLine`) or files that cannot be split (compressed).
-//! - [`Charset`]: the `encoding` option; decoding replaces invalid bytes
+//! - `Charset`: the `encoding` option; decoding replaces invalid bytes
 //!   with U+FFFD, as Java's decoders do in Spark.
-//! - [`Datetimes`]: dates and timestamps as text, with the session time
+//! - `Datetimes`: dates and timestamps as text, with the session time
 //!   zone, Spark's default grammars and the `dateFormat` / `timestampFormat`
 //!   / `timestampNTZFormat` patterns.
 //! - [`TextMetadata`]: these formats have no footer; their metadata is the

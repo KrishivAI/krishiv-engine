@@ -35,20 +35,26 @@ def main() -> None:
     spark = SparkSession.builder.remote(sys.argv[1]).getOrCreate()
     lines = [",".join("x" if r == c else "1" for c in range(COLS)) for r in range(ROWS)]
     path = f"/tmp/krishiv-csv-sampling-{uuid.uuid4().hex}"
-    spark.createDataFrame([(l,) for l in lines], "value string").coalesce(1).write.text(path)
+    spark.createDataFrame([(line,) for line in lines], "value string").coalesce(1).write.text(path)
     cases = []
     for ratio, max_bytes, open_cost in LAYOUTS:
         spark.conf.set("spark.sql.files.maxPartitionBytes", str(max_bytes or 134217728))
         spark.conf.set("spark.sql.files.openCostInBytes", str(open_cost if open_cost is not None else 4194304))
         df = spark.read.option("inferSchema", "true").option("samplingRatio", str(ratio)).csv(path)
-        cases.append({
-            "ratio": ratio,
-            "maxPartitionBytes": max_bytes,
-            "openCostInBytes": open_cost,
-            "types": [f.dataType.simpleString() for f in df.schema.fields],
-        })
-    json.dump({"spark_version": spark.version, "rows": ROWS, "cols": COLS, "cases": cases}, sys.stdout,
-              sort_keys=True, indent=0)
+        cases.append(
+            {
+                "ratio": ratio,
+                "maxPartitionBytes": max_bytes,
+                "openCostInBytes": open_cost,
+                "types": [f.dataType.simpleString() for f in df.schema.fields],
+            }
+        )
+    json.dump(
+        {"spark_version": spark.version, "rows": ROWS, "cols": COLS, "cases": cases},
+        sys.stdout,
+        sort_keys=True,
+        indent=0,
+    )
     sys.stdout.write("\n")
 
 

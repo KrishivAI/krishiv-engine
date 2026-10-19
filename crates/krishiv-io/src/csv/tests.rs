@@ -1073,9 +1073,20 @@ fn random_inputs_never_panic_and_splits_agree() {
             }
             let first = read_split(text.as_bytes(), &o, &req, ByteRange::new(0, cut));
             let second = read_split(text.as_bytes(), &o, &req, ByteRange::new(cut, size));
-            if let (Ok(w), Ok(f), Ok(s)) = (&whole, &first, &second) {
-                // Splits are only defined for files that can be split.
-                if CsvFormat.capabilities(&o).splittable == crate::format::Splittable::ByCodec {
+            // Splits are only defined for files that can be split.
+            let splittable =
+                CsvFormat.capabilities(&o).splittable == crate::format::Splittable::ByCodec;
+            if splittable {
+                assert_eq!(
+                    whole.is_ok(),
+                    first.is_ok() && second.is_ok(),
+                    "{opts} cut {cut} of {text:?}"
+                );
+            }
+            if let (Ok(w), Ok(f), Ok(s)) = (&whole, &first, &second)
+                && splittable
+            {
+                {
                     let mut got: Vec<_> = rows_of(f).into_iter().chain(rows_of(s)).collect();
                     let mut want = rows_of(w);
                     got.sort();

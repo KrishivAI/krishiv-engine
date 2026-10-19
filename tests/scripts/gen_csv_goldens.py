@@ -38,9 +38,46 @@ LINES_PER_SET = 160
 COLS = [f"c{i}" for i in range(8)]
 SCHEMA = ", ".join(f"{c} string" for c in COLS) + ", _corrupt_record string"
 ATOMS = [
-    "a", "", " ", "  b ", '"', '""', '"q"', '"a,b"', '"a""b"', '"a\\"b"', '"un', "\\", "\\\\", '"\\\\"', "'",
-    "'s'", 'x"y', '"x"y', '"a" ', ' "a"', '"a"  ', "#c", "é", "NA", '"NA"', "E", "\t", ";", "a;b", '"a;b"',
-    '"a\nb"', "||", "#", '"#"', "'a,b'", "'it''s'", '"a\\b"', "\\\"", '" "', "x ",
+    "a",
+    "",
+    " ",
+    "  b ",
+    '"',
+    '""',
+    '"q"',
+    '"a,b"',
+    '"a""b"',
+    '"a\\"b"',
+    '"un',
+    "\\",
+    "\\\\",
+    '"\\\\"',
+    "'",
+    "'s'",
+    'x"y',
+    '"x"y',
+    '"a" ',
+    ' "a"',
+    '"a"  ',
+    "#c",
+    "é",
+    "NA",
+    '"NA"',
+    "E",
+    "\t",
+    ";",
+    "a;b",
+    '"a;b"',
+    '"a\nb"',
+    "||",
+    "#",
+    '"#"',
+    "'a,b'",
+    "'it''s'",
+    '"a\\b"',
+    '\\"',
+    '" "',
+    "x ",
 ]
 TOKEN_SETS = [
     {},
@@ -92,53 +129,101 @@ def tokens(spark, rng):
         try:
             rows = [r[1] for r in df.selectExpr("s", f"{expr} r").collect()]
             results = [[r[c] for c in [*COLS, "_corrupt_record"]] for r in rows]
-        except Exception:  # noqa: BLE001 - a row failed: evaluate one by one
+        except Exception:
             results = []
             for s in lines:
                 one = spark.createDataFrame([(s,)], "s string")
                 try:
                     r = one.selectExpr(f"{expr} r").collect()[0][0]
                     results.append([r[c] for c in [*COLS, "_corrupt_record"]])
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     results.append({"error": classes(e)})
         cases.append({"options": opts, "lines": lines, "rows": results})
     return cases
 
 
 # (name, file text, read options, schema DDL or None to infer, selected columns or None)
-READS = [
-    ("header", "i,s,d\n1,x,2020-01-01\n\n   \n2,\"y,z\",2020-01-02\n", {"header": "true"}, "i int, s string, d date", None),
+READS: list[tuple[str, str | None, dict[str, str], str | None, list[str] | None]] = [
+    (
+        "header",
+        'i,s,d\n1,x,2020-01-01\n\n   \n2,"y,z",2020-01-02\n',
+        {"header": "true"},
+        "i int, s string, d date",
+        None,
+    ),
     ("no header infer", "1,x\n2,y\n", {}, None, None),
-    ("header infer names", ",a,a,B,b, c ,\"q\"\n1,2,3,4,5,6,7\n", {"header": "true"}, None, None),
-    ("header infer types", "a,b,c,d,e,f,g,h,k,l,m\n1,1,1.5,true,2020-01-01,2020-01-01 10:00:00,1e3,"
-     "123456789012345678901,x,,2020-01-01T10:00:00Z\n2,3000000000,2,false,2020-1-2,2020-01-01T10:00:00.123,"
-     "NaN,1,y,,2020-01-01 10:00\n", {"header": "true", "inferSchema": "true"}, None, None),
-    ("infer more", "a,b,c,d,e,f,g,h\n1,2020-01-01,1.0,0.1,1e400,true,9223372036854775808,-1\n,2020-01-02,2,0.25,1,"
-     "TRUE,1,+5\n3,,3,1.5E10,x,False,1,007\n", {"header": "true", "inferSchema": "true"}, None, None),
-    ("infer dates", "x,y\n2020-01-01,2020-01-01\n2020-01-02,2020-01-02 10:00:00\n",
-     {"header": "true", "inferSchema": "true"}, None, None),
-    ("infer prefersDate false", "x\n2020-01-01\n", {"header": "true", "inferSchema": "true", "prefersDate": "false"},
-     None, None),
-    ("infer with timestampFormat", "x,y\n2020-01-01 10:00:00,2020-01-01\n",
-     {"header": "true", "inferSchema": "true", "timestampFormat": "yyyy-MM-dd HH:mm:ss"}, None, None),
-    ("infer with dateFormat", "x,y\n01/02/2020,2020-01-01\n",
-     {"header": "true", "inferSchema": "true", "dateFormat": "MM/dd/yyyy"}, None, None),
-    ("infer decimals", "a,b,c\n0.1,1.50,12345678901234567890.5\n", {"header": "true", "inferSchema": "true",
-     "prefersDecimal": "true"}, None, None),
-    ("infer nulls and nan", "a,b,c\nNA,NaN,Inf\n,1,-Inf\n", {"header": "true", "inferSchema": "true",
-     "nullValue": "NA"}, None, None),
+    ("header infer names", ',a,a,B,b, c ,"q"\n1,2,3,4,5,6,7\n', {"header": "true"}, None, None),
+    (
+        "header infer types",
+        "a,b,c,d,e,f,g,h,k,l,m\n1,1,1.5,true,2020-01-01,2020-01-01 10:00:00,1e3,"
+        "123456789012345678901,x,,2020-01-01T10:00:00Z\n2,3000000000,2,false,2020-1-2,2020-01-01T10:00:00.123,"
+        "NaN,1,y,,2020-01-01 10:00\n",
+        {"header": "true", "inferSchema": "true"},
+        None,
+        None,
+    ),
+    (
+        "infer more",
+        "a,b,c,d,e,f,g,h\n1,2020-01-01,1.0,0.1,1e400,true,9223372036854775808,-1\n,2020-01-02,2,0.25,1,"
+        "TRUE,1,+5\n3,,3,1.5E10,x,False,1,007\n",
+        {"header": "true", "inferSchema": "true"},
+        None,
+        None,
+    ),
+    (
+        "infer dates",
+        "x,y\n2020-01-01,2020-01-01\n2020-01-02,2020-01-02 10:00:00\n",
+        {"header": "true", "inferSchema": "true"},
+        None,
+        None,
+    ),
+    (
+        "infer prefersDate false",
+        "x\n2020-01-01\n",
+        {"header": "true", "inferSchema": "true", "prefersDate": "false"},
+        None,
+        None,
+    ),
+    (
+        "infer with timestampFormat",
+        "x,y\n2020-01-01 10:00:00,2020-01-01\n",
+        {"header": "true", "inferSchema": "true", "timestampFormat": "yyyy-MM-dd HH:mm:ss"},
+        None,
+        None,
+    ),
+    (
+        "infer with dateFormat",
+        "x,y\n01/02/2020,2020-01-01\n",
+        {"header": "true", "inferSchema": "true", "dateFormat": "MM/dd/yyyy"},
+        None,
+        None,
+    ),
+    (
+        "infer decimals",
+        "a,b,c\n0.1,1.50,12345678901234567890.5\n",
+        {"header": "true", "inferSchema": "true", "prefersDecimal": "true"},
+        None,
+        None,
+    ),
+    (
+        "infer nulls and nan",
+        "a,b,c\nNA,NaN,Inf\n,1,-Inf\n",
+        {"header": "true", "inferSchema": "true", "nullValue": "NA"},
+        None,
+        None,
+    ),
     ("infer empty", "", {"inferSchema": "true"}, None, None),
     ("infer header only", "a,b\n", {"header": "true", "inferSchema": "true"}, None, None),
     ("infer ragged", "a,b\n1\n1,2,3\n", {"header": "true", "inferSchema": "true"}, None, None),
-    ("comment", "#c\na;b\n1;x\n# x\n2;\"y;z\"\n", {"sep": ";", "comment": "#", "header": "true"}, None, None),
+    ("comment", '#c\na;b\n1;x\n# x\n2;"y;z"\n', {"sep": ";", "comment": "#", "header": "true"}, None, None),
     ("crlf", "1,a\r\n2,b\r3,c\n\r\n4,d", {}, "a int, b string", None),
     ("lineSep", "1,a;2,b;;3,c", {"lineSep": ";"}, "a int, b string", None),
     ("bom", "﻿a,b\n1,2\n", {"header": "true"}, None, None),
     ("bom no header", "﻿1,2\n", {}, "a int, b int", None),
     ("whitespace only", " \t \n1, 2 \n", {}, "a string, b string", None),
-    ("multiline", "a,b\n1,\"x\ny\"\n  \n\n2,\"un\nterminated", {"multiLine": "true", "header": "true"}, None, None),
-    ("multiline comment", "#c\n1,\"#x\n#y\"\n#z\n", {"multiLine": "true", "comment": "#"}, "a int, b string", None),
-    ("multiline crlf", "1,\"x\r\ny\"\r\n2,z\r\n", {"multiLine": "true"}, "a int, b string", None),
+    ("multiline", 'a,b\n1,"x\ny"\n  \n\n2,"un\nterminated', {"multiLine": "true", "header": "true"}, None, None),
+    ("multiline comment", '#c\n1,"#x\n#y"\n#z\n', {"multiLine": "true", "comment": "#"}, "a int, b string", None),
+    ("multiline crlf", '1,"x\r\ny"\r\n2,z\r\n', {"multiLine": "true"}, "a int, b string", None),
 ]
 MODE_TEXT = 'i,s,d\n1,x,2020-01-01\n2,y\n3,z,2020-01-03,extra\nbad,w,2020-01-04\n\n   \n5,"q,uoted",2020-01-05\n'
 for mode in ["PERMISSIVE", "DROPMALFORMED", "FAILFAST"]:
@@ -148,8 +233,15 @@ for mode in ["PERMISSIVE", "DROPMALFORMED", "FAILFAST"]:
             if corrupt and select == []:
                 continue
             sel = select if not corrupt or select is None else [*select, "_corrupt_record"]
-            READS.append((f"mode {mode} corrupt={corrupt} select={select}", MODE_TEXT,
-                          {"header": "true", "mode": mode}, schema, sel))
+            READS.append(
+                (
+                    f"mode {mode} corrupt={corrupt} select={select}",
+                    MODE_TEXT,
+                    {"header": "true", "mode": mode},
+                    schema,
+                    sel,
+                )
+            )
 READS += [
     ("custom corrupt column", "1,2\nx,3\n", {"columnNameOfCorruptRecord": "bad"}, "a int, b int, bad string", None),
     ("no pruning", "1,2\n3\n", {"mode": "DROPMALFORMED"}, "a int, b int", ["a"]),
@@ -158,33 +250,95 @@ READS += [
     ("enforceSchema false count", "a\n1\n", {"header": "true", "enforceSchema": "false"}, "a int, b int", None),
     ("enforceSchema true", "x,y\n1,2\n", {"header": "true"}, "a int, b int", None),
     ("integers", "v\n 1\n1 \n+1\n1.0\n0x10\n2147483648\n-0\n127\n-129\n", {"header": "true"}, None, None),
-    ("integer types", "127,32767,2147483647,9223372036854775807\n128,32768,2147483648,9223372036854775808\n",
-     {}, "a tinyint, b smallint, c int, d bigint", None),
-    ("floats", "v\n1.5f\n 2.5 \n1e3\nInf\n-Inf\nNaN\nInfinity\n-Infinity\n1d\n.5\n5.\n0x1p3\n1e999\nnan\ninf\n",
-     {"header": "true"}, "v double, w float", None),
-    ("nan options", "nan,inf,-inf\nNaN,Inf,-Inf\n", {"nanValue": "nan", "positiveInf": "inf", "negativeInf": "-inf"},
-     "a double, b double, c float", None),
-    ("decimals", "v\n1.25\n-1.25\n12345.6\n1e1\n1.5f\n 2.5\n\"1,000.5\"\n.5\n5.\n", {"header": "true"}, "v decimal(6,1)",
-     None),
+    (
+        "integer types",
+        "127,32767,2147483647,9223372036854775807\n128,32768,2147483648,9223372036854775808\n",
+        {},
+        "a tinyint, b smallint, c int, d bigint",
+        None,
+    ),
+    (
+        "floats",
+        "v\n1.5f\n 2.5 \n1e3\nInf\n-Inf\nNaN\nInfinity\n-Infinity\n1d\n.5\n5.\n0x1p3\n1e999\nnan\ninf\n",
+        {"header": "true"},
+        "v double, w float",
+        None,
+    ),
+    (
+        "nan options",
+        "nan,inf,-inf\nNaN,Inf,-Inf\n",
+        {"nanValue": "nan", "positiveInf": "inf", "negativeInf": "-inf"},
+        "a double, b double, c float",
+        None,
+    ),
+    (
+        "decimals",
+        'v\n1.25\n-1.25\n12345.6\n1e1\n1.5f\n 2.5\n"1,000.5"\n.5\n5.\n',
+        {"header": "true"},
+        "v decimal(6,1)",
+        None,
+    ),
     ("booleans", "v\ntrue\nTRUE\nTrue\nt\n1\n true\n", {"header": "true"}, "v boolean", None),
-    ("dates", "v\n2020-01-01\n2020-1-1\n2020-01-01 10:00\n2020-01-01T10:00:00Z\n 2020-01-01\n2020\n2020-01\n20200101\n"
-     "+2020-01-01\n2020-02-30\n2020-01-01x\n2020-01-01GMT\n", {"header": "true"}, "v date", None),
-    ("date format", "v\n01/02/2020\n2020-01-02\n1/2/2020\n", {"header": "true", "dateFormat": "MM/dd/yyyy"}, "v date",
-     None),
-    ("date format fallback", "v\n01/02/2020\n2020-01-02\n", {"header": "true", "dateFormat": "MM/dd/yyyy",
-     "enableDateTimeParsingFallback": "true"}, "v date", None),
-    ("timestamps", "v\n2020-01-01\n2020-01-01 10:00:00\n2020-01-01T10:00:00.123456789\n2020-01-01 10:00:00+01:00\n"
-     "2020-01-01T10:00:00Z\n 2020-01-01 10:00:00\n2020-01-01 10:00\n2020-01-01 10\n2020-01-01T\n2020-01-01 10:00:00UTC\n"
-     "2020-01-01 10:00:00 +0100\n1577836800\n2020-01-01 10:00:00GMT\n2020-01-01 10:00:00 GMT+01:00\n",
-     {"header": "true"}, "v timestamp", None),
-    ("timestamps in a zone", "v\n2020-01-01 10:00:00\n2020-01-01T10:00:00Z\n", {"header": "true", "timeZone": "+05:30"},
-     "v timestamp", None),
-    ("timestamp format", "v\n2020-01-01 10:00:00\n2020-01-01\n02.01.2020 10:00\n",
-     {"header": "true", "timestampFormat": "dd.MM.yyyy HH:mm"}, "v timestamp", None),
-    ("ntz", "v\n2020-01-01\n2020-01-01 10:00:00.5\n2020-01-01 10:00:00+01:00\n10:00:00\n", {"header": "true"},
-     "v timestamp_ntz", None),
-    ("ntz format", "v\n02.01.2020 10:00\n02.01.2020 10:00 +01:00\n",
-     {"header": "true", "timestampNTZFormat": "dd.MM.yyyy HH:mm[ XXX]"}, "v timestamp_ntz", None),
+    (
+        "dates",
+        "v\n2020-01-01\n2020-1-1\n2020-01-01 10:00\n2020-01-01T10:00:00Z\n 2020-01-01\n2020\n2020-01\n20200101\n"
+        "+2020-01-01\n2020-02-30\n2020-01-01x\n2020-01-01GMT\n",
+        {"header": "true"},
+        "v date",
+        None,
+    ),
+    (
+        "date format",
+        "v\n01/02/2020\n2020-01-02\n1/2/2020\n",
+        {"header": "true", "dateFormat": "MM/dd/yyyy"},
+        "v date",
+        None,
+    ),
+    (
+        "date format fallback",
+        "v\n01/02/2020\n2020-01-02\n",
+        {"header": "true", "dateFormat": "MM/dd/yyyy", "enableDateTimeParsingFallback": "true"},
+        "v date",
+        None,
+    ),
+    (
+        "timestamps",
+        "v\n2020-01-01\n2020-01-01 10:00:00\n2020-01-01T10:00:00.123456789\n2020-01-01 10:00:00+01:00\n"
+        "2020-01-01T10:00:00Z\n 2020-01-01 10:00:00\n2020-01-01 10:00\n2020-01-01 10\n2020-01-01T\n"
+        "2020-01-01 10:00:00UTC\n"
+        "2020-01-01 10:00:00 +0100\n1577836800\n2020-01-01 10:00:00GMT\n2020-01-01 10:00:00 GMT+01:00\n",
+        {"header": "true"},
+        "v timestamp",
+        None,
+    ),
+    (
+        "timestamps in a zone",
+        "v\n2020-01-01 10:00:00\n2020-01-01T10:00:00Z\n",
+        {"header": "true", "timeZone": "+05:30"},
+        "v timestamp",
+        None,
+    ),
+    (
+        "timestamp format",
+        "v\n2020-01-01 10:00:00\n2020-01-01\n02.01.2020 10:00\n",
+        {"header": "true", "timestampFormat": "dd.MM.yyyy HH:mm"},
+        "v timestamp",
+        None,
+    ),
+    (
+        "ntz",
+        "v\n2020-01-01\n2020-01-01 10:00:00.5\n2020-01-01 10:00:00+01:00\n10:00:00\n",
+        {"header": "true"},
+        "v timestamp_ntz",
+        None,
+    ),
+    (
+        "ntz format",
+        "v\n02.01.2020 10:00\n02.01.2020 10:00 +01:00\n",
+        {"header": "true", "timestampNTZFormat": "dd.MM.yyyy HH:mm[ XXX]"},
+        "v timestamp_ntz",
+        None,
+    ),
     ("binary", "v\nab\n[01 02]\n", {"header": "true"}, "v binary", None),
     ("nullValue", '1,NA,"NA",\n2,,"",x\n', {"nullValue": "NA"}, "a int, b string, c string, d string", None),
     ("emptyValue", '1,NA,"NA",\n2,,"",x\n', {"emptyValue": "E"}, "a int, b string, c string, d string", None),
@@ -209,8 +363,7 @@ def read_case(spark, root, case):
         data = text.encode("utf-8")
     with open(os.path.join(path, "part.csv"), "wb") as f:
         f.write(data)
-    out = {"name": name, "file": base64.b64encode(data).decode(), "options": opts, "schema": schema,
-           "select": select}
+    out = {"name": name, "file": base64.b64encode(data).decode(), "options": opts, "schema": schema, "select": select}
     try:
         reader = spark.read.options(**opts)
         if schema is not None:
@@ -224,7 +377,7 @@ def read_case(spark, root, case):
         else:
             cols = [f"cast(`{c}` as string) as `{c}`" for c in df.columns]
             out["rows"] = [list(r) for r in df.selectExpr(*cols).collect()]
-    except Exception as e:  # noqa: BLE001 - the error classes are the result
+    except Exception as e:
         out["error"] = classes(e)
     return out
 
@@ -264,10 +417,17 @@ WRITES = [
     ("strings charToEscape", STRINGS, {"charToEscapeQuoteEscaping": "#"}),
     ("strings no quote", STRINGS, {"quote": ""}),
     ("types default", TYPES, {"header": "true"}),
-    ("types formats", TYPES, {"timestampFormat": "yyyy/MM/dd HH:mm:ss.SSSSSS XXX",
-                              "timestampNTZFormat": "dd.MM.yyyy HH:mm:ss.SSSSSS", "dateFormat": "MM/dd/yy"}),
+    (
+        "types formats",
+        TYPES,
+        {
+            "timestampFormat": "yyyy/MM/dd HH:mm:ss.SSSSSS XXX",
+            "timestampNTZFormat": "dd.MM.yyyy HH:mm:ss.SSSSSS",
+            "dateFormat": "MM/dd/yy",
+        },
+    ),
     ("types zone", TYPES, {"timeZone": "-08:00"}),
-    ("header names", "select 1 as `a,b`, 2 as `q\"`, 3 as ` sp `", {"header": "true"}),
+    ("header names", 'select 1 as `a,b`, 2 as `q"`, 3 as ` sp `', {"header": "true"}),
     ("empty with header", "select 1 as a, 'x' as b where false", {"header": "true"}),
     ("empty", "select 1 as a where false", {}),
 ]
@@ -284,7 +444,7 @@ def write_case(spark, root, case):
         with open(os.path.join(path, parts[0]), "rb") as f:
             out["content"] = base64.b64encode(f.read()).decode()
         out["schema"] = spark.sql(sql).schema.simpleString()
-    except Exception as e:  # noqa: BLE001 - the error classes are the result
+    except Exception as e:
         out["error"] = classes(e)
     return out
 
