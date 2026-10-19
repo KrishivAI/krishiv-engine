@@ -110,14 +110,14 @@ fn conf_is_applied() {
 
 #[test]
 fn syntax_error_exits_1_with_class_sqlstate_and_caret() {
-    let o = krishiv(&["sql", "-e", "selec 1"], None);
+    let o = krishiv(&["sql", "-e", "xyz 1"], None);
     assert_eq!(o.status.code(), Some(1));
     assert!(out(&o).is_empty());
     let e = err(&o);
     assert!(e.contains("[PARSE_SYNTAX_ERROR]"), "{e}");
     assert!(e.contains("SQLSTATE: 42601"), "{e}");
     assert!(
-        e.contains("(line 1, pos 0)\n\n== SQL ==\nselec 1\n^^^^^"),
+        e.contains("(line 1, pos 0)\n\n== SQL ==\nxyz 1\n^^^"),
         "{e}"
     );
 }
@@ -165,15 +165,17 @@ fn tpch_q1_over_a_parquet_table() {
     let table = format!("lineitem={path}");
     let o = krishiv(&["sql", "-o", "csv", "--table", &table, "-e", q1], None);
     assert!(o.status.success(), "{}", err(&o));
-    let t = out(&o);
-    let mut lines = t.lines();
-    assert_eq!(
-        lines.next(),
-        Some("l_returnflag,l_linestatus,sum_qty,count_order")
-    );
-    let rows: Vec<&str> = lines.collect();
-    assert!(rows.len() >= 3, "{t}");
-    assert!(rows[0].starts_with("A,F,"), "{t}");
+    let want = "l_returnflag,l_linestatus,sum_qty,count_order\n";
+    if std::env::var("KRISHIV_TPCH_SF1").is_ok() {
+        // TPC-H SF1 Q1 reference rows.
+        let t = out(&o);
+        assert!(t.starts_with(want), "{t}");
+        assert!(t.contains("A,F,37734107.00,1478493\n"), "{t}");
+        assert!(t.contains("N,O,74476040.00,2920374\n"), "{t}");
+    } else {
+        let rows = "A,F,38726.00,1490\nN,F,780.00,33\nN,O,74790.00,2915\nR,F,36245.00,1430\n";
+        assert_eq!(out(&o), format!("{want}{rows}"));
+    }
 }
 
 #[test]
@@ -215,4 +217,43 @@ fn table_registers_a_view_and_empty_input_is_ok() {
     );
     let o = krishiv(&["sql"], Some("  ;; "));
     assert!(o.status.success() && out(&o).is_empty());
+}
+
+#[test]
+fn csv_distinguishes_null_from_empty_and_zone_is_checked() {
+    let o = krishiv(
+        &[
+            "sql",
+            "-o",
+            "csv",
+            "-e",
+            "select '' as e, cast(null as string) as n",
+        ],
+        None,
+    );
+    assert_eq!(out(&o), "e,n\n\"\",\n");
+    let o = krishiv(
+        &[
+            "sql",
+            "--conf",
+            "spark.sql.session.timeZone=Mars/Base",
+            "-e",
+            "select 1",
+        ],
+        None,
+    );
+    assert_eq!(o.status.code(), Some(1));
+    assert!(err(&o).contains("not supported"), "{}", err(&o));
+    let o = krishiv(
+        &[
+            "sql",
+            "-o",
+            "csv",
+            "-e",
+            "select 1 as a; -- trailing comment",
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(out(&o), "a\n1\n");
 }

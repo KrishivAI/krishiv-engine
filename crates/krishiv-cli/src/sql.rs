@@ -103,11 +103,12 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
         futures::executor::block_on(df.create_or_replace_temp_view(name))
             .map_err(|e| format!("--table {name}={path}: {e}"))?;
     }
+    let tz = session_tz_micros(session.conf().get("spark.sql.session.timeZone").as_deref())?;
     for (line_offset, stmt) in split_statements(&input) {
         let start = Instant::now();
         let df = futures::executor::block_on(session.sql(&stmt))
             .map_err(|e| format!("{e}{}", caret(&stmt, line_offset, &e)))?;
-        print_result(&df, args.format)?;
+        print_result(&df, args.format, tz)?;
         if args.timing {
             let _ = writeln!(io::stderr(), "Time: {:.3}s", start.elapsed().as_secs_f64());
         }
@@ -146,7 +147,7 @@ fn caret(stmt: &str, line_offset: usize, error: &krishiv::Error) -> String {
     )
 }
 
-fn print_result(df: &DataFrame, format: Format) -> Result<(), String> {
+fn print_result(df: &DataFrame, format: Format, tz: i64) -> Result<(), String> {
     let batches = futures::executor::block_on(df.collect()).map_err(|e| e.to_string())?;
     let schema = futures::executor::block_on(df.schema()).map_err(|e| e.to_string())?;
     if let Ok(warnings) = futures::executor::block_on(df.warnings()) {
@@ -163,21 +164,26 @@ fn print_result(df: &DataFrame, format: Format) -> Result<(), String> {
     let mut out = io::BufWriter::new(io::stdout().lock());
     let io_err = |e: io::Error| format!("cannot write output: {e}");
     match format {
-        Format::Table => write_table(&mut out, &names, &batches).map_err(io_err)?,
-        Format::Csv => write_csv(&mut out, &names, &batches).map_err(io_err)?,
-        Format::Json => write_json(&mut out, &names, &numeric, &batches).map_err(io_err)?,
+        Format::Table => write_table(&mut out, &names, &batches, tz).map_err(io_err)?,
+        Format::Csv => write_csv(&mut out, &names, &batches, tz).map_err(io_err)?,
+        Format::Json => write_json(&mut out, &names, &numeric, &batches, tz).map_err(io_err)?,
     }
     out.flush().map_err(io_err)
 }
 
-fn write_table(out: &mut impl Write, names: &[String], batches: &[RecordBatch]) -> io::Result<()> {
+fn write_table(
+    out: &mut impl Write,
+    names: &[String],
+    batches: &[RecordBatch],
+    tz: i64,
+) -> io::Result<()> {
     let mut rows: Vec<Vec<String>> = Vec::new();
     for b in batches {
         for r in 0..b.num_rows() {
             rows.push(
                 b.columns()
                     .iter()
-                    .map(|c| cell(c.as_ref(), r, "NULL"))
+                    .map(|c| cell(c.as_ref(), r, "NULL", tz))
                     .collect(),
             );
         }
@@ -214,22 +220,34 @@ fn write_table(out: &mut impl Write, names: &[String], batches: &[RecordBatch]) 
 }
 
 fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n', '\r']) {
+    if s.is_empty() || s.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_owned()
     }
 }
 
-fn write_csv(out: &mut impl Write, names: &[String], batches: &[RecordBatch]) -> io::Result<()> {
+fn write_csv(
+    out: &mut impl Write,
+    names: &[String],
+    batches: &[RecordBatch],
+    tz: i64,
+) -> io::Result<()> {
     let header: Vec<String> = names.iter().map(|n| csv_field(n)).collect();
     writeln!(out, "{}", header.join(","))?;
     for b in batches {
         for r in 0..b.num_rows() {
+            // NULL is an empty field; the empty string is quoted (`""`), as Spark writes it.
             let row: Vec<String> = b
                 .columns()
                 .iter()
-                .map(|c| csv_field(&cell(c.as_ref(), r, "")))
+                .map(|c| {
+                    if c.is_null(r) {
+                        String::new()
+                    } else {
+                        csv_field(&cell(c.as_ref(), r, "", tz))
+                    }
+                })
                 .collect();
             writeln!(out, "{}", row.join(","))?;
         }
@@ -277,6 +295,7 @@ fn write_json(
     names: &[String],
     numeric: &[bool],
     batches: &[RecordBatch],
+    tz: i64,
 ) -> io::Result<()> {
     for b in batches {
         for r in 0..b.num_rows() {
@@ -291,9 +310,9 @@ fn write_json(
                 if c.is_null(r) {
                     line.push_str("null");
                 } else if numeric[i] || *t == DataType::Boolean {
-                    line.push_str(&cell(c.as_ref(), r, ""));
+                    line.push_str(&cell(c.as_ref(), r, "", tz));
                 } else if matches!(t, DataType::Float32 | DataType::Float64) {
-                    let v = cell(c.as_ref(), r, "");
+                    let v = cell(c.as_ref(), r, "", tz);
                     // JSON has no NaN or infinity.
                     if v.parse::<f64>().is_ok_and(f64::is_finite) {
                         line.push_str(&v);
@@ -301,7 +320,7 @@ fn write_json(
                         line.push_str(&json_string(&v));
                     }
                 } else {
-                    line.push_str(&json_string(&cell(c.as_ref(), r, "")));
+                    line.push_str(&json_string(&cell(c.as_ref(), r, "", tz)));
                 }
             }
             line.push('}');
@@ -312,7 +331,7 @@ fn write_json(
 }
 
 /// One value as text; `null` stands in for SQL NULL.
-fn cell(a: &dyn Array, i: usize, null: &str) -> String {
+fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
     if a.data_type() == &DataType::Null || a.is_null(i) {
         return null.to_owned();
     }
@@ -337,14 +356,19 @@ fn cell(a: &dyn Array, i: usize, null: &str) -> String {
             .as_primitive::<Date32Type>()
             .value_as_date(i)
             .map_or_else(String::new, |d| d.to_string()),
-        DataType::Timestamp(TimeUnit::Microsecond, _) => a
-            .as_primitive::<TimestampMicrosecondType>()
-            .value_as_datetime(i)
-            .map_or_else(String::new, |d| d.to_string()),
+        // TIMESTAMP (with a zone) shows in the session zone; TIMESTAMP_NTZ as stored.
+        DataType::Timestamp(TimeUnit::Microsecond, zone) => {
+            let shift = if zone.is_some() { tz } else { 0 };
+            a.as_primitive::<TimestampMicrosecondType>()
+                .value(i)
+                .checked_add(shift)
+                .and_then(krishiv::arrow::array::temporal_conversions::timestamp_us_to_datetime)
+                .map_or_else(String::new, |d| d.to_string())
+        }
         DataType::List(_) => {
             let inner = a.as_list::<i32>().value(i);
             let items: Vec<String> = (0..inner.len())
-                .map(|j| cell(inner.as_ref(), j, "NULL"))
+                .map(|j| cell(inner.as_ref(), j, "NULL", tz))
                 .collect();
             format!("[{}]", items.join(", "))
         }
@@ -353,12 +377,46 @@ fn cell(a: &dyn Array, i: usize, null: &str) -> String {
             let items: Vec<String> = fields
                 .iter()
                 .zip(s.columns())
-                .map(|(f, c)| format!("{}: {}", f.name(), cell(c.as_ref(), i, "NULL")))
+                .map(|(f, c)| format!("{}: {}", f.name(), cell(c.as_ref(), i, "NULL", tz)))
                 .collect();
             format!("{{{}}}", items.join(", "))
         }
         other => format!("<{other}>"),
     }
+}
+
+/// The session time zone as microseconds east of UTC. Only `UTC` and fixed
+/// offsets are known (the engine has no time-zone database yet); unset is
+/// UTC, where Spark would use the local zone.
+fn session_tz_micros(zone: Option<&str>) -> Result<i64, String> {
+    let z = zone.map_or("UTC", str::trim);
+    let offset = z
+        .strip_prefix("UTC")
+        .or_else(|| z.strip_prefix("GMT"))
+        .unwrap_or(z);
+    if offset.is_empty() || offset == "Z" {
+        return Ok(0);
+    }
+    let (sign, rest) = match offset.split_at(1) {
+        ("+", r) => (1, r),
+        ("-", r) => (-1, r),
+        _ => return Err(unsupported_zone(z)),
+    };
+    let mut parts = rest.split(':');
+    let num = |p: Option<&str>| p.map_or(Some(0), |t| t.parse::<i64>().ok());
+    let (h, m, sec) = (num(parts.next()), num(parts.next()), num(parts.next()));
+    match (h, m, sec, parts.next()) {
+        (Some(h @ 0..=18), Some(m @ 0..=59), Some(sec @ 0..=59), None) if !rest.is_empty() => {
+            Ok(sign * (h * 3600 + m * 60 + sec) * 1_000_000)
+        }
+        _ => Err(unsupported_zone(z)),
+    }
+}
+
+fn unsupported_zone(z: &str) -> String {
+    format!(
+        "spark.sql.session.timeZone `{z}` is not supported: only UTC and fixed offsets (+HH:MM)"
+    )
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -376,6 +434,7 @@ fn split_statements(input: &str) -> Vec<(usize, String)> {
     let mut cur = String::new();
     let mut chars = input.chars().peekable();
     let mut quote: Option<char> = None;
+    let mut code = false;
     while let Some(c) = chars.next() {
         cur.push(c);
         match quote {
@@ -389,7 +448,10 @@ fn split_statements(input: &str) -> Vec<(usize, String)> {
                 }
             }
             None => match c {
-                '\'' | '"' | '`' => quote = Some(c),
+                '\'' | '"' | '`' => {
+                    code = true;
+                    quote = Some(c);
+                }
                 '-' if chars.peek() == Some(&'-') => {
                     for n in chars.by_ref() {
                         cur.push(n);
@@ -410,18 +472,20 @@ fn split_statements(input: &str) -> Vec<(usize, String)> {
                 }
                 ';' => {
                     cur.pop();
-                    push_stmt(&mut out, &mut done_lines, &mut cur);
+                    push_stmt(&mut out, &mut done_lines, &mut cur, code);
+                    code = false;
                 }
+                c if !c.is_whitespace() => code = true,
                 _ => {}
             },
         }
     }
-    push_stmt(&mut out, &mut done_lines, &mut cur);
+    push_stmt(&mut out, &mut done_lines, &mut cur, code);
     out
 }
 
-fn push_stmt(out: &mut Vec<(usize, String)>, done_lines: &mut usize, cur: &mut String) {
-    if !cur.trim().is_empty() {
+fn push_stmt(out: &mut Vec<(usize, String)>, done_lines: &mut usize, cur: &mut String, code: bool) {
+    if code {
         let leading = cur.len() - cur.trim_start().len();
         let skipped = cur[..leading].matches('\n').count();
         out.push((*done_lines + skipped, cur.trim().to_owned()));
@@ -451,6 +515,9 @@ mod tests {
         assert_eq!(s[1].0, 0);
         let t = split_statements("select 1;\n\n  select 2");
         assert_eq!(t[1], (2, "select 2".to_owned()));
+        // Comment-only fragments are not statements.
+        let c = split_statements("-- only\n; /* x */ ; select 1 -- tail\n;\n-- end");
+        assert_eq!(c, vec![(1, "select 1 -- tail".to_owned())]);
         let esc = split_statements("select 'it\\'s;' ; select 2");
         assert_eq!(esc.len(), 2, "{esc:?}");
     }
@@ -466,6 +533,7 @@ mod tests {
     #[test]
     fn csv_and_json_escaping() {
         assert_eq!(csv_field("plain"), "plain");
+        assert_eq!(csv_field(""), "\"\"");
         assert_eq!(csv_field("a\nb"), "\"a\nb\"");
         assert_eq!(
             json_string("a\\b\n\r\t\u{1}\""),
@@ -506,11 +574,11 @@ mod tests {
             (arr(NullArray::new(1)), "NULL"),
         ];
         for (a, want) in cases {
-            assert_eq!(cell(a.as_ref(), 0, "NULL"), want, "{:?}", a.data_type());
+            assert_eq!(cell(a.as_ref(), 0, "NULL", 0), want, "{:?}", a.data_type());
         }
         let d = Decimal128Array::from(vec![None::<i128>]);
-        assert_eq!(cell(&d, 0, "-"), "-");
-        assert_eq!(cell(&arr(NullArray::new(1)), 0, "-"), "-");
+        assert_eq!(cell(&d, 0, "-", 0), "-");
+        assert_eq!(cell(&arr(NullArray::new(1)), 0, "-", 0), "-");
     }
 
     fn batch() -> (Vec<String>, Vec<RecordBatch>) {
@@ -541,20 +609,20 @@ mod tests {
         let (names, batches) = batch();
         let numeric = [true, false, false, false];
         let mut o = Vec::new();
-        write_json(&mut o, &names, &numeric, &batches).expect("json");
+        write_json(&mut o, &names, &numeric, &batches, 0).expect("json");
         let t = String::from_utf8(o).expect("utf-8");
         assert_eq!(
             t,
             "{\"i\":1,\"f\":\"NaN\",\"s\":\"a\\\"b\",\"b\":true}\n{\"i\":null,\"f\":2.5,\"s\":null,\"b\":null}\n"
         );
         let mut o = Vec::new();
-        write_csv(&mut o, &names, &batches).expect("csv");
+        write_csv(&mut o, &names, &batches, 0).expect("csv");
         assert_eq!(
             String::from_utf8(o).expect("utf-8"),
             "i,f,s,b\n1,NaN,\"a\"\"b\",true\n,2.5,,\n"
         );
         let mut o = Vec::new();
-        write_table(&mut o, &names, &batches).expect("table");
+        write_table(&mut o, &names, &batches, 0).expect("table");
         let t = String::from_utf8(o).expect("utf-8");
         assert!(t.contains("| NULL | 2.5 | NULL | NULL |"), "{t}");
         assert!(t.ends_with("2 rows\n"), "{t}");
@@ -566,6 +634,24 @@ mod tests {
             .and_then(|s| futures::executor::block_on(s.sql("select * from nope")).map(|_| ()))
             .expect_err("unknown table");
         assert_eq!(caret("select * from nope", 0, &e), "");
+    }
+
+    #[test]
+    fn session_zone_parsing_and_timestamp_shift() {
+        assert_eq!(session_tz_micros(None), Ok(0));
+        assert_eq!(session_tz_micros(Some("UTC")), Ok(0));
+        assert_eq!(session_tz_micros(Some("Z")), Ok(0));
+        assert_eq!(session_tz_micros(Some("+05:30")), Ok(19_800_000_000));
+        assert_eq!(session_tz_micros(Some("UTC-08:00")), Ok(-28_800_000_000));
+        assert_eq!(session_tz_micros(Some("-8")), Ok(-28_800_000_000));
+        for bad in ["America/Los_Angeles", "+25:00", "+", "+1:2:3:4", "+aa"] {
+            assert!(session_tz_micros(Some(bad)).is_err(), "{bad}");
+        }
+        let with_zone = TimestampMicrosecondArray::from(vec![1_000_000]).with_timezone("UTC");
+        let ntz = TimestampMicrosecondArray::from(vec![1_000_000]);
+        let east = 3_600_000_000;
+        assert_eq!(cell(&with_zone, 0, "", east), "1970-01-01 01:00:01");
+        assert_eq!(cell(&ntz, 0, "", east), "1970-01-01 00:00:01");
     }
 
     #[test]
