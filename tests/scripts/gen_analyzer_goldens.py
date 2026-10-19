@@ -657,8 +657,7 @@ def main() -> None:
         sql = path.read_text(encoding="utf-8").strip().rstrip(";")
         tpch.append({"id": path.stem, **run_sql(sql, {})})
     corpus = [
-        {"sql": sql, "conf": conf, **run_sql(sql, conf)}
-        for sql, conf in CORPUS + MATRIX + CASTS + ANALYZER_FIXES
+        {"sql": sql, "conf": conf, **run_sql(sql, conf)} for sql, conf in CORPUS + MATRIX + CASTS + ANALYZER_FIXES
     ]
     plan_ids = [{"id": i, "dataframe": d, **analyze(f)} for i, d, f in plan_id_cases(spark)]
     for name in TABLES:
