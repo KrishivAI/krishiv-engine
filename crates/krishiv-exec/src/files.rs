@@ -15,8 +15,9 @@
 //!
 //! A name is hidden when it starts with `.`, or with `_` without a `=` in
 //! it, or ends with `._COPYING_`; hidden directories are skipped whole.
-//! The schema comes from the first file by path (Spark without
-//! `mergeSchema`). Not yet supported, failing with
+//! The format infers the schema from the files by path (Spark without
+//! `mergeSchema`): Parquet reads the first file's footer, CSV samples
+//! all of them. Not yet supported, failing with
 //! `KRISHIV_UNSUPPORTED_FEATURE`: glob patterns, subdirectories (Spark's
 //! partition discovery), paths with a scheme other than `file`, and file
 //! sources without a [`FileFormat`] here, and merging the files' schemas
@@ -155,7 +156,7 @@ pub struct FileListing {
     pub format: Arc<dyn FileFormat>,
     /// The files, sorted by path.
     pub files: Arc<[FileRef]>,
-    /// The schema the format infers from the first file.
+    /// The schema the format infers from the listed files.
     pub schema: SchemaRef,
     /// The parsed read options.
     pub options: FormatOptions,
@@ -290,7 +291,7 @@ impl FileReads {
             .into());
         }
         let schema = format
-            .infer_schema(&self.io, &files[..1], &options)
+            .infer_schema(&self.io, &files, &options)
             .await
             .map_err(|e| e.into_error(&files[0].display_path()))?;
         Ok(FileListing {
