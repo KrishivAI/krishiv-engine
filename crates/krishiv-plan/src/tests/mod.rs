@@ -16,4 +16,5 @@ mod nodes;
 mod props;
 mod rewrite;
 mod secrets;
+mod setops;
 mod tpch;

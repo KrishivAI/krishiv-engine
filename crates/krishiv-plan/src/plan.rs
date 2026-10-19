@@ -213,6 +213,58 @@ pub enum PlanNode {
         /// Input.
         input: Arc<LogicalPlan>,
     },
+    /// `INTERSECT`, `EXCEPT` / `MINUS` (`DISTINCT` or `ALL`),
+    /// `df.intersect`, `df.intersectAll`, `df.subtract`, `df.exceptAll`
+    /// (Spark's `Intersect` / `Except`): columns match by position and
+    /// rows compare as Spark's null-safe equality (`NULL` equals `NULL`).
+    /// The analyzer rewrites it as Spark's optimizer does: the `DISTINCT`
+    /// forms to a semi or anti join on every column under a distinct, the
+    /// `ALL` forms to per-row counts of each side and
+    /// [`PlanNode::ReplicateRows`].
+    SetOp {
+        /// The rows kept or removed.
+        left: Arc<LogicalPlan>,
+        /// The rows compared with.
+        right: Arc<LogicalPlan>,
+        /// Intersect or except.
+        op: SetOperation,
+        /// Keep duplicates (`ALL`): a row `m` times on the left and `n`
+        /// times on the right appears `min(m, n)` times (intersect) or
+        /// `max(m - n, 0)` times (except).
+        all: bool,
+    },
+    /// Each input row `count` times; a row whose count is NULL or below 1
+    /// is dropped (Spark's `Generate(ReplicateRows)` in its rewrite of
+    /// `INTERSECT ALL` and `EXCEPT ALL`). Resolved plans only: the output
+    /// is the input's attributes.
+    ReplicateRows {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// A `BIGINT` expression over the input: the copies of each row.
+        count: Arc<Expr>,
+    },
+}
+
+/// The operation of a [`PlanNode::SetOp`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SetOperation {
+    /// `INTERSECT`: the left rows the right input has too.
+    Intersect,
+    /// `EXCEPT` / `MINUS`: the left rows the right input lacks.
+    Except,
+}
+
+impl SetOperation {
+    /// The SQL keyword, as Spark's errors name the operator.
+    #[must_use]
+    pub fn sql(self, all: bool) -> &'static str {
+        match (self, all) {
+            (Self::Intersect, false) => "INTERSECT",
+            (Self::Intersect, true) => "INTERSECT ALL",
+            (Self::Except, false) => "EXCEPT",
+            (Self::Except, true) => "EXCEPT ALL",
+        }
+    }
 }
 
 /// A join strategy hint (`BROADCAST`, `MERGE`, `SHUFFLE_HASH`,
@@ -501,8 +553,9 @@ impl LogicalPlan {
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
             | PlanNode::JoinHint { input, .. }
-            | PlanNode::Distinct { input } => f(input),
-            PlanNode::Join { left, right, .. } => {
+            | PlanNode::Distinct { input }
+            | PlanNode::ReplicateRows { input, .. } => f(input),
+            PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
                 f(left);
                 f(right);
             }
@@ -531,8 +584,9 @@ impl LogicalPlan {
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
             | PlanNode::JoinHint { input, .. }
-            | PlanNode::Distinct { input } => f(input),
-            PlanNode::Join { left, right, .. } => {
+            | PlanNode::Distinct { input }
+            | PlanNode::ReplicateRows { input, .. } => f(input),
+            PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
                 f(left);
                 f(right);
             }
@@ -557,6 +611,7 @@ impl LogicalPlan {
             | PlanNode::Shift { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
+            | PlanNode::SetOp { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Hint { params, .. } => params.iter().for_each(f),
             PlanNode::Sql { args, .. } => match args {
@@ -566,7 +621,9 @@ impl LogicalPlan {
             },
             PlanNode::Project { exprs, .. } => exprs.iter().for_each(f),
             PlanNode::WithColumns { columns, .. } => columns.iter().for_each(|(_, e)| f(e)),
-            PlanNode::Filter { predicate: e, .. } | PlanNode::Limit { limit: e, .. } => f(e),
+            PlanNode::Filter { predicate: e, .. }
+            | PlanNode::Limit { limit: e, .. }
+            | PlanNode::ReplicateRows { count: e, .. } => f(e),
             PlanNode::Aggregate {
                 grouping,
                 aggregates,
@@ -601,6 +658,7 @@ impl LogicalPlan {
             | PlanNode::Shift { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
+            | PlanNode::SetOp { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Hint { params, .. } => params.iter_mut().for_each(f),
             PlanNode::Sql { args, .. } => match args {
@@ -612,7 +670,9 @@ impl LogicalPlan {
             PlanNode::WithColumns { columns, .. } => {
                 columns.iter_mut().for_each(|(_, e)| f(e));
             }
-            PlanNode::Filter { predicate: e, .. } | PlanNode::Limit { limit: e, .. } => f(e),
+            PlanNode::Filter { predicate: e, .. }
+            | PlanNode::Limit { limit: e, .. }
+            | PlanNode::ReplicateRows { count: e, .. } => f(e),
             PlanNode::Aggregate {
                 grouping,
                 aggregates,
@@ -654,7 +714,8 @@ impl LogicalPlan {
                 | PlanNode::Sort { input, .. }
                 | PlanNode::Limit { input, .. }
                 | PlanNode::WithCte { input, .. }
-                | PlanNode::JoinHint { input, .. } => p = input,
+                | PlanNode::JoinHint { input, .. }
+                | PlanNode::ReplicateRows { input, .. } => p = input,
                 PlanNode::Union { inputs, .. } => {
                     let mut out = inputs.first()?.resolved_output()?;
                     for i in &inputs[1..] {
@@ -743,6 +804,7 @@ impl LogicalPlan {
                 | PlanNode::Sql { .. }
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
+                | PlanNode::SetOp { .. }
                 | PlanNode::Distinct { .. } => {
                     return None;
                 }

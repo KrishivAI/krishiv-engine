@@ -6,7 +6,11 @@
 //! - coalescing 10,000 column-chunk ranges of one file into requests;
 //! - encoding 16,384 rows (an integer and a string column) as one Parquet
 //!   file with the default (snappy) settings, footer and page indexes
-//!   included: arrow-rs's encoder plus the writer's own per-batch work.
+//!   included: arrow-rs's encoder plus the writer's own per-batch work;
+//! - scanning a Parquet file of 512 small row groups (3 columns) from an
+//!   in-memory store with the default prefetch budget, which holds every
+//!   column chunk at once: the scan's own per-batch bookkeeping of the
+//!   prefetched chunks (it once walked all of them for every upcoming range).
 
 #![expect(
     missing_docs,
@@ -29,7 +33,16 @@ use krishiv_common::config::Config;
 use krishiv_io::io::coalesce;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::split::{SplitConfig, SplitFile, plan};
-use krishiv_io::{FileFormat, FormatOptions};
+use krishiv_io::{
+    ByteRange, FileFormat, FileRef, FormatOptions, IoConfig, IoContext, IoScheduler, ScanOptions,
+    ScanRequest, ScanStream, StoreId,
+};
+use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
+use object_store::ObjectStore;
+use object_store::memory::InMemory;
+use object_store::path::Path;
+use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 
 fn files() -> Vec<SplitFile> {
     (0..10_000_u64)
@@ -88,6 +101,83 @@ fn encode(batches: &[RecordBatch], o: &FormatOptions) -> usize {
     size + enc.finish().expect("finish").tail.len()
 }
 
+const ROW_GROUPS: usize = 512;
+const GROUP_ROWS: usize = 256;
+
+/// A Parquet file of `ROW_GROUPS` row groups of three Int64 columns, stored
+/// in memory; the runtime, I/O context and file to scan it with.
+fn many_row_groups() -> (tokio::runtime::Runtime, IoContext, FileRef, ScanRequest) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("runtime");
+    let schema = Arc::new(Schema::new(
+        ["a", "b", "c"]
+            .map(|n| Field::new(n, DataType::Int64, false))
+            .to_vec(),
+    ));
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(GROUP_ROWS))
+        .build();
+    let mut buf = Vec::new();
+    let mut w = ArrowWriter::try_new(&mut buf, Arc::clone(&schema), Some(props)).expect("writer");
+    for g in 0..ROW_GROUPS {
+        let base = i64::try_from(g * GROUP_ROWS).expect("row");
+        let end = base + i64::try_from(GROUP_ROWS).expect("rows");
+        let col = |m: i64| -> Arc<dyn arrow_array::Array> {
+            Arc::new(Int64Array::from_iter_values(
+                (base..end).map(|i| i.wrapping_mul(m)),
+            ))
+        };
+        let b = RecordBatch::try_new(Arc::clone(&schema), vec![col(1), col(7), col(31)]);
+        w.write(&b.expect("batch")).expect("write");
+    }
+    w.close().expect("close");
+    let store = Arc::new(InMemory::new());
+    let sched = IoScheduler::new(IoConfig::default());
+    sched.register_store(
+        StoreId::new("memory://bench"),
+        Arc::clone(&store) as Arc<dyn ObjectStore>,
+    );
+    let file = rt.block_on(async {
+        let path = Path::from("many.parquet");
+        object_store::ObjectStoreExt::put(store.as_ref(), &path, buf.into())
+            .await
+            .expect("put");
+        let meta = object_store::ObjectStoreExt::head(store.as_ref(), &path)
+            .await
+            .expect("head");
+        FileRef::from_meta(StoreId::new("memory://bench"), &meta)
+    });
+    (rt, sched.context(), file, ScanRequest::all(schema))
+}
+
+/// Rows of one full scan of `file`.
+fn scan(rt: &tokio::runtime::Runtime, io: &IoContext, file: &FileRef, req: &ScanRequest) -> usize {
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    rt.block_on(async {
+        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        let id = pool.register("scan", None);
+        let mut s = ScanStream::open(
+            io,
+            &ParquetFormat,
+            file.clone(),
+            ByteRange::whole(file.size),
+            req,
+            &o,
+            Reservation::new(pool, id),
+            ScanOptions::default(),
+        )
+        .await
+        .expect("open");
+        let mut rows = 0;
+        while let Some(b) = s.next_batch().await.expect("batch") {
+            rows += b.num_rows();
+        }
+        rows
+    })
+}
+
 fn bench(c: &mut Criterion) {
     let files = files();
     let cfg = SplitConfig::from_config(&Config::new(), 16);
@@ -103,6 +193,11 @@ fn bench(c: &mut Criterion) {
     let o = FormatOptions::defaults(ParquetFormat.options());
     group.bench_function("parquet_encode_16k_rows", |b| {
         b.iter(|| encode(black_box(&batches), &o));
+    });
+    let (rt, io, file, req) = many_row_groups();
+    assert_eq!(scan(&rt, &io, &file, &req), ROW_GROUPS * GROUP_ROWS);
+    group.bench_function("parquet_scan_512_row_groups", |b| {
+        b.iter(|| scan(&rt, &io, black_box(&file), &req));
     });
     group.finish();
 }

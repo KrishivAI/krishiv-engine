@@ -20,8 +20,8 @@
 //! (the full cast matrix is a later task).
 
 pub(crate) mod datetime;
-mod text;
-mod timestamp;
+pub(crate) mod text;
+pub(crate) mod timestamp;
 
 use std::sync::Arc;
 

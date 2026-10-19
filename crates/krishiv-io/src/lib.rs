@@ -28,6 +28,7 @@
 #![forbid(unsafe_code)]
 
 mod commit;
+pub mod csv;
 mod error;
 mod format;
 pub mod io;
@@ -38,9 +39,11 @@ mod scan;
 mod schema_map;
 pub mod split;
 mod stats;
+pub mod text;
 mod write;
 
 pub use commit::{DirectoryWrite, SUCCESS_MARKER, SaveMode};
+pub use csv::CsvFormat;
 pub use error::{FormatError, FormatResult, Result};
 pub use format::{
     AsyncDecoder, Capabilities, Decoder, Encoder, FileFormat, FileMetadata, MetadataNeeds,
