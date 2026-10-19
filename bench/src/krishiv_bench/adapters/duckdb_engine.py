@@ -5,8 +5,8 @@ import shutil
 
 import duckdb
 
-from .base import Dataset, Engine, Measure, Query
 from ..paths import data_root
+from .base import Dataset, Engine, Measure, Query
 from .proc_mem import LocalProc
 
 
