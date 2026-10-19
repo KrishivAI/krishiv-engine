@@ -28,8 +28,8 @@ use krishiv_types::DecimalType;
 
 use crate::ast::{
     Alias, BinaryOp, Expr, ExprKind, FromClause, GroupItemKind, JoinConstraint, JoinKind, Literal,
-    NumKind, Query, Relation, RelationExt, Select, SetExprKind, SetQuantifier, SortItem, Span,
-    TableFactor, TableFactorKind, Truth, UnaryOp,
+    NumKind, Query, Relation, RelationExt, Select, SetExpr, SetExprKind, SetOperator,
+    SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth, UnaryOp,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_query};
@@ -163,30 +163,7 @@ impl Lowerer {
 
     fn query_inner(&mut self, q: &Query) -> R<LogicalPlan> {
         reject_organization(q)?;
-        let mut plan = match &q.body.kind {
-            SetExprKind::Select(s) => self.select(s, s.from.as_ref())?,
-            SetExprKind::Query(inner) => self.query(inner)?,
-            SetExprKind::Table(name) => self.node(
-                PlanNode::Read(ReadSource::Table {
-                    name: name.parts.iter().map(|p| p.value.clone()).collect(),
-                    options: BTreeMap::new(),
-                }),
-                name.span,
-            ),
-            SetExprKind::FromStatement(f) => match &f.bodies[..] {
-                [body] => match &body.body.kind {
-                    SetExprKind::Select(s) => {
-                        reject_organization(body)?;
-                        let inner = self.select(s, Some(&f.from))?;
-                        self.organize(inner, body)?
-                    }
-                    _ => return Err(unsupported("FROM ... SELECT with a set body", f.span)),
-                },
-                _ => return Err(unsupported("FROM with several SELECT bodies", f.span)),
-            },
-            SetExprKind::SetOp { .. } => return Err(unsupported("set operations", q.body.span)),
-            SetExprKind::Values(_) => return Err(unsupported("VALUES", q.body.span)),
-        };
+        let mut plan = self.body(&q.body)?;
         plan = self.organize(plan, q)?;
         if let Some(with) = &q.with {
             if with.recursive {
@@ -222,6 +199,60 @@ impl Lowerer {
             );
         }
         Ok(plan)
+    }
+
+    /// A query body: a `SELECT`, a set operation, a table, ...
+    fn body(&mut self, body: &SetExpr) -> R<LogicalPlan> {
+        Ok(match &body.kind {
+            SetExprKind::Select(s) => self.select(s, s.from.as_ref())?,
+            SetExprKind::Query(inner) => self.query(inner)?,
+            SetExprKind::Table(name) => self.node(
+                PlanNode::Read(ReadSource::Table {
+                    name: name.parts.iter().map(|p| p.value.clone()).collect(),
+                    options: BTreeMap::new(),
+                }),
+                name.span,
+            ),
+            SetExprKind::FromStatement(f) => match &f.bodies[..] {
+                [body] => match &body.body.kind {
+                    SetExprKind::Select(s) => {
+                        reject_organization(body)?;
+                        let inner = self.select(s, Some(&f.from))?;
+                        self.organize(inner, body)?
+                    }
+                    _ => return Err(unsupported("FROM ... SELECT with a set body", f.span)),
+                },
+                _ => return Err(unsupported("FROM with several SELECT bodies", f.span)),
+            },
+            SetExprKind::SetOp {
+                op: SetOperator::Union,
+                quantifier,
+                left,
+                right,
+            } => {
+                let inputs = vec![
+                    arc(self.deeper(|l| l.body(left))?),
+                    arc(self.deeper(|l| l.body(right))?),
+                ];
+                let union = self.node(
+                    PlanNode::Union {
+                        inputs,
+                        by_name: false,
+                        allow_missing_columns: false,
+                    },
+                    body.span,
+                );
+                if *quantifier == Some(SetQuantifier::All) {
+                    union
+                } else {
+                    self.node(PlanNode::Distinct { input: arc(union) }, body.span)
+                }
+            }
+            SetExprKind::SetOp { .. } => {
+                return Err(unsupported("INTERSECT and EXCEPT", body.span));
+            }
+            SetExprKind::Values(_) => return Err(unsupported("VALUES", body.span)),
+        })
     }
 
     /// `ORDER BY`, `SORT BY` and `LIMIT` of `q` over `plan`.
@@ -274,13 +305,33 @@ impl Lowerer {
         Ok(o)
     }
 
+    /// A `SELECT` with its `DISTINCT` and hints: as Spark's AstBuilder,
+    /// the hints wrap the rest, the first one outermost.
     fn select(&mut self, s: &Select, from: Option<&FromClause>) -> R<LogicalPlan> {
+        let mut plan = self.select_list(s, from)?;
+        if s.quantifier == Some(SetQuantifier::Distinct) {
+            plan = self.node(PlanNode::Distinct { input: arc(plan) }, s.span);
+        }
+        for h in s.hints.iter().rev() {
+            let params = h
+                .params
+                .iter()
+                .map(|e| self.arg(e))
+                .collect::<R<Vec<_>>>()?;
+            plan = self.node(
+                PlanNode::Hint {
+                    input: arc(plan),
+                    name: h.name.value.clone(),
+                    params,
+                },
+                h.span,
+            );
+        }
+        Ok(plan)
+    }
+
+    fn select_list(&mut self, s: &Select, from: Option<&FromClause>) -> R<LogicalPlan> {
         for (present, what) in [
-            (!s.hints.is_empty(), "hints"),
-            (
-                s.quantifier == Some(SetQuantifier::Distinct),
-                "SELECT DISTINCT",
-            ),
             (!s.lateral_views.is_empty(), "LATERAL VIEW"),
             (!s.windows.is_empty(), "WINDOW clauses"),
             (s.qualify.is_some(), "QUALIFY"),

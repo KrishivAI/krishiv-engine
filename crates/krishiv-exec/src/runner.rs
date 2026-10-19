@@ -5,7 +5,8 @@
 //! `submit` splits the plan into pipelines and spawns a coordinator task,
 //! which starts each pipeline once its dependencies have finalized:
 //! `min(worker slots, source parallelism)` drivers per pipeline (one if it
-//! must keep order). The coordinator awaits every driver; the first error
+//! must keep order). The pipelines of a fan-in (`UNION ALL`) end in one
+//! sink and start together, sharing its state. The coordinator awaits every driver; the first error
 //! (a driver's error, a panic, a memory abort, cancellation) wins and
 //! cancels the rest, which are also aborted. The result stream ends only
 //! after every task has ended and every pipeline's state is dropped, so the
@@ -178,13 +179,20 @@ async fn run_pipelines(
     query: &Arc<QueryContext>,
     pipelines: Vec<Pipeline>,
 ) -> Result<()> {
+    // Pipelines ending in one sink (a fan-in) start together and run as
+    // one; a group is ready once every member's dependencies finalized.
+    let sinks: Vec<OperatorId> = pipelines.iter().map(|p| p.sink.0).collect();
+    let group =
+        |i: usize| -> Vec<usize> { (0..sinks.len()).filter(|&j| sinks[j] == sinks[i]).collect() };
     let deps: Vec<Vec<usize>> = pipelines.iter().map(|p| p.deps.clone()).collect();
     let mut todo: Vec<Option<Pipeline>> = pipelines.into_iter().map(Some).collect();
     let mut done = vec![false; todo.len()];
     let mut finalized: HashMap<OperatorId, GlobalState> = HashMap::new();
     while done.iter().any(|d| !d) {
-        let ready: Vec<usize> = (0..todo.len())
-            .filter(|&i| !done[i] && deps[i].iter().all(|&d| done[d]))
+        let ready: Vec<Vec<usize>> = (0..todo.len())
+            .filter(|&i| !done[i] && group(i)[0] == i)
+            .map(group)
+            .filter(|g| g.iter().all(|&m| deps[m].iter().all(|&d| done[d])))
             .collect();
         if ready.is_empty() {
             // Unreachable: dependencies form a tree.
@@ -192,18 +200,22 @@ async fn run_pipelines(
         }
         let mut handles = Drivers(FuturesUnordered::new());
         let mut runs = Vec::new();
-        for i in ready {
-            done[i] = true;
-            if let Some(p) = todo[i].take() {
-                match start_pipeline(executor, query, p, &finalized) {
-                    Ok((run, hs)) => {
-                        handles.0.extend(hs);
-                        runs.push(run);
-                    }
-                    Err(e) => {
-                        query.fail(e);
-                        break;
-                    }
+        for g in ready {
+            let members: Vec<Pipeline> = g
+                .iter()
+                .filter_map(|&i| {
+                    done[i] = true;
+                    todo[i].take()
+                })
+                .collect();
+            match start_group(executor, query, members, &finalized) {
+                Ok((rs, hs)) => {
+                    handles.0.extend(hs);
+                    runs.extend(rs);
+                }
+                Err(e) => {
+                    query.fail(e);
+                    break;
                 }
             }
         }
@@ -233,12 +245,15 @@ fn record_extra_metrics(query: &QueryContext, runs: &[Arc<PipelineRun>]) {
     });
 }
 
-fn start_pipeline(
+/// Starts the pipelines of one sink: one pipeline, or the pipelines of a
+/// fan-in, which share the sink's state, its finalize countdown and the
+/// flush barriers of the operators they share.
+fn start_group(
     executor: &Arc<dyn Executor>,
     query: &Arc<QueryContext>,
-    pipeline: Pipeline,
+    members: Vec<Pipeline>,
     finalized: &HashMap<OperatorId, GlobalState>,
-) -> Result<(Arc<PipelineRun>, Vec<TaskHandle>)> {
+) -> Result<(Vec<Arc<PipelineRun>>, Vec<TaskHandle>)> {
     // Global-state contexts get an owner nobody services: memory reserved
     // in `global_state` is never asked to spill (see `Sink::global_state`).
     let ctx = |(id, name)| {
@@ -250,48 +265,74 @@ fn start_pipeline(
             name,
         )
     };
-    let (source_id, source) = &pipeline.source;
-    let (sink_id, sink) = &pipeline.sink;
     let read = |input: &OperatorId| {
         let state = finalized.get(input).cloned();
         state.ok_or_else(|| internal("a breaker read before it finalized".to_owned()))
     };
-    let mut source_ctx = ctx((*source_id, source.name()));
-    if let Some(input) = &pipeline.input {
-        source_ctx = source_ctx.with_dependency(read(input)?);
-    }
-    let operator_deps = pipeline
-        .operator_inputs
-        .iter()
-        .map(|i| i.as_ref().map(read).transpose())
-        .collect::<Result<Vec<_>>>()?;
-    let source_global = source.global_state(&source_ctx)?;
-    let sink_global = sink.global_state(&ctx((*sink_id, sink.name())))?;
-    let drivers = if pipeline.preserve_order {
-        1
-    } else {
-        executor
-            .parallelism()
-            .min(source.max_parallelism(&source_global))
-            .max(1)
+    let Some(first) = members.first() else {
+        return Err(internal("a pipeline group without pipelines".to_owned()));
     };
-    let barriers = (0..pipeline.operators.len())
-        .map(|_| Barrier::new(drivers))
+    let (sink_id, sink) = &first.sink;
+    let sink_global = sink.global_state(&ctx((*sink_id, sink.name())))?;
+    let mut started = Vec::with_capacity(members.len());
+    for pipeline in members {
+        let (source_id, source) = &pipeline.source;
+        let mut source_ctx = ctx((*source_id, source.name()));
+        if let Some(input) = &pipeline.input {
+            source_ctx = source_ctx.with_dependency(read(input)?);
+        }
+        let operator_deps = pipeline
+            .operator_inputs
+            .iter()
+            .map(|i| i.as_ref().map(read).transpose())
+            .collect::<Result<Vec<_>>>()?;
+        let source_global = source.global_state(&source_ctx)?;
+        let drivers = if pipeline.preserve_order {
+            1
+        } else {
+            executor
+                .parallelism()
+                .min(source.max_parallelism(&source_global))
+                .max(1)
+        };
+        started.push((pipeline, operator_deps, source_global, drivers));
+    }
+    // One barrier per operator, over the drivers of every pipeline it is in.
+    let mut barrier_drivers: HashMap<OperatorId, usize> = HashMap::new();
+    for (p, _, _, drivers) in &started {
+        for (id, _) in &p.operators {
+            *barrier_drivers.entry(*id).or_default() += drivers;
+        }
+    }
+    let barriers: HashMap<OperatorId, Arc<Barrier>> = barrier_drivers
+        .into_iter()
+        .map(|(id, n)| (id, Arc::new(Barrier::new(n))))
         .collect();
-    let run = Arc::new(PipelineRun {
-        pipeline,
-        operator_deps,
-        barriers,
-        source_global,
-        sink_global,
-        countdown: Countdown::new(drivers),
-        query: Arc::clone(query),
-        executor: Arc::clone(executor),
-    });
-    let handles = (0..drivers)
-        .map(|_| spawn_driver(Arc::clone(&run)))
-        .collect();
-    Ok((run, handles))
+    let total = started.iter().map(|s| s.3).sum();
+    let countdown = Arc::new(Countdown::new(total));
+    let mut runs = Vec::with_capacity(started.len());
+    let mut handles = Vec::with_capacity(total);
+    for (pipeline, operator_deps, source_global, drivers) in started {
+        let barriers = pipeline
+            .operators
+            .iter()
+            .map(|(id, _)| barriers.get(id).cloned())
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| internal("an operator without a barrier".to_owned()))?;
+        let run = Arc::new(PipelineRun {
+            pipeline,
+            operator_deps,
+            barriers,
+            source_global,
+            sink_global: Arc::clone(&sink_global),
+            countdown: Arc::clone(&countdown),
+            query: Arc::clone(query),
+            executor: Arc::clone(executor),
+        });
+        handles.extend((0..drivers).map(|_| spawn_driver(Arc::clone(&run))));
+        runs.push(run);
+    }
+    Ok((runs, handles))
 }
 
 /// A wave's drivers, aborted if the coordinator is dropped mid-wave (so

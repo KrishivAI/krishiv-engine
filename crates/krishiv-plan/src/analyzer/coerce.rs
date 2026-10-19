@@ -241,6 +241,12 @@ pub(super) fn common_type(a: &Arg<'_>, b: &Arg<'_>) -> Option<Option<DataType>> 
     common(a, b, false)
 }
 
+/// The type two set-operation columns meet at (`findWiderTypeForTwo`, the
+/// legacy rules with ANSI off).
+pub(super) fn wider_type(a: &Arg<'_>, b: &Arg<'_>, ansi: bool) -> Option<Option<DataType>> {
+    common_all(&[*a, *b], ansi)
+}
+
 /// The cast to `to` an argument of type `from` needs, if any.
 pub(super) fn cast_to(from: Option<&DataType>, to: Option<&DataType>) -> Option<DataType> {
     match to {

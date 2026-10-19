@@ -9,7 +9,9 @@ use arrow_array::types::{
 };
 use arrow_array::{ArrayRef, PrimitiveArray, RecordBatch};
 use arrow_schema::DataType as ArrowType;
-use krishiv_kernels::decimal::{DecimalOp, DecimalPlan, decimal_arith, decimal_unary};
+use krishiv_kernels::decimal::{
+    DecimalOp, DecimalPlan, decimal_arith, decimal_integral_divide, decimal_unary,
+};
 use krishiv_kernels::integer::{self, SparkIntegral, UnaryOp};
 use krishiv_kernels::{
     Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Sub, float,
@@ -246,6 +248,81 @@ impl PhysExpr for Negative {
         Ok(match v {
             Value::Scalar(_) => Value::Scalar(out),
             Value::Array(_) => Value::Array(out),
+        })
+    }
+}
+
+/// `l div r` (`IntegralDivide`): a `bigint` truncated towards zero, from
+/// `bigint` or decimal operands (the analyzer cast them).
+#[derive(Debug)]
+struct IntegralDivide {
+    l: Arc<dyn PhysExpr>,
+    r: Arc<dyn PhysExpr>,
+    /// Decimal operands' types.
+    decimal: Option<((u8, i8), (u8, i8))>,
+    ansi: bool,
+    kernels: KernelCtx,
+}
+
+pub(super) fn integral_divide(
+    l: Arc<dyn PhysExpr>,
+    r: Arc<dyn PhysExpr>,
+    env: &EvalEnv,
+) -> Result<Arc<dyn PhysExpr>> {
+    let decimal = match (l.data_type(), r.data_type()) {
+        (ArrowType::Int64, ArrowType::Int64) => None,
+        (ArrowType::Decimal128(lp, ls), ArrowType::Decimal128(rp, rs)) => {
+            Some(((*lp, *ls), (*rp, *rs)))
+        }
+        (lt, rt) => return Err(unsupported(&format!("`div` on {lt} and {rt}"))),
+    };
+    Ok(Arc::new(IntegralDivide {
+        l,
+        r,
+        decimal,
+        ansi: env.ansi,
+        kernels: env.kernels,
+    }))
+}
+
+impl PhysExpr for IntegralDivide {
+    fn data_type(&self) -> &ArrowType {
+        &ArrowType::Int64
+    }
+
+    fn nullable(&self) -> bool {
+        true
+    }
+
+    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+        let (mut l, r) = (self.l.eval(batch)?, self.r.eval(batch)?);
+        let scalar = l.is_scalar() && r.is_scalar();
+        if scalar {
+            l = Value::Array(Arc::clone(l.array()));
+        }
+        let ctx = &self.kernels;
+        let out: ArrayRef = match self.decimal {
+            None => {
+                let (a, b) = (prim::<Int64Type>(&l), prim::<Int64Type>(&r));
+                Arc::new(if self.ansi {
+                    integer::integral_divide::<AnsiError>(a, b, ctx)?
+                } else {
+                    integer::integral_divide::<JavaWrap>(a, b, ctx)?
+                })
+            }
+            Some((lt, rt)) => {
+                let (a, b) = (prim::<Decimal128Type>(&l), prim::<Decimal128Type>(&r));
+                Arc::new(if self.ansi {
+                    decimal_integral_divide::<AnsiError>(a, b, lt, rt, ctx)?
+                } else {
+                    decimal_integral_divide::<NullOnOverflow>(a, b, lt, rt, ctx)?
+                })
+            }
+        };
+        Ok(if scalar {
+            Value::Scalar(out)
+        } else {
+            Value::Array(out)
         })
     }
 }

@@ -37,11 +37,13 @@ pub(crate) struct PipelineRun {
     pub(crate) pipeline: Pipeline,
     /// Per operator: the finalized breaker state it reads, if any.
     pub(crate) operator_deps: Vec<Option<GlobalState>>,
-    /// Per operator: its flush barrier (used if it needs a flush).
-    pub(crate) barriers: Vec<Barrier>,
+    /// Per operator: its flush barrier (used if it needs a flush), shared
+    /// with the other pipelines of a fan-in that run the operator.
+    pub(crate) barriers: Vec<Arc<Barrier>>,
     pub(crate) source_global: GlobalState,
     pub(crate) sink_global: GlobalState,
-    pub(crate) countdown: Countdown,
+    /// Shared by the pipelines of a fan-in, as is `sink_global`.
+    pub(crate) countdown: Arc<Countdown>,
     pub(crate) query: Arc<QueryContext>,
     pub(crate) executor: Arc<dyn Executor>,
 }
