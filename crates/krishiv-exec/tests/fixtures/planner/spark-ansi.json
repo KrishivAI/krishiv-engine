@@ -730,6 +730,81 @@
     "9"
    ]
   },
+  "union_mixed_carriers": {
+   "rows": [
+    "NULL",
+    "42",
+    "a_b",
+    "ab",
+    "abc",
+    "apple",
+    "banana",
+    "lit",
+    "nine!",
+    "none!",
+    "one!",
+    "two again!",
+    "two!",
+    "xyz"
+   ]
+  },
+  "union_mixed_nullability": {
+   "rows": [
+    "1|one",
+    "1|x",
+    "2|two",
+    "2|x",
+    "3|two again",
+    "3|x",
+    "4|none",
+    "4|x",
+    "5|nine",
+    "5|x",
+    "6|x",
+    "7|x",
+    "8|x"
+   ]
+  },
+  "union_mixed_types": {
+   "rows": [
+    "NULL|4.00|NULL|1997-02-28|NULL",
+    "NULL|6.00|NONE|NULL|4.0",
+    "NULL|7.00|a_b|1999-12-31|0.0",
+    "0|1.50|apple|1994-01-01|0.5",
+    "1|1.50|ONE|NULL|1.0",
+    "1|2.25|banana|1995-06-30|-1.25",
+    "2|NULL|abc|1996-12-31|2.0",
+    "2|3.00|TWO|NULL|2.0",
+    "2|4.50|TWO AGAIN|NULL|3.0",
+    "3|-5.75|ab|1998-08-02|10000000000.0",
+    "3|8.88|xyz|2000-02-29|7.25",
+    "4|6.10|42|NULL|3.5",
+    "9|7.50|NINE|NULL|5.0"
+   ]
+  },
+  "union_qualifier": {
+   "rows": [
+    "1|apple",
+    "1|apple",
+    "2|banana",
+    "2|banana",
+    "3|abc",
+    "3|abc",
+    "4|NULL",
+    "4|NULL",
+    "5|ab",
+    "5|ab",
+    "6|42",
+    "6|42",
+    "7|a_b",
+    "7|a_b",
+    "8|xyz",
+    "8|xyz"
+   ]
+  },
+  "union_qualifier_cast": {
+   "error": "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+  },
   "union_types_incompatible": {
    "error": "INCOMPATIBLE_COLUMN_TYPE"
   },

@@ -215,3 +215,40 @@ fn ignored_hints_warn() {
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
 }
+
+/// The analysis errors of set operations and hint parameters (their rows
+/// against Spark are in the `semantics` goldens).
+#[test]
+fn set_operation_and_hint_errors() {
+    use krishiv_common::error::ErrorClass;
+    let env = env();
+    for (sql, class) in [
+        (
+            "SELECT a, b FROM t UNION ALL SELECT a FROM t",
+            ErrorClass::NumColumnsMismatch,
+        ),
+        (
+            "SELECT a FROM t UNION ALL SELECT DATE '2020-01-01'",
+            ErrorClass::IncompatibleColumnType,
+        ),
+        (
+            "SELECT /*+ BROADCAST(1) */ a FROM t",
+            ErrorClass::LegacyErrorTemp1046,
+        ),
+    ] {
+        let plan = krishiv_sql::parse_and_lower(
+            sql,
+            &krishiv_sql::ParserOptions::default(),
+            krishiv_plan::SourceId(0),
+        )
+        .unwrap();
+        let err =
+            krishiv_plan::analyzer::testing::block_on(krishiv_plan::analyzer::Analyzer::analyze(
+                &krishiv_plan::analyzer::DefaultAnalyzer,
+                &plan,
+                &env.ctx,
+            ))
+            .unwrap_err();
+        assert_eq!(err.error.error_class(), class, "{sql}: {}", err.error);
+    }
+}

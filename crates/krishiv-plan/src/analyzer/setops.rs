@@ -97,7 +97,8 @@ impl Resolver<'_> {
             .iter()
             .map(|a| Attr {
                 col: a.col.clone(),
-                qual: Arc::from(Vec::new()),
+                // The first input's attributes, qualifier included (Spark).
+                qual: Arc::clone(&a.qual),
                 source: None,
             })
             .collect();
@@ -147,9 +148,10 @@ impl Resolver<'_> {
                     output: output.clone(),
                 },
             ))));
+            // A cast column is a new attribute without a qualifier.
             out.push(Attr {
                 col: output,
-                qual: Arc::clone(&a.qual),
+                qual: Arc::from(Vec::new()),
                 source: None,
             });
         }
