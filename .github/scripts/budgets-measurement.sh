@@ -11,20 +11,67 @@
 # within WAIT_SECS. A cancelled run is superseded by a newer one on the same
 # head (re-opened PR, re-run), so it keeps waiting.
 # Read-only, so it also works for fork pull requests.
+# Every `gh` call is retried with exponential backoff (RETRY_ATTEMPTS tries,
+# RETRY_BASE_SECS doubling: 5, 10, 20, 40) when it fails transiently (HTTP 5xx,
+# network or stream errors, timeouts), never past the WAIT_SECS deadline. Real
+# errors (404, auth, bad request) fail at once.
 # Env: GH_TOKEN, REPO, HEAD_SHA, OUT_DIR, WAIT_SECS (default 4500),
-#      POLL_SECS (default 30), JOB, ARTIFACT, SKIP_JOB (see above).
+#      POLL_SECS (default 30), RETRY_ATTEMPTS (default 5),
+#      RETRY_BASE_SECS (default 5), JOB, ARTIFACT, SKIP_JOB (see above).
 set -euo pipefail
-wait_secs="${WAIT_SECS:-4500}"
-poll_secs="${POLL_SECS:-30}"
 job_name="${JOB:-budgets-measure}"
 artifact="${ARTIFACT:-budgets-current}"
 skip_job="${SKIP_JOB:-}"
+# Numeric settings: 1-9 digits, then normalised to decimal so a leading zero
+# (08) is not read as octal by Bash arithmetic.
+for v in WAIT_SECS:4500 POLL_SECS:30 RETRY_ATTEMPTS:5 RETRY_BASE_SECS:5; do
+  name=${v%%:*}
+  val=${!name:-${v##*:}}
+  case "$val" in
+    '' | *[!0-9]* | ??????????*)
+      echo "::error::$name must be a non-negative integer of at most 9 digits (got '$val')" >&2
+      exit 1
+      ;;
+  esac
+  printf -v "$name" '%s' "$((10#$val))"
+done
+wait_secs=$WAIT_SECS poll_secs=$POLL_SECS retry_attempts=$RETRY_ATTEMPTS retry_base=$RETRY_BASE_SECS
 deadline=$((SECONDS + wait_secs))
+
+# gh_retry <gh args>: stdout of the successful attempt is printed; stderr of a
+# failed attempt is shown, and the attempt is retried only if it looks transient.
+gh_retry() {
+  local attempt=1 delay=$retry_base err_file rc
+  err_file=$(mktemp)
+  while :; do
+    rc=0
+    gh "$@" 2>"$err_file" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      cat "$err_file" >&2
+      rm -f "$err_file"
+      return 0
+    fi
+    cat "$err_file" >&2
+    if ! grep -Eqi 'HTTP 5[0-9][0-9]|stream error|connection (reset|refused|closed)|timed? ?out|timeout|unexpected EOF|\bEOF\b|TLS|temporary failure|no such host|network is unreachable|server error|bad gateway|service unavailable' "$err_file"; then
+      rm -f "$err_file"
+      return "$rc"
+    fi
+    if [ "$attempt" -ge "$retry_attempts" ] || [ $((SECONDS + delay)) -ge "$deadline" ]; then
+      echo "::error::gh $1 failed transiently $attempt time(s); giving up (see the error above)" >&2
+      rm -f "$err_file"
+      return "$rc"
+    fi
+    echo "gh $1 failed transiently (attempt $attempt/$retry_attempts); retrying in ${delay}s" >&2
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
+}
 while :; do
-  run=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=1" \
+  run=$(gh_retry api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=1" \
     --jq '.workflow_runs[0].id // empty')
   if [ -n "$run" ]; then
-    job=$(gh api "repos/$REPO/actions/runs/$run/jobs?filter=latest&per_page=100" \
+    job=$(gh_retry api "repos/$REPO/actions/runs/$run/jobs?filter=latest&per_page=100" \
       --jq ".jobs[] | select(.name == \"$job_name\" or (\"$skip_job\" != \"\" and .name == \"$skip_job\")) | [.name, .status, (.conclusion // \"\")] | @tsv")
     name=$(printf '%s' "$job" | cut -f1)
     status=$(printf '%s' "$job" | cut -f2)
@@ -33,7 +80,7 @@ while :; do
       case "$conclusion" in
         success)
           if [ "$name" = "$job_name" ]; then
-            gh run download "$run" --repo "$REPO" --name "$artifact" --dir "$OUT_DIR" >&2
+            gh_retry run download "$run" --repo "$REPO" --name "$artifact" --dir "$OUT_DIR" >&2
             echo measured
             exit 0
           fi
