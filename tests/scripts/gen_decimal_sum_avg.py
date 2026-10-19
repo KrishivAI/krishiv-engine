@@ -16,6 +16,7 @@ Spark 4.2 Connect server at `$SPARK_REMOTE`, default `sc://127.0.0.1:15002`):
         python tests/scripts/gen_decimal_sum_avg.py > tests/fixtures/spark-4.2.0/decimal-sum-avg.json
 """
 
+import itertools
 import json
 import os
 import random
@@ -52,24 +53,59 @@ for _ in range(10):
     SINGLE.append((p, s, [random.randrange(-(10**p) + 1, 10**p) for _ in range(random.randrange(1, 9))]))
 
 # (precision, scale, values, groups, partitions): group of row i is i % groups; partitions split the
-# rows into contiguous ranges.
+# rows into contiguous ranges. Spark merges partial buffers in shuffle-fetch order, so every case
+# must have one outcome whatever the merge order (checked by `order_independent`); merge-order
+# shapes such as R6 (`M | 1 | -5`) are covered by the Krishiv accumulator tests instead.
 MULTI = [
-    (38, 0, [M, 1, -5], 1, 3),  # R6: the partial M merged with 1 overflows
-    (38, 0, [M, -5, 1], 1, 3),  # merges M, -5, 1: no prefix leaves the bound
+    (38, 0, [M, 1], 1, 2),  # the total leaves the bound: overflows in any order
+    (38, 0, [M - 10, -5, 3], 1, 3),  # no subset of partials leaves the bound
     (38, 0, [M, M, -M, -M], 1, 2),  # each partial overflows
-    (38, 0, [M, 7, -M, 9, 3, -2], 2, 3),  # group 0: M, -M, 3; group 1: 7, 9, -2
-    (38, 0, [M, M, 1, 2], 2, 2),  # group 0: M | 1 (overflows on merge); group 1: M | 2
+    (38, 0, [M - 10, 7, -(M - 10), 9, 3, -2], 2, 3),  # group 0 cancels; group 1: 7, 9, -2
+    (38, 0, [M, M, 1, 2], 2, 2),  # both groups' totals leave the bound
     (15, 2, [random.randrange(90000, 10500000) for _ in range(40)], 4, 3),
     (5, 0, [1] + [0] * 63, 2, 4),  # half points in group 0
     (18, 0, [10**18 - 1] * 24, 3, 4),
     (28, 18, [random.randrange(-(10**28) + 1, 10**28) for _ in range(30)], 5, 3),
 ]
-for _ in range(6):
+
+
+def order_independent(p, vals, groups, parts):
+    """Whether every group's outcome (overflow or not) is the same for every merge order.
+
+    Rows of one partition are folded in order; a partial that overflows stays overflowed. The
+    partials are then merged in each possible order with the bound checked after every merge.
+    """
+    bound = 10 ** min(38, p + 10)
+    n = len(vals)
+    for g in range(groups):
+        partials = []
+        for k in range(parts):
+            acc, overflowed = 0, False
+            for i in range(k * n // parts, (k + 1) * n // parts):
+                if i % groups == g:
+                    acc += vals[i]
+                    overflowed |= abs(acc) >= bound
+            partials.append(None if overflowed else acc)
+        outcomes = set()
+        for order in itertools.permutations(partials):
+            acc, overflowed = 0, False
+            for x in order:
+                overflowed |= x is None or abs(acc + x) >= bound
+                acc += x or 0
+            outcomes.add(overflowed)
+        if len(outcomes) > 1:
+            return False
+    return True
+
+
+while len(MULTI) < 15:
     p = random.randrange(1, 39)
     s = random.randrange(0, p + 1)
-    n = random.randrange(4, 40)
-    vals = [random.randrange(-(10**p) + 1, 10**p) for _ in range(n)]
-    MULTI.append((p, s, vals, random.randrange(1, 5), random.randrange(2, 5)))
+    vals = [random.randrange(-(10**p) + 1, 10**p) for _ in range(random.randrange(4, 40))]
+    groups, parts = random.randrange(1, 5), random.randrange(2, 5)
+    if order_independent(p, vals, groups, parts):
+        MULTI.append((p, s, vals, groups, parts))
+assert all(order_independent(p, v, g, k) for p, _, v, g, k in MULTI)
 CASES = [(p, s, vals, 1, 1) for p, s, vals in SINGLE] + MULTI
 
 

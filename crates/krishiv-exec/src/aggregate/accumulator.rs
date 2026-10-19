@@ -1666,6 +1666,42 @@ mod proof_tests {
         }
     }
 
+    /// Spark R6: partials `M | 1 | -5` overflow when `M` meets `1` first and
+    /// not when `-5` comes between; the outcome follows the merge order (not
+    /// a Spark golden: Spark's merge order is its shuffle-fetch order).
+    #[test]
+    fn r6_partials_follow_merge_order() {
+        let t = DataType::Decimal128(38, 0);
+        for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+            let partial = |v: i128| {
+                let mut a = acc(f, &t, true, true);
+                feed(&mut a, 1, &[(0, v, true, 1)], &t, 0);
+                a.state(&[0]).unwrap()
+            };
+            let (m, one, minus5) = (partial(M), partial(1), partial(-5));
+            for proofs in [true, false] {
+                let merged = |order: [&Vec<ArrayRef>; 3]| {
+                    let mut a = acc(f, &t, true, proofs);
+                    a.resize(1);
+                    for st in order {
+                        a.merge(&[0], st).unwrap();
+                    }
+                    a.evaluate(&[0]).map_err(|e| e.to_string())
+                };
+                let err = merged([&m, &one, &minus5]).unwrap_err();
+                assert!(err.contains("ARITHMETIC_OVERFLOW"), "{err}");
+                let ok = merged([&m, &minus5, &one]);
+                if f == AggregateFunction::Sum {
+                    let v = ok.unwrap();
+                    assert_eq!(v.as_primitive::<Decimal128Type>().value(0), M - 4);
+                } else {
+                    // The average (M - 4) / 3 is out of decimal(38, 4)'s range.
+                    assert!(ok.unwrap_err().contains("NUMERIC_VALUE_OUT_OF_RANGE"));
+                }
+            }
+        }
+    }
+
     /// Spark R1 vs R3: M, 1, -5 overflows in that order (grouped), M, -5, 1
     /// does not; the proof path keeps the processing order.
     #[test]
