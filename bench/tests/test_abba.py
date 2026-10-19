@@ -19,26 +19,28 @@ FAKE_RUNNER = textwrap.dedent(
     f"""\
     #!{sys.executable}
     import sys
+    from urllib.parse import unquote
     import pyarrow as pa, pyarrow.parquet as pq, os
     print("READY 9.9.9 t", flush=True)
     for line in sys.stdin:
         cmd = line.split()
         if cmd[0] == "QUIT":
             break
-        sql = open(cmd[1]).read()
+        sql = open(unquote(cmd[1])).read()
         if "boom" in sql:
             print("ERR planning failed", flush=True)
         elif "hang" in sql:
             import time; time.sleep(60)
         elif "die" in sql:
+            sys.stderr.write("fatal: out of memory\\n"); sys.stderr.flush()
             os._exit(1)
         elif "garbage" in sql:
             print("what", flush=True)
         elif cmd[0] == "RUN":
             print("OK 2 0.125000", flush=True)
         else:
-            os.makedirs(cmd[2])
-            pq.write_table(pa.table({{"a": [1, 2], "b": ["x", "y"]}}), cmd[2] + "/part-0.parquet")
+            out = unquote(cmd[2]); os.makedirs(out)
+            pq.write_table(pa.table({{"a": [1, 2], "b": ["x", "y"]}}), out + "/part-0.parquet")
             print("OK 2 0.125000", flush=True)
     """
 )
@@ -202,3 +204,76 @@ def test_run_abba_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ca
     assert abba.report_from_file(out).startswith("| query")
     with pytest.raises(SystemExit):
         abba.run_abba(7)
+
+
+def test_crash_message_carries_runner_stderr(engine: KrishivEngine):
+    with pytest.raises(RunnerCrashed, match="fatal: out of memory"):
+        engine.timed_run(q("die"))
+
+
+def test_startup_failure_reports_stderr(tmp_path: Path):
+    binary = tmp_path / "bad"
+    binary.write_text(f"#!{sys.executable}\nimport sys\nsys.stderr.write('krishiv-bench-runner: no tables\\n')\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    eng = KrishivEngine(binary=binary)
+    with pytest.raises(RunnerCrashed, match="no tables"):
+        eng.setup(Dataset("tpch", 1, tmp_path, ["t"]))
+    eng.teardown()
+
+
+def test_paths_with_spaces_are_encoded(tmp_path: Path):
+    binary = tmp_path / "run ner"
+    binary.write_text(FAKE_RUNNER)
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    spaced = tmp_path / "a b"
+    spaced.mkdir()
+    eng = KrishivEngine(binary=binary)
+    eng._tmp = spaced / "tmp dir"
+    eng._tmp.mkdir()
+    eng.setup(Dataset("tpch", 1, spaced, ["t"]))
+    try:
+        assert eng.timed_run(q("select 1"))[0] == 2
+        assert eng.run(q("select 1")) == [(1, "x"), (2, "y")]
+    finally:
+        eng.teardown()
+
+
+def test_duckdb_failure_in_timed_run_fails_only_that_query(engine: KrishivEngine):
+    class Flaky(_Duck):
+        calls = 0
+
+        def run(self, query):
+            Flaky.calls += 1
+            if Flaky.calls > 1:
+                raise RuntimeError("interrupted")
+            return self.rows
+
+    res = abba._one_query(q("select 1"), engine, Flaky([(1, "x"), (2, "y")]), 1, 5)
+    assert res["status"] == "failed"
+    assert "duckdb timed run RuntimeError" in res["reason"]
+
+
+def test_zero_timeout_disables_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    seen = {}
+
+    def fake_one(q, krishiv, duck, reps, timeout_s):
+        seen["krishiv"] = krishiv.timeout_s
+        seen["arg"] = timeout_s
+        return {"status": "failed", "reason": "stub"}
+
+    data = tmp_path / "data"
+    ds = data / "tpch-duckdb" / "sf1"
+    ds.mkdir(parents=True)
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    pq.write_table(pa.table({"a": [1]}), ds / "t.parquet")
+    binary = tmp_path / "runner"
+    binary.write_text(FAKE_RUNNER)
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("KRISHIV_DATA", str(data))
+    monkeypatch.setenv("KRISHIV_BENCH_RUNNER", str(binary))
+    monkeypatch.setattr(abba, "load_queries", lambda *_: [Query("q01", "select 1", "tpch")])
+    monkeypatch.setattr(abba, "_one_query", fake_one)
+    abba.run_abba(1, timeout_s=0)
+    assert seen == {"krishiv": None, "arg": 0}

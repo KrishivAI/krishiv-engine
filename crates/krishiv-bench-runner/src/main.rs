@@ -14,7 +14,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> ExitCode {
     let result = RunnerConfig::from_args(std::env::args().skip(1))
-        .and_then(|config| Runner::new(&config))
+        .map_err(|e| e.to_string())
+        .and_then(|config| Runner::new(&config).map_err(|e| e.to_string()))
         .and_then(|runner| {
             serve(
                 &runner,

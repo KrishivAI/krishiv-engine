@@ -18,8 +18,27 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 use std::time::Instant;
 
+use arrow_array::RecordBatch;
+use krishiv_common::error::KrishivError;
 use krishiv_exec::{ExecutorConfig, TokioExecutor};
 use krishiv_session::{DataFrame, Session};
+
+/// Why a runner call failed.
+#[derive(Debug, thiserror::Error)]
+pub enum RunnerError {
+    /// Bad arguments, a bad protocol line or an empty data directory.
+    #[error("{0}")]
+    Config(String),
+    /// A file or directory could not be read.
+    #[error("{0}")]
+    Io(String),
+    /// The engine failed; the Spark error class and SQLSTATE stay in the text.
+    #[error("{0}")]
+    Engine(#[from] KrishivError),
+}
+
+/// Name of the temporary view a `DUMP` writes from.
+const DUMP_VIEW: &str = "__krishiv_bench_dump";
 
 /// Settings of a runner.
 #[derive(Debug, Clone)]
@@ -37,24 +56,29 @@ impl RunnerConfig {
     ///
     /// # Errors
     /// A missing `--data`, an unknown flag or a bad value.
-    pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
+    pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, RunnerError> {
         let mut data = None;
         let mut threads = std::thread::available_parallelism().map_or(1, usize::from);
         let mut memory_limit = "12g".to_owned();
         let mut args = args.into_iter();
         while let Some(flag) = args.next() {
-            let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
+            let mut value = || {
+                args.next()
+                    .ok_or_else(|| RunnerError::Config(format!("{flag} needs a value")))
+            };
             match flag.as_str() {
                 "--data" => data = Some(value()?),
                 "--threads" => {
-                    threads = value()?.parse().map_err(|e| format!("--threads: {e}"))?;
+                    threads = value()?
+                        .parse()
+                        .map_err(|e| RunnerError::Config(format!("--threads: {e}")))?;
                 }
                 "--memory-limit" => memory_limit = value()?,
-                other => return Err(format!("unknown argument {other}")),
+                other => return Err(RunnerError::Config(format!("unknown argument {other}"))),
             }
         }
         Ok(Self {
-            data: data.ok_or("--data DIR is required")?,
+            data: data.ok_or_else(|| RunnerError::Config("--data DIR is required".to_owned()))?,
             threads,
             memory_limit,
         })
@@ -73,25 +97,23 @@ impl Runner {
     ///
     /// # Errors
     /// The data directory is unreadable or holds no Parquet tables, or the session cannot start.
-    pub fn new(config: &RunnerConfig) -> Result<Self, String> {
+    pub fn new(config: &RunnerConfig) -> Result<Self, RunnerError> {
         let threads = config.threads.max(1);
         let executor = TokioExecutor::new(&ExecutorConfig {
             compute_threads: threads,
             io_threads: 2,
             blocking_threads: threads,
-        })
-        .map_err(|e| e.to_string())?;
+        })?;
         let session = Session::builder()
             .executor(executor)
             .config("krishiv.memory.limit", config.memory_limit.as_str())
-            .build()
-            .map_err(|e| e.to_string())?;
+            .build()?;
         let mut tables = Vec::new();
         let entries = std::fs::read_dir(&config.data)
-            .map_err(|e| format!("cannot read {}: {e}", config.data))?;
+            .map_err(|e| RunnerError::Io(format!("cannot read {}: {e}", config.data)))?;
         for entry in entries {
             let path = entry
-                .map_err(|e| format!("cannot list {}: {e}", config.data))?
+                .map_err(|e| RunnerError::Io(format!("cannot list {}: {e}", config.data)))?
                 .path();
             let name = table_name(&path);
             let (Some(name), Some(path_str)) = (name, path.to_str()) else {
@@ -102,13 +124,15 @@ impl Runner {
                     .read()
                     .parquet([path_str])
                     .create_or_replace_temp_view(&name),
-            )
-            .map_err(|e| e.to_string())?;
+            )?;
             tables.push(name);
         }
         tables.sort();
         if tables.is_empty() {
-            return Err(format!("no <table>.parquet under {}", config.data));
+            return Err(RunnerError::Config(format!(
+                "no <table>.parquet under {}",
+                config.data
+            )));
         }
         Ok(Self { session, tables })
     }
@@ -123,42 +147,113 @@ impl Runner {
     ///
     /// # Errors
     /// Any planning or execution error.
-    pub fn run_sql(&self, sql: &str) -> Result<(u64, f64), String> {
-        let (rows, secs, _) = self.execute(sql)?;
-        Ok((rows, secs))
+    pub fn run_sql(&self, sql: &str) -> Result<(u64, f64), RunnerError> {
+        let (batches, secs, _) = self.execute(sql)?;
+        Ok((count_rows(&batches), secs))
     }
 
-    fn execute(&self, sql: &str) -> Result<(u64, f64, DataFrame), String> {
+    /// Plans and runs `sql`, materialising every batch.
+    fn execute(&self, sql: &str) -> Result<(Vec<RecordBatch>, f64, DataFrame), RunnerError> {
         let start = Instant::now();
-        let df = futures::executor::block_on(self.session.sql(sql)).map_err(|e| e.to_string())?;
-        let batches = futures::executor::block_on(df.collect()).map_err(|e| e.to_string())?;
-        let secs = start.elapsed().as_secs_f64();
-        let rows = batches.iter().map(|b| b.num_rows() as u64).sum();
-        Ok((rows, secs, df))
+        let df = futures::executor::block_on(self.session.sql(sql))?;
+        let batches = futures::executor::block_on(df.collect())?;
+        Ok((batches, start.elapsed().as_secs_f64(), df))
+    }
+
+    /// Writes already-collected `batches` as Parquet to `out`, without running the query again.
+    fn dump(
+        &self,
+        df: &DataFrame,
+        batches: Vec<RecordBatch>,
+        out: &str,
+    ) -> Result<(), RunnerError> {
+        let schema = futures::executor::block_on(df.schema())?;
+        self.session.register_batches(DUMP_VIEW, schema, batches)?;
+        let written = futures::executor::block_on(
+            self.session
+                .table(DUMP_VIEW)
+                .write()
+                .mode("overwrite")
+                .parquet(out),
+        );
+        let _existed = self.session.drop_temp_view(DUMP_VIEW);
+        Ok(written?)
+    }
+
+    fn reply(&self, line: &str) -> Result<String, RunnerError> {
+        let mut parts = line.split_whitespace();
+        match (parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some("RUN"), Some(file), None, _) => {
+                let (batches, secs, _) = self.execute(&read_sql(&decode_path(file)?)?)?;
+                Ok(format!("OK {} {secs:.6}", count_rows(&batches)))
+            }
+            (Some("DUMP"), Some(file), Some(out), None) => {
+                let (batches, secs, df) = self.execute(&read_sql(&decode_path(file)?)?)?;
+                let rows = count_rows(&batches);
+                self.dump(&df, batches, &decode_path(out)?)?;
+                Ok(format!("OK {rows} {secs:.6}"))
+            }
+            _ => Err(RunnerError::Config(format!("bad command: {line}"))),
+        }
     }
 
     /// Serves one protocol line; `None` means quit.
     pub fn handle_line(&self, line: &str) -> Option<String> {
-        let mut parts = line.split_whitespace();
-        let reply = match (parts.next(), parts.next(), parts.next()) {
-            (None, ..) => return Some(String::new()),
-            (Some("QUIT"), ..) => return None,
-            (Some("RUN"), Some(file), None) => read_sql(file)
-                .and_then(|sql| self.run_sql(&sql))
-                .map(|(rows, secs)| format!("OK {rows} {secs:.6}")),
-            (Some("DUMP"), Some(file), Some(out)) => read_sql(file).and_then(|sql| {
-                let (rows, secs, df) = self.execute(&sql)?;
-                futures::executor::block_on(df.write().mode("overwrite").parquet(out))
-                    .map_err(|e| e.to_string())?;
-                Ok(format!("OK {rows} {secs:.6}"))
-            }),
-            _ => Err(format!("bad command: {line}")),
-        };
-        Some(match reply {
+        match line.split_whitespace().next() {
+            None => return Some(String::new()),
+            Some("QUIT") => return None,
+            Some(_) => {}
+        }
+        Some(match self.reply(line) {
             Ok(ok) => ok,
-            Err(e) => format!("ERR {}", one_line(&e)),
+            Err(e) => format!("ERR {}", one_line(&e.to_string())),
         })
     }
+}
+
+fn count_rows(batches: &[RecordBatch]) -> u64 {
+    batches.iter().map(|b| b.num_rows() as u64).sum()
+}
+
+/// Percent-encodes `path` for the protocol: every byte but ASCII alphanumerics and `-_./` becomes `%XX`, so a
+/// path never contains whitespace and a line splits on whitespace into its arguments.
+#[must_use]
+pub fn encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for b in path.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_./".contains(&b) {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// The inverse of [`encode_path`].
+///
+/// # Errors
+/// A malformed `%XX` escape or bytes that are not UTF-8.
+pub fn decode_path(encoded: &str) -> Result<String, RunnerError> {
+    let bad = || RunnerError::Config(format!("bad path encoding: {encoded}"));
+    let mut bytes = Vec::with_capacity(encoded.len());
+    let mut it = encoded.bytes();
+    while let Some(b) = it.next() {
+        if b == b'%' {
+            let hi = it
+                .next()
+                .and_then(|c| char::from(c).to_digit(16))
+                .ok_or_else(bad)?;
+            let lo = it
+                .next()
+                .and_then(|c| char::from(c).to_digit(16))
+                .ok_or_else(bad)?;
+            bytes.push(u8::try_from(hi * 16 + lo).map_err(|_| bad())?);
+        } else {
+            bytes.push(b);
+        }
+    }
+    String::from_utf8(bytes).map_err(|_| bad())
 }
 
 /// Serves `input` line by line on `output` until `QUIT` or end of input.
@@ -193,8 +288,8 @@ fn table_name(path: &Path) -> Option<String> {
     Some(stem.to_owned())
 }
 
-fn read_sql(file: &str) -> Result<String, String> {
-    std::fs::read_to_string(file).map_err(|e| format!("cannot read {file}: {e}"))
+fn read_sql(file: &str) -> Result<String, RunnerError> {
+    std::fs::read_to_string(file).map_err(|e| RunnerError::Io(format!("cannot read {file}: {e}")))
 }
 
 fn one_line(s: &str) -> String {

@@ -55,7 +55,7 @@ Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (none neede
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash
 cargo build --release -p krishiv-bench-runner
-KRISHIV_BENCH_RUNNER=$CARGO_TARGET_DIR/release/krishiv-bench-runner \
+KRISHIV_BENCH_RUNNER=${CARGO_TARGET_DIR:-../target}/release/krishiv-bench-runner \
   uv run krishiv-bench abba --sf 10 --dataset tpch-duckdb --reps 3 --threads 8 --memory-limit 12g
 ```
 Per query: both engines run it once (untimed, warms the page cache) and Krishiv's rows must equal DuckDB's (type-aware

@@ -14,10 +14,13 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+arrow-array.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
+krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
 krishiv-session = { path = "../krishiv-session" }
 mimalloc.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

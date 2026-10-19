@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use krishiv_bench_runner::{Runner, RunnerConfig, serve};
+use krishiv_bench_runner::{Runner, RunnerConfig, decode_path, encode_path, serve};
 
 fn data_dir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -88,13 +88,13 @@ fn a_directory_of_parts_is_one_table_and_an_empty_directory_is_refused() {
         memory_limit: "1g".to_owned(),
     })
     .unwrap_err();
-    assert!(err.contains("no <table>.parquet"), "{err}");
+    assert!(err.to_string().contains("no <table>.parquet"), "{err}");
     let missing = Runner::new(&RunnerConfig {
         data: "/does/not/exist".to_owned(),
         threads: 1,
         memory_limit: "1g".to_owned(),
     });
-    assert!(missing.unwrap_err().contains("cannot read"));
+    assert!(missing.unwrap_err().to_string().contains("cannot read"));
 }
 
 #[test]
@@ -106,12 +106,119 @@ fn arguments() {
         ("/d", 4, "2g")
     );
     assert!(args("--data /d").unwrap().threads >= 1);
-    assert!(args("--threads 4").unwrap_err().contains("--data"));
-    assert!(args("--data").unwrap_err().contains("needs a value"));
+    assert!(
+        args("--threads 4")
+            .unwrap_err()
+            .to_string()
+            .contains("--data")
+    );
+    assert!(
+        args("--data")
+            .unwrap_err()
+            .to_string()
+            .contains("needs a value")
+    );
     assert!(
         args("--data /d --threads x")
             .unwrap_err()
+            .to_string()
             .contains("--threads")
     );
-    assert!(args("--wat").unwrap_err().contains("unknown argument"));
+    assert!(
+        args("--wat")
+            .unwrap_err()
+            .to_string()
+            .contains("unknown argument")
+    );
+}
+
+#[test]
+fn path_codec_round_trips_and_rejects_garbage() {
+    for p in [
+        "/plain/a.sql",
+        "/with space/a b.sql",
+        "/pct%/\u{e9}t\u{e9}/x\ty\n.sql",
+    ] {
+        let e = encode_path(p);
+        assert!(!e.contains(char::is_whitespace), "{e}");
+        assert_eq!(decode_path(&e).unwrap(), p);
+    }
+    assert_eq!(encode_path("a b"), "a%20b");
+    for bad in ["%", "%4", "%zz", "%FF"] {
+        assert!(
+            decode_path(bad)
+                .unwrap_err()
+                .to_string()
+                .contains("bad path encoding"),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn dump_runs_the_query_once_and_leaves_no_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/tpch/q1-lineitem.parquet");
+    let spaced = dir.path().join("with space");
+    std::fs::create_dir(&spaced).unwrap();
+    std::fs::copy(fixture, spaced.join("lineitem.parquet")).unwrap();
+    let r = Runner::new(&RunnerConfig {
+        data: spaced.to_str().unwrap().to_owned(),
+        threads: 1,
+        memory_limit: "1g".to_owned(),
+    })
+    .unwrap();
+    let sql = spaced.join("q file.sql");
+    std::fs::write(&sql, "SELECT * FROM lineitem WHERE false").unwrap();
+    let out = spaced.join("out dir");
+    let line = format!(
+        "DUMP {} {}",
+        encode_path(sql.to_str().unwrap()),
+        encode_path(out.to_str().unwrap())
+    );
+    // An empty result still writes (the schema comes from the plan, not the batches).
+    let reply = r.handle_line(&line).unwrap();
+    assert!(reply.starts_with("OK 0 "), "{reply}");
+    assert!(out.exists());
+    // The dump view is gone: dumping again works and a table of that name does not resolve.
+    assert!(r.handle_line(&line).unwrap().starts_with("OK 0 "));
+    let probe = spaced.join("probe.sql");
+    std::fs::write(&probe, "SELECT * FROM __krishiv_bench_dump").unwrap();
+    let reply = r
+        .handle_line(&format!("RUN {}", encode_path(probe.to_str().unwrap())))
+        .unwrap();
+    assert!(reply.starts_with("ERR "), "{reply}");
+    let bad = r.handle_line("DUMP %zz /x").unwrap();
+    assert!(bad.starts_with("ERR bad path encoding"), "{bad}");
+}
+
+#[test]
+fn the_binary_serves_stdin_and_reports_startup_errors() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let bin = env!("CARGO_BIN_EXE_krishiv-bench-runner");
+    let dir = data_dir();
+    let mut child = Command::new(bin)
+        .args(["--data", dir.path().to_str().unwrap(), "--threads", "1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"BOGUS\nQUIT\n")
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.starts_with("READY "), "{text}");
+    assert!(text.contains("ERR bad command: BOGUS"), "{text}");
+
+    let failed = Command::new(bin).output().unwrap();
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("--data DIR is required"));
 }

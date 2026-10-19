@@ -127,7 +127,7 @@ def run_abba(
 def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s) -> Path:
     krishiv = KrishivEngine(threads=threads, memory_limit=memory_limit.lower())
     duck = DuckDBEngine(threads=threads, memory_limit=memory_limit.upper())
-    krishiv.timeout_s = timeout_s
+    krishiv.timeout_s = timeout_s or None  # 0 disables the timeout
     started = dt.datetime.now(dt.UTC)
     load_start = loadavg()
     record: dict[str, Any] = {
@@ -202,6 +202,8 @@ def _one_query(q, krishiv: KrishivEngine, duck: Engine, reps: int, timeout_s: fl
                 times[who].append(secs)
     except (RunnerError, RunnerCrashed) as e:
         return {**entry, "status": "failed", "reason": f"krishiv timed run: {str(e)[:300]}"}
+    except Exception as e:  # a DuckDB failure (interrupt, out of memory) fails this query, not the whole run
+        return {**entry, "status": "failed", "reason": f"duckdb timed run {type(e).__name__}: {str(e)[:300]}"}
     k, d = times["krishiv"], times["duckdb"]
     lo, hi = bootstrap_ci(k, d)
     entry.update(
