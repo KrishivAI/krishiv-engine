@@ -175,6 +175,84 @@ const CASES: &[(&str, &str)] = &[
         "push_correlated_join",
         "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE t.c > (SELECT count(*) FROM u u2 WHERE u2.d = t.b AND u2.a = u.a)",
     ),
+    // Restricting an aggregate to the keys its join can match.
+    (
+        "restrict_scalar_avg",
+        "SELECT a FROM t WHERE b = 'x' AND c > (SELECT avg(u.a) FROM u WHERE u.a = t.a)",
+    ),
+    (
+        "restrict_count_bug",
+        "SELECT a, (SELECT count(*) FROM u WHERE u.a = t.a) AS n FROM t WHERE b = 'x'",
+    ),
+    (
+        "restrict_duplicate_keys",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE t.b = 'x' AND t.c > (SELECT max(u2.a) FROM u u2 WHERE u2.a = t.a)",
+    ),
+    (
+        "restrict_two_keys",
+        "SELECT a FROM t WHERE b = 'x' AND c > (SELECT count(*) FROM u WHERE u.a = t.a AND u.d = t.b)",
+    ),
+    (
+        "restrict_in_having",
+        "SELECT a FROM t WHERE b = 'x' AND a IN (SELECT a FROM u GROUP BY a HAVING count(*) > 1)",
+    ),
+    (
+        "restrict_equality_only",
+        "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON t.a = g.a AND t.c > g.n WHERE t.b = 'x'",
+    ),
+    (
+        "restrict_right_outer",
+        "SELECT t.a, g.n FROM (SELECT a, count(*) AS n FROM u GROUP BY a) g RIGHT JOIN (SELECT a FROM t WHERE b = 'x') t ON g.a = t.a",
+    ),
+    (
+        "restrict_renamed_key",
+        "SELECT t.a FROM t JOIN (SELECT k, n FROM (SELECT a AS k, count(*) AS n FROM u GROUP BY a) WHERE n > 1) g ON t.a = g.k WHERE t.b = 'x' AND t.c < (SELECT max(c) FROM t)",
+    ),
+    // An aggregate over an aggregate: restricted at both levels at once.
+    (
+        "restrict_nested",
+        "SELECT x1.c1 AS c0, count(*) AS c1 FROM (SELECT a + 1 AS c0, d AS c1 FROM u WHERE d >= 'x') x1 LEFT SEMI JOIN (SELECT x4.c0, count(*) AS c1 FROM (SELECT c AS c0, count(*) AS c1 FROM t WHERE NOT (coalesce(a, 3) = 3) GROUP BY c) x4 GROUP BY x4.c0) x3 ON x1.c0 = x3.c0 AND x3.c1 IN (3, -2) WHERE x1.c1 IS NOT NULL GROUP BY x1.c1",
+    ),
+    (
+        "restrict_below_semi",
+        "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u WHERE d IN (SELECT b FROM t WHERE c > 0) GROUP BY a) g ON t.a = g.a WHERE t.b = 'x'",
+    ),
+    (
+        "restrict_not_global",
+        "SELECT t.a FROM t JOIN (SELECT count(*) AS n FROM u) g ON t.c = g.n WHERE t.b = 'x'",
+    ),
+    (
+        "restrict_not_nondeterministic_input",
+        "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u WHERE rand() > 0.5 GROUP BY a) g ON t.a = g.a WHERE t.b = 'x'",
+    ),
+    (
+        "restrict_not_subquery_key",
+        "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON t.a + (SELECT max(a) FROM u) = g.a WHERE t.b = 'x'",
+    ),
+    (
+        "restrict_not_inequality",
+        "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON t.a < g.a WHERE t.b = 'x'",
+    ),
+    (
+        "restrict_not_null_safe",
+        "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON t.a <=> g.a WHERE t.b = 'x'",
+    ),
+    (
+        "restrict_not_preserved",
+        "SELECT g.a FROM (SELECT a, count(*) AS n FROM u GROUP BY a) g LEFT JOIN t ON t.a = g.a AND t.b = 'x'",
+    ),
+    (
+        "restrict_not_nondeterministic_aggregate",
+        "SELECT t.a, g.f FROM t JOIN (SELECT a, nondeterministic_first(d) AS f FROM u GROUP BY a) g ON t.a = g.a WHERE t.b = 'x'",
+    ),
+    (
+        "restrict_not_nondeterministic_domain",
+        "SELECT t.a FROM (SELECT a FROM t WHERE b = 'x' AND rand() > 0.5) t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON t.a = g.a",
+    ),
+    (
+        "restrict_not_floating_key",
+        "SELECT t.a FROM t JOIN (SELECT CAST(a AS DOUBLE) AS k, count(*) AS n FROM u GROUP BY CAST(a AS DOUBLE)) g ON CAST(t.a AS DOUBLE) = g.k WHERE t.b = 'x'",
+    ),
     // Projections and limits.
     (
         "collapse",
