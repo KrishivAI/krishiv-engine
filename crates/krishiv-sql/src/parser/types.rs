@@ -204,13 +204,13 @@ impl Parser<'_> {
     }
 
     /// Whether `t` is a type keyword with nothing after it.
-    fn bare_keyword_type(&self, t: &DataTypeSpec) -> bool {
+    pub(super) fn bare_keyword_type(&self, t: &DataTypeSpec) -> bool {
         let text = t.span.text(self.src);
         TYPE_KEYWORDS.iter().any(|k| is_kw(text, k))
     }
 
     /// Whether the current token could continue the bare type keyword `t`.
-    fn continues_type(&self, t: &DataTypeSpec) -> bool {
+    pub(super) fn continues_type(&self, t: &DataTypeSpec) -> bool {
         let text = t.span.text(self.src);
         let is = |kw: &str| is_kw(text, kw);
         self.sym_at(0, Sym::LParen)
