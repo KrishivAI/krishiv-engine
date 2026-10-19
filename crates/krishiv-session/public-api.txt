@@ -32,7 +32,10 @@ pub fn krishiv_session::functions::max(krishiv_session::Column) -> krishiv_sessi
 pub fn krishiv_session::functions::min(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
 #[non_exhaustive] pub enum krishiv_session::ExplainMode
+pub krishiv_session::ExplainMode::Codegen
+pub krishiv_session::ExplainMode::Cost
 pub krishiv_session::ExplainMode::Extended
+pub krishiv_session::ExplainMode::Formatted
 pub krishiv_session::ExplainMode::Simple
 impl core::clone::Clone for krishiv_session::ExplainMode
 pub fn krishiv_session::ExplainMode::clone(&self) -> krishiv_session::ExplainMode

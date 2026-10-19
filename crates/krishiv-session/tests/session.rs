@@ -104,9 +104,9 @@ fn errors_surface_where_spark_raises_them() {
         class(block_on(s.sql("SELECT nope FROM people"))),
         ErrorClass::UnresolvedColumnWithSuggestion
     );
-    let e = block_on(s.sql("EXPLAIN SELECT 1")).unwrap_err();
+    let e = block_on(s.sql("EXPLAIN EXPLAIN SELECT 1")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.to_string().contains("EXPLAIN statements"), "{e}");
+    assert!(e.to_string().contains("EXPLAIN of an EXPLAIN"), "{e}");
     // DataFrames fail at their first action.
     let df = s.table("people").select([col("nope")]);
     assert_eq!(
