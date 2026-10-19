@@ -289,11 +289,13 @@ fn reads_by_path_and_their_views() {
     assert_eq!(s.temp_table_names(), ["ids"]);
     let df = block_on(s.sql("SELECT * FROM ids")).unwrap();
     assert_eq!(block_on(df.schema()).unwrap().fields().len(), 1);
-    // Running queries over files waits for the file table provider.
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), [1, 2]);
     assert_eq!(
-        class(block_on(df.collect())),
-        ErrorClass::KrishivUnsupportedFeature
+        block_on(s.read().parquet([root.as_str()]).count()).unwrap(),
+        2
     );
+    let df = block_on(s.sql(&format!("SELECT id FROM parquet.`{root}` WHERE id > 1"))).unwrap();
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), [2]);
 }
 
 #[test]
@@ -522,8 +524,8 @@ fn column_builders_and_functions_resolve_with_spark_types() {
 fn temp_views_resolve_for_unqualified_names_only() {
     // Spark 4.2.0 with a temp view `v`: `v` and `V` resolve; `default.v`,
     // `spark_catalog.default.v` and `global_temp.v` fail with
-    // TABLE_OR_VIEW_NOT_FOUND; `spark_catalog.v` fails with
-    // REQUIRES_SINGLE_PART_NAMESPACE (not modelled here: it also fails).
+    // TABLE_OR_VIEW_NOT_FOUND; `spark_catalog.v`, `spark_catalog.a.b.v`
+    // and `a.b.v` fail with REQUIRES_SINGLE_PART_NAMESPACE.
     let s = session();
     let (schema, batch) = people();
     s.register_batches("v", schema, vec![batch]).unwrap();
@@ -561,4 +563,145 @@ fn temp_views_resolve_for_unqualified_names_only() {
             "{bad}"
         );
     }
+}
+
+#[test]
+fn names_outside_a_single_part_namespace_are_rejected() {
+    // Spark 4.2.0: "[REQUIRES_SINGLE_PART_NAMESPACE] spark_catalog requires
+    // a single-part namespace, but got identifier `a`.`b`.`v`." (42K05),
+    // for SQL and for `spark.table`, whether or not the table exists.
+    let s = session();
+    for (name, identifier) in [
+        ("spark_catalog.people", "`people`"),
+        ("SPARK_CATALOG.people", "`people`"),
+        ("spark_catalog.nosuch", "`nosuch`"),
+        ("spark_catalog.a.b.people", "`a`.`b`.`people`"),
+        ("a.b.people", "`a`.`b`.`people`"),
+    ] {
+        let sql = block_on(s.sql(&format!("SELECT * FROM {name}")))
+            .and_then(|df| block_on(df.schema()).map(|_| ()))
+            .unwrap_err();
+        assert_eq!(
+            sql.error_class(),
+            ErrorClass::RequiresSinglePartNamespace,
+            "{name}"
+        );
+        assert_eq!(
+            sql.to_string(),
+            format!(
+                "[REQUIRES_SINGLE_PART_NAMESPACE] spark_catalog requires a single-part \
+                 namespace, but got identifier {identifier}. SQLSTATE: 42K05"
+            ),
+            "{name}"
+        );
+        assert_eq!(
+            class(block_on(s.table(name).schema())),
+            ErrorClass::RequiresSinglePartNamespace,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn file_views_read_the_files_there_when_the_query_runs() {
+    // Krishiv lists a file view's files at every query, so overwritten
+    // files are read (Spark 4.2 keeps the listing from the view's
+    // creation and fails with FAILED_READ_FILE.FILE_NOT_EXIST; ADR 0023).
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("t");
+    let root = root.to_str().unwrap().to_owned();
+    let s = session();
+    block_on(s.table("people").select(["id"]).write().parquet(&root)).unwrap();
+    block_on(
+        s.read()
+            .parquet([root.as_str()])
+            .create_or_replace_temp_view("v"),
+    )
+    .unwrap();
+    let sorted =
+        |df: krishiv_session::DataFrame| ids(&block_on(df.order_by(["id"]).collect()).unwrap());
+    assert_eq!(sorted(s.table("v")), [1, 2, 3]);
+    block_on(
+        s.table("people")
+            .filter(col("id").gt(lit(1)))
+            .select([(col("id") * lit(10)).alias("id")])
+            .write()
+            .mode("overwrite")
+            .parquet(&root),
+    )
+    .unwrap();
+    assert_eq!(sorted(s.table("v")), [20, 30]);
+    assert_eq!(
+        sorted(block_on(s.sql("SELECT id FROM v")).unwrap()),
+        [20, 30]
+    );
+}
+
+#[test]
+fn writes_follow_spark_save_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let out = out.to_str().unwrap().to_owned();
+    let s = session();
+    let people = s.table("people");
+    let count = || block_on(s.read().parquet([out.as_str()]).count()).unwrap();
+    // The default mode writes a new path, then refuses it.
+    block_on(people.write().parquet(&out)).unwrap();
+    assert!(dir.path().join("out/_SUCCESS").exists());
+    assert_eq!(count(), 3);
+    assert_eq!(
+        class(block_on(people.write().parquet(&out))),
+        ErrorClass::PathAlreadyExists
+    );
+    assert_eq!(
+        class(block_on(people.write().mode("ErrorIfExists").save(&out))),
+        ErrorClass::PathAlreadyExists
+    );
+    block_on(people.write().mode("ignore").parquet(&out)).unwrap();
+    assert_eq!(count(), 3);
+    block_on(people.write().mode("APPEND").parquet(&out)).unwrap();
+    assert_eq!(count(), 6);
+    block_on(people.limit(1).write().mode("overwrite").parquet(&out)).unwrap();
+    assert_eq!(count(), 1);
+    // The written columns and rows read back as they were.
+    let back = block_on(s.read().parquet([out.as_str()]).collect()).unwrap();
+    assert_eq!(back[0].schema().field(1).name(), "name");
+    assert_eq!(ids(&back).len(), 1);
+    // No rows: one empty file keeps the schema.
+    let empty = dir.path().join("empty");
+    let empty = empty.to_str().unwrap();
+    block_on(people.filter(col("id").lt(lit(0))).write().parquet(empty)).unwrap();
+    let schema = block_on(s.read().parquet([empty]).schema()).unwrap();
+    assert_eq!(schema.fields().len(), 2);
+    assert_eq!(block_on(s.read().parquet([empty]).count()).unwrap(), 0);
+    // Spark's errors for a bad mode, format or option.
+    assert_eq!(
+        class(block_on(people.write().mode("sometimes").parquet(&out))),
+        ErrorClass::InvalidSaveMode
+    );
+    assert_eq!(
+        class(block_on(people.write().format("avro").save(&out))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(count(), 1);
+    // Analysis errors come first.
+    assert_eq!(
+        class(block_on(s.table("missing").write().parquet(&out))),
+        ErrorClass::TableOrViewNotFound
+    );
+}
+
+#[test]
+fn writes_run_from_a_tokio_runtime_and_relative_paths_resolve() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("rt");
+    let out = out.to_str().unwrap().to_owned();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let s = session();
+    rt.block_on(async {
+        s.table("people").write().parquet(&out).await.unwrap();
+        assert_eq!(s.read().parquet([out.as_str()]).count().await.unwrap(), 3);
+    });
 }

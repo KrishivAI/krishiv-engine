@@ -1616,6 +1616,7 @@ version = "0.1.0-dev"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "arrow-select",
  "futures",
  "krishiv-common",
  "krishiv-exec",

@@ -11,7 +11,8 @@ publish = false
 [dependencies]
 arrow-array.workspace = true
 arrow-schema.workspace = true
-futures = { workspace = true, features = ["alloc"] }
+# `executor`: file footers are read on a thread of their own (catalog.rs).
+futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
 krishiv-io = { path = "../krishiv-io" }
@@ -20,12 +21,14 @@ krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-types = { path = "../krishiv-types" }
-# A oneshot channel back from tasks on the session's executor.
-tokio = { workspace = true, features = ["sync"] }
+# A oneshot channel back from tasks on the session's executor; `rt` to
+# enter the I/O runtime from the thread that reads file footers.
+tokio = { workspace = true, features = ["rt", "sync"] }
 # The local file system as a store (`fs`); no other store features.
 object_store = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 parquet = { workspace = true, features = ["arrow"] }
 tempfile.workspace = true

@@ -24,7 +24,7 @@ use krishiv_plan::{
 
 use crate::catalog::TempTable;
 use crate::column::Column;
-use crate::session::{QueryEnv, RecordBatchStream, Session, read_files, typed_paths};
+use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_files, typed_paths};
 
 /// How [`DataFrame::join`] combines rows (Spark's `how`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -529,7 +529,7 @@ impl DataFrame {
 
     async fn execute_stream_here(&self) -> Result<RecordBatchStream, KrishivError> {
         let a = self.analysis().await?;
-        let (_, physical) = self.session.physical(&a.analyzed, &a.env)?;
+        let (_, physical) = self.session.physical(&a.analyzed, &a.env).await?;
         self.session.run(&physical, &a.env).await
     }
 
@@ -602,7 +602,7 @@ impl DataFrame {
 
     async fn explain_here(&self, mode: ExplainMode) -> Result<String, KrishivError> {
         let a = self.analysis().await?;
-        let (optimized, physical) = self.session.physical(&a.analyzed, &a.env)?;
+        let (optimized, physical) = self.session.physical(&a.analyzed, &a.env).await?;
         let physical = format!("== Physical Plan ==\n{physical}");
         Ok(match mode {
             ExplainMode::Simple => physical,
@@ -623,6 +623,29 @@ impl DataFrame {
                 )
             }
         })
+    }
+
+    /// Writes this DataFrame's rows to files (PySpark's `df.write`).
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let dir = tempfile::tempdir().unwrap();
+    /// # let out = dir.path().join("out");
+    /// # let out = out.to_str().unwrap();
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # let batch = arrow_array::RecordBatch::try_new(schema.clone(), vec![std::sync::Arc::new(arrow_array::Int32Array::from(vec![1, 2]))]).unwrap();
+    /// # s.register_batches("t", schema, vec![batch])?;
+    /// futures::executor::block_on(s.table("t").write().mode("overwrite").parquet(out))?;
+    /// assert_eq!(futures::executor::block_on(s.read().parquet([out]).count())?, 2);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn write(&self) -> DataFrameWriter {
+        DataFrameWriter {
+            df: self.clone(),
+            format: "parquet".to_owned(),
+            mode: "errorifexists".to_owned(),
+            options: BTreeMap::new(),
+        }
     }
 
     /// Registers this DataFrame as the temporary view `name`, replacing any
@@ -772,6 +795,117 @@ impl DataFrameReader {
     #[must_use]
     pub fn parquet<S: AsRef<str>>(self, paths: impl IntoIterator<Item = S>) -> DataFrame {
         self.format("parquet").load(paths)
+    }
+}
+
+/// Writes a DataFrame's rows to files ([`DataFrame::write`]; PySpark's
+/// `DataFrameWriter`).
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct DataFrameWriter {
+    df: DataFrame,
+    format: String,
+    mode: String,
+    options: BTreeMap<String, OptionValue>,
+}
+
+impl DataFrameWriter {
+    /// What to do when the path exists (Spark's save modes, ASCII
+    /// case-insensitive): `errorifexists` (also `error`, `default`; the
+    /// default) fails with `PATH_ALREADY_EXISTS`, `ignore` writes nothing,
+    /// `append` adds files, `overwrite` replaces what is there once the
+    /// new files are complete. Another name fails the write with
+    /// `INVALID_SAVE_MODE`.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let w = s.table("t").write().mode("append");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn mode(mut self, mode: &str) -> Self {
+        mode.clone_into(&mut self.mode);
+        self
+    }
+
+    /// The file format (default `parquet`).
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let w = s.table("t").write().format("parquet");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn format(mut self, format: &str) -> Self {
+        format.clone_into(&mut self.format);
+        self
+    }
+
+    /// A write option (`compression`, ...); values are typed as secrets
+    /// where Spark redacts them.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let w = s.table("t").write().option("compression", "zstd");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn option(mut self, key: &str, value: &str) -> Self {
+        self.options
+            .insert(key.to_owned(), OptionValue::from_user(key, value));
+        self
+    }
+
+    /// Writes the rows to the directory `path` in the format. Dropping
+    /// the future cancels the write and deletes its files.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let dir = tempfile::tempdir().unwrap();
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// let out = dir.path().join("t");
+    /// futures::executor::block_on(s.table("t").write().format("parquet").save(out.to_str().unwrap()))?;
+    /// assert!(out.join("_SUCCESS").exists());
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Analysis and planning errors; `INVALID_SAVE_MODE`;
+    /// `PATH_ALREADY_EXISTS` (`errorifexists` on an existing path, or an
+    /// append to a file); the format's option errors; write failures.
+    pub async fn save(self, path: &str) -> Result<(), KrishivError> {
+        let target = WriteTarget {
+            format: self.format,
+            mode: self.mode,
+            path: OptionValue::from_user("path", path),
+            options: self.options,
+        };
+        let df = self.df;
+        let session = df.session.clone();
+        session
+            .on_executor(async move {
+                let a = df.analysis().await?;
+                let (_, physical) = df.session.physical(&a.analyzed, &a.env).await?;
+                df.session.write_files(physical, &a.env, target).await
+            })
+            .await
+    }
+
+    /// Writes the rows as Parquet files under `path` (PySpark's
+    /// `write.parquet`).
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let dir = tempfile::tempdir().unwrap();
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// let out = dir.path().join("t");
+    /// futures::executor::block_on(s.table("t").write().parquet(out.to_str().unwrap()))?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As [`Self::save`].
+    pub async fn parquet(self, path: &str) -> Result<(), KrishivError> {
+        self.format("parquet").save(path).await
     }
 }
 
