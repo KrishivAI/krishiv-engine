@@ -152,6 +152,8 @@ class DataFrame:
                 errorClass="VALUE_NOT_ALLOWED",
                 messageParameters={"arg_name": "how", "allowed_values": ", ".join(sorted(_HOW))},
             )
+        if on is not None and kind == "cross":
+            kind = "inner"  # Spark: a cross join with a condition is an inner join
         if on is None:
             if kind not in ("inner", "cross"):
                 raise PySparkValueError("a join without a condition must be inner or cross")

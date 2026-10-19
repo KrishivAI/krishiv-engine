@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from krishiv import _native
-from krishiv.errors import PySparkValueError, not_expected_type
+from krishiv.errors import SparkNoSuchElementException, not_expected_type
 
 _UNSET = object()
 
@@ -18,7 +18,13 @@ class RuntimeConfig:
         if value is not None:
             return value
         if default is _UNSET:
-            raise PySparkValueError(errorClass="CANNOT_BE_NONE", messageParameters={"arg_name": key})
+            raise SparkNoSuchElementException(
+                f'[SQL_CONF_NOT_FOUND] The SQL config "{key}" cannot be found. Please verify that the config exists. '
+                "SQLSTATE: 42K0I",
+                errorClass="SQL_CONF_NOT_FOUND",
+                messageParameters={"sqlConf": f'"{key}"'},
+                sqlState="42K0I",
+            )
         return None if default is None else str(default)
 
     def set(self, key: str, value: str | int | bool) -> None:

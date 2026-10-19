@@ -27,6 +27,18 @@ class Row(tuple):
             raise PySparkValueError("Cannot convert a Row class into dict")
         return dict(zip(self.__fields__, self, strict=True))
 
+    def __contains__(self, item: object) -> bool:
+        """Like PySpark: on a named row, ``in`` tests the field names."""
+        if hasattr(self, "__fields__"):
+            return item in self.__fields__
+        return tuple.__contains__(self, item)
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        """Pickle and copy rebuild through ``_create_row`` (``tuple``'s default would re-wrap the values)."""
+        if hasattr(self, "__fields__"):
+            return _create_row, (self.__fields__, list(self))
+        return _create_row, (None, list(self))
+
     def __getitem__(self, item: Any) -> Any:
         if isinstance(item, str):
             try:
@@ -47,3 +59,12 @@ class Row(tuple):
         if hasattr(self, "__fields__"):
             return "Row(" + ", ".join(f"{k}={v!r}" for k, v in zip(self.__fields__, self, strict=True)) + ")"
         return f"<Row({', '.join(repr(v) for v in self)})>"
+
+
+def _create_row(fields: list[str] | None, values: list[Any]) -> Row:
+    """Rebuilds a Row from its field names (``None`` for a positional row) and values."""
+    if fields is None:
+        return Row(*values)
+    row = tuple.__new__(Row, values)
+    row.__fields__ = list(fields)
+    return row

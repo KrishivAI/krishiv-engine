@@ -45,8 +45,12 @@ def test_builder_options(spark: SparkSession) -> None:
     assert configured.version == "4.2.0"
     assert spark.conf.get("no.such.key", None) is None
     assert spark.conf.get("no.such.key", 5) == "5"
-    with pytest.raises(errors.PySparkValueError):
+    with pytest.raises(errors.SparkNoSuchElementException) as missing:
         spark.conf.get("no.such.key")
+    assert missing.value.getCondition() == "SQL_CONF_NOT_FOUND"
+    assert missing.value.getSqlState() == "42K0I"
+    assert missing.value.getMessageParameters() == {"sqlConf": '"no.such.key"'}
+    assert str(missing.value).startswith('[SQL_CONF_NOT_FOUND] The SQL config "no.such.key" cannot be found.')
     spark.conf.set("spark.sql.ansi.enabled", True)
     assert spark.conf.get("spark.sql.ansi.enabled") == "true"
     spark.conf.unset("spark.sql.ansi.enabled")
@@ -297,6 +301,10 @@ def test_row() -> None:
     positional = Row(1, 2)
     assert positional[1] == 2
     assert repr(positional) == "<Row(1, 2)>"
+    assert "a" in r
+    assert 1 not in r
+    assert 1 in positional
+    assert "a" not in positional
     with pytest.raises(errors.PySparkValueError):
         Row(1, a=2)
     with pytest.raises(errors.PySparkValueError):
@@ -309,7 +317,26 @@ def test_row() -> None:
         _ = r.__nope__
 
 
+@pytest.mark.parametrize("row", [Row(a=1, b="x"), Row(1, 2), Row()])
+def test_row_pickle_and_copy_round_trip(row: Row) -> None:
+    import copy
+    import pickle
+
+    for clone in (
+        pickle.loads(pickle.dumps(row)),
+        pickle.loads(pickle.dumps(row, protocol=2)),
+        copy.copy(row),
+        copy.deepcopy(row),
+    ):
+        assert clone == row
+        assert repr(clone) == repr(row)
+        assert getattr(clone, "__fields__", None) == getattr(row, "__fields__", None)
+    named = copy.deepcopy(Row(a=1, b="x"))
+    assert (named.a, named.b, named.asDict()) == (1, "x", {"a": 1, "b": "x"})
+
+
 def test_types() -> None:
+    assert T.NullType.typeName() == T.NullType().typeName() == "void"
     assert T.IntegerType() == T.IntegerType()
     assert T.IntegerType() != T.LongType()
     assert hash(T.DecimalType(5, 2)) == hash(T.DecimalType(5, 2))
@@ -330,3 +357,57 @@ def test_types() -> None:
         T._from_simple_string("array<int>")
     for t in (T.NullType, T.BooleanType, T.ByteType, T.ShortType, T.FloatType, T.BinaryType, T.TimestampType):
         assert T._from_simple_string(t().simpleString()) == t()
+
+
+def test_builder_on_active_session_skips_static_settings() -> None:
+    first = krishiv.session()
+    try:
+        with pytest.warns(UserWarning, match="spark.network.timeout"):
+            again = (
+                SparkSession.builder.config("spark.network.timeout", "5s")
+                .config("spark.sql.ansi.enabled", False)
+                .getOrCreate()
+            )
+        assert again is first
+        assert first.conf.get("spark.sql.ansi.enabled") == "false"
+    finally:
+        first.stop()
+
+
+def test_cross_join_with_condition_is_inner(df: DataFrame) -> None:
+    left, right = df.alias("l"), df.alias("r")
+    assert left.join(right, F.col("l.id") == F.col("r.id"), "cross").columns == df.columns * 2
+    assert df.join(df.select("id", "v").alias("o"), ["id"], "cross").columns == ["id", "name", "v", "v"]
+
+
+def test_asc_desc_accept_columns_and_names(df: DataFrame) -> None:
+    assert df.orderBy(F.asc(F.col("id")), F.desc(df["v"]), F.asc("name")).columns == df.columns
+    with pytest.raises(errors.PySparkTypeError):
+        F.asc(1)  # ty: ignore[invalid-argument-type]
+
+
+def test_created_dataframes_own_their_tables(spark: SparkSession) -> None:
+    import gc
+
+    names = spark._native.temp_table_names
+    assert names() == []
+    first = spark.createDataFrame(pa.table({"a": [1, 2]}))
+    second = spark.createDataFrame(pa.table({"a": [3], "b": [4]}))
+    assert len(names()) == 2
+    derived = first.withColumn("c", F.col("a") + 1).groupBy("a").agg(F.count("*")).limit(1)
+    joined = first.alias("x").join(second.alias("y"), F.col("x.a") == F.col("y.a"))
+    del first, second
+    gc.collect()
+    assert len(names()) == 2  # still read by `derived` and `joined`
+    assert derived.columns == ["a", "count(1)"]
+    assert joined.columns == ["a", "a", "b"]
+    del derived
+    gc.collect()
+    assert len(names()) == 2  # `joined` reads both
+    del joined
+    gc.collect()
+    assert names() == []
+    for _ in range(50):
+        spark.createDataFrame(pa.table({"a": [1]}))
+    gc.collect()
+    assert names() == []

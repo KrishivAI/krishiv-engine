@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use krishiv_session::Session;
 use pyo3::prelude::*;
 
-use crate::dataframe::PyDataFrame;
+use crate::dataframe::{OwnedTable, PyDataFrame};
 use crate::errors::{block_on, to_py};
 use crate::stream::ArrowStream;
 
@@ -38,13 +38,11 @@ impl PySession {
     fn sql(&self, py: Python<'_>, query: &str) -> PyResult<PyDataFrame> {
         let (session, query) = (self.inner.clone(), query.to_owned());
         let inner = block_on(py, async move { session.sql(&query).await })?;
-        Ok(PyDataFrame { inner })
+        Ok(PyDataFrame::new(inner))
     }
 
     fn table(&self, name: &str) -> PyDataFrame {
-        PyDataFrame {
-            inner: self.inner.table(name),
-        }
+        PyDataFrame::new(self.inner.table(name))
     }
 
     /// The DataFrame reading the files `paths` as `format`, with `options`.
@@ -59,14 +57,13 @@ impl PySession {
         for (key, value) in options.unwrap_or_default() {
             reader = reader.option(&key, &value);
         }
-        PyDataFrame {
-            inner: reader.load(paths),
-        }
+        PyDataFrame::new(reader.load(paths))
     }
 
     /// A DataFrame of the Arrow data `data` (any object implementing the
-    /// Arrow PyCapsule interface), read now and kept in the session under a
-    /// generated name.
+    /// Arrow PyCapsule interface), read now. The data lives in a temporary
+    /// table of a generated name that the returned DataFrame (and those
+    /// derived from it) own: it is dropped with the last of them.
     fn create_dataframe(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<PyDataFrame> {
         let (schema, batches) = ArrowStream::from_arrow(data)?.read_all()?;
         let name = format!(
@@ -78,7 +75,17 @@ impl PySession {
             .map_err(|e| to_py(py, &e))?;
         Ok(PyDataFrame {
             inner: self.inner.table(&name),
+            owned: vec![OwnedTable::new(self.inner.clone(), name)],
         })
+    }
+
+    /// Names of the session's temporary tables and views.
+    fn temp_table_names(&self) -> Vec<String> {
+        self.inner.temp_table_names()
+    }
+
+    fn conf_is_modifiable(&self, key: &str) -> bool {
+        self.inner.conf().is_modifiable(key)
     }
 
     fn conf_get(&self, key: &str) -> Option<String> {

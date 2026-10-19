@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import threading
+import warnings
 from typing import Any
 
 from krishiv import _native
@@ -57,8 +58,17 @@ class SparkSession:
                 if _active is None:
                     _active = SparkSession(_native.Session(list(self._config.items())))
                 else:
+                    skipped = [k for k in self._config if not _active._native.conf_is_modifiable(k)]
+                    if skipped:
+                        warnings.warn(
+                            "Using an existing Spark session; only runtime SQL configurations will take effect "
+                            f"(ignored: {', '.join(skipped)}).",
+                            UserWarning,
+                            stacklevel=2,
+                        )
                     for k, v in self._config.items():
-                        _active.conf.set(k, v)
+                        if k not in skipped:
+                            _active.conf.set(k, v)
                 return _active
 
         def create(self) -> SparkSession:

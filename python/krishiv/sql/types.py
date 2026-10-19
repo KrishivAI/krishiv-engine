@@ -31,7 +31,9 @@ class DataType:
 
 
 class NullType(DataType):
-    pass
+    @classmethod
+    def typeName(cls) -> str:
+        return "void"
 
 
 class BooleanType(DataType):

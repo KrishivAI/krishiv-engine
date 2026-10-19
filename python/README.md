@@ -21,7 +21,7 @@ print(df.columns, df.schema)  # analysis only, nothing runs
 ```
 
 `krishiv.sql` mirrors `pyspark.sql` (signatures and import paths); errors are in `krishiv.errors`, shaped like
-`pyspark.errors`. pyarrow is optional: install `krishiv[pyarrow]` (or `krishiv[pandas]`). Actions
+`pyspark.errors`. pyarrow is optional: install `krishiv[pyarrow]`. Actions
 (`collect`, `show`, `toArrow`, `toPandas`) and SQL expression strings (`selectExpr`, `where("...")`, `expr`) are not
 available yet.
 

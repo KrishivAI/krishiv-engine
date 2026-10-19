@@ -6,8 +6,8 @@ use krishiv_common::error::KrishivError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-/// The Python exception for `error`; a `RuntimeError` carrying the message if
-/// `krishiv.errors` cannot be used.
+/// The Python exception for `error`; a `RuntimeError` carrying the message (and
+/// the conversion failure as its cause) if `krishiv.errors` cannot be used.
 pub(crate) fn to_py(py: Python<'_>, error: &KrishivError) -> PyErr {
     let build = || -> PyResult<PyErr> {
         let parameters = PyDict::new(py);
@@ -25,7 +25,12 @@ pub(crate) fn to_py(py: Python<'_>, error: &KrishivError) -> PyErr {
             ))?;
         Ok(PyErr::from_value(exception))
     };
-    build().unwrap_or_else(|_| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    build().unwrap_or_else(|cause| {
+        // Keep why the conversion failed (a bug in `krishiv.errors`) as the cause.
+        let err = pyo3::exceptions::PyRuntimeError::new_err(error.to_string());
+        err.set_cause(py, Some(cause));
+        err
+    })
 }
 
 /// Runs the engine future `work` to completion with the GIL released.

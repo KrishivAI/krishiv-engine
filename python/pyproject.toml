@@ -23,9 +23,9 @@ classifiers = [
 
 [project.optional-dependencies]
 # Arrow libraries are optional: `__arrow_c_stream__` needs none (Polars and DuckDB consume it
-# directly); pyarrow is needed by `toArrow`/`toPandas`, which import it lazily.
+# directly); pyarrow is needed by `toArrow`, which imports it lazily. A `pandas` extra comes
+# with `toPandas` (its numpy dependency has a compound license the dependency review rejects).
 pyarrow = ["pyarrow>=16"]
-pandas = ["pandas>=2", "pyarrow>=16"]
 
 [dependency-groups]
 dev = [

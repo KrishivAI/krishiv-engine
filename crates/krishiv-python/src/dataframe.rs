@@ -3,7 +3,9 @@
 //! `krishiv-session`'s builders. Transformations only build plans; `schema`
 //! analyzes (no execution).
 
-use krishiv_session::{DataFrame, GroupedData, JoinType};
+use std::sync::Arc;
+
+use krishiv_session::{DataFrame, GroupedData, JoinType, Session};
 use krishiv_types::DataType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -16,6 +18,53 @@ use crate::errors::{block_on, to_py};
 #[derive(Debug)]
 pub struct PyDataFrame {
     pub(crate) inner: DataFrame,
+    /// Session tables this DataFrame's plan reads that it owns: dropped when
+    /// the last DataFrame derived from them is.
+    pub(crate) owned: Vec<Arc<OwnedTable>>,
+}
+
+/// A temporary table dropped from its session when the last holder goes.
+#[derive(Debug)]
+pub(crate) struct OwnedTable {
+    session: Session,
+    name: String,
+}
+
+impl OwnedTable {
+    pub(crate) fn new(session: Session, name: String) -> Arc<Self> {
+        Arc::new(Self { session, name })
+    }
+}
+
+impl Drop for OwnedTable {
+    fn drop(&mut self) {
+        // Whether it still existed does not matter.
+        let _ = self.session.drop_temp_view(&self.name);
+    }
+}
+
+impl PyDataFrame {
+    /// A DataFrame that owns no tables.
+    pub(crate) fn new(inner: DataFrame) -> Self {
+        Self {
+            inner,
+            owned: Vec::new(),
+        }
+    }
+
+    /// `inner`, derived from this DataFrame: it keeps the tables alive.
+    fn derive_with(&self, inner: DataFrame, other: &Self) -> Self {
+        let mut owned = self.owned.clone();
+        owned.extend(other.owned.iter().cloned());
+        Self { inner, owned }
+    }
+
+    fn derive(&self, inner: DataFrame) -> Self {
+        Self {
+            inner,
+            owned: self.owned.clone(),
+        }
+    }
 }
 
 fn columns(cols: Vec<PyColumn>) -> impl Iterator<Item = krishiv_session::Column> {
@@ -41,33 +90,26 @@ fn join_type(how: &str) -> PyResult<JoinType> {
 #[pymethods]
 impl PyDataFrame {
     fn select(&self, cols: Vec<PyColumn>) -> Self {
-        Self {
-            inner: self.inner.select(columns(cols)),
-        }
+        self.derive(self.inner.select(columns(cols)))
     }
 
     fn filter(&self, condition: &PyColumn) -> Self {
-        Self {
-            inner: self.inner.filter(condition.inner.clone()),
-        }
+        self.derive(self.inner.filter(condition.inner.clone()))
     }
 
     fn with_column(&self, name: &str, value: &PyColumn) -> Self {
-        Self {
-            inner: self.inner.with_column(name, value.inner.clone()),
-        }
+        self.derive(self.inner.with_column(name, value.inner.clone()))
     }
 
     fn group_by(&self, cols: Vec<PyColumn>) -> PyGroupedData {
         PyGroupedData {
             inner: self.inner.group_by(columns(cols)),
+            owned: self.owned.clone(),
         }
     }
 
     fn agg(&self, cols: Vec<PyColumn>) -> Self {
-        Self {
-            inner: self.inner.agg(columns(cols)),
-        }
+        self.derive(self.inner.agg(columns(cols)))
     }
 
     /// Joins `other` on the condition `on`, or on the shared columns `using`;
@@ -84,9 +126,7 @@ impl PyDataFrame {
             if on.is_some() || using.is_some() {
                 return Err(PyValueError::new_err("a cross join takes no condition"));
             }
-            return Ok(Self {
-                inner: self.inner.cross_join(&other.inner),
-            });
+            return Ok(self.derive_with(self.inner.cross_join(&other.inner), other));
         }
         let how = join_type(how)?;
         let inner = match (on, using) {
@@ -101,25 +141,19 @@ impl PyDataFrame {
                 ));
             }
         };
-        Ok(Self { inner })
+        Ok(self.derive_with(inner, other))
     }
 
     fn order_by(&self, cols: Vec<PyColumn>) -> Self {
-        Self {
-            inner: self.inner.order_by(columns(cols)),
-        }
+        self.derive(self.inner.order_by(columns(cols)))
     }
 
     fn limit(&self, n: i32) -> Self {
-        Self {
-            inner: self.inner.limit(n),
-        }
+        self.derive(self.inner.limit(n))
     }
 
     fn alias(&self, alias: &str) -> Self {
-        Self {
-            inner: self.inner.alias(alias),
-        }
+        self.derive(self.inner.alias(alias))
     }
 
     /// The column `name` of this DataFrame (`df["name"]`).
@@ -149,6 +183,7 @@ impl PyDataFrame {
 #[derive(Debug)]
 pub struct PyGroupedData {
     inner: GroupedData,
+    owned: Vec<Arc<OwnedTable>>,
 }
 
 #[pymethods]
@@ -156,6 +191,7 @@ impl PyGroupedData {
     fn agg(&self, cols: Vec<PyColumn>) -> PyDataFrame {
         PyDataFrame {
             inner: self.inner.agg(columns(cols)),
+            owned: self.owned.clone(),
         }
     }
 }

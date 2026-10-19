@@ -105,9 +105,9 @@ def least(*cols: ColumnOrName) -> Column:
     return _call("least", *cols)
 
 
-def asc(col: str) -> Column:
-    return Column(_native.col(col)).asc()
+def asc(col: ColumnOrName) -> Column:
+    return Column(_named(col, "col")).asc()
 
 
-def desc(col: str) -> Column:
-    return Column(_native.col(col)).desc()
+def desc(col: ColumnOrName) -> Column:
+    return Column(_named(col, "col")).desc()
