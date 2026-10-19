@@ -258,6 +258,10 @@ fn run_wheel_sizes(dir: &Path, flags: &[&str]) -> Result<(), String> {
     }
     if let Some(out) = measure_only {
         let json = serde_json::to_string_pretty(&measured).map_err(|e| e.to_string())? + "\n";
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        }
         std::fs::write(&out, json).map_err(|e| format!("cannot write {}: {e}", out.display()))?;
         println!("measured {} wheels into {}", measured.len(), out.display());
         return Ok(());

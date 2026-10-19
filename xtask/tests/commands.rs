@@ -557,6 +557,11 @@ fn wheel_sizes_record_and_gate() {
     std::fs::remove_file(&new_target).unwrap();
     // Measure once, gate later (what the wheels workflow and the pr-policy
     // gate do): --measure-only gates nothing, --compare gates the file.
+    // The output directory need not exist (CI points it into a fresh temp dir).
+    let nested = dir.join("not/yet/there/sizes.json");
+    let out = run(&["--measure-only", nested.to_str().unwrap()], false);
+    assert!(out.status.success(), "{out:?}");
+    assert!(nested.is_file());
     let sizes = dir.join("sizes.json");
     let out = run(&["--measure-only", sizes.to_str().unwrap()], false);
     assert!(out.status.success(), "{out:?}");
