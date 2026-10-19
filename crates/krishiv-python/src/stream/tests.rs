@@ -13,6 +13,8 @@
 
 #[path = "ffi.rs"]
 mod ffi;
+#[path = "query.rs"]
+mod query;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -850,4 +852,58 @@ fn an_exported_stream_stays_done_after_an_error() {
     let mut consumer = ArrowArrayStreamReader::try_new(stream).unwrap();
     assert!(consumer.next().unwrap().is_err());
     assert!(consumer.next().is_none(), "no batch after an error");
+}
+
+/// A source that counts the batches it produces and records that it was dropped.
+struct Probe {
+    produced: Arc<AtomicUsize>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl futures::Stream for Probe {
+    type Item = Result<RecordBatch, krishiv_common::error::KrishivError>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.produced.fetch_add(1, Ordering::SeqCst);
+        std::task::Poll::Ready(Some(Ok(batch())))
+    }
+}
+
+impl Drop for Probe {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Releasing the exported C stream drops the engine stream (which cancels
+/// the query) and nothing polls it afterwards.
+#[test]
+fn releasing_the_exported_query_stream_drops_the_engine_stream() {
+    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+    use futures::StreamExt as _;
+
+    let produced = Arc::new(AtomicUsize::new(0));
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut stream: krishiv_session::RecordBatchStream = Box::pin(Probe {
+        produced: Arc::clone(&produced),
+        dropped: Arc::clone(&dropped),
+    });
+    // As `DataFrame.execute` does: one batch is read to learn the schema.
+    let first = futures::executor::block_on(stream.next()).unwrap().unwrap();
+    let reader = query::QueryReader::new(first.schema(), Some(first), stream);
+    let exported = ffi::export_stream(Box::new(reader), None);
+    let mut consumer = ArrowArrayStreamReader::try_new(exported).unwrap();
+    consumer.next().unwrap().unwrap(); // the first batch
+    consumer.next().unwrap().unwrap(); // one pulled from the engine
+    assert_eq!(produced.load(Ordering::SeqCst), 2);
+    assert!(!dropped.load(Ordering::SeqCst));
+    drop(consumer);
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "the engine stream was not dropped"
+    );
+    assert_eq!(produced.load(Ordering::SeqCst), 2, "polled after release");
 }

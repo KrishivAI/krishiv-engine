@@ -5,54 +5,16 @@
 
 use std::sync::Arc;
 
-use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow_array::RecordBatch;
 use futures::StreamExt as _;
-use krishiv_session::{DataFrame, GroupedData, JoinType, RecordBatchStream, Session};
+use krishiv_session::{DataFrame, GroupedData, JoinType, Session};
 use krishiv_types::DataType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::column::PyColumn;
 use crate::errors::{block_on, to_py};
-use crate::stream::ArrowStream;
-
-/// The result of a running query as an Arrow reader. It never touches Python,
-/// so a consumer may call it with the GIL held or from a foreign thread.
-/// Dropping it drops the engine stream, which cancels the query without
-/// waiting for it.
-struct QueryReader {
-    schema: SchemaRef,
-    /// The batch read to learn the schema, handed out first.
-    first: Option<RecordBatch>,
-    stream: RecordBatchStream,
-}
-
-impl Iterator for QueryReader {
-    type Item = Result<RecordBatch, ArrowError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let batch = match self.first.take() {
-            Some(batch) => batch,
-            None => match futures::executor::block_on(self.stream.next())? {
-                Ok(batch) => batch,
-                Err(e) => return Some(Err(ArrowError::ExternalError(Box::new(e)))),
-            },
-        };
-        // The schema was fixed by the first batch: a batch that differs is an
-        // engine bug, reported instead of exported under the wrong schema.
-        Some(RecordBatch::try_new(
-            SchemaRef::clone(&self.schema),
-            batch.columns().to_vec(),
-        ))
-    }
-}
-
-impl RecordBatchReader for QueryReader {
-    fn schema(&self) -> SchemaRef {
-        SchemaRef::clone(&self.schema)
-    }
-}
+use crate::stream::{ArrowStream, QueryReader};
 
 /// A lazily evaluated query.
 #[pyclass(name = "DataFrame", module = "krishiv._native", frozen)]
@@ -218,11 +180,9 @@ impl PyDataFrame {
             let schema = first.as_ref().map_or(analyzed, RecordBatch::schema);
             Ok((schema, first, stream))
         })?;
-        Ok(ArrowStream::new(Box::new(QueryReader {
-            schema,
-            first,
-            stream,
-        })))
+        Ok(ArrowStream::new(Box::new(QueryReader::new(
+            schema, first, stream,
+        ))))
     }
 
     /// The number of result rows (executes the query, the GIL released).

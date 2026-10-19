@@ -9,6 +9,9 @@
 //! no pyo3 dependency so that it can be tested under Miri.
 
 mod ffi;
+mod query;
+
+pub(crate) use self::query::QueryReader;
 
 use std::ffi::CStr;
 use std::sync::Mutex;

@@ -392,7 +392,9 @@ def test_string_expressions_are_listed_as_not_implemented(df: DataFrame) -> None
 
 def test_release_does_not_wait_for_the_query(spark: SparkSession, big: Any) -> None:
     """Releasing a stream of a 10^10-row cross join returns at once (cancellation does not join the engine), and
-    the session keeps working."""
+    the session keeps working. That the release drops the engine stream, with no poll afterwards, is checked
+    deterministically in ``stream_ffi`` (``releasing_the_exported_query_stream_drops_the_engine_stream``); the
+    executor's cancel-on-drop in ``krishiv-exec``'s ``executor`` tests."""
     import time
 
     left = spark.createDataFrame(big.select(["id"]))
