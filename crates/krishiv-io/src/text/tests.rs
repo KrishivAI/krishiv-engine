@@ -162,3 +162,17 @@ fn compressed_files_and_codecs_are_refused() {
     }
     assert!(super::check_plain("a.csv").is_ok());
 }
+
+#[test]
+fn a_separator_straddling_a_split_start_loses_no_line() {
+    let text = b"a||bb||ccc||d|e||f";
+    let sep = || LineSep::Custom(b"||".to_vec());
+    let whole = lines_of(text, ByteRange::new(0, 18), sep());
+    assert_eq!(whole.len(), 5);
+    for cut in 1..18 {
+        let mut got = lines_of(text, ByteRange::new(0, cut), sep());
+        got.extend(lines_of(text, ByteRange::new(cut, 18), sep()));
+        got.sort_by_key(|l| l.1);
+        assert_eq!(got, whole, "cut {cut}");
+    }
+}

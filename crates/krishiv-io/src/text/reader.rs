@@ -87,7 +87,8 @@ pub(crate) struct LineReader {
     feed: Feed,
     end: u64,
     sep: LineSep,
-    skipping: bool,
+    /// Lines starting at or before this offset belong to the previous split.
+    skip_to: Option<u64>,
     finished: bool,
 }
 
@@ -120,11 +121,22 @@ impl LineReader {
         } else {
             (0, u64::MAX, split.start != 0)
         };
+        // A separator of several bytes may straddle the split's start: begin
+        // early enough to see all of it.
+        let overlap = match &sep {
+            LineSep::Custom(s) => s.len().saturating_sub(1) as u64,
+            LineSep::Default => 0,
+        };
+        let begin = if start == 0 {
+            0
+        } else {
+            start.saturating_sub(overlap)
+        };
         Self {
-            feed: Feed::new(size, start),
+            feed: Feed::new(size, begin),
             end,
             sep,
-            skipping: start != 0,
+            skip_to: (start != 0).then_some(start),
             finished,
         }
     }
@@ -136,7 +148,8 @@ impl LineReader {
                 return Ok(ReadChunk::End);
             }
             let line_start = self.feed.buf_pos + self.feed.cursor as u64;
-            if !self.skipping && line_start > self.end {
+            let skipping = self.skip_to.is_some_and(|s| line_start <= s);
+            if !skipping && line_start > self.end {
                 self.finished = true;
                 return Ok(ReadChunk::End);
             }
@@ -157,8 +170,7 @@ impl LineReader {
             };
             let line = self.feed.rest()[..len].to_vec();
             self.feed.cursor += len + term;
-            if self.skipping {
-                self.skipping = false;
+            if skipping {
                 continue;
             }
             return Ok(ReadChunk::Line(line, line_start));

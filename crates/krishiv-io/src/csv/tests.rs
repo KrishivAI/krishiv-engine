@@ -927,7 +927,6 @@ fn bad_option_values_are_typed_errors() {
     let unsupported = [
         serde_json::json!({"encoding": "UTF-16"}),
         serde_json::json!({"locale": "de-DE"}),
-        serde_json::json!({"timeZone": "America/New_York"}),
     ];
     for (opts, class) in invalid
         .iter()
@@ -1125,15 +1124,13 @@ fn every_arrow_representation_reads_and_nested_types_are_refused() {
         b.column(8).as_primitive::<Float32Type>().value(0),
         f32::INFINITY
     );
-    assert_eq!(b.column(9).as_primitive::<Float64Type>().value(0), 1000.5);
+    assert!(b.column(9).is_null(0));
     // `300` does not fit a byte: the record is malformed, its value NULL.
     assert!(b.column(6).is_null(1) && b.column(7).is_null(1));
-    // A `double` falls back to a number format: the longest numeric prefix.
-    let f32s = b.column(8).as_primitive::<Float32Type>();
-    // (`1,5` is 15: the comma is a grouping separator.)
-    assert_eq!((f32s.value(2), f32s.value(3)), (-5.0, 15.0));
-    assert_eq!(b.column(9).as_primitive::<Float64Type>().value(2), 1000.0);
-    assert_eq!(b.column(9).as_primitive::<Float64Type>().value(3), 1.0);
+    // A number with trailing text is no number (Spark 4.2 has no lenient
+    // number-format fallback: `5x`, `1,5` and `1e+3z` read as NULL).
+    assert!(b.column(8).is_null(2) && b.column(8).is_null(3));
+    assert!(b.column(9).is_null(2) && b.column(9).is_null(3));
     // Nested types have no CSV representation.
     let nested = Arc::new(Schema::new(vec![Field::new(
         "n",
@@ -1151,4 +1148,66 @@ fn every_arrow_representation_reads_and_nested_types_are_refused() {
         e.error_class(),
         krishiv_common::error::ErrorClass::UnsupportedDataTypeForDatasource
     );
+}
+
+#[test]
+fn a_region_time_zone_fails_only_timestamp_conversions() {
+    let o = options(&serde_json::json!({"timeZone": "America/New_York"}));
+    let ints = ScanRequest::all(int_schema());
+    assert_eq!(
+        rows_of(&read(b"1,x\n", &o, &ints).expect("no timestamps")).len(),
+        1
+    );
+    let ts = ddl("a int, t timestamp");
+    let e = read(b"1,2020-01-01 10:00:00\n", &o, &ScanRequest::all(ts)).expect_err("zone");
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+    );
+    let e = encode(&types_batch(), &o).expect_err("zone");
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+    );
+    assert!(encode(&strings_batch(), &o).is_ok());
+}
+
+#[test]
+fn failfast_and_tokenizer_errors_carry_spark_classes() {
+    use krishiv_common::error::ErrorClass::{
+        FailedReadFileNoHint, MalformedCsvRecord, MalformedRecordInParsingWithoutSuggestion,
+    };
+    let req = ScanRequest::all(int_schema());
+    // A short record under FAILFAST: the read fails, caused by the parse
+    // error, caused by the malformed record.
+    let o = options(&serde_json::json!({"mode": "FAILFAST"}));
+    let e = read(b"1,x\n2\n", &o, &req).expect_err("short record");
+    assert_eq!(
+        classes_of(&e),
+        [
+            FailedReadFileNoHint,
+            MalformedRecordInParsingWithoutSuggestion,
+            MalformedCsvRecord
+        ]
+    );
+    // A value that is no number has no malformed-record cause.
+    let e = read(b"x,y\n", &o, &req).expect_err("bad value");
+    assert_eq!(
+        classes_of(&e),
+        [
+            FailedReadFileNoHint,
+            MalformedRecordInParsingWithoutSuggestion
+        ]
+    );
+    // Too many columns fails in every mode.
+    let o = options(&serde_json::json!({"maxColumns": "1"}));
+    let e = read(b"1,x\n", &o, &req).expect_err("columns");
+    assert_eq!(classes_of(&e), [FailedReadFileNoHint, MalformedCsvRecord]);
+}
+
+fn classes_of(e: &KrishivError) -> Vec<krishiv_common::error::ErrorClass> {
+    std::iter::once(e)
+        .chain(e.causes())
+        .map(KrishivError::error_class)
+        .collect()
 }

@@ -22,7 +22,9 @@ const NTZ_PATTERN: &str = "yyyy-MM-dd'T'HH:mm:ss[.SSS]";
 #[derive(Debug)]
 pub(crate) struct Datetimes {
     zone_id: String,
-    rules: FixedOffset,
+    /// The session zone; an unsupported one fails only the conversions
+    /// that need it, so a read without timestamps still works.
+    rules: Result<FixedOffset, KrishivError>,
     date: Option<DateTimePattern>,
     timestamp: Option<DateTimePattern>,
     ntz: Option<DateTimePattern>,
@@ -62,7 +64,7 @@ impl Datetimes {
     /// An invalid pattern or time zone.
     pub(crate) fn new(o: &FormatOptions, purpose: Purpose) -> Result<Self, KrishivError> {
         let zone_id = o.str("timeZone").unwrap_or("UTC").to_owned();
-        let rules = zone_rules(&zone_id)?;
+        let rules = zone_rules(&zone_id);
         let pattern = |opt: &str, default: &str| -> Result<Option<DateTimePattern>, KrishivError> {
             match (o.str(opt), purpose) {
                 (Some(p), _) => DateTimePattern::new(p, purpose).map(Some),
@@ -82,7 +84,7 @@ impl Datetimes {
         Ok(Self {
             fallback_date: explicit.unwrap_or(date.is_none()),
             fallback_timestamp: explicit.unwrap_or(timestamp.is_none() && ntz.is_none()),
-            today: today_in(now, &rules),
+            today: rules.as_ref().map_or(0, |r| today_in(now, r)),
             zone_id,
             rules,
             date,
@@ -91,11 +93,15 @@ impl Datetimes {
         })
     }
 
-    fn zone(&self) -> Zone<'_> {
-        Zone {
+    fn rules(&self) -> Result<&FixedOffset, KrishivError> {
+        self.rules.as_ref().map_err(Clone::clone)
+    }
+
+    fn zone(&self) -> Result<Zone<'_>, KrishivError> {
+        Ok(Zone {
             id: &self.zone_id,
-            rules: &self.rules,
-        }
+            rules: self.rules()?,
+        })
     }
 
     /// A `DATE` from text; `Ok(None)` when it does not parse.
@@ -120,9 +126,10 @@ impl Datetimes {
     /// # Errors
     /// A region zone id in the text.
     pub(crate) fn parse_timestamp(&self, s: &str) -> Result<Option<i64>, KrishivError> {
-        let default = || spark_string_to_timestamp(&clean(s), &self.rules, self.today);
+        let rules = self.rules()?;
+        let default = || spark_string_to_timestamp(&clean(s), rules, self.today);
         let parsed = match &self.timestamp {
-            Some(p) => p.parse_timestamp(s, &self.rules)?,
+            Some(p) => p.parse_timestamp(s, rules)?,
             None => default()?,
         };
         match parsed {
@@ -165,7 +172,7 @@ impl Datetimes {
     /// A value the pattern cannot show.
     pub(crate) fn format_timestamp(&self, micros: i64) -> Result<String, KrishivError> {
         match &self.timestamp {
-            Some(p) => p.format_timestamp(micros, self.zone()),
+            Some(p) => p.format_timestamp(micros, self.zone()?),
             None => Err(crate::error::internal("a timestamp pattern for writing")),
         }
     }

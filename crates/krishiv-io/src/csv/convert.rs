@@ -131,66 +131,6 @@ impl From<KrishivError> for Conv {
     }
 }
 
-/// Java's `NumberFormat.getInstance(US).parse(s)`: the longest numeric
-/// prefix (grouping separators allowed), the fallback for `float` and
-/// `double` values `toDouble` rejects.
-fn number_format_prefix(s: &str) -> Option<f64> {
-    let b = s.as_bytes();
-    let mut i = 0;
-    let mut text = String::new();
-    if b.first() == Some(&b'-') {
-        text.push('-');
-        i = 1;
-    }
-    let digits_from = i;
-    while i < b.len() && (b[i].is_ascii_digit() || b[i] == b',') {
-        if b[i] != b',' {
-            text.push(char::from(b[i]));
-        }
-        i += 1;
-    }
-    let mut has_digits = i > digits_from;
-    if b.get(i) == Some(&b'.') {
-        text.push('.');
-        i += 1;
-        let frac_from = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            text.push(char::from(b[i]));
-            i += 1;
-        }
-        has_digits |= i > frac_from;
-    }
-    if !has_digits {
-        return None;
-    }
-    if matches!(b.get(i), Some(b'E' | b'e')) {
-        let mut j = i + 1;
-        let mut exp = String::from("e");
-        if matches!(b.get(j), Some(b'-' | b'+')) {
-            exp.push(char::from(b[j]));
-            j += 1;
-        }
-        let from = j;
-        while j < b.len() && b[j].is_ascii_digit() {
-            exp.push(char::from(b[j]));
-            j += 1;
-        }
-        if j > from {
-            text.push_str(&exp);
-        }
-    }
-    text.parse().ok()
-}
-
-/// `Number.floatValue()` of a parsed double.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "Java narrows the parsed double to a float"
-)]
-fn narrow(v: f64) -> f32 {
-    v as f32
-}
-
 /// Converts the tokens of records.
 pub(crate) struct Converter<'a> {
     pub o: &'a CsvOptions,
@@ -231,10 +171,7 @@ impl Converter<'_> {
             } else if s == self.o.pos_inf {
                 f32::INFINITY
             } else {
-                match java_parse_float(s) {
-                    Some(v) => v,
-                    None => narrow(number_format_prefix(s).ok_or_else(bad)?),
-                }
+                java_parse_float(s).ok_or_else(bad)?
             }),
             Kind::F64 => Val::F64(if s == self.o.nan {
                 f64::NAN
@@ -243,10 +180,7 @@ impl Converter<'_> {
             } else if s == self.o.pos_inf {
                 f64::INFINITY
             } else {
-                match java_parse_double(s) {
-                    Some(v) => v,
-                    None => number_format_prefix(s).ok_or_else(bad)?,
-                }
+                java_parse_double(s).ok_or_else(bad)?
             }),
             Kind::Decimal(p, sc) => {
                 let sc = u8::try_from(*sc).map_err(|_| bad())?;

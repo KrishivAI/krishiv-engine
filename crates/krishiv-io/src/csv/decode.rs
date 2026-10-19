@@ -66,8 +66,6 @@ pub(crate) struct CsvDecoder {
     /// Reads the lines before a split that starts after byte 0, to count
     /// the rows `_metadata.row_index` continues from (only then).
     prefix: Option<LineReader>,
-    /// The rows counted in the prefix are still in the builders.
-    discard_pending: bool,
     /// Rows accepted so far in the file, prefix included.
     row_no: i64,
     rows: usize,
@@ -180,7 +178,6 @@ impl CsvDecoder {
             tok: Tokenizer::new(opts.syntax.clone()),
             header_pending: opts.header && (split.start == 0 || prefix.is_some()),
             prefix,
-            discard_pending: false,
             row_no: 0,
             done: units.units.is_empty(),
             source,
@@ -203,10 +200,6 @@ impl CsvDecoder {
 
     fn next(&mut self) -> FormatResult<Next> {
         loop {
-            if std::mem::take(&mut self.discard_pending) {
-                let counted = self.batch()?;
-                self.metrics.rows -= counted.num_rows() as u64;
-            }
             let prefix = &mut self.prefix;
             match &mut self.source {
                 Source::Lines(main) => match prefix.as_mut().unwrap_or(main).next_line()? {
@@ -215,7 +208,6 @@ impl CsvDecoder {
                         // The rows before the split are counted.
                         *prefix = None;
                         self.header_pending = false;
-                        self.discard_pending = true;
                         continue;
                     }
                     ReadChunk::End => return Ok(Next::End),
@@ -337,6 +329,10 @@ impl CsvDecoder {
             }
         }
         self.row_no += 1;
+        if self.prefix.is_some() {
+            // Rows before the split are only counted.
+            return Ok(());
+        }
         for (col, v) in self.columns.iter_mut().zip(&vals) {
             if let Val::Text(s) = v {
                 self.held_text += s.len();
@@ -372,12 +368,7 @@ impl Decoder for CsvDecoder {
                 Next::Record(raw, tokens) => {
                     self.add(&raw, &tokens)?;
                     if self.rows >= BATCH_ROWS {
-                        let batch = self.batch()?;
-                        if self.prefix.is_none() {
-                            return Ok(Step::Batch(batch));
-                        }
-                        // Rows before the split are only counted.
-                        self.metrics.rows -= batch.num_rows() as u64;
+                        return Ok(Step::Batch(self.batch()?));
                     }
                 }
                 Next::End => {
