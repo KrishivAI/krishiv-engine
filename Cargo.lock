@@ -1402,10 +1402,13 @@ name = "krishiv-cli"
 version = "0.1.0-dev"
 dependencies = [
  "clap",
+ "futures",
  "krishiv",
  "krishiv-server",
+ "krishiv-sql",
  "libmimalloc-sys",
  "mimalloc",
+ "tempfile",
 ]
 
 [[package]]
