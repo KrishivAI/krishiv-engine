@@ -5,8 +5,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -28,7 +28,7 @@ use krishiv_exec::{
 };
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
-use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_plan::analyzer::{
     AllowAll, AnalysisContext, AnalyzedPlan, Analyzer as _, BuiltinFunctions, DefaultAnalyzer,
     FunctionRegistry, Principal, ResolutionConf, SparkProfile, TableColumn,
@@ -95,6 +95,9 @@ pub(crate) struct SessionState {
     executor: Arc<dyn Executor>,
     runner: QueryRunner,
     memory: Arc<dyn MemoryPool>,
+    /// The spill directory, opened by the first query that plans for
+    /// execution (`krishiv.spill.*` are build-time keys).
+    spill: Mutex<Option<SpillManager>>,
     io: Arc<IoScheduler>,
     formats: Vec<Arc<dyn FileFormat>>,
     cwd: String,
@@ -237,6 +240,7 @@ impl SessionBuilder {
                 runner: QueryRunner::new(Arc::clone(&executor)),
                 executor,
                 memory,
+                spill: Mutex::new(None),
                 io,
                 formats: vec![Arc::new(ParquetFormat)],
                 cwd,
@@ -560,6 +564,49 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        self.physical_with(analyzed, env, true).await
+    }
+
+    /// [`Self::physical`] for a plan that is only inspected (EXPLAIN,
+    /// warnings): it gets no spill scope, so no directory is made.
+    pub(crate) async fn physical_for_inspection(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        self.physical_with(analyzed, env, false).await
+    }
+
+    /// The spill scope of one query: its own directory under the session's
+    /// spill directory, removed when the query's plan and streams are
+    /// dropped (cancellation included).
+    fn spill_scope(&self, config: &Config) -> Result<SpillScope, KrishivError> {
+        let mut slot = self
+            .state
+            .spill
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            let manager = SpillManager::open(&SpillConfig::from_config(config))
+                .map_err(|e| internal(format!("cannot set up the spill directory: {e}")))?;
+            *slot = Some(manager);
+        }
+        slot.as_ref().map_or_else(
+            || Err(internal("the spill directory is not open".to_owned())),
+            |m| {
+                m.scope().map_err(|e| {
+                    internal(format!("cannot create the query's spill directory: {e}"))
+                })
+            },
+        )
+    }
+
+    async fn physical_with(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+        spill: bool,
+    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
         env.catalog.open_files(analyzed.plan.root()).await?;
         let tables =
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>;
@@ -567,8 +614,11 @@ impl Session {
             &analyzed.plan,
             &ProviderStatistics(Arc::clone(&tables)),
         )?;
-        let cx = PlanningContext::new(tables, Arc::clone(&env.config))
+        let mut cx = PlanningContext::new(tables, Arc::clone(&env.config))
             .with_user(self.state.principal.name.as_str());
+        if spill {
+            cx = cx.with_spill(self.spill_scope(&env.config)?);
+        }
         let physical = self.state.planner.plan(&optimized, &cx)?;
         // Spark logs what analysis and planning ignore (hints) as
         // warnings; `DataFrame::warnings` returns them too.
