@@ -1,0 +1,14 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: optimized.root().to_string()
+---
+Aggregate [], [count(1) AS count(1)#12, sum(ws_quantity#2) AS sum(ws_quantity)#13, sum(wr_fee#11) AS sum(wr_fee)#14]
++- Project [ws_quantity#2, wr_fee#11]
+   +- Join Inner, (((ws_item_sk#0 == wr_item_sk#8) and (ws_order_number#1 == wr_order_number#9)) and ((((ca_country#7 == 'United States') and (ca_state#6 IN ('IN', 'OH', 'NJ'))) and ((ws_net_profit#4 >= 100.00) and (ws_net_profit#4 <= 200.00))) or (((ca_country#7 == 'United States') and (ca_state#6 IN ('WI', 'CT', 'KY'))) and ((ws_net_profit#4 >= 150.00) and (ws_net_profit#4 <= 300.00)))))
+      :- Filter (((ws_net_profit#4 >= 100.00) and (ws_net_profit#4 <= 200.00)) or ((ws_net_profit#4 >= 150.00) and (ws_net_profit#4 <= 300.00)))
+      :  +- Scan spark_catalog.default.web_sales [ws_item_sk#0, ws_order_number#1, ws_quantity#2, ws_net_profit#4]
+      +- Project [wr_item_sk#8, wr_order_number#9, wr_fee#11, ca_state#6, ca_country#7]
+         +- Join Inner, (ca_address_sk#5 == wr_refunded_addr_sk#10)
+            :- Scan spark_catalog.default.web_returns [wr_item_sk#8, wr_order_number#9, wr_refunded_addr_sk#10, wr_fee#11]
+            +- Filter (((ca_country#7 == 'United States') and (ca_state#6 IN ('IN', 'OH', 'NJ'))) or ((ca_country#7 == 'United States') and (ca_state#6 IN ('WI', 'CT', 'KY'))))
+               +- Scan spark_catalog.default.customer_address [ca_address_sk#5, ca_state#6, ca_country#7]

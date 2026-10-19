@@ -19,9 +19,8 @@ use krishiv_plan::{
 
 use crate::dag::with_input;
 use crate::expr::{
-    Attrs, and_all, builtin, call, conjuncts, disjuncts, has_aggregate, has_outer_reference,
-    has_subquery, is_deterministic, lit, or_all, references, same, strip_alias, substitute,
-    unshift,
+    Attrs, and_all, builtin, call, conjuncts, has_aggregate, has_outer_reference, has_subquery,
+    implied, is_deterministic, lit, references, same, strip_alias, substitute, unshift,
 };
 use crate::fold::fold;
 use krishiv_types::DataType;
@@ -98,6 +97,37 @@ pub(crate) fn push_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     }
     let (left, right) = (into(left, l), into(right, r));
     join(&node, left, right, *kind, stay)
+}
+
+/// The rule at an inner or cross `Join`, run once before the rewrite batch:
+/// filters each input with what the condition's disjunctions imply on it
+/// alone (`(a1 and b1) or (a2 and b2)` adds `a1 or a2` below the join, as
+/// Spark's `PushExtraPredicateThroughJoin` does). A disjunction moved from a
+/// `WHERE` into a join gets them as it moves (`push_join`); one written in
+/// `ON` gets them here. Join ordering divides them out of the disjunction's
+/// selectivity, so both kinds must have them. Once only: the disjunction
+/// stays in the condition, so a fixed point would add them again.
+pub(crate) fn imply_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    let PlanNode::Join {
+        left,
+        right,
+        kind: kind @ (JoinKind::Inner | JoinKind::Cross),
+        condition: JoinCondition::On(cond),
+    } = &node.node
+    else {
+        return node;
+    };
+    let (lo, ro) = (ids(left), ids(right));
+    let (mut l, mut r) = (Vec::new(), Vec::new());
+    for c in conjuncts(cond).iter().filter(|c| is_deterministic(c)) {
+        l.extend(implied(c, &lo));
+        r.extend(implied(c, &ro));
+    }
+    if l.is_empty() && r.is_empty() {
+        return node;
+    }
+    let (left, right) = (into(left, l), into(right, r));
+    join(&node, left, right, *kind, conjuncts(cond))
 }
 
 /// Pushes `preds` (over `plan`'s output) into `plan` as far as legal.
@@ -230,8 +260,8 @@ fn push_join(
                     // A join condition holds no subquery: it stays a filter.
                     stay.push(p);
                 } else {
-                    l.extend(extract(&p, &lo));
-                    r.extend(extract(&p, &ro));
+                    l.extend(implied(&p, &lo));
+                    r.extend(implied(&p, &ro));
                     on.push(p);
                 }
             }
@@ -325,25 +355,6 @@ fn rejects_nulls(pred: &Arc<Expr>, side: &LogicalPlan, ids: &Attrs) -> bool {
         fold(&substitute(pred, &nulls)).node,
         ExprNode::Literal(Literal::Null(_) | Literal::Boolean(false))
     )
-}
-
-/// From a predicate over both sides of an inner join, a predicate over
-/// `side` alone that it implies: for `(a1 and b1) or (a2 and b2)`, `a1 or
-/// a2` when each disjunct has a conjunct over `side` alone.
-fn extract(pred: &Arc<Expr>, side: &Attrs) -> Option<Arc<Expr>> {
-    let parts = disjuncts(pred);
-    if parts.len() < 2 || has_subquery(pred) {
-        return None;
-    }
-    let mut out = Vec::new();
-    for d in &parts {
-        let mine: Vec<_> = conjuncts(d)
-            .into_iter()
-            .filter(|c| references(c).is_subset(side))
-            .collect();
-        out.push(and_all(mine)?);
-    }
-    or_all(out)
 }
 
 /// The output ids of a resolved relation (none for an unresolved one, so
