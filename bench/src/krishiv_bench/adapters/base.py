@@ -8,6 +8,7 @@ normalises and checksums them). Adapters report engine-side resource use via
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +37,17 @@ class Measure:
     spill_bytes: int | None = None
 
 
+def table_path(dataset: Dataset, table: str) -> str:
+    """Parquet source of ``table``: ``<root>/<table>.parquet``, or a glob over a directory of part files."""
+    f = dataset.root / f"{table}.parquet"
+    if f.is_file():
+        return str(f)
+    for d in (dataset.root / table, f):
+        if d.is_dir():
+            return str(d / "*.parquet")
+    raise FileNotFoundError(f"no Parquet source for table {table!r} under {dataset.root}")
+
+
 class Engine(ABC):
     name: str = "?"
 
@@ -49,6 +61,16 @@ class Engine(ABC):
     @abstractmethod
     def run(self, query: Query) -> list[tuple]:
         """Execute to completion, return all rows."""
+
+    def timed_run(self, query: Query) -> tuple[int, float]:
+        """Execute to completion; return ``(row_count, seconds)`` measured around the execution only.
+
+        Default: time ``run``. Adapters whose ``run`` converts rows in Python override this so that conversion is
+        not part of the measurement.
+        """
+        t0 = time.perf_counter()
+        rows = self.run(query)
+        return len(rows), time.perf_counter() - t0
 
     def teardown(self) -> None:  # noqa: B027  # optional hook, default no-op  # pragma: no cover
         pass
