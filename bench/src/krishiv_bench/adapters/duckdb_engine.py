@@ -37,7 +37,7 @@ class DuckDBEngine(Engine):
         if self.memory_limit:
             con.execute(f"SET memory_limit='{self.memory_limit}'")
         for t in dataset.tables:
-            con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{dataset.root / (t + '.parquet')}')")
+            con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{table_source(dataset.root, t)}')")
 
     def run(self, query: Query) -> list[tuple]:
         assert self.con is not None, "setup() not called"
@@ -58,3 +58,11 @@ class DuckDBEngine(Engine):
     def teardown(self) -> None:
         if self.con:
             self.con.close()
+
+
+def table_source(root, table: str) -> str:
+    """The `read_parquet` argument for `table`: its file, or a glob over its directory of parts."""
+    for candidate in (root / f"{table}.parquet", root / table):
+        if candidate.is_dir():
+            return str(candidate / "*.parquet")
+    return str(root / f"{table}.parquet")

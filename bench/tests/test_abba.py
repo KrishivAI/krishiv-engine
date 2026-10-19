@@ -279,3 +279,24 @@ def test_zero_timeout_disables_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(abba, "_one_query", fake_one)
     abba.run_abba(1, timeout_s=0)
     assert seen == {"krishiv": None, "arg": 0}
+
+
+def test_partitioned_dataset_registers_one_table(tmp_path):
+    import duckdb
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from krishiv_bench.abba import discover_tables
+    from krishiv_bench.adapters.duckdb_engine import table_source
+
+    parts = tmp_path / "hits"
+    parts.mkdir()
+    for i in range(3):
+        pq.write_table(pa.table({"x": [i, i]}), parts / f"hits_{i}.parquet")
+    pq.write_table(pa.table({"y": [1]}), tmp_path / "other.parquet")
+
+    assert discover_tables(tmp_path) == ["hits", "other"]
+    assert table_source(tmp_path, "hits").endswith("hits/*.parquet")
+    assert table_source(tmp_path, "other").endswith("other.parquet")
+    rows = duckdb.sql(f"select count(*) from read_parquet('{table_source(tmp_path, 'hits')}')").fetchone()
+    assert rows == (6,)
