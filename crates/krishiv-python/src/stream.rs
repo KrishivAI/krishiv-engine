@@ -81,6 +81,21 @@ impl ArrowStream {
             reader: Mutex::new(Some(reader)),
         }
     }
+
+    /// Reads all the batches (once: the stream is then consumed); the
+    /// import validated them.
+    pub(crate) fn read_all(&self) -> PyResult<(SchemaRef, Vec<arrow_array::RecordBatch>)> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| PyValueError::new_err("the Arrow stream is poisoned"))?
+            .take()
+            .ok_or_else(|| PyValueError::new_err("the Arrow stream was already consumed"))?;
+        let batches = reader
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok((SchemaRef::clone(&self.schema), batches))
+    }
 }
 
 #[pymethods]
@@ -90,7 +105,7 @@ impl ArrowStream {
     /// single batch, `__arrow_c_array__`. The data is not copied; it is
     /// validated in full as it is read.
     #[staticmethod]
-    fn from_arrow(data: &Bound<'_, PyAny>) -> PyResult<Self> {
+    pub(crate) fn from_arrow(data: &Bound<'_, PyAny>) -> PyResult<Self> {
         if data.hasattr("__arrow_c_stream__")? {
             let capsule = data.call_method0("__arrow_c_stream__")?;
             // The move out of the capsule runs in a critical section on it:

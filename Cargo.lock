@@ -1592,7 +1592,10 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
+ "futures",
  "krishiv-common",
+ "krishiv-session",
+ "krishiv-types",
  "mimalloc",
  "pyo3",
 ]

@@ -8,6 +8,23 @@ the `krishiv-python` crate (PyO3 0.30) with maturin.
 CPython 3.11 and newer. The default wheel is one `abi3` wheel (crate feature `abi3-py311`) covering 3.11+; the
 free-threaded `cp314t` wheel is built separately. CI builds both and imports them (`wheels` job).
 
+## Use
+
+```python
+import krishiv
+from krishiv.sql import functions as F
+
+spark = krishiv.session()  # SparkSession.builder.getOrCreate()
+df = spark.sql("SELECT 1 AS a")
+df = df.withColumn("b", F.col("a") + 1)
+print(df.columns, df.schema)  # analysis only, nothing runs
+```
+
+`krishiv.sql` mirrors `pyspark.sql` (signatures and import paths); errors are in `krishiv.errors`, shaped like
+`pyspark.errors`. pyarrow is optional: install `krishiv[pyarrow]` (or `krishiv[pandas]`). Actions
+(`collect`, `show`, `toArrow`, `toPandas`) and SQL expression strings (`selectExpr`, `where("...")`, `expr`) are not
+available yet.
+
 ## Develop
 
 ```sh

@@ -21,6 +21,12 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
 ]
 
+[project.optional-dependencies]
+# Arrow libraries are optional: `__arrow_c_stream__` needs none (Polars and DuckDB consume it
+# directly); pyarrow is needed by `toArrow`/`toPandas`, which import it lazily.
+pyarrow = ["pyarrow>=16"]
+pandas = ["pandas>=2", "pyarrow>=16"]
+
 [dependency-groups]
 dev = [
     # Arrow PyCapsule consumers/producers the bridge tests run against.
