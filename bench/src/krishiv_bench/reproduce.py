@@ -177,7 +177,7 @@ def theirs_query(
         times: list[float] = []
         for _ in range(runs):
             n, secs = eng.timed_run(q)
-            if nrows is not None and n != nrows:
+            if n != nrows:
                 raise EngineError(f"timed run returned {n} rows, expected {nrows}")
             times.append(secs)
         return {"status": "ok", "runs_s": times, "first_s": times[0], "best_s": min(times)}
@@ -286,7 +286,7 @@ def _run_theirs(record, queries, ds, names, threads, memory_gb, runs, timeout_s,
         for n in names:
             if ent.get("engines", {}).get(n, {}).get("status") != "ok":
                 continue
-            t[n] = theirs_query(n, qm[n], ds, threads, memory_gb, runs, timeout_s, ent.get("rows"))
+            t[n] = theirs_query(n, qm[n], ds, threads, memory_gb, runs, timeout_s, ent["rows"])
             ent["engines"][n]["theirs"] = t[n]
         ent["theirs_load"] = loadavg()
         print("  theirs " + qid + ": " + " ".join(f"{n}={_best(r)}" for n, r in t.items()), flush=True)

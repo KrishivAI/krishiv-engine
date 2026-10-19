@@ -188,13 +188,13 @@ def test_ours_query_interleaves_and_summarizes(tiny):
 
 
 def test_theirs_query_best_of_runs_and_timeout(tiny):
-    ok = reproduce.theirs_query("duckdb", q("SELECT count(*) FROM t"), tiny, 2, 1, 3, 60)
+    ok = reproduce.theirs_query("duckdb", q("SELECT count(*) FROM t"), tiny, 2, 1, 3, 60, 1)
     assert ok["status"] == "ok"
     assert len(ok["runs_s"]) == 3
     assert ok["best_s"] == min(ok["runs_s"])
     assert ok["first_s"] == ok["runs_s"][0]
     slow = reproduce.theirs_query(
-        "duckdb", q("SELECT count(*) FROM range(100000000000) a, range(100000000000) b"), tiny, 2, 1, 3, 1.0
+        "duckdb", q("SELECT count(*) FROM range(100000000000) a, range(100000000000) b"), tiny, 2, 1, 3, 1.0, 1
     )
     assert slow["status"] == "timeout"
 
@@ -268,6 +268,7 @@ def _proc_state(pid: int) -> str | None:
         return None
 
 
+@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="needs Linux pidfd and /proc")
 def test_timeout_kills_descendants_in_the_worker_process_group(tiny, tmp_path: Path, monkeypatch):
     pidfile = tmp_path / "descendant.pid"
     real_popen = subprocess.Popen
@@ -313,7 +314,9 @@ def test_theirs_query_rejects_row_count_drift(tiny, monkeypatch):
     assert ok["status"] == "ok"
     bad = reproduce.theirs_query("x", q("SELECT 1"), tiny, 1, 1, 2, 60, nrows=3)
     assert bad["status"] == "error"
-    assert "expected 3" in bad["reason"]
+    assert bad["reason"] == "timed run returned 4 rows, expected 3"
+    assert "best_s" not in bad
+    assert "runs_s" not in bad
 
 
 def test_run_reproduce_rejects_nonpositive_reps_and_runs():
