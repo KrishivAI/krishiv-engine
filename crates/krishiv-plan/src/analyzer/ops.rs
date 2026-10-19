@@ -1233,21 +1233,30 @@ impl Resolver<'_> {
         keys: &[(Attr, Attr)],
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
-        let find = |a: &Attr| j.out.iter().find(|x| x.col.id == a.col.id).cloned();
+        // A key as the join outputs it (nullable as the join made it). A
+        // semi or anti join outputs the left side only, its keys included
+        // (Spark), so only the left key is looked up there.
+        let find = |a: &Attr| {
+            j.out
+                .iter()
+                .find(|x| x.col.id == a.col.id)
+                .cloned()
+                .unwrap_or_else(|| a.clone())
+        };
         let mut exprs = Vec::new();
         let mut out = Vec::new();
         let mut key_ids = HashSet::new();
         for (la, ra) in keys {
             key_ids.extend([la.col.id, ra.col.id]);
-            let (Some(l), Some(r)) = (find(la), find(ra)) else {
-                return Err(unsupported("a USING join shape", origin));
-            };
+            let l = find(la);
             match kind {
                 JoinKind::RightOuter => {
+                    let r = find(ra);
                     exprs.push(col_expr(&r.col, Origin::UNKNOWN));
                     out.push(r);
                 }
                 JoinKind::FullOuter => {
+                    let r = find(ra);
                     let both = vec![
                         col_expr(&l.col, Origin::UNKNOWN),
                         col_expr(&r.col, Origin::UNKNOWN),

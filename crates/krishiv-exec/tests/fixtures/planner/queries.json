@@ -97,6 +97,11 @@
  "union_qualifier_cast": "SELECT t.a FROM t UNION ALL SELECT b FROM t ORDER BY t.a",
  "union_types_incompatible": "SELECT dt FROM t UNION ALL SELECT uid FROM u",
  "union_void_widens": "SELECT s FROM t UNION ALL SELECT NULL ORDER BY 1",
+ "using_anti_qualified": "SELECT t.a, s, id FROM t ANTI JOIN (SELECT k AS a FROM u) x USING (a) ORDER BY id",
+ "using_left_anti": "SELECT * FROM t LEFT ANTI JOIN (SELECT k AS a, name FROM u) USING (a) ORDER BY id",
+ "using_left_semi": "SELECT * FROM t LEFT SEMI JOIN (SELECT k AS a, name FROM u) USING (a) ORDER BY id",
+ "using_semi_right_column": "SELECT x.a FROM t SEMI JOIN (SELECT k AS a FROM u) x USING (a)",
+ "using_semi_two_keys": "SELECT * FROM t SEMI JOIN (SELECT uid AS id, k AS a FROM u) USING (a, id) ORDER BY id",
  "void_column": "SELECT NULL AS n, id FROM t ORDER BY id",
  "void_union": "SELECT NULL UNION ALL SELECT NULL"
 }
