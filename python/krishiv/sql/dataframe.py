@@ -208,6 +208,9 @@ class DataFrame:
         and releasing the stream cancels it."""
         return self._df.execute().__arrow_c_stream__(requested_schema)
 
+    def _session_zone(self) -> Any:
+        return _convert.session_zone(self._session.conf.get("spark.sql.session.timeZone", "UTC") or "UTC")
+
     def toArrow(self) -> Any:
         """The result as a ``pyarrow.Table`` (needs pyarrow)."""
         pa = _convert.require_pyarrow("toArrow")
@@ -222,13 +225,14 @@ class DataFrame:
         return table
 
     def toPandas(self) -> Any:
-        """The result as a ``pandas.DataFrame``, converted from Arrow (needs pyarrow and pandas)."""
+        """The result as a ``pandas.DataFrame``, converted from Arrow (needs pyarrow and pandas). Instants are
+        wall-clock times in the session time zone without a zone, as Spark's ``toPandas``."""
         table = self.toArrow()
         try:
             importlib.import_module("pandas")  # pandas itself is optional: only checked here
         except ImportError as e:
             raise ImportError("toPandas needs pandas; install it with `pip install pandas`") from e
-        return table.to_pandas()
+        return _convert.session_local(table, self._session_zone()).to_pandas()
 
     def collect(self) -> list[Row]:
         """All result rows (needs pyarrow)."""
@@ -257,8 +261,7 @@ class DataFrame:
         if not isinstance(truncate, bool | int):
             raise not_expected_type("truncate", "bool or int", truncate)
         rows = min(max(n, 0), _SHOW_MAX)  # Spark's bounds: MAX_ROUNDED_ARRAY_LENGTH - 1
-        zone = _convert.session_zone(self._session.conf.get("spark.sql.session.timeZone", "UTC") or "UTC")
-        cells = _convert.table_cells(self.limit(rows + 1).toArrow(), zone)
+        cells = _convert.table_cells(self.limit(rows + 1).toArrow(), self._session_zone())
         print(_convert.show_string(self.columns, cells, rows, truncate, vertical), end="")
 
     def createOrReplaceTempView(self, name: str) -> None:

@@ -195,3 +195,31 @@ def show_string(names: list[str], rows: list[list[str]], n: int, truncate: bool 
     if len(rows) > n:
         lines.append(f"only showing top {n} row{'s' if n != 1 else ''}")
     return "\n".join(lines) + "\n"
+
+
+def _arrow_zone_name(zone: tzinfo) -> str:
+    """``zone`` as a time zone name Arrow accepts: a region ID or a ``+hh:mm`` offset."""
+    key = getattr(zone, "key", None)
+    if isinstance(key, str):
+        return key
+    offset = zone.utcoffset(None)
+    if offset is None or offset == timedelta(0):
+        return "UTC"
+    minutes = int(offset.total_seconds() // 60)
+    sign = "-" if minutes < 0 else "+"
+    return f"{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+
+
+def session_local(table: Any, zone: tzinfo) -> Any:
+    """``table`` with its instants (timestamps with a time zone) as the wall-clock time of ``zone``, without a time
+    zone: what Spark's ``toPandas`` returns. Timestamps without a time zone are unchanged."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    name = _arrow_zone_name(zone)
+    columns = []
+    for column in table.columns:
+        if pa.types.is_timestamp(column.type) and column.type.tz is not None:
+            column = pc.call_function("local_timestamp", [column.cast(pa.timestamp(column.type.unit, name))])
+        columns.append(column)
+    return pa.table(columns, names=table.schema.names)

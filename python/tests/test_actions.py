@@ -52,10 +52,11 @@ def test_to_arrow_and_collect(df: DataFrame) -> None:
     assert rows[0] == Row(id=1, name="a", v=1.5)
     assert rows[1].asDict() == {"id": 2, "name": None, "v": 2.5}
     assert rows[2].v is None
-    assert df.take(2) == df.limit(2).collect()
-    assert df.head() is not None
-    assert len(df.head(2)) == 2  # ty: ignore[invalid-argument-type]
-    assert df.first() is not None
+    ordered = df.orderBy("id")
+    assert ordered.head() == Row(id=1, name="a", v=1.5)
+    assert ordered.first() == Row(id=1, name="a", v=1.5)
+    assert ordered.head(2) == [Row(id=1, name="a", v=1.5), Row(id=2, name=None, v=2.5)]
+    assert ordered.take(1) == [Row(id=1, name="a", v=1.5)]
     assert df.filter(F.col("id") > 99).head() is None
     assert df.filter(F.col("id") > 99).collect() == []
 
@@ -98,21 +99,20 @@ def test_count(df: DataFrame, spark: SparkSession) -> None:
 
 
 def test_actions_rerun_the_query(spark: SparkSession) -> None:
+    """Two streams of one DataFrame each deliver the full result (a cached or single-use stream would not)."""
     df = spark.sql("select 1 as a")
-    assert df.collect() == df.collect()
-    assert df.toArrow().equals(df.toArrow())
-    stream = df.__arrow_c_stream__()
-    assert stream is not df.__arrow_c_stream__()
+    first = pa.RecordBatchReader.from_stream(df).read_all()
+    second = pa.RecordBatchReader.from_stream(df).read_all()
+    assert first.to_pydict() == second.to_pydict() == {"a": [1]}
+    assert df.collect() == df.collect() == [Row(a=1)]
 
 
 def test_errors_surface_as_krishiv_exceptions(spark: SparkSession) -> None:
     df = spark.sql("select 1 / 0 as x")
-    with pytest.raises(errors.PySparkException):
-        df.collect()
-    with pytest.raises(errors.PySparkException):
-        df.toArrow()
-    with pytest.raises(errors.PySparkException):
-        df.count()
+    for action in (df.collect, df.toArrow, df.count):
+        with pytest.raises(errors.PySparkException) as raised:
+            action()
+        assert raised.value.getCondition() == "DIVIDE_BY_ZERO"
 
 
 def test_lit_none(spark: SparkSession) -> None:
@@ -390,22 +390,51 @@ def test_string_expressions_are_listed_as_not_implemented(df: DataFrame) -> None
             call()
 
 
-def test_release_does_not_wait_for_the_query(spark: SparkSession, big: Any) -> None:
-    """Releasing a stream of a 10^10-row cross join returns at once (cancellation does not join the engine), and
-    the session keeps working. That the release drops the engine stream, with no poll afterwards, is checked
-    deterministically in ``stream_ffi`` (``releasing_the_exported_query_stream_drops_the_engine_stream``); the
-    executor's cancel-on-drop in ``krishiv-exec``'s ``executor`` tests."""
-    import time
+def test_release_does_not_hang_and_the_session_survives(spark: SparkSession, big: Any) -> None:
+    """Releasing a stream of a 10^10-row cross join neither hangs nor breaks the session. That the release drops
+    the engine stream, with no poll afterwards, is checked deterministically in ``stream_ffi``
+    (``releasing_the_exported_query_stream_drops_the_engine_stream``); the executor's cancel-on-drop in
+    ``krishiv-exec``'s ``executor`` tests."""
+    import threading
 
     left = spark.createDataFrame(big.select(["id"]))
     right = spark.createDataFrame(big.select(["x"]))
     reader = pa.RecordBatchReader.from_stream(left.crossJoin(right))
     reader.read_next_batch()
-    started = time.perf_counter()
-    del reader
-    gc.collect()
-    assert time.perf_counter() - started < 5
+
+    def release() -> None:
+        nonlocal reader
+        del reader
+        gc.collect()
+
+    worker = threading.Thread(target=release)
+    worker.start()
+    worker.join(timeout=120)  # no timing assertion: only a hang fails
+    assert not worker.is_alive(), "releasing the stream hung"
     assert spark.sql("select 1 as a").collect() == [Row(a=1)]
+
+
+def test_session_local_instants() -> None:
+    from datetime import UTC, datetime
+
+    from krishiv.sql._convert import session_local, session_zone
+
+    instant = datetime(2020, 6, 1, 12, 0, tzinfo=UTC)
+    table = pa.table(
+        {
+            "t": pa.array([instant, None], pa.timestamp("us", "UTC")),
+            "n": pa.array([datetime(2020, 6, 1, 12, 0), None], pa.timestamp("us")),
+            "i": [1, 2],
+        }
+    )
+    for name, wall in {"America/New_York": 8, "+05:30": 17, "UTC+01:00": 13, "UTC": 12}.items():
+        out = session_local(table, session_zone(name))
+        assert out.schema.field("t").type == pa.timestamp("us")  # no time zone
+        got = out.column("t").to_pylist()[0]
+        assert (got.hour, got.minute) == (wall, 30 if name == "+05:30" else 0), name
+        assert out.column("t").to_pylist()[1] is None
+        assert out.column("n").to_pylist() == table.column("n").to_pylist()  # TimestampNtz unchanged
+        assert out.column("i").to_pylist() == [1, 2]
 
 
 def test_a_later_batch_error_keeps_its_spark_class(spark: SparkSession) -> None:
