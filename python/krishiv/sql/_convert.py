@@ -7,6 +7,7 @@ pyarrow is imported lazily: the package works without it, and the actions that n
 from __future__ import annotations
 
 import math
+import re
 import struct
 import unicodedata
 from datetime import UTC, date, datetime, timedelta, timezone, tzinfo
@@ -29,7 +30,9 @@ def rows_of(table: Any) -> list[Row]:
     """The rows of a pyarrow ``Table`` as ``Row``s, with Spark's Python types (structs as ``Row``, maps as ``dict``)."""
     names = list(table.schema.names)
     columns = [_column_values(table.column(i)) for i in range(table.num_columns)]
-    return [_create_row(names, list(values)) for values in zip(*columns, strict=True)] if names else []
+    if not names:
+        return [Row() for _ in range(table.num_rows)]  # no columns: one empty Row per row, as PySpark
+    return [_create_row(names, list(values)) for values in zip(*columns, strict=True)]
 
 
 def _column_values(column: Any) -> list[Any]:
@@ -58,15 +61,19 @@ def _value(value: Any, arrow_type: Any) -> Any:
 # -- show ---------------------------------------------------------------------------------------
 
 
+_OFFSET = re.compile(r"(?:UTC|GMT|UT)?([+-])(\d{1,2})(?::?(\d{2}))?(?::?(\d{2}))?")
+
+
 def session_zone(name: str) -> tzinfo:
-    """The time zone named by ``spark.sql.session.timeZone``: a region ID, ``UTC``/``Z`` or a ``±hh[:mm]`` offset."""
-    if name in ("Z", "UTC"):
+    """The time zone named by ``spark.sql.session.timeZone``: a region ID, ``Z``/``UTC``/``GMT``/``UT``, or an
+    offset (``+h``, ``+hh:mm``, ``+hhmmss``, optionally prefixed ``UTC``, ``GMT`` or ``UT``), as Java's ``ZoneId``."""
+    if name in ("Z", "UTC", "GMT", "UT"):
         return UTC
-    if name[:1] in "+-" and len(name) > 1:
-        hours, _, minutes = name[1:].partition(":")
-        if hours.isdigit() and (minutes.isdigit() or not minutes):
-            offset = timedelta(hours=int(hours), minutes=int(minutes or 0))
-            return timezone(-offset if name[0] == "-" else offset)
+    match = _OFFSET.fullmatch(name)
+    if match:
+        sign, hours, minutes, seconds = match.groups()
+        offset = timedelta(hours=int(hours), minutes=int(minutes or 0), seconds=int(seconds or 0))
+        return timezone(-offset if sign == "-" else offset)
     from zoneinfo import ZoneInfo
 
     return ZoneInfo(name)
@@ -153,6 +160,8 @@ def _truncate(text: str, limit: int) -> str:
 def table_cells(table: Any, zone: tzinfo = UTC) -> list[list[str]]:
     """The cells of a pyarrow ``Table``, as ``show`` prints them, one list per row."""
     columns = [[cell(v, col.type, zone) for v in col.to_pylist()] for col in table.columns]
+    if not columns:
+        return [[] for _ in range(table.num_rows)]
     return [list(row) for row in zip(*columns, strict=True)]
 
 

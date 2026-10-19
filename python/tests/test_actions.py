@@ -419,11 +419,13 @@ def test_a_later_batch_error_keeps_its_spark_class(spark: SparkSession) -> None:
         assert raised.value.getCondition() == "CAST_INVALID_INPUT"
 
 
-def test_a_result_without_columns_keeps_its_rows(df: DataFrame) -> None:
+def test_a_result_without_columns_keeps_its_rows(df: DataFrame, capsys: pytest.CaptureFixture[str]) -> None:
     empty = df.select()
     assert empty.columns == []
     assert empty.toArrow().num_rows == 3
-    assert empty.collect() == []  # no columns: no row values, as PySpark's Row()
+    assert empty.collect() == [Row(), Row(), Row()]  # one empty Row per row, as PySpark
+    assert empty.head() == Row()
+    assert shown(empty, capsys) == "++\n||\n++\n||\n||\n||\n++\n"
     assert empty.count() == 3
 
 
@@ -448,3 +450,21 @@ def test_timestamps_follow_the_time_zones(spark: SparkSession, capsys: pytest.Ca
     assert "2020-06-01 12:00:00" in shown(df, capsys)
     # collect() gives the instant as a naive datetime in the client's local time zone, as PySpark.
     assert df.collect()[0].t == instant.astimezone().replace(tzinfo=None)
+
+
+def test_session_zone_accepts_java_zone_id_forms() -> None:
+    from datetime import UTC, datetime
+
+    from krishiv.sql._convert import session_zone
+
+    noon = datetime(2020, 6, 1, 12, 0, tzinfo=UTC)
+    for name, expected in {
+        "UTC+01:00": "13:00:00",
+        "GMT+8": "20:00:00",
+        "UT-03": "09:00:00",
+        "+01:02:03": "13:02:03",
+        "-0130": "10:30:00",
+        "GMT": "12:00:00",
+        "Europe/Paris": "14:00:00",
+    }.items():
+        assert noon.astimezone(session_zone(name)).strftime("%H:%M:%S") == expected, name
