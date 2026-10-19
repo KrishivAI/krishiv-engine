@@ -1,0 +1,31 @@
+---
+source: crates/krishiv-session/tests/explain.rs
+expression: "logical_and_physical(&s, 1)"
+---
+== Parsed Logical Plan ==
+Sort [l_returnflag ASC NULLS FIRST, l_linestatus ASC NULLS FIRST], true
++- Aggregate [l_returnflag, l_linestatus], [l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty, sum(l_extendedprice) AS sum_base_price, sum((l_extendedprice * (1 - l_discount))) AS sum_disc_price, sum(((l_extendedprice * (1 - l_discount)) * (1 + l_tax))) AS sum_charge, avg(l_quantity) AS avg_qty, avg(l_extendedprice) AS avg_price, avg(l_discount) AS avg_disc, count(*) AS count_order]
+   +- Filter (l_shipdate <= CAST('1998-09-02' AS DATE))
+      +- Read lineitem
+
+== Analyzed Logical Plan ==
+l_returnflag: string, l_linestatus: string, sum_qty: decimal(25,2), sum_base_price: decimal(25,2), sum_disc_price: decimal(38,4), sum_charge: decimal(38,6), avg_qty: decimal(19,6), avg_price: decimal(19,6), avg_disc: decimal(19,6), count_order: bigint
+Sort [l_returnflag#8 ASC NULLS FIRST, l_linestatus#9 ASC NULLS FIRST], true
++- Aggregate [l_returnflag#8, l_linestatus#9], [l_returnflag#8, l_linestatus#9, sum(l_quantity#4) AS sum_qty#16, sum(l_extendedprice#5) AS sum_base_price#17, sum((l_extendedprice#5 * (CAST(1 AS DECIMAL(1,0)) - l_discount#6))) AS sum_disc_price#18, sum(((l_extendedprice#5 * (CAST(1 AS DECIMAL(1,0)) - l_discount#6)) * (CAST(1 AS DECIMAL(1,0)) + l_tax#7))) AS sum_charge#19, avg(l_quantity#4) AS avg_qty#20, avg(l_extendedprice#5) AS avg_price#21, avg(l_discount#6) AS avg_disc#22, count(1) AS count_order#23]
+   +- Filter (l_shipdate#10 <= CAST('1998-09-02' AS DATE))
+      +- Scan spark_catalog.default.lineitem [l_orderkey#0, l_partkey#1, l_suppkey#2, l_linenumber#3, l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10, l_commitdate#11, l_receiptdate#12, l_shipinstruct#13, l_shipmode#14, l_comment#15]
+
+== Optimized Logical Plan ==
+Sort [l_returnflag#8 ASC NULLS FIRST, l_linestatus#9 ASC NULLS FIRST], true
++- Aggregate [l_returnflag#8, l_linestatus#9], [l_returnflag#8, l_linestatus#9, sum(l_quantity#4) AS sum_qty#16, sum(l_extendedprice#5) AS sum_base_price#17, sum((l_extendedprice#5 * (1 - l_discount#6))) AS sum_disc_price#18, sum(((l_extendedprice#5 * (1 - l_discount#6)) * (1 + l_tax#7))) AS sum_charge#19, avg(l_quantity#4) AS avg_qty#20, avg(l_extendedprice#5) AS avg_price#21, avg(l_discount#6) AS avg_disc#22, count(1) AS count_order#23]
+   +- Project [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9]
+      +- Filter (l_shipdate#10 <= DATE '1998-09-02')
+         +- Scan spark_catalog.default.lineitem [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10]
+
+== Physical Plan ==
+Sort [l_returnflag#8 ASC NULLS FIRST, l_linestatus#9 ASC NULLS FIRST]
++- Project [l_returnflag#8, l_linestatus#9, sum(l_quantity#4)#4611686018427387913 AS sum_qty#16, sum(l_extendedprice#5)#4611686018427387914 AS sum_base_price#17, sum((l_extendedprice#5 * (1 - l_discount#6)))#4611686018427387915 AS sum_disc_price#18, sum(((l_extendedprice#5 * (1 - l_discount#6)) * (1 + l_tax#7)))#4611686018427387916 AS sum_charge#19, avg(l_quantity#4)#4611686018427387917 AS avg_qty#20, avg(l_extendedprice#5)#4611686018427387918 AS avg_price#21, avg(l_discount#6)#4611686018427387919 AS avg_disc#22, count(1)#4611686018427387920 AS count_order#23]
+   +- HashAggregate keys=[l_returnflag#8, l_linestatus#9], functions=[sum(l_quantity#4), sum(l_extendedprice#5), sum((l_extendedprice#5 * (1 - l_discount#6))), sum(((l_extendedprice#5 * (1 - l_discount#6)) * (1 + l_tax#7))), avg(l_quantity#4), avg(l_extendedprice#5), avg(l_discount#6), count(1)]
+      +- Project [l_returnflag#8, l_linestatus#9, l_quantity#4, l_extendedprice#5, (l_extendedprice#5 * (1 - l_discount#6)), ((l_extendedprice#5 * (1 - l_discount#6)) * (1 + l_tax#7)), l_quantity#4, l_extendedprice#5, l_discount#6]
+         +- Project [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9]
+            +- Scan spark_catalog.default.lineitem [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10], PushedFilters: [(l_shipdate#10 <= DATE '1998-09-02')]

@@ -779,6 +779,18 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(u8::from(*allow_missing_columns));
             }
             PlanNode::Distinct { .. } => self.u8(19),
+            PlanNode::SetOp { op, all, .. } => {
+                self.u8(20);
+                self.u8(match op {
+                    crate::SetOperation::Intersect => 0,
+                    crate::SetOperation::Except => 1,
+                });
+                self.u8(u8::from(*all));
+            }
+            PlanNode::ReplicateRows { count, .. } => {
+                self.u8(21);
+                self.expr(count);
+            }
         }
     }
 
