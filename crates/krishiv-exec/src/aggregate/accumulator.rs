@@ -165,9 +165,8 @@ pub(crate) struct Accumulator {
     /// The bound of a running decimal sum's magnitude (`10^p` of the sum
     /// type); `None` for other aggregates.
     sum_bound: Option<u128>,
-    /// An upper bound of `|sum|` over every group of a decimal `sum`/`avg`:
-    /// the running maximum of the stored sums (it never shrinks, so it stays
-    /// sound when IVM retractions lower a sum).
+    /// An upper bound of `|sum|` over every group of a decimal `sum`/`avg`,
+    /// refreshed after each fold ([`refresh_max`]).
     max_sum: u128,
     /// Whether decimal folds may take the per-batch proof path (tests turn
     /// it off to compare against the per-row path).
@@ -213,7 +212,52 @@ fn proven(
     nulls: Option<&NullBuffer>,
     w: Option<&Weights>,
 ) -> bool {
-    enabled && bound.is_some_and(|b| max_sum.saturating_add(batch_abs(v, nulls, w)) < b)
+    enabled
+        && bound.is_some_and(|b| {
+            max_sum.saturating_add(quick_abs(v, w)) < b
+                || max_sum.saturating_add(batch_abs(v, nulls, w)) < b
+        })
+}
+
+/// A cheap upper bound of [`batch_abs`]: rows × max |v| × max |w|, with
+/// each maximum bounded by an OR of ones'-complement magnitudes (`|x| <=
+/// OR + 1`, branch-free) over every slot, NULL ones included. When it is
+/// too loose (values near the bound, large values under NULLs) the caller
+/// takes the exact sum.
+fn quick_abs(v: &[i128], w: Option<&Weights>) -> u128 {
+    let or = v
+        .iter()
+        .fold(0_u128, |m, &x| m | (x ^ (x >> 127)).cast_unsigned())
+        .saturating_add(1);
+    let wmax = match w {
+        None => 1,
+        Some(Weights::Const(c)) => u128::from(c.unsigned_abs()),
+        Some(Weights::Column(c)) => u128::from(
+            c.values()
+                .iter()
+                .fold(0_u64, |m, &x| m | (x ^ (x >> 63)).cast_unsigned()),
+        )
+        .saturating_add(1),
+    };
+    let rows = u128::try_from(v.len()).unwrap_or(u128::MAX);
+    or.saturating_mul(rows).saturating_mul(wmax)
+}
+
+/// The new bound of every group's `|sum|` after a fold touched `groups`:
+/// the exact maximum over all groups when there are no more groups than
+/// rows (it can then shrink, e.g. after IVM retractions), else the old
+/// bound raised by the touched groups' sums (untouched sums are within it).
+fn refresh_max(old: u128, sum: &[i128], groups: &[u32]) -> u128 {
+    let abs = |v: &i128| v.unsigned_abs();
+    if sum.len() <= groups.len() {
+        sum.iter().map(abs).max().unwrap_or(0)
+    } else {
+        groups
+            .iter()
+            .filter_map(|&g| sum.get(g as usize))
+            .map(abs)
+            .fold(old, u128::max)
+    }
 }
 
 /// The weight of row `i`.
@@ -730,7 +774,7 @@ impl Accumulator {
         let ansi = self.ansi;
         let bound = self.sum_bound;
         let fits = |s: &i128| bound.is_none_or(|b| s.unsigned_abs() < b);
-        let (proofs, mut max_sum) = (self.proofs, self.max_sum);
+        let (proofs, max_sum) = (self.proofs, self.max_sum);
         // Validity bitmaps, read once per batch (no virtual call per row);
         // logical, so an untyped NULL column (`count(NULL)`) counts nothing.
         let nulls: Vec<Option<NullBuffer>> =
@@ -798,6 +842,7 @@ impl Accumulator {
                 let v = decimals(a)?;
                 let nonempty = args.get(1).map(|b| booleans_of(b)).transpose()?;
                 let fast = proven(proofs, bound, max_sum, v, first, (!state).then_some(w));
+                let unit = matches!(w, Weights::Const(1));
                 for (i, &g) in groups.iter().enumerate() {
                     let g = g as usize;
                     if state {
@@ -818,7 +863,9 @@ impl Accumulator {
                             }
                         }
                     } else if valid(i) && st[g] != 2 {
-                        let s = if fast {
+                        let s = if fast && unit {
+                            Some(sum[g].wrapping_add(v[i]))
+                        } else if fast {
                             Some(sum[g].wrapping_add(v[i].wrapping_mul(i128::from(weight(w, i)))))
                         } else {
                             v[i].checked_mul(i128::from(weight(w, i)))
@@ -827,7 +874,6 @@ impl Accumulator {
                         };
                         (sum[g], st[g]) = s.map_or((0, 2), |s| (s, 1));
                     }
-                    max_sum = max_sum.max(sum[g].unsigned_abs());
                 }
             }
             (Kind::AvgFloat { sum, count }, _) => {
@@ -891,7 +937,6 @@ impl Accumulator {
                         None => overflow[g] = true,
                     }
                     count[g] = count[g].wrapping_add(n);
-                    max_sum = max_sum.max(sum[g].unsigned_abs());
                 }
             }
             (
@@ -1015,7 +1060,9 @@ impl Accumulator {
                 }
             }
         }
-        self.max_sum = max_sum;
+        if let Kind::SumDec { sum, .. } | Kind::AvgDec { sum, .. } = &self.kind {
+            self.max_sum = refresh_max(self.max_sum, sum, groups);
+        }
         Ok(())
     }
 
@@ -1623,11 +1670,19 @@ mod proof_tests {
         );
         let v = a.evaluate(&[0]).unwrap();
         assert_eq!(v.as_primitive::<Decimal128Type>().value(0), M - 4);
-        // IVM: a retraction lowers the sum, the bound stays sound.
+        // IVM: a retraction lowers the sum; with no more groups than rows
+        // the bound is recomputed and shrinks with it.
         let mut a = acc(AggregateFunction::Sum, &t, true, true);
         feed(&mut a, 1, &[(0, M, true, 1)], &t, 0);
-        feed(&mut a, 1, &[(0, M, true, -1)], &t, 2);
         assert_eq!(a.max_sum, M.unsigned_abs());
+        feed(&mut a, 1, &[(0, M, true, -1)], &t, 2);
+        assert_eq!(a.max_sum, 0);
+        // Many groups, one row: only the touched group raises the bound.
+        assert_eq!(refresh_max(9, &[1, -20, 3], &[2]), 9);
+        assert_eq!(refresh_max(9, &[1, -20, 3], &[1]), 20);
+        assert_eq!(quick_abs(&[3, -2], Some(&Weights::Const(-2))), 2 * 4 * 2);
+        let w = Weights::Column(Int64Array::from(vec![1_i64, -3]));
+        assert_eq!(quick_abs(&[3, -2], Some(&w)), 2 * 4 * 4);
         feed(&mut a, 1, &[(0, 7, true, 1)], &t, 0);
         let v = a.evaluate(&[0]).unwrap();
         assert_eq!(v.as_primitive::<Decimal128Type>().value(0), 7);

@@ -19,13 +19,13 @@
 //! lanes ([`DecimalStorage::I64`]) — cheaper multiplies and range checks —
 //! and widens the result back. Arrays stay `Decimal128` between operators.
 //!
-//! **Per-batch range proof (P2-T160):** unless the types already allow
-//! unchecked 64-bit lanes, exact `+ - *` first bound each batch's results
-//! from its operands' largest magnitudes. When the bound is
-//! below `10^p` of the result type, no row can overflow and the batch runs
-//! without checks; when it also fits 63 bits, it runs on the 64-bit lanes
-//! whatever the declared precisions (TPC-H's `price * (1 - discount)` is
-//! `decimal(32,4)` by type but small by value). Otherwise the batch takes
+//! **Per-batch range proof (P2-T160):** exact `+ - *` that the types leave
+//! on checked 128-bit lanes first bound each batch's results from its
+//! operands' largest magnitudes. When the bound is below `10^p` of the
+//! result type, no row can overflow and the batch runs without checks;
+//! when it also fits 63 bits, it runs on the 64-bit lanes whatever the
+//! declared precisions (TPC-H's `price * (1 - discount) * (1 + tax)` is
+//! `decimal(38,6)` by type but small by value). Otherwise the batch takes
 //! the checked lanes as before. The proof only selects lanes, so results
 //! and errors are those of the checked path.
 
@@ -632,19 +632,26 @@ enum BatchProof {
     Fits64,
 }
 
+/// The OR of the ones'-complement magnitudes of `a` into `m`: branch-free,
+/// unlike a 128-bit maximum, and `|v| <= OR + 1` for every `v`.
+fn or_magnitudes(m: u128, a: &[i128]) -> u128 {
+    a.iter()
+        .fold(m, |m, &v| m | (v ^ (v >> 127)).cast_unsigned())
+}
+
 /// An upper bound of `|v|` over every lane of a side, NULL slots included
-/// (their values are arbitrary; a large one only costs the proof). An OR
-/// of the ones'-complement magnitudes (branch-free, unlike a 128-bit
-/// maximum) bounds them: `|v| <= OR + 1`.
+/// (their values are arbitrary; a large one only costs the proof).
+#[cfg(test)]
 fn max_abs(s: Side<'_, i128>) -> u128 {
     match s {
         Side::Scalar(v) => v.unsigned_abs(),
-        Side::Array(a) => a
-            .iter()
-            .fold(0_u128, |m, &v| m | (v ^ (v >> 127)).cast_unsigned())
-            .saturating_add(1),
+        Side::Array(a) => or_magnitudes(0, a).saturating_add(1),
     }
 }
+
+/// Rows per step of [`batch_proof`]'s scan: it stops at the first step
+/// whose running bound already fails, so an unprovable batch costs little.
+const PROOF_STEP: usize = 1024;
 
 /// The per-batch range proof of an exact `+ - *` plan: with `A = max|a|`
 /// and `B = max|b|` over the batch, `|a·l_mul ± b·r_mul| <= A·l_mul +
@@ -653,17 +660,44 @@ fn max_abs(s: Side<'_, i128>) -> u128 {
 /// `i64`, wrapping 64-bit lanes are exact (truncation commutes with
 /// wrapping `+ - *`). The proof is local to the batch.
 fn batch_proof(plan: &DecimalPlan, l: Side<'_, i128>, r: Side<'_, i128>) -> BatchProof {
-    let (a, b) = (max_abs(l), max_abs(r));
     let (lm, rm) = (plan.l_mul.unsigned_abs(), plan.r_mul.unsigned_abs());
-    let bound = if plan.op == DecimalOp::Multiply {
-        a.saturating_mul(b)
-    } else {
-        a.saturating_mul(lm).saturating_add(b.saturating_mul(rm))
+    let combine = |a: u128, b: u128| {
+        if plan.op == DecimalOp::Multiply {
+            a.saturating_mul(b)
+        } else {
+            a.saturating_mul(lm).saturating_add(b.saturating_mul(rm))
+        }
     };
+    let limit = pow10(plan.out.0).unsigned_abs();
+    // Arrays: the OR so far (the bound is OR + 1); scalars: |v| exactly.
+    let (mut oa, mut ob) = (0_u128, 0_u128);
+    let side = |s: Side<'_, i128>, or: u128| match s {
+        Side::Scalar(v) => v.unsigned_abs(),
+        Side::Array(_) => or.saturating_add(1),
+    };
+    let len = match (l, r) {
+        (Side::Array(a), _) | (_, Side::Array(a)) => a.len(),
+        _ => 0,
+    };
+    let mut start = 0_usize;
+    loop {
+        let end = start.saturating_add(PROOF_STEP).min(len);
+        for (s, or) in [(l, &mut oa), (r, &mut ob)] {
+            if let Side::Array(a) = s {
+                *or = or_magnitudes(*or, a.get(start..end).unwrap_or_default());
+            }
+        }
+        if combine(side(l, oa), side(r, ob)) >= limit {
+            return BatchProof::None;
+        }
+        if end >= len {
+            break;
+        }
+        start = end;
+    }
+    let bound = combine(side(l, oa), side(r, ob));
     let i64_max = u128::from(i64::MAX.unsigned_abs());
-    if bound >= pow10(plan.out.0).unsigned_abs() {
-        BatchProof::None
-    } else if bound <= i64_max && lm <= i64_max && rm <= i64_max {
+    if bound <= i64_max && lm <= i64_max && rm <= i64_max {
         BatchProof::Fits64
     } else {
         BatchProof::Fits
@@ -751,9 +785,10 @@ where
         bound: pow10(plan.out.0),
         op: std::marker::PhantomData,
     };
-    // Per-batch range proof (design P2-T160): skipped only when the types
-    // already license the cheapest lanes.
-    let proof = if O::MODE == OverflowMode::Unchecked && plan.storage == DecimalStorage::I64 {
+    // Per-batch range proof (design P2-T160), for checked 128-bit plans
+    // only: the checked 64-bit lanes and unchecked lanes cost about what
+    // the proof's extra pass over the operands costs (measured).
+    let proof = if O::MODE == OverflowMode::Unchecked || plan.storage == DecimalStorage::I64 {
         BatchProof::None
     } else {
         batch_proof(plan, sl, sr)
@@ -1051,6 +1086,12 @@ mod tests {
             q(10_i128.pow(20) - 1, 10_i128.pow(22) - 1),
             BatchProof::None
         );
+        // The scan runs in steps; a large value in a late step still counts.
+        let mut long = vec![3_i128; 3 * PROOF_STEP + 5];
+        assert_eq!(p(&long, 7), BatchProof::Fits64);
+        *long.last_mut().unwrap() = -(10_i128.pow(37));
+        assert_eq!(p(&long, 100), BatchProof::None);
+        assert_eq!(p(&[], 5), BatchProof::Fits64);
         // A rescale factor beyond `i64` never takes the 64-bit lanes.
         let far = plan(ArithOp::Add, (38, 0), (38, 37), (38, 37));
         let r = batch_proof(&far, Side::Scalar(0), Side::Scalar(1));

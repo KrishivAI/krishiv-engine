@@ -174,10 +174,19 @@ fn decimal(c: &mut Criterion) {
     }
 }
 
-/// `n` values of `decimal(p, s)` in `[lo, lo + span)`.
+/// `ROWS` values of `decimal(p, s)` in `[lo, lo + span)`, spread over the
+/// whole span (a span beyond `2^40` in steps of `span / 1_000_003`).
 fn decimal_range(p: u8, s: i8, lo: i128, span: i128, seed: i128) -> Decimal128Array {
+    const STEPS: i128 = 1_000_003;
     let a: PrimitiveArray<Decimal128Type> = (0..i128::from(ROWS))
-        .map(|i| Some(lo + (i.wrapping_mul(seed) % span)))
+        .map(|i| {
+            let x = i.wrapping_mul(seed);
+            Some(if span > 1 << 40 {
+                lo + (x % STEPS) * (span / STEPS)
+            } else {
+                lo + x % span
+            })
+        })
         .collect();
     a.with_precision_and_scale(p, s).unwrap()
 }
@@ -219,10 +228,12 @@ fn decimal_proof(c: &mut Criterion) {
             .unwrap()
         });
     });
-    let big = 40_000_000_000_000_000_000_000_000_000_000_000_000_i128;
+    // `a` in [0, 9e37), `b` in [-9e37, 0): no sum overflows, but the
+    // magnitudes alone cannot prove it.
+    let big = 90_000_000_000_000_000_000_000_000_000_000_000_000_i128;
     let (a, b) = (
-        decimal_range(38, 0, -big, 2 * big, 7919),
-        decimal_range(38, 0, -big, 2 * big, 104_729),
+        decimal_range(38, 0, 0, big, 7919),
+        decimal_range(38, 0, -big, big, 104_729),
     );
     let add = DecimalPlan::new(DecimalOp::Add, (38, 0), (38, 0), (38, 0)).unwrap();
     c.bench_function("decimal_add/wide_38_0/ansi", |bench| {
