@@ -16,6 +16,13 @@ mkdir "$tmp/bin"
 cat > "$tmp/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
+# FAKE_FAIL_TIMES calls (of any kind) fail first with FAKE_FAIL_MSG.
+f=$(cat "$FAKE_COUNT.fail" 2>/dev/null || echo 0)
+if [ "$f" -lt "${FAKE_FAIL_TIMES:-0}" ]; then
+  echo $((f + 1)) > "$FAKE_COUNT.fail"
+  echo "$FAKE_FAIL_MSG" >&2
+  exit 1
+fi
 case "$1 $2" in
   "api repos/"*"/actions/workflows/ci.yml/runs"*) printf '%s\n' "${FAKE_RUN:-}" ;;
   "api repos/"*"/jobs"*)
@@ -38,12 +45,12 @@ case "$1 $2" in
 esac
 FAKE
 chmod +x "$tmp/bin/gh"
-export PATH="$tmp/bin:$PATH" REPO=o/r HEAD_SHA=abc POLL_SECS=0 GH_TOKEN=x
+export PATH="$tmp/bin:$PATH" REPO=o/r HEAD_SHA=abc POLL_SECS=0 GH_TOKEN=x RETRY_BASE_SECS=0
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 case_() {
   local desc=$1 want=$2 run=$3 jobs=$4 wait=${5:-5}
-  rm -rf "$tmp/out" "$tmp/count"
+  rm -rf "$tmp/out" "$tmp/count" "$tmp/count.fail"
   local got rc=0
   got=$(FAKE_RUN="$run" FAKE_JOBS="$jobs" FAKE_COUNT="$tmp/count" OUT_DIR="$tmp/out" \
     WAIT_SECS="$wait" bash "$script" 2>/dev/null) || rc=$?
@@ -68,6 +75,26 @@ completed${tab}success"
 case_ "failed measurement fails" fail 7 "completed${tab}failure"
 case_ "no run before the deadline fails" fail "" "" 0
 case_ "unfinished job at the deadline fails" fail 7 "in_progress${tab}" 0
+
+# Transient gh failures are retried; real errors are not.
+err=$(mktemp)
+retry_case() {
+  local desc=$1 want=$2 times=$3 msg=$4
+  FAKE_FAIL_TIMES=$times FAKE_FAIL_MSG=$msg case_ "$desc" "$want" 7 "completed${tab}success"
+}
+retry_case "HTTP 502 then success" measured 1 "gh: Server Error (HTTP 502)"
+retry_case "stream CANCEL then success" measured 2 "stream error: stream ID 1; CANCEL; received from peer"
+retry_case "timeout then success" measured 1 "Get https://api.github.com: i/o timeout"
+retry_case "persistent 502 fails after retries" fail 99 "gh: Server Error (HTTP 502)"
+[ "$(cat "$tmp/count.fail")" = 5 ] || fail "persistent 502: expected 5 attempts, got $(cat "$tmp/count.fail")"
+rm -f "$tmp/count.fail"
+FAKE_FAIL_TIMES=99 FAKE_FAIL_MSG="gh: Server Error (HTTP 502)" FAKE_RUN=7 FAKE_JOBS="completed${tab}success" \
+  FAKE_COUNT="$tmp/count" OUT_DIR="$tmp/out" WAIT_SECS=5 bash "$script" 2>"$err" >/dev/null && fail "persistent 502 passed"
+grep -q "failed transiently 5 time" "$err" || fail "persistent 502: unclear message: $(cat "$err")"
+retry_case "404 fails immediately" fail 99 "gh: Not Found (HTTP 404)"
+[ "$(cat "$tmp/count.fail")" = 1 ] || fail "404 was retried ($(cat "$tmp/count.fail") attempts)"
+retry_case "auth error fails immediately" fail 99 "gh: Bad credentials (HTTP 401)"
+[ "$(cat "$tmp/count.fail")" = 1 ] || fail "401 was retried"
 
 # The wheel sizes: the job lives in the called workflow, and a skipped
 # `wheels-targets` (no Python change) is the only skip that means "nothing".
