@@ -99,6 +99,37 @@ pub(crate) fn push_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     join(&node, left, right, *kind, stay)
 }
 
+/// The rule at an inner or cross `Join`, run once before the rewrite batch:
+/// filters each input with what the condition's disjunctions imply on it
+/// alone (`(a1 and b1) or (a2 and b2)` adds `a1 or a2` below the join, as
+/// Spark's `PushExtraPredicateThroughJoin` does). A disjunction moved from a
+/// `WHERE` into a join gets them as it moves (`push_join`); one written in
+/// `ON` gets them here. Join ordering divides them out of the disjunction's
+/// selectivity, so both kinds must have them. Once only: the disjunction
+/// stays in the condition, so a fixed point would add them again.
+pub(crate) fn imply_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    let PlanNode::Join {
+        left,
+        right,
+        kind: kind @ (JoinKind::Inner | JoinKind::Cross),
+        condition: JoinCondition::On(cond),
+    } = &node.node
+    else {
+        return node;
+    };
+    let (lo, ro) = (ids(left), ids(right));
+    let (mut l, mut r) = (Vec::new(), Vec::new());
+    for c in conjuncts(cond).iter().filter(|c| is_deterministic(c)) {
+        l.extend(implied(c, &lo));
+        r.extend(implied(c, &ro));
+    }
+    if l.is_empty() && r.is_empty() {
+        return node;
+    }
+    let (left, right) = (into(left, l), into(right, r));
+    join(&node, left, right, *kind, conjuncts(cond))
+}
+
 /// Pushes `preds` (over `plan`'s output) into `plan` as far as legal.
 /// Returns the new plan and the predicates that stay above it, in order.
 fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Vec<Arc<Expr>>) {

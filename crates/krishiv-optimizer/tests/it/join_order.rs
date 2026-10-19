@@ -390,3 +390,37 @@ fn implied_filters_are_not_counted_twice() {
     every_join_has_an_equality(optimized.root(), "TPC-DS q85");
     insta::assert_snapshot!(optimized.root().to_string());
 }
+
+/// The same query with the disjunction written in `ON`: its implied
+/// filters are added below the join too (once: optimizing again changes
+/// nothing), so the estimate that divides them out holds for it as well.
+#[test]
+fn implied_filters_of_on_conditions() {
+    let sql = "SELECT count(*), sum(ws_quantity), sum(wr_fee) \
+               FROM web_sales JOIN customer_address \
+               ON ((ca_country = 'United States' AND ca_state IN ('IN', 'OH', 'NJ') \
+                     AND ws_net_profit BETWEEN 100 AND 200) \
+                 OR (ca_country = 'United States' AND ca_state IN ('WI', 'CT', 'KY') \
+                     AND ws_net_profit BETWEEN 150 AND 300)) \
+               JOIN web_returns ON ws_item_sk = wr_item_sk AND ws_order_number = wr_order_number \
+               AND ca_address_sk = wr_refunded_addr_sk";
+    let plan = support::resolve(sql, &tpcds_ctx());
+    let optimized = optimize_with(&plan, &TpcdsFooters).unwrap();
+    every_join_has_an_equality(optimized.root(), "an ON disjunction");
+    assert!(
+        optimize_with(&optimized, &TpcdsFooters)
+            .unwrap()
+            .structurally_eq(&optimized)
+    );
+    insta::assert_snapshot!(optimized.root().to_string());
+}
+
+#[test]
+fn implied_filters_of_on_conditions_keep_the_rows() {
+    same_rows(
+        "SELECT t.a, u.d FROM t JOIN u ON (t.b = 'x' AND u.d = 'y') OR (t.b = 'z' AND u.a > 2)",
+    );
+    same_rows(
+        "SELECT t.a, u.d FROM t LEFT JOIN u ON (t.b = 'x' AND u.d = 'y') OR (t.b = 'z' AND u.a > 2)",
+    );
+}
