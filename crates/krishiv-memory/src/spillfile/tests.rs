@@ -1455,3 +1455,77 @@ fn crc32_matches_the_standard_check_values() {
     assert_eq!(crc(&[]), 0);
     assert_eq!(crc(&[b"a"]), 0xE8B7_BE43);
 }
+
+/// A slice of a view column shares its parent's data buffers, which Arrow
+/// IPC writes whole: the writer compacts it first, so the frame, its
+/// scratch and its read reservation follow the slice's rows.
+#[test]
+fn a_sliced_view_column_writes_only_its_rows_bytes() {
+    let (_dir, manager, scope, _) = env(SpillCodec::None);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("s", DataType::Utf8View, true),
+        Field::new("b", DataType::BinaryView, false),
+    ]));
+    let n = 20_000;
+    let strings = StringViewArray::from_iter(
+        (0..n).map(|i| (i % 7 != 0).then(|| format!("a string well over twelve bytes {i:06}"))),
+    );
+    let binary = BinaryViewArray::from_iter_values((0..n).map(|i| vec![(i % 251) as u8; 40]));
+    let whole = Batch::new(
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(strings), Arc::new(binary)],
+        )
+        .unwrap(),
+    );
+    let shared = whole.data().get_array_memory_size();
+    assert!(shared > 1 << 20, "{shared}");
+    let slice = whole.slice(1000, 10).unwrap();
+    let frame = SpillWriter::frame_bytes(&slice);
+    assert!(frame < 2_000, "{frame}");
+    let weighted = Batch::with_weights(
+        slice.data().clone(),
+        Weights::Column(Int64Array::from(vec![2; 10])),
+    )
+    .unwrap();
+    assert_eq!(SpillWriter::frame_bytes(&weighted), frame + 80);
+
+    // Under a budget far below the shared buffers the write fits.
+    let pool = Pool::new(Some(256 << 10));
+    let mut w = scope
+        .writer(Arc::clone(&schema), pool.reservation())
+        .unwrap();
+    w.write(&slice).unwrap();
+    w.write(&weighted).unwrap();
+    assert_eq!(pool.root.reserved(), 0, "scratch and copy are returned");
+    let file = w.finish().unwrap();
+    assert!(file.bytes() < 8_000, "{} bytes written", file.bytes());
+    assert!(
+        file.max_read_reservation() < 8_000,
+        "{}",
+        file.max_read_reservation()
+    );
+    let back = read_all(&file, &pool).unwrap();
+    assert_eq!(back.len(), 2);
+    assert_eq!(back[0].data(), slice.data());
+    assert_eq!(back[1].weights(), weighted.weights());
+    drop(file);
+    assert_eq!(manager.used_bytes(), 0);
+
+    // The copy is scratch: refused (nothing written, the writer usable)
+    // when the pool cannot fund it.
+    let pool = Pool::new(Some(1_000));
+    let mut w = scope
+        .writer(Arc::clone(&schema), pool.reservation())
+        .unwrap();
+    let err = w.write(&slice).unwrap_err();
+    assert_eq!(class(&err), ErrorClass::UnableToAcquireMemory);
+    assert_eq!(pool.root.reserved(), 0);
+    assert_eq!(w.num_batches(), 0);
+    // The copy fits, the encoding scratch does not: both are returned.
+    let pool = Pool::new(Some(frame + 100));
+    let mut w = scope.writer(schema, pool.reservation()).unwrap();
+    let err = w.write(&slice).unwrap_err();
+    assert_eq!(class(&err), ErrorClass::UnableToAcquireMemory);
+    assert_eq!(pool.root.reserved(), 0);
+}
