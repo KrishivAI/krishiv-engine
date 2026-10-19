@@ -82,7 +82,8 @@ flowchart LR
 The shipped x86-64 binaries and wheels are built for the **x86-64-v3** level: AVX, AVX2, FMA, BMI1/2, F16C, LZCNT and
 MOVBE, i.e. Intel Haswell (2013) / AMD Excavator and Zen or newer. The arm64 builds target an Armv8.2 baseline
 (`neoverse-n1`: AWS Graviton2 or newer, Apple silicon). On an older CPU the main build refuses to start and says
-which feature is missing, instead of crashing.
+which feature is missing, instead of crashing (the Python package raises an `ImportError`; on Linux only: the
+macOS arm64 and Windows wheels are separate builds and are not checked).
 
 For an older x86-64 CPU use the **compat** build, which targets the plain x86-64 baseline (a little slower on
 vectorised workloads). It covers Linux x86-64 only: a manylinux x86_64 wheel and an x86-64 CLI binary. No arm64 or

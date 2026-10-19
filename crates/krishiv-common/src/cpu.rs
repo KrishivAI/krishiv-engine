@@ -28,9 +28,12 @@
 //! then an `#[inline(never)]` function) for the same reason. CI runs the v3
 //! binary under QEMU with a pre-AVX2 CPU model to catch a regression.
 //!
+//! The Python extension does not use this module: raising a Python exception from
+//! a v3-compiled extension on an old CPU faults too, so the wheels check the CPU
+//! in pure Python (`python/krishiv/_cpu.py`) before the extension is imported.
+//!
 //! Limitation: the check cannot run before the program starts. Code that runs
-//! first (the Rust runtime start-up, the dynamic loader, and for the Python
-//! module the interpreter importing the extension) was not necessarily built
+//! first (the Rust runtime start-up and the dynamic loader) was not necessarily built
 //! for the baseline, and the compiler may use a higher level anywhere in the
 //! binary, including in code that runs before `main`. In practice nothing
 //! before `main` is hot or vectorised, so the check is reliable on the CPUs it

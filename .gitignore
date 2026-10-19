@@ -8,3 +8,4 @@
 
 # Python bytecode (generator scripts run in place)
 __pycache__/
+python/krishiv/_cpu_level

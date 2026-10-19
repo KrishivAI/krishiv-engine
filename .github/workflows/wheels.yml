@@ -14,7 +14,8 @@ name: Wheels
 # plain x86-64 baseline wheel under the distribution name `krishiv-compat`
 # (same `krishiv` import name); it is uploaded as `compat-wheel-*`, outside the
 # `wheels-*` set the size budgets measure. The module checks the CPU at import
-# (krishiv_common::cpu) and points at that package.
+# (python/krishiv/_cpu.py, level recorded in `_cpu_level` by the build) and
+# raises an ImportError that points at that package.
 #
 # Called by ci.yml for pull requests that touch the Python package, the
 # extension crate or the packaging, and by nightly.yml; runnable by hand.
@@ -64,6 +65,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Record the CPU level the wheel needs (checked by krishiv/_cpu.py)
+        run: echo x86-64-v3 > python/krishiv/_cpu_level
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         env:
@@ -86,8 +89,8 @@ jobs:
             .github/scripts/wheel-test.sh "$(uv python find "$v")" dist "$FLAVOUR"
           done
       # The old-CPU path: import the abi3 wheel under user-mode QEMU with a
-      # pre-AVX2 CPU; the import must end with a clean exit (status 1) and a
-      # message naming the missing features and the compat package, not SIGILL.
+      # pre-AVX2 CPU; the import must raise an ImportError naming the missing
+      # features and the compat package, not die with SIGILL.
       - name: Old CPU import (QEMU Nehalem)
         if: matrix.libc == 'manylinux' && matrix.flavour == 'abi3'
         run: |
@@ -97,6 +100,11 @@ jobs:
           uv venv --python 3.11 "$RUNNER_TEMP/oldcpu"
           uv pip install --python "$RUNNER_TEMP/oldcpu/bin/python" dist/*.whl
           py=$(uv python find 3.11)
+          # qemu-user shows the host's /proc/cpuinfo, so the check is pointed at a
+          # Nehalem-class one; what is proved is that the ImportError comes before the
+          # native module is loaded (which would die with SIGILL under -cpu Nehalem).
+          printf 'flags\t\t: fpu sse sse2 pni ssse3 cx16 sse4_1 sse4_2 popcnt\n' > "$RUNNER_TEMP/nehalem-cpuinfo"
+          export KRISHIV_CPUINFO="$RUNNER_TEMP/nehalem-cpuinfo"
           set +e
           PYTHONPATH=$("$RUNNER_TEMP/oldcpu/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])') \
             qemu-x86_64 -L / -cpu Nehalem "$py" -c 'import krishiv' >"$RUNNER_TEMP/old.out" 2>&1
@@ -104,6 +112,7 @@ jobs:
           set -e
           cat "$RUNNER_TEMP/old.out"
           test "$code" -eq 1
+          grep -q 'ImportError' "$RUNNER_TEMP/old.out"
           ! grep -qi 'illegal instruction' "$RUNNER_TEMP/old.out"
           grep -q 'avx2' "$RUNNER_TEMP/old.out"
           grep -q 'krishiv-compat' "$RUNNER_TEMP/old.out"
@@ -182,6 +191,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Record the CPU level the wheel needs (checked by krishiv/_cpu.py)
+        run: echo neoverse-n1 > python/krishiv/_cpu_level
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         env:

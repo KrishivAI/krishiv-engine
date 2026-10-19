@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Krishiv: a Rust-native, Spark-compatible batch and streaming engine."""
 
-from krishiv._native import __allocator__, __version__
-from krishiv.sql.session import SparkSession
+from krishiv import _cpu
+
+_cpu.ensure_supported()  # before the native module: an old CPU would die with SIGILL there
+
+from krishiv._native import __allocator__, __version__  # noqa: E402
+from krishiv.sql.session import SparkSession  # noqa: E402
 
 __all__ = ["SparkSession", "__version__", "build_info", "session"]
 
