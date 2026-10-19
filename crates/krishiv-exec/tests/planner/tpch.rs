@@ -62,6 +62,21 @@ pub(crate) fn parquet_dir(
     ansi: bool,
     rt: &tokio::runtime::Runtime,
 ) -> Tpch {
+    let tables: Vec<(&str, Vec<String>)> = names
+        .iter()
+        .map(|t| (*t, vec![format!("{t}.parquet")]))
+        .collect();
+    parquet_files(dir, &tables, ansi, rt)
+}
+
+/// Tables of the Parquet files under `dir` (relative paths; the first
+/// file's schema is the table's).
+pub(crate) fn parquet_files(
+    dir: &Path,
+    sources: &[(&str, Vec<String>)],
+    ansi: bool,
+    rt: &tokio::runtime::Runtime,
+) -> Tpch {
     let store = Arc::new(LocalFileSystem::new_with_prefix(dir).unwrap());
     let sched = IoScheduler::new(IoConfig::default());
     let id = StoreId::new("file://");
@@ -78,14 +93,24 @@ pub(crate) fn parquet_dir(
         .unwrap();
     let mut catalog = MemoryCatalog::new("spark_catalog");
     let mut tables = MemoryTables::new();
-    for &t in names {
-        let path = object_store::path::Path::from(format!("{t}.parquet"));
-        let meta = rt
-            .block_on(object_store::ObjectStoreExt::head(store.as_ref(), &path))
-            .unwrap();
-        let file = FileRef::from_meta(id.clone(), &meta);
+    for (t, paths) in sources {
+        let files: Vec<FileRef> = paths
+            .iter()
+            .map(|p| {
+                let path = object_store::path::Path::from(p.as_str());
+                let meta = rt
+                    .block_on(object_store::ObjectStoreExt::head(store.as_ref(), &path))
+                    .unwrap();
+                FileRef::from_meta(id.clone(), &meta)
+            })
+            .collect();
         let file_schema = rt
-            .block_on(io.read_metadata(format.as_ref(), &file, MetadataNeeds::default(), &options))
+            .block_on(io.read_metadata(
+                format.as_ref(),
+                &files[0],
+                MetadataNeeds::default(),
+                &options,
+            ))
             .unwrap()
             .schema();
         let mut columns = Vec::new();
@@ -105,7 +130,7 @@ pub(crate) fn parquet_dir(
                 Arc::clone(&format),
                 io.clone(),
                 Arc::new(arrow_schema::Schema::new(fields)),
-                vec![file],
+                files,
                 options.clone(),
                 &config,
                 12,
@@ -124,6 +149,17 @@ pub(crate) fn parquet_dir(
     }
 }
 
+/// How a test plan orders its joins.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Order {
+    /// By the tables' footer statistics.
+    Statistics,
+    /// By the optimizer's default estimates.
+    Defaults,
+    /// As the query writes them.
+    Written,
+}
+
 impl Tpch {
     pub(crate) fn plan(&self, q: usize) -> PhysicalPlan {
         self.plan_sql(&sql(q))
@@ -133,21 +169,37 @@ impl Tpch {
     /// Parses, analyzes, optimizes (ordering joins by the tables'
     /// statistics) and plans `text`.
     pub(crate) fn plan_sql(&self, text: &str) -> Result<PhysicalPlan, KrishivError> {
-        self.plan_sql_in(text, None)
+        self.plan_sql_with(text, Order::Statistics)
     }
 
-    /// [`plan_sql`](Self::plan_sql), its operators spilling into `spill`.
+    /// As [`Self::plan_sql`], ordering the joins by `order`.
+    pub(crate) fn plan_sql_with(
+        &self,
+        text: &str,
+        order: Order,
+    ) -> Result<PhysicalPlan, KrishivError> {
+        self.plan_sql_in(text, order, None)
+    }
+
+    /// As [`Self::plan_sql_with`], its operators spilling into `spill`.
     pub(crate) fn plan_sql_in(
         &self,
         text: &str,
+        order: Order,
         spill: Option<&SpillScope>,
     ) -> Result<PhysicalPlan, KrishivError> {
         let plan =
             krishiv_sql::parse_and_lower(text, &krishiv_sql::ParserOptions::default(), SourceId(0))
                 .map_err(KrishivError::from)?;
         let plan: Plan = block_on(DefaultAnalyzer.analyze(&plan, &self.ctx))?.plan;
-        let stats = ProviderStatistics(Arc::clone(&self.tables) as _);
-        let plan = krishiv_optimizer::optimize_with(&plan, &stats)?;
+        let plan = match order {
+            Order::Statistics => {
+                let stats = ProviderStatistics(Arc::clone(&self.tables) as _);
+                krishiv_optimizer::optimize_with(&plan, &stats)?
+            }
+            Order::Defaults => krishiv_optimizer::optimize(&plan)?,
+            Order::Written => krishiv_optimizer::optimize_as_written(&plan)?,
+        };
         let mut cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
         if let Some(scope) = spill {
             cx = cx.with_spill(scope.clone());
@@ -158,7 +210,7 @@ impl Tpch {
 
 /// One value as Spark's answers render it.
 pub(crate) fn render(a: &dyn Array, row: usize) -> String {
-    if a.is_null(row) {
+    if a.is_null(row) || a.data_type() == &ArrowType::Null {
         return "NULL".to_owned();
     }
     match a.data_type() {
@@ -332,6 +384,63 @@ pub(crate) fn check(dir: &Path, answers_path: &Path) {
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
+/// The optimizer differential (P2-T072a): each query planned with the
+/// tables' statistics and with default estimates, which order the joins
+/// differently; both plans return Spark's answer. Returns how many queries
+/// got different plans.
+fn join_orders_agree(dir: &Path, answers_path: &Path, skip: &[usize]) -> usize {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = parquet_tables(dir, &rt);
+    let answers = answers(answers_path);
+    let mut failed = Vec::new();
+    let mut differ = 0;
+    for q in (1..=22).filter(|q| !skip.contains(q)) {
+        let want = expected_rows(&answers, &format!("q{q:02}"));
+        let with = tpch.plan_sql_with(&sql(q), Order::Statistics).unwrap();
+        let without = tpch.plan_sql_with(&sql(q), Order::Defaults).unwrap();
+        if with.to_string() == without.to_string() {
+            continue;
+        }
+        differ += 1;
+        for (name, plan) in [("statistics", &with), ("default estimates", &without)] {
+            let start = std::time::Instant::now();
+            match super::run(plan) {
+                Ok(b) if rows(&b) == want => {
+                    eprintln!("q{q:02} ({name}): {:.2?}", start.elapsed());
+                }
+                Ok(b) => failed.push(format!("q{q:02} ({name}): {:?}\n{plan}", rows(&b))),
+                Err(e) => failed.push(format!("q{q:02} ({name}): {e}")),
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+    differ
+}
+
+#[test]
+fn tpch_sf0_01_join_orders_agree() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tpch-sf0.01-parquet");
+    let differ = join_orders_agree(&dir, &dir.join("spark-answers.json"), &[]);
+    assert!(differ >= 5, "only {differ} queries got another join order");
+}
+
+/// [`join_orders_agree`] at SF1 (`KRISHIV_TPCH_SF1_DIR`, as
+/// [`tpch_sf1_matches_spark`]). Without statistics Q5 joins `customer` and
+/// `supplier` on their nation first (a many-to-many join, ~36 billion rows
+/// into the `lineitem` join at SF1), so it runs at SF 0.01 only.
+#[test]
+#[ignore = "needs the TPC-H SF1 data set"]
+fn tpch_sf1_join_orders_agree() {
+    let dir = std::env::var("KRISHIV_TPCH_SF1_DIR").expect("KRISHIV_TPCH_SF1_DIR");
+    let answers =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tpch-sf1-spark-answers.json");
+    let differ = join_orders_agree(Path::new(&dir), &answers, &[5]);
+    eprintln!("{differ} queries got another join order");
+}
+
 /// TPC-H SF 0.01 (`tests/fixtures/tpch-sf0.01-parquet`, DuckDB's dbgen)
 /// against Spark 4.2.0's answers.
 #[test]
@@ -380,7 +489,9 @@ fn tpch_sf1_tight_memory_spills_and_matches_spark() {
     .unwrap();
     for q in [9, 18] {
         let scope = manager.scope().unwrap();
-        let plan = tpch.plan_sql_in(&sql(q), Some(&scope)).unwrap();
+        let plan = tpch
+            .plan_sql_in(&sql(q), Order::Statistics, Some(&scope))
+            .unwrap();
         let root = TreePool::new(&MemoryConfig {
             limit: Some(mib << 20),
             ..MemoryConfig::default()
@@ -492,4 +603,134 @@ fn file_table_statistics_merge_footers() {
     );
     assert_eq!(two.columns["d"].min.as_ref().map(|_| ()), Some(()));
     assert!(two.columns["dt"].distinct.is_some());
+}
+
+/// TPC-H Q5, Q7, Q8 and Q9 with their joins written in a hand-picked
+/// order: `lineitem` probes, every other table is built (filters stay in
+/// `WHERE`, where the optimizer pushes them into the scans).
+const HAND_ORDERED: [(usize, &str); 4] = [
+    (
+        5,
+        "SELECT n_name, sum(l_extendedprice * (1 - l_discount)) AS revenue \
+         FROM lineitem JOIN orders ON l_orderkey = o_orderkey \
+         JOIN customer ON c_custkey = o_custkey \
+         JOIN supplier ON l_suppkey = s_suppkey AND c_nationkey = s_nationkey \
+         JOIN nation ON s_nationkey = n_nationkey \
+         JOIN region ON n_regionkey = r_regionkey \
+         WHERE r_name = 'ASIA' AND o_orderdate >= CAST('1994-01-01' AS date) \
+         AND o_orderdate < CAST('1995-01-01' AS date) \
+         GROUP BY n_name ORDER BY revenue DESC",
+    ),
+    (
+        7,
+        "SELECT supp_nation, cust_nation, l_year, sum(volume) AS revenue FROM ( \
+         SELECT n1.n_name AS supp_nation, n2.n_name AS cust_nation, \
+         extract(year FROM l_shipdate) AS l_year, l_extendedprice * (1 - l_discount) AS volume \
+         FROM lineitem JOIN supplier ON s_suppkey = l_suppkey \
+         JOIN orders ON o_orderkey = l_orderkey \
+         JOIN customer ON c_custkey = o_custkey \
+         JOIN nation n1 ON s_nationkey = n1.n_nationkey \
+         JOIN nation n2 ON c_nationkey = n2.n_nationkey \
+         WHERE ((n1.n_name = 'FRANCE' AND n2.n_name = 'GERMANY') \
+         OR (n1.n_name = 'GERMANY' AND n2.n_name = 'FRANCE')) \
+         AND l_shipdate BETWEEN CAST('1995-01-01' AS date) AND CAST('1996-12-31' AS date)) AS shipping \
+         GROUP BY supp_nation, cust_nation, l_year ORDER BY supp_nation, cust_nation, l_year",
+    ),
+    (
+        8,
+        "SELECT o_year, sum(CASE WHEN nation = 'BRAZIL' THEN volume ELSE 0 END) / sum(volume) AS mkt_share \
+         FROM (SELECT extract(year FROM o_orderdate) AS o_year, \
+         l_extendedprice * (1 - l_discount) AS volume, n2.n_name AS nation \
+         FROM lineitem JOIN part ON p_partkey = l_partkey \
+         JOIN supplier ON s_suppkey = l_suppkey \
+         JOIN orders ON l_orderkey = o_orderkey \
+         JOIN customer ON o_custkey = c_custkey \
+         JOIN nation n1 ON c_nationkey = n1.n_nationkey \
+         JOIN region ON n1.n_regionkey = r_regionkey \
+         JOIN nation n2 ON s_nationkey = n2.n_nationkey \
+         WHERE r_name = 'AMERICA' \
+         AND o_orderdate BETWEEN CAST('1995-01-01' AS date) AND CAST('1996-12-31' AS date) \
+         AND p_type = 'ECONOMY ANODIZED STEEL') AS all_nations \
+         GROUP BY o_year ORDER BY o_year",
+    ),
+    (
+        9,
+        "SELECT nation, o_year, sum(amount) AS sum_profit FROM ( \
+         SELECT n_name AS nation, extract(year FROM o_orderdate) AS o_year, \
+         l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity AS amount \
+         FROM lineitem JOIN part ON p_partkey = l_partkey \
+         JOIN supplier ON s_suppkey = l_suppkey \
+         JOIN partsupp ON ps_suppkey = l_suppkey AND ps_partkey = l_partkey \
+         JOIN orders ON o_orderkey = l_orderkey \
+         JOIN nation ON s_nationkey = n_nationkey \
+         WHERE p_name LIKE '%green%') AS profit \
+         GROUP BY nation, o_year ORDER BY nation, o_year DESC",
+    ),
+];
+
+/// The hand-ordered queries return the same rows as the queries (SF 0.01).
+#[test]
+fn tpch_hand_ordered_queries_agree() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tpch-sf0.01-parquet");
+    let tpch = parquet_tables(&dir, &rt);
+    let answers = answers(&dir.join("spark-answers.json"));
+    for (q, text) in HAND_ORDERED {
+        let plan = tpch.plan_sql_with(text, Order::Written).unwrap();
+        let got = rows(&super::run(&plan).unwrap());
+        assert_eq!(got, expected_rows(&answers, &format!("q{q:02}")), "q{q:02}");
+    }
+}
+
+/// P2-T073a: Q5, Q7, Q8 and Q9 at SF10 (`KRISHIV_TPCH_SF10_DIR`) with the
+/// optimizer's join order within 2x of the hand-ordered plan; runs
+/// interleaved, the median of `KRISHIV_TPCH_RUNS` (default 3) each. Run
+/// with `cargo test --release -p krishiv-exec --test planner tpch_sf10 --
+/// --ignored --nocapture`.
+#[test]
+#[ignore = "needs the TPC-H SF10 data set"]
+fn tpch_sf10_join_order_within_2x_of_hand_ordered() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = std::env::var("KRISHIV_TPCH_SF10_DIR").expect("KRISHIV_TPCH_SF10_DIR");
+    let runs: usize = std::env::var("KRISHIV_TPCH_RUNS")
+        .ok()
+        .map_or(3, |r| r.parse().unwrap());
+    let tpch = parquet_tables(Path::new(&dir), &rt);
+    let mut slow = Vec::new();
+    for (q, text) in HAND_ORDERED {
+        let mut times = [Vec::new(), Vec::new()];
+        let mut results = [Vec::new(), Vec::new()];
+        for _ in 0..runs {
+            for (i, (query, order)) in [
+                (sql(q), Order::Statistics),
+                (text.to_owned(), Order::Written),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let plan = tpch.plan_sql_with(&query, order).unwrap();
+                let start = std::time::Instant::now();
+                results[i] = rows(&super::run(&plan).unwrap());
+                times[i].push(start.elapsed());
+            }
+        }
+        assert_eq!(results[0], results[1], "q{q:02}");
+        let median = |v: &mut Vec<std::time::Duration>| {
+            v.sort();
+            v[v.len() / 2]
+        };
+        let (opt, hand) = (median(&mut times[0]), median(&mut times[1]));
+        let ratio = opt.as_secs_f64() / hand.as_secs_f64();
+        eprintln!("q{q:02}: optimizer {opt:.2?}, hand-ordered {hand:.2?}, ratio {ratio:.2}");
+        if ratio > 2.0 {
+            slow.push(q);
+        }
+    }
+    assert!(slow.is_empty(), "over 2x the hand-ordered time: {slow:?}");
 }

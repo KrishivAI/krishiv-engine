@@ -36,7 +36,10 @@ pub(super) fn compile(
     let zoned = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, Some(_)));
     let zone = match input.env.zone {
         Some(offset) => FixedOffset(offset),
-        None if zoned(&out) || bind_args.iter().any(|a| zoned(&a.data_type())) => {
+        None if zoned(&out)
+            || bind_args.iter().any(|a| zoned(&a.data_type()))
+            || matches!(name, "current_date" | "curdate" | "localtimestamp") =>
+        {
             return Err(unsupported(
                 "functions of timestamps in a session time zone other than a fixed offset",
             ));
@@ -47,7 +50,8 @@ pub(super) fn compile(
         .with_ansi(input.env.ansi)
         .with_kernel(input.env.kernels)
         .with_time_zone(Arc::new(zone))
-        .with_query_start(input.env.query_start_micros);
+        .with_query_start(input.env.query_start_micros)
+        .with_user(Arc::clone(&input.env.user));
     let function = bind_scalar(name, &bind_args, &opts).map_err(|err| {
         if err.error_class() == krishiv_common::error::ErrorClass::KrishivUnsupportedFeature {
             unsupported_expr(e)

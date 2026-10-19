@@ -80,6 +80,17 @@ pub enum AggregateFunction {
     Min,
     /// `max(x)`, as `min`.
     Max,
+    /// `first(x)`: the first row's value of the group in input order (a
+    /// NULL counts unless `ignore_nulls`); NULL for no value. The input type.
+    First {
+        /// `first(x, true)` / `IGNORE NULLS`: the first non-NULL value.
+        ignore_nulls: bool,
+    },
+    /// `last(x)`, as `first` for the last row.
+    Last {
+        /// `last(x, true)` / `IGNORE NULLS`: the last non-NULL value.
+        ignore_nulls: bool,
+    },
 }
 
 /// Where an aggregate's arguments come from.
@@ -173,7 +184,11 @@ impl AggregateExpr {
             (F::Avg, DataType::Decimal128(p, s)) if *s >= 0 => {
                 DataType::Decimal128((*p + 4).min(38), s.saturating_add(4).min(38))
             }
-            (F::Min | F::Max, t) if accumulator::min_max_supported(t) => t.clone(),
+            (F::Min | F::Max | F::First { .. } | F::Last { .. }, t)
+                if accumulator::min_max_supported(t) =>
+            {
+                t.clone()
+            }
             (f, t) => return Err(unsupported(format!("{f:?} of {t}"))),
         })
     }
@@ -198,6 +213,11 @@ impl AggregateExpr {
                 Field::new(n("count"), DataType::Int64, false),
             ],
             (F::Min | F::Max, _) => vec![Field::new(n("value"), out, true)],
+            // Whether a row was taken: a NULL value is a value.
+            (F::First { .. } | F::Last { .. }, _) => vec![
+                Field::new(n("value"), out, true),
+                Field::new(n("valueSet"), DataType::Boolean, false),
+            ],
         })
     }
 

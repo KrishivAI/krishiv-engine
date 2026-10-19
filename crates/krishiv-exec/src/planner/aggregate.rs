@@ -53,6 +53,11 @@ impl Planner<'_> {
             let args: Vec<&Arc<Expr>> =
                 c.f.args
                     .iter()
+                    .take(if picks(c.f.id.name()).is_some() {
+                        1
+                    } else {
+                        usize::MAX
+                    })
                     .filter(|a| !non_null_literal(a) || c.f.id.name() != "count")
                     .collect();
             arg_at.push(wanted.len()..wanted.len() + args.len());
@@ -69,6 +74,19 @@ impl Planner<'_> {
                 "avg" => AggregateFunction::Avg,
                 "min" => AggregateFunction::Min,
                 "max" => AggregateFunction::Max,
+                // `first(x, ignoreNulls)`: the analyzer checked the flag is a
+                // boolean literal.
+                name if picks(name).is_some() => {
+                    let ignore_nulls = matches!(
+                        c.f.args.get(1).map(|a| &a.node),
+                        Some(ExprNode::Literal(krishiv_plan::Literal::Boolean(true)))
+                    );
+                    if picks(name) == Some(true) {
+                        AggregateFunction::Last { ignore_nulls }
+                    } else {
+                        AggregateFunction::First { ignore_nulls }
+                    }
+                }
                 other => {
                     return Err(unsupported(&format!("the aggregate function {other}")));
                 }
@@ -80,8 +98,18 @@ impl Planner<'_> {
             if function != AggregateFunction::Count && args.len() != 1 {
                 return Err(internal("an aggregate of several arguments"));
             }
+            // Spark's STRING and BINARY are views here whatever carrier a
+            // registered table uses; the accumulators read any carrier.
             let arg_type = args.first().map_or(arrow_schema::DataType::Null, |a| {
-                input.schema.field(*a).data_type().clone()
+                match input.schema.field(*a).data_type() {
+                    arrow_schema::DataType::Utf8 | arrow_schema::DataType::LargeUtf8 => {
+                        arrow_schema::DataType::Utf8View
+                    }
+                    arrow_schema::DataType::Binary | arrow_schema::DataType::LargeBinary => {
+                        arrow_schema::DataType::BinaryView
+                    }
+                    t => t.clone(),
+                }
             });
             let agg = AggregateExpr {
                 function,
@@ -220,6 +248,16 @@ fn replace(
             None => x,
         })
     })
+}
+
+/// `Some(true)` for `last`/`last_value`, `Some(false)` for `first`/
+/// `first_value`: the aggregates that pick a row's value.
+fn picks(name: &str) -> Option<bool> {
+    match name {
+        "first" | "first_value" => Some(false),
+        "last" | "last_value" => Some(true),
+        _ => None,
+    }
 }
 
 fn non_null_literal(e: &Expr) -> bool {

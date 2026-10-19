@@ -1405,3 +1405,87 @@ async fn a_source_waiting_for_memory_is_served_by_its_own_drivers_sink() {
     assert_eq!(root.stats().aborts, 0);
     assert_released(&root);
 }
+
+/// `UNION ALL` fan-in: several inputs into one pipeline.
+struct FanIn(Vec<Arc<dyn ExecNode>>);
+
+impl ExecNode for FanIn {
+    fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+        b.fan_in(&self.0)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fan_in_runs_its_inputs_into_one_sink() {
+    let runner = QueryRunner::new(executor(4));
+    let root = root(1 << 30);
+    // Inputs with operators of their own, a breaker under one, a nested
+    // fan-in, then shared operators and a breaker above.
+    let filtered = pipe(scan(10_000).1, Filter::new(|v| v % 2 == 0));
+    let counted = Arc::new(Break(scan(7).1, Count::new(), false));
+    let nested = Arc::new(FanIn(vec![scan(3).1, scan(4).1]));
+    let union = Arc::new(FanIn(vec![filtered, counted, nested]));
+    let plan = Arc::new(Break(
+        pipe(union, Filter::new(|v| v < 5)),
+        Count::new(),
+        false,
+    ));
+    let out = run(&runner, plan, &query(&root, 1, ExecConfig::default()))
+        .await
+        .unwrap();
+    // [count, sum]: 0, 2, 4 from the first input; the inner count's
+    // [7, 21] is filtered out; 0..3 and 0..4 pass.
+    assert_eq!(values(&out), [3 + 3 + 4, 6 + 3 + 6]);
+    // A limit above a fan-in stops every input.
+    let union = Arc::new(FanIn(vec![scan(1 << 20).1, scan(1 << 20).1]));
+    let out = run(
+        &runner,
+        pipe(union, Limit::new(10)),
+        &query(&root, 2, ExecConfig::default()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows(&out), 10);
+    assert_released(&root);
+}
+
+#[tokio::test]
+async fn fan_in_errors() {
+    let runner = QueryRunner::new(executor(1));
+    let root = root(1 << 30);
+    struct Started;
+    impl ExecNode for Started {
+        fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+            b.set_source(RangeSource::new(1))?;
+            b.fan_in(&[scan(1).1])
+        }
+    }
+    struct Failing;
+    impl ExecNode for Failing {
+        fn build_pipelines(self: Arc<Self>, _b: &mut PipelineBuilder) -> Result<()> {
+            Err(DivideByZero {
+                config: "\"spark.sql.ansi.enabled\"".into(),
+            }
+            .into())
+        }
+    }
+    for plan in [
+        Arc::new(FanIn(Vec::new())) as Arc<dyn ExecNode>,
+        Arc::new(Started),
+    ] {
+        let e = runner
+            .submit(plan, query(&root, 1, ExecConfig::default()))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(e.error_class(), ErrorClass::InternalError);
+    }
+    // An input's planning error is the query's.
+    let plan = Arc::new(FanIn(vec![scan(1).1, Arc::new(Failing)]));
+    let e = runner
+        .submit(plan, query(&root, 2, ExecConfig::default()))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+}

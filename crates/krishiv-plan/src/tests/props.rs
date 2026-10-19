@@ -17,8 +17,8 @@ use proptest::sample::Index;
 
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Cte, CteRef, DayTimeField, Expr, ExprNode,
-    FunctionCall, FunctionId, FunctionKind, Grouping, JoinCondition, JoinKind, Literal,
-    LogicalPlan, NullOrdering, Origin, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr,
+    FunctionCall, FunctionId, FunctionKind, Grouping, JoinCondition, JoinKind, JoinStrategy,
+    Literal, LogicalPlan, NullOrdering, Origin, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr,
     ResolvedFunction, Scan, SortDirection, SortOrder, SourceId, Span, SqlArgs, Star, SubqueryKind,
     TableVersion, YearMonthField,
 };
@@ -288,7 +288,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 15 };
+        let kinds = if depth == 0 { 4 } else { 19 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -387,6 +387,28 @@ impl Gen<'_> {
                 input: self.input(d),
                 alias: self.name(),
                 columns: self.many(0, 1, Gen::name),
+            },
+            15 => PlanNode::Hint {
+                input: self.input(d),
+                name: self.name(),
+                params: self.exprs(),
+            },
+            16 => PlanNode::JoinHint {
+                input: self.input(d),
+                strategy: [
+                    JoinStrategy::Broadcast,
+                    JoinStrategy::ShuffleMerge,
+                    JoinStrategy::ShuffleHash,
+                    JoinStrategy::ShuffleReplicateNl,
+                ][usize::from(self.pick(4))],
+            },
+            17 => PlanNode::Union {
+                inputs: self.many(1, 3, |g| g.input(d)),
+                by_name: self.flag(),
+                allow_missing_columns: self.flag(),
+            },
+            18 => PlanNode::Distinct {
+                input: self.input(d),
             },
             _ => PlanNode::WithCte {
                 input: self.input(d),
@@ -824,6 +846,29 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             alias,
             columns,
         } => m_string(alias, w) || m_strings(columns, w) || m_plan(input, w),
+        PlanNode::Hint {
+            input,
+            name,
+            params,
+        } => m_string(name, w) || m_exprs(params, w) || m_plan(input, w),
+        PlanNode::JoinHint { input, strategy } => {
+            site!(
+                w,
+                flip(strategy, JoinStrategy::Broadcast, JoinStrategy::ShuffleHash)
+            );
+            m_plan(input, w)
+        }
+        PlanNode::Union {
+            inputs,
+            by_name,
+            allow_missing_columns,
+        } => {
+            site!(w, *by_name = !*by_name);
+            site!(w, *allow_missing_columns = !*allow_missing_columns);
+            site!(w, inputs.push(Arc::new(LogicalPlan::table(["x"]))));
+            inputs.iter_mut().any(|i| m_plan(i, w))
+        }
+        PlanNode::Distinct { input } => m_plan(input, w),
         PlanNode::WithCte { input, ctes } => {
             site!(
                 w,

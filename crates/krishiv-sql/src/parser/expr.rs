@@ -6,7 +6,7 @@
 //! `IN`, `LIKE`, `IS`, ...), comparison, `|`, `^`, `&`, shifts, `+ - ||`,
 //! `* / % DIV`, unary `- + ~`, postfix `[i]`, `.field`, `::type`.
 
-use super::{Fail, PR, Parser};
+use super::{Close, Fail, PR, Parser};
 use crate::ast::{
     BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, Function, FunctionArg, Ident,
     Interval, IntervalValue, LikeQuantifier, Literal, NullTreatment, NumKind, ObjectName,
@@ -378,8 +378,13 @@ impl Parser<'_> {
             let save = self.pos;
             let mut query = None;
             if self.query_follows(0) {
+                let nested = self.sym_at(0, Sym::LParen);
                 match self.query() {
                     Ok(q) if self.sym_at(0, Sym::RParen) => query = Some(q),
+                    // A query that starts with `SELECT` is committed to.
+                    Ok(_) if !nested => {
+                        self.expect_closing(Sym::RParen, Close::DropOrInsert)?;
+                    }
                     Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
                     _ => self.pos = save,
                 }
@@ -398,7 +403,15 @@ impl Parser<'_> {
                     op: Span::default(),
                 },
             };
-            self.expect_sym(Sym::RParen)?;
+            let n = match &kind {
+                ExprKind::InList { list, .. } => list.len(),
+                _ => 0,
+            };
+            if n == 0 {
+                self.expect_sym(Sym::RParen)?;
+            } else {
+                self.expect_closing(Sym::RParen, Close::List(n))?;
+            }
             kind
         } else if self.eat_kw("RLIKE") || self.eat_kw("REGEXP") {
             let pattern = self.pred_value(&mut height)?;
@@ -631,7 +644,7 @@ impl Parser<'_> {
         loop {
             let kind = if self.eat_sym(Sym::LBracket) {
                 let (index, h) = self.value_expr()?;
-                self.expect_sym(Sym::RBracket)?;
+                self.expect_closing(Sym::RBracket, Close::DropOrInsert)?;
                 height = height.max(h);
                 ExprKind::Subscript(boxed(e), boxed(index))
             } else if self.sym_at(0, Sym::Dot) && self.is_ident_at(1, true) {
@@ -775,8 +788,11 @@ impl Parser<'_> {
         if self.query_follows(1) {
             let save = self.pos;
             self.bump();
+            let nested = self.sym_at(0, Sym::LParen);
             match self.query() {
-                Ok(q) if self.eat_sym(Sym::RParen) => {
+                Ok(q) if self.sym_at(0, Sym::RParen) || !nested => {
+                    // `(SELECT ...` is committed to by ANTLR's prediction.
+                    self.expect_closing(Sym::RParen, Close::DropOrInsert)?;
                     return Ok(Some(self.mk(ExprKind::Subquery(Box::new(q)), start)));
                 }
                 Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
@@ -801,7 +817,7 @@ impl Parser<'_> {
         while self.eat_sym(Sym::Comma) {
             items.push(self.select_item()?);
         }
-        self.expect_sym(Sym::RParen)?;
+        self.expect_closing(Sym::RParen, Close::List(items.len()))?;
         Ok(self.mk(ExprKind::Row(items), start))
     }
 
@@ -953,7 +969,13 @@ impl Parser<'_> {
             let expr = boxed(self.expr()?);
             self.expect_kw("AS")?;
             let data_type = Box::new(self.data_type()?);
-            self.expect_sym(Sym::RParen)?;
+            // After a bare type keyword, ANTLR is still predicting the
+            // type's optional parts: no recovery hint (see `extra_after_type`).
+            if self.bare_keyword_type(&data_type) && !self.continues_type(&data_type) {
+                self.expect_sym(Sym::RParen)?;
+            } else {
+                self.expect_closing(Sym::RParen, Close::DropOrInsert)?;
+            }
             ExprKind::Cast {
                 expr,
                 data_type,
@@ -1209,7 +1231,16 @@ impl Parser<'_> {
         start: usize,
     ) -> PR<Function> {
         let mut null_treatment = self.null_treatment();
-        self.expect_sym(Sym::RParen)?;
+        // After a plain column name Spark also inserts a missing `)`.
+        let after_name = quantifier.is_none()
+            && self.pos > 0
+            && self.toks.get(self.pos - 1).map(|t| t.kind) == Some(TokenKind::Word);
+        let how = if after_name {
+            Close::DropOrInsert
+        } else {
+            Close::Drop
+        };
+        self.expect_closing(Sym::RParen, how)?;
         let mut within_group = vec![];
         if self.kw_at(0, "WITHIN") && self.kw_at(1, "GROUP") {
             self.pos += 2;

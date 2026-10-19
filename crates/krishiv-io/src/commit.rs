@@ -178,8 +178,16 @@ impl DirectoryWrite {
         }
         // Never a file of this write, even if its job UUID was reused.
         let new: std::collections::HashSet<&Path> = files.iter().map(|f| &f.path).collect();
-        futures::stream::iter(self.replaced.iter().filter(|p| !new.contains(p)))
+        // The (lazy) delete futures are built first: a stream mapping
+        // through a borrowing closure makes this future unprovably `Send`
+        // for callers that spawn it.
+        let deletes: Vec<_> = self
+            .replaced
+            .iter()
+            .filter(|p| !new.contains(p))
             .map(|p| io.delete(&self.store, p))
+            .collect();
+        futures::stream::iter(deletes)
             .buffer_unordered(PARALLEL_DELETES)
             .try_collect::<Vec<()>>()
             .await?;

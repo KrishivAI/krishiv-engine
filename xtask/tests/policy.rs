@@ -166,14 +166,40 @@ fn ci_policy_wiring() {
     let fetch = read(".github/scripts/budgets-measurement.sh");
     for needle in [
         "actions/workflows/ci.yml/runs",
-        "select(.name == \"budgets-measure\")",
-        "--name budgets-current",
+        "job_name=\"${JOB:-budgets-measure}\"",
+        "artifact=\"${ARTIFACT:-budgets-current}\"",
+        "--name \"$artifact\"",
     ] {
         assert!(
             fetch.contains(needle),
             "budgets-measurement.sh lacks {needle:?}"
         );
     }
+    // Wheel sizes: wheels.yml only measures on a pull request (and reads no
+    // label); the label-aware gate in pr-policy.yml compares the measurement.
+    let wheels = read(".github/workflows/wheels.yml");
+    for needle in [
+        "cargo xtask wheel-sizes dist --measure-only",
+        "name: wheel-sizes",
+        "if: github.event_name != 'pull_request'",
+    ] {
+        assert!(wheels.contains(needle), "wheels.yml lacks {needle:?}");
+    }
+    assert!(
+        !wheels.contains("approval-label.sh") && !wheels.contains("HAS_LABEL"),
+        "wheels.yml must not resolve labels from its (stale) event payload"
+    );
+    for needle in [
+        "  wheel-sizes:\n",
+        "JOB: wheels-targets / sizes",
+        "SKIP_JOB: wheels-targets",
+        "approval-label.sh budget-approved",
+        "cargo xtask wheel-sizes --compare",
+        "--budgets \"$RUNNER_TEMP/base-budgets.json\"",
+    ] {
+        assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
+    }
+    assert!(ci.contains("  wheels-targets:\n") && ci.contains("  wheels-ok:\n"));
     assert!(
         !ci.contains("--all-features --locked --no-tests"),
         "PR nextest must use default features"
