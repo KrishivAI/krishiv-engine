@@ -731,7 +731,7 @@ fn writes_follow_spark_save_modes() {
 }
 
 #[test]
-fn writes_run_from_a_tokio_runtime_and_relative_paths_resolve() {
+fn writes_run_from_a_tokio_runtime() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("rt");
     let out = out.to_str().unwrap().to_owned();
@@ -766,4 +766,35 @@ fn ignored_hints_come_back_as_warnings() {
     );
     // The query still runs, and a query without hints has none.
     assert!(warnings("SELECT id FROM people").is_empty());
+}
+
+#[test]
+fn file_scans_run_on_a_deterministic_current_thread_executor() {
+    // A deterministic executor runs everything, I/O included, on the
+    // caller's current-thread runtime: the footer reads made from the file
+    // table's own thread progress while that runtime drives the action.
+    let dir = tempfile::tempdir().unwrap();
+    parquet_file(&dir.path().join("part-0.parquet"));
+    let root = dir.path().to_str().unwrap().to_owned();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let executor = krishiv_exec::TokioExecutor::deterministic(2).unwrap();
+        let s = Session::builder().executor(executor).build().unwrap();
+        let df = s.read().parquet([root.as_str()]);
+        assert_eq!(df.count().await.unwrap(), 2);
+        view_over_files(&s, &root).await;
+    });
+}
+
+async fn view_over_files(s: &Session, root: &str) {
+    s.read()
+        .parquet([root])
+        .create_or_replace_temp_view("d")
+        .await
+        .unwrap();
+    let df = s.sql("SELECT id FROM d WHERE id > 1").await.unwrap();
+    assert_eq!(ids(&df.collect().await.unwrap()), [2]);
 }

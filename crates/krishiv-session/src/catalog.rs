@@ -276,7 +276,10 @@ impl QueryCatalog {
 
 /// [`FileTable::open`] on a thread of its own. Its future cannot be proven
 /// `Send` (a higher-ranked closure in its footer stream), so it cannot run
-/// on the session's executor; the thread enters the I/O runtime. The
+/// on the session's executor; the thread enters the I/O runtime, whose
+/// tasks and timers its reads use (on a deterministic executor that is the
+/// caller's current-thread runtime, which drives them while the action
+/// awaits this thread). The
 /// thread only waits for footers, so no compute or blocking-pool slot is
 /// held. Dropping the returned future abandons the open.
 async fn open_table(

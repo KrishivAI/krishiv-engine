@@ -34,7 +34,7 @@ arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 parquet = { workspace = true, features = ["arrow"] }
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [features]
 # Access to the logical-plan IR (`Session::from_plan`, `DataFrame::plan`):
