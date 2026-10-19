@@ -62,11 +62,10 @@ def main():
             for p, s, vals in CASES:
                 spark = SparkSession.builder.remote(remote).getOrCreate()
                 spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
-                when = " ".join(
-                    f"WHEN {i} THEN CAST('{text(v, s)}' AS DECIMAL({p},{s}))" for i, v in enumerate(vals)
-                )
-                spark.range(0, len(vals), 1, 1).selectExpr("id % 1 AS g", f"CASE id {when} END AS v") \
-                    .createOrReplaceTempView("t")
+                when = " ".join(f"WHEN {i} THEN CAST('{text(v, s)}' AS DECIMAL({p},{s}))" for i, v in enumerate(vals))
+                spark.range(0, len(vals), 1, 1).selectExpr(
+                    "id % 1 AS g", f"CASE id {when} END AS v"
+                ).createOrReplaceTempView("t")
                 case = {"ansi": ansi, "fn": fn, "type": [p, s], "values": [str(v) for v in vals]}
                 try:
                     r = spark.sql(f"SELECT {fn}(v) AS a, typeof({fn}(v)) AS t FROM t GROUP BY g").collect()[0]
