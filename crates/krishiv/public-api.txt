@@ -2,6 +2,7 @@ pub mod krishiv
 pub use krishiv::Column
 pub use krishiv::DataFrame
 pub use krishiv::DataFrameReader
+pub use krishiv::DataFrameWriter
 pub use krishiv::DataType
 pub use krishiv::Error
 pub use krishiv::ExplainMode

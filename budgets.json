@@ -9,13 +9,13 @@
     "krishiv-python": 114
   },
   "wheel_bytes": {
-    "cp311-abi3-macosx_11_0_arm64": 634667,
-    "cp311-abi3-manylinux_2_28_aarch64": 766297,
-    "cp311-abi3-manylinux_2_28_x86_64": 793599,
-    "cp311-abi3-musllinux_1_2_x86_64": 973877,
-    "cp314-cp314t-macosx_11_0_arm64": 630485,
-    "cp314-cp314t-manylinux_2_28_aarch64": 761437,
-    "cp314-cp314t-manylinux_2_28_x86_64": 789106,
-    "cp314-cp314t-musllinux_1_2_x86_64": 969360
+    "cp311-abi3-macosx_11_0_arm64": 7211643,
+    "cp311-abi3-manylinux_2_28_aarch64": 8177747,
+    "cp311-abi3-manylinux_2_28_x86_64": 8838675,
+    "cp311-abi3-musllinux_1_2_x86_64": 9269914,
+    "cp314-cp314t-macosx_11_0_arm64": 7207314,
+    "cp314-cp314t-manylinux_2_28_aarch64": 8174711,
+    "cp314-cp314t-manylinux_2_28_x86_64": 8833817,
+    "cp314-cp314t-musllinux_1_2_x86_64": 9268428
   }
 }
