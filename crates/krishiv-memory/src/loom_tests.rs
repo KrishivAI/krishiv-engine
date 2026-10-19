@@ -46,6 +46,7 @@ fn pool(limit: usize, quantum: usize) -> Arc<TreePool> {
             quantum,
             spill_wait_timeout: Duration::from_secs(1),
             abort_release_timeout: Duration::from_secs(1),
+            spill_scratch_reserve: 0,
         },
         Arc::new(NeverClock),
     )
@@ -385,5 +386,132 @@ fn an_arbitration_round_is_served_by_a_spill() {
         requester.join().unwrap().unwrap();
         assert_eq!((q1.reserved(), q2.reserved(), root.reserved()), (4, 4, 8));
         assert_eq!(root.stats().aborts, 0);
+    });
+}
+
+/// The first deadline (a round's spill wait) has passed already; later
+/// ones (the abort-release wait) never fire.
+#[derive(Debug, Default)]
+struct ExpiredClock(AtomicBool);
+
+impl Clock for ExpiredClock {
+    fn now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
+
+    fn sleep_until(
+        &self,
+        _deadline: std::time::Instant,
+    ) -> Result<BoxFuture<'static, ()>, MemoryError> {
+        if self.0.swap(true, Ordering::SeqCst) {
+            Ok(Box::pin(std::future::pending()))
+        } else {
+            Ok(Box::pin(std::future::ready(())))
+        }
+    }
+}
+
+/// `begin` racing a requester that checks `started` (as a round does at
+/// its deadline): a ticket seen as started is always completed, and its
+/// completion always wakes the requester.
+#[test]
+fn a_started_ticket_always_completes() {
+    model(|| {
+        let signal = Arc::new(SpillSignal::new());
+        let ticket = signal.request_spill(4);
+        let owner = {
+            let signal = Arc::clone(&signal);
+            thread::spawn(move || {
+                if let Some(service) = signal.begin() {
+                    service.complete(4);
+                }
+            })
+        };
+        if ticket.started() {
+            assert_eq!(block_on(ticket), 4);
+        } else {
+            drop(ticket); // given up at the deadline
+        }
+        owner.join().unwrap();
+        assert_eq!(signal.spill_requested(), None);
+    });
+}
+
+/// An ordinary reservation and spill scratch race for a pool's last bytes:
+/// the ordinary one never takes the floor, the scratch one never passes the
+/// limit, and both roll back cleanly.
+#[test]
+fn ordinary_grants_never_take_the_scratch_floor() {
+    model(|| {
+        let root = TreePool::with_clock(
+            &MemoryConfig {
+                limit: Some(16),
+                quantum: 1,
+                spill_wait_timeout: Duration::from_secs(1),
+                abort_release_timeout: Duration::from_secs(1),
+                spill_scratch_reserve: 2,
+            },
+            Arc::new(NeverClock),
+        );
+        let q = root.child_pool("q", None);
+        let (a, s) = (q.register("table", None), q.register("writer", None));
+        q.try_reserve(a, 12).unwrap();
+        let scratch = {
+            let q = Arc::clone(&q);
+            thread::spawn(move || q.try_reserve_scratch(s, 3).is_ok())
+        };
+        let ordinary = q.try_reserve(a, 2).is_ok();
+        let scratch = scratch.join().unwrap();
+        // First come wins: 14 + 3 > 16 refuses the scratch; after the
+        // scratch, 15 + 2 > 14 (the limit minus the floor) refuses the
+        // ordinary grant.
+        assert!(ordinary ^ scratch);
+        assert_eq!(root.reserved(), if ordinary { 14 } else { 15 });
+        q.release(a, 14);
+        q.release(s, 3);
+        assert_eq!(root.reserved(), 0);
+    });
+}
+
+/// A round whose spill-wait deadline has already passed when it checks,
+/// with a victim already spilling (its driver began servicing a request,
+/// which the round's request joins): the round awaits that spill instead
+/// of aborting the victim, in every interleaving.
+#[test]
+fn an_expired_deadline_still_awaits_a_begun_spill() {
+    let mut b = loom::model::Builder::new();
+    b.preemption_bound = Some(2);
+    b.check(|| {
+        let root = TreePool::with_clock(
+            &MemoryConfig {
+                limit: Some(8),
+                quantum: 1,
+                spill_wait_timeout: Duration::from_secs(1),
+                abort_release_timeout: Duration::from_secs(1),
+                spill_scratch_reserve: 0,
+            },
+            Arc::new(ExpiredClock::default()),
+        );
+        let q1 = root.child_pool("q1", None);
+        let q2 = root.child_pool("q2", None);
+        let owner = SpillOwner::new();
+        let signal = owner.signal();
+        let x = q1.register("x", Some(Arc::clone(&signal) as Arc<dyn Spillable>));
+        q1.try_reserve(x, 8).unwrap();
+        signal.set_spillable_bytes(8);
+        // The victim's driver is already spilling for an earlier request.
+        drop(signal.request_spill(4));
+        let service = signal.begin().unwrap();
+        let w = q2.register("w", None);
+        let requester = {
+            let q2 = Arc::clone(&q2);
+            thread::spawn(move || block_on(q2.reserve(w, 4)))
+        };
+        q1.release(x, 4);
+        service.complete(4);
+        requester.join().unwrap().unwrap();
+        assert_eq!((q1.reserved(), q2.reserved()), (4, 4));
+        assert_eq!(root.stats().aborts, 0, "a begun spill is never given up");
+        assert!(q1.check_aborted().is_ok());
     });
 }

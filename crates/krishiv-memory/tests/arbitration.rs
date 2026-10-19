@@ -46,6 +46,7 @@ fn new_root(limit: usize) -> Arc<TreePool> {
             quantum: MIB,
             spill_wait_timeout: TIMEOUT,
             abort_release_timeout: RELEASE,
+            spill_scratch_reserve: 0,
         },
         Arc::new(TokioClock),
     )
@@ -66,15 +67,19 @@ struct Behaviour {
     spills: bool,
     /// Delay before acting on a spill request or an abort.
     react_after: Duration,
+    /// How long a spill takes once begun (its I/O).
+    spill_takes: Duration,
 }
 
 const COOPERATIVE: Behaviour = Behaviour {
     spills: true,
     react_after: Duration::ZERO,
+    spill_takes: Duration::ZERO,
 };
 const NO_SPILL: Behaviour = Behaviour {
     spills: false,
     react_after: Duration::ZERO,
+    spill_takes: Duration::ZERO,
 };
 
 /// One consumer with its own driver, which runs batches and services spill
@@ -108,14 +113,14 @@ impl Spiller {
                 sleep(b.react_after).await;
                 self.pool.check_aborted()?;
             }
-            if b.spills
-                && let Some(target) = self.signal.spill_requested()
-            {
+            if b.spills && self.signal.spill_requested().is_some() {
                 sleep(b.react_after).await;
-                let freed = target.min(self.reservation.size());
-                self.reservation.shrink(freed); // "written to disk"
+                let service = self.signal.begin().unwrap();
+                sleep(b.spill_takes).await; // "written to disk"
+                let freed = service.target().min(self.reservation.size());
+                self.reservation.shrink(freed);
                 self.signal.set_spillable_bytes(self.reservation.size());
-                self.signal.complete(freed);
+                service.complete(freed);
                 spilled += freed;
             }
             sleep(Duration::from_millis(1)).await; // one batch of work
@@ -170,6 +175,80 @@ async fn two_queries_one_limit_one_spills_while_the_other_allocates() {
     assert_eq!(root.reserved(), 0, "pools are empty at query end");
 }
 
+/// A victim that has begun spilling is awaited to the end of its spill,
+/// however long its I/O takes: the timeout only bounds the wait for it to
+/// begin, so nothing is aborted.
+#[tokio::test(start_paused = true)]
+async fn a_spill_in_progress_is_awaited_past_the_timeout() {
+    let root = new_root(8 * MIB);
+    let qa = root.child("query-a", None);
+    let qb = root.child("query-b", None);
+    let slow_io = Behaviour {
+        spill_takes: 3 * TIMEOUT,
+        ..COOPERATIVE
+    };
+    let (stop, driver) = Spiller::new(&qa, "sort", 6 * MIB).spawn(slow_io);
+
+    let mut b = holder(&qb, "hash-build", 0);
+    let start = Instant::now();
+    b.grow(4 * MIB).await.unwrap();
+    assert!(start.elapsed() >= 3 * TIMEOUT, "{:?}", start.elapsed());
+    stop.store(true, Ordering::Release);
+    assert_eq!(driver.await.unwrap().unwrap(), 2 * MIB);
+    assert!(qa.check_aborted().is_ok() && qb.check_aborted().is_ok());
+    assert_eq!(root.stats(), stats(0, 1, 1));
+}
+
+/// A victim that begins only after the timeout has been given up on: its
+/// query is aborted, as one that never spills.
+#[tokio::test(start_paused = true)]
+async fn a_spill_begun_after_the_timeout_does_not_save_the_victim() {
+    let root = new_root(8 * MIB);
+    let qa = root.child("query-a", None);
+    let qb = root.child("query-b", None);
+    let late = Behaviour {
+        react_after: TIMEOUT + Duration::from_millis(500),
+        spill_takes: TIMEOUT,
+        ..COOPERATIVE
+    };
+    let (_stop, driver) = Spiller::new(&qa, "sort", 6 * MIB).spawn(late);
+    let mut b = holder(&qb, "hash-build", 0);
+    b.grow(4 * MIB).await.unwrap();
+    assert!(matches!(
+        driver.await.unwrap(),
+        Err(MemoryError::Aborted { .. })
+    ));
+    assert_eq!(root.stats().aborts, 1);
+}
+
+/// `reserve_without_abort` spills like `reserve` but fails instead of
+/// aborting a query when spills cannot make room.
+#[tokio::test(start_paused = true)]
+async fn a_spill_only_request_never_aborts() {
+    let root = new_root(8 * MIB);
+    let qa = root.child("query-a", None);
+    let qb = root.child("query-b", None);
+    let (_stop, stubborn) = Spiller::new(&qa, "sort", 6 * MIB).spawn(NO_SPILL);
+    let id = qb.register("grace-load", None);
+    let e = qb.reserve_without_abort(id, 4 * MIB).await.unwrap_err();
+    assert!(matches!(e, MemoryError::Exhausted { .. }), "{e:?}");
+    assert_eq!(root.stats().aborts, 0);
+    assert!(qa.check_aborted().is_ok() && qb.check_aborted().is_ok());
+    assert_eq!(qb.reserved(), 0);
+    stubborn.abort();
+    assert!(stubborn.await.unwrap_err().is_cancelled());
+
+    // With a victim that spills, the same request succeeds.
+    let qc = root.child("query-c", None);
+    let (stop, driver) = Spiller::new(&qc, "agg", 6 * MIB).spawn(COOPERATIVE);
+    qb.reserve_without_abort(id, 4 * MIB).await.unwrap();
+    assert_eq!(qb.reserved(), 4 * MIB);
+    stop.store(true, Ordering::Release);
+    assert!(driver.await.unwrap().unwrap() > 0);
+    assert_eq!(root.stats().aborts, 0);
+    qb.unregister(id);
+}
+
 #[tokio::test(start_paused = true)]
 async fn spill_timeout_aborts_the_largest_other_query() {
     let root = new_root(8 * MIB);
@@ -204,6 +283,7 @@ async fn a_slow_releasing_victim_is_aborted_once_and_the_requester_succeeds() {
     let slow = Behaviour {
         spills: false,
         react_after: 3 * TIMEOUT,
+        spill_takes: Duration::ZERO,
     };
     let (_stop, victim) = Spiller::new(&qa, "sort", 5 * MIB).spawn(slow);
     let small = holder(&qc, "agg", 2 * MIB);
@@ -373,6 +453,7 @@ async fn rounds_in_disjoint_queries_run_concurrently() {
     let slow = Behaviour {
         spills: true,
         react_after: Duration::from_secs(1),
+        spill_takes: Duration::ZERO,
     };
     let mut requests = Vec::new();
     for name in ["query-a", "query-b"] {
@@ -401,6 +482,7 @@ async fn tickets_are_awaited_together_and_releases_are_seen() {
     let slow = Behaviour {
         spills: true,
         react_after: Duration::from_secs(1),
+        spill_takes: Duration::ZERO,
     };
     let qa = root.child("query-a", None);
     let qb = root.child("query-b", None);
@@ -632,6 +714,7 @@ fn timeout_scenario(
             quantum: MIB,
             spill_wait_timeout: Duration::from_millis(50),
             abort_release_timeout: Duration::from_millis(100),
+            spill_scratch_reserve: 0,
         },
         Arc::new(SystemClock::new()),
     );

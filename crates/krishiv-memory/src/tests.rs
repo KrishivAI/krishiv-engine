@@ -37,6 +37,7 @@ fn root(limit: Option<usize>, quantum: usize) -> Arc<TreePool> {
             quantum,
             spill_wait_timeout: Duration::from_secs(2),
             abort_release_timeout: Duration::from_secs(30),
+            spill_scratch_reserve: 0,
         },
         Arc::new(TokioClock),
     )
@@ -68,6 +69,171 @@ fn config_entries_feed_memory_config() {
     );
     assert_eq!(d.spill_wait_timeout, Duration::from_secs(2));
     assert_eq!(d.abort_release_timeout, Duration::from_secs(30));
+    assert_eq!(d.spill_scratch_reserve, DEFAULT_SPILL_SCRATCH_RESERVE);
+    let (c, _) = Config::from_pairs([("krishiv.memory.spillScratchReserve", "0")]).unwrap();
+    assert_eq!(MemoryConfig::from_config(&c).spill_scratch_reserve, 0);
+}
+
+fn floored(limit: usize, reserve: usize) -> Arc<TreePool> {
+    TreePool::with_clock(
+        &MemoryConfig {
+            limit: Some(limit),
+            quantum: 4096,
+            spill_wait_timeout: Duration::from_secs(2),
+            abort_release_timeout: Duration::from_secs(30),
+            spill_scratch_reserve: reserve,
+        },
+        Arc::new(TokioClock),
+    )
+}
+
+/// Ordinary reservations stop at the limit minus the floor; spill scratch
+/// may go up to the limit, exactly (no quantum), and the floor is free
+/// again once the scratch is released.
+#[test]
+fn the_spill_scratch_floor_is_kept_for_spill_scratch() {
+    const MIB: usize = 1 << 20;
+    let root = floored(8 * MIB, 512 << 10);
+    let q = root.child_pool("q", None);
+    let (a, w) = (q.register("table", None), q.register("writer", None));
+    let e = q.try_reserve(a, 8 * MIB).unwrap_err();
+    assert_eq!(
+        e,
+        MemoryError::Exhausted {
+            requested: 8 * MIB,
+            available: 8 * MIB - (512 << 10),
+        }
+    );
+    q.try_reserve(a, 8 * MIB - (512 << 10)).unwrap();
+    assert!(
+        q.try_reserve(a, 1).is_err(),
+        "the floor is not ordinary memory"
+    );
+    q.try_reserve_scratch(w, 100).unwrap();
+    assert_eq!(usage(&q, w).granted, 100, "scratch is granted exactly");
+    let mut writer = Reservation::new(Arc::clone(&q) as Arc<dyn MemoryPool>, w).for_spill_scratch();
+    writer.try_grow((512 << 10) - 100).unwrap();
+    assert_eq!(root.reserved(), 8 * MIB);
+    assert!(writer.try_grow(1).is_err(), "never past the limit");
+    drop(writer);
+    q.release(w, 100);
+    assert_eq!(root.reserved(), 8 * MIB - (512 << 10));
+    // A plain reservation of the same consumer stays below the floor.
+    let mut plain = Reservation::new(Arc::clone(&q) as Arc<dyn MemoryPool>, w);
+    assert!(plain.try_grow(1).is_err());
+    q.release(a, 8 * MIB);
+    assert_eq!(root.reserved(), 0);
+}
+
+/// The floor is at most an eighth of each pool's limit, applies to every
+/// limited pool on the way up, and a request larger than what ordinary
+/// reservations can ever hold fails at once, without arbitration.
+#[tokio::test(start_paused = true)]
+async fn the_floor_is_capped_and_applies_to_every_limited_pool() {
+    let root = floored(1 << 20, 1 << 20);
+    let q = root.child_pool("q", Some(1 << 19));
+    let id = q.register("op", None);
+    q.try_reserve(id, (1 << 19) - (1 << 16)).unwrap();
+    assert!(q.try_reserve(id, 1).is_err(), "q's floor is 64 KiB");
+    q.try_reserve_scratch(id, 1 << 16).unwrap();
+    assert_eq!(q.reserved(), 1 << 19);
+    q.release(id, 1 << 19);
+    let e = q.reserve(id, 1 << 19).await.unwrap_err();
+    assert!(matches!(e, MemoryError::Exhausted { .. }));
+    assert_eq!(root.stats().rounds, 0, "never fits: no round");
+    // No limit, no floor; a zero reserve disables it.
+    let unbounded = TreePool::new(&MemoryConfig {
+        limit: None,
+        ..MemoryConfig::default()
+    });
+    let u = unbounded.register("op", None);
+    unbounded.try_reserve(u, usize::MAX >> 2).unwrap();
+    let off = floored(1 << 20, 0);
+    let o = off.register("op", None);
+    off.try_reserve(o, 1 << 20).unwrap();
+}
+
+/// `begin` marks a request's tickets as started; dropping the service
+/// guard completes it with nothing freed, so no ticket is left pending.
+#[test]
+fn a_begun_spill_is_started_and_its_guard_always_completes() {
+    let signal = SpillSignal::new();
+    assert!(signal.begin().is_none(), "nothing requested");
+    let ticket = signal.request_spill(10);
+    assert!(!ticket.started());
+    let service = signal.begin().unwrap();
+    assert!(ticket.started());
+    let joined = signal.request_spill(20);
+    assert!(joined.started(), "a request during a spill joins it");
+    assert_eq!(service.target(), 10);
+    drop(service);
+    assert_eq!((ticket.try_get(), joined.try_get()), (Some(0), Some(0)));
+    assert_eq!(signal.spill_requested(), None);
+    let next = signal.request_spill(5);
+    assert!(!next.started(), "a new request starts unstarted");
+    signal.begin().unwrap().complete(5);
+    assert_eq!(next.try_get(), Some(5));
+    assert!(next.started() && SpillTicket::ready(1).started());
+}
+
+/// The trait's defaults: scratch is an ordinary reservation and a
+/// spill-only reserve is the fast path, for pools without arbitration.
+#[tokio::test(start_paused = true)]
+async fn memory_pool_defaults_for_scratch_and_spill_only() {
+    #[derive(Debug)]
+    struct Fixed(Arc<TreePool>);
+    impl MemoryPool for Fixed {
+        fn child(&self, name: &str, limit: Option<usize>) -> Arc<dyn MemoryPool> {
+            self.0.child(name, limit)
+        }
+        fn register(&self, name: &str, spill: Option<Arc<dyn Spillable>>) -> ConsumerId {
+            self.0.register(name, spill)
+        }
+        fn unregister(&self, id: ConsumerId) {
+            self.0.unregister(id);
+        }
+        fn try_reserve(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+            self.0.try_reserve(id, bytes)
+        }
+        fn reserve<'a>(
+            &'a self,
+            id: ConsumerId,
+            bytes: usize,
+        ) -> BoxFuture<'a, Result<(), MemoryError>> {
+            self.0.reserve(id, bytes)
+        }
+        fn release(&self, id: ConsumerId, bytes: usize) {
+            self.0.release(id, bytes);
+        }
+        fn transfer(
+            &self,
+            from: ConsumerId,
+            to: ConsumerId,
+            bytes: usize,
+        ) -> Result<(), MemoryError> {
+            self.0.transfer(from, to, bytes)
+        }
+        fn reserved(&self) -> usize {
+            self.0.reserved()
+        }
+        fn limit(&self) -> Option<usize> {
+            self.0.limit()
+        }
+        fn check_aborted(&self) -> Result<(), MemoryError> {
+            self.0.check_aborted()
+        }
+    }
+    let pool = Fixed(floored(1 << 20, 1 << 17));
+    let id = pool.register("op", None);
+    pool.try_reserve_scratch(id, (1 << 20) - (1 << 17)).unwrap();
+    assert!(
+        pool.try_reserve_scratch(id, 1).is_err(),
+        "no floor by default"
+    );
+    assert!(pool.reserve_without_abort(id, 1).await.is_err());
+    pool.release(id, 1 << 20);
+    pool.reserve_without_abort(id, 1).await.unwrap();
+    assert_eq!(pool.reserved(), 4096);
 }
 
 #[test]
@@ -596,7 +762,8 @@ fn dropping_an_empty_pool_and_unregistering_mid_reserve() {
     q.unregister(id);
     // A reservation that looked the consumer up before it was unregistered.
     assert!(matches!(
-        q.node().try_reserve_for(&consumer, 1),
+        q.node()
+            .try_reserve_for(&consumer, 1, crate::pool::Class::Ordinary),
         Err(crate::pool::Denied::Error(
             MemoryError::UnknownConsumer { .. }
         ))
@@ -721,6 +888,7 @@ fn an_unavailable_timer_fails_the_request_without_hurting_anyone() {
             quantum: Q,
             spill_wait_timeout: Duration::from_millis(20),
             abort_release_timeout: Duration::from_millis(20),
+            spill_scratch_reserve: 0,
         },
         Arc::new(clock),
     );
@@ -930,6 +1098,23 @@ async fn reserve_for_parks_the_grant_as_credit() {
     let e = owner.reserve_for(&h, 8 * Q, || async {}).await.unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
     assert_eq!(h.credit(), Q, "a refused request parks nothing");
+    // Without abort: self-spill and spill requests, never an abort.
+    let other = root.child_pool("other", None);
+    let hog = other.register("hog", None);
+    other.try_reserve(hog, 2 * Q).unwrap();
+    let e = owner
+        .reserve_for_without_abort(&h, 2 * Q, || async {})
+        .await
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert_eq!((h.credit(), root.stats().aborts), (Q, 0));
+    assert!(other.check_aborted().is_ok() && q.check_aborted().is_ok());
+    other.release(hog, 2 * Q);
+    owner
+        .reserve_for_without_abort(&h, 2 * Q, || async {})
+        .await
+        .unwrap();
+    assert_eq!(h.credit(), 3 * Q);
 }
 
 #[test]
