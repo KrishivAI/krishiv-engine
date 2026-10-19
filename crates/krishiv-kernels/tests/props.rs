@@ -662,6 +662,48 @@ proptest! {
     }
 }
 
+/// Values bounded by `10^k - 1` for a random `k`, so whole batches fall
+/// under the per-batch range proof (P2-T160) or just above it: the proof
+/// path (unchecked 64- or 128-bit lanes) must equal the reference.
+fn decimal_proof_case() -> impl Strategy<Value = DecimalCase> {
+    let ty = (1..=38_u8)
+        .prop_flat_map(|p| (Just(p), 0..=p))
+        .prop_map(|(p, s)| (p, i8::try_from(s).unwrap()));
+    let op =
+        proptest::sample::select(&[DecimalOp::Add, DecimalOp::Subtract, DecimalOp::Multiply][..]);
+    (op, ty.clone(), ty, 0..2_u8, 0..=38_u32).prop_flat_map(|(op, l, r, choice, k)| {
+        let m = 10_i128.pow(k).saturating_sub(1).max(1);
+        let v = prop_oneof![Just(m), Just(-m), Just(m / 2), Just(0_i128), -m..=m];
+        let max = |p: u8| 10_i128.pow(u32::from(p)) - 1;
+        let (ml, mr) = (max(l.0), max(r.0));
+        case(v).prop_map(move |mut c| {
+            for x in &mut c.l.values {
+                *x = (*x).clamp(-ml, ml);
+            }
+            for x in &mut c.r.values {
+                *x = (*x).clamp(-mr, mr);
+            }
+            c.shape = match c.shape {
+                Shape::ArrayScalar(s) => Shape::ArrayScalar(s.map(|x| x.clamp(-mr, mr))),
+                Shape::ScalarArray(s) => Shape::ScalarArray(s.map(|x| x.clamp(-ml, ml))),
+                s => s,
+            };
+            (op, l, r, (choice, 0, 0), c)
+        })
+    })
+}
+
+proptest! {
+    #![proptest_config(config())]
+
+    #[test]
+    fn decimal_batch_proof((op, l, r, (choice, _, _), c) in decimal_proof_case()) {
+        let out = result_type(op, l, r, choice == 0).unwrap();
+        let plan = DecimalPlan::new(op, l, r, out).unwrap();
+        check_decimal_op(&plan, l, r, &c);
+    }
+}
+
 /// Regression for `decimal_ops`: a quotient whose 39-decimal expansion does
 /// not fit 256 bits made the reference oracle saturate, then round to a value
 /// that fit, so it disagreed with the (correct) kernel. Spark 4.2 returns

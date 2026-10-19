@@ -7,10 +7,18 @@
 //! Decimal sums overflow as soon as a running sum leaves the sum type's
 //! precision, even if later rows bring it back (`ARITHMETIC_OVERFLOW
 //! "Overflow in sum of decimals"` under ANSI, NULL otherwise), grouped or
-//! not, so the result never depends on the plan. Spark 4.2 keeps grouped
-//! and partial buffers in that precision too; only its single-partition
-//! global aggregate tolerates a temporary overflow (a documented divergence,
-//! ADR 0023).
+//! not. Whether a temporary overflow happens depends on the summation
+//! order, as in Spark 4.2's grouped and partial buffers. Spark's global
+//! aggregate (when no partial buffer overflows) and its grouped aggregate
+//! over a local relation tolerate a temporary overflow; Krishiv does not (a
+//! documented divergence, ADR 0023).
+//!
+//! **Per-batch proof (P2-T160):** each decimal `sum`/`avg` keeps an upper
+//! bound of every group's `|sum|`; a batch whose `Σ |weight·value|` keeps
+//! that bound below the sum type's `10^p` cannot overflow any group in any
+//! order, so it folds without per-row checks. Other batches take the
+//! per-row checked path. Decimal `avg` with a result scale of at most 19
+//! divides once instead of digit by digit (see [`avg_fast`]).
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -24,6 +32,7 @@ use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Decimal128Array, Float64Array,
     Int64Array, PrimitiveArray, StringArray, StringViewArray,
 };
+use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, TimeUnit};
 use krishiv_types::batch::Weights;
 
@@ -156,6 +165,55 @@ pub(crate) struct Accumulator {
     /// The bound of a running decimal sum's magnitude (`10^p` of the sum
     /// type); `None` for other aggregates.
     sum_bound: Option<u128>,
+    /// An upper bound of `|sum|` over every group of a decimal `sum`/`avg`:
+    /// the running maximum of the stored sums (it never shrinks, so it stays
+    /// sound when IVM retractions lower a sum).
+    max_sum: u128,
+    /// Whether decimal folds may take the per-batch proof path (tests turn
+    /// it off to compare against the per-row path).
+    proofs: bool,
+}
+
+/// `Σ |w_i|·|v_i|` over the valid rows of a batch (saturating; unit
+/// weights when `w` is `None`, as for merged partial states).
+fn batch_abs(v: &[i128], nulls: Option<&NullBuffer>, w: Option<&Weights>) -> u128 {
+    let at = |i: usize, x: i128| match w {
+        None | Some(Weights::Const(1)) => x.unsigned_abs(),
+        Some(w) => x
+            .unsigned_abs()
+            .saturating_mul(u128::from(weight(w, i).unsigned_abs())),
+    };
+    match nulls {
+        None => v
+            .iter()
+            .enumerate()
+            .fold(0_u128, |s, (i, &x)| s.saturating_add(at(i, x))),
+        Some(n) => v
+            .iter()
+            .zip(n.iter())
+            .enumerate()
+            .fold(0_u128, |s, (i, (&x, ok))| {
+                s.saturating_add(if ok { at(i, x) } else { 0 })
+            }),
+    }
+}
+
+/// The per-batch overflow proof of a decimal `sum`/`avg` fold (design
+/// P2-T160): every stored sum is within `max_sum` and the batch moves any
+/// one group's sum by at most `Σ |w|·|v|`, so if `max_sum + Σ |w|·|v|` is
+/// below the bound, no running sum of any group leaves the bound during
+/// the batch, in any row order. The fold may then add with wrapping
+/// arithmetic and no range test, and its result is exactly the per-row
+/// path's. Proofs are local to one batch; the next batch is tested afresh.
+fn proven(
+    enabled: bool,
+    bound: Option<u128>,
+    max_sum: u128,
+    v: &[i128],
+    nulls: Option<&NullBuffer>,
+    w: Option<&Weights>,
+) -> bool {
+    enabled && bound.is_some_and(|b| max_sum.saturating_add(batch_abs(v, nulls, w)) < b)
 }
 
 /// The weight of row `i`.
@@ -378,6 +436,35 @@ fn avg_decimal(sum: i128, sum_scale: i8, count: i64, p: u8, s: i8) -> (Option<i1
     (v, text)
 }
 
+/// [`avg_decimal`]'s value by one `HALF_UP` division (design P2-T160 D3),
+/// or `None` when that shortcut does not apply (result scale above 19 or
+/// below the sum's, numerator beyond `u128`) or the value does not fit
+/// `decimal(p, s)` (the caller then takes the digit loop for the error
+/// text).
+///
+/// Spark rounds the quotient `HALF_UP` to scale 39, then `HALF_UP` to `s`.
+/// For `s <= 19` that equals one rounding of the exact quotient to `s`: the
+/// first rounding can only change the second when the exact quotient is
+/// within `½·10^-39` of a half point at scale `s` without being on it, but
+/// such a distance is a nonzero multiple of `1 / (2·count·10^s)`, at least
+/// `½·10^-(19+s)` since `|count| < 10^19`; exact half points are
+/// representable at scale 39 and round up both ways.
+fn avg_fast(sum: i128, sum_scale: i8, count: i64, p: u8, s: i8) -> Option<i128> {
+    let (ss, rs) = (u8::try_from(sum_scale).ok()?, u8::try_from(s).ok()?);
+    if rs > 19 || rs < ss || count == 0 {
+        return None;
+    }
+    let n = sum
+        .unsigned_abs()
+        .checked_mul(pow10(rs - ss).unsigned_abs())?;
+    let d = u128::from(count.unsigned_abs());
+    let (q, r) = (n / d, n % d);
+    // `r < d < 2^64`, so `d - r` cannot underflow; `2r >= d` rounds up.
+    let q = q + u128::from(r >= d - r);
+    let v = i128::try_from(q).ok().filter(|&v| v < pow10(p))?;
+    Some(if (sum < 0) != (count < 0) { -v } else { v })
+}
+
 /// Adds one unit in the last place of `digits`; `true` if it carries out.
 fn round_up(digits: &mut [u8]) -> bool {
     for d in digits.iter_mut().rev() {
@@ -445,6 +532,8 @@ impl Accumulator {
             result,
             ansi,
             sum_bound,
+            max_sum: 0,
+            proofs: true,
         })
     }
 
@@ -641,9 +730,10 @@ impl Accumulator {
         let ansi = self.ansi;
         let bound = self.sum_bound;
         let fits = |s: &i128| bound.is_none_or(|b| s.unsigned_abs() < b);
+        let (proofs, mut max_sum) = (self.proofs, self.max_sum);
         // Validity bitmaps, read once per batch (no virtual call per row);
         // logical, so an untyped NULL column (`count(NULL)`) counts nothing.
-        let nulls: Vec<Option<arrow_buffer::NullBuffer>> =
+        let nulls: Vec<Option<NullBuffer>> =
             args.iter().map(arrow_array::Array::logical_nulls).collect();
         let first = nulls.first().and_then(Option::as_ref);
         let valid = |i: usize| first.is_none_or(|n| n.is_valid(i));
@@ -707,26 +797,37 @@ impl Accumulator {
                 let a = args[0];
                 let v = decimals(a)?;
                 let nonempty = args.get(1).map(|b| booleans_of(b)).transpose()?;
+                let fast = proven(proofs, bound, max_sum, v, first, (!state).then_some(w));
                 for (i, &g) in groups.iter().enumerate() {
                     let g = g as usize;
                     if state {
                         if nonempty.is_some_and(|b| b.value(i)) {
+                            // An overflowed partial (sum NULL, nonempty) has
+                            // no magnitude: it is sticky on both paths.
                             if !valid(i) {
                                 st[g] = 2;
                             } else if st[g] != 2 {
-                                (sum[g], st[g]) = sum[g]
-                                    .checked_add(v[i])
-                                    .filter(fits)
-                                    .map_or((0, 2), |s| (s, 1));
+                                (sum[g], st[g]) = if fast {
+                                    (sum[g].wrapping_add(v[i]), 1)
+                                } else {
+                                    sum[g]
+                                        .checked_add(v[i])
+                                        .filter(fits)
+                                        .map_or((0, 2), |s| (s, 1))
+                                };
                             }
                         }
                     } else if valid(i) && st[g] != 2 {
-                        let s = v[i]
-                            .checked_mul(i128::from(weight(w, i)))
-                            .and_then(|x| sum[g].checked_add(x))
-                            .filter(fits);
+                        let s = if fast {
+                            Some(sum[g].wrapping_add(v[i].wrapping_mul(i128::from(weight(w, i)))))
+                        } else {
+                            v[i].checked_mul(i128::from(weight(w, i)))
+                                .and_then(|x| sum[g].checked_add(x))
+                                .filter(fits)
+                        };
                         (sum[g], st[g]) = s.map_or((0, 2), |s| (s, 1));
                     }
+                    max_sum = max_sum.max(sum[g].unsigned_abs());
                 }
             }
             (Kind::AvgFloat { sum, count }, _) => {
@@ -760,6 +861,8 @@ impl Accumulator {
                 let a = args[0];
                 let v = decimals(a)?;
                 let counts = args.get(1).map(|c| counts_of(c)).transpose()?;
+                let weights = counts.is_none().then_some(w);
+                let fast = proven(proofs, bound, max_sum, v, first, weights);
                 for (i, &g) in groups.iter().enumerate() {
                     let g = g as usize;
                     let (add, n) = match counts {
@@ -770,15 +873,25 @@ impl Accumulator {
                         }
                         None if valid(i) => {
                             let wt = weight(w, i);
-                            (v[i].checked_mul(i128::from(wt)), wt)
+                            if fast {
+                                (Some(v[i].wrapping_mul(i128::from(wt))), wt)
+                            } else {
+                                (v[i].checked_mul(i128::from(wt)), wt)
+                            }
                         }
                         None => continue,
                     };
-                    match add.and_then(|x| sum[g].checked_add(x)).filter(fits) {
+                    let s = if fast {
+                        add.map(|x| sum[g].wrapping_add(x))
+                    } else {
+                        add.and_then(|x| sum[g].checked_add(x)).filter(fits)
+                    };
+                    match s {
                         Some(s) => sum[g] = s,
                         None => overflow[g] = true,
                     }
                     count[g] = count[g].wrapping_add(n);
+                    max_sum = max_sum.max(sum[g].unsigned_abs());
                 }
             }
             (
@@ -902,6 +1015,7 @@ impl Accumulator {
                 }
             }
         }
+        self.max_sum = max_sum;
         Ok(())
     }
 
@@ -1087,6 +1201,8 @@ impl Accumulator {
                             return Err(decimal_sum_overflow("avg"));
                         }
                         None
+                    } else if let Some(v) = avg_fast(sum[g], ss, count[g], *p, *s) {
+                        Some(v)
                     } else {
                         match avg_decimal(sum[g], ss, count[g], *p, *s) {
                             (Some(v), _) => Some(v),
@@ -1134,6 +1250,387 @@ fn narrow(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayR
         DataType::Date32 => prim::<Date32Type>(it, t),
         DataType::Timestamp(..) => prim::<TimestampMicrosecondType>(it, t),
         _ => prim::<Decimal128Type>(it, t),
+    }
+}
+
+/// The per-batch proofs (design P2-T160) against the per-row path.
+#[cfg(test)]
+#[cfg(not(loom))]
+mod proof_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// `10^38 - 1`, Spark's largest decimal.
+    const M: i128 = 99_999_999_999_999_999_999_999_999_999_999_999_999;
+
+    type Row = (u32, i128, bool, i64);
+
+    fn acc(f: AggregateFunction, t: &DataType, ansi: bool, proofs: bool) -> Accumulator {
+        let mut a = Accumulator::new(&AggregateExpr::new(f, 0, t.clone(), "a"), ansi).unwrap();
+        a.proofs = proofs;
+        a
+    }
+
+    fn column(rows: &[Row], t: &DataType) -> ArrayRef {
+        let v = rows.iter().map(|&(_, v, ok, _)| ok.then_some(v));
+        Arc::new(Decimal128Array::from_iter(v).with_data_type(t.clone()))
+    }
+
+    fn weights(rows: &[Row], mode: u8) -> Weights {
+        match mode {
+            0 => Weights::Const(1),
+            1 => Weights::Const(rows.first().map_or(1, |r| r.3)),
+            _ => Weights::Column(Int64Array::from_iter_values(rows.iter().map(|r| r.3))),
+        }
+    }
+
+    fn feed(a: &mut Accumulator, groups: u32, batch: &[Row], t: &DataType, mode: u8) {
+        a.resize(groups as usize);
+        let g: Vec<u32> = batch.iter().map(|r| r.0).collect();
+        a.update(&g, &[column(batch, t)], &weights(batch, mode))
+            .unwrap();
+    }
+
+    /// `state` and `evaluate` (value or error text) of every group.
+    fn outcome(
+        a: &Accumulator,
+        groups: u32,
+    ) -> (Vec<ArrayRef>, std::result::Result<ArrayRef, String>) {
+        let ids: Vec<u32> = (0..groups).collect();
+        (
+            a.state(&ids).unwrap(),
+            a.evaluate(&ids).map_err(|e| e.to_string()),
+        )
+    }
+
+    /// The largest stored `|sum|`, which `max_sum` must bound.
+    fn stored_max(a: &Accumulator) -> u128 {
+        match &a.kind {
+            Kind::SumDec { sum, .. } | Kind::AvgDec { sum, .. } => {
+                sum.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0)
+            }
+            _ => 0,
+        }
+    }
+
+    fn decimal_type() -> impl Strategy<Value = (u8, i8)> {
+        prop_oneof![
+            Just((38, 0)),
+            Just((28, 0)),
+            Just((5, 2)),
+            Just((1, 0)),
+            Just((18, 0)),
+            Just((30, 5)),
+            Just((28, 18)),
+        ]
+    }
+
+    fn value(p: u8) -> impl Strategy<Value = i128> + Clone {
+        let m = 10_i128.pow(u32::from(p)) - 1;
+        prop_oneof![
+            Just(m),
+            Just(-m),
+            Just(m / 2 + 1),
+            Just(1),
+            Just(-5),
+            Just(0),
+            -1000..1000_i128,
+            -m..=m,
+        ]
+    }
+
+    fn weight() -> impl Strategy<Value = i64> + Clone {
+        prop_oneof![
+            4 => Just(1_i64),
+            2 => Just(-1),
+            1 => -3..=3_i64,
+            1 => Just(i64::MAX),
+            1 => Just(i64::MIN),
+            1 => any::<i64>(),
+        ]
+    }
+
+    /// `(input type, groups, weights mode, batches)`.
+    type Input = ((u8, i8), u32, u8, Vec<Vec<Row>>);
+
+    fn input() -> impl Strategy<Value = Input> {
+        (decimal_type(), 1..=3_u32, 0..3_u8).prop_flat_map(|(t, groups, mode)| {
+            let row = (
+                0..groups,
+                value(t.0),
+                proptest::bool::weighted(0.9),
+                weight(),
+            );
+            // Short batches put a near-bound value alone in a batch, so
+            // the next batch's proof depends on the running bound.
+            let batch = prop_oneof![
+                proptest::collection::vec(row.clone(), 0..3),
+                proptest::collection::vec(row, 0..24),
+            ];
+            (
+                Just(t),
+                Just(groups),
+                Just(mode),
+                proptest::collection::vec(batch, 1..8),
+            )
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { failure_persistence: None, ..ProptestConfig::default() })]
+
+        /// Raw rows (with IVM weights of both signs): the proof path equals
+        /// the per-row path for `sum` and `avg`, ANSI on and off.
+        #[test]
+        fn fold_proof_equals_per_row(((p, s), groups, mode, batches) in input()) {
+            let t = DataType::Decimal128(p, s);
+            for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+                for ansi in [true, false] {
+                    let (mut fast, mut slow) = (acc(f, &t, ansi, true), acc(f, &t, ansi, false));
+                    for b in &batches {
+                        feed(&mut fast, groups, b, &t, mode);
+                        feed(&mut slow, groups, b, &t, mode);
+                        prop_assert!(stored_max(&fast) <= fast.max_sum);
+                        prop_assert!(stored_max(&slow) <= slow.max_sum);
+                    }
+                    prop_assert_eq!(outcome(&fast, groups), outcome(&slow, groups));
+                }
+            }
+        }
+
+        /// Merged partial states, overflowed ones included (sum NULL with a
+        /// nonempty flag or a count): the proof path equals the per-row path
+        /// in both merge orders.
+        #[test]
+        fn merge_proof_equals_per_row(((p, s), groups, _mode, batches) in input()) {
+            let t = DataType::Decimal128(p, s);
+            for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+                for ansi in [true, false] {
+                    let ids: Vec<u32> = (0..groups).collect();
+                    let partials: Vec<Vec<ArrayRef>> = batches
+                        .iter()
+                        .map(|b| {
+                            let mut a = acc(f, &t, ansi, false);
+                            feed(&mut a, groups, b, &t, 0);
+                            a.state(&ids).unwrap()
+                        })
+                        .collect();
+                    for order in [false, true] {
+                        let (mut fast, mut slow) =
+                            (acc(f, &t, ansi, true), acc(f, &t, ansi, false));
+                        fast.resize(groups as usize);
+                        slow.resize(groups as usize);
+                        let mut list: Vec<&Vec<ArrayRef>> = partials.iter().collect();
+                        if order {
+                            list.reverse();
+                        }
+                        for st in list {
+                            fast.merge(&ids, st).unwrap();
+                            slow.merge(&ids, st).unwrap();
+                        }
+                        prop_assert_eq!(outcome(&fast, groups), outcome(&slow, groups));
+                    }
+                }
+            }
+        }
+
+        /// One `HALF_UP` division equals Spark's two roundings (scale 39,
+        /// then the result scale) whenever it applies.
+        #[test]
+        fn avg_single_division_equals_digit_loop(
+            sum in prop_oneof![Just(M), Just(-M), Just(M / 3), -M..=M, -100_000..100_000_i128],
+            ss in 0..=38_i8,
+            count in prop_oneof![Just(1_i64), Just(2), Just(3), Just(-7), Just(i64::MAX), Just(i64::MIN), any::<i64>()],
+            p in 1..=38_u8,
+            extra in 0..=8_i8,
+        ) {
+            prop_assume!(count != 0);
+            let s = (ss + extra).min(38);
+            let (slow, _) = avg_decimal(sum, ss, count, p, s);
+            match avg_fast(sum, ss, count, p, s) {
+                Some(v) => prop_assert_eq!(Some(v), slow),
+                None => {
+                    // The shortcut declines only when it does not apply or
+                    // the value does not fit.
+                    let k = u32::try_from(s - ss).unwrap();
+                    let applies = s <= 19
+                        && sum.unsigned_abs().checked_mul(10_u128.pow(k)).is_some();
+                    prop_assert!(!applies || slow.is_none());
+                }
+            }
+        }
+    }
+
+    /// Spark 4.2's grouped `sum`/`avg` over rows in a fixed order, ANSI on
+    /// and off (`tests/scripts/gen_decimal_sum_avg.py`): the same rows
+    /// folded in one batch, one row per batch (the running bound decides
+    /// each proof) and on the per-row path give Spark's value or error.
+    #[test]
+    fn spark_sum_avg_goldens() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/spark-4.2.0/decimal-sum-avg.json"
+        );
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(cases.len(), 112);
+        for c in &cases {
+            let ansi = c["ansi"].as_bool().unwrap();
+            let f = match c["fn"].as_str().unwrap() {
+                "sum" => AggregateFunction::Sum,
+                _ => AggregateFunction::Avg,
+            };
+            let ty = c["type"].as_array().unwrap();
+            let p = u8::try_from(ty[0].as_u64().unwrap()).unwrap();
+            let s = i8::try_from(ty[1].as_u64().unwrap()).unwrap();
+            let t = DataType::Decimal128(p, s);
+            let rows: Vec<Row> = c["values"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| (0, v.as_str().unwrap().parse().unwrap(), true, 1))
+                .collect();
+            let mut runs = Vec::new();
+            for (proofs, one_batch) in [(true, true), (true, false), (false, true)] {
+                let mut a = acc(f, &t, ansi, proofs);
+                if one_batch {
+                    feed(&mut a, 1, &rows, &t, 0);
+                } else {
+                    for r in &rows {
+                        feed(&mut a, 1, std::slice::from_ref(r), &t, 0);
+                    }
+                }
+                runs.push(a.evaluate(&[0]).map_err(|e| e.to_string()));
+            }
+            for got in &runs {
+                match (got, c.get("error")) {
+                    (Err(e), Some(want)) => {
+                        assert!(e.contains(want.as_str().unwrap()), "{c}: {e}");
+                    }
+                    (Ok(v), None) => {
+                        let DataType::Decimal128(op, os) = v.data_type() else {
+                            panic!("{c}: {:?}", v.data_type());
+                        };
+                        assert_eq!(c["type_out"], format!("decimal({op},{os})"), "{c}");
+                        let v = v.as_primitive::<Decimal128Type>();
+                        let text = (!v.is_null(0)).then(|| plain(v.value(0), *os));
+                        assert_eq!(c["value"].as_str(), text.as_deref(), "{c}");
+                    }
+                    (got, _) => panic!("{c}: {got:?}"),
+                }
+            }
+        }
+    }
+
+    /// Half points round away from zero, as Spark's `HALF_UP` does.
+    #[test]
+    fn avg_single_division_half_points() {
+        assert_eq!(avg_fast(5, 0, 2, 10, 0), Some(3));
+        assert_eq!(avg_fast(-5, 0, 2, 10, 0), Some(-3));
+        assert_eq!(avg_fast(5, 0, -2, 10, 0), Some(-3));
+        assert_eq!(avg_fast(-5, 0, 3, 5, 4), Some(-16_667));
+        assert_eq!(avg_decimal(-5, 0, 3, 5, 4).0, Some(-16_667));
+        // Numerator beyond u128: `M * 10^4`; the digit loop decides.
+        assert_eq!(avg_fast(M, 0, 3, 38, 4), None);
+        assert_eq!(avg_fast(1, 0, 3, 38, 20), None);
+        assert_eq!(avg_fast(1, 2, 3, 38, 1), None);
+        assert_eq!(avg_fast(1, 0, 0, 38, 1), None);
+        // Does not fit: the caller takes the loop for the error text.
+        assert_eq!(avg_fast(99_999, 0, 1, 5, 1), None);
+    }
+
+    /// The proof holds strictly below the bound, Σ|w|·|v| counts weights,
+    /// and NULL slots do not count.
+    #[test]
+    fn proof_boundaries() {
+        let b = Some(100_u128);
+        assert!(proven(true, b, 89, &[10], None, None));
+        assert!(!proven(true, b, 90, &[10], None, None));
+        assert!(!proven(false, b, 0, &[1], None, None));
+        assert!(!proven(true, None, 0, &[1], None, None));
+        let w = Weights::Column(Int64Array::from(vec![-3_i64, 2]));
+        assert_eq!(batch_abs(&[-10, 5], None, Some(&w)), 40);
+        assert_eq!(batch_abs(&[7], None, Some(&Weights::Const(-4))), 28);
+        let nulls = NullBuffer::from(vec![true, false]);
+        assert_eq!(batch_abs(&[1, i128::MAX], Some(&nulls), None), 1);
+        assert_eq!(batch_abs(&[i128::MIN, i128::MIN], None, None), u128::MAX);
+        let big = Weights::Const(i64::MIN);
+        assert_eq!(batch_abs(&[M], None, Some(&big)), u128::MAX);
+    }
+
+    /// Spark R6 shape: a partial that overflowed upstream (sum NULL,
+    /// nonempty) merged with a proof-eligible batch stays overflowed.
+    #[test]
+    fn overflowed_partial_is_sticky_on_the_proof_path() {
+        let t = DataType::Decimal128(38, 0);
+        for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+            let mut part = acc(f, &t, true, true);
+            feed(&mut part, 1, &[(0, M, true, 1), (0, 1, true, 1)], &t, 0);
+            let st = part.state(&[0]).unwrap();
+            assert!(st[0].is_null(0), "{f:?} partial overflowed");
+            let mut small = acc(f, &t, true, true);
+            feed(&mut small, 1, &[(0, -5, true, 1)], &t, 0);
+            let small = small.state(&[0]).unwrap();
+            for order in [[&st, &small], [&small, &st]] {
+                let mut m = acc(f, &t, true, true);
+                m.resize(1);
+                for s in order {
+                    m.merge(&[0], s).unwrap();
+                }
+                let err = m.evaluate(&[0]).unwrap_err().to_string();
+                assert!(err.contains("ARITHMETIC_OVERFLOW"), "{err}");
+                let mut legacy = acc(f, &t, false, true);
+                legacy.resize(1);
+                for s in order {
+                    legacy.merge(&[0], s).unwrap();
+                }
+                assert!(legacy.evaluate(&[0]).unwrap().is_null(0));
+            }
+        }
+    }
+
+    /// Spark R1 vs R3: M, 1, -5 overflows in that order (grouped), M, -5, 1
+    /// does not; the proof path keeps the processing order.
+    #[test]
+    fn transient_overflow_follows_row_order() {
+        let t = DataType::Decimal128(38, 0);
+        let mut a = acc(AggregateFunction::Sum, &t, true, true);
+        feed(
+            &mut a,
+            1,
+            &[(0, M, true, 1), (0, 1, true, 1), (0, -5, true, 1)],
+            &t,
+            0,
+        );
+        assert!(a.evaluate(&[0]).is_err());
+        // The same across batches: the second batch alone is provable, the
+        // running bound is not.
+        for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+            let mut a = acc(f, &t, true, true);
+            feed(&mut a, 1, &[(0, M, true, 1)], &t, 0);
+            feed(&mut a, 1, &[(0, 1, true, 1)], &t, 0);
+            feed(&mut a, 1, &[(0, -5, true, 1)], &t, 0);
+            let err = a.evaluate(&[0]).unwrap_err().to_string();
+            assert!(err.contains("ARITHMETIC_OVERFLOW"), "{err}");
+        }
+        let mut a = acc(AggregateFunction::Sum, &t, true, true);
+        feed(
+            &mut a,
+            1,
+            &[(0, M, true, 1), (0, -5, true, 1), (0, 1, true, 1)],
+            &t,
+            0,
+        );
+        let v = a.evaluate(&[0]).unwrap();
+        assert_eq!(v.as_primitive::<Decimal128Type>().value(0), M - 4);
+        // IVM: a retraction lowers the sum, the bound stays sound.
+        let mut a = acc(AggregateFunction::Sum, &t, true, true);
+        feed(&mut a, 1, &[(0, M, true, 1)], &t, 0);
+        feed(&mut a, 1, &[(0, M, true, -1)], &t, 2);
+        assert_eq!(a.max_sum, M.unsigned_abs());
+        feed(&mut a, 1, &[(0, 7, true, 1)], &t, 0);
+        let v = a.evaluate(&[0]).unwrap();
+        assert_eq!(v.as_primitive::<Decimal128Type>().value(0), 7);
     }
 }
 

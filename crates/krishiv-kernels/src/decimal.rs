@@ -18,6 +18,16 @@
 //! in an `i64`, so the loop computes on the low 64 bits of the `Decimal128`
 //! lanes ([`DecimalStorage::I64`]) — cheaper multiplies and range checks —
 //! and widens the result back. Arrays stay `Decimal128` between operators.
+//!
+//! **Per-batch range proof (P2-T160):** unless the types already allow
+//! unchecked 64-bit lanes, exact `+ - *` first bound each batch's results
+//! from its operands' largest magnitudes. When the bound is
+//! below `10^p` of the result type, no row can overflow and the batch runs
+//! without checks; when it also fits 63 bits, it runs on the 64-bit lanes
+//! whatever the declared precisions (TPC-H's `price * (1 - discount)` is
+//! `decimal(32,4)` by type but small by value). Otherwise the batch takes
+//! the checked lanes as before. The proof only selects lanes, so results
+//! and errors are those of the checked path.
 
 use arrow_array::types::Decimal128Type;
 use arrow_array::{Array, Decimal128Array, Int64Array, PrimitiveArray};
@@ -610,6 +620,56 @@ impl LaneOp<i128> for LaneWide<'_> {
     }
 }
 
+/// What a batch's values prove about an exact `+ - *` plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchProof {
+    /// Nothing beyond the types.
+    None,
+    /// Every result fits the result precision: no row can overflow.
+    Fits,
+    /// As `Fits`, and every result, rescaled operand and rescale factor
+    /// fits an `i64`, so the 64-bit lanes compute it exactly.
+    Fits64,
+}
+
+/// An upper bound of `|v|` over every lane of a side, NULL slots included
+/// (their values are arbitrary; a large one only costs the proof). An OR
+/// of the ones'-complement magnitudes (branch-free, unlike a 128-bit
+/// maximum) bounds them: `|v| <= OR + 1`.
+fn max_abs(s: Side<'_, i128>) -> u128 {
+    match s {
+        Side::Scalar(v) => v.unsigned_abs(),
+        Side::Array(a) => a
+            .iter()
+            .fold(0_u128, |m, &v| m | (v ^ (v >> 127)).cast_unsigned())
+            .saturating_add(1),
+    }
+}
+
+/// The per-batch range proof of an exact `+ - *` plan: with `A = max|a|`
+/// and `B = max|b|` over the batch, `|a·l_mul ± b·r_mul| <= A·l_mul +
+/// B·r_mul` and `|a·b| <= A·B`. When that bound is below `10^p_out` no row
+/// overflows, so the policy has nothing to check; when it also fits an
+/// `i64`, wrapping 64-bit lanes are exact (truncation commutes with
+/// wrapping `+ - *`). The proof is local to the batch.
+fn batch_proof(plan: &DecimalPlan, l: Side<'_, i128>, r: Side<'_, i128>) -> BatchProof {
+    let (a, b) = (max_abs(l), max_abs(r));
+    let (lm, rm) = (plan.l_mul.unsigned_abs(), plan.r_mul.unsigned_abs());
+    let bound = if plan.op == DecimalOp::Multiply {
+        a.saturating_mul(b)
+    } else {
+        a.saturating_mul(lm).saturating_add(b.saturating_mul(rm))
+    };
+    let i64_max = u128::from(i64::MAX.unsigned_abs());
+    if bound >= pow10(plan.out.0).unsigned_abs() {
+        BatchProof::None
+    } else if bound <= i64_max && lm <= i64_max && rm <= i64_max {
+        BatchProof::Fits64
+    } else {
+        BatchProof::Fits
+    }
+}
+
 /// The `(precision, scale)` of a decimal array.
 fn type_of(a: &Decimal128Array) -> DecimalType {
     (a.precision(), a.scale())
@@ -678,25 +738,38 @@ where
         Resolved::Lanes { l, r, nulls, len } => (l, r, nulls, len),
     };
     let raise = |row, fault| plan_error(plan, ctx, sl, sr, row, fault);
-    let c = match plan.storage {
-        DecimalStorage::I128 => {
-            let lane = Lane128::<Op> {
-                plan,
-                bound: pow10(plan.out.0),
-                op: std::marker::PhantomData,
-            };
-            chunk::compute::<i128, _, O>(ctx, sl, sr, nulls, len, lane, raise)
+    let narrow = |v: i128| i64::try_from(v).unwrap_or(i64::MAX);
+    let lane64 = Lane64::<Op> {
+        plan,
+        l_mul: narrow(plan.l_mul),
+        r_mul: narrow(plan.r_mul),
+        bound: narrow(pow10(plan.out.0)),
+        op: std::marker::PhantomData,
+    };
+    let lane128 = Lane128::<Op> {
+        plan,
+        bound: pow10(plan.out.0),
+        op: std::marker::PhantomData,
+    };
+    // Per-batch range proof (design P2-T160): skipped only when the types
+    // already license the cheapest lanes.
+    let proof = if O::MODE == OverflowMode::Unchecked && plan.storage == DecimalStorage::I64 {
+        BatchProof::None
+    } else {
+        batch_proof(plan, sl, sr)
+    };
+    let c = match (proof, plan.storage) {
+        (BatchProof::Fits64, _) => {
+            chunk::compute::<i128, _, Unchecked>(ctx, sl, sr, nulls, len, lane64, raise)
         }
-        DecimalStorage::I64 => {
-            let narrow = |v: i128| i64::try_from(v).unwrap_or(i64::MAX);
-            let lane = Lane64::<Op> {
-                plan,
-                l_mul: narrow(plan.l_mul),
-                r_mul: narrow(plan.r_mul),
-                bound: narrow(pow10(plan.out.0)),
-                op: std::marker::PhantomData,
-            };
-            chunk::compute::<i128, _, O>(ctx, sl, sr, nulls, len, lane, raise)
+        (BatchProof::Fits, _) => {
+            chunk::compute::<i128, _, Unchecked>(ctx, sl, sr, nulls, len, lane128, raise)
+        }
+        (BatchProof::None, DecimalStorage::I128) => {
+            chunk::compute::<i128, _, O>(ctx, sl, sr, nulls, len, lane128, raise)
+        }
+        (BatchProof::None, DecimalStorage::I64) => {
+            chunk::compute::<i128, _, O>(ctx, sl, sr, nulls, len, lane64, raise)
         }
     }?;
     finish(
@@ -952,6 +1025,36 @@ mod tests {
         assert!(rem.overflow_impossible() && rem.types_op() == DecimalOp::Remainder);
         let div = DecimalPlan::new(DecimalOp::Divide, (5, 1), (3, 2), (10, 6)).unwrap();
         assert!(!div.overflow_impossible() && div.storage() == DecimalStorage::I128);
+    }
+
+    #[test]
+    fn batch_proof_boundaries() {
+        let mul = plan(ArithOp::Multiply, (20, 0), (20, 0), (38, 0));
+        // `max_abs` of an array is `OR + 1`: 9 bounds as 10.
+        assert_eq!(max_abs(Side::Array(&[9, -3])), 12);
+        assert_eq!(max_abs(Side::Array(&[i128::MIN])), i128::MIN.unsigned_abs());
+        assert_eq!(max_abs(Side::Scalar(-7)), 7);
+        let p = |a: &[i128], b: i128| batch_proof(&mul, Side::Array(a), Side::Scalar(b));
+        // Just below and at 2^63 and 10^38.
+        let two63 = 1_i128 << 63;
+        // (2^62 - 2 + 1) * 2 = 2^63 - 2 fits; (2^62 - 1 + 1) * 2 = 2^63 does not.
+        assert_eq!(p(&[two63 / 2 - 2], 2), BatchProof::Fits64);
+        assert_eq!(p(&[two63 / 2 - 1], 2), BatchProof::Fits);
+        let e19 = 10_i128.pow(19);
+        assert_eq!(p(&[e19 - 1], e19 - 1), BatchProof::Fits);
+        assert_eq!(p(&[e19 - 1], e19), BatchProof::None);
+        // `+` rescales: 10^2 * (A) + B.
+        let add = plan(ArithOp::Add, (20, 0), (20, 2), (22, 2));
+        let q = |a: i128, b: i128| batch_proof(&add, Side::Scalar(a), Side::Scalar(b));
+        assert_eq!(q(5, 7), BatchProof::Fits64);
+        assert_eq!(
+            q(10_i128.pow(20) - 1, 10_i128.pow(22) - 1),
+            BatchProof::None
+        );
+        // A rescale factor beyond `i64` never takes the 64-bit lanes.
+        let far = plan(ArithOp::Add, (38, 0), (38, 37), (38, 37));
+        let r = batch_proof(&far, Side::Scalar(0), Side::Scalar(1));
+        assert_eq!(r, BatchProof::Fits);
     }
 
     #[test]
