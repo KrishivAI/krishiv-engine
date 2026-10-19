@@ -748,6 +748,13 @@ fn dec64(v: i64, p: u8, sc: i8) -> ArrayRef {
 }
 
 proptest! {
+    // No failure file (Miri's isolation forbids `getcwd`); two cases under Miri.
+    #![proptest_config(ProptestConfig {
+        cases: if cfg!(miri) { 2 } else { 256 },
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
     /// `Decimal64` is a carrier of `decimal(p <= 18, s)` (P2-T160): casts
     /// to and from it give the `Decimal128` cast's values and errors, and a
     /// result on the requested carrier.

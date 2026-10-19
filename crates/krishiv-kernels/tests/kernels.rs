@@ -761,7 +761,13 @@ fn decimal_carriers() {
         DecimalOperand::of_array(&b).unwrap(),
         DecimalOperand::Decimal128(_)
     ));
-    assert!(DecimalOperand::of_array(&arrow_array::Int64Array::from(vec![1])).is_err());
+    let e = DecimalOperand::of_array(&arrow_array::Int64Array::from(vec![1])).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(
+        e.to_string()
+            .contains("decimal kernel operand of type Int64"),
+        "{e}"
+    );
     // Mixed carriers: decimal(10,2) + decimal(20,2) -> decimal(21,2).
     let plan = DecimalPlan::new(ArithOp::Add, (10, 2), (20, 2), (21, 2)).unwrap();
     let (l, r) = (
@@ -780,9 +786,10 @@ fn decimal_carriers() {
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     // An operand of another type than the plan's.
     let wrong = DecimalPlan::new(ArithOp::Add, (11, 2), (20, 2), (21, 2)).unwrap();
-    assert!(
-        decimal_arith_any::<AnsiError>(l, r, &wrong, DecimalCarrier::Decimal128, &ctx()).is_err()
-    );
+    let e = decimal_arith_any::<AnsiError>(l, r, &wrong, DecimalCarrier::Decimal128, &ctx())
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("plan expects (11, 2)"), "{e}");
     // A NULL literal: every row NULL, on the requested carrier.
     let small = DecimalPlan::new(ArithOp::Add, (10, 2), (10, 2), (11, 2)).unwrap();
     for (carrier, t) in [

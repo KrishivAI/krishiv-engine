@@ -955,6 +955,8 @@ proptest! {
 }
 
 proptest! {
+    #![proptest_config(config())]
+
     /// `round` on a `Decimal64` column (P2-T160) gives the `Decimal128`
     /// values and errors; the result stays on `Decimal64` when its
     /// precision allows.
