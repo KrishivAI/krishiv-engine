@@ -189,3 +189,17 @@ pub fn count_distinct(cols: impl IntoIterator<Item = Column>) -> Column {
 pub fn coalesce(cols: impl IntoIterator<Item = Column>) -> Column {
     call_function("coalesce", cols)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lit_null_is_the_untyped_null_literal() {
+        let null = lit_null();
+        assert_eq!(
+            format!("{null:?}"),
+            format!("{:?}", Column::new(Expr::literal(Literal::Null(None))))
+        );
+    }
+}

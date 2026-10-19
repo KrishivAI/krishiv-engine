@@ -50,6 +50,9 @@ _HOW = {
 }
 
 
+#: The most rows ``show`` prints, as Spark: ``ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH - 1``.
+_SHOW_MAX = 2**31 - 17
+
 ColumnOrName = Column | str
 ColumnsOrNames = ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...]
 
@@ -208,7 +211,15 @@ class DataFrame:
     def toArrow(self) -> Any:
         """The result as a ``pyarrow.Table`` (needs pyarrow)."""
         pa = _convert.require_pyarrow("toArrow")
-        return pa.table(self)
+        stream = self._df.execute()
+        try:
+            table = pa.table(stream)
+        except Exception:
+            # The C stream carries only an Arrow error message: raise the engine's own error if that was the cause.
+            stream.check_error()
+            raise
+        stream.check_error()
+        return table
 
     def toPandas(self) -> Any:
         """The result as a ``pandas.DataFrame``, converted from Arrow (needs pyarrow and pandas)."""
@@ -245,8 +256,10 @@ class DataFrame:
             raise not_expected_type("n", "int", n)
         if not isinstance(truncate, bool | int):
             raise not_expected_type("truncate", "bool or int", truncate)
-        rows = _convert.table_cells(self.limit(n + 1).toArrow()) if n >= 0 else []
-        print(_convert.show_string(self.columns, rows, max(n, 0), truncate, vertical), end="")
+        rows = min(max(n, 0), _SHOW_MAX)  # Spark's bounds: MAX_ROUNDED_ARRAY_LENGTH - 1
+        zone = _convert.session_zone(self._session.conf.get("spark.sql.session.timeZone", "UTC") or "UTC")
+        cells = _convert.table_cells(self.limit(rows + 1).toArrow(), zone)
+        print(_convert.show_string(self.columns, cells, rows, truncate, vertical), end="")
 
     def createOrReplaceTempView(self, name: str) -> None:
         """Registers this DataFrame as the temporary view ``name`` (views of reads by path only, so far)."""

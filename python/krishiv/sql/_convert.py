@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import struct
 import unicodedata
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 from typing import Any
 
@@ -42,6 +42,9 @@ def _value(value: Any, arrow_type: Any) -> Any:
         return None
     import pyarrow as pa
 
+    if pa.types.is_timestamp(arrow_type) and arrow_type.tz is not None:
+        # An instant: PySpark returns it as a naive datetime in the client's local time zone.
+        return value.astimezone().replace(tzinfo=None)
     if pa.types.is_struct(arrow_type):
         fields = [arrow_type.field(i) for i in range(arrow_type.num_fields)]
         return _create_row([f.name for f in fields], [_value(value[f.name], f.type) for f in fields])
@@ -55,20 +58,37 @@ def _value(value: Any, arrow_type: Any) -> Any:
 # -- show ---------------------------------------------------------------------------------------
 
 
-def cell(value: Any, arrow_type: Any) -> str:
-    """One value (as pyarrow's ``to_pylist`` gives it, of ``arrow_type``) as ``Dataset.show`` prints it."""
+def session_zone(name: str) -> tzinfo:
+    """The time zone named by ``spark.sql.session.timeZone``: a region ID, ``UTC``/``Z`` or a ``±hh[:mm]`` offset."""
+    if name in ("Z", "UTC"):
+        return UTC
+    if name[:1] in "+-" and len(name) > 1:
+        hours, _, minutes = name[1:].partition(":")
+        if hours.isdigit() and (minutes.isdigit() or not minutes):
+            offset = timedelta(hours=int(hours), minutes=int(minutes or 0))
+            return timezone(-offset if name[0] == "-" else offset)
+    from zoneinfo import ZoneInfo
+
+    return ZoneInfo(name)
+
+
+def cell(value: Any, arrow_type: Any, zone: tzinfo = UTC) -> str:
+    """One value (as pyarrow's ``to_pylist`` gives it, of ``arrow_type``) as ``Dataset.show`` prints it;
+    instants (timestamps with a time zone) in ``zone``, the session time zone."""
     if value is None:
         return "NULL"
     import pyarrow as pa
 
     if pa.types.is_struct(arrow_type):
         fields = [arrow_type.field(i) for i in range(arrow_type.num_fields)]
-        return "{" + ", ".join(cell(value[f.name], f.type) for f in fields) + "}"
+        return "{" + ", ".join(cell(value[f.name], f.type, zone) for f in fields) + "}"
     if pa.types.is_map(arrow_type):
-        pairs = (f"{cell(k, arrow_type.key_type)} -> {cell(v, arrow_type.item_type)}" for k, v in value)
+        pairs = (f"{cell(k, arrow_type.key_type, zone)} -> {cell(v, arrow_type.item_type, zone)}" for k, v in value)
         return "{" + ", ".join(pairs) + "}"
     if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type) or pa.types.is_fixed_size_list(arrow_type):
-        return "[" + ", ".join(cell(v, arrow_type.value_type) for v in value) + "]"
+        return "[" + ", ".join(cell(v, arrow_type.value_type, zone) for v in value) + "]"
+    if pa.types.is_timestamp(arrow_type) and arrow_type.tz is not None:
+        value = value.astimezone(zone)
     if pa.types.is_float32(arrow_type):
         return _java_double(value, single=True)
     if isinstance(value, bool):
@@ -130,9 +150,9 @@ def _truncate(text: str, limit: int) -> str:
     return text[:limit] if limit < 4 else text[: limit - 3] + "..."
 
 
-def table_cells(table: Any) -> list[list[str]]:
+def table_cells(table: Any, zone: tzinfo = UTC) -> list[list[str]]:
     """The cells of a pyarrow ``Table``, as ``show`` prints them, one list per row."""
-    columns = [[cell(v, col.type) for v in col.to_pylist()] for col in table.columns]
+    columns = [[cell(v, col.type, zone) for v in col.to_pylist()] for col in table.columns]
     return [list(row) for row in zip(*columns, strict=True)]
 
 

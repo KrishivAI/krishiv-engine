@@ -2,10 +2,17 @@
 //! The result of a running query as an Arrow reader (pyo3-free, so that
 //! `tests.rs` can compile it and check cancel-on-release).
 
-use arrow_array::{RecordBatch, RecordBatchReader};
+use std::sync::{Arc, Mutex};
+
+use arrow_array::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
 use futures::StreamExt as _;
+use krishiv_common::error::KrishivError;
 use krishiv_session::RecordBatchStream;
+
+/// Where a reader leaves the engine error that ended it, so the caller can raise
+/// the original (Spark-classed) exception instead of the Arrow one the C stream carries.
+pub(crate) type ErrorSlot = Arc<Mutex<Option<KrishivError>>>;
 
 /// The result of a running query as an Arrow reader. It never touches Python,
 /// so a consumer may call it with the GIL held or from a foreign thread.
@@ -16,6 +23,7 @@ pub(crate) struct QueryReader {
     /// The batch read to learn the schema, handed out first.
     first: Option<RecordBatch>,
     stream: RecordBatchStream,
+    error: ErrorSlot,
 }
 
 impl Iterator for QueryReader {
@@ -26,14 +34,22 @@ impl Iterator for QueryReader {
             Some(batch) => batch,
             None => match futures::executor::block_on(self.stream.next())? {
                 Ok(batch) => batch,
-                Err(e) => return Some(Err(ArrowError::ExternalError(Box::new(e)))),
+                Err(e) => {
+                    let arrow = ArrowError::ExternalError(e.to_string().into());
+                    if let Ok(mut slot) = self.error.lock() {
+                        *slot = Some(e);
+                    }
+                    return Some(Err(arrow));
+                }
             },
         };
         // The schema was fixed by the first batch: a batch that differs is an
         // engine bug, reported instead of exported under the wrong schema.
-        Some(RecordBatch::try_new(
+        // The row count is kept: a batch without columns has no other source for it.
+        Some(RecordBatch::try_new_with_options(
             SchemaRef::clone(&self.schema),
             batch.columns().to_vec(),
+            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
         ))
     }
 }
@@ -56,6 +72,12 @@ impl QueryReader {
             schema,
             first,
             stream,
+            error: ErrorSlot::default(),
         }
+    }
+
+    /// The slot the engine error that ends this reader is left in.
+    pub(crate) fn error_slot(&self) -> ErrorSlot {
+        ErrorSlot::clone(&self.error)
     }
 }

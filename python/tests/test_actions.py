@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import gc
 import sys
-from datetime import date
+from datetime import UTC, date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -406,3 +406,45 @@ def test_release_does_not_wait_for_the_query(spark: SparkSession, big: Any) -> N
     gc.collect()
     assert time.perf_counter() - started < 5
     assert spark.sql("select 1 as a").collect() == [Row(a=1)]
+
+
+def test_a_later_batch_error_keeps_its_spark_class(spark: SparkSession) -> None:
+    """The error comes after the first batch (rows 0-9999 are numbers, then one is not): ``toArrow`` raises the
+    engine's own error, not the Arrow consumer's message."""
+    values = [str(i) for i in range(30_000)] + ["not a number"]
+    df = spark.createDataFrame(pa.table({"s": values})).select(F.col("s").cast("int").alias("i"))
+    for action in (df.toArrow, df.collect):
+        with pytest.raises(errors.PySparkException) as raised:
+            action()
+        assert raised.value.getCondition() == "CAST_INVALID_INPUT"
+
+
+def test_a_result_without_columns_keeps_its_rows(df: DataFrame) -> None:
+    empty = df.select()
+    assert empty.columns == []
+    assert empty.toArrow().num_rows == 3
+    assert empty.collect() == []  # no columns: no row values, as PySpark's Row()
+    assert empty.count() == 3
+
+
+def test_show_bounds_follow_spark(df: DataFrame, capsys: pytest.CaptureFixture[str]) -> None:
+    one = df.select("id")
+    assert shown(one, capsys, -5) == "+---+\n| id|\n+---+\n+---+\nonly showing top 0 rows\n"
+    assert shown(one.orderBy("id"), capsys, 2**31 - 1).count("\n") == 7  # no overflow of n + 1
+
+
+def test_timestamps_follow_the_time_zones(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
+    from datetime import datetime
+
+    instant = datetime(2020, 6, 1, 12, 0, tzinfo=UTC)
+    df = spark.createDataFrame(pa.table({"t": pa.array([instant], pa.timestamp("us", "UTC"))}))
+    spark.conf.set("spark.sql.session.timeZone", "America/New_York")
+    assert "2020-06-01 08:00:00" in shown(df, capsys)
+    spark.conf.set("spark.sql.session.timeZone", "+05:30")
+    assert "2020-06-01 17:30:00" in shown(df, capsys)
+    spark.conf.set("spark.sql.session.timeZone", "-02")
+    assert "2020-06-01 10:00:00" in shown(df, capsys)
+    spark.conf.set("spark.sql.session.timeZone", "Z")
+    assert "2020-06-01 12:00:00" in shown(df, capsys)
+    # collect() gives the instant as a naive datetime in the client's local time zone, as PySpark.
+    assert df.collect()[0].t == instant.astimezone().replace(tzinfo=None)

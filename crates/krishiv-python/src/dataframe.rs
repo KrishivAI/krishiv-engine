@@ -180,9 +180,9 @@ impl PyDataFrame {
             let schema = first.as_ref().map_or(analyzed, RecordBatch::schema);
             Ok((schema, first, stream))
         })?;
-        Ok(ArrowStream::new(Box::new(QueryReader::new(
-            schema, first, stream,
-        ))))
+        let reader = QueryReader::new(schema, first, stream);
+        let slot = reader.error_slot();
+        Ok(ArrowStream::new(Box::new(reader)).with_error_slot(slot))
     }
 
     /// The number of result rows (executes the query, the GIL released).
