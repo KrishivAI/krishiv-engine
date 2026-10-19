@@ -4,7 +4,7 @@
 //! today's arrow-row `KeyTable`, single thread.
 //!
 //! ```text
-//! cargo run --release -p krishiv-exec --example row_table_matrix
+//! cargo run --release -p krishiv-exec --features row-table-prototype --example row_table_matrix
 //! ROW_TABLE_SIZES=10000,1000000 ROW_TABLE_REPS=5 cargo run ...
 //! ```
 //!

@@ -11,7 +11,7 @@
 //!   keys (long views, heap compare).
 //!
 //! These are cache-resident sizes for CodSpeed; the go/no-go matrix at
-//! 1e4–1.5e7 keys is `cargo run --release --example row_table_matrix`.
+//! 1e4–1.5e7 keys is `cargo run --release --features row-table-prototype --example row_table_matrix`.
 
 #![expect(
     missing_docs,
