@@ -71,6 +71,13 @@ def resolve_dataset(suite: str, dataset: str | None, sf: float) -> Dataset:
     return Dataset(name, sf, root, sorted(tables))
 
 
+def _wait_idle(limit: float = 2.0, max_wait_s: float = 900.0) -> None:
+    """Let the 1-minute load average decay (e.g. after the previous benchmark run) before recording anything."""
+    deadline = time.monotonic() + max_wait_s
+    while loadavg() > limit and time.monotonic() < deadline:
+        time.sleep(15)
+
+
 def _fail(status: str, e: Exception | str) -> dict:
     return {"status": status, "reason": str(e)[:1000]}
 
@@ -184,6 +191,7 @@ def run_reproduce(
         fcntl.flock(lock, fcntl.LOCK_EX)
         waited = time.perf_counter() - t_wait
         print(f"bench lock acquired (waited {waited:.0f}s)")
+        _wait_idle()
         started = dt.datetime.now(dt.UTC)
         record: dict[str, Any] = {
             "schema": 1,
