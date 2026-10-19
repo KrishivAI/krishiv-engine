@@ -438,6 +438,51 @@ impl Source for Count {
     }
 }
 
+/// A gate a blocking call waits at until the test opens it, for
+/// deterministic tests of work on the blocking pool (no wall-clock bounds).
+#[derive(Debug, Default)]
+pub struct BlockingGate {
+    /// (a caller is waiting or has passed, the gate is open)
+    state: std::sync::Mutex<(bool, bool)>,
+    opened: std::sync::Condvar,
+}
+
+impl BlockingGate {
+    /// A closed gate.
+    pub fn new() -> Arc<Self> {
+        Arc::default()
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, (bool, bool)> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Blocks the calling thread until the gate is open.
+    pub fn pass(&self) {
+        let mut s = self.state();
+        s.0 = true;
+        while !s.1 {
+            s = self
+                .opened
+                .wait(s)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    /// Whether a caller has reached the gate.
+    pub fn reached(&self) -> bool {
+        self.state().0
+    }
+
+    /// Opens the gate for every caller, now and later.
+    pub fn open(&self) {
+        self.state().1 = true;
+        self.opened.notify_all();
+    }
+}
+
 /// A pipeline breaker standing in for sort / join build: its sink side
 /// buffers every batch under a reservation (a spill moves the buffered
 /// batches out of the accounted memory, as if to disk), its source side
@@ -446,6 +491,8 @@ impl Source for Count {
 pub struct Buffer {
     spillable: bool,
     finalize_work: Option<Duration>,
+    /// A gate `finalize`'s blocking call waits at.
+    finalize_gate: Option<Arc<BlockingGate>>,
     finalize_yields: u32,
     /// Batches sunk so far.
     pub sunk: AtomicU64,
@@ -488,12 +535,23 @@ impl Buffer {
         Arc::new(Self {
             spillable,
             finalize_work,
+            finalize_gate: None,
             finalize_yields,
             sunk: AtomicU64::new(0),
             finalizing: AtomicBool::new(false),
             spilled_at: Mutex::new(Vec::new()),
             signals: Mutex::new(Vec::new()),
         })
+    }
+
+    /// A buffer whose `finalize` runs one blocking call that waits at
+    /// `gate` until the test opens it.
+    pub fn with_finalize_gate(gate: Arc<BlockingGate>) -> Arc<Self> {
+        let mut b = Self::with_finalize_yields(false, None, 0);
+        if let Some(b) = Arc::get_mut(&mut b) {
+            b.finalize_gate = Some(gate);
+        }
+        b
     }
 
     /// The value of `sunk` at each spill.
@@ -574,6 +632,14 @@ impl Sink for Buffer {
             if let Some(d) = self.finalize_work {
                 ctx.run_blocking(move || {
                     std::thread::sleep(d);
+                    Ok(())
+                })
+                .await?;
+            }
+            if let Some(gate) = &self.finalize_gate {
+                let gate = Arc::clone(gate);
+                ctx.run_blocking(move || {
+                    gate.pass();
                     Ok(())
                 })
                 .await?;

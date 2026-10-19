@@ -104,6 +104,8 @@ impl Pool {
         let root = TreePool::new(&MemoryConfig {
             limit,
             quantum: 1,
+            // Exact budgets: no spill-scratch floor below the limit.
+            spill_scratch_reserve: 0,
             ..MemoryConfig::default()
         });
         let query = root.child("query", None);

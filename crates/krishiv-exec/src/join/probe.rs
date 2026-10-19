@@ -424,6 +424,11 @@ impl Operator for ProbeOp {
                 return Ok(0);
             };
             let chosen = choose(&l.parts, 0, target);
+            if chosen.is_empty() {
+                // Nothing in memory (the grace phase): leave the consumer's
+                // credit alone, it holds a partition's read-back headroom.
+                return Ok(0);
+            }
             let (freed, written) = spill_parts(
                 &mut l.parts,
                 &chosen,

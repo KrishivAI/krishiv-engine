@@ -144,6 +144,16 @@ impl Spiller {
         w.map_err(KrishivError::from)
     }
 
+    /// A writer for one spill run, finished before the spill returns: its
+    /// scratch may use the pool's spill-scratch floor, so a spill of a full
+    /// pool does not fail for want of its writer's buffers.
+    fn run_writer(&self) -> Result<SpillWriter> {
+        let schema = Arc::clone(&self.core.state_schema);
+        let scratch = self.consumer.reservation().for_spill_scratch();
+        let w = self.scope.writer(schema, scratch);
+        w.map_err(KrishivError::from)
+    }
+
     fn finish(&self, w: SpillWriter) -> Result<SpillFile> {
         let f = w.finish().map_err(KrishivError::from)?;
         bump(&self.counters.spill_files, 1);
@@ -160,7 +170,7 @@ impl Spiller {
             if ids.is_empty() {
                 continue;
             }
-            let mut writer = self.writer()?;
+            let mut writer = self.run_writer()?;
             for chunk in ids.chunks(spill_chunk(table)) {
                 self.query.check_cancelled()?;
                 let b = Batch::new(table.state_batch(chunk)?);
@@ -923,6 +933,15 @@ impl Source for HashAggregate {
                     } else {
                         None
                     };
+                    if let Some(f) = &file {
+                        // The reader's frames, reserved through the
+                        // arbitrator before it opens and cycled through the
+                        // consumer's credit: a read is never refused.
+                        let need = f.max_read_reservation();
+                        let mut lent = l.consumer.reservation();
+                        lent.grow(need).await.map_err(KrishivError::from)?;
+                        lent.shrink_to_credit(need);
+                    }
                     let reader = l.reader.take();
                     let consumer = Arc::clone(&l.consumer);
                     // File I/O runs on the blocking pool, never on a worker.
@@ -932,7 +951,7 @@ impl Source for HashAggregate {
                         let mut r = match (reader, file) {
                             (Some(r), _) => r,
                             (None, Some(f)) => f
-                                .reader(consumer.reservation())
+                                .reader(consumer.reservation().releasing_to_credit())
                                 .map_err(KrishivError::from)?,
                             (None, None) => return Err(internal("no output file".to_owned())),
                         };
@@ -940,7 +959,12 @@ impl Source for HashAggregate {
                         Ok((r, next))
                     })
                     .await?;
-                    l.reader = Some(reader);
+                    if next.is_some() {
+                        l.reader = Some(reader);
+                    } else {
+                        drop(reader);
+                        l.consumer.release_credit();
+                    }
                     Ok(next)
                 }
                 None => Err(internal("aggregate read before it finalized".to_owned())),

@@ -488,6 +488,9 @@ impl Driver {
             match out? {
                 FlushOutput::Done => break,
                 FlushOutput::Continue => {}
+                FlushOutput::NeedMemory { bytes } => {
+                    self.reserve_or_fall_back(i + 1, bytes).await?;
+                }
                 FlushOutput::Batch(b) => {
                     self.metrics(i + 1).output(b.num_rows());
                     if let Some(next) = self.push(i + 1, b).await? {
@@ -614,27 +617,59 @@ impl Driver {
     /// (self-spill, then arbitration while servicing this driver's own spill
     /// requests) and park them as the slot's grant credit.
     async fn reserve(&mut self, k: usize, bytes: usize) -> Result<()> {
+        let granted = self.reserve_with(k, bytes, true).await?;
+        if granted.is_ok() {
+            self.credit = Some(k);
+        }
+        granted.map_err(KrishivError::from)
+    }
+
+    /// `FlushOutput::NeedMemory` from slot `k`: as [`reserve`](Self::reserve)
+    /// but never aborting a query, and the credit is the operator's to
+    /// manage. When spills cannot make room the step finds no new credit
+    /// and takes its fallback.
+    async fn reserve_or_fall_back(&mut self, k: usize, bytes: usize) -> Result<()> {
+        match self.reserve_with(k, bytes, false).await? {
+            Ok(()) | Err(MemoryError::Exhausted { .. }) => Ok(()),
+            Err(e) => Err(KrishivError::from(e)),
+        }
+    }
+
+    /// Reserves `bytes` for slot `k`'s consumer, parking the grant as its
+    /// credit in the same step; `may_abort` lets the arbitrator abort a
+    /// query. The outer error is the driver's own (cancelled, failed).
+    async fn reserve_with(
+        &mut self,
+        k: usize,
+        bytes: usize,
+        may_abort: bool,
+    ) -> Result<Result<(), MemoryError>> {
         let run = Arc::clone(&self.run);
         let consumer = Arc::clone(self.slots.get_mut().slot(k)?.ctx.consumer().consumer());
         self.waiting = Some((k, Blocked::Memory, run.executor.now()));
         let slots = &self.slots;
         let run_ref = &*run;
-        // Parks the grant as credit in the same step it is granted.
-        let reserved = self.owner.reserve_for(&consumer, bytes, || async move {
+        let service = || async move {
             let mut guard = slots.lock().await;
             if let Err(e) = service(run_ref, &mut guard).await {
                 run_ref.query.fail(e);
             }
-        });
+        };
+        let owner = &self.owner;
+        let reserved = async move {
+            if may_abort {
+                owner.reserve_for(&consumer, bytes, service).await
+            } else {
+                owner
+                    .reserve_for_without_abort(&consumer, bytes, service)
+                    .await
+            }
+        };
         let reserved = pause(run_ref, None, reserved).await;
         self.end_wait();
         let granted = reserved?.0;
-        if granted.is_ok() {
-            self.credit = Some(k);
-        }
         run.query.check_cancelled()?;
-        granted.map_err(KrishivError::from)?;
-        Ok(())
+        Ok(granted)
     }
 }
 
@@ -649,18 +684,26 @@ async fn service(run: &PipelineRun, slots: &mut Slots) -> Result<()> {
         let Some(m) = slot.ctx.registered() else {
             continue;
         };
-        let Some(target) = m.signal().spill_requested() else {
+        if m.signal().spill_requested().is_none() {
+            continue;
+        }
+        let op = k.checked_sub(1).and_then(|i| run.pipeline.operators.get(i));
+        // A step of this operator is in progress: it is serviced at the
+        // next batch boundary, once the step ended (not begun until then,
+        // so the arbitrator's wait for it stays bounded).
+        if slot.local.is_none() && slot.busy && op.is_some() {
+            continue;
+        }
+        // From here the request is being serviced: the arbitrator awaits
+        // it without a deadline, and an error completes it with 0 bytes.
+        let Some(service) = m.signal().begin() else {
             continue;
         };
-        let op = k.checked_sub(1).and_then(|i| run.pipeline.operators.get(i));
+        let target = service.target();
         let freed = match (k, slot.local.as_mut(), op) {
-            // Sources have no spill hook.
-            (0, _, _) => 0,
-            // A step of this operator is in progress: it is serviced at the
-            // next batch boundary, once the step ended.
-            (_, None, Some(_)) if slot.busy => continue,
-            // No longer wanted: its state is gone with its memory.
-            (_, None, Some(_)) => 0,
+            // Sources have no spill hook; an operator whose state is gone
+            // (no longer wanted) has freed its memory with it.
+            (0, _, _) | (_, None, Some(_)) => 0,
             (_, Some(local), Some((_, op))) => op.spill(local, target, &slot.ctx).await?,
             (_, Some(local), None) => run.pipeline.sink.1.spill(local, target, &slot.ctx).await?,
             // Combined (finalize runs): the sink's state is global now.
@@ -670,7 +713,7 @@ async fn service(run: &PipelineRun, slots: &mut Slots) -> Result<()> {
                     .await?
             }
         };
-        m.signal().complete(freed);
+        service.complete(freed);
         let metrics = &mut slots.metrics[k];
         metrics.spills += 1;
         metrics.spilled_bytes += freed as u64;

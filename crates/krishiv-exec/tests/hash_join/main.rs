@@ -452,6 +452,57 @@ async fn grace_spill_with_recursion_equals_the_in_memory_join() {
     }
 }
 
+/// A spilled partition that fits once a spillable consumer elsewhere gives
+/// memory back is loaded through the arbitrator (by its driver alone) and
+/// joined, not repartitioned: memory held by spillable consumers never
+/// forces a needless repartition.
+#[tokio::test(start_paused = true)]
+async fn a_partition_that_fits_after_others_spill_is_not_repartitioned() {
+    const LIMIT: usize = 4 * MIB;
+    let build = skewed(100_000, 60_000);
+    let probe = skewed(20_000, 60_000);
+    let c = case(JoinType::Inner, 1, false, false);
+    let (expect, _) = run_case(&c, &probe, &build, 1024, 3, 256 * MIB).await;
+
+    let root = root(LIMIT);
+    // Another query's spillable state holds most of the pool and spills
+    // only when asked.
+    let other = krishiv_memory::MemoryPool::child(&*root, "other", None);
+    let owner = krishiv_memory::SpillOwner::new();
+    let signal = owner.signal();
+    let id = other.register("hog", Some(Arc::clone(&signal) as _));
+    let mut held = krishiv_memory::Reservation::new(Arc::clone(&other), id);
+    held.try_grow(3 * MIB).unwrap();
+    signal.set_spillable_bytes(held.size());
+    let hog = tokio::spawn(async move {
+        let mut spilled = 0;
+        while held.size() > 0 {
+            if let Some(service) = signal.begin() {
+                let freed = service.target().min(held.size());
+                held.shrink(freed);
+                signal.set_spillable_bytes(held.size());
+                service.complete(freed);
+                spilled += freed;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        spilled
+    });
+    let (_manager, scope) = spill();
+    let q = query(&root, 1, ExecConfig::default());
+    let plan = join(
+        c.spec(Some(scope.clone())),
+        scan(&schema(), batches(&data(&build), 1024)),
+        scan(&schema(), batches(&data(&probe), 1024)),
+    );
+    let out = run(&runner_for(3, LIMIT), plan, &q).await.unwrap();
+    assert!(render(&out) == expect, "grace result differs");
+    assert!(metric(&q, "HashJoinProbe", "grace_partitions") > 0);
+    assert_eq!(metric(&q, "HashJoinProbe", "repartitions"), 0);
+    hog.abort();
+    assert_eq!(spill_files(&scope), 0);
+}
+
 /// Keys that cannot be split: a partition still too large at the depth
 /// limit fails with a typed error, releasing memory and files.
 #[tokio::test(start_paused = true)]

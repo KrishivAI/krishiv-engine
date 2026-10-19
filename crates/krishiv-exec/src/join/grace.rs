@@ -13,7 +13,8 @@ use arrow_array::{ArrayRef, UInt32Array};
 use arrow_schema::SchemaRef;
 use krishiv_common::error::KrishivJoinPartitionTooLarge;
 use krishiv_memory::{
-    ConsumerId, Reservation, SpillError, SpillFile, SpillReader, SpillScope, SpillWriter,
+    ConsumerHandle, ConsumerId, MemoryError, Reservation, SpillError, SpillFile, SpillReader,
+    SpillScope, SpillWriter,
 };
 use krishiv_types::batch::Batch;
 
@@ -22,7 +23,7 @@ use super::keys::{MAX_DEPTH, PARTITIONS, partition};
 use super::probe::{Cursor, Tables};
 use super::table::{JoinTable, RowArena, key_bytes};
 use super::{Counter, Shared, take_batch};
-use crate::context::TaskContext;
+use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::hash::HashSeed;
 use crate::operator::FlushOutput;
@@ -123,11 +124,12 @@ impl Part {
 
 /// Writes the in-memory chunks of the `chosen` parts to one new spill file
 /// each. Unless it `must`, it declines (returns `(0, 0)`, nothing changed)
-/// when the rows plus the pool's free memory cannot fund the writers'
-/// scratch; one that must write takes what is missing from the pool as
-/// each write needs it. Their memory is released **first**: a writer needs scratch (its
-/// buffer and an encoded frame), and with the pool full that can only come
-/// from the bytes being spilled. The chunks stay in RAM, unaccounted, only
+/// when the rows plus the pool's free memory, its spill-scratch floor
+/// included, cannot fund the writers' scratch; one that must write takes
+/// what is missing from the pool as each write needs it. Their memory is
+/// released **first**: a writer needs scratch (its buffer and an encoded
+/// frame), and with the pool full that can only come from the bytes being
+/// spilled or the floor. The chunks stay in RAM, unaccounted, only
 /// while they are written. Returns the bytes freed and written.
 pub(crate) async fn spill_parts(
     parts: &mut [Part],
@@ -144,7 +146,7 @@ pub(crate) async fn spill_parts(
         .filter_map(|&p| parts.get(p).filter(|part| !part.chunks.is_empty()))
         .map(Part::bytes)
         .sum();
-    let mut topup = ctx.consumer().reservation();
+    let mut topup = ctx.consumer().reservation().for_spill_scratch();
     let funded = topup.try_grow(SPILL_SCRATCH.saturating_sub(held)).is_ok();
     if held == 0 || !(funded || must) {
         // Scratch a caller lent is not needed.
@@ -174,7 +176,10 @@ pub(crate) async fn spill_parts(
         jobs.push((
             p,
             std::mem::take(&mut part.chunks),
-            ctx.consumer().reservation().releasing_to_credit(),
+            ctx.consumer()
+                .reservation()
+                .releasing_to_credit()
+                .for_spill_scratch(),
         ));
     }
     if jobs.is_empty() {
@@ -303,7 +308,10 @@ struct Task {
     probe: Part,
 }
 
-/// The spilled partitions of a join, shared by its probe drivers.
+/// The spilled partitions of a join, shared by its probe drivers, and who
+/// works on what. A driver that finds nothing to claim waits on
+/// [`Built::grace_changed`](super::build::Built), notified whenever a
+/// claim ends, instead of polling.
 #[derive(Debug)]
 pub(crate) struct Grace {
     /// Level-0 build partitions that spilled (set by `finalize`).
@@ -312,11 +320,16 @@ pub(crate) struct Grace {
     pub(crate) probe: Vec<Part>,
     started: bool,
     queue: Vec<Task>,
-    /// Drivers loading or holding a partition.
+    /// Drivers holding a partition's memory (loading or joining it).
     active: usize,
-    /// Once a partition did not fit, the one driver that may still claim
-    /// partitions: it waits until no other holds one, then works alone, so
-    /// repartitioning never competes with other drivers' tables.
+    /// Drivers holding a task that may yet come back to the queue or be
+    /// split into new tasks: while any does, the work is not done.
+    held: usize,
+    /// A driver whose partition did not fit next to the others' tables: no
+    /// driver claims a partition until it has retried alone, and
+    /// repartitioned the partition if it still does not fit. Drivers
+    /// holding a partition keep joining it; after the retry every driver
+    /// claims again, in parallel.
     exclusive: Option<ConsumerId>,
 }
 
@@ -328,7 +341,20 @@ impl Grace {
             started: false,
             queue: Vec::new(),
             active: 0,
+            held: 0,
             exclusive: None,
+        }
+    }
+
+    /// What a driver holding no task does next.
+    fn next(&mut self) -> Next {
+        if self.exclusive.is_some() {
+            return Next::Wait;
+        }
+        match self.pop() {
+            Some(task) => Next::Task(task),
+            None if self.held == 0 => Next::Done,
+            None => Next::Wait,
         }
     }
 
@@ -338,7 +364,7 @@ impl Grace {
             self.started = true;
             let build = std::mem::take(&mut self.build);
             let probe = std::mem::take(&mut self.probe);
-            self.queue = build
+            let level0 = build
                 .into_iter()
                 .zip(probe)
                 .filter(|(_, p)| p.rows > 0)
@@ -346,11 +372,23 @@ impl Grace {
                     depth: 0,
                     build,
                     probe,
-                })
-                .collect();
+                });
+            self.queue.extend(level0);
         }
         self.queue.pop()
     }
+}
+
+/// See [`Grace::next`].
+#[derive(Debug)]
+enum Next {
+    /// Claim this task.
+    Task(Task),
+    /// Wait for a claim to end: a driver works alone, or a task held by
+    /// another may come back or be split into new ones.
+    Wait,
+    /// Every partition is joined or being joined.
+    Done,
 }
 
 /// A partition being joined by one driver.
@@ -365,24 +403,56 @@ struct Active {
     cursor: Option<Cursor>,
 }
 
-/// One driver's claim on a partition (loading or joining it): counted in
-/// [`Grace`] until dropped, also when the driver stops early (a `LIMIT`
-/// above the join is satisfied) or fails.
-#[derive(Debug)]
-struct Slot(Arc<BuildGlobal>);
+/// What a [`Claim`] holds in [`Grace`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hold {
+    /// A partition's memory ([`Grace::active`]).
+    Memory,
+    /// A task ([`Grace::held`]).
+    Task,
+    /// The right to work alone ([`Grace::exclusive`]).
+    Alone(ConsumerId),
+}
 
-impl Slot {
-    fn claim(build: &Arc<BuildGlobal>, g: &mut Grace) -> Self {
-        g.active += 1;
-        Self(Arc::clone(build))
+/// One driver's claim in [`Grace`], given up (and every waiting driver
+/// woken) when dropped: also when the driver stops early (a `LIMIT` above
+/// the join is satisfied) or fails.
+#[derive(Debug)]
+struct Claim {
+    build: Arc<BuildGlobal>,
+    hold: Hold,
+}
+
+impl Claim {
+    fn new(build: &Arc<BuildGlobal>, g: &mut Grace, hold: Hold) -> Self {
+        match hold {
+            Hold::Memory => g.active += 1,
+            Hold::Task => g.held += 1,
+            Hold::Alone(me) => g.exclusive = Some(me),
+        }
+        Self {
+            build: Arc::clone(build),
+            hold,
+        }
     }
 }
 
-impl Drop for Slot {
+impl Drop for Claim {
     fn drop(&mut self) {
-        if let Some(built) = self.0.built.get() {
-            let mut g = lock(&built.grace);
-            g.active = g.active.saturating_sub(1);
+        if let Some(built) = self.build.built.get() {
+            {
+                let mut g = lock(&built.grace);
+                match self.hold {
+                    Hold::Memory => g.active = g.active.saturating_sub(1),
+                    Hold::Task => g.held = g.held.saturating_sub(1),
+                    Hold::Alone(me) => {
+                        if g.exclusive == Some(me) {
+                            g.exclusive = None;
+                        }
+                    }
+                }
+            }
+            built.grace_changed.notify();
         }
     }
 }
@@ -391,7 +461,13 @@ impl Drop for Slot {
 #[derive(Debug, Default)]
 pub(crate) struct Flush {
     active: Option<Active>,
-    slot: Option<Slot>,
+    /// The memory claim of the partition being loaded or joined.
+    slot: Option<Claim>,
+    /// The task this driver holds: being loaded, or waiting to be retried
+    /// alone.
+    task: Option<(Loading, Claim)>,
+    /// Held while this driver works alone.
+    alone: Option<Claim>,
 }
 
 /// One flush step: emit a batch of the partition being joined, read its
@@ -407,7 +483,6 @@ pub(crate) async fn step(
         .built
         .get()
         .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
-    let grace = &built.grace;
     let limit = ctx.query().config().batch_size.max(1);
     if let Some(a) = &mut st.active {
         if let Some(c) = &mut a.cursor {
@@ -432,58 +507,93 @@ pub(crate) async fn step(
         }
         return Ok(FlushOutput::Continue);
     }
-    let me = ctx.consumer().id();
-    let task = {
-        let mut g = lock(grace);
-        match g.exclusive {
-            Some(owner) if owner != me => return Ok(FlushOutput::Done),
-            Some(_) if g.active > 0 => return Ok(FlushOutput::Continue),
-            _ => {}
+    if st.slot.is_none() {
+        // Claim a task's memory: a new task, or (working alone) the held
+        // one once no other driver holds a partition. Otherwise wait for a
+        // claim to end; listen first, so a change in between is not missed.
+        let changed = built.grace_changed.listen();
+        {
+            let mut g = lock(&built.grace);
+            if st.task.is_some() {
+                if g.active == 0 {
+                    st.slot = Some(Claim::new(build, &mut g, Hold::Memory));
+                }
+            } else {
+                match g.next() {
+                    Next::Task(task) => {
+                        st.slot = Some(Claim::new(build, &mut g, Hold::Memory));
+                        let held = Claim::new(build, &mut g, Hold::Task);
+                        st.task = Some((Loading::new(task, false, ctx), held));
+                    }
+                    Next::Done => return Ok(FlushOutput::Done),
+                    Next::Wait => {}
+                }
+            }
         }
-        let Some(task) = g.pop() else {
-            return Ok(FlushOutput::Done);
-        };
-        st.slot = Some(Slot::claim(build, &mut g));
-        task
-    };
-    let depth = task.depth;
-    let loaded = load(shared, task, ctx).await;
-    if !matches!(loaded, Ok(Ok(_))) {
-        st.slot = None;
+        if st.slot.is_none() {
+            changed.await;
+            return Ok(FlushOutput::Continue);
+        }
     }
-    match loaded? {
-        Ok(active) => {
+    let Some((loading, held)) = st.task.take() else {
+        return Err(internal("grace join claimed no task".to_owned()));
+    };
+    let (loading, loaded) = load(shared, loading, ctx).await?;
+    match loaded {
+        Loaded::Need(bytes) => {
+            st.task = Some((loading, held));
+            Ok(FlushOutput::NeedMemory { bytes })
+        }
+        Loaded::Table(table, headroom) => {
+            let depth = loading.task.depth;
+            st.active = Some(loading.into_active(*table, headroom, ctx));
+            // Done with the task, and with working alone.
+            drop(held);
+            st.alone = None;
             shared.counters.add(Counter::GracePartitions, 1);
             shared
                 .counters
                 .max(Counter::RecursionDepth, u64::from(depth));
-            st.active = Some(active);
+            Ok(FlushOutput::Continue)
         }
-        Err(task) => {
-            {
-                // It does not fit: from now on one driver works alone, once
-                // no other holds a partition (the others stop claiming).
-                let mut g = lock(grace);
-                let owner = *g.exclusive.get_or_insert(me);
-                if owner != me || g.active > 0 {
-                    g.queue.push(task);
-                    let next = if owner == me {
-                        FlushOutput::Continue
-                    } else {
-                        FlushOutput::Done
-                    };
-                    return Ok(next);
+        Loaded::TooLarge => {
+            let arbitrated = loading.arbitrate;
+            let task = loading.into_task();
+            ctx.consumer().consumer().release_credit();
+            st.slot = None;
+            if !arbitrated {
+                let me = ctx.consumer().id();
+                let mut g = lock(&built.grace);
+                if st.alone.is_none() && g.exclusive.is_none() {
+                    st.alone = Some(Claim::new(build, &mut g, Hold::Alone(me)));
                 }
+                if st.alone.is_none() {
+                    // Another driver works alone first: hand the task back
+                    // and claim again after it.
+                    g.queue.push(task);
+                    drop(g);
+                    drop(held);
+                    return Ok(FlushOutput::Continue);
+                }
+                // Retry alone, once the other drivers' partitions are
+                // joined, with the arbitrator's help.
+                drop(g);
+                st.task = Some((Loading::new(task, true, ctx), held));
+                return Ok(FlushOutput::Continue);
             }
+            // It does not fit even alone: repartition it, then let every
+            // driver claim again.
             let split = split(shared, seed, task, ctx).await;
             ctx.consumer().consumer().release_credit();
             let (tasks, written) = split?;
             shared.counters.add(Counter::Repartitions, 1);
             shared.counters.add(Counter::ProbeSpillBytes, written);
-            lock(grace).queue.extend(tasks);
+            lock(&built.grace).queue.extend(tasks);
+            drop(held);
+            st.alone = None;
+            Ok(FlushOutput::Continue)
         }
     }
-    Ok(FlushOutput::Continue)
 }
 
 async fn next_probe(a: &mut Active, ctx: &TaskContext) -> Result<Option<Batch>> {
@@ -535,73 +645,257 @@ fn for_each(
     Ok(())
 }
 
-/// Loads a partition's build rows into a table, or gives the task back if
-/// they do not fit. The reservation also covers reading the probe rows back
-/// (parked as grant credit, which the readers draw), so a partition that
-/// loads can always be joined.
-async fn load(shared: &Arc<Shared>, task: Task, ctx: &TaskContext) -> Result<Result<Active, Task>> {
-    let shared = Arc::clone(shared);
-    let mut memory = ctx.consumer().reservation();
-    let handle = Arc::clone(ctx.consumer().consumer());
-    let query = Arc::clone(ctx.query());
-    let loaded = ctx
-        .run_blocking(move || {
-            // Build chunks in memory are already reserved by their part.
-            let mut chunks = task.build.chunks.clone();
-            let mut fits = true;
-            'files: for file in &task.build.files {
-                let reader = match file.reader(handle.reservation().releasing_to_credit()) {
-                    Err(SpillError::Memory(_)) => {
-                        fits = false;
-                        break 'files;
-                    }
-                    other => other?,
-                };
-                for b in reader {
-                    query.check_cancelled()?;
-                    let b = match b {
-                        Err(SpillError::Memory(_)) => {
-                            fits = false;
-                            break 'files;
-                        }
-                        other => other?,
-                    };
-                    if memory.try_grow(b.data().get_array_memory_size()).is_err() {
-                        fits = false;
-                        break 'files;
-                    }
-                    chunks.push(b);
-                }
-            }
-            let rows = chunks.iter().map(Batch::num_rows).sum();
-            let concat = if chunks.len() > 1 { memory.size() } else { 0 };
-            let headroom = task.probe.read_headroom();
-            let need = JoinTable::index_bytes(rows, key_bytes(&chunks)) + concat + headroom;
-            if !fits || memory.try_grow(need).is_err() {
-                return Ok(Err(task));
-            }
-            let arena = RowArena::concat(&shared.arena_schema, &chunks)?;
-            drop(chunks);
-            memory.shrink(concat);
-            let table = JoinTable::build(arena)?;
-            memory.shrink_to_credit(headroom);
-            let Task { build, probe, .. } = task;
-            drop(build);
-            Ok(Ok(Active {
-                table,
-                _memory: memory,
-                chunks: probe.chunks,
-                _chunk_memory: probe.memory,
-                files: probe.files.into(),
-                reader: None,
-                cursor: None,
-            }))
-        })
-        .await;
-    if !matches!(loaded, Ok(Ok(_))) {
-        ctx.consumer().consumer().release_credit();
+/// A partition's build rows being read into memory. Next to other
+/// drivers' partitions a load takes free memory only: concurrent loads
+/// that spilled everything else would leave the operators downstream of
+/// every driver no memory to work with. A partition that does not fit is
+/// retried by its driver alone, and that load spans flush steps: when a
+/// batch, a spill reader's frame or the finished table needs memory the
+/// pool does not have, the step ends with [`FlushOutput::NeedMemory`] and
+/// the driver reserves it through the arbitrator (its own consumers spill
+/// first, then other drivers' are asked to, no query is ever aborted). So
+/// memory held by spillable consumers, such as an aggregate downstream,
+/// never forces a needless repartition.
+#[derive(Debug)]
+struct Loading {
+    task: Task,
+    /// The rows read from the build files, then the table.
+    memory: Reservation,
+    chunks: Vec<Batch>,
+    /// The next build file to open.
+    file: usize,
+    reader: Option<SpillReader>,
+    /// A batch read whose memory the pool refused.
+    pending: Option<Batch>,
+    /// The outstanding `NeedMemory`, if any.
+    asked: Option<Asked>,
+    /// Loading alone: missing memory is asked of the arbitrator.
+    arbitrate: bool,
+    /// The arbitrator refused an estimate of the rest: ask for what is
+    /// missing now only from then on.
+    estimate_refused: bool,
+}
+
+/// A `NeedMemory` a loading step returned.
+#[derive(Debug, Clone, Copy)]
+struct Asked {
+    /// The consumer's credit if the driver got the bytes (only the owning
+    /// driver touches it, so nothing else moves it in between).
+    expect: usize,
+    /// The bytes the step could not have.
+    now: usize,
+    /// Whether it asked for an estimate of the rest of the partition, more
+    /// than `now`.
+    estimated: bool,
+}
+
+/// How a loading step ended.
+enum Loaded {
+    /// Ask the driver for this many bytes, then step again.
+    Need(usize),
+    /// The table, and the probe rows' read-back headroom it holds.
+    Table(Box<JoinTable>, usize),
+    /// It does not fit: the arbitrator could not make room.
+    TooLarge,
+}
+
+impl Loading {
+    fn new(task: Task, arbitrate: bool, ctx: &TaskContext) -> Self {
+        Self {
+            task,
+            memory: ctx.consumer().reservation(),
+            chunks: Vec::new(),
+            file: 0,
+            reader: None,
+            pending: None,
+            asked: None,
+            arbitrate,
+            estimate_refused: false,
+        }
     }
-    loaded
+
+    /// Gives the task back; what was read is released.
+    fn into_task(self) -> Task {
+        self.task
+    }
+
+    /// The joined partition: the table holds the memory, the probe rows'
+    /// read-back headroom goes to the consumer's credit for the readers.
+    fn into_active(mut self, table: JoinTable, headroom: usize, ctx: &TaskContext) -> Active {
+        // Credit left over (an estimate's excess, readers' frames) goes
+        // back first: only the headroom stays parked.
+        ctx.consumer().consumer().release_credit();
+        self.memory.shrink_to_credit(headroom);
+        let Task { build, probe, .. } = self.task;
+        drop(build);
+        Active {
+            table,
+            _memory: self.memory,
+            chunks: probe.chunks,
+            _chunk_memory: probe.memory,
+            files: probe.files.into(),
+            reader: None,
+            cursor: None,
+        }
+    }
+
+    /// Reads build batches until done or short of memory (blocking I/O).
+    fn advance(&mut self, shared: &Shared, ctx: &BlockingCtx) -> Result<Loaded> {
+        loop {
+            if let Some(b) = self.pending.take() {
+                let bytes = b.data().get_array_memory_size();
+                if self.memory.try_grow(bytes).is_err() {
+                    self.pending = Some(b);
+                    return Ok(Loaded::Need(bytes));
+                }
+                self.chunks.push(b);
+            }
+            if self.reader.is_none() {
+                let Some(file) = self.task.build.files.get(self.file) else {
+                    break;
+                };
+                let memory = ctx.handle.reservation().releasing_to_credit();
+                match file.reader(memory) {
+                    Err(SpillError::Memory(MemoryError::Exhausted { .. })) => {
+                        return Ok(Loaded::Need(file.max_read_reservation()));
+                    }
+                    reader => self.reader = Some(reader?),
+                }
+                self.file += 1;
+            }
+            ctx.query.check_cancelled()?;
+            let Some(reader) = self.reader.as_mut() else {
+                continue;
+            };
+            match reader.next() {
+                None => self.reader = None,
+                // The reader rewound to the frame's start: it is read again
+                // once the memory is there.
+                Some(Err(SpillError::Memory(MemoryError::Exhausted { .. }))) => {
+                    let file = self
+                        .file
+                        .checked_sub(1)
+                        .and_then(|f| self.task.build.files.get(f));
+                    let need = file.map_or(0, SpillFile::max_read_reservation);
+                    return Ok(Loaded::Need(need.max(1)));
+                }
+                Some(b) => self.pending = Some(b?),
+            }
+        }
+        // Every row read: the table's index, the concatenated copy of the
+        // rows and the probe rows' read-back headroom (exact, so a
+        // partition that loads can always be joined).
+        let chunks: Vec<Batch> = self
+            .task
+            .build
+            .chunks
+            .iter()
+            .chain(&self.chunks)
+            .cloned()
+            .collect();
+        let rows = chunks.iter().map(Batch::num_rows).sum();
+        let concat = if chunks.len() > 1 {
+            self.memory.size() + self.task.build.bytes()
+        } else {
+            0
+        };
+        let headroom = self.task.probe.read_headroom();
+        let need = JoinTable::index_bytes(rows, key_bytes(&chunks)) + concat + headroom;
+        if self.memory.try_grow(need).is_err() {
+            return Ok(Loaded::Need(need));
+        }
+        let arena = RowArena::concat(&shared.arena_schema, &chunks)?;
+        drop(chunks);
+        self.chunks.clear();
+        self.memory.shrink(concat);
+        Ok(Loaded::Table(Box::new(JoinTable::build(arena)?), headroom))
+    }
+
+    /// Records a `NeedMemory` for `now` missing bytes, the consumer holding
+    /// `credit`; returns the bytes to ask for.
+    fn ask(&mut self, now: usize, credit: usize) -> usize {
+        let bytes = if self.estimate_refused {
+            now
+        } else {
+            self.estimate(now)
+        };
+        self.asked = Some(Asked {
+            expect: credit.saturating_add(bytes),
+            now,
+            estimated: bytes > now,
+        });
+        bytes
+    }
+
+    /// After a `NeedMemory`, with the consumer now holding `credit`: `None`
+    /// if the driver got the bytes (or nothing was asked), else what to do:
+    /// ask again for the bytes missing now after a refused estimate, or give
+    /// up ([`Loaded::TooLarge`]).
+    fn check_grant(&mut self, credit: usize) -> Option<Loaded> {
+        let asked = self.asked.take().filter(|a| credit < a.expect)?;
+        if !asked.estimated {
+            return Some(Loaded::TooLarge);
+        }
+        self.estimate_refused = true;
+        self.asked = Some(Asked {
+            expect: credit.saturating_add(asked.now),
+            now: asked.now,
+            estimated: false,
+        });
+        Some(Loaded::Need(asked.now))
+    }
+
+    /// Bytes to ask for when `now` are missing: until refused once, an
+    /// estimate of the whole rest of the partition (from the bytes per row
+    /// read so far), so a large partition takes few arbitration rounds.
+    fn estimate(&self, now: usize) -> usize {
+        let read: usize = self.chunks.iter().map(Batch::num_rows).sum();
+        let total: u64 = self.task.build.files.iter().map(SpillFile::num_rows).sum();
+        let rest = usize::try_from(total)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(read);
+        let per_row = self.memory.size() / read.max(1);
+        now.saturating_add(per_row.saturating_mul(rest))
+    }
+}
+
+/// What blocking loading work needs, owned.
+struct BlockingCtx {
+    handle: Arc<ConsumerHandle>,
+    query: Arc<QueryContext>,
+}
+
+/// One loading step of a partition's build rows. It reads on, gets the
+/// memory it asked the driver for as credit, or reports
+/// [`Loaded::TooLarge`] when the driver could not have it.
+async fn load(
+    shared: &Arc<Shared>,
+    mut loading: Loading,
+    ctx: &TaskContext,
+) -> Result<(Loading, Loaded)> {
+    let handle = Arc::clone(ctx.consumer().consumer());
+    if let Some(refused) = loading.check_grant(handle.credit()) {
+        return Ok((loading, refused));
+    }
+    let shared = Arc::clone(shared);
+    let bctx = BlockingCtx {
+        handle: Arc::clone(&handle),
+        query: Arc::clone(ctx.query()),
+    };
+    let (mut loading, loaded) = ctx
+        .run_blocking(move || {
+            let loaded = loading.advance(&shared, &bctx)?;
+            Ok((loading, loaded))
+        })
+        .await?;
+    if let Loaded::Need(now) = loaded {
+        if !loading.arbitrate {
+            return Ok((loading, Loaded::TooLarge));
+        }
+        let bytes = loading.ask(now, handle.credit());
+        return Ok((loading, Loaded::Need(bytes)));
+    }
+    Ok((loading, loaded))
 }
 
 /// Repartitions a task's build and probe rows one level deeper. Returns the
@@ -729,6 +1023,94 @@ fn scatter(
     Ok((parts, written))
 }
 
+/// Loom models of the grace phase's claims and waits (no I/O: tasks with
+/// no rows). `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib
+/// --release`.
+#[cfg(all(test, loom))]
+mod loom_tests {
+    use loom::future::block_on;
+    use loom::thread;
+
+    use super::*;
+
+    fn model(f: impl Fn() + Sync + Send + 'static) {
+        let mut b = loom::model::Builder::new();
+        b.preemption_bound = Some(3);
+        b.check(f);
+    }
+
+    fn task() -> Task {
+        Task {
+            depth: 1,
+            build: Part::default(),
+            probe: Part::default(),
+        }
+    }
+
+    /// A driver holding a task splits it into a new task and lets go: a
+    /// driver waiting for work always claims that task, never sees the
+    /// work as done before it arrives, and is never left asleep.
+    #[test]
+    fn a_waiting_driver_claims_the_split_task() {
+        model(|| {
+            let build = BuildGlobal::with_grace(Grace::new());
+            let built = build.built.get().unwrap();
+            let held = Claim::new(&build, &mut lock(&built.grace), Hold::Task);
+            let splitter = {
+                let build = Arc::clone(&build);
+                thread::spawn(move || {
+                    let built = build.built.get().unwrap();
+                    lock(&built.grace).queue.push(task());
+                    drop(held);
+                })
+            };
+            let claimed = loop {
+                let changed = built.grace_changed.listen();
+                match lock(&built.grace).next() {
+                    Next::Task(_) => break true,
+                    Next::Done => break false,
+                    Next::Wait => {}
+                }
+                block_on(changed);
+            };
+            assert!(claimed, "the split task was claimed");
+            splitter.join().unwrap();
+        });
+    }
+
+    /// The driver working alone waits for the others' partitions to be
+    /// joined; while it does, nobody claims, and once it lets go every
+    /// driver claims again.
+    #[test]
+    fn working_alone_waits_for_partitions_and_blocks_claims() {
+        model(|| {
+            let build = BuildGlobal::with_grace(Grace::new());
+            let built = build.built.get().unwrap();
+            let (slot, alone) = {
+                let mut g = lock(&built.grace);
+                g.queue.push(task());
+                g.started = true;
+                let slot = Claim::new(&build, &mut g, Hold::Memory);
+                let pool = krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+                let me = krishiv_memory::MemoryPool::register(&*pool, "probe", None);
+                (slot, Claim::new(&build, &mut g, Hold::Alone(me)))
+            };
+            assert!(matches!(lock(&built.grace).next(), Next::Wait));
+            let other = thread::spawn(move || drop(slot));
+            loop {
+                let changed = built.grace_changed.listen();
+                if lock(&built.grace).active == 0 {
+                    break;
+                }
+                block_on(changed);
+            }
+            other.join().unwrap();
+            drop(alone);
+            assert!(matches!(lock(&built.grace).next(), Next::Task(_)));
+        });
+    }
+}
+
 // Real pools and spill files: not under loom (loom state outside a model).
 #[cfg(all(test, not(loom)))]
 mod tests {
@@ -839,6 +1221,7 @@ mod tests {
         let root = TreePool::new(&MemoryConfig {
             limit: Some(LIMIT),
             quantum: 1,
+            spill_scratch_reserve: 0,
             ..MemoryConfig::default()
         });
         let query = QueryContext::new(
@@ -912,6 +1295,7 @@ mod tests {
         let root = TreePool::new(&MemoryConfig {
             limit: Some(LIMIT),
             quantum: 1,
+            spill_scratch_reserve: 0,
             ..MemoryConfig::default()
         });
         let query = QueryContext::new(
@@ -960,6 +1344,123 @@ mod tests {
         assert_eq!(ctx.consumer().consumer().credit(), 0);
         drop(parts);
         assert_eq!(root.reserved(), 0);
+    }
+
+    /// With the pool's spill-scratch floor, a spill of a pool that ordinary
+    /// reservations filled is funded from the floor instead of declined,
+    /// and the floor is free again afterwards.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn the_scratch_floor_funds_a_spill_of_a_full_pool() {
+        const LIMIT: usize = 4 << 20;
+        let root = TreePool::new(&MemoryConfig {
+            limit: Some(LIMIT),
+            quantum: 1,
+            spill_scratch_reserve: SPILL_SCRATCH,
+            ..MemoryConfig::default()
+        });
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            root.child("q", None),
+        );
+        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
+        let dir = TempDir::new("grace-floor");
+        let manager = SpillManager::open(&SpillConfig {
+            dir: dir.0.clone(),
+            ..SpillConfig::default()
+        })
+        .unwrap();
+        let scope = manager.scope().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let small = Batch::new(
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from_iter_values(0..100))],
+            )
+            .unwrap(),
+        );
+        let mut parts = vec![Part::with_memory(ctx.consumer().reservation())];
+        reserve_chunks(&mut parts, &[(0, small.clone())]).unwrap();
+        parts[0].chunks.push(small);
+        let held = parts[0].bytes();
+        let other: Arc<dyn MemoryPool> = root.child("other", None);
+        let id = other.register("filler", None);
+        let mut filler = krishiv_memory::Reservation::new(Arc::clone(&other), id);
+        filler
+            .try_grow(LIMIT - SPILL_SCRATCH - root.reserved())
+            .unwrap();
+        assert!(filler.try_grow(1).is_err(), "full for ordinary memory");
+        let (freed, written) = spill_parts(&mut parts, &[0], &schema, &scope, &ctx, false)
+            .await
+            .unwrap();
+        assert_eq!((freed, parts[0].files.len()), (held, 1));
+        assert!(written > 0);
+        assert_eq!(ctx.consumer().consumer().credit(), 0);
+        assert_eq!(root.reserved(), filler.size(), "the floor is free again");
+        drop((parts, filler));
+        assert_eq!(root.reserved(), 0);
+    }
+
+    /// An alone load asks for an estimate of the whole rest of the
+    /// partition only until the arbitrator refuses it once; then for the
+    /// bytes missing now, and a refused exact ask gives up.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_refused_estimate_is_not_asked_again() {
+        let root = TreePool::new(&MemoryConfig {
+            limit: Some(64 << 20),
+            quantum: 1,
+            ..MemoryConfig::default()
+        });
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            root.child("q", None),
+        );
+        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
+        let dir = TempDir::new("grace-estimate");
+        let manager = SpillManager::open(&SpillConfig {
+            dir: dir.0.clone(),
+            ..SpillConfig::default()
+        })
+        .unwrap();
+        let scope = manager.scope().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let rows = Batch::new(
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from_iter_values(0..10_000))],
+            )
+            .unwrap(),
+        );
+        let mut parts = vec![Part::with_memory(ctx.consumer().reservation())];
+        reserve_chunks(&mut parts, &[(0, rows.clone())]).unwrap();
+        parts[0].chunks.push(rows.clone());
+        spill_parts(&mut parts, &[0], &schema, &scope, &ctx, true)
+            .await
+            .unwrap();
+        let task = Task {
+            depth: 0,
+            build: parts.pop().unwrap(),
+            probe: Part::default(),
+        };
+        let mut loading = Loading::new(task, true, &ctx);
+        // Some rows read: the estimate covers the other 9,000 too.
+        loading.memory.try_grow(8_000).unwrap();
+        loading.chunks.push(rows.slice(0, 1_000).unwrap());
+        let estimate = loading.ask(100, 0);
+        assert!(estimate > 9_000 * 8, "{estimate}");
+        assert!(loading.check_grant(estimate).is_none(), "granted");
+        assert_eq!(loading.ask(100, 0), estimate, "asked again after a grant");
+        assert!(matches!(loading.check_grant(0), Some(Loaded::Need(100))));
+        assert!(matches!(loading.check_grant(0), Some(Loaded::TooLarge)));
+        assert_eq!(loading.ask(100, 0), 100, "never the estimate again");
+        assert!(loading.check_grant(100).is_none());
+        drop(loading);
+        ctx.consumer().consumer().release_credit();
     }
 
     /// A spill picks at least `SPILL_MIN` bytes when it can, never a part

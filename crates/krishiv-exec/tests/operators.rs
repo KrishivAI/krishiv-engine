@@ -53,6 +53,7 @@ fn root() -> Arc<TreePool> {
             quantum: 64 << 10,
             spill_wait_timeout: Duration::from_secs(2),
             abort_release_timeout: Duration::from_secs(30),
+            spill_scratch_reserve: krishiv_memory::DEFAULT_SPILL_SCRATCH_RESERVE,
         },
         Arc::new(TokioClock),
     )

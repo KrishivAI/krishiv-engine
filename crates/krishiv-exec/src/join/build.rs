@@ -20,7 +20,7 @@ use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::hash::HashSeed;
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
-use crate::sync::{Mutex, lock};
+use crate::sync::{Event, Mutex, lock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// The build sink.
@@ -59,6 +59,8 @@ pub(crate) struct Built {
     pub(crate) spilled: u64,
     /// The spilled partitions' work, shared by the probe drivers' flush.
     pub(crate) grace: Mutex<Grace>,
+    /// Notified whenever a driver's claim on `grace` ends.
+    pub(crate) grace_changed: Event,
     _memory: Vec<Reservation>,
 }
 
@@ -179,6 +181,29 @@ impl BuildSink {
 
 fn mem_bytes(parts: &[Part]) -> usize {
     parts.iter().map(Part::bytes).sum()
+}
+
+#[cfg(all(test, loom))]
+impl BuildGlobal {
+    /// A finalized build whose only work is `grace` (loom models).
+    pub(crate) fn with_grace(grace: Grace) -> Arc<Self> {
+        let g = Self {
+            seed: HashSeed::new(Some(0)),
+            spilled: Arc::new(AtomicU64::new(0)),
+            rows: AtomicU64::new(0),
+            null_key: AtomicBool::new(false),
+            collect: Mutex::new(Collect::default()),
+            built: OnceLock::new(),
+        };
+        let _ = g.built.set(Built {
+            tables: Vec::new(),
+            spilled: 0,
+            grace: Mutex::new(grace),
+            grace_changed: Event::default(),
+            _memory: Vec::new(),
+        });
+        Arc::new(g)
+    }
 }
 
 impl Sink for BuildSink {
@@ -397,6 +422,7 @@ impl Sink for BuildSink {
                     tables: all,
                     spilled,
                     grace: Mutex::new(grace),
+                    grace_changed: Event::default(),
                     _memory: memory,
                 })
                 .map_err(|_| internal("hash join build finalized twice".to_owned()))

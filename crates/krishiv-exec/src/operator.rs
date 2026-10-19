@@ -112,6 +112,19 @@ pub enum FlushOutput {
     Continue,
     /// Nothing left to flush.
     Done,
+    /// The step needs `bytes` more memory and has a fallback if it cannot
+    /// have them (a grace hash join partition that does not fit is
+    /// repartitioned instead). The driver reserves them the cooperative
+    /// way without aborting any query (its own consumers spill first, then
+    /// other drivers' are asked to), parks what it got as the consumer's
+    /// grant credit and calls `flush` again: the operator finds the bytes
+    /// as credit, or no new credit if they could not be had. Credit is the
+    /// operator's to use and to return
+    /// ([`ConsumerHandle::release_credit`](krishiv_memory::ConsumerHandle::release_credit)).
+    NeedMemory {
+        /// Bytes to reserve.
+        bytes: usize,
+    },
 }
 
 /// A streaming operator in the middle of a pipeline.
