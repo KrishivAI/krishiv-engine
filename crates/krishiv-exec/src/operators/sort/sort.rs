@@ -156,6 +156,27 @@ async fn lending<T>(
     out
 }
 
+/// [`lending`] for a spill write: takes back at most what it lent (or
+/// `target`) and returns the rest of the consumer's credit to the pool. The
+/// writer's scratch beyond the lent bytes is temporary, and may have come
+/// from the pool's spill-scratch floor, which must not stay with one
+/// consumer.
+async fn lending_for_write<T>(
+    res: &mut Reservation,
+    handle: &ConsumerHandle,
+    target: usize,
+    work: impl Future<Output = T>,
+) -> T {
+    let lent = res.size();
+    res.shrink_to_credit(lent);
+    let out = work.await;
+    // Credit only: this never reaches the pool, so it cannot fail.
+    let _ = res.try_grow(handle.credit().min(lent.max(target)));
+    handle.release_credit();
+    let _ = res.try_grow(target.saturating_sub(res.size()));
+    out
+}
+
 /// Buffer slack a sunk batch may carry over its data before it is
 /// compacted.
 const SLICE_SLACK_BYTES: usize = 16 << 10;
@@ -220,7 +241,7 @@ impl Sort {
         let rows = spill_rows(buffer.row_bytes, batch_rows);
         let (batches, handle) = (buffer.batches.clone(), Arc::clone(&buffer.handle));
         let written = self.write(batches, Vec::new(), rows, &handle, ctx);
-        let run = match lending(&mut buffer.headroom, &handle, target, written).await? {
+        let run = match lending_for_write(&mut buffer.headroom, &handle, target, written).await? {
             Ok(run) => run,
             Err(refused) => return Ok(Err(refused)),
         };
@@ -249,7 +270,7 @@ impl Sort {
         let written = ctx
             .run_blocking(move || {
                 let mut merger = Merger::new(schema, encoder, memory, &spilled, &h)?;
-                let scratch = h.reservation().releasing_to_credit();
+                let scratch = h.reservation().releasing_to_credit().for_spill_scratch();
                 write_run(&mut merger, &scope, scratch, rows, &query)
             })
             .await?;
@@ -291,7 +312,7 @@ impl Sort {
                 let row_bytes = group.iter().map(|r| r.row_bytes).max().unwrap_or(1);
                 let rows = spill_rows(row_bytes, batch_rows);
                 let merged = self.write(Vec::new(), group, rows, &handle, ctx);
-                let run = lending(&mut budget, &handle, target, merged).await?;
+                let run = lending_for_write(&mut budget, &handle, target, merged).await?;
                 runs.push(run.map_err(KrishivError::from)?);
             }
         }
