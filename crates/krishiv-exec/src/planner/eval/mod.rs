@@ -45,6 +45,7 @@ use krishiv_plan::{
 use super::build::{internal, unsupported};
 use crate::error::Result;
 use crate::operators::{Predicate, ScalarExpr};
+use crate::physical::ExprEnv;
 
 /// A value of an expression over one batch: a column, or one value for
 /// every row (a literal, or an expression of literals only).
@@ -187,6 +188,27 @@ impl EvalEnv {
             user,
         }
     }
+
+    /// The environment a plan fixed, with this worker's kernels.
+    pub(crate) fn from_plan(env: &ExprEnv) -> Self {
+        Self {
+            ansi: env.ansi,
+            zone: env.zone,
+            kernels: KernelCtx::new(),
+            query_start_micros: env.query_start_micros,
+            user: Arc::clone(&env.user),
+        }
+    }
+
+    /// The environment as plan data.
+    pub(crate) fn to_plan(&self) -> ExprEnv {
+        ExprEnv {
+            ansi: self.ansi,
+            zone: self.zone,
+            query_start_micros: self.query_start_micros,
+            user: Arc::clone(&self.user),
+        }
+    }
 }
 
 /// The offset of `UTC`, `GMT`, `Z` or `[+-]hh:mm`, in seconds.
@@ -216,9 +238,9 @@ pub(crate) struct Input<'a> {
     /// The input batches' schema.
     pub(crate) schema: &'a SchemaRef,
     pub(crate) env: &'a EvalEnv,
-    /// The values of the uncorrelated subqueries, by the address of their
-    /// plans.
-    pub(crate) subqueries: &'a [(usize, Arc<dyn PhysExpr>)],
+    /// The values of the uncorrelated subqueries, by the attribute
+    /// expressions read them as (`SubqueryId::attr`).
+    pub(crate) subqueries: &'a [(AttrId, Arc<dyn PhysExpr>)],
 }
 
 /// Compiles `e` over `input`.
@@ -226,6 +248,9 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     match &e.node {
         ExprNode::Literal(l) => Ok(Arc::new(Lit::new(l)?)),
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+            if let Some((_, v)) = input.subqueries.iter().find(|(a, _)| *a == c.id) {
+                return Ok(Arc::clone(v));
+            }
             let index = input
                 .layout
                 .iter()
@@ -241,15 +266,6 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             }))
         }
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => compile(expr, input),
-        ExprNode::Subquery { plan, .. } => {
-            let key = Arc::as_ptr(plan) as usize;
-            input
-                .subqueries
-                .iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, v)| Arc::clone(v))
-                .ok_or_else(|| unsupported_expr(e))
-        }
         ExprNode::Cast { expr, to, mode } => cast::compile(compile(expr, input)?, to, *mode, input),
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Scalar => {
             let args = f
@@ -263,6 +279,8 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 _ => Err(unsupported_expr(e)),
             }
         }
+        // Includes subqueries: the planner replaces those it runs by
+        // columns ([`Input::subqueries`]).
         _ => Err(unsupported_expr(e)),
     }
 }

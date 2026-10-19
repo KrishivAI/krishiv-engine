@@ -79,7 +79,7 @@ async fn run(
     plan: Arc<dyn ExecNode>,
     q: &Arc<QueryContext>,
 ) -> Result<Vec<Batch>> {
-    let mut stream = runner.submit(plan, Arc::clone(q)).await?;
+    let mut stream = runner.execute(plan, Arc::clone(q)).await?;
     let mut out = Vec::new();
     let mut error = None;
     while let Some(b) = stream.next().await {
@@ -203,7 +203,7 @@ async fn a_cancelled_query_stops_within_100ms_and_releases_everything() {
     let (_, scan) = scan(u64::MAX >> 8);
     let buffer = Buffer::new(true, None);
     let plan = Arc::new(Break(scan, Arc::clone(&buffer), false));
-    let mut stream = runner.submit(plan, Arc::clone(&q)).await.unwrap();
+    let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
     while buffer.sunk.load(Ordering::Relaxed) < 100 {
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
@@ -270,7 +270,7 @@ async fn blocking_work_does_not_delay_a_short_query() {
     let long = Buffer::with_finalize_gate(Arc::clone(&gate));
     let long_q = query(&root, 1, ExecConfig::default());
     let mut long_stream = runner
-        .submit(Arc::new(Break(long_scan, long, false)), Arc::clone(&long_q))
+        .execute(Arc::new(Break(long_scan, long, false)), Arc::clone(&long_q))
         .await
         .unwrap();
     let reached = tokio::time::timeout(HANG, async {
@@ -365,7 +365,7 @@ async fn backpressure_and_dropping_the_stream_cancels() {
         },
     );
     let (source, scan) = scan(u64::MAX >> 8);
-    let mut stream = runner.submit(scan, Arc::clone(&q)).await.unwrap();
+    let mut stream = runner.execute(scan, Arc::clone(&q)).await.unwrap();
     assert!(stream.next().await.unwrap().is_ok());
     tokio::time::sleep(Duration::from_millis(50)).await;
     let read = source.produced.load(Ordering::Relaxed);
@@ -636,7 +636,7 @@ async fn planning_and_setup_errors() {
         Arc::new(TwoSources),
     ] {
         let e = runner
-            .submit(plan, query(&root, 1, ExecConfig::default()))
+            .execute(plan, query(&root, 1, ExecConfig::default()))
             .await
             .err()
             .unwrap();
@@ -652,7 +652,7 @@ async fn planning_and_setup_errors() {
         }
     }
     let e = runner
-        .submit(Arc::new(BadBreaker), query(&root, 1, ExecConfig::default()))
+        .execute(Arc::new(BadBreaker), query(&root, 1, ExecConfig::default()))
         .await
         .err()
         .unwrap();
@@ -660,10 +660,10 @@ async fn planning_and_setup_errors() {
     // A query id that is already running is refused.
     let running = query(&root, 5, ExecConfig::default());
     let (_, scan5) = scan(u64::MAX >> 8);
-    let stream = runner.submit(scan5, Arc::clone(&running)).await.unwrap();
+    let stream = runner.execute(scan5, Arc::clone(&running)).await.unwrap();
     let (_, again) = scan(1);
     let e = runner
-        .submit(again, query(&root, 5, ExecConfig::default()))
+        .execute(again, query(&root, 5, ExecConfig::default()))
         .await
         .err()
         .unwrap();
@@ -766,7 +766,7 @@ async fn a_parked_driver_services_spill_requests() {
     let hold = hold(MIB, true);
     let (_, scan) = scan(u64::MAX >> 8);
     let plan = pipe(scan, Arc::clone(&hold) as Arc<dyn Operator>);
-    let stream = runner.submit(plan, Arc::clone(&q)).await.unwrap();
+    let stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(10)).await; // the driver parks on the full channel
     let signal = Arc::clone(&hold.0.lock().unwrap()[0]);
     assert_eq!(
@@ -804,7 +804,7 @@ async fn a_memory_abort_wakes_a_parked_driver() {
     let (_, scan) = scan(u64::MAX >> 8);
     // Not spillable and above its fair share: the arbitrator aborts it.
     let plan = pipe(scan, hold(3 * MIB, false) as Arc<dyn Operator>);
-    let mut stream = runner.submit(plan, Arc::clone(&q1)).await.unwrap();
+    let mut stream = runner.execute(plan, Arc::clone(&q1)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(10)).await;
     let q2 = root.child("q2", None);
     let id2 = q2.register("want", None);
@@ -1019,7 +1019,7 @@ fn shutting_down_the_executor_ends_running_queries() {
         .unwrap();
     let (_, scan) = scan(u64::MAX >> 8);
     let mut stream = caller
-        .block_on(runner.submit(scan, Arc::clone(&q)))
+        .block_on(runner.execute(scan, Arc::clone(&q)))
         .unwrap();
     drop(runner);
     drop(exec); // the running tasks still hold the executor
@@ -1042,7 +1042,7 @@ async fn finalize_spills_global_state_under_memory_pressure() {
     let (_, scan) = scan(80 * DEFAULT_BATCH_SIZE as u64); // ~2.5 MiB
     let buffer = Buffer::with_finalize_yields(true, None, 10_000);
     let plan = Arc::new(Break(scan, Arc::clone(&buffer), false));
-    let mut stream = runner.submit(plan, Arc::clone(&q1)).await.unwrap();
+    let mut stream = runner.execute(plan, Arc::clone(&q1)).await.unwrap();
     while !buffer.finalizing.load(Ordering::Acquire) {
         tokio::task::yield_now().await;
     }
@@ -1170,7 +1170,7 @@ async fn a_spill_request_to_a_source_is_answered_and_never_hangs() {
         std::sync::Mutex::default(),
     ));
     let plan = Arc::new(Scan(Arc::clone(&source) as Arc<dyn krishiv_exec::Source>));
-    let stream = runner.submit(plan, Arc::clone(&q)).await.unwrap();
+    let stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
     while source.1.lock().unwrap().is_empty() {
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
@@ -1474,7 +1474,7 @@ async fn fan_in_errors() {
         Arc::new(Started),
     ] {
         let e = runner
-            .submit(plan, query(&root, 1, ExecConfig::default()))
+            .execute(plan, query(&root, 1, ExecConfig::default()))
             .await
             .err()
             .unwrap();
@@ -1483,7 +1483,7 @@ async fn fan_in_errors() {
     // An input's planning error is the query's.
     let plan = Arc::new(FanIn(vec![scan(1).1, Arc::new(Failing)]));
     let e = runner
-        .submit(plan, query(&root, 2, ExecConfig::default()))
+        .execute(plan, query(&root, 2, ExecConfig::default()))
         .await
         .err()
         .unwrap();

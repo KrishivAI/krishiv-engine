@@ -29,14 +29,13 @@ use krishiv_plan::{
     LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
 };
 
-use super::build::{Planned, Planner, concat_schemas, internal, unsupported};
-use super::eval::{self, Compiled, Input};
+use super::build::{Planned, Planner, unsupported};
 use super::explain::ExplainNode;
 use crate::error::Result;
-use crate::join::{
-    HashJoin, HashJoinNode, JoinSpec, JoinType, NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec,
+use crate::join::JoinType;
+use crate::physical::{
+    HashJoinPlan, NestedLoopPlan, PhysNode, Residual, hash_join, nested_loop_join,
 };
-use crate::operators::Predicate;
 
 impl Planner<'_> {
     pub(crate) fn join(
@@ -131,21 +130,12 @@ impl Planner<'_> {
         let build_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.1)).collect();
         let (probe, probe_keys) = self.with_columns(probe, &probe_exprs)?;
         let (build, build_keys) = self.with_columns(build, &build_exprs)?;
-        let filter = self.residual(&probe, &build, &residual)?;
+        let filter = residual_of(&probe, &build, &residual);
         let null_safe = keys.iter().map(|k| k.2).collect();
-        let mut join = HashJoin::try_new(JoinSpec {
-            join_type,
-            probe_schema: Arc::clone(&probe.schema),
-            build_schema: Arc::clone(&build.schema),
-            probe_keys: probe_keys.clone(),
-            build_keys,
-            null_safe,
-            filter,
-            spill: self.cx.spill.clone(),
-        })?;
         // Inner and left semi joins drop unmatched probe rows: the build
         // publishes runtime filters to the probe side's scans.
         let mut published = Vec::new();
+        let mut runtime_filters = Vec::new();
         if matches!(join_type, JoinType::Inner | JoinType::LeftSemi) {
             let build_plan = if build_left { &logical.0 } else { &logical.1 };
             let build_rows = self.estimated_rows(build_plan);
@@ -155,7 +145,7 @@ impl Planner<'_> {
                 .collect();
             let rf = self.runtime_filters(&probe, &probe_exprs, &key_types, build_rows);
             published = rf.explain;
-            join = join.with_runtime_filters(rf.filters)?;
+            runtime_filters = rf.filters;
         }
         let mut layout = probe.layout.clone();
         let mut sites = probe.sites.clone();
@@ -177,13 +167,30 @@ impl Planner<'_> {
         for p in published {
             detail.push_str(&format!(", {p}"));
         }
+        let (probe_schema, build_schema) = (Arc::clone(&probe.schema), Arc::clone(&build.schema));
+        let plan = HashJoinPlan {
+            probe: Box::new(probe.node),
+            build: Box::new(build.node),
+            join_type,
+            probe_keys,
+            build_keys,
+            null_safe,
+            residual: filter,
+            runtime_filters,
+        };
+        // Validates the join and gives its schema, over placeholder cells.
+        let schema = hash_join(
+            &probe_schema,
+            &build_schema,
+            &plan,
+            &self.env,
+            None,
+            &mut |id| self.filter_cell(id),
+        )?
+        .schema();
         Ok(Planned {
-            schema: join.schema(),
-            node: Arc::new(HashJoinNode {
-                join,
-                build: build.node,
-                probe: probe.node,
-            }),
+            schema,
+            node: PhysNode::HashJoin(plan),
             layout,
             explain: ExplainNode::new("HashJoin", detail, vec![probe.explain, build.explain]),
             sites,
@@ -191,36 +198,18 @@ impl Planner<'_> {
     }
 }
 
-impl Planner<'_> {
-    /// The conjunction of `residual` over probe then build columns.
-    fn residual(
-        &self,
-        probe: &Planned,
-        build: &Planned,
-        residual: &[&Expr],
-    ) -> Result<Option<Arc<dyn Predicate>>> {
-        if residual.is_empty() {
-            return Ok(None);
-        }
-        let both = concat_schemas(&probe.schema, &build.schema);
-        let layout: Vec<AttrId> = probe.layout.iter().chain(&build.layout).copied().collect();
-        let input = Input {
-            layout: &layout,
-            schema: &both,
-            env: &self.env,
-            subqueries: &[],
-        };
-        let mut exprs = residual
-            .iter()
-            .map(|c| eval::compile(c, input))
-            .collect::<Result<Vec<_>>>()?;
-        let mut all = exprs.pop().ok_or_else(|| internal("residual"))?;
-        while let Some(e) = exprs.pop() {
-            all = eval::and(e, all);
-        }
-        Ok(Some(Arc::new(Compiled(all)) as Arc<dyn Predicate>))
+/// The conjuncts `residual` over probe then build columns.
+fn residual_of(probe: &Planned, build: &Planned, residual: &[&Expr]) -> Option<Residual> {
+    if residual.is_empty() {
+        return None;
     }
+    Some(Residual {
+        layout: probe.layout.iter().chain(&build.layout).copied().collect(),
+        conjuncts: residual.iter().map(|c| Arc::new((*c).clone())).collect(),
+    })
+}
 
+impl Planner<'_> {
     /// A join without an equality conjunct: a nested-loop join building the
     /// right input.
     fn nested_loop(
@@ -230,13 +219,7 @@ impl Planner<'_> {
         join_type: JoinType,
         residual: &[&Expr],
     ) -> Result<Planned> {
-        let filter = self.residual(&probe, &build, residual)?;
-        let join = NestedLoopJoin::try_new(NestedLoopSpec {
-            join_type,
-            probe_schema: Arc::clone(&probe.schema),
-            build_schema: Arc::clone(&build.schema),
-            filter,
-        })?;
+        let filter = residual_of(&probe, &build, residual);
         let mut layout = probe.layout.clone();
         let mut sites = probe.sites.clone();
         if matches!(join_type, JoinType::Inner | JoinType::LeftOuter) {
@@ -251,13 +234,17 @@ impl Planner<'_> {
         } else {
             format!("{join_type:?}, {}", r.join(" AND "))
         };
+        let (probe_schema, build_schema) = (Arc::clone(&probe.schema), Arc::clone(&build.schema));
+        let plan = NestedLoopPlan {
+            probe: Box::new(probe.node),
+            build: Box::new(build.node),
+            join_type,
+            residual: filter,
+        };
+        let schema = nested_loop_join(&probe_schema, &build_schema, &plan, &self.env)?.schema();
         Ok(Planned {
-            schema: join.schema(),
-            node: Arc::new(NestedLoopJoinNode {
-                join,
-                build: build.node,
-                probe: probe.node,
-            }),
+            schema,
+            node: PhysNode::NestedLoopJoin(plan),
             layout,
             explain: ExplainNode::new("NestedLoopJoin", detail, vec![probe.explain, build.explain]),
             sites,

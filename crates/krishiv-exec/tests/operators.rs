@@ -21,7 +21,7 @@ use krishiv_common::error::ErrorClass;
 use krishiv_exec::testing::{Break, Count, Pipe, Scan};
 use krishiv_exec::{
     ExecConfig, ExecNode, Filter, FnPredicate, Limit, MemoryScan, Predicate, Project, ProjectItem,
-    PushedFilter, QueryContext, QueryId, QueryRunner, Result, ScalarExpr, ScanPushdowns, Scheduler,
+    PushedFilter, QueryContext, QueryId, QueryRunner, Result, ScalarExpr, ScanPushdowns,
     TokioClock, TokioExecutor, UnionAlign, WorkloadClass,
 };
 use krishiv_io::ColumnPath;
@@ -74,7 +74,7 @@ async fn run(
     plan: Arc<dyn ExecNode>,
     q: &Arc<QueryContext>,
 ) -> Result<Vec<Batch>> {
-    let mut stream = runner.submit(plan, Arc::clone(q)).await?;
+    let mut stream = runner.execute(plan, Arc::clone(q)).await?;
     let mut out = Vec::new();
     let mut error = None;
     while let Some(b) = stream.next().await {

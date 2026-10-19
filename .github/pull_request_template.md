@@ -22,6 +22,7 @@ Task / spec / ADRs:
 - [ ] Every `unsafe` block has a `// SAFETY:` argument; lint exceptions use `#[expect(..., reason = "...")]`, never `allow`.
 - [ ] Errors carry a Spark error class and SQLSTATE from the registry (no ad-hoc strings).
 - [ ] Spark-observable behaviour: expectations come from executing Spark in the `krishiv-bench` container, never transcribed.
+- [ ] Distributed execution readiness: nothing assumes one process (plan nodes stay serializable data; no state shared across drivers or partitions instead of an explicit merge; no per-process hash seed for partitioning; output independent of the task attempt).
 
 ### Rust API Guidelines (public items)
 

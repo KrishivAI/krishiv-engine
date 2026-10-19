@@ -20,8 +20,8 @@ use krishiv_exec::testing::Break;
 use krishiv_exec::{
     ExecConfig, ExecNode, FileScan, FileSelections, FileWrite, FileWriteSink, FilterPushdown,
     FnPredicate, GlobalState, LocalState, MemoryScan, PipelineBuilder, PushedFilter, QueryContext,
-    QueryId, QueryRunner, ScanPushdown, ScanPushdowns, Scheduler, Sink, SinkStatus, Source,
-    TaskContext, TokioExecutor, WorkloadClass,
+    QueryId, QueryRunner, ScanPushdown, ScanPushdowns, Sink, SinkStatus, Source, TaskContext,
+    TokioExecutor, WorkloadClass,
 };
 use krishiv_io::io::FaultStore;
 use krishiv_io::parquet::ParquetFormat;
@@ -94,7 +94,7 @@ async fn run_with(
 ) -> Result<Vec<RecordBatch>, KrishivError> {
     let runner = QueryRunner::new(TokioExecutor::deterministic(slots)?);
     let query = QueryContext::new(QueryId(7), WorkloadClass::Batch, config, Arc::clone(pool));
-    let mut stream = runner.submit(plan, Arc::clone(&query)).await?;
+    let mut stream = runner.execute(plan, Arc::clone(&query)).await?;
     let mut out = Vec::new();
     let mut error = None;
     while let Some(b) = stream.next().await {
@@ -754,24 +754,24 @@ fn unsupported_pushdowns_and_writes_are_refused() {
             None
         }
     }
-    let e = scan
-        .source(ScanPushdowns {
-            selection: Some(Arc::new(All)),
-            ..ScanPushdowns::default()
-        })
-        .unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    let metadata = MetadataCols {
-        row_index: true,
-        ..MetadataCols::default()
+    // `source` and `output_schema` refuse the same pushdowns, alike.
+    let refused = |p: ScanPushdowns| {
+        let a = ScanPushdown::output_schema(&scan, &p).unwrap_err();
+        let b = scan.source(p).unwrap_err();
+        assert_eq!(a.to_string(), b.to_string());
+        assert_eq!(b.error_class(), ErrorClass::KrishivUnsupportedFeature);
     };
-    let e = scan
-        .source(ScanPushdowns {
-            metadata,
-            ..ScanPushdowns::default()
-        })
-        .unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    refused(ScanPushdowns {
+        selection: Some(Arc::new(All)),
+        ..ScanPushdowns::default()
+    });
+    refused(ScanPushdowns {
+        metadata: MetadataCols {
+            row_index: true,
+            ..MetadataCols::default()
+        },
+        ..ScanPushdowns::default()
+    });
     let e = FileWriteSink::try_new(
         Arc::new(Limited),
         env.io,

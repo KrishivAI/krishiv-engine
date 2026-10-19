@@ -17,7 +17,7 @@ use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_exec::{
     ExecConfig, ExecNode, FileScan, FileSelections, FileWrite, FileWriteSink, FnPredicate,
     GlobalState, LocalState, PipelineBuilder, PushedFilter, QueryContext, QueryId, QueryRunner,
-    ScanPushdown, ScanPushdowns, Scheduler, Source, TaskContext, TokioExecutor, WorkloadClass,
+    ScanPushdown, ScanPushdowns, Source, TaskContext, TokioExecutor, WorkloadClass,
 };
 use krishiv_io::split::{FilePartition, FileSplit, SplitConfig};
 use krishiv_io::{
@@ -272,7 +272,7 @@ impl Executor {
             ExecConfig::default(),
             Arc::clone(&env.query),
         );
-        let mut stream = runner.submit(plan, Arc::clone(&query)).await?;
+        let mut stream = runner.execute(plan, Arc::clone(&query)).await?;
         let mut out = Vec::new();
         let mut first_error = None;
         while let Some(b) = stream.next().await {
