@@ -152,7 +152,10 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
         }
         PlanNode::Sort { input, .. }
         | PlanNode::SubqueryAlias { input, .. }
-        | PlanNode::WithCte { input, .. } => through(plan, input, movable, |p| Some(Arc::clone(p))),
+        | PlanNode::WithCte { input, .. }
+        | PlanNode::JoinHint { input, .. } => {
+            through(plan, input, movable, |p| Some(Arc::clone(p)))
+        }
         PlanNode::Shift { input, offset } => through(plan, input, movable, |p| {
             // The subtree under a shift holds no outer references.
             if has_subquery(p) || has_outer_reference(p) {

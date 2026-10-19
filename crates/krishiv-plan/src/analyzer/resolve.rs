@@ -108,7 +108,12 @@ pub(super) struct Resolver<'a> {
     root_env: Option<Arc<Env>>,
 }
 
-type Resolved = (Arc<LogicalPlan>, Vec<BoundColumn>, Vec<SecurableUse>);
+type Resolved = (
+    Arc<LogicalPlan>,
+    Vec<BoundColumn>,
+    Vec<SecurableUse>,
+    Vec<String>,
+);
 
 pub(super) fn resolve(
     plan: &Plan,
@@ -134,8 +139,10 @@ pub(super) fn resolve(
     let env = r.env(Vec::new(), 0, Vec::new());
     r.root_env = Some(Arc::clone(&env));
     let rel = r.rel(plan.root(), &env)?;
+    // Hints name relations of their resolved subtree.
+    let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).
-    let root = super::subquery::rewrite(&rel.plan, &mut r.next_id)?;
+    let root = super::subquery::rewrite(&root, &mut r.next_id)?;
     let output = rel.out.iter().map(|a| a.col.clone()).collect();
     let uses = b
         .securables
@@ -147,7 +154,7 @@ pub(super) fn resolve(
             columns,
         })
         .collect();
-    Ok((root, output, uses))
+    Ok((root, output, uses, warnings))
 }
 
 /// One past the largest attribute id in `root` (a `Shift` counted at its
@@ -596,6 +603,25 @@ impl Resolver<'_> {
                 alias,
                 columns,
             } => self.subquery_alias(p, input, alias, columns, env),
+            PlanNode::Union {
+                inputs, by_name, ..
+            } => self.union(p, inputs, *by_name, env),
+            PlanNode::Distinct { input } => self.distinct(p, input, env),
+            PlanNode::Hint {
+                input,
+                name,
+                params,
+            } => self.hint(p, input, name, params, env),
+            PlanNode::JoinHint { input, strategy } => {
+                let c = self.child(input, env)?;
+                let node = PlanNode::JoinHint {
+                    input: Arc::clone(&c.plan),
+                    strategy: *strategy,
+                };
+                let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
+                r.widen = Some(Arc::new(Widen::Through { child: c }));
+                Ok(r)
+            }
             PlanNode::WithCte { input, ctes } => {
                 let mut visible = env.ctes.clone();
                 let mut scope = env.ctes_id;

@@ -17,6 +17,11 @@ Python bindings (PyO3) and the PyCapsule Arrow bridge; Python UDF runtime.
   unwind into a C callback. A consumer's `requested_schema` capsule is only read, never moved out or released. No
   writable memoryviews over Rust buffers.
 
+- Facade (`src/{session,dataframe,column,errors}.rs`): frozen pyo3 handles on `krishiv-session` (`Session`, `DataFrame`,
+  `GroupedData`, `Column`); no builder logic here, no new `unsafe`. Engine futures run via `errors::block_on` with the
+  GIL released; every `KrishivError` becomes a `krishiv.errors` exception through `krishiv.errors._from_native`.
+  The PySpark-shaped Python layer is `python/krishiv/sql`.
+
 ## ADRs (in `../krishiv-internal/adr/`)
 0005, 0022, 0028
 

@@ -92,7 +92,8 @@ pub(crate) fn with_input(node: &Arc<LogicalPlan>, input: Arc<LogicalPlan>) -> Ar
         | PlanNode::Limit { input: slot, .. }
         | PlanNode::SubqueryAlias { input: slot, .. }
         | PlanNode::WithCte { input: slot, .. }
-        | PlanNode::Shift { input: slot, .. } => *slot = input,
+        | PlanNode::Shift { input: slot, .. }
+        | PlanNode::JoinHint { input: slot, .. } => *slot = input,
         _ => return Arc::clone(node),
     }
     Arc::new(out)
