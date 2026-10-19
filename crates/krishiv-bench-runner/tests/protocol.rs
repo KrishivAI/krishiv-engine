@@ -20,6 +20,7 @@ fn runner(dir: &tempfile::TempDir) -> Runner {
         data: dir.path().to_str().unwrap().to_owned(),
         threads: 2,
         memory_limit: "1g".to_owned(),
+        conf: Vec::new(),
     })
     .unwrap()
 }
@@ -86,6 +87,7 @@ fn a_directory_of_parts_is_one_table_and_an_empty_directory_is_refused() {
         data: empty.path().to_str().unwrap().to_owned(),
         threads: 1,
         memory_limit: "1g".to_owned(),
+        conf: Vec::new(),
     })
     .unwrap_err();
     assert!(err.to_string().contains("no <table>.parquet"), "{err}");
@@ -93,6 +95,7 @@ fn a_directory_of_parts_is_one_table_and_an_empty_directory_is_refused() {
         data: "/does/not/exist".to_owned(),
         threads: 1,
         memory_limit: "1g".to_owned(),
+        conf: Vec::new(),
     });
     assert!(missing.unwrap_err().to_string().contains("cannot read"));
 }
@@ -106,6 +109,20 @@ fn arguments() {
         ("/d", 4, "2g")
     );
     assert!(args("--data /d").unwrap().threads >= 1);
+    let c = args("--data /d --conf krishiv.exec.join.rowLayout=true --conf a=b=c").unwrap();
+    assert_eq!(
+        c.conf,
+        [
+            ("krishiv.exec.join.rowLayout".to_owned(), "true".to_owned()),
+            ("a".to_owned(), "b=c".to_owned()),
+        ]
+    );
+    assert!(
+        args("--data /d --conf novalue")
+            .unwrap_err()
+            .to_string()
+            .contains("key=value")
+    );
     assert!(
         args("--threads 4")
             .unwrap_err()
@@ -167,6 +184,7 @@ fn dump_runs_the_query_once_and_leaves_no_view() {
         data: spaced.to_str().unwrap().to_owned(),
         threads: 1,
         memory_limit: "1g".to_owned(),
+        conf: Vec::new(),
     })
     .unwrap();
     let sql = spaced.join("q file.sql");

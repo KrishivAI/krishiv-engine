@@ -14,12 +14,11 @@ use krishiv_memory::{Reservation, SpillSignal};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::grace::{Grace, Part, choose, reserve_chunks, spill_parts};
-use super::keys::{Encoded, PARTITIONS, any_invalid, partition, query_seed};
+use super::keys::{Encoded, Hashing, PARTITIONS, any_invalid};
 use super::table::{JoinTable, RowArena, key_bytes};
 use super::{Counter, JoinType, Shared, record, unsupported};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
-use crate::hash::HashSeed;
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
 use crate::sync::{Event, Mutex, lock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -31,8 +30,8 @@ pub(crate) struct BuildSink(pub(crate) Arc<Shared>);
 /// The build's global state; after `finalize`, what the probe reads.
 #[derive(Debug)]
 pub(crate) struct BuildGlobal {
-    /// The query's hash seed.
-    pub(crate) seed: HashSeed,
+    /// The join instance's key format and seed.
+    pub(crate) hashing: Hashing,
     /// Level-0 partitions spilled by any driver (bit per partition).
     spilled: Arc<AtomicU64>,
     /// Build rows, NULL keys included (null-aware anti: is it empty?).
@@ -87,6 +86,7 @@ pub(crate) struct Built {
 }
 
 struct BuildLocal {
+    hashing: Hashing,
     parts: Vec<Part>,
     spilled: Arc<AtomicU64>,
     signal: Arc<SpillSignal>,
@@ -213,19 +213,18 @@ fn local_mut(local: &mut LocalState) -> Result<&mut BuildLocal> {
 /// The row-arena chunk of `rows` (indices into the encoded batch).
 pub(crate) fn arena_chunk(
     shared: &Shared,
+    hashing: &Hashing,
     keys: &Encoded,
     payload: Option<&Rows>,
     weights: &Weights,
     rows: &[usize],
 ) -> Result<Batch> {
-    let mut columns: Vec<ArrayRef> = vec![
-        Arc::new(UInt64Array::from_iter_values(
-            rows.iter().map(|&i| keys.hashes[i]),
-        )),
-        Arc::new(LargeBinaryArray::from_iter_values(
-            rows.iter().map(|&i| keys.rows.row(i)),
-        )),
-    ];
+    let hashes = keys.hashes();
+    let mut columns: Vec<ArrayRef> = vec![Arc::new(UInt64Array::from_iter_values(
+        rows.iter().map(|&i| hashes[i]),
+    ))];
+    let layout = shared.keys.layout().filter(|_| hashing.rows());
+    columns.extend(keys.arena_columns(layout.map(AsRef::as_ref), rows)?);
     if let Some(p) = payload {
         columns.push(Arc::new(LargeBinaryArray::from_iter_values(
             rows.iter().map(|&i| p.row(i)),
@@ -237,7 +236,7 @@ pub(crate) fn arena_chunk(
             rows.iter().map(|&i| c.value(i)),
         )),
     };
-    let data = record(&shared.arena_schema, columns, rows.len())?;
+    let data = record(shared.arena_schema(hashing), columns, rows.len())?;
     Batch::with_weights(data, weights).map_err(|e| internal(e.to_string()))
 }
 
@@ -254,6 +253,7 @@ impl BuildSink {
 
     async fn spill_parts(
         &self,
+        hashing: &Hashing,
         parts: &mut [Part],
         chosen: &[usize],
         ctx: &TaskContext,
@@ -261,7 +261,7 @@ impl BuildSink {
     ) -> Result<(usize, u64)> {
         match &self.0.spill {
             Some(scope) => {
-                let schema = &self.0.arena_schema;
+                let schema = self.0.arena_schema(hashing);
                 spill_parts(parts, chosen, schema, scope, ctx, must).await
             }
             None => Ok((0, 0)),
@@ -297,7 +297,9 @@ impl BuildSink {
             }
             (taken, chosen)
         };
-        let (freed, written) = self.spill_parts(&mut taken.0, &taken.1, ctx, must).await?;
+        let (freed, written) = self
+            .spill_parts(&g.hashing, &mut taken.0, &taken.1, ctx, must)
+            .await?;
         let mut c = lock(&g.collect);
         c.file_bytes += written;
         for (p, t) in taken.0.into_iter().enumerate() {
@@ -318,11 +320,11 @@ impl BuildSink {
 /// What indexing a partition's in-memory rows reserves: `(index, copy)`,
 /// its [`JoinTable`] index and its transient concatenation copy (none for a
 /// single chunk); `None` if no rows are in memory.
-fn build_need(part: &Part) -> Option<(usize, usize)> {
+fn build_need(part: &Part, row_layout: bool) -> Option<(usize, usize)> {
     if part.chunks.is_empty() {
         return None;
     }
-    let index = JoinTable::index_bytes(part.mem_rows(), key_bytes(&part.chunks));
+    let index = JoinTable::index_bytes(part.mem_rows(), key_bytes(&part.chunks), row_layout);
     let copy = if part.chunks.len() > 1 {
         part.bytes()
     } else {
@@ -340,7 +342,7 @@ impl BuildGlobal {
     /// A finalized build whose only work is `grace` (loom models).
     pub(crate) fn with_grace(grace: Grace) -> Arc<Self> {
         let g = Self {
-            seed: HashSeed::new(Some(0)),
+            hashing: Hashing::new(Some(0), false),
             spilled: Arc::new(AtomicU64::new(0)),
             rows: AtomicU64::new(0),
             null_key: AtomicBool::new(false),
@@ -367,7 +369,7 @@ impl Sink for BuildSink {
 
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         Ok(Arc::new(BuildGlobal {
-            seed: query_seed(ctx.query().config().seed),
+            hashing: self.0.hashing(ctx.query().config()),
             spilled: Arc::new(AtomicU64::new(0)),
             rows: AtomicU64::new(0),
             null_key: AtomicBool::new(false),
@@ -392,6 +394,7 @@ impl Sink for BuildSink {
     fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
         let memory = ctx.consumer();
         Ok(Box::new(BuildLocal {
+            hashing: state(global)?.hashing.clone(),
             parts: (0..PARTITIONS)
                 .map(|_| Part::with_memory(memory.reservation()))
                 .collect(),
@@ -428,7 +431,7 @@ impl Sink for BuildSink {
             .iter()
             .map(|&k| Arc::clone(&columns[k]))
             .collect();
-        let keys = s.keys.encode(&key_columns, &g.seed)?;
+        let keys = s.keys.encode(&key_columns, &g.hashing)?;
         if s.join_type == JoinType::NullAwareAnti && any_invalid(keys.valid.as_ref()) {
             g.null_key.store(true, Ordering::Release);
         }
@@ -440,8 +443,9 @@ impl Sink for BuildSink {
             None => None,
         };
         let mut by_part = vec![Vec::new(); PARTITIONS];
+        let hashes = keys.hashes();
         for i in (0..n).filter(|&i| keys.is_valid(i)) {
-            by_part[partition(keys.hashes[i], 0)].push(i);
+            by_part[g.hashing.partition(hashes[i], 0)].push(i);
         }
         let mut chunks = Vec::new();
         let mut stored = 0;
@@ -449,7 +453,14 @@ impl Sink for BuildSink {
             stored += rows.len() as u64;
             chunks.push((
                 p,
-                arena_chunk(s, &keys, payload.as_ref(), input.weights(), rows)?,
+                arena_chunk(
+                    s,
+                    &g.hashing,
+                    &keys,
+                    payload.as_ref(),
+                    input.weights(),
+                    rows,
+                )?,
             ));
         }
         if let Err(bytes) = reserve_chunks(&mut l.parts, &chunks) {
@@ -462,7 +473,7 @@ impl Sink for BuildSink {
         }
         for (p, c) in chunks {
             l.parts[p].chunks.push(c);
-            l.parts[p].coalesce(&s.arena_schema)?;
+            l.parts[p].coalesce(s.arena_schema(&g.hashing))?;
         }
         g.rows.fetch_add(n as u64, Ordering::Relaxed);
         l.stored += stored;
@@ -530,7 +541,8 @@ impl Sink for BuildSink {
                     }
                     let (indexes, copy) = {
                         let c = lock(&g.collect);
-                        let needs = c.parts.iter().filter_map(build_need);
+                        let rows = g.hashing.rows();
+                        let needs = c.parts.iter().filter_map(|p| build_need(p, rows));
                         needs.fold((0usize, 0usize), |(i, m), (index, copy)| {
                             (i.saturating_add(index), usize::max(m, copy))
                         })
@@ -546,7 +558,7 @@ impl Sink for BuildSink {
                 c.parts
                     .iter_mut()
                     .enumerate()
-                    .filter_map(|(i, p)| Some((i, build_need(p)?, p)))
+                    .filter_map(|(i, p)| Some((i, build_need(p, g.hashing.rows())?, p)))
                     .map(|(i, need, p)| (i, std::mem::take(&mut p.chunks), need))
                     .collect()
             };
@@ -584,12 +596,15 @@ impl Sink for BuildSink {
                     };
                     if let Some((p, chunks, (_, copy))) = jobs.pop_front_if(|_| funded) {
                         let shared = Arc::clone(&self.0);
+                        let hashing = g.hashing.clone();
                         running.push(async move {
                             let table = ctx
                                 .run_blocking(move || {
-                                    let arena = RowArena::concat(&shared.arena_schema, &chunks)?;
+                                    let schema = shared.arena_schema(&hashing);
+                                    let arena = RowArena::concat(schema, &chunks)?;
                                     drop(chunks);
-                                    JoinTable::build(arena)
+                                    let layout = shared.keys.layout().filter(|_| hashing.rows());
+                                    JoinTable::build(arena, layout, hashing.g_seed())
                                 })
                                 .await?;
                             Ok::<_, KrishivError>((p, table, copy))
@@ -665,7 +680,9 @@ impl Sink for BuildSink {
             for &p in &chosen {
                 l.spilled.fetch_or(1 << p, Ordering::AcqRel);
             }
-            let (freed, written) = self.spill_parts(&mut l.parts, &chosen, ctx, false).await?;
+            let (freed, written) = self
+                .spill_parts(&l.hashing, &mut l.parts, &chosen, ctx, false)
+                .await?;
             l.file_bytes += written;
             l.signal.set_spillable_bytes(mem_bytes(&l.parts));
             Ok(freed)

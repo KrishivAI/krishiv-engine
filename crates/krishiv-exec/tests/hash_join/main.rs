@@ -88,6 +88,8 @@ struct Case {
     keys: usize,
     null_safe: Vec<bool>,
     filter: bool,
+    /// `krishiv.exec.join.rowLayout` (P2-T158).
+    row_layout: bool,
 }
 
 impl Case {
@@ -166,6 +168,7 @@ async fn run_case(
     // Tiny output batches exercise the output bound, on small inputs.
     let config = ExecConfig {
         batch_size: if probe.len() < 1000 { 5 } else { 1024 },
+        join_row_layout: case.row_layout,
         ..ExecConfig::default()
     };
     let q = query(&root, 1, config);
@@ -190,6 +193,7 @@ fn case(join_type: JoinType, keys: usize, null_safe: bool, filter: bool) -> Case
         keys,
         null_safe: vec![null_safe; keys],
         filter,
+        row_layout: false,
     }
 }
 
@@ -236,16 +240,21 @@ async fn join_types_match_the_oracle_on_edge_cases() {
                     if jt == JoinType::NullAwareAnti && (keys > 1 || safe || filter) {
                         continue;
                     }
-                    let c = case(jt, keys, safe, filter);
-                    for (p, b) in inputs {
-                        let (got, _) = run_case(&c, p, b, 2, 2, 64 * MIB).await;
-                        assert_eq!(
-                            got,
-                            c.oracle(p, b),
-                            "{c:?} probe {} build {}",
-                            p.len(),
-                            b.len()
-                        );
+                    for row_layout in [false, true] {
+                        let c = Case {
+                            row_layout,
+                            ..case(jt, keys, safe, filter)
+                        };
+                        for (p, b) in inputs {
+                            let (got, _) = run_case(&c, p, b, 2, 2, 64 * MIB).await;
+                            assert_eq!(
+                                got,
+                                c.oracle(p, b),
+                                "{c:?} probe {} build {}",
+                                p.len(),
+                                b.len()
+                            );
+                        }
                     }
                 }
             }
@@ -257,7 +266,16 @@ async fn join_types_match_the_oracle_on_edge_cases() {
 /// the subquery keeps none; otherwise a NULL probe value is dropped.
 #[tokio::test]
 async fn not_in_follows_spark_null_semantics() {
-    let c = case(JoinType::NullAwareAnti, 1, false, false);
+    for row_layout in [false, true] {
+        not_in_cases(Case {
+            row_layout,
+            ..case(JoinType::NullAwareAnti, 1, false, false)
+        })
+        .await;
+    }
+}
+
+async fn not_in_cases(c: Case) {
     let probe = [r(Some(1), None, 0), r(Some(2), None, 0), r(None, None, 0)];
     let (got, _) = run_case(&c, &probe, &[], 1, 1, 64 * MIB).await;
     assert_eq!(got, ["1|∅|0", "2|∅|0", "∅|∅|0"]);
@@ -292,8 +310,9 @@ fn any_case() -> impl Strategy<Value = Case> {
         1usize..3,
         prop::collection::vec(any::<bool>(), 2),
         any::<bool>(),
+        any::<bool>(),
     )
-        .prop_map(|(t, keys, safe, filter)| {
+        .prop_map(|(t, keys, safe, filter, row_layout)| {
             let join_type = TYPES[t];
             let naaj = join_type == JoinType::NullAwareAnti;
             Case {
@@ -305,6 +324,7 @@ fn any_case() -> impl Strategy<Value = Case> {
                     safe[..keys].to_vec()
                 },
                 filter: filter && !naaj,
+                row_layout,
             }
         })
 }
@@ -330,7 +350,8 @@ proptest! {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 12, max_shrink_iters: 16, ..ProptestConfig::default() })]
     /// Larger random inputs under a budget that forces grace spill
-    /// (asserted): the same answer as the in-memory path.
+    /// (asserted): the same answer as the in-memory path, which uses the
+    /// other key format (fast == slow: row layout against arrow rows).
     #[test]
     fn random_spilling_joins_equal_the_in_memory_path(
         c in any_case(),
@@ -352,7 +373,8 @@ proptest! {
             .start_paused(true)
             .build()
             .unwrap();
-        let (expect, _) = rt.block_on(run_case(&c, &probe, &build, batch_rows, threads, 256 * MIB));
+        let other = Case { row_layout: !c.row_layout, ..c.clone() };
+        let (expect, _) = rt.block_on(run_case(&other, &probe, &build, batch_rows, threads, 256 * MIB));
         let (got, q) = rt.block_on(run_case(&c, &probe, &build, batch_rows, threads, MIB));
         prop_assert!(got == expect, "grace result differs");
         prop_assert!(metric(&q, "HashJoinBuild", "spilled_partitions") > 0);
@@ -428,17 +450,34 @@ fn skewed(rows: usize, keys: i64) -> Vec<Row> {
 
 /// A tiny budget forces build partitions, probe rows and (one level down)
 /// repartitioned partitions to disk; the answer equals the in-memory one
-/// and `EXPLAIN ANALYZE` shows the spill.
+/// and `EXPLAIN ANALYZE` shows the spill. Both key formats spill and
+/// repartition to the arrow-row in-memory answer.
 #[tokio::test(start_paused = true)]
 async fn grace_spill_with_recursion_equals_the_in_memory_join() {
     let build = skewed(30_000, 20_000);
     let probe = skewed(40_000, 25_000);
-    for jt in TYPES {
-        let keys = if jt == JoinType::NullAwareAnti { 1 } else { 2 };
+    for (jt, row_layout) in TYPES.into_iter().flat_map(|t| [(t, false), (t, true)]) {
+        // The row layout covers fixed-width keys (a string key keeps arrow
+        // rows): one `Int64` key.
+        let keys = if jt == JoinType::NullAwareAnti || row_layout {
+            1
+        } else {
+            2
+        };
         let c = case(jt, keys, false, jt == JoinType::LeftOuter);
         let (expect, mem) = run_case(&c, &probe, &build, 1024, 3, 256 * MIB).await;
         assert_eq!(metric(&mem, "HashJoinBuild", "spilled_partitions"), 0);
-        let (got, q) = run_case(&c, &probe, &build, 1024, 3, 1536 << 10).await;
+        let c = Case { row_layout, ..c };
+        // A key-only build of one `Int64` key takes less memory in the row
+        // layout (16-byte rows, no key copy in the index): a smaller budget
+        // makes it spill too.
+        let rows = row_layout || row_layout_forced();
+        let limit = if rows && keys == 1 {
+            1 << 20
+        } else {
+            1536 << 10
+        };
+        let (got, q) = run_case(&c, &probe, &build, 1024, 3, limit).await;
         assert_eq!(got.len(), expect.len(), "{jt:?}");
         assert!(got == expect, "{jt:?}: grace result differs");
         assert!(
@@ -508,11 +547,21 @@ async fn a_partition_that_fits_after_others_spill_is_not_repartitioned() {
 /// limit fails with a typed error, releasing memory and files.
 #[tokio::test(start_paused = true)]
 async fn a_partition_skewed_on_one_key_fails_at_the_depth_limit() {
+    for row_layout in [false, true] {
+        skewed_fails_at_the_depth_limit(row_layout).await;
+    }
+}
+
+async fn skewed_fails_at_the_depth_limit(join_row_layout: bool) {
     let build: Vec<Row> = (0..60_000).map(|i| r(Some(7), Some("a"), i)).collect();
     let probe = vec![r(Some(7), Some("a"), 1); 10];
     let root = root(1 << 20);
     let (_manager, scope) = spill();
-    let q = query(&root, 1, ExecConfig::default());
+    let config = ExecConfig {
+        join_row_layout,
+        ..ExecConfig::default()
+    };
+    let q = query(&root, 1, config);
     let plan = join(
         case(JoinType::Inner, 1, false, false).spec(Some(scope.clone())),
         scan(&schema(), batches(&data(&build), 2048)),
