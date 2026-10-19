@@ -90,7 +90,11 @@ impl DataFrame {
             Err(e) if lenient => return Ok(failed(mode, &parsed, None, &e)),
             Err(e) => return Err(e),
         };
-        let (optimized, physical) = match self.session.physical(&analysis.analyzed, &analysis.env) {
+        let (optimized, physical) = match self
+            .session
+            .physical(&analysis.analyzed, &analysis.env)
+            .await
+        {
             Ok((optimized, physical)) => (optimized, physical.explain().clone()),
             Err(e) if lenient => return Ok(failed(mode, &parsed, Some(&analysis), &e)),
             Err(e) => return Err(e),

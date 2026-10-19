@@ -303,6 +303,8 @@ fn cost_of_a_query_that_fails_after_analysis_repeats_the_error() {
     // Analyzes, but the planner has no FULL OUTER JOIN yet.
     let q =
         "SELECT a.n_name FROM nation a FULL OUTER JOIN nation b ON a.n_nationkey = b.n_nationkey";
+    // The query analyzes; only planning fails.
+    block_on(block_on(s.sql(q)).unwrap().schema()).unwrap();
     let t = explain_sql(&s, &format!("EXPLAIN COST {q}"));
     // Spark's layout for a failed COST (oracle 4.2.0): the error, then it
     // again under the optimized and physical headers.

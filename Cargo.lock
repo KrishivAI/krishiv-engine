@@ -1619,6 +1619,7 @@ version = "0.1.0-dev"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "arrow-select",
  "futures",
  "insta",
  "krishiv-common",
@@ -1633,6 +1634,7 @@ dependencies = [
  "parquet",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

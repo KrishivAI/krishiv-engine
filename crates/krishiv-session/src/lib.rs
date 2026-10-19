@@ -51,5 +51,7 @@ mod session;
 
 pub use column::Column;
 pub use conf::RuntimeConf;
-pub use dataframe::{DataFrame, DataFrameReader, ExplainMode, GroupedData, JoinType};
+pub use dataframe::{
+    DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, GroupedData, JoinType,
+};
 pub use session::{RecordBatchStream, Session, SessionBuilder};

@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     KrishivCatalogFailure, KrishivInsufficientPermissions, KrishivUnsupportedFeature,
-    TableOrViewNotFound, UnresolvedRoutine, UnsupportedDatasourceForDirectQuery,
+    RequiresSinglePartNamespace, TableOrViewNotFound, UnresolvedRoutine,
+    UnsupportedDatasourceForDirectQuery,
 };
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
@@ -427,6 +428,17 @@ async fn load(
             b.tables.insert(name.to_vec(), bound);
             continue;
         };
+        if catalog.single_part_namespace() && ident.namespace.len() != 1 {
+            let mut parts = ident.namespace.clone();
+            parts.push(ident.name.clone());
+            return Err(AnalysisError::new(
+                RequiresSinglePartNamespace {
+                    session_catalog: catalog.name().to_owned(),
+                    identifier: quoted(&parts),
+                },
+                origin,
+            ));
+        }
         // Asked as written, and folded the way a case-insensitive catalog
         // folds, so no spelling of a name dodges a rule on another (the
         // catalog's own identifier is asked below once the table is loaded).

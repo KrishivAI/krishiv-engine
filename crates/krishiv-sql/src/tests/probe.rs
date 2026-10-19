@@ -8,64 +8,20 @@ use super::*;
 /// Statements where this parser and Spark 4.2 disagree, with the reason.
 const SPARK_DEVIATIONS: &[(&str, &str)] = &[
     (
-        "SELECT (SELECT 1",
-        "ANTLR adds the hint `: missing ')'` (error quality, P2-T077)",
-    ),
-    (
-        "SELECT a[1",
-        "ANTLR adds the hint `: missing ']'` (error quality, P2-T077)",
-    ),
-    (
-        "SELECT a FROM t ORDER BY",
-        "ANTLR drops the trailing `BY` as extra input (P2-T077)",
-    ),
-    (
-        "SELECT a, count(*) FROM t GROUP BY a HAVING",
-        "ANTLR drops the trailing `HAVING` as extra input (P2-T077)",
-    ),
-    (
-        "SELECT a FROM",
-        "with enforced keywords ANTLR reports `FROM`, not the end of input (P2-T077)",
-    ),
-    (
         "SELECT 1 'secret'",
         "the text of a string literal is never echoed in an error",
-    ),
-    (
-        "SELECT * FROM t end",
-        "with enforced keywords ANTLR adds no `extra input` hint here (P2-T077)",
     ),
     (
         "EXPLAIN ANALYZE TABLE t COMPUTE STATISTICS",
         "`ANALYZE TABLE` is not a supported statement",
     ),
     (
-        "SELECT /*+ x(a b) */ * FROM t",
-        "ANTLR drops `b` before `)` as extra input (P2-T077)",
+        "SELECT a FROM",
+        "with enforced keywords ANTLR reports `FROM`, not the end of input, after a literal but not after an alias (P2-T077)",
     ),
     (
-        "SELECT CAST(x AS array<int)",
-        "ANTLR adds the hint `: missing ')'` (P2-T077)",
-    ),
-    (
-        "SELECT CAST(x AS map<int>)",
-        "ANTLR adds the hint `: missing ')'` (P2-T077)",
-    ),
-    (
-        "SELECT CAST(x AS struct<a int,>)",
-        "ANTLR adds the hint `: missing ')'` (P2-T077)",
-    ),
-    (
-        "SELECT CAST(x AS decimal(10,2)",
-        "ANTLR adds the hint `: missing ')'` (P2-T077)",
-    ),
-    (
-        "SELECT CAST(x AS array<int>>)",
-        "ANTLR drops the second `>` as extra input (P2-T077)",
-    ),
-    (
-        "SELECT CAST(x AS foo x)",
-        "ANTLR drops `x` before `)` as extra input (P2-T077)",
+        "SELECT * FROM t end",
+        "with enforced keywords ANTLR adds no `extra input` hint after a table name but does after an alias (P2-T077)",
     ),
 ];
 
@@ -416,4 +372,55 @@ fn retry_keywords_are_unique_bounded_and_before_the_failure() {
     let kept = crate::parser::retry_keywords(&casts, 1_000);
     assert_eq!(kept, (24..40).collect::<Vec<_>>());
     assert_eq!(crate::parser::retry_keywords(&[5, 3, 5], 1_000), vec![3, 5]);
+}
+
+/// Syntax errors from `sql-parse-errors.json` (a Spark 4.2 run of
+/// `tests/scripts/gen_sql_parse_errors.py`, written from Spark's behaviour
+/// alone): the offending token, the `extra input` / `missing` hint and the
+/// position are Spark's, including where ANTLR's recovery shows no hint.
+#[test]
+fn agrees_with_spark_on_the_syntax_error_fixture() {
+    let path = format!(
+        "{}/../../tests/fixtures/spark-4.2.0/sql-parse-errors.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let options = ParserOptions::default();
+    let mut wrong = vec![];
+    let cases = doc["cases"].as_array().unwrap();
+    for case in cases {
+        let sql = case["sql"].as_str().unwrap();
+        let ours = parse_statement(sql, &options);
+        let agrees = if case["parses"].as_bool().unwrap() {
+            ours.is_ok()
+        } else {
+            ours.as_ref()
+                .is_err_and(|e| same_error(sql, e, case, spark_position(case)))
+        };
+        if !agrees {
+            wrong.push((sql, ours.err().map(|e| e.error.to_string())));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+    assert!(cases.len() >= 60);
+}
+
+/// A complex type read after a failure that reached further (backtracking
+/// re-reads it with `far` reset) leaves that failure's recovery hint intact.
+#[test]
+fn complex_type_rereads_keep_the_recovery_hint() {
+    let options = ParserOptions::default();
+    for (sql, hint) in [
+        (
+            "SELECT ((SELECT x::array<int> FROM t WHERE f(a b)",
+            ": extra input 'b'",
+        ),
+        ("SELECT c::array<int>, f(a b)", ": extra input 'b'"),
+        ("SELECT (SELECT a::map<int,int> FROM t", ": missing ')'"),
+    ] {
+        let e = parse_statement(sql, &options).unwrap_err();
+        let params = e.error.message_parameters();
+        assert_eq!(params[1].1.as_str(), hint, "{sql}");
+    }
 }

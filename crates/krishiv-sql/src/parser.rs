@@ -42,6 +42,21 @@ pub(crate) enum Fail {
     Fatal(Box<ParseError>),
 }
 
+/// The inline recovery ANTLR shows a failed `match` of a closing token with
+/// (measured on Spark 4.2): dropping the token in the way when the one after
+/// it fits ("extra input"), and inserting the closing token when the token in
+/// the way fits after it ("missing").
+#[derive(Clone, Copy)]
+pub(crate) enum Close {
+    /// Only dropping the token in the way.
+    Drop,
+    /// Dropping, else inserting.
+    DropOrInsert,
+    /// After a comma list of this many elements: dropping, and at the end of
+    /// the input (which Spark drops as well) once the list has two elements.
+    List(usize),
+}
+
 pub(crate) type PR<T> = Result<T, Fail>;
 
 pub(crate) struct Parser<'s> {
@@ -59,6 +74,9 @@ pub(crate) struct Parser<'s> {
     /// A token before which ANTLR would insert a missing token, and that
     /// token (Spark's "missing" hint).
     missing: Option<(usize, &'static str)>,
+    /// The closing token ANTLR's `match` wanted at the furthest failure, and
+    /// which recoveries Spark shows there; see [`Parser::error_with_recovery`].
+    matched: Option<(usize, Sym, Close)>,
     /// Current recursion depth and the deepest tree level reached.
     depth: usize,
     peak: usize,
@@ -357,7 +375,7 @@ fn run<R: TopRule>(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<R
                 .and_then(|out| checked::<R>(out, src, opts, deep));
         }
         Err(Fail::Fatal(e)) => return Err((*e).into()),
-        Err(Fail::Syntax) => p.syntax_error(),
+        Err(Fail::Syntax) => p.error_with_recovery::<R>(opts),
     };
     // ANTLR's full-context prediction keeps a bare `ARRAY` after `::` as an
     // alternative to `ARRAY<...>` until one of them fails: when the bare
@@ -372,7 +390,9 @@ fn run<R: TopRule>(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<R
                     .finish(out)
                     .and_then(|out| checked::<R>(out, src, opts, deep));
             }
-            Err(Fail::Syntax) if retry.far > p.far => return Err(retry.syntax_error().into()),
+            Err(Fail::Syntax) if retry.far > p.far => {
+                return Err(retry.error_with_recovery::<R>(opts).into());
+            }
             Err(_) => {}
         }
     }
@@ -471,6 +491,7 @@ impl<'s> Parser<'s> {
             far: 0,
             extra: None,
             missing: None,
+            matched: None,
             depth: 0,
             peak: 0,
             failed_queries: HashMap::new(),
@@ -546,6 +567,9 @@ impl<'s> Parser<'s> {
 
     /// Records a failure at the current token.
     fn fail<T>(&mut self) -> PR<T> {
+        if self.pos > self.far {
+            self.matched = None;
+        }
         self.far = self.far.max(self.pos);
         Err(Fail::Syntax)
     }
@@ -574,6 +598,21 @@ impl<'s> Parser<'s> {
         if self.eat_sym(s) { Ok(()) } else { self.fail() }
     }
 
+    /// `eat_sym` for a closing token that ANTLR matches after a complete
+    /// element (no prediction decision in the way), where its error recovery
+    /// applies: a failure here may carry Spark's `extra input` hint and, per
+    /// `how`, its `missing` hint.
+    fn expect_closing(&mut self, s: Sym, how: Close) -> PR<()> {
+        if self.eat_sym(s) {
+            return Ok(());
+        }
+        let r = self.fail();
+        if self.pos == self.far {
+            self.matched = Some((self.pos, s, how));
+        }
+        r
+    }
+
     fn comma_sep<T>(&mut self, mut f: impl FnMut(&mut Self) -> PR<T>) -> PR<Vec<T>> {
         let mut v = vec![f(self)?];
         while self.eat_sym(Sym::Comma) {
@@ -586,7 +625,7 @@ impl<'s> Parser<'s> {
     fn paren_list<T>(&mut self, f: impl FnMut(&mut Self) -> PR<T>) -> PR<Vec<T>> {
         self.expect_sym(Sym::LParen)?;
         let v = self.comma_sep(f)?;
-        self.expect_sym(Sym::RParen)?;
+        self.expect_closing(Sym::RParen, Close::List(v.len()))?;
         Ok(v)
     }
 
@@ -622,6 +661,142 @@ impl<'s> Parser<'s> {
             _ => String::new(),
         };
         error::syntax_error(display, hint, span)
+    }
+
+    /// The syntax error at the furthest failure, with the hint of ANTLR's
+    /// inline recovery when the failure is at a `match` ([`expect_closing`]):
+    /// ANTLR first drops the token in the way if the one after it fits
+    /// ("extra input"), else inserts the wanted token if the token in the way
+    /// fits after it ("missing"). Whether a token fits is decided by parsing
+    /// the statement again with the edit made: it fits when the parse
+    /// consumes it, and for a dropped token only when the wanted token is next.
+    ///
+    /// [`expect_closing`]: Parser::expect_closing
+    #[inline(never)]
+    fn error_with_recovery<R: TopRule>(&mut self, opts: ParserOptions) -> ParseError {
+        self.dangling_clause_word::<R>(opts);
+        self.organization_clause_failure::<R>(opts);
+        if let Some((at, sym, how)) = self.matched
+            && at == self.far
+            && self.extra != Some(at)
+            && self.missing.is_none_or(|(m, _)| m != at)
+        {
+            let fits = |edited: Vec<Token>, past: usize| {
+                let mut p = Parser::new(self.src, edited, opts, self.force_bare);
+                match R::parse(&mut p) {
+                    Ok(_) => true,
+                    Err(Fail::Syntax) => p.far > past,
+                    Err(Fail::Fatal(_)) => false,
+                }
+            };
+            let mut dropped = self.toks.clone();
+            if at < dropped.len() {
+                dropped.remove(at);
+                // The token after the dropped one must be the wanted one: it
+                // is what the state expects (operators that continue the
+                // element aside, which Spark's hints do not show either).
+                let next = self.toks.get(at + 1).map(|t| t.kind);
+                if next == Some(TokenKind::Sym(sym)) && fits(dropped, at) {
+                    self.extra = Some(at);
+                }
+            } else if matches!(how, Close::List(n) if n >= 2) {
+                self.extra = Some(at);
+            }
+            if self.extra != Some(at) && matches!(how, Close::DropOrInsert) {
+                let text = match sym {
+                    Sym::RBracket => Some("']'"),
+                    Sym::RParen => Some("')'"),
+                    _ => None,
+                };
+                let mut inserted = self.toks.clone();
+                let start = self.toks.get(at).map_or(self.src.len(), |t| t.span.start);
+                let token = Token {
+                    kind: TokenKind::Sym(sym),
+                    span: Span::new(start, start),
+                };
+                inserted.insert(at, token);
+                if let Some(text) = text
+                    && fits(inserted, at + 1)
+                {
+                    self.missing = Some((at, text));
+                }
+            }
+        }
+        self.syntax_error()
+    }
+
+    /// A statement that ends with `BY` or `HAVING` right after text that is a
+    /// statement without it (`... t ORDER BY`, `... GROUP BY a HAVING`):
+    /// ANTLR's prediction for the optional clause fails at the end of the
+    /// input and takes the exit, so the error is the clause's last token
+    /// dropped as "extra input" instead of the end of the input.
+    fn dangling_clause_word<R: TopRule>(&mut self, opts: ParserOptions) {
+        let n = self.toks.len();
+        let last_is = |p: &Self, kw: &str| {
+            p.toks
+                .last()
+                .is_some_and(|t| t.kind == TokenKind::Word && is_kw(t.span.text(p.src), kw))
+        };
+        if n >= 2
+            && self.far == n
+            && (last_is(self, "BY") || last_is(self, "HAVING"))
+            && self.extra.is_none()
+        {
+            let mut p = Parser::new(self.src, self.toks[..n - 1].to_vec(), opts, self.force_bare);
+            if R::parse(&mut p).is_ok() {
+                self.far = n - 1;
+                self.extra = Some(n - 1);
+            }
+        }
+    }
+
+    /// A failure at the end of the input inside an `ORDER BY`, `SORT BY` or
+    /// `LIMIT` clause that follows a complete query (`... t ORDER BY a,`; `(SELECT 1 ORDER BY a,` also gets its `missing` hint):
+    /// ANTLR's prediction takes the keyword as an alias and reports it, with
+    /// no hint, instead of the end of the input. Failing right after the
+    /// `BY` reports the `BY`.
+    fn organization_clause_failure<R: TopRule>(&mut self, opts: ParserOptions) {
+        let n = self.toks.len();
+        if self.far != n || self.extra.is_some() {
+            return;
+        }
+        let word = |p: &Self, i: usize, kw: &str| {
+            p.toks
+                .get(i)
+                .is_some_and(|t| t.kind == TokenKind::Word && is_kw(t.span.text(p.src), kw))
+        };
+        let mut depth = 0usize;
+        let mut clause = None;
+        for i in (0..n).rev() {
+            match self.toks[i].kind {
+                TokenKind::Sym(Sym::RParen) => depth += 1,
+                TokenKind::Sym(Sym::LParen) => depth = depth.saturating_sub(1),
+                _ if depth == 0
+                    && ((word(self, i, "ORDER") || word(self, i, "SORT"))
+                        && word(self, i + 1, "BY")
+                        && i + 2 < n
+                        || word(self, i, "LIMIT") && i + 1 < n) =>
+                {
+                    clause = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(k) = clause.filter(|&k| k > 0) else {
+            return;
+        };
+        let mut p = Parser::new(self.src, self.toks[..k].to_vec(), opts, self.force_bare);
+        // The query before the clause is complete, or ends where the clause
+        // starts (an unclosed `(`), which then gets its recovery hint.
+        match R::parse(&mut p) {
+            Ok(_) => self.far = k,
+            Err(Fail::Syntax) if p.far == k => {
+                self.far = k;
+                self.matched = p.matched;
+            }
+            Err(_) => {}
+        }
     }
 
     /// A token as an error message shows it: quoted text like Spark's, except
@@ -1584,8 +1759,13 @@ impl<'s> Parser<'s> {
             let mut sub = None;
             if self.query_follows(1) {
                 self.bump();
+                let nested = self.sym_at(0, Sym::LParen);
                 match self.query() {
-                    Ok(q) if self.eat_sym(Sym::RParen) => sub = Some(q),
+                    Ok(q) if self.sym_at(0, Sym::RParen) || !nested => {
+                        // `(SELECT ...` is committed to by ANTLR's prediction.
+                        self.expect_closing(Sym::RParen, Close::DropOrInsert)?;
+                        sub = Some(q);
+                    }
                     Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
                     _ => self.pos = save,
                 }
