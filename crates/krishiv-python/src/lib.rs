@@ -5,6 +5,10 @@
 
 use pyo3::prelude::*;
 
+mod column;
+mod dataframe;
+mod errors;
+mod session;
 mod stream;
 
 #[cfg(feature = "mimalloc")]
@@ -24,5 +28,14 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__allocator__", ALLOCATOR)?;
     m.add_class::<stream::ArrowStream>()?;
+    m.add_class::<session::PySession>()?;
+    m.add_class::<dataframe::PyDataFrame>()?;
+    m.add_class::<dataframe::PyGroupedData>()?;
+    m.add_class::<column::PyColumn>()?;
+    m.add_function(wrap_pyfunction!(column::column, m)?)?;
+    m.add_function(wrap_pyfunction!(column::literal, m)?)?;
+    m.add_function(wrap_pyfunction!(column::call, m)?)?;
+    m.add_function(wrap_pyfunction!(column::count_all, m)?)?;
+    m.add_function(wrap_pyfunction!(column::count_distinct_of, m)?)?;
     Ok(())
 }
