@@ -759,6 +759,26 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(14);
                 self.put(&offset.to_le_bytes());
             }
+            PlanNode::Hint { name, params, .. } => {
+                self.u8(16);
+                self.str(name);
+                self.exprs(params);
+            }
+            PlanNode::JoinHint { strategy, .. } => {
+                self.u8(17);
+                self.str(strategy.name());
+            }
+            PlanNode::Union {
+                inputs,
+                by_name,
+                allow_missing_columns,
+            } => {
+                self.u8(18);
+                self.len(inputs.len());
+                self.u8(u8::from(*by_name));
+                self.u8(u8::from(*allow_missing_columns));
+            }
+            PlanNode::Distinct { .. } => self.u8(19),
         }
     }
 

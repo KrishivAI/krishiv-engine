@@ -555,6 +555,62 @@ fn wheel_sizes_record_and_gate() {
         "{out:?}"
     );
     std::fs::remove_file(&new_target).unwrap();
+    // Measure once, gate later (what the wheels workflow and the pr-policy
+    // gate do): --measure-only gates nothing, --compare gates the file.
+    // The output directory need not exist (CI points it into a fresh temp dir).
+    let nested = dir.join("not/yet/there/sizes.json");
+    let out = run(&["--measure-only", nested.to_str().unwrap()], false);
+    assert!(out.status.success(), "{out:?}");
+    assert!(nested.is_file());
+    let sizes = dir.join("sizes.json");
+    let out = run(&["--measure-only", sizes.to_str().unwrap()], false);
+    assert!(out.status.success(), "{out:?}");
+    let compare = |approved: bool| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        c.args(["wheel-sizes", "--compare"])
+            .arg(&sizes)
+            .arg("--budgets")
+            .arg(&budgets)
+            .env_remove("GITHUB_STEP_SUMMARY")
+            .env_remove("BUDGET_APPROVED");
+        if approved {
+            c.env("BUDGET_APPROVED", "1");
+        }
+        c.output().unwrap()
+    };
+    assert!(compare(false).status.success());
+    std::fs::write(&wheel, vec![0_u8; 1100]).unwrap();
+    let grown = dir.join("grown.json");
+    assert!(
+        run(&["--measure-only", grown.to_str().unwrap()], false)
+            .status
+            .success(),
+        "measuring never fails on growth"
+    );
+    std::fs::write(&wheel, vec![0_u8; 1000]).unwrap();
+    std::fs::rename(&grown, &sizes).unwrap();
+    let out = compare(false);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("grew from 1000 to 1100"),
+        "{out:?}"
+    );
+    assert!(compare(true).status.success(), "approved growth passes");
+    std::fs::write(&sizes, "{}").unwrap();
+    assert!(!compare(false).status.success(), "empty measurement fails");
+    std::fs::write(&sizes, "nope").unwrap();
+    assert!(!compare(false).status.success(), "bad measurement fails");
+    std::fs::remove_file(&sizes).unwrap();
+    assert!(
+        !compare(false).status.success(),
+        "missing measurement fails"
+    );
+    assert!(!run(&["--measure-only"], false).status.success());
+    assert!(
+        !run(&["--measure-only", "x.json", "--write"], false)
+            .status
+            .success()
+    );
     // Usage and input errors.
     assert!(!run(&["--bogus"], false).status.success());
     assert!(!run(&["--budgets"], false).status.success());

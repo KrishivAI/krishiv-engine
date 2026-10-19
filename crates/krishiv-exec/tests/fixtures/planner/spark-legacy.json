@@ -203,6 +203,59 @@
     "5|10|8"
    ]
   },
+  "div": {
+   "rows": [
+    "1|0|NULL|-1|5|0",
+    "2|0|20|-2|7|0",
+    "3|1|-15|4|NULL|NULL",
+    "4|NULL|NULL|-5|13|NULL",
+    "5|1|3074457345618258602|-1317624576693539401|-19|0",
+    "6|2|-12|7|20|0",
+    "7|NULL|NULL|-10|23|NULL",
+    "8|1|26|-11|29|0"
+   ]
+  },
+  "div_by_zero": {
+   "rows": [
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL"
+   ]
+  },
+  "div_decimal_by_zero": {
+   "rows": [
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL",
+    "NULL"
+   ]
+  },
+  "div_nonzero": {
+   "rows": [
+    "1|0|-1|5|3",
+    "2|0|-2|7|6",
+    "3|1|4|NULL|-10",
+    "4|NULL|-5|13|13",
+    "5|1|-1317624576693539401|-19|3074457345618258602",
+    "6|2|7|20|-16",
+    "7|NULL|-10|23|23",
+    "8|1|-11|29|26"
+   ]
+  },
+  "div_overflow": {
+   "rows": [
+    "-9223372036854775808"
+   ]
+  },
   "divide_by_zero": {
    "rows": [
     "1|NULL|NULL",
@@ -271,6 +324,73 @@
     "NULL|22.00|3",
     "3|6.26|3",
     "4|12.20|2"
+   ]
+  },
+  "hint_bad_parameter": {
+   "error": "_LEGACY_ERROR_TEMP_1046"
+  },
+  "hint_broadcast_alias": {
+   "rows": [
+    "1|NULL",
+    "2|one",
+    "3|two",
+    "3|two again",
+    "4|NULL",
+    "5|NULL",
+    "6|NULL",
+    "7|NULL",
+    "8|NULL"
+   ]
+  },
+  "hint_broadcast_left": {
+   "rows": [
+    "2|one",
+    "3|two",
+    "3|two again"
+   ]
+  },
+  "hint_broadcast_non_equi": {
+   "rows": [
+    "1|1",
+    "1|2",
+    "1|3",
+    "1|5",
+    "2|2",
+    "2|3",
+    "2|5",
+    "3|5",
+    "5|5",
+    "6|5",
+    "8|5"
+   ]
+  },
+  "hint_merge": {
+   "rows": [
+    "2|1",
+    "3|2",
+    "3|3"
+   ]
+  },
+  "hint_replicate_nl": {
+   "rows": []
+  },
+  "hint_shuffle_hash_semi": {
+   "rows": [
+    "2",
+    "3"
+   ]
+  },
+  "hint_subquery": {
+   "rows": [
+    "2",
+    "3"
+   ]
+  },
+  "hint_unknown_and_missing": {
+   "rows": [
+    "2|1",
+    "3|2",
+    "3|3"
    ]
   },
   "in_between_like": {
@@ -510,6 +630,29 @@
   "scalar_subquery_too_many": {
    "error": "SCALAR_SUBQUERY_TOO_MANY_ROWS"
   },
+  "select_distinct": {
+   "rows": [
+    "NULL",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4"
+   ]
+  },
+  "select_distinct_two": {
+   "rows": [
+    "NULL|false",
+    "NULL|true",
+    "0|false",
+    "1|false"
+   ]
+  },
+  "select_without_from": {
+   "rows": [
+    "1|x|NULL|3"
+   ]
+  },
   "self_join": {
    "rows": [
     "5|8"
@@ -617,6 +760,237 @@
     "6",
     "7",
     "8"
+   ]
+  },
+  "union_all": {
+   "rows": [
+    "1|0",
+    "1|1",
+    "2|1",
+    "2|2",
+    "3|2",
+    "3|2",
+    "4|NULL",
+    "4|NULL",
+    "5|3",
+    "5|9",
+    "6|4",
+    "7|NULL",
+    "8|3"
+   ]
+  },
+  "union_all_aggregate": {
+   "rows": [
+    "NULL|3|114",
+    "0|1|10",
+    "1|2|21",
+    "2|3|-25",
+    "3|2|-9223372036854775729",
+    "4|1|-50",
+    "9|1|5"
+   ]
+  },
+  "union_all_in_subquery": {
+   "rows": [
+    "2",
+    "3",
+    "6"
+   ]
+  },
+  "union_all_join_build": {
+   "rows": [
+    "1|0",
+    "2|1",
+    "2|1",
+    "3|2",
+    "3|2"
+   ]
+  },
+  "union_all_join_probe": {
+   "rows": [
+    "1|one",
+    "1|one",
+    "2|two",
+    "2|two",
+    "2|two",
+    "2|two again",
+    "2|two again",
+    "2|two again",
+    "9|nine"
+   ]
+  },
+  "union_all_nested_branches": {
+   "rows": [
+    "1",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "7",
+    "8"
+   ]
+  },
+  "union_all_nullability": {
+   "rows": [
+    "NULL",
+    "1",
+    "1",
+    "2",
+    "2",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9"
+   ]
+  },
+  "union_all_three_with_limit": {
+   "rows": [
+    "15"
+   ]
+  },
+  "union_all_widens": {
+   "rows": [
+    "NULL|NULL",
+    "NULL|a_b",
+    "0|apple",
+    "1|1.5",
+    "1|banana",
+    "2|3.0",
+    "2|abc",
+    "3|4.5",
+    "3|ab",
+    "3|xyz",
+    "4|42",
+    "4|6.0",
+    "5|7.5"
+   ]
+  },
+  "union_columns_mismatch": {
+   "error": "NUM_COLUMNS_MISMATCH"
+  },
+  "union_distinct": {
+   "rows": [
+    "NULL",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "9"
+   ]
+  },
+  "union_mixed_carriers": {
+   "rows": [
+    "NULL",
+    "42",
+    "a_b",
+    "ab",
+    "abc",
+    "apple",
+    "banana",
+    "lit",
+    "nine!",
+    "none!",
+    "one!",
+    "two again!",
+    "two!",
+    "xyz"
+   ]
+  },
+  "union_mixed_nullability": {
+   "rows": [
+    "1|one",
+    "1|x",
+    "2|two",
+    "2|x",
+    "3|two again",
+    "3|x",
+    "4|none",
+    "4|x",
+    "5|nine",
+    "5|x",
+    "6|x",
+    "7|x",
+    "8|x"
+   ]
+  },
+  "union_mixed_types": {
+   "rows": [
+    "NULL|4.00|NULL|1997-02-28|NULL",
+    "NULL|6.00|NONE|NULL|4.0",
+    "NULL|7.00|a_b|1999-12-31|0.0",
+    "0|1.50|apple|1994-01-01|0.5",
+    "1|1.50|ONE|NULL|1.0",
+    "1|2.25|banana|1995-06-30|-1.25",
+    "2|NULL|abc|1996-12-31|2.0",
+    "2|3.00|TWO|NULL|2.0",
+    "2|4.50|TWO AGAIN|NULL|3.0",
+    "3|-5.75|ab|1998-08-02|10000000000.0",
+    "3|8.88|xyz|2000-02-29|7.25",
+    "4|6.10|42|NULL|3.5",
+    "9|7.50|NINE|NULL|5.0"
+   ]
+  },
+  "union_qualifier": {
+   "rows": [
+    "1|apple",
+    "1|apple",
+    "2|banana",
+    "2|banana",
+    "3|abc",
+    "3|abc",
+    "4|NULL",
+    "4|NULL",
+    "5|ab",
+    "5|ab",
+    "6|42",
+    "6|42",
+    "7|a_b",
+    "7|a_b",
+    "8|xyz",
+    "8|xyz"
+   ]
+  },
+  "union_qualifier_cast": {
+   "error": "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+  },
+  "union_types_incompatible": {
+   "error": "INCOMPATIBLE_COLUMN_TYPE"
+  },
+  "union_void_widens": {
+   "rows": [
+    "NULL",
+    "NULL",
+    "42",
+    "a_b",
+    "ab",
+    "abc",
+    "apple",
+    "banana",
+    "xyz"
+   ]
+  },
+  "void_column": {
+   "rows": [
+    "NULL|1",
+    "NULL|2",
+    "NULL|3",
+    "NULL|4",
+    "NULL|5",
+    "NULL|6",
+    "NULL|7",
+    "NULL|8"
+   ]
+  },
+  "void_union": {
+   "rows": [
+    "NULL",
+    "NULL"
    ]
   }
  },

@@ -68,8 +68,10 @@ mod catalog;
 mod coerce;
 mod exprs;
 mod fold;
+mod hints;
 mod ops;
 mod resolve;
+mod setops;
 mod subquery;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -325,6 +327,8 @@ pub struct AnalyzedPlan {
     pub reads_files: bool,
     /// Stage timings.
     pub timings: AnalysisTimings,
+    /// What Spark logs as warnings during analysis: hints it ignores.
+    pub warnings: Vec<String>,
 }
 
 impl PartialEq for AnalyzedPlan {
@@ -337,6 +341,7 @@ impl PartialEq for AnalyzedPlan {
             && self.context == other.context
             && self.query_text == other.query_text
             && self.reads_files == other.reads_files
+            && self.warnings == other.warnings
     }
 }
 
@@ -462,7 +467,7 @@ impl Analyzer for DefaultAnalyzer {
             let bindings = bind::bind(plan, ctx).await?;
             let metadata = started.elapsed();
             let resolving = std::time::Instant::now();
-            let (root, output, securables) = resolve::resolve(plan, ctx, &bindings)?;
+            let (root, output, securables, warnings) = resolve::resolve(plan, ctx, &bindings)?;
             let resolved =
                 Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
             let bind::Bindings {
@@ -485,6 +490,7 @@ impl Analyzer for DefaultAnalyzer {
                     metadata,
                     resolve: resolving.elapsed(),
                 },
+                warnings,
             })
         })
     }

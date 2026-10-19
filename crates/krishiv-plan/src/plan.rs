@@ -172,6 +172,89 @@ pub enum PlanNode {
         /// What each attribute id inside gains.
         offset: u64,
     },
+    /// A hint, `/*+ name(params) */` or `df.hint(name, params)` (Spark's
+    /// `UnresolvedHint`). The analyzer resolves a join strategy hint into
+    /// [`PlanNode::JoinHint`]s on the relations it names and drops every
+    /// hint node.
+    Hint {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The hint name, as written.
+        name: String,
+        /// Its parameters.
+        params: Vec<Arc<Expr>>,
+    },
+    /// A join strategy hint on a relation (Spark's `ResolvedHint`): a join
+    /// this relation is a side of prefers `strategy`. Rows pass through.
+    JoinHint {
+        /// The hinted relation.
+        input: Arc<LogicalPlan>,
+        /// The strategy.
+        strategy: JoinStrategy,
+    },
+    /// `UNION ALL`, `df.union`, `df.unionByName`: the rows of every input.
+    /// Columns match by position, or by name with `by_name` (then a column
+    /// some input lacks reads NULL there if `allow_missing_columns`).
+    /// Resolved, the inputs match by position with equal types and the
+    /// output is the first input's attributes, nullable where any input's
+    /// column is (Spark's `Union`).
+    Union {
+        /// The inputs, two or more.
+        inputs: Vec<Arc<LogicalPlan>>,
+        /// Match columns by name.
+        by_name: bool,
+        /// With `by_name`: a missing column reads NULL.
+        allow_missing_columns: bool,
+    },
+    /// `SELECT DISTINCT`, `UNION` (distinct), `df.distinct()`: the input's
+    /// distinct rows. The analyzer rewrites it to an aggregate grouping
+    /// every column.
+    Distinct {
+        /// Input.
+        input: Arc<LogicalPlan>,
+    },
+}
+
+/// A join strategy hint (`BROADCAST`, `MERGE`, `SHUFFLE_HASH`,
+/// `SHUFFLE_REPLICATE_NL`), in Spark's precedence order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum JoinStrategy {
+    /// `BROADCAST`, `BROADCASTJOIN`, `MAPJOIN`: build a hash table (or a
+    /// nested-loop build) from this side.
+    Broadcast,
+    /// `MERGE`, `SHUFFLE_MERGE`, `MERGEJOIN`: a sort-merge join.
+    ShuffleMerge,
+    /// `SHUFFLE_HASH`: a hash join building this side.
+    ShuffleHash,
+    /// `SHUFFLE_REPLICATE_NL`: a nested-loop join over every pair of rows
+    /// (inner joins only).
+    ShuffleReplicateNl,
+}
+
+impl JoinStrategy {
+    /// The strategy a hint name stands for (case-insensitive).
+    #[must_use]
+    pub fn from_hint(name: &str) -> Option<Self> {
+        match name.to_ascii_uppercase().as_str() {
+            "BROADCAST" | "BROADCASTJOIN" | "MAPJOIN" => Some(Self::Broadcast),
+            "MERGE" | "SHUFFLE_MERGE" | "MERGEJOIN" => Some(Self::ShuffleMerge),
+            "SHUFFLE_HASH" => Some(Self::ShuffleHash),
+            "SHUFFLE_REPLICATE_NL" => Some(Self::ShuffleReplicateNl),
+            _ => None,
+        }
+    }
+
+    /// Spark's display name (`HintInfo` prints `(strategy=<name>)`).
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Broadcast => "broadcast",
+            Self::ShuffleMerge => "merge",
+            Self::ShuffleHash => "shuffle_hash",
+            Self::ShuffleReplicateNl => "shuffle_replicate_nl",
+        }
+    }
 }
 
 /// A resolved reference to a `WITH` definition: the definition is planned
@@ -415,11 +498,15 @@ impl LogicalPlan {
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
-            | PlanNode::Shift { input, .. } => f(input),
+            | PlanNode::Shift { input, .. }
+            | PlanNode::Hint { input, .. }
+            | PlanNode::JoinHint { input, .. }
+            | PlanNode::Distinct { input } => f(input),
             PlanNode::Join { left, right, .. } => {
                 f(left);
                 f(right);
             }
+            PlanNode::Union { inputs, .. } => inputs.iter().for_each(f),
             PlanNode::WithCte { input, ctes } => {
                 ctes.iter().for_each(|c| f(&c.plan));
                 f(input);
@@ -441,11 +528,15 @@ impl LogicalPlan {
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
-            | PlanNode::Shift { input, .. } => f(input),
+            | PlanNode::Shift { input, .. }
+            | PlanNode::Hint { input, .. }
+            | PlanNode::JoinHint { input, .. }
+            | PlanNode::Distinct { input } => f(input),
             PlanNode::Join { left, right, .. } => {
                 f(left);
                 f(right);
             }
+            PlanNode::Union { inputs, .. } => inputs.iter_mut().for_each(f),
             PlanNode::WithCte { input, ctes } => {
                 ctes.iter_mut().for_each(|c| f(&mut c.plan));
                 f(input);
@@ -463,7 +554,11 @@ impl LogicalPlan {
             | PlanNode::WithCte { .. }
             | PlanNode::CteRef(_)
             | PlanNode::OneRowRelation
-            | PlanNode::Shift { .. } => {}
+            | PlanNode::Shift { .. }
+            | PlanNode::JoinHint { .. }
+            | PlanNode::Union { .. }
+            | PlanNode::Distinct { .. } => {}
+            PlanNode::Hint { params, .. } => params.iter().for_each(f),
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter().for_each(f),
@@ -503,7 +598,11 @@ impl LogicalPlan {
             | PlanNode::WithCte { .. }
             | PlanNode::CteRef(_)
             | PlanNode::OneRowRelation
-            | PlanNode::Shift { .. } => {}
+            | PlanNode::Shift { .. }
+            | PlanNode::JoinHint { .. }
+            | PlanNode::Union { .. }
+            | PlanNode::Distinct { .. } => {}
+            PlanNode::Hint { params, .. } => params.iter_mut().for_each(f),
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter_mut().for_each(f),
@@ -554,7 +653,21 @@ impl LogicalPlan {
                 PlanNode::Filter { input, .. }
                 | PlanNode::Sort { input, .. }
                 | PlanNode::Limit { input, .. }
-                | PlanNode::WithCte { input, .. } => p = input,
+                | PlanNode::WithCte { input, .. }
+                | PlanNode::JoinHint { input, .. } => p = input,
+                PlanNode::Union { inputs, .. } => {
+                    let mut out = inputs.first()?.resolved_output()?;
+                    for i in &inputs[1..] {
+                        let o = i.resolved_output()?;
+                        if o.len() != out.len() {
+                            return None;
+                        }
+                        for (c, d) in out.iter_mut().zip(o) {
+                            c.nullable |= d.nullable;
+                        }
+                    }
+                    return Some(out);
+                }
                 PlanNode::SubqueryAlias { input, columns, .. } => {
                     let out = input.resolved_output()?;
                     if columns.is_empty() {
@@ -626,7 +739,11 @@ impl LogicalPlan {
                     }
                     return Some(out);
                 }
-                PlanNode::Read(_) | PlanNode::Sql { .. } | PlanNode::WithColumns { .. } => {
+                PlanNode::Read(_)
+                | PlanNode::Sql { .. }
+                | PlanNode::WithColumns { .. }
+                | PlanNode::Hint { .. }
+                | PlanNode::Distinct { .. } => {
                     return None;
                 }
             }

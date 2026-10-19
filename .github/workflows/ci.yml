@@ -554,13 +554,13 @@ jobs:
     if: needs.changes.outputs.python == 'true'
     permissions:
       contents: read
-      actions: read
-      pull-requests: read
     uses: $/.github/workflows/wheels.yml
 
   # Required-check summary for the `wheels` matrix: a skipped matrix job reports
   # under an unexpanded name, so the legs themselves cannot be required. This job
   # always reports and passes when the wheels passed or were skipped (no Rust change).
+  # It covers building, testing and measuring the wheels; their size is gated by
+  # the `wheel-sizes` job of pr-policy.yml (label-aware), which is required too.
   wheels-ok:
     needs: [changes, wheels, wheels-targets]
     if: always()

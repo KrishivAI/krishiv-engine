@@ -82,6 +82,19 @@ pub fn optimize(plan: &Plan) -> Result<Plan, KrishivError> {
 /// be started. A rewrite nesting deeper than [`krishiv_plan::MAX_DEPTH`] is
 /// not an error: the input plan is returned unoptimised.
 pub fn optimize_with(plan: &Plan, stats: &dyn Statistics) -> Result<Plan, KrishivError> {
+    run(plan, Some(stats))
+}
+
+/// As [`optimize_with`], keeping the joins in the order the query wrote
+/// them (a baseline for the join order, as benchmarks compare it).
+///
+/// # Errors
+/// As [`optimize_with`].
+pub fn optimize_as_written(plan: &Plan) -> Result<Plan, KrishivError> {
+    run(plan, None)
+}
+
+fn run(plan: &Plan, stats: Option<&dyn Statistics>) -> Result<Plan, KrishivError> {
     if !plan.root().is_resolved() {
         return Err(InternalError {
             message: "the optimizer needs a resolved plan".to_owned(),
@@ -91,7 +104,10 @@ pub fn optimize_with(plan: &Plan, stats: &dyn Statistics) -> Result<Plan, Krishi
     let root = Arc::clone(plan.root());
     let run = move || -> Result<Arc<LogicalPlan>, KrishivError> {
         let root = batch(root)?;
-        let root = join_order::reorder(&root, stats);
+        let root = match stats {
+            Some(stats) => join_order::reorder(&root, stats),
+            None => root,
+        };
         let root = prune::prune(&root);
         batch(root)
     };
