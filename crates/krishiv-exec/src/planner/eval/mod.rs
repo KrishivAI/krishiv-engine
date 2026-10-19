@@ -104,21 +104,37 @@ pub(crate) fn eval_where(
         arrow_select::filter::filter_record_batch(batch, &BooleanArray::new(mask.clone(), None))
             .map_err(|err| internal(&err.to_string()))?;
     let values = e.eval(&chosen)?.into_array(selected)?;
-    let nulls = new_null_array(e.data_type(), 1);
-    let mut next = 0;
-    let pick: Vec<(usize, usize)> = mask
+    scatter(values.as_ref(), mask)
+}
+
+/// Spreads `values` (one per set bit of `mask`, in order) over `mask.len()`
+/// rows, NULL where the mask is unset. One `take` with NULL indices: a
+/// per-row `interleave` of the values and a NULL went through Arrow's generic
+/// row-at-a-time `MutableArrayData` path for booleans, dominating filters with
+/// a few `AND`ed predicates.
+fn scatter(values: &dyn Array, mask: &arrow_buffer::BooleanBuffer) -> Result<ArrayRef> {
+    if u32::try_from(mask.len()).is_err() {
+        return Err(internal("batch too large to scatter a masked evaluation"));
+    }
+    // Unset rows point at row 0 (any in-bounds row; their index is NULL).
+    // `next` counts set bits of a mask shorter than `u32::MAX`: no overflow.
+    let mut next = 0_u32;
+    let indices: Vec<u32> = mask
         .iter()
         .map(|on| {
-            if on {
-                next += 1;
-                (0, next - 1)
-            } else {
-                (1, 0)
-            }
+            let at = if on { next } else { 0 };
+            next += u32::from(on);
+            at
         })
         .collect();
-    arrow_select::interleave::interleave(&[values.as_ref(), nulls.as_ref()], &pick)
-        .map_err(|err| internal(&err.to_string()))
+    if usize::try_from(next).ok() != Some(values.len()) {
+        return Err(internal("a masked evaluation returned the wrong row count"));
+    }
+    let indices = UInt32Array::new(
+        indices.into(),
+        Some(arrow_buffer::NullBuffer::new(mask.clone())),
+    );
+    arrow_select::take::take(values, &indices, None).map_err(|err| internal(&err.to_string()))
 }
 
 /// A compiled expression.
@@ -498,5 +514,29 @@ mod tests {
                 .nullable()
         );
         assert!(!Lit::new(&Literal::Integer(1)).unwrap().nullable());
+    }
+
+    /// `scatter` puts the i-th value at the i-th set row, NULL elsewhere,
+    /// keeping the values' own NULLs, for booleans and strings alike.
+    #[test]
+    fn scatter_spreads_values_over_the_mask() {
+        use arrow_array::cast::AsArray;
+        use arrow_array::{Array, BooleanArray, StringArray};
+        use arrow_buffer::BooleanBuffer;
+
+        let mask = BooleanBuffer::from(vec![false, true, true, false, true, false]);
+        let bools = BooleanArray::from(vec![Some(true), None, Some(false)]);
+        let out = super::scatter(&bools, &mask).unwrap();
+        let expected = [None, Some(true), None, None, Some(false), None];
+        assert_eq!(out.as_boolean().iter().collect::<Vec<_>>(), expected);
+        let strings = StringArray::from(vec!["a", "b", "c"]);
+        let out = super::scatter(&strings, &mask).unwrap();
+        let expected = [None, Some("a"), Some("b"), None, Some("c"), None];
+        assert_eq!(out.as_string::<i32>().iter().collect::<Vec<_>>(), expected);
+        // A value count that does not match the mask is an internal error.
+        assert!(super::scatter(&strings.slice(0, 2), &mask).is_err());
+        let none = BooleanBuffer::new_unset(4);
+        let out = super::scatter(&BooleanArray::from(Vec::<bool>::new()), &none).unwrap();
+        assert_eq!((out.len(), out.null_count()), (4, 4));
     }
 }

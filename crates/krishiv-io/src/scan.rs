@@ -20,6 +20,7 @@
 //! [`ScanStream::next_batch`] cancels its requests; the decoder never saw a
 //! partial push, so the next call asks again.
 
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 use arrow_array::RecordBatch;
@@ -88,6 +89,56 @@ struct Chunk {
     served: u64,
 }
 
+/// The prefetched chunks of a file, keyed by start offset (column chunks do
+/// not overlap), with their total kept up to date: the scan asks after every
+/// batch whether each upcoming range is held, so a lookup must not be a
+/// linear scan of every held chunk (hundreds with a large prefetch budget).
+#[derive(Default)]
+struct Ready {
+    chunks: BTreeMap<u64, Chunk>,
+    bytes: u64,
+}
+
+impl Ready {
+    fn insert(&mut self, chunk: Chunk) {
+        self.bytes += chunk.range.end - chunk.range.start;
+        if let Some(old) = self.chunks.insert(chunk.range.start, chunk) {
+            self.bytes -= old.range.end - old.range.start;
+        }
+    }
+
+    /// The bytes of `r` if a chunk holds all of it; a chunk is dropped once
+    /// the decoder took all of its bytes.
+    fn take(&mut self, r: &Range<u64>) -> Option<Bytes> {
+        let (&key, c) = self.chunks.range_mut(..=r.start).next_back()?;
+        if r.end > c.range.end {
+            return None;
+        }
+        let a = usize::try_from(r.start - c.range.start).ok()?;
+        let b = usize::try_from(r.end - c.range.start).ok()?;
+        let bytes = c.bytes.slice(a..b);
+        c.served += r.end - r.start;
+        let len = c.range.end - c.range.start;
+        if c.served >= len {
+            self.chunks.remove(&key);
+            self.bytes -= len;
+        }
+        Some(bytes)
+    }
+
+    fn holds(&self, r: &Range<u64>) -> bool {
+        self.chunks
+            .range(..=r.start)
+            .next_back()
+            .is_some_and(|(_, c)| r.end <= c.range.end)
+    }
+
+    fn clear(&mut self) {
+        self.chunks.clear();
+        self.bytes = 0;
+    }
+}
+
 type Pending = (u64, BoxFuture<'static, Result<Vec<Bytes>>>, Vec<Range<u64>>);
 
 /// Reads one split of one file (see the module docs).
@@ -100,8 +151,13 @@ pub struct ScanStream {
     file: FileRef,
     mem: Reservation,
     options: ScanOptions,
-    ready: Vec<Chunk>,
+    ready: Ready,
     in_flight: Option<Pending>,
+    /// The last prefetch attempt found nothing to fetch within the budget
+    /// and nothing it depends on (the held chunks, the decoder's position)
+    /// changed since: the next attempt would find the same, so it is
+    /// skipped instead of re-walking every upcoming range after each batch.
+    settled: bool,
     done: bool,
 }
 
@@ -154,8 +210,9 @@ impl ScanStream {
             file,
             mem,
             options,
-            ready: Vec::new(),
+            ready: Ready::default(),
             in_flight: None,
+            settled: false,
             done: false,
         };
         match stream.open_inner(format, split, req, format_options).await {
@@ -279,6 +336,8 @@ impl ScanStream {
     /// The bytes of `ranges`: from prefetched chunks where possible, the
     /// rest fetched now (after reserving it, with waiting).
     async fn gather(&mut self, ranges: Vec<Range<u64>>) -> Result<Vec<(Range<u64>, Bytes)>> {
+        // The decoder moved on and the held chunks change: worth a new look.
+        self.settled = false;
         // Ranges come from file metadata (untrusted): an inverted one is a
         // corrupt file, never an overflow.
         if let Some(bad) = ranges.iter().find(|r| r.start > r.end) {
@@ -292,7 +351,7 @@ impl ScanStream {
             // failed prefetch is only a lost hint (the fetch below retries).
             if let Ok(bytes) = fut.await {
                 for (range, bytes) in wanted.into_iter().zip(bytes) {
-                    self.ready.push(Chunk {
+                    self.ready.insert(Chunk {
                         range,
                         bytes,
                         served: 0,
@@ -304,7 +363,7 @@ impl ScanStream {
         let mut out = Vec::with_capacity(ranges.len());
         let mut missing = Vec::new();
         for r in ranges {
-            match self.take_ready(&r) {
+            match self.ready.take(&r) {
                 Some(b) => out.push((r, b)),
                 None => missing.push(r),
             }
@@ -321,30 +380,12 @@ impl ScanStream {
             let fetched = self.io.get_ranges(&self.file, &missing).await?;
             out.extend(missing.into_iter().zip(fetched));
         }
-        self.drop_served();
         Ok(out)
-    }
-
-    fn take_ready(&mut self, r: &Range<u64>) -> Option<Bytes> {
-        let c = self
-            .ready
-            .iter_mut()
-            .find(|c| c.range.start <= r.start && r.end <= c.range.end)?;
-        let a = usize::try_from(r.start - c.range.start).ok()?;
-        let b = usize::try_from(r.end - c.range.start).ok()?;
-        c.served += r.end - r.start;
-        Some(c.bytes.slice(a..b))
-    }
-
-    fn drop_served(&mut self) {
-        self.ready
-            .retain(|c| c.served < c.range.end - c.range.start);
     }
 
     /// Prefetched bytes held or in flight.
     fn prefetched(&self) -> u64 {
-        let ready: u64 = self.ready.iter().map(|c| c.range.end - c.range.start).sum();
-        ready + self.in_flight.as_ref().map_or(0, |(n, ..)| *n)
+        self.ready.bytes + self.in_flight.as_ref().map_or(0, |(n, ..)| *n)
     }
 
     fn held_bytes(&self) -> u64 {
@@ -364,7 +405,7 @@ impl ScanStream {
     /// Starts a prefetch of the decoder's upcoming ranges if none is in
     /// flight and the budget and the pool allow it.
     fn prefetch(&mut self) {
-        if self.in_flight.is_some() {
+        if self.in_flight.is_some() || self.settled {
             return;
         }
         let budget = self
@@ -372,21 +413,18 @@ impl ScanStream {
             .prefetch_bytes
             .saturating_sub(self.prefetched());
         let Some(d) = self.decoder.as_ref().filter(|_| budget > 0) else {
+            self.settled = true;
             return;
         };
         let ranges: Vec<Range<u64>> = d
             .upcoming(budget)
             .into_iter()
             .filter(|r| r.start < r.end)
-            .filter(|r| {
-                !self
-                    .ready
-                    .iter()
-                    .any(|c| c.range.start <= r.start && r.end <= c.range.end)
-            })
+            .filter(|r| !self.ready.holds(r))
             .collect();
         let bytes: u64 = ranges.iter().map(|r| r.end - r.start).sum();
         if bytes == 0 || bytes > budget {
+            self.settled = true;
             return;
         }
         let target = usize::try_from(self.held_bytes() + bytes).unwrap_or(usize::MAX);
@@ -404,6 +442,7 @@ impl ScanStream {
         let before = self.mem.size();
         self.ready.clear();
         self.in_flight = None;
+        self.settled = false;
         self.account();
         before - self.mem.size()
     }
@@ -438,5 +477,45 @@ impl ScanStream {
     #[must_use]
     pub fn file(&self) -> &FileRef {
         &self.file
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Bytes, Chunk, Ready};
+
+    fn chunk(start: u64, len: u64) -> Chunk {
+        let bytes: Vec<u8> = (0..len)
+            .map(|i| ((start + i) % 256).to_le_bytes()[0])
+            .collect();
+        Chunk {
+            range: start..start + len,
+            bytes: Bytes::from(bytes),
+            served: 0,
+        }
+    }
+
+    /// Lookups find the chunk holding a range (or none), a chunk leaves once
+    /// all its bytes were taken, and the held total follows every change.
+    #[test]
+    fn ready_chunks_are_found_taken_and_counted() {
+        let mut r = Ready::default();
+        r.insert(chunk(100, 50));
+        r.insert(chunk(10, 20));
+        assert_eq!(r.bytes, 70);
+        assert!(r.holds(&(10..30)) && r.holds(&(120..130)));
+        assert!(!r.holds(&(5..15)) && !r.holds(&(25..35)) && !r.holds(&(140..160)));
+        assert!(!r.holds(&(0..1)) && !r.holds(&(200..210)));
+        assert_eq!(r.take(&(12..14)).unwrap().as_ref(), &[12, 13]);
+        assert_eq!(r.take(&(25..40)), None);
+        assert_eq!(r.bytes, 70, "a partly taken chunk stays");
+        assert_eq!(r.take(&(10..30)).unwrap().len(), 20);
+        assert_eq!(r.bytes, 50, "a fully taken chunk leaves");
+        assert!(!r.holds(&(10..12)));
+        // A chunk at the same offset replaces the one held.
+        r.insert(chunk(100, 10));
+        assert_eq!(r.bytes, 10);
+        r.clear();
+        assert_eq!((r.bytes, r.chunks.len()), (0, 0));
     }
 }

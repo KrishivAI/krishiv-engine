@@ -63,31 +63,53 @@ impl Part {
         self.chunks.iter().map(Batch::num_rows).sum()
     }
 
-    /// Merges many small in-memory chunks into one (each chunk carries
-    /// fixed array overhead), if the merged copy can be reserved first.
+    /// Merges runs of small in-memory chunks (each chunk carries fixed array
+    /// overhead), if each merged copy can be reserved first.
+    ///
+    /// Size-tiered, like an LSM tree: a chunk's tier is `log16` of its bytes,
+    /// and only a trailing run of at least `FANOUT` chunks no higher in tier
+    /// than the newest one is merged. Merging every chunk held whenever the
+    /// count reached the fan-out copied the whole partition again every 15
+    /// pushes (quadratic in its size); tiered, a row is copied about once
+    /// per tier it climbs.
     pub(crate) fn coalesce(&mut self, schema: &SchemaRef) -> Result<()> {
-        const MANY: usize = 16;
-        if self.chunks.len() < MANY {
-            return Ok(());
-        }
+        const FANOUT: usize = 16;
         let size = |c: &Batch| c.data().get_array_memory_size();
-        let old: usize = self.chunks.iter().map(size).sum();
-        let Some(m) = self.memory.first_mut().filter(|m| m.size() >= old) else {
-            return Ok(());
-        };
-        if m.try_grow(old).is_err() {
-            return Ok(());
-        }
-        let merged = Batch::concat(schema, &self.chunks).map_err(|e| internal(e.to_string()));
-        let merged = match merged {
-            Ok(b) if size(&b) <= old => b,
-            other => {
-                m.shrink(old);
-                return other.map(drop);
+        let tier = |c: &Batch| size(c).max(1).ilog(FANOUT);
+        while self.chunks.len() >= FANOUT {
+            let Some(top) = self.chunks.last().map(tier) else {
+                return Ok(());
+            };
+            let run = self
+                .chunks
+                .iter()
+                .rev()
+                .take_while(|c| tier(c) <= top)
+                .count();
+            if run < FANOUT {
+                return Ok(());
             }
-        };
-        m.shrink(old + old - size(&merged));
-        self.chunks = vec![merged];
+            let from = self.chunks.len() - run;
+            let old: usize = self.chunks[from..].iter().map(size).sum();
+            let Some(m) = self.memory.first_mut().filter(|m| m.size() >= old) else {
+                return Ok(());
+            };
+            if m.try_grow(old).is_err() {
+                return Ok(());
+            }
+            let merged =
+                Batch::concat(schema, &self.chunks[from..]).map_err(|e| internal(e.to_string()));
+            let merged = match merged {
+                Ok(b) if size(&b) <= old => b,
+                other => {
+                    m.shrink(old);
+                    return other.map(drop);
+                }
+            };
+            m.shrink(old + old - size(&merged));
+            self.chunks.truncate(from);
+            self.chunks.push(merged);
+        }
         Ok(())
     }
 
@@ -734,6 +756,75 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// Coalescing is size-tiered: a merged chunk is not copied again by the
+    /// next run of small chunks (merging all chunks every 16 pushes was
+    /// quadratic), the chunk count stays bounded, and no row is lost.
+    #[test]
+    fn coalescing_does_not_recopy_merged_chunks() {
+        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        let id = pool.register("coalesce", None);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("s", DataType::Utf8, false),
+        ]));
+        let chunk = |i: i64| {
+            let k = Int64Array::from_iter_values(i * 300..(i + 1) * 300);
+            let s = StringArray::from_iter_values((0..300).map(|j| format!("row-{i}-{j}")));
+            Batch::new(
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(s)]).unwrap(),
+            )
+        };
+        let mut parts = vec![Part::with_memory(krishiv_memory::Reservation::new(
+            Arc::clone(&pool),
+            id,
+        ))];
+        let push = |parts: &mut Vec<Part>, i: i64| {
+            let c = chunk(i);
+            reserve_chunks(parts, &[(0, c.clone())]).unwrap();
+            parts[0].chunks.push(c);
+            parts[0].coalesce(&schema).unwrap();
+        };
+        for i in 0..16 {
+            push(&mut parts, i);
+        }
+        assert_eq!(parts[0].chunks.len(), 1, "16 small chunks merge");
+        let merged = Arc::clone(parts[0].chunks[0].data().column(0));
+        for i in 16..31 {
+            push(&mut parts, i);
+        }
+        assert_eq!(parts[0].chunks.len(), 16);
+        let first = parts[0].chunks[0].data().column(0);
+        assert!(
+            Arc::ptr_eq(first, &merged),
+            "the merged chunk was copied again"
+        );
+        let mut most = 0;
+        for i in 31..1024 {
+            push(&mut parts, i);
+            most = most.max(parts[0].chunks.len());
+        }
+        assert!(most < 3 * 16, "{most} chunks held");
+        assert_eq!(parts[0].mem_rows(), 1024 * 300);
+        let mut keys: Vec<i64> = parts[0]
+            .chunks
+            .iter()
+            .flat_map(|c| {
+                let k = c
+                    .data()
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int64Type>();
+                k.values().to_vec()
+            })
+            .collect();
+        keys.sort_unstable();
+        assert!(
+            keys.into_iter().eq(0..1024 * 300),
+            "rows lost or duplicated"
+        );
+        drop(parts);
+        assert_eq!(pool.reserved(), 0);
     }
 
     /// Probe rows deferred in many small chunks are coalesced, spilled in
