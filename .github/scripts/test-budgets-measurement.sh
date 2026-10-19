@@ -11,7 +11,8 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/bin"
 # The fake prints what the real `gh ... --jq` would: the run id for the runs
 # query (FAKE_RUN, may be empty), then one `status<TAB>conclusion` line per
-# jobs query taken from FAKE_JOBS (the last line repeats).
+# jobs query taken from FAKE_JOBS (the last line repeats). A line is
+# `name<TAB>status<TAB>conclusion`; one without a name is the budget job's.
 cat > "$tmp/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -22,12 +23,14 @@ case "$1 $2" in
     echo $((n + 1)) > "$FAKE_COUNT"
     total=$(printf '%s\n' "$FAKE_JOBS" | wc -l)
     line=$(( n + 1 > total ? total : n + 1 ))
-    printf '%s\n' "$FAKE_JOBS" | sed -n "${line}p"
+    printf '%s\n' "$FAKE_JOBS" | sed -n "${line}p" |
+      awk 'BEGIN { FS = OFS = "\t" } NF < 3 { $0 = "budgets-measure\t" $0 } { print }'
     ;;
   "run download")
     shift 2
     while [ $# -gt 0 ]; do
-      if [ "$1" = --dir ]; then mkdir -p "$2"; echo '{}' > "$2/budgets-current.json"; fi
+      if [ "$1" = --name ]; then name=$2; fi
+      if [ "$1" = --dir ]; then mkdir -p "$2"; echo '{}' > "$2/$name.json"; fi
       shift
     done
     ;;
@@ -65,4 +68,17 @@ completed${tab}success"
 case_ "failed measurement fails" fail 7 "completed${tab}failure"
 case_ "no run before the deadline fails" fail "" "" 0
 case_ "unfinished job at the deadline fails" fail 7 "in_progress${tab}" 0
+
+# The wheel sizes: the job lives in the called workflow, and a skipped
+# `wheels-targets` (no Python change) is the only skip that means "nothing".
+export JOB="wheels-targets / sizes" ARTIFACT=wheel-sizes SKIP_JOB=wheels-targets
+w="wheels-targets / sizes"
+case_ "wheel sizes are downloaded" measured 7 "${w}${tab}completed${tab}success"
+[ -f "$tmp/out/wheel-sizes.json" ] || fail "wheel-sizes artifact not downloaded"
+case_ "wheel sizes: waits for the job" measured 7 "${w}${tab}in_progress${tab}
+${w}${tab}completed${tab}success"
+case_ "skipped wheels workflow" skipped 7 "wheels-targets${tab}completed${tab}skipped"
+case_ "skipped sizes job (a wheel build failed) fails" fail 7 "${w}${tab}completed${tab}skipped"
+case_ "failed sizes job fails" fail 7 "${w}${tab}completed${tab}failure"
+case_ "no wheels job yet at the deadline fails" fail 7 "" 0
 echo "budgets-measurement.sh: all cases passed"
