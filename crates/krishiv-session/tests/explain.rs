@@ -296,3 +296,20 @@ fn tpch_q1_q3_q9_snapshots() {
     insta::assert_snapshot!("q03", logical_and_physical(&s, 3));
     insta::assert_snapshot!("q09", logical_and_physical(&s, 9));
 }
+
+#[test]
+fn cost_of_a_query_that_fails_after_analysis_repeats_the_error() {
+    let s = tpch();
+    // Analyzes, but the planner has no FULL OUTER JOIN yet.
+    let q =
+        "SELECT a.n_name FROM nation a FULL OUTER JOIN nation b ON a.n_nationkey = b.n_nationkey";
+    let t = explain_sql(&s, &format!("EXPLAIN COST {q}"));
+    // Spark's layout for a failed COST (oracle 4.2.0): the error, then it
+    // again under the optimized and physical headers.
+    let err = t.split("\n\n").next().unwrap();
+    assert!(err.contains("FULL OUTER JOIN"), "{t}");
+    assert_eq!(
+        t,
+        format!("{err}\n\n== Optimized Logical Plan ==\n{err}\n\n== Physical Plan ==\n{err}\n\n")
+    );
+}
