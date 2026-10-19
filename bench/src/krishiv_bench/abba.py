@@ -99,6 +99,24 @@ def _duck_timed(duck: Engine, query, timeout: float | None) -> float:
         return time.perf_counter() - t0
 
 
+def discover_tables(root: Path) -> list[str]:
+    """Tables under `root`: each `<t>.parquet` file, and each directory of part files.
+
+    A directory (`hits/` or `hits.parquet/`) is one table, so a partitioned download such as
+    ClickBench's `hits_0.parquet` … `hits_99.parquet` placed in `hits/` registers as one `hits`
+    relation rather than one table per part.
+    """
+    if not root.is_dir():
+        return []
+    names: set[str] = set()
+    for p in root.iterdir():
+        if p.is_file() and p.suffix == ".parquet":
+            names.add(p.stem)
+        elif p.is_dir() and any(p.glob("*.parquet")):
+            names.add(p.name.removesuffix(".parquet"))
+    return sorted(names)
+
+
 def run_abba(
     sf: float,
     dataset: str = "tpch-duckdb",
@@ -110,7 +128,7 @@ def run_abba(
     suite: str = "tpch",
 ) -> Path:
     root = data_root() / dataset if suite == "clickbench" else dataset_dir(dataset, sf)
-    tables = sorted(p.stem for p in root.glob("*.parquet"))
+    tables = discover_tables(root)
     if not tables:
         raise SystemExit(f"no dataset at {root}")
     queries = load_queries(suite, "krishiv", only)
