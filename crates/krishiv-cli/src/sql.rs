@@ -432,7 +432,16 @@ fn push_stmt(out: &mut Vec<(usize, String)>, done_lines: &mut usize, cur: &mut S
 
 #[cfg(test)]
 mod tests {
-    use super::split_statements;
+    use std::sync::Arc;
+
+    use krishiv::arrow::array::{
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float64Array,
+        Int32Array, ListArray, NullArray, RecordBatch, StringArray, StructArray,
+        TimestampMicrosecondArray, UInt8Array,
+    };
+    use krishiv::arrow::datatypes::{DataType, Field, Schema};
+
+    use super::*;
 
     #[test]
     fn splits_outside_quotes_and_comments() {
@@ -442,5 +451,127 @@ mod tests {
         assert_eq!(s[1].0, 0);
         let t = split_statements("select 1;\n\n  select 2");
         assert_eq!(t[1], (2, "select 2".to_owned()));
+        let esc = split_statements("select 'it\\'s;' ; select 2");
+        assert_eq!(esc.len(), 2, "{esc:?}");
+    }
+
+    #[test]
+    fn key_value_parsing() {
+        assert_eq!(key_value("a=b=c"), Ok(("a".into(), "b=c".into())));
+        assert_eq!(key_value(" k = v"), Ok(("k".into(), " v".into())));
+        assert!(key_value("novalue").is_err());
+        assert!(key_value("=v").is_err());
+    }
+
+    #[test]
+    fn csv_and_json_escaping() {
+        assert_eq!(csv_field("plain"), "plain");
+        assert_eq!(csv_field("a\nb"), "\"a\nb\"");
+        assert_eq!(
+            json_string("a\\b\n\r\t\u{1}\""),
+            "\"a\\\\b\\n\\r\\t\\u0001\\\"\""
+        );
+        assert_eq!(hex(&[0, 255, 16]), "00ff10");
+    }
+
+    fn arr<A: Array + 'static>(a: A) -> ArrayRef {
+        Arc::new(a)
+    }
+
+    #[test]
+    fn cell_renders_every_supported_type() {
+        let dec = Decimal128Array::from(vec![Some(12345), None])
+            .with_precision_and_scale(10, 2)
+            .expect("decimal");
+        let list =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(1), Some(2)])]);
+        let st = StructArray::from(vec![(
+            Arc::new(Field::new("x", DataType::Int32, true)),
+            arr(Int32Array::from(vec![7])),
+        )]);
+        let cases: Vec<(ArrayRef, &str)> = vec![
+            (arr(BooleanArray::from(vec![true])), "true"),
+            (arr(UInt8Array::from(vec![5])), "5"),
+            (arr(Float64Array::from(vec![1.0])), "1.0"),
+            (arr(dec), "123.45"),
+            (arr(StringArray::from(vec!["s"])), "s"),
+            (arr(BinaryArray::from(vec![&[1_u8, 171][..]])), "01ab"),
+            (arr(Date32Array::from(vec![0])), "1970-01-01"),
+            (
+                arr(TimestampMicrosecondArray::from(vec![1_000_000])),
+                "1970-01-01 00:00:01",
+            ),
+            (arr(list), "[1, 2]"),
+            (arr(st), "{x: 7}"),
+            (arr(NullArray::new(1)), "NULL"),
+        ];
+        for (a, want) in cases {
+            assert_eq!(cell(a.as_ref(), 0, "NULL"), want, "{:?}", a.data_type());
+        }
+        let d = Decimal128Array::from(vec![None::<i128>]);
+        assert_eq!(cell(&d, 0, "-"), "-");
+        assert_eq!(cell(&arr(NullArray::new(1)), 0, "-"), "-");
+    }
+
+    fn batch() -> (Vec<String>, Vec<RecordBatch>) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, true),
+            Field::new("f", DataType::Float64, true),
+            Field::new("s", DataType::Utf8, true),
+            Field::new("b", DataType::Boolean, true),
+        ]));
+        let b = RecordBatch::try_new(
+            schema,
+            vec![
+                arr(Int32Array::from(vec![Some(1), None])),
+                arr(Float64Array::from(vec![f64::NAN, 2.5])),
+                arr(StringArray::from(vec![Some("a\"b"), None])),
+                arr(BooleanArray::from(vec![Some(true), None])),
+            ],
+        )
+        .expect("batch");
+        (
+            vec!["i".into(), "f".into(), "s".into(), "b".into()],
+            vec![b],
+        )
+    }
+
+    #[test]
+    fn writers_format_nulls_nan_and_widths() {
+        let (names, batches) = batch();
+        let numeric = [true, false, false, false];
+        let mut o = Vec::new();
+        write_json(&mut o, &names, &numeric, &batches).expect("json");
+        let t = String::from_utf8(o).expect("utf-8");
+        assert_eq!(
+            t,
+            "{\"i\":1,\"f\":\"NaN\",\"s\":\"a\\\"b\",\"b\":true}\n{\"i\":null,\"f\":2.5,\"s\":null,\"b\":null}\n"
+        );
+        let mut o = Vec::new();
+        write_csv(&mut o, &names, &batches).expect("csv");
+        assert_eq!(
+            String::from_utf8(o).expect("utf-8"),
+            "i,f,s,b\n1,NaN,\"a\"\"b\",true\n,2.5,,\n"
+        );
+        let mut o = Vec::new();
+        write_table(&mut o, &names, &batches).expect("table");
+        let t = String::from_utf8(o).expect("utf-8");
+        assert!(t.contains("| NULL | 2.5 | NULL | NULL |"), "{t}");
+        assert!(t.ends_with("2 rows\n"), "{t}");
+    }
+
+    #[test]
+    fn caret_is_empty_for_non_parse_errors() {
+        let e = Session::new()
+            .and_then(|s| futures::executor::block_on(s.sql("select * from nope")).map(|_| ()))
+            .expect_err("unknown table");
+        assert_eq!(caret("select * from nope", 0, &e), "");
+    }
+
+    #[test]
+    fn json_number_types() {
+        assert!(is_json_number(&DataType::Int64));
+        assert!(is_json_number(&DataType::Decimal128(10, 2)));
+        assert!(!is_json_number(&DataType::Utf8));
     }
 }

@@ -175,3 +175,44 @@ fn tpch_q1_over_a_parquet_table() {
     assert!(rows.len() >= 3, "{t}");
     assert!(rows[0].starts_with("A,F,"), "{t}");
 }
+
+#[test]
+fn dash_file_reads_stdin_and_types_render() {
+    let q = "select cast(1.50 as decimal(5,2)) as d, date '2020-01-02' as dt, true as b, 2.5 as f";
+    let o = krishiv(&["sql", "-o", "json", "-f", "-"], Some(q));
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert!(
+        t.contains("\"d\":1.50") && t.contains("\"dt\":\"2020-01-02\"") && t.contains("\"b\":true"),
+        "{t}"
+    );
+}
+
+#[test]
+fn execute_conflicts_with_file() {
+    let o = krishiv(&["sql", "-e", "select 1", "-f", "x.sql"], None);
+    assert_eq!(o.status.code(), Some(2));
+}
+
+#[test]
+fn table_registers_a_view_and_empty_input_is_ok() {
+    let o = krishiv(
+        &[
+            "sql",
+            "--table",
+            &format!("t={LINEITEM}"),
+            "-o",
+            "csv",
+            "-e",
+            "select count(*) as n from t",
+        ],
+        None,
+    );
+    assert!(
+        o.status.success() && out(&o).starts_with("n\n"),
+        "{}",
+        err(&o)
+    );
+    let o = krishiv(&["sql"], Some("  ;; "));
+    assert!(o.status.success() && out(&o).is_empty());
+}
