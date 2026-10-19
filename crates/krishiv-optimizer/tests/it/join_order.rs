@@ -6,7 +6,10 @@
 use std::collections::HashMap;
 
 use krishiv_optimizer::{ColumnStats, Statistics, TableStats, optimize, optimize_with};
-use krishiv_plan::{JoinCondition, Literal, LogicalPlan, PlanNode, ReadSource, Scan};
+use krishiv_plan::{
+    Builtin, Expr, ExprNode, FunctionId, JoinCondition, Literal, LogicalPlan, PlanNode, ReadSource,
+    ResolvedExpr, Scan,
+};
 use serde_json::Value;
 
 use crate::support::{self, data, eval};
@@ -234,4 +237,156 @@ fn subquery_conditions_keep_their_join() {
          AND t.b = u.d JOIN t y ON y.c = t.c",
     );
     no_cross_product(optimized.root(), "a subquery join condition");
+}
+
+/// Whether `e` is, or has as a conjunct, an equality of two columns.
+fn has_column_equality(e: &Expr) -> bool {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return false;
+    };
+    match f.id {
+        FunctionId::Builtin(Builtin::And) => f.args.iter().any(|a| has_column_equality(a)),
+        FunctionId::Builtin(Builtin::Eq) => f
+            .args
+            .iter()
+            .all(|a| matches!(a.node, ExprNode::Resolved(ResolvedExpr::Column(_)))),
+        _ => false,
+    }
+}
+
+/// Panics on a join without a column equality in its condition (a
+/// nested-loop join) anywhere in `root`.
+fn every_join_has_an_equality(root: &LogicalPlan, what: &str) {
+    let mut stack = vec![root];
+    while let Some(p) = stack.pop() {
+        p.for_each_child(&mut |c| stack.push(c));
+        if let PlanNode::Join { condition, .. } = &p.node {
+            let equi = matches!(condition, JoinCondition::On(c) if has_column_equality(c));
+            assert!(equi, "{what} plans a nested-loop join:\n{root}");
+        }
+    }
+}
+
+/// TPC-DS SF1 statistics as the Parquet footers give them (`rows`, and per
+/// column `(type, min, max, nulls, distinct)`): no distinct counts, so an
+/// integral column's range bounds its distinct values (as the engine
+/// derives them) and every other column counts as all distinct.
+type Column = (&'static str, &'static str, f64, f64, u64, Option<u64>);
+const TPCDS_SF1: &[(&str, u64, &[Column])] = &[
+    (
+        "web_sales",
+        719_384,
+        &[
+            ("ws_item_sk", "bigint", 1.0, 18_000.0, 0, Some(18_000)),
+            ("ws_order_number", "bigint", 1.0, 60_000.0, 0, Some(60_000)),
+            ("ws_quantity", "bigint", 1.0, 100.0, 173, Some(100)),
+            ("ws_sales_price", "decimal(7,2)", 0.0, 299.16, 170, None),
+            (
+                "ws_net_profit",
+                "decimal(7,2)",
+                -9_938.0,
+                18_864.56,
+                0,
+                None,
+            ),
+        ],
+    ),
+    (
+        "web_returns",
+        71_654,
+        &[
+            ("wr_item_sk", "bigint", 1.0, 18_000.0, 0, Some(18_000)),
+            ("wr_order_number", "bigint", 1.0, 59_999.0, 0, Some(59_999)),
+            (
+                "wr_refunded_addr_sk",
+                "bigint",
+                1.0,
+                50_000.0,
+                3_110,
+                Some(50_000),
+            ),
+            ("wr_fee", "decimal(7,2)", 0.5, 100.0, 3_139, None),
+        ],
+    ),
+    (
+        "customer_address",
+        50_000,
+        &[
+            ("ca_address_sk", "bigint", 1.0, 50_000.0, 0, Some(50_000)),
+            ("ca_state", "string", f64::NAN, f64::NAN, 1_550, None),
+            ("ca_country", "string", f64::NAN, f64::NAN, 1_525, None),
+        ],
+    ),
+];
+
+#[derive(Debug)]
+struct TpcdsFooters;
+
+impl Statistics for TpcdsFooters {
+    fn table(&self, scan: &Scan) -> Option<TableStats> {
+        let ReadSource::Table { name, .. } = &scan.source else {
+            return None;
+        };
+        let table = name.last()?;
+        let (_, rows, columns) = TPCDS_SF1.iter().find(|t| t.0 == table)?;
+        let columns = columns.iter().map(|&(c, _, min, max, nulls, distinct)| {
+            let number = |v: f64| (!v.is_nan()).then_some(Literal::Double(v));
+            let stats = ColumnStats {
+                distinct,
+                nulls: Some(nulls),
+                min: number(min),
+                max: number(max),
+            };
+            (c.to_owned(), stats)
+        });
+        Some(TableStats {
+            rows: *rows,
+            columns: columns.collect(),
+        })
+    }
+}
+
+/// The TPC-H catalog plus the TPC-DS tables of [`TPCDS_SF1`].
+fn tpcds_ctx() -> krishiv_plan::analyzer::AnalysisContext {
+    let mut cat = support::catalog();
+    for (table, _, columns) in TPCDS_SF1 {
+        let columns = columns
+            .iter()
+            .map(|(c, ty, ..)| krishiv_plan::analyzer::TableColumn {
+                name: (*c).to_owned(),
+                data_type: krishiv_types::parse_data_type(ty).unwrap(),
+                nullable: true,
+            })
+            .collect();
+        cat = cat.with_table(&["default"], table, columns, None);
+    }
+    support::ctx_over(cat)
+}
+
+/// TPC-DS q85, reduced to the three inputs of its failure: a disjunction
+/// relates `web_sales` and `customer_address`, which otherwise meet only
+/// through `web_returns`. Filter pushdown adds what the disjunction
+/// implies on each input, so the disjunction's selectivity is conditional
+/// on those filters (at SF1, 148M of the 245M pairs that pass them match).
+/// Counted unconditionally it squared them, estimated the nested-loop join
+/// of the two as tiny and planned it first: the hash join above it then
+/// built 148M rows and the query ran out of memory. Joined through
+/// `web_returns` instead, the disjunction is a residual of an equi-join.
+#[test]
+fn implied_filters_are_not_counted_twice() {
+    let sql = "SELECT count(*), sum(ws_quantity), sum(wr_fee) \
+               FROM web_sales, web_returns, customer_address \
+               WHERE ws_item_sk = wr_item_sk AND ws_order_number = wr_order_number \
+               AND ca_address_sk = wr_refunded_addr_sk \
+               AND ws_sales_price BETWEEN 50.00 AND 200.00 \
+               AND ((ca_country = 'United States' AND ca_state IN ('IN', 'OH', 'NJ') \
+                     AND ws_net_profit BETWEEN 100 AND 200) \
+                 OR (ca_country = 'United States' AND ca_state IN ('WI', 'CT', 'KY') \
+                     AND ws_net_profit BETWEEN 150 AND 300) \
+                 OR (ca_country = 'United States' AND ca_state IN ('LA', 'IA', 'AR') \
+                     AND ws_net_profit BETWEEN 50 AND 250))";
+    let plan = support::resolve(sql, &tpcds_ctx());
+    let optimized = optimize_with(&plan, &TpcdsFooters).unwrap();
+    every_join_has_an_equality(optimized.root(), "TPC-DS q85");
+    insta::assert_snapshot!(optimized.root().to_string());
 }
