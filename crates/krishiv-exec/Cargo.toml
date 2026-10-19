@@ -67,3 +67,7 @@ harness = false
 [[bench]]
 name = "hash_join"
 harness = false
+
+[[bench]]
+name = "row_table"
+harness = false

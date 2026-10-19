@@ -81,6 +81,7 @@ mod operator;
 mod operators;
 mod pipeline;
 pub mod planner;
+pub mod rows;
 mod runner;
 mod sync;
 pub mod testing;
