@@ -32,6 +32,7 @@ mod filter;
 mod limit;
 mod project;
 mod replicate;
+mod runtime_filter;
 mod scan;
 mod sort;
 mod union;
@@ -43,6 +44,8 @@ pub use filter::Filter;
 pub use limit::Limit;
 pub use project::{Project, ProjectItem};
 pub use replicate::ReplicateRows;
+pub(crate) use runtime_filter::RowStage;
+pub use runtime_filter::{RowStageSettings, RuntimeFilters};
 pub use scan::{
     FileSelections, FilterPushdown, MemoryScan, PushedFilter, ScanPushdown, ScanPushdowns,
 };

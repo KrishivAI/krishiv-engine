@@ -12,10 +12,16 @@
 //!   file is opened.
 //! - **Pushdown** ([`ScanPushdown`]) becomes the immutable table-level
 //!   [`ScanRequest`]: nested projection, the typed predicates of the pushed
-//!   filters, dynamic filters, a limit hint, per-file row selections, field
-//!   mapping and `_metadata` columns. Pruning keeps a superset of the
-//!   matching rows, so pushed filters are never [`FilterPushdown::Exact`]:
-//!   the `Filter` above the scan stays.
+//!   filters, a limit hint, per-file row selections, field mapping and
+//!   `_metadata` columns. Pruning keeps a superset of the matching rows, so
+//!   pushed filters are never [`FilterPushdown::Exact`]: the `Filter` above
+//!   the scan stays.
+//! - **Runtime filters** (design P2-T163), attached after planning, join
+//!   the request when the scan starts. A split whose filter drops every row
+//!   (an empty join build) is skipped without opening its file; the format
+//!   prunes row groups with them (re-read at row-group boundaries); each
+//!   driver's row stage drops rows from the mapped batches, with its
+//!   adaptive switch-off.
 //! - **`_metadata`** columns are one `_metadata` struct column appended
 //!   after the projection, with Spark's field names, types and order
 //!   (`file_path`, `file_name`, `file_size`, `file_block_start`,
@@ -216,6 +222,9 @@ pub struct FileScanSource {
     format_options: FormatOptions,
     scan_options: ScanOptions,
     output: SchemaRef,
+    /// The decoded batches' schema (`output` before `_metadata`).
+    mapped: SchemaRef,
+    runtime: super::RuntimeFilters,
     metrics: Mutex<FileScanMetrics>,
 }
 
@@ -231,6 +240,8 @@ impl std::fmt::Debug for FileScanSource {
 
 struct FileScanGlobal {
     cursor: MorselCursor,
+    /// The table-level request with the runtime filters attached.
+    request: ScanRequest,
     /// Rows returned by every driver (for a limit hint).
     returned: AtomicU64,
 }
@@ -252,6 +263,7 @@ struct FileScanLocal {
     /// The footer read in flight for a file this driver opens next.
     ahead: Option<(usize, MetadataFuture)>,
     claimed: u64,
+    rows: super::RowStage,
 }
 
 impl FileScanSource {
@@ -283,7 +295,6 @@ impl FileScanSource {
             1 => exprs.into_iter().next(),
             _ => Some(PushdownExpr::And(exprs)),
         };
-        request.dynamic = p.dynamic;
         request.limit = p.limit.filter(|_| p.filters.is_empty());
         request.metadata_cols = p.metadata;
         request.mapping = p.mapping;
@@ -291,6 +302,7 @@ impl FileScanSource {
         let mapped =
             Arc::clone(SchemaMapper::new(&request, Arc::clone(&scan.table), "")?.output_schema());
         let output = with_metadata_column(&mapped, &request.metadata_cols);
+        let mapped = Arc::clone(&mapped);
         Ok(Self {
             format: Arc::clone(&scan.format),
             io: scan.io.clone(),
@@ -301,6 +313,8 @@ impl FileScanSource {
             format_options: scan.format_options.clone(),
             scan_options: scan.scan_options,
             output,
+            mapped,
+            runtime: p.dynamic,
             metrics: Mutex::new(FileScanMetrics::default()),
         })
     }
@@ -358,7 +372,18 @@ impl FileScanSource {
         }
     }
 
-    async fn open(&self, local: &mut FileScanLocal, file: usize, range: ByteRange) -> Result<()> {
+    async fn open(
+        &self,
+        local: &mut FileScanLocal,
+        request: &ScanRequest,
+        file: usize,
+        range: ByteRange,
+    ) -> Result<()> {
+        // Stage 0: a filter that drops every row skips the split unopened.
+        if let Some(f) = request.dynamic.iter().find(|f| f.drops_everything()) {
+            f.filter().stats().add_split(range.len());
+            return Ok(());
+        }
         if let Some((f, _)) = &local.ahead
             && *f == file
             && let Some((_, fut)) = local.ahead.take()
@@ -370,12 +395,12 @@ impl FileScanSource {
         let selected;
         let req = match &self.selection {
             Some(s) => {
-                let mut r = self.request.clone();
+                let mut r = request.clone();
                 r.selection = s.selection(&f);
                 selected = r;
                 &selected
             }
-            None => &self.request,
+            None => request,
         };
         let stream = ScanStream::open(
             &self.io,
@@ -415,6 +440,7 @@ impl FileScanSource {
                 match cur.stream.next_batch().await? {
                     Some(b) => {
                         let file = self.file(cur.file)?;
+                        let b = local.rows.apply(b)?;
                         let b = self.append_metadata(b, file, cur.range)?;
                         g.returned.fetch_add(b.num_rows() as u64, Ordering::Relaxed);
                         return Ok(Some(Batch::new(b)));
@@ -432,7 +458,8 @@ impl FileScanSource {
             {
                 local.partition = Some((p, next + 1));
                 self.read_ahead(local, p, next);
-                self.open(local, split.file, split.range).await?;
+                self.open(local, &g.request, split.file, split.range)
+                    .await?;
                 continue;
             }
             let Some(p) = g.cursor.claim() else {
@@ -648,7 +675,10 @@ impl Source for FileScanSource {
     }
 
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
+        let mut request = self.request.clone();
+        request.dynamic = self.runtime.scan_filters(&self.request.table_schema);
         Ok(Arc::new(FileScanGlobal {
+            request,
             cursor: MorselCursor::new(self.partitions.len(), ctx.query().config().seed),
             returned: AtomicU64::new(0),
         }))
@@ -658,8 +688,10 @@ impl Source for FileScanSource {
         global_ref::<FileScanGlobal>(global, "FileScan").map_or(1, |g| g.cursor.len().max(1))
     }
 
-    fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
+    fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
+        let g = global_ref::<FileScanGlobal>(global, "FileScan")?;
         Ok(Box::new(FileScanLocal {
+            rows: super::RowStage::new(&g.request.dynamic, &self.mapped, self.runtime.settings()),
             consumer: Arc::clone(ctx.consumer().consumer()),
             partition: None,
             current: None,
@@ -680,6 +712,10 @@ impl Source for FileScanSource {
         local
             .downcast_ref::<FileScanLocal>()
             .map_or(0, |l| l.claimed)
+    }
+
+    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+        self.runtime.extra_metrics()
     }
 }
 

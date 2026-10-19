@@ -4,6 +4,9 @@
 //!
 //! - `hash_join/build_1m_rows`: build 1 M unique `Int64` keys with a
 //!   payload column, probe one batch (the build dominates).
+//! - `hash_join/build_1m_rows_runtime_filter`: the same build publishing a
+//!   runtime filter (min/max, value set, Bloom filter of 1 M keys): the
+//!   producer's overhead (design P2-T163 targets at most 5%).
 //! - `hash_join/probe_1m_rows`: build 64 Ki keys, probe 1 M rows of which
 //!   half match (inner join, build columns decoded).
 //! - `hash_join/grace_spill_256k_rows`: 256 Ki ⋈ 256 Ki rows under a 4 MiB
@@ -27,8 +30,9 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use futures::StreamExt;
 use krishiv_exec::testing::{Batches, Scan};
 use krishiv_exec::{
-    DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, HashJoin, HashJoinNode, JoinSpec, JoinType,
-    QueryContext, QueryId, QueryRunner, Scheduler, TokioClock, TokioExecutor, WorkloadClass,
+    DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec,
+    JoinType, QueryContext, QueryId, QueryRunner, Scheduler, TokioClock, TokioExecutor,
+    WorkloadClass,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_types::batch::Batch;
@@ -56,6 +60,15 @@ fn data(rows: i64, stride: i64) -> Vec<Batch> {
 }
 
 fn plan(build: &[Batch], probe: &[Batch], spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
+    plan_with(build, probe, spill, false)
+}
+
+fn plan_with(
+    build: &[Batch],
+    probe: &[Batch],
+    spill: Option<SpillScope>,
+    runtime_filter: bool,
+) -> Arc<dyn ExecNode> {
     let spec = JoinSpec {
         join_type: JoinType::Inner,
         probe_schema: schema(),
@@ -68,8 +81,23 @@ fn plan(build: &[Batch], probe: &[Batch], spill: Option<SpillScope>) -> Arc<dyn 
     };
     let scan =
         |b: &[Batch]| -> Arc<dyn ExecNode> { Arc::new(Scan(Batches::new(schema(), b.to_vec()))) };
+    let mut join = HashJoin::try_new(spec).expect("join");
+    if runtime_filter {
+        let filter = krishiv_io::RuntimeFilter::new(
+            krishiv_io::FilterId(1),
+            krishiv_io::ColumnPath::new("k"),
+            DataType::Int64,
+        );
+        join = join
+            .with_runtime_filters(vec![JoinRuntimeFilter {
+                key: 0,
+                filter: Arc::new(filter),
+                options: krishiv_io::KeyFilterOptions::default(),
+            }])
+            .expect("runtime filter");
+    }
     Arc::new(HashJoinNode {
-        join: HashJoin::try_new(spec).expect("join"),
+        join,
         build: scan(build),
         probe: scan(probe),
     })
@@ -130,6 +158,12 @@ fn bench(c: &mut Criterion) {
     g.throughput(Throughput::Elements(1 << 20));
     g.bench_function("build_1m_rows", |b| {
         b.iter(|| black_box(run(&runner, &caller, plan(&big, &one, None), None)));
+    });
+    g.bench_function("build_1m_rows_runtime_filter", |b| {
+        b.iter(|| {
+            let plan = plan_with(&big, &one, None, true);
+            black_box(run(&runner, &caller, plan, None))
+        });
     });
     let (small, probe) = (data(1 << 16, 2), data(1 << 20, 1));
     g.bench_function("probe_1m_rows", |b| {

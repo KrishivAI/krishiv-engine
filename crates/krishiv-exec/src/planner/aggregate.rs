@@ -155,11 +155,15 @@ impl Planner<'_> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        // Grouping keys keep their attributes: a filter on one drops whole
+        // groups, which the producer above would drop anyway.
+        let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
         let agg = Planned {
             node,
             schema,
             layout,
             explain: super::explain::ExplainNode::new("HashAggregate", detail, vec![input.explain]),
+            sites,
         };
         // Step 3: the output expressions over keys and results.
         let mut key_ids: HashMap<String, BoundColumn> = HashMap::new();

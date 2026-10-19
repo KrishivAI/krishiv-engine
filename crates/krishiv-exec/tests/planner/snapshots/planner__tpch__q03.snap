@@ -7,12 +7,12 @@ TopN 10, [revenue#33 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
    +- HashAggregate keys=[l_orderkey#17, o_orderdate#12, o_shippriority#15], functions=[sum((l_extendedprice#22 * (1 - l_discount#23)))]
       +- Project [l_orderkey#17, o_orderdate#12, o_shippriority#15, (l_extendedprice#22 * (1 - l_discount#23))]
          +- Project [l_orderkey#17, l_extendedprice#22, l_discount#23, o_orderdate#12, o_shippriority#15]
-            +- HashJoin Inner, [l_orderkey#17] = [o_orderkey#8]
+            +- HashJoin Inner, [l_orderkey#17] = [o_orderkey#8], RuntimeFilter #2: l_orderkey#17 -> spark_catalog.default.lineitem.l_orderkey
                :- Project [l_orderkey#17, l_extendedprice#22, l_discount#23]
                :  +- Filter (l_shipdate#27 > DATE '1995-03-15')
                :     +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_shipdate#27], PushedFilters: [(l_shipdate#27 > DATE '1995-03-15')]
                +- Project [o_orderkey#8, o_orderdate#12, o_shippriority#15]
-                  +- HashJoin Inner, [o_custkey#9] = [c_custkey#0]
+                  +- HashJoin Inner, [o_custkey#9] = [c_custkey#0], RuntimeFilter #1: o_custkey#9 -> spark_catalog.default.orders.o_custkey
                      :- Filter (o_orderdate#12 < DATE '1995-03-15')
                      :  +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12, o_shippriority#15], PushedFilters: [(o_orderdate#12 < DATE '1995-03-15')]
                      +- Project [c_custkey#0]
