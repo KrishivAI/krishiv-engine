@@ -21,6 +21,11 @@ use super::table::TableProvider;
 use crate::error::Result;
 use crate::operators::{FileScan, ScanPushdown};
 
+/// Pending footer reads of [`FileTable::open`], in multiples of the
+/// stores' request limit: enough to keep that many requests in flight
+/// across most of a chunk.
+const FOOTER_CHUNK: usize = 4;
+
 /// A table of `files` read by one [`FileFormat`] (spec 13 §7): the file
 /// scan with Spark's split planning, and the row counts, null counts and
 /// min/max values of the files' footers as the optimizer's statistics.
@@ -51,28 +56,32 @@ impl FileTable {
         // The footers are read concurrently, up to the stores' request
         // limit (the scheduler bounds requests per store too); `buffered`
         // keeps file order, so the merged statistics do not depend on
-        // which read finishes first.
-        // The read futures are built before the stream: a closure that
-        // borrows into `stream::iter` makes the future of `open` lose
-        // `Send` (the borrow's lifetime is not provably general enough),
-        // so it could not run on a multi-threaded runtime's task.
+        // which read finishes first. Files go in chunks of
+        // `FOOTER_CHUNK` times that limit, so a table of many files holds
+        // a bounded number of pending reads, not one per file.
+        // The read futures of a chunk are built before its stream: a
+        // closure that borrows into `stream::iter` makes the future of
+        // `open` lose `Send` (the borrow's lifetime is not provably
+        // general enough), so it could not run on a multi-threaded
+        // runtime's task.
         let width = io.config().max_concurrent_requests.max(1);
-        let reads: Vec<_> = files
-            .iter()
-            .map(|f| io.read_metadata(format.as_ref(), f, MetadataNeeds::default(), &options))
-            .collect();
-        let mut footers = stream::iter(reads).buffered(width);
         let mut stats: Option<FileStatistics> = None;
         let mut known = true;
-        while let Some(meta) = footers.try_next().await? {
-            let s = meta.statistics();
-            known &= s.rows.exact().is_some();
-            stats = Some(match stats {
-                None => s,
-                Some(acc) => merge(acc, &s),
-            });
+        for chunk in files.chunks(width.saturating_mul(FOOTER_CHUNK)) {
+            let reads: Vec<_> = chunk
+                .iter()
+                .map(|f| io.read_metadata(format.as_ref(), f, MetadataNeeds::default(), &options))
+                .collect();
+            let mut footers = stream::iter(reads).buffered(width);
+            while let Some(meta) = footers.try_next().await? {
+                let s = meta.statistics();
+                known &= s.rows.exact().is_some();
+                stats = Some(match stats {
+                    None => s,
+                    Some(acc) => merge(acc, &s),
+                });
+            }
         }
-        drop(footers);
         let statistics = known
             .then(|| stats.map(|s| table_stats(&s, &table)))
             .flatten();
