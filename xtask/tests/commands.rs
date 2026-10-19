@@ -416,7 +416,7 @@ case "$1" in
   build)
     [ -n "$FAKE_BUILD_FAIL" ] && exit 1
     while [ $# -gt 0 ]; do [ "$1" = --target-dir ] && d=$2; shift; done
-    mkdir -p "$d/release" && printf 'bin' > "$d/release/krishiv" ;;
+    mkdir -p "$d/dist" && printf 'bin' > "$d/dist/krishiv" ;;
   *) exit 2 ;;
 esac
 "#,
@@ -457,7 +457,9 @@ esac
     assert!(String::from_utf8_lossy(&out.stdout).contains("## Budgets"));
     let out = run(&["--measure-only"], true);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("release build of krishiv-cli failed"));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("dist-profile build of krishiv-cli failed")
+    );
 }
 
 /// `wheel-sizes`: records the wheel sizes, then gates growth past the

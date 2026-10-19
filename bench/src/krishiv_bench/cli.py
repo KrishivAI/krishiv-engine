@@ -27,7 +27,9 @@ def main(argv=None) -> None:
     r.add_argument("--duckdb-threads", type=int)
     r.add_argument("--duckdb-memory-limit", default="12GB")
     r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
-    ab = sub.add_parser("abba", help="interleaved ABBA Krishiv vs DuckDB (P2-T142); needs the release runner binary")
+    ab = sub.add_parser(
+        "abba", help="interleaved ABBA Krishiv vs DuckDB (P2-T142); needs the dist-profile runner binary"
+    )
     ab.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
     ab.add_argument("--sf", type=float, default=10)
     ab.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")

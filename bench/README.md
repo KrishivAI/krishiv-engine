@@ -45,17 +45,17 @@ returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket
   spill = null (Spark spill is available via the REST API :14040 but not collected yet). Host data path is rewritten to `/data`.
   Spark runs with Spark 4 defaults (ANSI mode on) and `spark.sql.shuffle.partitions=24`. The JVM retains its heap, so Spark peaks are cumulative/order-dependent.
   Probes run outside the timed region (a few ms; no sampler thread).
-- `krishiv`: drives `krishiv-bench-runner` (release build of `krishiv-session`, bench-only crate, not the public CLI) over a stdin/stdout
+- `krishiv`: drives `krishiv-bench-runner` (`dist`-profile build of `krishiv-session` like the shipped artifacts and DuckDB's optimized build, bench-only crate, not the public CLI) over a stdin/stdout
   line protocol until the Python facade can execute queries. Tables are Parquet views registered at `setup()`; `timed_run` reports
   runner-side seconds, `run` dumps the result to Parquet (outside the timed region) and returns the rows for correctness checks.
-  Build: `cargo build --release -p krishiv-bench-runner`; override the path with `$KRISHIV_BENCH_RUNNER`.
+  Build: `cargo build --profile dist -p krishiv-bench-runner`; override the path with `$KRISHIV_BENCH_RUNNER`.
 - Adding Sail/Polars/Flink: subclass `Engine`, register in `adapters/__init__.py`.
 Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (none needed so far).
 
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash
-cargo build --release -p krishiv-bench-runner
-KRISHIV_BENCH_RUNNER=${CARGO_TARGET_DIR:-../target}/release/krishiv-bench-runner \
+cargo build --profile dist -p krishiv-bench-runner
+KRISHIV_BENCH_RUNNER=${CARGO_TARGET_DIR:-../target}/dist/krishiv-bench-runner \
   uv run krishiv-bench abba --sf 10 --dataset tpch-duckdb --reps 3 --threads 8 --memory-limit 12g
   uv run krishiv-bench abba --suite clickbench --threads 12   # 43 queries over $KRISHIV_DATA/clickbench/hits.parquet
   uv run krishiv-bench abba --suite tpcds --sf 1 --threads 12 # 99 queries; unsupported ones are reported as failed

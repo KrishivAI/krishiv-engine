@@ -27,9 +27,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  # maturin build flags per flavour.
-  ABI3_ARGS: --release --locked
-  FT_ARGS: --release --locked --no-default-features --features mimalloc
+  # maturin build flags per flavour; `dist` is the LTO + stripped profile of the workspace Cargo.toml.
+  ABI3_ARGS: --profile dist --locked
+  FT_ARGS: --profile dist --locked --no-default-features --features mimalloc
 
 jobs:
   # manylinux_2_28 and musllinux_1_2 on x86_64. The wheels are built in the
