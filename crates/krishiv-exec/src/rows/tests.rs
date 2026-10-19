@@ -316,7 +316,14 @@ fn a_new_page_reserves_a_few_rows_and_a_page_heap_stays_bounded() {
     let huge = "y".repeat(17 << 20);
     let a: ArrayRef = Arc::new(StringArray::from(vec![huge.as_str()]));
     let keys = layout.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
-    let before = pages.len();
-    assert!(pages.push(&keys, 0).is_err(), "value over the heap limit");
-    assert_eq!(pages.len(), before);
+    let id = pages
+        .push(&keys, 0)
+        .unwrap_or_else(|e| panic!("oversized key must be accepted: {e}"));
+    assert_eq!(pages.row(id).1.len(), 17 << 20);
+    // The oversized row's page takes no further rows.
+    let small: ArrayRef = Arc::new(StringArray::from(vec!["z".repeat(20)]));
+    let small_keys = layout.encode(&[small], 0).unwrap_or_else(|e| panic!("{e}"));
+    let next = pages.push(&small_keys, 0).unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(next >> pages.shift_for_test(), id >> pages.shift_for_test());
+    assert_eq!(pages.row(id).1.len(), 17 << 20);
 }

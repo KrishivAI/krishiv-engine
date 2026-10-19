@@ -59,6 +59,11 @@ impl RowPages {
         self.len == 0
     }
 
+    #[cfg(test)]
+    pub(crate) fn shift_for_test(&self) -> u32 {
+        self.shift
+    }
+
     fn page_rows(&self) -> usize {
         1 << self.shift
     }
@@ -102,11 +107,8 @@ impl RowPages {
                 long_bytes = long_bytes.saturating_add(len);
             }
         }
-        if long_bytes > MAX_PAGE_HEAP {
-            return Err(internal(format!(
-                "key row holds {long_bytes} bytes of long values; a page heap is limited to {MAX_PAGE_HEAP}"
-            )));
-        }
+        // A row whose long values exceed the heap limit gets a page of its
+        // own (the limit applies to shared pages), so large keys still work.
         let full = self.pages.last().is_none_or(|p| {
             p.len == self.page_rows() || p.heap.len().saturating_add(long_bytes) > MAX_PAGE_HEAP
         });
