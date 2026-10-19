@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
+import os
 import signal
 import subprocess
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -257,18 +260,37 @@ def test_cli_rejects_bad_methods(capsys):
     assert "--methods" in capsys.readouterr().err
 
 
-def test_timeout_kills_descendants_in_the_worker_process_group(tiny):
+def _proc_state(pid: int) -> str | None:
+    """Kernel state letter of ``pid`` (None once it is gone); 'Z' means dead but not yet reaped."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except FileNotFoundError:
+        return None
+
+
+def test_timeout_kills_descendants_in_the_worker_process_group(tiny, tmp_path: Path, monkeypatch):
+    pidfile = tmp_path / "descendant.pid"
+    real_popen = subprocess.Popen
+
+    def popen_with_descendant(argv, **kw):
+        # The shell starts a background `sleep` (same session and group), then becomes the worker.
+        script = f'sleep 300 & echo $! > "{pidfile}"; exec "$@"'
+        return real_popen(["sh", "-c", script, "sh", *argv], **kw)
+
+    monkeypatch.setattr(subprocess, "Popen", popen_with_descendant)
     eng = ProcessEngine("duckdb", 2, 1, 1.0)
     eng.setup(tiny)
-    assert eng._proc is not None
-    # A descendant that joins the worker's process group, as a JVM or helper process would.
-    child = subprocess.Popen(["sleep", "300"], process_group=eng._proc.pid)
+    monkeypatch.setattr(subprocess, "Popen", real_popen)
+    pid = int(pidfile.read_text())
+    assert "sleep" in Path(f"/proc/{pid}/cmdline").read_text()  # identity: the recorded pid is the descendant
     try:
         with pytest.raises(EngineTimeout):
             eng.run(q("SELECT count(*) FROM range(100000000000) a, range(100000000000) b"))
-        # The Popen handle pins the identity (no PID reuse); wait() is bounded and reaps the zombie.
-        assert child.wait(timeout=10) == -signal.SIGKILL
+        deadline = time.monotonic() + 10
+        while _proc_state(pid) not in (None, "Z") and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert _proc_state(pid) in (None, "Z")
     finally:
-        child.kill()
-        child.wait()
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
         eng.teardown()
