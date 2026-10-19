@@ -539,56 +539,63 @@ fn runtime_filter_bench() {
 }
 
 /// The Bloom filter settings: the Krishiv key of Spark's switch, the item
-/// cap and the byte cap each keep Bloom filters out of the plan or the
-/// build, and results never change.
+/// cap and the byte cap each keep a Bloom filter out of the plan or out
+/// of the build (a 32-byte filter is too inaccurate to publish), and
+/// results never change.
 #[test]
 fn bloom_settings_are_honoured() {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tpch-sf0.01-parquet");
-    let mut tpch = parquet_tables(&dir, &rt);
-    let answers = answers(&dir.join("spark-answers.json"));
-    let want = expected_rows(&answers, "q17");
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 11;
+    // Build keys spread over a wide domain: the range keeps almost every
+    // probe row, a Bloom filter most of them out; 600 keys overfill a
+    // 32-byte filter.
+    write(dir.path(), "big.parquet", &table(&mut rng, 4000, 40_000, 0));
+    write(
+        dir.path(),
+        "small.parquet",
+        &table(&mut rng, 600, 40_000, 0),
+    );
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let q = "SELECT b.v FROM big b JOIN small s ON b.k64 = s.k64";
+    configured(&mut t, MODES[0].1);
+    let want = sorted(&run(&t.plan_sql(q).unwrap()).0);
     let forced = ("krishiv.runtimeFilter.bloom.minApplicationRows", "0");
     let no_values = ("krishiv.runtimeFilter.inList.maxValues", "0");
+    // The row stage never switches off, so its drops are deterministic.
+    let always = ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100");
+    let spark_off = ("krishiv.sql.optimizer.runtime.bloomFilter.enabled", "false");
+    let no_items = ("krishiv.runtimeFilter.bloom.maxItems", "0");
+    let tiny = ("krishiv.runtimeFilter.bloom.maxBytes", "32");
     let cases: [(&[(&str, &str)], bool); 4] = [
-        (&[forced, no_values], true),
-        (
-            &[
-                forced,
-                no_values,
-                ("krishiv.sql.optimizer.runtime.bloomFilter.enabled", "false"),
-            ],
-            false,
-        ),
-        (
-            &[
-                forced,
-                no_values,
-                ("krishiv.runtimeFilter.bloom.maxItems", "0"),
-            ],
-            false,
-        ),
-        // Planned, but a 32-byte filter is too inaccurate to publish.
-        (
-            &[
-                forced,
-                no_values,
-                ("krishiv.runtimeFilter.bloom.maxBytes", "32"),
-            ],
-            true,
-        ),
+        (&[forced, no_values, always], true),
+        (&[forced, no_values, always, spark_off], false),
+        (&[forced, no_values, always, no_items], false),
+        (&[forced, no_values, always, tiny], true),
     ];
+    let mut dropped = Vec::new();
     for (mode, planned) in cases {
-        configured(&mut tpch, mode);
-        let plan = tpch.plan_sql(&sql(17)).unwrap();
+        configured(&mut t, mode);
+        let plan = t.plan_sql(q).unwrap();
         assert_eq!(
             plan.to_string().contains("(bloom)"),
             planned,
             "{mode:?}\n{plan}"
         );
-        assert_eq!(rows(&run(&plan).0), want, "{mode:?}");
+        let (got, c) = run(&plan);
+        assert_eq!(sorted(&got), want, "{mode:?}");
+        dropped.push(c.rows_dropped);
     }
+    // Without a Bloom filter only the range drops rows; the 32-byte one
+    // was planned but not published, so it drops exactly as many.
+    assert!(dropped[0] > dropped[1], "{dropped:?}");
+    assert_eq!(dropped[2], dropped[1], "{dropped:?}");
+    assert_eq!(dropped[3], dropped[1], "{dropped:?}");
 }
