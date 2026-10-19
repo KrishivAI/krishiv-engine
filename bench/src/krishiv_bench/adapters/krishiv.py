@@ -143,6 +143,7 @@ class KrishivEngine(Engine):
         if reply.startswith("ERR "):
             raise RunnerError(reply[4:])
         if not reply.startswith("OK "):
+            self._kill()  # later replies would be matched to the wrong commands
             raise RunnerCrashed(f"unexpected reply {reply!r}")
         return reply[3:]
 

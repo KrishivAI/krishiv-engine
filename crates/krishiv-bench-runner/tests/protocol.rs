@@ -38,9 +38,9 @@ fn serves_run_dump_and_errors() {
     let out = dir.path().join("out");
     let script = format!(
         "RUN {sql}\n\nDUMP {sql} {out}\nRUN {bad}\nRUN /does/not/exist.sql\nBOGUS\nQUIT\nRUN {sql}\n",
-        sql = sql.display(),
-        bad = bad.display(),
-        out = out.display(),
+        sql = encode_path(sql.to_str().unwrap()),
+        bad = encode_path(bad.to_str().unwrap()),
+        out = encode_path(out.to_str().unwrap()),
     );
     let mut reply = Vec::new();
     serve(&runner(&dir), script.as_bytes(), &mut reply).unwrap();

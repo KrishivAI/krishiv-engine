@@ -190,20 +190,25 @@ def _one_query(q, krishiv: KrishivEngine, duck: Engine, reps: int, timeout_s: fl
     if not ok:
         return {**entry, "status": "failed", "reason": f"wrong result: {msg[:300]}"}
     times: dict[str, list[float]] = {"krishiv": [], "duckdb": []}
-    try:
-        for _ in range(reps):
-            for who in PATTERN:
-                if who == "krishiv":
+    for _ in range(reps):
+        for who in PATTERN:
+            if who == "krishiv":
+                try:
                     rows, secs = krishiv.timed_run(q)
                     if rows != len(drows):
                         raise RunnerError(f"timed run returned {rows} rows, expected {len(drows)}")
-                else:
+                except (RunnerError, RunnerCrashed) as e:
+                    return {**entry, "status": "failed", "reason": f"krishiv timed run: {str(e)[:300]}"}
+            else:
+                try:  # a DuckDB failure (interrupt, out of memory) fails this query, not the whole run
                     secs = _duck_timed(duck, q, timeout_s)
-                times[who].append(secs)
-    except (RunnerError, RunnerCrashed) as e:
-        return {**entry, "status": "failed", "reason": f"krishiv timed run: {str(e)[:300]}"}
-    except Exception as e:  # a DuckDB failure (interrupt, out of memory) fails this query, not the whole run
-        return {**entry, "status": "failed", "reason": f"duckdb timed run {type(e).__name__}: {str(e)[:300]}"}
+                except Exception as e:
+                    return {
+                        **entry,
+                        "status": "failed",
+                        "reason": f"duckdb timed run {type(e).__name__}: {str(e)[:300]}",
+                    }
+            times[who].append(secs)
     k, d = times["krishiv"], times["duckdb"]
     lo, hi = bootstrap_ci(k, d)
     entry.update(

@@ -79,6 +79,7 @@ def test_adapter_error_crash_and_restart(engine: KrishivEngine):
     assert engine.timed_run(q("ok"))[0] == 2  # restarted on the next command
     with pytest.raises(RunnerCrashed, match="unexpected reply"):
         engine.timed_run(q("garbage"))
+    assert engine._proc is None  # killed: the next command starts a fresh runner
     engine.timeout_s = 0.5
     with pytest.raises(RunnerCrashed, match="no answer"):
         engine.timed_run(q("hang"))
@@ -251,6 +252,7 @@ def test_duckdb_failure_in_timed_run_fails_only_that_query(engine: KrishivEngine
     res = abba._one_query(q("select 1"), engine, Flaky([(1, "x"), (2, "y")]), 1, 5)
     assert res["status"] == "failed"
     assert "duckdb timed run RuntimeError" in res["reason"]
+    assert "krishiv" not in res["reason"]
 
 
 def test_zero_timeout_disables_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
