@@ -9,7 +9,10 @@
 //! relation hinted before; a later hint on the same relation is
 //! overridden by the outer one, which comes first in the text. Without
 //! parameters the hint wraps its whole subtree. Every hint node is then
-//! removed; what Spark only logs comes back as warnings.
+//! removed; what Spark only logs comes back as warnings. A partitioning
+//! hint (`COALESCE`, `REPARTITION`, ...), its parameters checked by the
+//! resolver, is dropped with a warning: a single-node plan has no
+//! partitions to set.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -97,6 +100,12 @@ impl Hints {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        if super::setops::PARTITIONING_HINTS.contains(&name.to_ascii_uppercase().as_str()) {
+            // Checked by the resolver; one node has no partitions to set.
+            self.warnings
+                .push(format!("Hint {shown} has no effect in a single-node plan."));
+            return Ok(Arc::clone(input));
+        }
         let Some(strategy) = JoinStrategy::from_hint(name) else {
             self.warnings.push(format!("Unrecognized hint: {shown}"));
             return Ok(Arc::clone(input));

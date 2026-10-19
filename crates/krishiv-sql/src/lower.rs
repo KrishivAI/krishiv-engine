@@ -28,8 +28,8 @@ use krishiv_types::DecimalType;
 
 use crate::ast::{
     Alias, BinaryOp, Expr, ExprKind, FromClause, GroupItemKind, JoinConstraint, JoinKind, Literal,
-    NumKind, Query, Relation, RelationExt, Select, SetExpr, SetExprKind, SetOperator,
-    SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth, UnaryOp,
+    NullTreatment, NumKind, Query, Relation, RelationExt, Select, SetExpr, SetExprKind,
+    SetOperator, SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth, UnaryOp,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_query};
@@ -225,31 +225,42 @@ impl Lowerer {
                 _ => return Err(unsupported("FROM with several SELECT bodies", f.span)),
             },
             SetExprKind::SetOp {
-                op: SetOperator::Union,
+                op,
                 quantifier,
                 left,
                 right,
             } => {
-                let inputs = vec![
-                    arc(self.deeper(|l| l.body(left))?),
-                    arc(self.deeper(|l| l.body(right))?),
-                ];
-                let union = self.node(
-                    PlanNode::Union {
-                        inputs,
-                        by_name: false,
-                        allow_missing_columns: false,
+                let left = arc(self.deeper(|l| l.body(left))?);
+                let right = arc(self.deeper(|l| l.body(right))?);
+                let all = *quantifier == Some(SetQuantifier::All);
+                let op = match op {
+                    SetOperator::Union => {
+                        let union = self.node(
+                            PlanNode::Union {
+                                inputs: vec![left, right],
+                                by_name: false,
+                                allow_missing_columns: false,
+                            },
+                            body.span,
+                        );
+                        return Ok(if all {
+                            union
+                        } else {
+                            self.node(PlanNode::Distinct { input: arc(union) }, body.span)
+                        });
+                    }
+                    SetOperator::Intersect => krishiv_plan::SetOperation::Intersect,
+                    SetOperator::Except => krishiv_plan::SetOperation::Except,
+                };
+                self.node(
+                    PlanNode::SetOp {
+                        left,
+                        right,
+                        op,
+                        all,
                     },
                     body.span,
-                );
-                if *quantifier == Some(SetQuantifier::All) {
-                    union
-                } else {
-                    self.node(PlanNode::Distinct { input: arc(union) }, body.span)
-                }
-            }
-            SetExprKind::SetOp { .. } => {
-                return Err(unsupported("INTERSECT and EXCEPT", body.span));
+                )
             }
             SetExprKind::Values(_) => return Err(unsupported("VALUES", body.span)),
         })
@@ -852,7 +863,10 @@ impl Lowerer {
                 for (present, what) in [
                     (f.over.is_some(), "window functions"),
                     (!f.within_group.is_empty(), "WITHIN GROUP"),
-                    (f.null_treatment.is_some(), "IGNORE NULLS and RESPECT NULLS"),
+                    (
+                        f.null_treatment.is_some() && !takes_null_treatment(&name.value),
+                        "IGNORE NULLS and RESPECT NULLS",
+                    ),
                 ] {
                     if present {
                         return Err(unsupported(what, sp));
@@ -864,6 +878,27 @@ impl Lowerer {
                         return Err(unsupported("named function arguments", a.span));
                     }
                     args.push(self.arg(&a.expr)?);
+                }
+                // `first(x) IGNORE NULLS` is `first(x, true)` and `RESPECT
+                // NULLS` is `first(x, false)`, whatever flag was written;
+                // a flag that is not a literal stays for the analyzer to
+                // refuse, as Spark does.
+                if let Some(t) = f.null_treatment {
+                    let flag = t == NullTreatment::Ignore;
+                    match args.get(1).map(|a| &a.node) {
+                        None | Some(ExprNode::Literal(IrLiteral::Boolean(_))) => {
+                            let flag =
+                                arc(self.ex(ExprNode::Literal(IrLiteral::Boolean(flag)), sp));
+                            // Only the flag slot is replaced: surplus arguments
+                            // stay for the analyzer's arity error.
+                            if args.len() == 1 {
+                                args.push(flag);
+                            } else {
+                                args[1] = flag;
+                            }
+                        }
+                        Some(_) => {}
+                    }
                 }
                 let filter = f.filter.as_ref().map(|x| self.arg(x)).transpose()?;
                 self.ex(
@@ -896,6 +931,14 @@ impl Lowerer {
             sp,
         )
     }
+}
+
+/// The aggregates that take `IGNORE NULLS` / `RESPECT NULLS` (as their
+/// `ignoreNulls` argument).
+fn takes_null_treatment(name: &str) -> bool {
+    ["first", "last", "first_value", "last_value"]
+        .iter()
+        .any(|n| name.eq_ignore_ascii_case(n))
 }
 
 /// A path written as a quoted name part (`parquet.`s3://b/k``).

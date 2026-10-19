@@ -17,8 +17,8 @@ def make_engine(name: str, **kw) -> Engine:
     if name == "krishiv":
         from .krishiv import KrishivEngine
 
-        return KrishivEngine()
-    raise ValueError(f"unknown engine {name!r}; available: duckdb, spark-connect, krishiv (stub)")
+        return KrishivEngine(**kw)
+    raise ValueError(f"unknown engine {name!r}; available: duckdb, spark-connect, krishiv")
 
 
 ENGINES = ["duckdb", "spark-connect", "krishiv"]

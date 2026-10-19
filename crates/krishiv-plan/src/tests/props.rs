@@ -19,8 +19,8 @@ use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Cte, CteRef, DayTimeField, Expr, ExprNode,
     FunctionCall, FunctionId, FunctionKind, Grouping, JoinCondition, JoinKind, JoinStrategy,
     Literal, LogicalPlan, NullOrdering, Origin, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr,
-    ResolvedFunction, Scan, SortDirection, SortOrder, SourceId, Span, SqlArgs, Star, SubqueryKind,
-    TableVersion, YearMonthField,
+    ResolvedFunction, Scan, SetOperation, SortDirection, SortOrder, SourceId, Span, SqlArgs, Star,
+    SubqueryKind, TableVersion, YearMonthField,
 };
 
 // ---- generator ------------------------------------------------------------
@@ -288,7 +288,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 19 };
+        let kinds = if depth == 0 { 4 } else { 21 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -409,6 +409,20 @@ impl Gen<'_> {
             },
             18 => PlanNode::Distinct {
                 input: self.input(d),
+            },
+            19 => PlanNode::SetOp {
+                left: self.input(d),
+                right: self.input(d),
+                op: if self.flag() {
+                    SetOperation::Intersect
+                } else {
+                    SetOperation::Except
+                },
+                all: self.flag(),
+            },
+            20 => PlanNode::ReplicateRows {
+                input: self.input(d),
+                count: Arc::new(self.expr(1)),
             },
             _ => PlanNode::WithCte {
                 input: self.input(d),
@@ -797,7 +811,18 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             input,
             predicate: e,
         }
-        | PlanNode::Limit { input, limit: e } => m_expr(e, w) || m_plan(input, w),
+        | PlanNode::Limit { input, limit: e }
+        | PlanNode::ReplicateRows { input, count: e } => m_expr(e, w) || m_plan(input, w),
+        PlanNode::SetOp {
+            left,
+            right,
+            op,
+            all,
+        } => {
+            site!(w, flip(op, SetOperation::Intersect, SetOperation::Except));
+            site!(w, *all = !*all);
+            m_plan(left, w) || m_plan(right, w)
+        }
         PlanNode::Aggregate {
             input,
             grouping,

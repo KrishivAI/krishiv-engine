@@ -37,6 +37,7 @@
 //! Split-planning parity with Spark is format-independent and checked in
 //! `krishiv-io` against Spark 4.2 goldens.
 
+pub mod csv;
 pub mod data;
 pub mod drive;
 pub mod mock;
@@ -106,6 +107,14 @@ pub trait FormatFixture: Send + Sync {
     /// has one.
     fn metadata_key_option(&self) -> Option<&'static str> {
         None
+    }
+    /// Whether the format has neither a footer nor checksums nor statistics
+    /// (CSV, JSON lines, text): the checks that read the footer through the
+    /// cache, prune with statistics or expect corrupt bytes to lose rows are
+    /// skipped; corrupt input must still never panic and must give typed
+    /// errors.
+    fn footerless(&self) -> bool {
+        false
     }
     /// How scans and writes run: the framework's loops ([`drive::Direct`],
     /// the default) or the executor ([`drive::ThroughExecutor`]).
@@ -498,7 +507,7 @@ pub fn round_trip(fx: &dyn FormatFixture) -> SuiteResult {
         ))
         .map_err(|e| e.to_string())?;
     ensure!(
-        md.schema().fields().len() == schema.fields().len(),
+        fx.footerless() || md.schema().fields().len() == schema.fields().len(),
         "metadata schema has other fields"
     );
     let variant = md
@@ -753,7 +762,7 @@ pub fn pruning_soundness(fx: &dyn FormatFixture) -> SuiteResult {
     }
     // Not vacuous: statistics pruned some units.
     ensure!(
-        returned_rows < 150 * input.num_rows(),
+        fx.footerless() || returned_rows < 150 * input.num_rows(),
         "no predicate pruned anything"
     );
     nan_behind_float_bounds(&env, fx)
@@ -1142,7 +1151,10 @@ pub fn corrupt_inputs(fx: &dyn FormatFixture) -> SuiteResult {
         let got = env
             .scan(fx, &f, &req, None, ignore)
             .map_err(|e| format!("{name}: not ignored: {e}"))?;
-        ensure!(rows(&got) <= 800, "{name}: more rows than written");
+        ensure!(
+            fx.footerless() || rows(&got) <= 800,
+            "{name}: more rows than written"
+        );
     }
     // Missing file.
     let gone = FileRef {
@@ -1432,7 +1444,7 @@ pub fn io_behaviour(fx: &dyn FormatFixture) -> SuiteResult {
     );
     let after = env.store.stats();
     ensure!(
-        after.tail_gets - before.tail_gets == 1,
+        fx.footerless() || after.tail_gets - before.tail_gets == 1,
         "footer took {} tail reads",
         after.tail_gets - before.tail_gets
     );
@@ -1451,10 +1463,13 @@ pub fn io_behaviour(fx: &dyn FormatFixture) -> SuiteResult {
     env.scan(fx, &file, &req, None, ScanOptions::default())
         .map_err(|e| e.to_string())?;
     ensure!(
-        env.store.stats().tail_gets == after.tail_gets,
+        fx.footerless() || env.store.stats().tail_gets == after.tail_gets,
         "cached footer was read again"
     );
-    ensure!(IoCounters::get(&c.cache_hits) >= 1, "no cache hit");
+    ensure!(
+        fx.footerless() || IoCounters::get(&c.cache_hits) >= 1,
+        "no cache hit"
+    );
     // Bytes counted are bytes served.
     ensure!(
         IoCounters::get(&c.bytes_read) == env.store.stats().bytes - before.bytes,

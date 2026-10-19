@@ -320,7 +320,7 @@ impl Session {
         let statement = krishiv_sql::parse_statement(query, &env.parser).map_err(|e| e.error)?;
         let q = match statement {
             Statement::Query(q) => q,
-            Statement::Explain(_) => return Err(unsupported_statement("EXPLAIN statements")),
+            Statement::Explain(e) => return self.explain_statement(&e).await,
             _ => return Err(unsupported_statement("statements other than queries")),
         };
         let plan = krishiv_sql::lower(&q, SourceId(0)).map_err(|e| e.error)?;
@@ -567,7 +567,8 @@ impl Session {
             &analyzed.plan,
             &ProviderStatistics(Arc::clone(&tables)),
         )?;
-        let cx = PlanningContext::new(tables, Arc::clone(&env.config));
+        let cx = PlanningContext::new(tables, Arc::clone(&env.config))
+            .with_user(self.state.principal.name.as_str());
         let physical = self.state.planner.plan(&optimized, &cx)?;
         // Spark logs what analysis and planning ignore (hints) as
         // warnings; `DataFrame::warnings` returns them too.

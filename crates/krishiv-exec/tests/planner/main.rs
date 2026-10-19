@@ -133,19 +133,30 @@ impl Env {
 
 /// Runs `plan` to completion.
 fn run(plan: &PhysicalPlan) -> Result<Vec<RecordBatch>, KrishivError> {
-    let executor = TokioExecutor::new(&ExecutorConfig::default())?;
-    let runner = QueryRunner::new(executor);
     let root = TreePool::new(&MemoryConfig::default());
+    run_in(plan, &root).0
+}
+
+/// Runs `plan` to completion as a query of `root`; also returns the query
+/// (for its metrics).
+fn run_in(
+    plan: &PhysicalPlan,
+    root: &TreePool,
+) -> (Result<Vec<RecordBatch>, KrishivError>, Arc<QueryContext>) {
     let query = QueryContext::new(
         QueryId(1),
         WorkloadClass::Interactive,
         ExecConfig::default(),
         root.child("q", None),
     );
+    let runner = match TokioExecutor::new(&ExecutorConfig::default()) {
+        Ok(executor) => QueryRunner::new(executor),
+        Err(e) => return (Err(e), query),
+    };
     let rt = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
-    rt.block_on(async {
+    let out = rt.block_on(async {
         let mut stream = runner
             .submit(Arc::clone(plan.root()), Arc::clone(&query))
             .await?;
@@ -155,7 +166,8 @@ fn run(plan: &PhysicalPlan) -> Result<Vec<RecordBatch>, KrishivError> {
         }
         query.finished().await;
         Ok(out)
-    })
+    });
+    (out, query)
 }
 
 /// One value as text (`NULL` for null).

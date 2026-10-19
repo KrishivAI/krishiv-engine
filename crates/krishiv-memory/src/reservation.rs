@@ -19,6 +19,9 @@ pub struct Reservation {
     /// Shrinking parks the bytes as the handle's credit instead of
     /// returning them to the pool ([`Reservation::releasing_to_credit`]).
     to_credit: bool,
+    /// Growth may take the pools' spill-scratch floors
+    /// ([`Reservation::for_spill_scratch`]).
+    scratch: bool,
 }
 
 impl Reservation {
@@ -30,6 +33,7 @@ impl Reservation {
             bytes: 0,
             handle: None,
             to_credit: false,
+            scratch: false,
         }
     }
 
@@ -40,6 +44,7 @@ impl Reservation {
             bytes: 0,
             handle: Some(handle),
             to_credit: false,
+            scratch: false,
         }
     }
 
@@ -55,6 +60,18 @@ impl Reservation {
     #[must_use]
     pub fn releasing_to_credit(mut self) -> Self {
         self.to_credit = self.handle.is_some();
+        self
+    }
+
+    /// Makes `try_grow` take what credit does not cover with
+    /// [`MemoryPool::try_reserve_scratch`], which may use the pools'
+    /// spill-scratch floors. For a spill writer's working memory only: it
+    /// must be released once the write ends, since the floor is shared by
+    /// every spill under the pool. (`grow` still arbitrates for ordinary
+    /// memory.)
+    #[must_use]
+    pub fn for_spill_scratch(mut self) -> Self {
+        self.scratch = true;
         self
     }
 
@@ -84,9 +101,12 @@ impl Reservation {
     /// [`MemoryError`] if the pool cannot grant the bytes now.
     pub fn try_grow(&mut self, bytes: usize) -> Result<(), MemoryError> {
         let (rest, credit) = self.draw_credit(bytes);
-        if rest > 0
-            && let Err(e) = self.pool.try_reserve(self.id, rest)
-        {
+        let reserved = match (rest, self.scratch) {
+            (0, _) => Ok(()),
+            (_, true) => self.pool.try_reserve_scratch(self.id, rest),
+            (_, false) => self.pool.try_reserve(self.id, rest),
+        };
+        if let Err(e) = reserved {
             self.refund(credit);
             return Err(e);
         }

@@ -66,7 +66,17 @@
 //! the pool per write. Repartitioning reserves
 //! its scratch and read-back headroom through arbitration first, and the
 //! grace phase reserves the exact read-back headroom of a partition's probe
-//! files when it loads the partition.
+//! files when it loads the partition. Writers' scratch may also use the
+//! pool's spill-scratch floor (`krishiv.memory.spillScratchReserve`).
+//!
+//! In the grace phase, drivers claim spilled partitions in parallel and
+//! load them with free memory. A partition that does not fit next to the
+//! others is retried by its driver alone (the others finish the partitions
+//! they hold and wait, woken by an event, never polling), this time asking
+//! the arbitrator for the memory (`FlushOutput::NeedMemory`: spillable
+//! consumers such as an aggregate downstream spill, no query is aborted).
+//! Only a partition that does not fit even then is repartitioned; after
+//! that every driver claims in parallel again.
 //!
 //! # Metrics (`EXPLAIN ANALYZE`, [`OperatorEntry::extra`](crate::OperatorEntry::extra))
 //! Build sink: `build_rows`, `spilled_partitions`, `spill_file_bytes`. Probe:

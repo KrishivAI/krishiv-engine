@@ -80,7 +80,7 @@ const DIGIT_ZEROS: [u32; 68] = [
 ];
 
 /// Java's `Character.digit(c, 10)`.
-fn java_digit(c: char) -> Option<u8> {
+pub(crate) fn java_digit(c: char) -> Option<u8> {
     let c = u32::from(c);
     let i = DIGIT_ZEROS.partition_point(|&z| z <= c).checked_sub(1)?;
     let d = c - DIGIT_ZEROS.get(i)?;
@@ -280,6 +280,21 @@ pub(crate) fn parse_decimal(s: &str) -> Option<BigDec> {
 /// `nan`, ... in any case). `None` is malformed.
 pub(crate) fn parse_float<F: std::str::FromStr + HexFloat>(s: &[u8]) -> Option<F> {
     let s = std::str::from_utf8(trim(s)).ok()?;
+    if let Some(v) = parse_java_float(s) {
+        return Some(v);
+    }
+    match s.to_ascii_lowercase().as_str() {
+        "inf" | "+inf" | "infinity" | "+infinity" => "inf".parse().ok(),
+        "-inf" | "-infinity" => "-inf".parse().ok(),
+        "nan" => "NaN".parse().ok(),
+        _ => None,
+    }
+}
+
+/// Java's `Double.parseDouble` / `Float.parseFloat` on input already
+/// trimmed: an optional sign, `NaN`, `Infinity`, a hexadecimal or decimal
+/// literal with an optional `d`/`f` suffix.
+pub(crate) fn parse_java_float<F: std::str::FromStr + HexFloat>(s: &str) -> Option<F> {
     let (sign, body) = match s.strip_prefix('-') {
         Some(b) => ("-", b),
         None => ("", s.strip_prefix('+').unwrap_or(s)),
@@ -306,12 +321,7 @@ pub(crate) fn parse_float<F: std::str::FromStr + HexFloat>(s: &[u8]) -> Option<F
     if valid && let Ok(v) = format!("{sign}{core}").parse::<F>() {
         return Some(v);
     }
-    match s.to_ascii_lowercase().as_str() {
-        "inf" | "+inf" | "infinity" | "+infinity" => "inf".parse().ok(),
-        "-inf" | "-infinity" => "-inf".parse().ok(),
-        "nan" => "NaN".parse().ok(),
-        _ => None,
-    }
+    None
 }
 
 /// Java hexadecimal floating-point literals (`0x1.8p1`).

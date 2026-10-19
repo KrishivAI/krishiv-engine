@@ -452,6 +452,57 @@ async fn grace_spill_with_recursion_equals_the_in_memory_join() {
     }
 }
 
+/// A spilled partition that fits once a spillable consumer elsewhere gives
+/// memory back is loaded through the arbitrator (by its driver alone) and
+/// joined, not repartitioned: memory held by spillable consumers never
+/// forces a needless repartition.
+#[tokio::test(start_paused = true)]
+async fn a_partition_that_fits_after_others_spill_is_not_repartitioned() {
+    const LIMIT: usize = 4 * MIB;
+    let build = skewed(100_000, 60_000);
+    let probe = skewed(20_000, 60_000);
+    let c = case(JoinType::Inner, 1, false, false);
+    let (expect, _) = run_case(&c, &probe, &build, 1024, 3, 256 * MIB).await;
+
+    let root = root(LIMIT);
+    // Another query's spillable state holds most of the pool and spills
+    // only when asked.
+    let other = krishiv_memory::MemoryPool::child(&*root, "other", None);
+    let owner = krishiv_memory::SpillOwner::new();
+    let signal = owner.signal();
+    let id = other.register("hog", Some(Arc::clone(&signal) as _));
+    let mut held = krishiv_memory::Reservation::new(Arc::clone(&other), id);
+    held.try_grow(3 * MIB).unwrap();
+    signal.set_spillable_bytes(held.size());
+    let hog = tokio::spawn(async move {
+        let mut spilled = 0;
+        while held.size() > 0 {
+            if let Some(service) = signal.begin() {
+                let freed = service.target().min(held.size());
+                held.shrink(freed);
+                signal.set_spillable_bytes(held.size());
+                service.complete(freed);
+                spilled += freed;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        spilled
+    });
+    let (_manager, scope) = spill();
+    let q = query(&root, 1, ExecConfig::default());
+    let plan = join(
+        c.spec(Some(scope.clone())),
+        scan(&schema(), batches(&data(&build), 1024)),
+        scan(&schema(), batches(&data(&probe), 1024)),
+    );
+    let out = run(&runner_for(3, LIMIT), plan, &q).await.unwrap();
+    assert!(render(&out) == expect, "grace result differs");
+    assert!(metric(&q, "HashJoinProbe", "grace_partitions") > 0);
+    assert_eq!(metric(&q, "HashJoinProbe", "repartitions"), 0);
+    hog.abort();
+    assert_eq!(spill_files(&scope), 0);
+}
+
 /// Keys that cannot be split: a partition still too large at the depth
 /// limit fails with a typed error, releasing memory and files.
 #[tokio::test(start_paused = true)]
@@ -629,4 +680,69 @@ async fn probe_rows_are_counted_when_a_limit_skips_the_flush() {
     assert_eq!(out.iter().map(Batch::num_rows).sum::<usize>(), 10);
     assert!(metric(&q, "HashJoinProbe", "probe_rows") >= 10);
     assert_released(&root);
+}
+
+/// The peak memory every operator of `q` reserved (an upper bound of the
+/// query's peak).
+fn peak(q: &krishiv_exec::QueryContext) -> usize {
+    let p: u64 = q
+        .metrics()
+        .operators
+        .values()
+        .map(|e| e.metrics.peak_reserved)
+        .sum();
+    usize::try_from(p).unwrap()
+}
+
+/// Runs an inner join of `build` with itself on one driver under `limit`,
+/// spilling into `spill`; returns the rendered rows or the error.
+async fn run_self_join(
+    build: &[Row],
+    chunk: usize,
+    limit: usize,
+    spill: Option<SpillScope>,
+) -> (Result<Vec<String>>, Arc<krishiv_exec::QueryContext>) {
+    let root = root(limit);
+    let q = query(&root, 1, ExecConfig::default());
+    let plan = join(
+        case(JoinType::Inner, 1, false, false).spec(spill),
+        scan(&schema(), batches(&data(build), chunk)),
+        scan(&schema(), batches(&data(&build[..100]), 512)),
+    );
+    let out = run(&runner_for(1, limit), plan, &q)
+        .await
+        .map(|b| render(&b));
+    assert_released(&root);
+    (out, q)
+}
+
+/// The build starts a partition's index only once its concatenation copy is
+/// reserved, so a build that fits with one copy beside every index
+/// completes, without a spill scope as with one (where it stays in memory
+/// instead of spilling). Reserving every copy at once needs about the
+/// build's size again.
+#[tokio::test(start_paused = true)]
+async fn a_build_that_fits_with_one_partition_copy_completes() {
+    let build = skewed(40_000, 40_000);
+    // One input batch: one chunk per partition, indexed without a copy.
+    let (expect, q) = run_self_join(&build, build.len(), 48 * MIB, None).await;
+    let expect = expect.unwrap();
+    let single = peak(&q);
+    // Many small chunks per partition: every partition needs a copy.
+    let (got, _) = run_self_join(&build, 512, 48 * MIB, None).await;
+    assert!(got.unwrap() == expect, "the in-memory join result differs");
+    // Every copy at once would add about the build's size again.
+    let limit = single + single / 8;
+    let (got, _) = run_self_join(&build, 512, limit, None).await;
+    assert!(got.unwrap() == expect, "the in-memory join result differs");
+
+    let (_manager, scope) = spill();
+    let (got, q) = run_self_join(&build, 512, limit, Some(scope.clone())).await;
+    assert!(got.unwrap() == expect, "the join result differs");
+    assert_eq!(
+        metric(&q, "HashJoinBuild", "spilled_partitions"),
+        0,
+        "the build fits without spilling"
+    );
+    assert_eq!(spill_files(&scope), 0);
 }

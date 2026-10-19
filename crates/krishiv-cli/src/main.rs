@@ -12,6 +12,8 @@
     )
 )]
 
+mod sql;
+
 use clap::Parser;
 
 #[cfg(feature = "mimalloc")]
@@ -31,15 +33,16 @@ const LONG_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\nallocator=syste
 #[derive(Parser)]
 #[command(name = "krishiv", version, long_version = LONG_VERSION)]
 struct Cli {
-    #[cfg(feature = "ui")]
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
 
-#[cfg(feature = "ui")]
 #[derive(clap::Subcommand)]
 enum Command {
+    /// Run SQL from `-e`, `-f` or stdin and print the result.
+    Sql(sql::SqlArgs),
     /// Serve the web UI and admin API.
+    #[cfg(feature = "ui")]
     Server {
         /// Port to listen on (0 picks a free port).
         #[arg(long, default_value_t = 8080)]
@@ -52,19 +55,20 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
-    #[cfg(feature = "ui")]
-    if let Some(Command::Server { port, host }) = cli.command {
-        let addr = std::net::SocketAddr::new(host, port);
-        let result = krishiv_server::run_blocking(addr, |a| {
-            println!("krishiv server listening on http://{a}");
-        });
-        if let Err(e) = result {
-            eprintln!("krishiv server: {e}");
-            std::process::exit(1);
+    match cli.command {
+        Command::Sql(args) => std::process::exit(sql::run(&args)),
+        #[cfg(feature = "ui")]
+        Command::Server { port, host } => {
+            let addr = std::net::SocketAddr::new(host, port);
+            let result = krishiv_server::run_blocking(addr, |a| {
+                println!("krishiv server listening on http://{a}");
+            });
+            if let Err(e) = result {
+                eprintln!("krishiv server: {e}");
+                std::process::exit(1);
+            }
         }
     }
-    #[cfg(not(feature = "ui"))]
-    let _ = cli;
 }
 
 #[cfg(all(test, feature = "mimalloc"))]

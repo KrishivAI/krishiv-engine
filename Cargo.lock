@@ -1384,14 +1384,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "krishiv-bench-runner"
+version = "0.1.0-dev"
+dependencies = [
+ "arrow-array",
+ "futures",
+ "krishiv-common",
+ "krishiv-exec",
+ "krishiv-session",
+ "mimalloc",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "krishiv-cli"
 version = "0.1.0-dev"
 dependencies = [
  "clap",
+ "futures",
  "krishiv",
  "krishiv-server",
+ "krishiv-sql",
  "libmimalloc-sys",
  "mimalloc",
+ "tempfile",
 ]
 
 [[package]]
@@ -1501,8 +1518,10 @@ dependencies = [
  "codspeed-criterion-compat",
  "futures",
  "krishiv-common",
+ "krishiv-kernels",
  "krishiv-memory",
  "krishiv-types",
+ "memchr",
  "object_store",
  "parquet",
  "proptest",
@@ -1572,6 +1591,8 @@ dependencies = [
 name = "krishiv-plan"
 version = "0.1.0-dev"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
  "codspeed-criterion-compat",
  "insta",
  "krishiv-common",
@@ -1621,6 +1642,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "futures",
+ "insta",
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",

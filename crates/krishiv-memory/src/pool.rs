@@ -13,17 +13,27 @@
 //! A query pool's counter word also carries an abort bit: once set, every
 //! grant through that query fails in the same compare-and-swap, so the
 //! query's held bytes can only go down after an abort.
+//!
+//! **Spill-scratch floor.** The top `floor` bytes of every limited pool
+//! (`krishiv.memory.spillScratchReserve`, at most 1/8 of the limit) are
+//! granted only to spill scratch ([`MemoryPool::try_reserve_scratch`]):
+//! ordinary reservations see the limit minus the floor. A pool that ordinary
+//! consumers filled can therefore still fund a spill writer's buffers, so a
+//! requested spill is not declined for want of the memory it needs to free
+//! memory. The floor is shared by every spill under the pool, exact (never
+//! quantised) and returned as soon as the writer finishes.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use krishiv_common::config::{
     Config, ConfigValue, MEMORY_ABORT_RELEASE_TIMEOUT, MEMORY_LIMIT, MEMORY_RESERVATION_QUANTUM,
-    MEMORY_SPILL_WAIT_TIMEOUT,
+    MEMORY_SPILL_SCRATCH_RESERVE, MEMORY_SPILL_WAIT_TIMEOUT,
 };
 
+use crate::arbitrate::Escalation;
 use crate::clock::{Clock, SystemClock};
 use crate::event::Event;
 use crate::rounds::Rounds;
@@ -38,6 +48,12 @@ const MAX_BYTES: usize = ABORTED - 1;
 /// A consumer's quantum is at most this fraction of the smallest limit above
 /// it, so slack stays small under small limits.
 const QUANTUM_LIMIT_DIVISOR: usize = 64;
+/// A pool's spill-scratch floor is at most this fraction of its limit.
+const FLOOR_LIMIT_DIVISOR: usize = 8;
+
+/// The default `krishiv.memory.spillScratchReserve`: room for two spill
+/// writers' buffers at once.
+pub const DEFAULT_SPILL_SCRATCH_RESERVE: usize = 512 << 10;
 
 /// Settings of a pool tree, normally read from the `krishiv.memory.*` config.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,12 +63,16 @@ pub struct MemoryConfig {
     pub limit: Option<usize>,
     /// Reservation granularity (`krishiv.memory.reservationQuantum`).
     pub quantum: usize,
-    /// How long a round waits for requested spills
+    /// How long a round waits for a requested spill to begin
     /// (`krishiv.memory.spillWaitTimeout`).
     pub spill_wait_timeout: Duration,
     /// How long a request waits for aborted queries to release their memory
     /// (`krishiv.memory.abortReleaseTimeout`).
     pub abort_release_timeout: Duration,
+    /// The top bytes of every limited pool kept for spill scratch, capped
+    /// at 1/8 of its limit (`krishiv.memory.spillScratchReserve`; see the
+    /// module docs). 0 disables the floor.
+    pub spill_scratch_reserve: usize,
 }
 
 impl Default for MemoryConfig {
@@ -83,6 +103,8 @@ impl MemoryConfig {
                 config.get(&MEMORY_ABORT_RELEASE_TIMEOUT),
                 Duration::from_secs(30),
             ),
+            spill_scratch_reserve: size(config.get(&MEMORY_SPILL_SCRATCH_RESERVE))
+                .unwrap_or(DEFAULT_SPILL_SCRATCH_RESERVE),
         }
     }
 }
@@ -152,12 +174,15 @@ impl Drop for WaitGuard<'_> {
 /// State shared by every node of one tree.
 pub(crate) struct Shared {
     quantum: usize,
+    scratch_reserve: usize,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) spill_wait_timeout: Duration,
     pub(crate) abort_release_timeout: Duration,
     /// Every live consumer of the tree, for victim selection. Weak: nodes own
     /// their consumers, so a dropped subtree disappears from here too.
-    registry: Mutex<HashMap<ConsumerId, Weak<Consumer>>>,
+    /// Ordered by id (registration order), so victims tied on every
+    /// ranking key are asked in the same order on every run.
+    registry: Mutex<BTreeMap<ConsumerId, Weak<Consumer>>>,
     pub(crate) rounds: Rounds,
     pub(crate) release: ReleaseSignal,
     pub(crate) stats: Stats,
@@ -271,6 +296,15 @@ impl Consumer {
     }
 }
 
+/// Which ceiling a grant is checked against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Class {
+    /// Below each pool's spill-scratch floor.
+    Ordinary,
+    /// Spill scratch: up to each pool's limit.
+    Scratch,
+}
+
 /// Why a fast-path reservation was refused.
 pub(crate) enum Denied {
     /// Not retryable.
@@ -283,6 +317,8 @@ pub(crate) enum Denied {
 pub(crate) struct Node {
     name: String,
     limit: Option<usize>,
+    /// The top of `limit` only spill scratch may take (see the module docs).
+    floor: usize,
     /// Bytes held by the subtree; on a query node, plus the abort bit.
     word: AtomicUsize,
     parent: Option<Arc<Node>>,
@@ -339,19 +375,34 @@ impl Node {
         self.word.fetch_add(0, Ordering::AcqRel)
     }
 
-    /// Free bytes under this node's own limit.
+    /// Free bytes under this node's own limit for an ordinary reservation
+    /// (below the spill-scratch floor).
     pub(crate) fn available(&self) -> usize {
-        self.limit
-            .map_or(MAX_BYTES, |l| l.saturating_sub(self.reserved()))
+        self.cap(Class::Ordinary).saturating_sub(self.reserved())
     }
 
     pub(crate) fn limit(&self) -> Option<usize> {
         self.limit
     }
 
+    /// The most an ordinary reservation can ever hold here: the limit minus
+    /// the spill-scratch floor.
+    pub(crate) fn grant_limit(&self) -> Option<usize> {
+        self.limit.map(|_| self.cap(Class::Ordinary))
+    }
+
+    /// The counter's ceiling for a grant of `class`.
+    fn cap(&self, class: Class) -> usize {
+        match (self.limit, class) {
+            (None, _) => MAX_BYTES,
+            (Some(l), Class::Scratch) => l,
+            (Some(l), Class::Ordinary) => l - self.floor,
+        }
+    }
+
     /// Adds `n` unless the limit or the abort bit refuses.
-    fn try_add(&self, n: usize) -> Result<(), Refusal> {
-        let limit = self.limit.unwrap_or(MAX_BYTES);
+    fn try_add(&self, n: usize, class: Class) -> Result<(), Refusal> {
+        let limit = self.cap(class);
         let mut cur = self.load_word();
         loop {
             if cur & ABORTED != 0 {
@@ -382,14 +433,11 @@ impl Node {
     }
 
     /// Why this node would refuse `n` now (a read-only check).
-    fn refusal(&self, n: usize) -> Option<Refusal> {
+    fn refusal(&self, n: usize, class: Class) -> Option<Refusal> {
         let cur = self.load_word();
         if cur & ABORTED != 0 {
             Some(Refusal::Aborted)
-        } else if cur
-            .checked_add(n)
-            .is_none_or(|t| t > self.limit.unwrap_or(MAX_BYTES))
-        {
+        } else if cur.checked_add(n).is_none_or(|t| t > self.cap(class)) {
             Some(Refusal::Limit)
         } else {
             None
@@ -397,19 +445,19 @@ impl Node {
     }
 
     /// Adds `n` to this node and every ancestor, or to none of them.
-    fn add_chain(self: &Arc<Self>, n: usize) -> Result<(), (Arc<Node>, Refusal)> {
+    fn add_chain(self: &Arc<Self>, n: usize, class: Class) -> Result<(), (Arc<Node>, Refusal)> {
         // Read-only pass first: a full pool refuses without any store, so
         // retries never churn the shared counters above it.
         let mut cur = Some(self);
         while let Some(node) = cur {
-            if let Some(why) = node.refusal(n) {
+            if let Some(why) = node.refusal(n, class) {
                 return Err((Arc::clone(node), why));
             }
             cur = node.parent.as_ref();
         }
         let mut cur = Some(self);
         while let Some(node) = cur {
-            if let Err(why) = node.try_add(n) {
+            if let Err(why) = node.try_add(n, class) {
                 let mut back = Some(self);
                 while let Some(b) = back {
                     if Arc::ptr_eq(b, node) {
@@ -495,11 +543,14 @@ impl Node {
             .unwrap_or(MemoryError::Aborted { held: 0 })
     }
 
-    /// The fast path: no arbitration, no await.
+    /// The fast path: no arbitration, no await. Spill scratch
+    /// ([`Class::Scratch`]) may use the pools' floors and is granted exactly
+    /// (no quantum slack outlives it under the floor).
     pub(crate) fn try_reserve_for(
         self: &Arc<Self>,
         consumer: &Consumer,
         bytes: usize,
+        class: Class,
     ) -> Result<(), Denied> {
         if let Some(g) = &self.group {
             g.check().map_err(Denied::Error)?;
@@ -525,11 +576,18 @@ impl Node {
             u.used = new_used;
             return Ok(());
         }
-        let quantised = round_up(new_used, consumer.quantum).min(MAX_BYTES);
-        let mut result = self.add_chain(quantised - u.granted).map(|()| quantised);
+        let quantised = match class {
+            Class::Ordinary => round_up(new_used, consumer.quantum).min(MAX_BYTES),
+            Class::Scratch => new_used,
+        };
+        let mut result = self
+            .add_chain(quantised - u.granted, class)
+            .map(|()| quantised);
         if matches!(result, Err((_, Refusal::Limit))) && quantised > new_used {
             // The rounded amount does not fit; the exact amount might.
-            result = self.add_chain(new_used - u.granted).map(|()| new_used);
+            result = self
+                .add_chain(new_used - u.granted, class)
+                .map(|()| new_used);
         }
         match result {
             Ok(granted) => {
@@ -583,6 +641,11 @@ impl Drop for Node {
     }
 }
 
+/// The spill-scratch floor of a pool with `limit`.
+fn floor(limit: Option<usize>, reserve: usize) -> usize {
+    limit.map_or(0, |l| reserve.min(l.min(MAX_BYTES) / FLOOR_LIMIT_DIVISOR))
+}
+
 static NEXT_CONSUMER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The pool-tree implementation of [`MemoryPool`]. The root's children are
@@ -604,10 +667,11 @@ impl TreePool {
     pub fn with_clock(config: &MemoryConfig, clock: Arc<dyn Clock>) -> Arc<Self> {
         let shared = Arc::new(Shared {
             quantum: config.quantum.max(1),
+            scratch_reserve: config.spill_scratch_reserve,
             clock,
             spill_wait_timeout: config.spill_wait_timeout,
             abort_release_timeout: config.abort_release_timeout,
-            registry: Mutex::new(HashMap::new()),
+            registry: Mutex::new(BTreeMap::new()),
             rounds: Rounds::default(),
             release: ReleaseSignal::default(),
             stats: Stats::default(),
@@ -616,6 +680,7 @@ impl TreePool {
             node: Arc::new(Node {
                 name: "root".to_owned(),
                 limit: config.limit.map(|l| l.min(MAX_BYTES)),
+                floor: floor(config.limit, config.spill_scratch_reserve),
                 word: AtomicUsize::new(0),
                 parent: None,
                 depth: 0,
@@ -636,6 +701,7 @@ impl TreePool {
             node: Arc::new(Node {
                 name: name.to_owned(),
                 limit: limit.map(|l| l.min(MAX_BYTES)),
+                floor: floor(limit, parent.shared.scratch_reserve),
                 word: AtomicUsize::new(0),
                 parent: Some(Arc::clone(parent)),
                 depth: parent.depth + 1,
@@ -684,6 +750,24 @@ impl TreePool {
         }
     }
 
+    fn try_reserve_class(
+        &self,
+        id: ConsumerId,
+        bytes: usize,
+        class: Class,
+    ) -> Result<(), MemoryError> {
+        let consumer = self.node.consumer(id)?;
+        self.node
+            .try_reserve_for(&consumer, bytes, class)
+            .map_err(|d| match d {
+                Denied::Error(e) => e,
+                Denied::Limit { binding, .. } => MemoryError::Exhausted {
+                    requested: bytes,
+                    available: binding.available(),
+                },
+            })
+    }
+
     #[cfg(test)]
     pub(crate) fn node(&self) -> &Arc<Node> {
         &self.node
@@ -726,16 +810,11 @@ impl MemoryPool for TreePool {
     }
 
     fn try_reserve(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
-        let consumer = self.node.consumer(id)?;
-        self.node
-            .try_reserve_for(&consumer, bytes)
-            .map_err(|d| match d {
-                Denied::Error(e) => e,
-                Denied::Limit { binding, .. } => MemoryError::Exhausted {
-                    requested: bytes,
-                    available: binding.available(),
-                },
-            })
+        self.try_reserve_class(id, bytes, Class::Ordinary)
+    }
+
+    fn try_reserve_scratch(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+        self.try_reserve_class(id, bytes, Class::Scratch)
     }
 
     fn reserve<'a>(
@@ -743,7 +822,25 @@ impl MemoryPool for TreePool {
         id: ConsumerId,
         bytes: usize,
     ) -> BoxFuture<'a, Result<(), MemoryError>> {
-        Box::pin(crate::arbitrate::reserve(Arc::clone(&self.node), id, bytes))
+        Box::pin(crate::arbitrate::reserve(
+            Arc::clone(&self.node),
+            id,
+            bytes,
+            Escalation::Abort,
+        ))
+    }
+
+    fn reserve_without_abort<'a>(
+        &'a self,
+        id: ConsumerId,
+        bytes: usize,
+    ) -> BoxFuture<'a, Result<(), MemoryError>> {
+        Box::pin(crate::arbitrate::reserve(
+            Arc::clone(&self.node),
+            id,
+            bytes,
+            Escalation::SpillOnly,
+        ))
     }
 
     fn release(&self, id: ConsumerId, bytes: usize) {

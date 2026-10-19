@@ -10,10 +10,13 @@
 //!    pending releases (memory of already-aborted queries) do not. Victims
 //!    are ranked by how far their query holds memory above its fair share
 //!    (`limit / active queries`), then by spillable bytes; the requester's
-//!    own consumer and every consumer of its driver ([`crate::SpillOwner`])
-//!    are never asked. Tickets are awaited together, each completed victim
+//!    own consumer is never asked, and the other consumers of its driver
+//!    ([`crate::SpillOwner`]) only after every other victim (the driver
+//!    services them while it waits; a caller that does not is given up on
+//!    at `spillWaitTimeout`, as any victim that never begins). Tickets are awaited together, each completed victim
 //!    is trimmed so its exact freed bytes count, and the request is retried
-//!    on every release, until `spillWaitTimeout`.
+//!    on every release. `spillWaitTimeout` bounds the wait for a victim to
+//!    *begin* its spill; a spill in progress is awaited to its end.
 //! 3. **Abort.** While pending releases cover the shortfall, wait for them
 //!    (no new abort). Otherwise abort the query furthest above its fair
 //!    share. The requester's own query fails the request with
@@ -21,30 +24,47 @@
 //!    `KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY`; another victim is aborted and
 //!    the round waits for its release. The phase is bounded by
 //!    `abortReleaseTimeout`. A task- or operator-level limit (depth ≥ 2)
-//!    fails only the request, never the whole query.
+//!    fails only the request, never the whole query. A request made with
+//!    [`Escalation::SpillOnly`] skips this phase and fails instead: its
+//!    caller has a cheaper fallback than aborting a query.
 
 use std::future::{Future, poll_fn};
 use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::task::Poll;
 
-use crate::pool::{Consumer, Denied, Group, GroupKind, Node};
+use crate::pool::{Class, Consumer, Denied, Group, GroupKind, Node};
 use crate::spill::SpillTicket;
 use std::time::Instant;
 
 use crate::sync::Ordering;
 use crate::{ConsumerId, MemoryError};
 
+/// Spill requests a round sends while each pass frees memory, before it
+/// escalates.
+const MAX_SPILL_PASSES: usize = 8;
+
+/// How far a round may go to make room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Escalation {
+    /// Reclaim, spill, then abort queries.
+    Abort,
+    /// Reclaim and spill only.
+    SpillOnly,
+}
+
 pub(crate) async fn reserve(
     node: Arc<Node>,
     id: ConsumerId,
     bytes: usize,
+    escalation: Escalation,
 ) -> Result<(), MemoryError> {
     let consumer = node.consumer(id)?;
     let round = Round {
         node,
         consumer,
         bytes,
+        escalation,
     };
     let Some((mut binding, need)) = round.attempt()? else {
         return Ok(());
@@ -54,7 +74,7 @@ pub(crate) async fn reserve(
         .group
         .as_ref()
         .is_some_and(|g| g.kind == GroupKind::Query);
-    if !arbitrates || binding.limit().is_some_and(|l| need > l) {
+    if !arbitrates || binding.grant_limit().is_some_and(|l| need > l) {
         // External or root consumers never start a round; a request larger
         // than the limit could never fit, whatever is freed.
         return Err(round.exhausted(&binding));
@@ -131,6 +151,7 @@ struct Round {
     node: Arc<Node>,
     consumer: Arc<Consumer>,
     bytes: usize,
+    escalation: Escalation,
 }
 
 fn aborted(n: &Node) -> bool {
@@ -144,7 +165,10 @@ impl Round {
 
     /// `None` when granted, else the binding pool and the bytes it refused.
     fn attempt(&self) -> Result<Option<(Arc<Node>, usize)>, MemoryError> {
-        match self.node.try_reserve_for(&self.consumer, self.bytes) {
+        match self
+            .node
+            .try_reserve_for(&self.consumer, self.bytes, Class::Ordinary)
+        {
             Ok(()) => Ok(None),
             Err(Denied::Error(e)) => Err(e),
             Err(Denied::Limit { binding, need }) => Ok(Some((binding, need))),
@@ -218,22 +242,39 @@ impl Round {
             c.trim(&n);
         }
 
-        // 2. Spill what pending releases do not cover.
-        let (binding, need) = match self.step(slot)? {
-            Step::Short(b, need) => (b, need),
-            s => return Ok(s),
-        };
-        let consumers = self.consumers_within(&binding);
-        let plan = self.plan(&binding, &consumers);
-        let shortfall = need
-            .saturating_sub(binding.available())
-            .saturating_sub(plan.pending);
-        let tickets = self.request_spills(&consumers, &plan, shortfall);
-        if !tickets.is_empty() {
+        // 2. Spill what pending releases do not cover. Bytes a spill frees
+        // return to the pool, where other consumers' fast path may take
+        // them before this request does: while spills keep freeing memory,
+        // ask again rather than escalate (a bounded number of times).
+        for _ in 0..MAX_SPILL_PASSES {
+            let (binding, need) = match self.step(slot)? {
+                Step::Short(b, need) => (b, need),
+                s => return Ok(s),
+            };
+            let consumers = self.consumers_within(&binding);
+            let plan = self.plan(&binding, &consumers);
+            let shortfall = need
+                .saturating_sub(binding.available())
+                .saturating_sub(plan.pending);
+            let tickets = self.request_spills(&consumers, &plan, shortfall);
+            if tickets.is_empty() {
+                break;
+            }
+            let all: Vec<SpillTicket> = tickets.iter().map(|(t, ..)| t.clone()).collect();
             let deadline = shared.clock.now() + shared.spill_wait_timeout;
             if let Waited::Step(s) = self.wait(slot, deadline, tickets, true).await? {
                 return Ok(s);
             }
+            if all.iter().filter_map(SpillTicket::try_get).sum::<usize>() == 0 {
+                break;
+            }
+        }
+
+        if self.escalation == Escalation::SpillOnly {
+            return match self.step(slot)? {
+                Step::Short(b, _) => Err(self.exhausted(&b)),
+                s => Ok(s),
+            };
         }
 
         // 3. Abort, never more than the shortfall needs.
@@ -297,20 +338,23 @@ impl Round {
         let me = &self.consumer;
         let mut victims: Vec<_> = consumers
             .iter()
-            .filter(|(c, n)| {
-                c.id != me.id && (c.owner.is_none() || c.owner != me.owner) && !aborted(n)
-            })
+            .filter(|(c, n)| c.id != me.id && !aborted(n))
             .filter_map(|(c, n)| {
                 let spill = c.spillable()?;
                 let bytes = spill.spillable_bytes().min(c.used());
                 let excess = plan.excess(n.group_node().as_ref());
-                (bytes > 0).then(|| (excess, bytes, spill, Arc::clone(c), Arc::clone(n)))
+                // The requester's own driver services requests while it
+                // waits, but has already spilled what `SpillOwner::reserve`
+                // asked of it: its other consumers are asked last.
+                let own = c.owner.is_some() && c.owner == me.owner;
+                (bytes > 0).then(|| (own, excess, bytes, spill, Arc::clone(c), Arc::clone(n)))
             })
             .collect();
-        victims.sort_by_key(|(excess, bytes, ..)| std::cmp::Reverse((*excess, *bytes)));
+        victims
+            .sort_by_key(|(own, excess, bytes, ..)| (*own, std::cmp::Reverse((*excess, *bytes))));
         let mut remaining = shortfall;
         let mut tickets = Vec::new();
-        for (_, bytes, spill, c, n) in victims {
+        for (_, _, bytes, spill, c, n) in victims {
             if remaining == 0 {
                 break;
             }
@@ -327,7 +371,11 @@ impl Round {
     }
 
     /// Retries on every release, ticket completion or abort until granted,
-    /// `deadline`, or (with `until_tickets_done`) all tickets completed.
+    /// `deadline`, or (with `until_tickets_done`) all tickets completed. The
+    /// deadline only stops waiting for victims that have not begun their
+    /// spill ([`SpillTicket::started`]): at the deadline those tickets are
+    /// dropped, and the round keeps waiting, with no deadline, for the
+    /// spills already in progress.
     async fn wait(
         &self,
         slot: &Node,
@@ -337,7 +385,7 @@ impl Round {
     ) -> Result<Waited, MemoryError> {
         let shared = &self.node.shared;
         let waiter = shared.release.wait();
-        let mut sleep = shared.clock.sleep_until(deadline)?;
+        let mut sleep = Some(shared.clock.sleep_until(deadline)?);
         loop {
             let mut released = waiter.listen();
             let mut aborted = self.group().map(|g| g.abort_event.listen());
@@ -366,13 +414,21 @@ impl Round {
                     ready |= Pin::new(a).poll(cx).is_ready();
                 }
                 if ready {
-                    Poll::Ready(true)
-                } else {
-                    sleep.as_mut().poll(cx).map(|()| false)
+                    return Poll::Ready(true);
+                }
+                match sleep.as_mut() {
+                    Some(s) => s.as_mut().poll(cx).map(|()| false),
+                    None => Poll::Pending,
                 }
             })
             .await;
-            if !woke {
+            if woke {
+                continue;
+            }
+            // The deadline: give up on victims that never began.
+            sleep = None;
+            tickets.retain(|(t, ..)| t.started());
+            if tickets.is_empty() || !until_tickets_done {
                 return Ok(match self.step(slot)? {
                     Step::Short(..) => Waited::Deadline,
                     s => Waited::Step(s),

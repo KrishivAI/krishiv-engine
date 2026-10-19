@@ -260,3 +260,25 @@ async fn spill_global_spills_the_combined_buffers() {
     drop(manager);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Intermediate merges rewrite only as many runs as it takes to get down to
+/// the fan-in: 16 runs at fan-in 8 merge 8, then 2 (10 runs rewritten, not
+/// 16); 15 runs merge 8; a deep level merges full groups first.
+#[test]
+fn merge_groups_rewrite_no_more_than_needed() {
+    use super::sort::group_size;
+    let plan = |mut total: usize, fan_in: usize| {
+        let mut groups = Vec::new();
+        while total > fan_in {
+            let g = group_size(total, fan_in);
+            groups.push(g);
+            total -= g - 1;
+        }
+        groups
+    };
+    assert_eq!(plan(16, 8), [8, 2]);
+    assert_eq!(plan(15, 8), [8]);
+    assert_eq!(plan(9, 8), [2]);
+    assert_eq!(plan(3, 2), [2]);
+    assert_eq!(plan(40, 4), [4; 12]);
+}

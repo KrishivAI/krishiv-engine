@@ -604,8 +604,26 @@ impl Resolver<'_> {
                 columns,
             } => self.subquery_alias(p, input, alias, columns, env),
             PlanNode::Union {
-                inputs, by_name, ..
-            } => self.union(p, inputs, *by_name, env),
+                inputs,
+                by_name,
+                allow_missing_columns,
+            } => self.union(p, inputs, *by_name, *allow_missing_columns, env),
+            PlanNode::SetOp {
+                left,
+                right,
+                op,
+                all,
+            } => self.set_op(p, left, right, *op, *all, env),
+            PlanNode::ReplicateRows { input, count } => {
+                let c = self.child(input, env)?;
+                let rels = [&c];
+                let b = self.bind(count, &Self::cx(&c.out, &rels, env, "Generate"))?;
+                let node = PlanNode::ReplicateRows {
+                    input: Arc::clone(&c.plan),
+                    count: b.expr,
+                };
+                Ok(self.make(o, node, c.out.to_vec(), &[&c]))
+            }
             PlanNode::Distinct { input } => self.distinct(p, input, env),
             PlanNode::Hint {
                 input,

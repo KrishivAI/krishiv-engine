@@ -5,12 +5,21 @@
 //! [`Spillable::request_spill`], which only sets a flag, wakes the owning
 //! driver and hands back a [`SpillTicket`]. The driver services the request
 //! on its own task: at its next batch boundary, or at once if it is waiting
-//! for memory itself ([`SpillOwner::reserve`]). It spills, shrinks its
-//! reservations and completes the ticket.
+//! for memory itself ([`SpillOwner::reserve`]). It marks the request as
+//! being serviced ([`SpillSignal::begin`]), spills, shrinks its
+//! reservations and completes the ticket. The arbitrator's
+//! `spillWaitTimeout` bounds only the wait for a victim to *begin*: once it
+//! is servicing the request, the round waits for it to finish however long
+//! the spill's I/O takes, so a slow but working spill never turns into an
+//! abort.
 //!
-//! **Self-spill contract.** The arbitrator never asks the requester's own
-//! driver to spill (that driver is busy waiting). A driver whose operator
-//! needs memory therefore spills its *own* consumers first, then asks the
+//! **Self-spill contract.** The arbitrator never asks the requesting
+//! consumer to spill, and asks the other consumers of the requester's
+//! driver only after every other victim: a driver services its own
+//! requests while it waits for memory (a source's or a flush step's
+//! `Reservation::grow` included), so its spillable state, say a sink
+//! downstream of a scan, can make room for it. A driver whose operator
+//! needs memory spills its *own* consumers first, then asks the
 //! arbitrator: [`SpillOwner::reserve`] does both. Sync operator code never
 //! spills or waits inline; on a failed `try_grow` it returns `NeedMemory`
 //! with its state unchanged, and the driver calls [`SpillOwner::reserve`].
@@ -21,6 +30,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Waker};
 
+use crate::arbitrate::Escalation;
 use crate::event::Event;
 use crate::sync::{AtomicUsize, Mutex, Ordering, lock};
 use crate::{ConsumerHandle, ConsumerId, MemoryError, MemoryPool};
@@ -41,7 +51,7 @@ pub trait Spillable: Send + Sync {
     /// boundary, so it must be cheap (one atomic load for [`SpillSignal`]).
     fn spill_requested(&self) -> Option<usize>;
     /// The driver that services this consumer's requests, if any. The
-    /// arbitrator never sends requests to the requester's own driver.
+    /// arbitrator asks the requester's own driver last.
     fn owner(&self) -> Option<OwnerId> {
         None
     }
@@ -50,6 +60,8 @@ pub trait Spillable: Send + Sync {
 #[derive(Debug, Default)]
 struct TicketState {
     freed: Option<usize>,
+    /// The owner has begun servicing the request ([`SpillSignal::begin`]).
+    started: bool,
     wakers: Vec<Waker>,
 }
 
@@ -93,6 +105,14 @@ impl SpillTicket {
     /// The bytes freed, if the owner has completed the request.
     pub fn try_get(&self) -> Option<usize> {
         lock(&self.cell.state).freed
+    }
+
+    /// Whether the owner has begun servicing the request (or completed
+    /// it): it will complete without the owner reaching another batch
+    /// boundary.
+    pub fn started(&self) -> bool {
+        let s = lock(&self.cell.state);
+        s.started || s.freed.is_some()
     }
 }
 
@@ -153,6 +173,30 @@ impl SpillSignal {
         self.spillable.store(bytes, Ordering::Release);
     }
 
+    /// Owner side: starts servicing the pending request, if any. Its
+    /// tickets report [`SpillTicket::started`] from now on, so the
+    /// arbitrator waits for this spill without a deadline; requests that
+    /// arrive before it completes join it. Complete it with
+    /// [`SpillService::complete`]; dropping the guard instead (an error or
+    /// a cancelled service) completes it with 0 bytes, so a started request
+    /// can never be left waiting.
+    pub fn begin(&self) -> Option<SpillService<'_>> {
+        let target = {
+            let mut p = lock(&self.pending);
+            if p.target == 0 {
+                return None;
+            }
+            let cell = Arc::clone(p.cell.get_or_insert_with(Arc::default));
+            lock(&cell.state).started = true;
+            p.target
+        };
+        Some(SpillService {
+            signal: self,
+            target,
+            done: false,
+        })
+    }
+
     /// Owner side: the pending request is done (`freed` may be 0 if nothing
     /// could be spilled). Clears the request and completes every ticket of
     /// it; a request that arrives afterwards starts a new generation.
@@ -204,6 +248,37 @@ impl Spillable for SpillSignal {
 impl Drop for SpillSignal {
     fn drop(&mut self) {
         self.complete(0);
+    }
+}
+
+/// A spill request being serviced ([`SpillSignal::begin`]); completes the
+/// request with 0 bytes if dropped before [`complete`](Self::complete).
+#[derive(Debug)]
+#[must_use = "dropping the guard completes the request with 0 bytes"]
+pub struct SpillService<'a> {
+    signal: &'a SpillSignal,
+    target: usize,
+    done: bool,
+}
+
+impl SpillService<'_> {
+    /// The bytes requested (the largest target when it began).
+    pub fn target(&self) -> usize {
+        self.target
+    }
+
+    /// The spill freed `freed` bytes: completes every ticket of the request.
+    pub fn complete(mut self, freed: usize) {
+        self.done = true;
+        self.signal.complete(freed);
+    }
+}
+
+impl Drop for SpillService<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            self.signal.complete(0);
+        }
     }
 }
 
@@ -305,7 +380,33 @@ impl SpillOwner {
         F: FnMut() -> Fut,
         Fut: Future<Output = ()>,
     {
-        self.reserve(&**consumer.pool(), consumer.id(), bytes, service)
+        let (pool, id) = (&**consumer.pool(), consumer.id());
+        self.reserve_with(pool, id, bytes, Escalation::Abort, service)
+            .await?;
+        consumer.add_credit(bytes);
+        Ok(())
+    }
+
+    /// [`reserve_for`](Self::reserve_for) through
+    /// [`MemoryPool::reserve_without_abort`]: self-spill, then spill
+    /// requests to other drivers, but never an abort. For requests with a
+    /// cheaper fallback (repartitioning a grace hash join partition).
+    ///
+    /// # Errors
+    /// [`MemoryError::Exhausted`] when spilling could not make room; as
+    /// [`MemoryPool::reserve`] otherwise.
+    pub async fn reserve_for_without_abort<F, Fut>(
+        &self,
+        consumer: &ConsumerHandle,
+        bytes: usize,
+        service: F,
+    ) -> Result<(), MemoryError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let (pool, id) = (&**consumer.pool(), consumer.id());
+        self.reserve_with(pool, id, bytes, Escalation::SpillOnly, service)
             .await?;
         consumer.add_credit(bytes);
         Ok(())
@@ -328,6 +429,22 @@ impl SpillOwner {
         pool: &dyn MemoryPool,
         id: ConsumerId,
         bytes: usize,
+        service: F,
+    ) -> Result<(), MemoryError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        self.reserve_with(pool, id, bytes, Escalation::Abort, service)
+            .await
+    }
+
+    async fn reserve_with<F, Fut>(
+        &self,
+        pool: &dyn MemoryPool,
+        id: ConsumerId,
+        bytes: usize,
+        escalation: Escalation,
         mut service: F,
     ) -> Result<(), MemoryError>
     where
@@ -359,7 +476,10 @@ impl SpillOwner {
                 return Ok(());
             }
         }
-        let mut arbitration = pool.reserve(id, bytes);
+        let mut arbitration = match escalation {
+            Escalation::Abort => pool.reserve(id, bytes),
+            Escalation::SpillOnly => pool.reserve_without_abort(id, bytes),
+        };
         loop {
             let mut requested = self.requested.listen();
             // Service once, then always poll arbitration too: a request the

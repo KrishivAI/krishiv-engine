@@ -22,6 +22,7 @@ use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
     FileFormat, FileRef, FormatOptions, IoConfig, IoScheduler, MetadataNeeds, StoreId,
 };
+use krishiv_memory::{MemoryConfig, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_plan::analyzer::testing::{block_on, context};
 use krishiv_plan::analyzer::{
     AnalysisContext, Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf, TableColumn,
@@ -177,6 +178,16 @@ impl Tpch {
         text: &str,
         order: Order,
     ) -> Result<PhysicalPlan, KrishivError> {
+        self.plan_sql_in(text, order, None)
+    }
+
+    /// As [`Self::plan_sql_with`], its operators spilling into `spill`.
+    pub(crate) fn plan_sql_in(
+        &self,
+        text: &str,
+        order: Order,
+        spill: Option<&SpillScope>,
+    ) -> Result<PhysicalPlan, KrishivError> {
         let plan =
             krishiv_sql::parse_and_lower(text, &krishiv_sql::ParserOptions::default(), SourceId(0))
                 .map_err(KrishivError::from)?;
@@ -189,7 +200,10 @@ impl Tpch {
             Order::Defaults => krishiv_optimizer::optimize(&plan)?,
             Order::Written => krishiv_optimizer::optimize_as_written(&plan)?,
         };
-        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        let mut cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        if let Some(scope) = spill {
+            cx = cx.with_spill(scope.clone());
+        }
         DefaultPlanner.plan(&plan, &cx)
     }
 }
@@ -448,6 +462,64 @@ fn tpch_sf1_matches_spark() {
     check(Path::new(&dir), &answers);
 }
 
+/// TPC-H Q9 and Q18 at SF1 (`KRISHIV_TPCH_SF1_DIR`) under a tight memory
+/// limit (`KRISHIV_TPCH_MEMORY_MIB`, default 64) on the threaded executor
+/// with the system clock: both spill and still match Spark. Run with
+/// `cargo test --release -p krishiv-exec --test planner tpch_sf1_tight -- --ignored`.
+#[test]
+#[ignore = "needs the TPC-H SF1 data set"]
+fn tpch_sf1_tight_memory_spills_and_matches_spark() {
+    let dir = std::env::var("KRISHIV_TPCH_SF1_DIR").expect("KRISHIV_TPCH_SF1_DIR");
+    let mib: usize = std::env::var("KRISHIV_TPCH_MEMORY_MIB")
+        .map_or(64, |v| v.parse().expect("KRISHIV_TPCH_MEMORY_MIB"));
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = parquet_tables(Path::new(&dir), &rt);
+    let answers = answers(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tpch-sf1-spark-answers.json"),
+    );
+    let spill_dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("tpch-sf1-tight-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: spill_dir,
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    for q in [9, 18] {
+        let scope = manager.scope().unwrap();
+        let plan = tpch
+            .plan_sql_in(&sql(q), Order::Statistics, Some(&scope))
+            .unwrap();
+        let root = TreePool::new(&MemoryConfig {
+            limit: Some(mib << 20),
+            ..MemoryConfig::default()
+        });
+        let start = std::time::Instant::now();
+        let (out, query) = super::run_in(&plan, &root);
+        let elapsed = start.elapsed();
+        let got = rows(&out.unwrap_or_else(|e| panic!("q{q:02} under {mib} MiB: {e}")));
+        let metrics = query.metrics();
+        // Bytes written to spill files, by any operator.
+        let spilled: u64 = metrics
+            .operators
+            .values()
+            .flat_map(|e| &e.extra)
+            .filter(|(name, _)| name.contains("spill") && name.ends_with("bytes"))
+            .map(|(_, v)| v)
+            .sum();
+        let stats = root.stats();
+        eprintln!(
+            "q{q:02} under {mib} MiB: {elapsed:.2?}, {spilled} bytes spilled, {} rounds, {} spill requests, {} aborts",
+            stats.rounds, stats.spill_requests, stats.aborts
+        );
+        assert_eq!(got, expected_rows(&answers, &format!("q{q:02}")), "q{q:02}");
+        assert!(spilled > 0, "q{q:02} spilled under {mib} MiB");
+        assert_eq!(stats.aborts, 0, "q{q:02}");
+    }
+}
+
 /// The physical plans of the 22 queries over the SF 0.01 tables (their
 /// footers' row counts order the joins).
 #[test]
@@ -661,4 +733,55 @@ fn tpch_sf10_join_order_within_2x_of_hand_ordered() {
         }
     }
     assert!(slow.is_empty(), "over 2x the hand-ordered time: {slow:?}");
+}
+
+/// TPC-H Q21 at SF10 (`KRISHIV_TPCH_SF10_DIR`) under a memory limit
+/// (`KRISHIV_TPCH_MEMORY_MIB`, default 12 GiB) completes, without a spill
+/// scope (as a session runs it) or with one (`KRISHIV_TPCH_SPILL=1`), and
+/// reports the operators' peak reservations. Run with `cargo test --release
+/// -p krishiv-exec --test planner tpch_sf10_q21 -- --ignored --nocapture`.
+#[test]
+#[ignore = "needs the TPC-H SF10 data set"]
+fn tpch_sf10_q21_completes_under_the_memory_limit() {
+    let dir = std::env::var("KRISHIV_TPCH_SF10_DIR").expect("KRISHIV_TPCH_SF10_DIR");
+    let mib: usize = std::env::var("KRISHIV_TPCH_MEMORY_MIB")
+        .map_or(12 << 10, |v| v.parse().expect("KRISHIV_TPCH_MEMORY_MIB"));
+    let spill = std::env::var("KRISHIV_TPCH_SPILL").is_ok_and(|v| v == "1");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = parquet_tables(Path::new(&dir), &rt);
+    let spill_dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("tpch-sf10-q21-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: spill_dir,
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    let plan = tpch
+        .plan_sql_in(&sql(21), Order::Statistics, spill.then_some(&scope))
+        .unwrap();
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(mib << 20),
+        ..MemoryConfig::default()
+    });
+    let start = std::time::Instant::now();
+    let (out, query) = super::run_in(&plan, &root);
+    let elapsed = start.elapsed();
+    let metrics = query.metrics();
+    let mut peaks: Vec<(u64, &str)> = metrics
+        .operators
+        .values()
+        .map(|e| (e.metrics.peak_reserved, e.name))
+        .collect();
+    peaks.sort_unstable_by(|a, b| b.cmp(a));
+    let total: u64 = peaks.iter().map(|(p, _)| p).sum();
+    eprintln!(
+        "q21 under {mib} MiB (spill {spill}): {elapsed:.2?}, operator peaks summed {total} bytes, largest {:?}",
+        &peaks[..peaks.len().min(4)]
+    );
+    let got = rows(&out.unwrap_or_else(|e| panic!("q21 under {mib} MiB: {e}")));
+    assert_eq!(got.len(), 100, "q21 returns 100 rows");
 }

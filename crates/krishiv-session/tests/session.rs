@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
 use arrow_array::{Int32Array, RecordBatch, StringArray};
@@ -104,9 +105,9 @@ fn errors_surface_where_spark_raises_them() {
         class(block_on(s.sql("SELECT nope FROM people"))),
         ErrorClass::UnresolvedColumnWithSuggestion
     );
-    let e = block_on(s.sql("EXPLAIN SELECT 1")).unwrap_err();
+    let e = block_on(s.sql("EXPLAIN EXPLAIN SELECT 1")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.to_string().contains("EXPLAIN statements"), "{e}");
+    assert!(e.to_string().contains("EXPLAIN of an EXPLAIN"), "{e}");
     // DataFrames fail at their first action.
     let df = s.table("people").select([col("nope")]);
     assert_eq!(
@@ -565,6 +566,296 @@ fn temp_views_resolve_for_unqualified_names_only() {
     }
 }
 
+/// A session over `events(id INT, tag STRING)`, rows in this order:
+/// (3, 'c'), (1, NULL), (2, 'b'), (5, NULL).
+fn events_session(builder: krishiv_session::SessionBuilder) -> Session {
+    use arrow_array::StringViewArray;
+    let s = builder.build().unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", ArrowType::Int32, false),
+        Field::new("tag", ArrowType::Utf8View, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![3, 1, 2, 5])),
+            Arc::new(StringViewArray::from(vec![
+                Some("c"),
+                None,
+                Some("b"),
+                None,
+            ])),
+        ],
+    )
+    .unwrap();
+    s.register_batches("events", schema, vec![batch]).unwrap();
+    s
+}
+
+/// One row of strings (NULL as `~`) from a query's result.
+fn row(s: &Session, sql: &str) -> Vec<String> {
+    let batches = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    assert_eq!(
+        batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        1,
+        "{sql}"
+    );
+    batches[0]
+        .columns()
+        .iter()
+        .map(|c| {
+            if c.is_null(0) {
+                return "~".to_owned();
+            }
+            match c.data_type() {
+                ArrowType::Utf8View => c.as_string_view().value(0).to_owned(),
+                ArrowType::Int32 => c.as_primitive::<Int32Type>().value(0).to_string(),
+                ArrowType::Decimal128(_, s) => {
+                    let v = c
+                        .as_primitive::<arrow_array::types::Decimal128Type>()
+                        .value(0);
+                    format!("{v}e-{s}")
+                }
+                ArrowType::Timestamp(_, _) => c
+                    .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+                    .value(0)
+                    .to_string(),
+                other => format!("{other}"),
+            }
+        })
+        .collect()
+}
+
+fn sql_error(s: &Session, sql: &str) -> KrishivError {
+    block_on(async { s.sql(sql).await?.collect().await }).unwrap_err()
+}
+
+/// Spark 4.2: `first`/`last` pick by input order, a NULL counting unless
+/// `ignoreNulls`; `IGNORE NULLS` / `RESPECT NULLS` set the flag.
+#[test]
+fn first_and_last_aggregates() {
+    let s = events_session(Session::builder());
+    assert_eq!(
+        row(
+            &s,
+            "SELECT first(tag), last(tag), first(tag, true), last(tag, true), first(id), last(id) FROM events"
+        ),
+        ["c", "~", "c", "b", "3", "5"]
+    );
+    assert_eq!(
+        row(
+            &s,
+            "SELECT first_value(tag), last_value(tag), first_value(tag, true), last_value(tag, true) FROM events"
+        ),
+        ["c", "~", "c", "b"]
+    );
+    assert_eq!(
+        row(
+            &s,
+            "SELECT first(tag) IGNORE NULLS, last(tag) IGNORE NULLS, first_value(tag) IGNORE NULLS FROM events"
+        ),
+        ["c", "b", "c"]
+    );
+    // RESPECT NULLS clears the flag, IGNORE NULLS sets it, whatever was written.
+    assert_eq!(
+        row(
+            &s,
+            "SELECT first(tag, false) IGNORE NULLS, last(tag, false) IGNORE NULLS, last(tag, true) RESPECT NULLS FROM events"
+        ),
+        ["c", "b", "~"]
+    );
+    // No rows: NULL.
+    assert_eq!(
+        row(
+            &s,
+            "SELECT first(tag), last(id, true) FROM events WHERE id > 100"
+        ),
+        ["~", "~"]
+    );
+    // Grouped, with the type of the argument.
+    let batches = block_on(
+        block_on(s.sql("SELECT id > 2 AS big, first(tag), last(tag, true) FROM events GROUP BY id > 2 ORDER BY big")).unwrap().collect(),
+    )
+    .unwrap();
+    let b = &batches[0];
+    assert_eq!(b.num_rows(), 2);
+    let (first, last) = (b.column(1).as_string_view(), b.column(2).as_string_view());
+    assert!(first.is_null(0) && last.value(0) == "b");
+    assert_eq!((first.value(1), last.value(1)), ("c", "c"));
+    // The generated name leaves the flag out, as Spark's does.
+    let df = block_on(
+        s.sql("SELECT first(tag, true), last_value(tag) IGNORE NULLS, first(id) FROM events"),
+    )
+    .unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    let names: Vec<_> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, ["first(tag)", "last_value(tag)", "first(id)"]);
+    // The flag must be a boolean literal; other functions refuse the clause.
+    for sql in [
+        "SELECT first(tag, id > 2) FROM events",
+        "SELECT first(tag, NULL) FROM events",
+        "SELECT last_value(id, 1) FROM events",
+    ] {
+        let e = sql_error(&s, sql);
+        assert_eq!(e.error_class(), ErrorClass::LegacyErrorTemp1210, "{sql}");
+    }
+    for sql in [
+        "SELECT first(id, true, true) FROM events",
+        "SELECT first(id, true, 1) IGNORE NULLS FROM events",
+    ] {
+        let e = sql_error(&s, sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::WrongNumArgsWithoutSuggestion,
+            "{sql}"
+        );
+    }
+    let e = sql_error(&s, "SELECT sum(id) IGNORE NULLS FROM events");
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+/// The session principal and the query clock.
+#[test]
+fn session_user_and_local_timestamp() {
+    use krishiv_plan::analyzer::{Principal, PrincipalKind};
+    let s =
+        events_session(Session::builder().principal(Principal::new("etl", PrincipalKind::Service)));
+    assert_eq!(
+        row(
+            &s,
+            "SELECT current_user(), user(), session_user(), current_user, user, session_user FROM events LIMIT 1"
+        ),
+        ["etl"; 6]
+    );
+    // `localtimestamp` is the session zone's wall clock, read from the same
+    // query clock as `current_timestamp`.
+    let s = events_session(Session::builder().config("spark.sql.session.timeZone", "+05:30"));
+    let r = row(
+        &s,
+        "SELECT localtimestamp(), current_timestamp() FROM events LIMIT 1",
+    );
+    let (local, instant): (i64, i64) = (r[0].parse().unwrap(), r[1].parse().unwrap());
+    assert_eq!(local - instant, 19_800_000_000);
+    let df = block_on(s.sql("SELECT localtimestamp() FROM events")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(
+        schema.field(0).data_type(),
+        &ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
+    );
+    assert!(!schema.field(0).is_nullable());
+    // `current_time` is a TIME, which has no Krishiv type yet.
+    for sql in [
+        "SELECT current_time() FROM events",
+        "SELECT current_time(3) FROM events",
+    ] {
+        assert_eq!(
+            sql_error(&s, sql).error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+    }
+    // A zone that is not a fixed offset needs the tz database: refused, not
+    // read as UTC.
+    let s =
+        events_session(Session::builder().config("spark.sql.session.timeZone", "America/New_York"));
+    for sql in [
+        "SELECT localtimestamp() FROM events",
+        "SELECT current_date() FROM events",
+    ] {
+        assert_eq!(
+            sql_error(&s, sql).error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+    }
+}
+
+/// Spark 4.2 folds `CAST(x AS FLOAT/DECIMAL/DOUBLE)` scales of `round`
+/// (checked against the oracle).
+#[test]
+fn round_scales_written_as_casts_fold() {
+    let s = events_session(Session::builder());
+    let r = |sql: &str| row(&s, &format!("SELECT {sql} FROM events LIMIT 1"));
+    assert_eq!(r("round(id, CAST(1.5 AS FLOAT))"), ["3"]);
+    assert_eq!(r("round(2.345, CAST(1.5 AS FLOAT))"), ["23e-1"]);
+    assert_eq!(r("round(2.345, CAST(2.5 AS DECIMAL(10,1)))"), ["235e-2"]);
+    // A decimal target rounds 2.5 to 3 first: scale 3.
+    assert_eq!(r("round(2.345, CAST(2.5 AS DECIMAL(10,0)))"), ["2345e-3"]);
+    assert_eq!(r("bround(2.345, CAST(2.9 AS FLOAT))"), ["234e-2"]);
+    assert_eq!(r("round(2.345, CAST(-0.5 AS FLOAT))"), ["2e-0"]);
+    assert_eq!(r("round(1234.5, CAST(-1.5 AS DOUBLE))"), ["1230e-0"]);
+    assert_eq!(r("round(2.345, CAST('2.7' AS DOUBLE))"), ["235e-2"]);
+    assert_eq!(
+        r("round(2.345, CAST(CAST(2.5 AS FLOAT) AS DOUBLE))"),
+        ["235e-2"]
+    );
+    assert_eq!(r("round(2.345, CAST(NULL AS FLOAT))"), ["~"]);
+    assert_eq!(r("round(2.345, 1.5)"), ["23e-1"]);
+    // Failing casts raise Spark's error where the scale is read.
+    for (sql, class) in [
+        (
+            "round(2.345, CAST(1e30 AS DOUBLE))",
+            ErrorClass::CastOverflow,
+        ),
+        (
+            "round(2.345, CAST(3000000000.5 AS FLOAT))",
+            ErrorClass::CastOverflow,
+        ),
+        ("round(2.345, 1e30D)", ErrorClass::CastOverflow),
+        (
+            "round(2.345, CAST('x' AS FLOAT))",
+            ErrorClass::CastInvalidInput,
+        ),
+        (
+            "round(2.345, CAST(300 AS TINYINT))",
+            ErrorClass::CastOverflow,
+        ),
+        (
+            "round(2.345, CAST(99.5 AS DECIMAL(2,0)))",
+            ErrorClass::NumericValueOutOfRangeWithSuggestion,
+        ),
+        // A column is not foldable: round checks its scale as an input,
+        // ceil/floor as an argument.
+        (
+            "round(2.345, id)",
+            ErrorClass::DatatypeMismatchNonFoldableInput,
+        ),
+        (
+            "bround(2.5D, CAST(id AS FLOAT))",
+            ErrorClass::DatatypeMismatchNonFoldableInput,
+        ),
+        ("floor(2.345, id)", ErrorClass::NonFoldableArgument),
+        (
+            "floor(2.345, CAST('x' AS INT))",
+            ErrorClass::CastInvalidInput,
+        ),
+        (
+            "ceil(2.345, CAST(300 AS TINYINT))",
+            ErrorClass::NonFoldableArgument,
+        ),
+        (
+            "ceil(2.345, CAST(1.5 AS FLOAT))",
+            ErrorClass::NonFoldableArgument,
+        ),
+    ] {
+        let e = sql_error(&s, &format!("SELECT {sql} FROM events"));
+        assert_eq!(e.error_class(), class, "{sql}: {e}");
+    }
+}
+
+/// A table registered from `Utf8` batches aggregates strings like `Utf8View` ones.
+#[test]
+fn string_aggregates_over_utf8_tables() {
+    let s = session();
+    assert_eq!(
+        row(
+            &s,
+            "SELECT min(name), max(name), first(name), last(name, true) FROM people"
+        ),
+        ["b", "c", "c", "b"]
+    );
+}
+
 #[test]
 fn names_outside_a_single_part_namespace_are_rejected() {
     // Spark 4.2.0: "[REQUIRES_SINGLE_PART_NAMESPACE] spark_catalog requires
@@ -797,4 +1088,42 @@ async fn view_over_files(s: &Session, root: &str) {
         .unwrap();
     let df = s.sql("SELECT id FROM d WHERE id > 1").await.unwrap();
     assert_eq!(ids(&df.collect().await.unwrap()), [2]);
+}
+
+/// TPC-DS q66 (`sum(jan_sales / w_warehouse_sq_ft)`), reduced to one
+/// group: Spark 4.2 types `DECIMAL(38,2) / BIGINT` as `DECIMAL(38,6)` and
+/// rounds each quotient HALF_UP to that scale before `sum` adds them
+/// (11.450440 + 0.244532), so the result is 11.694972, not the exact sum
+/// 11.6949728... rounded (11.694973) that a double-precision division gives.
+#[test]
+fn decimal_quotients_round_before_they_are_summed() {
+    use arrow_array::{Decimal128Array, Int64Array};
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("sales", ArrowType::Decimal128(38, 2), false),
+        Field::new("sq_ft", ArrowType::Int64, false),
+    ]));
+    let sales = Decimal128Array::from(vec![1_119_609_176, 23_910_068])
+        .with_precision_and_scale(38, 2)
+        .unwrap();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(sales),
+            Arc::new(Int64Array::from(vec![977_787, 977_787])),
+        ],
+    )
+    .unwrap();
+    s.register_batches("warehouse_sales", schema, vec![batch])
+        .unwrap();
+    let df = block_on(s.sql("SELECT sum(sales / sq_ft) FROM warehouse_sales")).unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    assert_eq!(
+        batches[0].schema().field(0).data_type(),
+        &ArrowType::Decimal128(38, 6)
+    );
+    assert_eq!(
+        row(&s, "SELECT sum(sales / sq_ft) FROM warehouse_sales"),
+        ["11694972e-6"]
+    );
 }
