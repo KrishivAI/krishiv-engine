@@ -231,7 +231,7 @@ class DataFrame:
         try:
             importlib.import_module("pandas")  # pandas itself is optional: only checked here
         except ImportError as e:
-            raise ImportError("toPandas needs pandas; install it with `pip install pandas`") from e
+            raise ImportError("toPandas needs pandas; install it with `pip install krishiv[pandas]`") from e
         return _convert.session_local(table, self._session_zone()).to_pandas()
 
     def collect(self) -> list[Row]:
