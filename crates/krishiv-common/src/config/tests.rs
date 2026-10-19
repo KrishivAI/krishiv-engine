@@ -409,3 +409,14 @@ fn positive_ints_reject_zero_and_negatives() {
     }
     assert_eq!(ValueType::PositiveInt.to_string(), "positive int");
 }
+
+#[test]
+fn unset_restores_defaults() {
+    let mut c = Config::new();
+    c.set("spark.sql.ansi.enabled", "false").unwrap();
+    c.set("my.app.flag", "1").unwrap();
+    c.unset("krishiv.sql.ansi.enabled");
+    c.unset("my.app.flag");
+    c.unset("never.set");
+    assert_eq!(c, Config::new());
+}

@@ -14,8 +14,8 @@ use krishiv_common::secret::OptionValue;
 
 use super::catalog::quoted;
 use super::{
-    AccessDecision, AnalysisContext, AnalysisError, Catalog, FunctionLookup, Privilege, Securable,
-    SourceKind, TableColumn, TableIdent, TableKind, TableMeta,
+    AccessDecision, AnalysisContext, AnalysisError, Catalog, FunctionLookup, NameForm, Privilege,
+    Securable, SourceKind, TableColumn, TableIdent, TableKind, TableMeta,
 };
 use crate::walk::{self, Node};
 use crate::{
@@ -294,6 +294,14 @@ fn locate(ctx: &AnalysisContext, parts: &[String]) -> Option<(Arc<dyn Catalog>, 
     Some((catalog, ident))
 }
 
+/// How the name `parts` was written, for the catalog that loads it.
+fn form(parts: &[String], case_sensitive: bool) -> NameForm {
+    NameForm {
+        case_sensitive,
+        qualified: parts.len() > 1,
+    }
+}
+
 /// `ident` as a catalog resolving case-insensitively sees it.
 fn fold(ident: &TableIdent, case_sensitive: bool) -> TableIdent {
     if case_sensitive {
@@ -436,7 +444,7 @@ async fn load(
         };
         b.epochs.insert(catalog.name().to_owned(), catalog.epoch());
         let mut meta = catalog
-            .load_table(&ident, version, cs)
+            .load_table(&ident, version, form(name, cs))
             .await
             .map_err(failed)?;
         if let Some(m) = &meta
@@ -448,7 +456,7 @@ async fn load(
             }
             // Another spelling of a table already pinned: read the pin.
             meta = catalog
-                .load_table(&ident, Some(pinned), cs)
+                .load_table(&ident, Some(pinned), form(name, cs))
                 .await
                 .map_err(failed)?;
         }

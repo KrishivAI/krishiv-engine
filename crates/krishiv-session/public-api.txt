@@ -1,0 +1,207 @@
+pub mod krishiv_session
+pub mod krishiv_session::functions
+pub trait krishiv_session::functions::IntoLiteral
+pub fn krishiv_session::functions::IntoLiteral::into_literal(self) -> krishiv_plan::literal::Literal
+impl krishiv_session::functions::IntoLiteral for &str
+pub fn &str::into_literal(self) -> krishiv_plan::literal::Literal
+impl krishiv_session::functions::IntoLiteral for alloc::string::String
+pub fn alloc::string::String::into_literal(self) -> krishiv_plan::literal::Literal
+impl krishiv_session::functions::IntoLiteral for bool
+pub fn bool::into_literal(self) -> krishiv_plan::literal::Literal
+impl krishiv_session::functions::IntoLiteral for f32
+pub fn f32::into_literal(self) -> krishiv_plan::literal::Literal
+impl krishiv_session::functions::IntoLiteral for f64
+pub fn f64::into_literal(self) -> krishiv_plan::literal::Literal
+impl krishiv_session::functions::IntoLiteral for i16
+pub fn i16::into_literal(self) -> krishiv_plan::literal::Literal
+impl krishiv_session::functions::IntoLiteral for i32
+pub fn i32::into_literal(self) -> krishiv_plan::literal::Literal
+impl krishiv_session::functions::IntoLiteral for i64
+pub fn i64::into_literal(self) -> krishiv_plan::literal::Literal
+impl krishiv_session::functions::IntoLiteral for i8
+pub fn i8::into_literal(self) -> krishiv_plan::literal::Literal
+pub fn krishiv_session::functions::avg(krishiv_session::Column) -> krishiv_session::Column
+pub fn krishiv_session::functions::call_function(&str, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::Column
+pub fn krishiv_session::functions::coalesce(impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::Column
+pub fn krishiv_session::functions::col(&str) -> krishiv_session::Column
+pub fn krishiv_session::functions::count(krishiv_session::Column) -> krishiv_session::Column
+pub fn krishiv_session::functions::count_distinct(impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::Column
+pub fn krishiv_session::functions::count_star() -> krishiv_session::Column
+pub fn krishiv_session::functions::lit(impl krishiv_session::functions::IntoLiteral) -> krishiv_session::Column
+pub fn krishiv_session::functions::max(krishiv_session::Column) -> krishiv_session::Column
+pub fn krishiv_session::functions::min(krishiv_session::Column) -> krishiv_session::Column
+pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
+#[non_exhaustive] pub enum krishiv_session::ExplainMode
+pub krishiv_session::ExplainMode::Extended
+pub krishiv_session::ExplainMode::Simple
+impl core::clone::Clone for krishiv_session::ExplainMode
+pub fn krishiv_session::ExplainMode::clone(&self) -> krishiv_session::ExplainMode
+impl core::cmp::Eq for krishiv_session::ExplainMode
+impl core::cmp::PartialEq for krishiv_session::ExplainMode
+pub fn krishiv_session::ExplainMode::eq(&self, &krishiv_session::ExplainMode) -> bool
+impl core::fmt::Debug for krishiv_session::ExplainMode
+pub fn krishiv_session::ExplainMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::ExplainMode
+impl core::marker::StructuralPartialEq for krishiv_session::ExplainMode
+#[non_exhaustive] pub enum krishiv_session::JoinType
+pub krishiv_session::JoinType::FullOuter
+pub krishiv_session::JoinType::Inner
+pub krishiv_session::JoinType::LeftAnti
+pub krishiv_session::JoinType::LeftOuter
+pub krishiv_session::JoinType::LeftSemi
+pub krishiv_session::JoinType::RightOuter
+impl core::clone::Clone for krishiv_session::JoinType
+pub fn krishiv_session::JoinType::clone(&self) -> krishiv_session::JoinType
+impl core::cmp::Eq for krishiv_session::JoinType
+impl core::cmp::PartialEq for krishiv_session::JoinType
+pub fn krishiv_session::JoinType::eq(&self, &krishiv_session::JoinType) -> bool
+impl core::fmt::Debug for krishiv_session::JoinType
+pub fn krishiv_session::JoinType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::JoinType
+impl core::marker::StructuralPartialEq for krishiv_session::JoinType
+pub struct krishiv_session::Column
+impl krishiv_session::Column
+pub fn krishiv_session::Column::alias(self, &str) -> Self
+pub fn krishiv_session::Column::and(self, impl core::convert::Into<Self>) -> Self
+pub fn krishiv_session::Column::asc(self) -> Self
+pub fn krishiv_session::Column::asc_nulls_last(self) -> Self
+pub fn krishiv_session::Column::between(self, impl core::convert::Into<Self>, impl core::convert::Into<Self>) -> Self
+pub fn krishiv_session::Column::cast(self, krishiv_types::data_type::DataType) -> Self
+pub fn krishiv_session::Column::desc(self) -> Self
+pub fn krishiv_session::Column::desc_nulls_first(self) -> Self
+pub fn krishiv_session::Column::eq(self, impl core::convert::Into<Self>) -> Self
+pub fn krishiv_session::Column::eq_null_safe(self, impl core::convert::Into<Self>) -> Self
+pub fn krishiv_session::Column::gt(self, impl core::convert::Into<Self>) -> Self
+pub fn krishiv_session::Column::gt_eq(self, impl core::convert::Into<Self>) -> Self
+pub fn krishiv_session::Column::is_in(self, impl core::iter::traits::collect::IntoIterator<Item = Self>) -> Self
+pub fn krishiv_session::Column::is_not_null(self) -> Self
+pub fn krishiv_session::Column::is_null(self) -> Self
+pub fn krishiv_session::Column::like(self, &str) -> Self
+pub fn krishiv_session::Column::lt(self, impl core::convert::Into<Self>) -> Self
+pub fn krishiv_session::Column::lt_eq(self, impl core::convert::Into<Self>) -> Self
+pub fn krishiv_session::Column::not_eq(self, impl core::convert::Into<Self>) -> Self
+pub fn krishiv_session::Column::or(self, impl core::convert::Into<Self>) -> Self
+impl core::clone::Clone for krishiv_session::Column
+pub fn krishiv_session::Column::clone(&self) -> krishiv_session::Column
+impl core::cmp::Eq for krishiv_session::Column
+impl core::cmp::PartialEq for krishiv_session::Column
+pub fn krishiv_session::Column::eq(&self, &krishiv_session::Column) -> bool
+impl core::convert::From<&str> for krishiv_session::Column
+pub fn krishiv_session::Column::from(&str) -> Self
+impl core::convert::From<bool> for krishiv_session::Column
+pub fn krishiv_session::Column::from(bool) -> Self
+impl core::convert::From<f32> for krishiv_session::Column
+pub fn krishiv_session::Column::from(f32) -> Self
+impl core::convert::From<f64> for krishiv_session::Column
+pub fn krishiv_session::Column::from(f64) -> Self
+impl core::convert::From<i16> for krishiv_session::Column
+pub fn krishiv_session::Column::from(i16) -> Self
+impl core::convert::From<i32> for krishiv_session::Column
+pub fn krishiv_session::Column::from(i32) -> Self
+impl core::convert::From<i64> for krishiv_session::Column
+pub fn krishiv_session::Column::from(i64) -> Self
+impl core::convert::From<i8> for krishiv_session::Column
+pub fn krishiv_session::Column::from(i8) -> Self
+impl core::fmt::Debug for krishiv_session::Column
+pub fn krishiv_session::Column::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::Column
+impl core::ops::arith::Neg for krishiv_session::Column
+pub type krishiv_session::Column::Output = krishiv_session::Column
+pub fn krishiv_session::Column::neg(self) -> krishiv_session::Column
+impl core::ops::bit::Not for krishiv_session::Column
+pub type krishiv_session::Column::Output = krishiv_session::Column
+pub fn krishiv_session::Column::not(self) -> krishiv_session::Column
+impl<T: core::convert::Into<krishiv_session::Column>> core::ops::arith::Add<T> for krishiv_session::Column
+pub type krishiv_session::Column::Output = krishiv_session::Column
+pub fn krishiv_session::Column::add(self, T) -> krishiv_session::Column
+impl<T: core::convert::Into<krishiv_session::Column>> core::ops::arith::Div<T> for krishiv_session::Column
+pub type krishiv_session::Column::Output = krishiv_session::Column
+pub fn krishiv_session::Column::div(self, T) -> krishiv_session::Column
+impl<T: core::convert::Into<krishiv_session::Column>> core::ops::arith::Mul<T> for krishiv_session::Column
+pub type krishiv_session::Column::Output = krishiv_session::Column
+pub fn krishiv_session::Column::mul(self, T) -> krishiv_session::Column
+impl<T: core::convert::Into<krishiv_session::Column>> core::ops::arith::Rem<T> for krishiv_session::Column
+pub type krishiv_session::Column::Output = krishiv_session::Column
+pub fn krishiv_session::Column::rem(self, T) -> krishiv_session::Column
+impl<T: core::convert::Into<krishiv_session::Column>> core::ops::arith::Sub<T> for krishiv_session::Column
+pub type krishiv_session::Column::Output = krishiv_session::Column
+pub fn krishiv_session::Column::sub(self, T) -> krishiv_session::Column
+pub struct krishiv_session::DataFrame
+impl krishiv_session::DataFrame
+pub fn krishiv_session::DataFrame::agg(&self, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> Self
+pub fn krishiv_session::DataFrame::alias(&self, &str) -> Self
+pub fn krishiv_session::DataFrame::col(&self, &str) -> krishiv_session::Column
+pub async fn krishiv_session::DataFrame::collect(&self) -> core::result::Result<alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::count(&self) -> core::result::Result<u64, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::create_or_replace_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::DataFrame::cross_join(&self, &Self) -> Self
+pub async fn krishiv_session::DataFrame::execute_stream(&self) -> core::result::Result<krishiv_session::RecordBatchStream, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::explain(&self, krishiv_session::ExplainMode) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
+pub fn krishiv_session::DataFrame::filter(&self, krishiv_session::Column) -> Self
+pub fn krishiv_session::DataFrame::group_by(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
+pub fn krishiv_session::DataFrame::join(&self, &Self, krishiv_session::Column, krishiv_session::JoinType) -> Self
+pub fn krishiv_session::DataFrame::join_using<'a>(&self, &Self, impl core::iter::traits::collect::IntoIterator<Item = &'a str>, krishiv_session::JoinType) -> Self
+pub fn krishiv_session::DataFrame::limit(&self, i32) -> Self
+pub fn krishiv_session::DataFrame::order_by(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub async fn krishiv_session::DataFrame::schema(&self) -> core::result::Result<arrow_schema::schema::SchemaRef, krishiv_common::error::KrishivError>
+pub fn krishiv_session::DataFrame::select(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::DataFrame::sort(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::DataFrame::where_(&self, krishiv_session::Column) -> Self
+pub fn krishiv_session::DataFrame::with_column(&self, &str, krishiv_session::Column) -> Self
+impl core::clone::Clone for krishiv_session::DataFrame
+pub fn krishiv_session::DataFrame::clone(&self) -> krishiv_session::DataFrame
+impl core::fmt::Debug for krishiv_session::DataFrame
+pub fn krishiv_session::DataFrame::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::DataFrameReader
+impl krishiv_session::DataFrameReader
+pub fn krishiv_session::DataFrameReader::format(self, &str) -> Self
+pub fn krishiv_session::DataFrameReader::load<S: core::convert::AsRef<str>>(self, impl core::iter::traits::collect::IntoIterator<Item = S>) -> krishiv_session::DataFrame
+pub fn krishiv_session::DataFrameReader::option(self, &str, &str) -> Self
+pub fn krishiv_session::DataFrameReader::parquet<S: core::convert::AsRef<str>>(self, impl core::iter::traits::collect::IntoIterator<Item = S>) -> krishiv_session::DataFrame
+impl core::clone::Clone for krishiv_session::DataFrameReader
+pub fn krishiv_session::DataFrameReader::clone(&self) -> krishiv_session::DataFrameReader
+impl core::fmt::Debug for krishiv_session::DataFrameReader
+pub fn krishiv_session::DataFrameReader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::GroupedData
+impl krishiv_session::GroupedData
+pub fn krishiv_session::GroupedData::agg(&self, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::DataFrame
+impl core::clone::Clone for krishiv_session::GroupedData
+pub fn krishiv_session::GroupedData::clone(&self) -> krishiv_session::GroupedData
+impl core::fmt::Debug for krishiv_session::GroupedData
+pub fn krishiv_session::GroupedData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::RuntimeConf
+impl krishiv_session::RuntimeConf
+pub fn krishiv_session::RuntimeConf::get(&self, &str) -> core::option::Option<alloc::string::String>
+pub fn krishiv_session::RuntimeConf::is_modifiable(&self, &str) -> bool
+pub fn krishiv_session::RuntimeConf::set(&self, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::RuntimeConf::unset(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+impl core::clone::Clone for krishiv_session::RuntimeConf
+pub fn krishiv_session::RuntimeConf::clone(&self) -> krishiv_session::RuntimeConf
+impl core::fmt::Debug for krishiv_session::RuntimeConf
+pub fn krishiv_session::RuntimeConf::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::Session
+impl krishiv_session::Session
+pub fn krishiv_session::Session::builder() -> krishiv_session::SessionBuilder
+pub fn krishiv_session::Session::conf(&self) -> krishiv_session::RuntimeConf
+pub fn krishiv_session::Session::drop_temp_view(&self, &str) -> bool
+pub fn krishiv_session::Session::new() -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::Session::read(&self) -> krishiv_session::DataFrameReader
+pub fn krishiv_session::Session::register_batches(&self, &str, arrow_schema::schema::SchemaRef, alloc::vec::Vec<arrow_array::record_batch::RecordBatch>) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::Session::sql(&self, &str) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
+pub fn krishiv_session::Session::table(&self, &str) -> krishiv_session::DataFrame
+pub fn krishiv_session::Session::temp_table_names(&self) -> alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for krishiv_session::Session
+pub fn krishiv_session::Session::clone(&self) -> krishiv_session::Session
+impl core::fmt::Debug for krishiv_session::Session
+pub fn krishiv_session::Session::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::SessionBuilder
+impl krishiv_session::SessionBuilder
+pub fn krishiv_session::SessionBuilder::build(self) -> core::result::Result<krishiv_session::Session, krishiv_common::error::KrishivError>
+pub fn krishiv_session::SessionBuilder::config(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn krishiv_session::SessionBuilder::executor(self, alloc::sync::Arc<dyn krishiv_exec::executor::Executor>) -> Self
+pub fn krishiv_session::SessionBuilder::functions(self, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::FunctionRegistry>) -> Self
+pub fn krishiv_session::SessionBuilder::principal(self, krishiv_plan::analyzer::catalog::Principal) -> Self
+pub fn krishiv_session::SessionBuilder::profile(self, krishiv_functions::signature::SparkProfile) -> Self
+impl core::fmt::Debug for krishiv_session::SessionBuilder
+pub fn krishiv_session::SessionBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub type krishiv_session::RecordBatchStream = futures_core::stream::BoxStream<'static, core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>>

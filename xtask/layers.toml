@@ -22,6 +22,7 @@ krishiv-state = 4
 krishiv-stream = 4
 krishiv-shuffle = 5
 krishiv-scheduler = 5
+krishiv-session = 5
 krishiv-connectors-kafka = 5
 krishiv-connectors-iceberg = 5
 krishiv-connectors-delta = 5
