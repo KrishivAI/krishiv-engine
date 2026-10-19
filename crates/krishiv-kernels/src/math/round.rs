@@ -441,6 +441,49 @@ pub fn round_decimal(
         .map_err(|e| KernelError::internal(e.to_string()))
 }
 
+/// [`round_decimal`] on a column of either decimal carrier (design
+/// P2-T160): a `Decimal64` column is widened, and its result is narrowed
+/// back to `Decimal64` when the result precision is at most 18 (a result
+/// carrier that follows the input's, as decimal aggregates do).
+///
+/// # Errors
+/// As [`round_decimal`]; `INTERNAL_ERROR` for a non-decimal column.
+pub fn round_decimal_any(
+    input: &dyn Array,
+    scale: i32,
+    mode: DecimalRounding,
+) -> Result<arrow_array::ArrayRef, KernelError> {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Decimal64Type, Decimal128Type};
+    match input.data_type() {
+        DataType::Decimal128(..) => Ok(std::sync::Arc::new(round_decimal(
+            input.as_primitive::<Decimal128Type>(),
+            scale,
+            mode,
+        )?)),
+        DataType::Decimal64(p, s) => {
+            let wide = input
+                .as_primitive::<Decimal64Type>()
+                .unary::<_, Decimal128Type>(i128::from)
+                .with_data_type(DataType::Decimal128(*p, *s));
+            let out = round_decimal(&wide, scale, mode)?;
+            let (op, os) = (out.precision(), out.scale());
+            if op > crate::decimal::MAX_I64_PRECISION {
+                return Ok(std::sync::Arc::new(out));
+            }
+            // Every valid value is below 10^18, so it fits an `i64`.
+            let narrow = out
+                .unary::<_, Decimal64Type>(|v| crate::decimal::DecimalNative::low64(v).0)
+                .with_precision_and_scale(op, os)
+                .map_err(|e| KernelError::internal(e.to_string()))?;
+            Ok(std::sync::Arc::new(narrow))
+        }
+        t => Err(KernelError::internal(format!(
+            "round_decimal needs a decimal column, got {t}"
+        ))),
+    }
+}
+
 /// `BigDecimal.toPlainString` of `unscaled * 10^-scale`.
 pub(super) fn plain_string(unscaled: i128, scale: i32) -> String {
     let digits = unscaled.unsigned_abs().to_string();

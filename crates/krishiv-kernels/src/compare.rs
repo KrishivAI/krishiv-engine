@@ -2,8 +2,9 @@
 //! Spark comparisons: `= != < <= > >=` and the null-safe `<=>`.
 //!
 //! - Primitives ([`compare`]): integral, `date` (`Date32`), timestamps
-//!   (`Timestamp(Microsecond)`), decimals of one type (`Decimal128`, the
-//!   planner casts both sides to a common type first) and floats. Floats
+//!   (`Timestamp(Microsecond)`), decimals of one type (`Decimal64` or
+//!   `Decimal128`; the planner casts both sides to a common type and
+//!   carrier first) and floats. Floats
 //!   use `SQLOrderingUtil.compareDoubles`: `NaN = NaN`, `NaN` above every
 //!   other value, `-0.0 = 0.0` (IEEE comparison and arrow-rs's `total_cmp`
 //!   both differ).

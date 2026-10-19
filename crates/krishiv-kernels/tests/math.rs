@@ -16,7 +16,8 @@ use krishiv_common::error::ErrorClass;
 use krishiv_kernels::math::{
     BinaryFn, DecimalRounding, Extremum, RoundMode, UnaryFn, binary, ceil_floor_to_long,
     extremum_bool, extremum_bytes, extremum_float, extremum_primitive, pmod_decimal, pmod_float,
-    pmod_integral, round_decimal, round_decimal_type, round_f32, round_f64, round_integral, unary,
+    pmod_integral, round_decimal, round_decimal_any, round_decimal_type, round_f32, round_f64,
+    round_integral, unary,
 };
 use krishiv_kernels::{KernelCtx, Operand, OverflowMode, SparkVersion};
 use proptest::prelude::*;
@@ -950,5 +951,56 @@ proptest! {
         let again = rf64(&f64s(&[Some(r)]), d, RoundMode::HalfUp).value(0);
         prop_assert_eq!(r.to_bits(), again.to_bits());
         prop_assert!((r - v).abs() <= 0.5 * 10_f64.powi(-d) * (1.0 + 1e-9) + v.abs() * 1e-15);
+    }
+}
+
+proptest! {
+    /// `round` on a `Decimal64` column (P2-T160) gives the `Decimal128`
+    /// values and errors; the result stays on `Decimal64` when its
+    /// precision allows.
+    #[test]
+    fn round_decimal_on_decimal64(
+        v in prop_oneof![Just(999_999_999_999_999_999_i64), Just(-250_i64), Just(5_i64), any::<i64>()],
+        p in 1..=18_u8,
+        s in 0..=18_i8,
+        scale in -20..=20_i32,
+        mode in prop_oneof![
+            Just(DecimalRounding::HalfUp),
+            Just(DecimalRounding::HalfEven),
+            Just(DecimalRounding::Ceiling),
+            Just(DecimalRounding::Floor),
+        ],
+    ) {
+        let s = s.min(i8::try_from(p).unwrap());
+        let v = v % 10_i64.pow(u32::from(p));
+        let wide = dec(&[Some(i128::from(v)), None], p, s);
+        let narrow: arrow_array::ArrayRef = std::sync::Arc::new(
+            arrow_array::Decimal64Array::from(vec![Some(v), None])
+                .with_precision_and_scale(p, s)
+                .unwrap(),
+        );
+        let want = round_decimal(&wide, scale, mode).map_err(|e| e.to_string());
+        let got = round_decimal_any(narrow.as_ref(), scale, mode).map_err(|e| e.to_string());
+        match (got, want) {
+            (Ok(g), Ok(w)) => {
+                let (op, os) = (w.precision(), w.scale());
+                if op <= 18 {
+                    prop_assert_eq!(g.data_type(), &arrow_schema::DataType::Decimal64(op, os));
+                    let g = g.as_any().downcast_ref::<arrow_array::Decimal64Array>().unwrap();
+                    prop_assert_eq!(i128::from(g.value(0)), w.value(0));
+                    prop_assert!(g.is_null(1));
+                } else {
+                    prop_assert_eq!(g.as_any().downcast_ref::<Decimal128Array>().unwrap(), &w);
+                }
+            }
+            (g, w) => prop_assert_eq!(g.map(|_| ()), w.map(|_| ())),
+        }
+        // A `Decimal128` column takes the same path as `round_decimal`.
+        let same = round_decimal_any(&wide, scale, mode).map_err(|e| e.to_string());
+        let want = round_decimal(&wide, scale, mode).map_err(|e| e.to_string());
+        prop_assert_eq!(
+            same.map(|a| a.as_any().downcast_ref::<Decimal128Array>().unwrap().clone()),
+            want
+        );
     }
 }

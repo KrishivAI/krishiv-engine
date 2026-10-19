@@ -23,7 +23,8 @@
 //! - **Decimals.** Only `Decimal128` crosses an edge (Connect/Flight, IPC,
 //!   spill, shuffle). The i64 representation for precision ≤ 18
 //!   ([`crate::DecimalStorage::I64`]) is internal to kernels; Arrow `Decimal64`
-//!   is not used until that fast path is benchmarked. Arrow rejects
+//!   is not a canonical type yet (the decimal kernels and aggregates accept
+//!   it, design P2-T160 step 2; making it canonical for `p <= 18` is step 3). Arrow rejects
 //!   precision 0, so `decimal(0,0)` (whose only value is 0) is stored as
 //!   `Decimal128(1, 0)` with the field tag; use the field form for it.
 //! - **Timestamps.** `timestamp` values are UTC instants. An input Arrow

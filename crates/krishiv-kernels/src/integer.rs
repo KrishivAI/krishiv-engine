@@ -100,6 +100,7 @@ pub(crate) fn at<T: Copy + Default>(s: Side<'_, T>, row: usize) -> T {
 struct IntLane<Op>(PhantomData<Op>);
 
 impl<T: IntNative, Op: BinaryOp> LaneOp<T> for IntLane<Op> {
+    type Out = T;
     #[inline(always)]
     fn wrapping(self, a: T, b: T) -> T {
         Op::wrapping(a, b)
@@ -205,6 +206,7 @@ pub(crate) fn finish<T: ArrowPrimitiveType>(
 struct RemLane;
 
 impl<T: IntNative> LaneOp<T> for RemLane {
+    type Out = T;
     const MAY_DIVIDE_BY_ZERO: bool = true;
     #[inline(always)]
     fn wrapping(self, a: T, b: T) -> T {
@@ -251,6 +253,7 @@ where
 struct DivLane;
 
 impl LaneOp<i64> for DivLane {
+    type Out = i64;
     const MAY_DIVIDE_BY_ZERO: bool = true;
     #[inline(always)]
     fn wrapping(self, a: i64, b: i64) -> i64 {
@@ -311,6 +314,7 @@ pub enum UnaryOp {
 struct UnaryLane(UnaryOp);
 
 impl<T: IntNative> LaneOp<T> for UnaryLane {
+    type Out = T;
     #[inline(always)]
     fn wrapping(self, a: T, _b: T) -> T {
         match self.0 {

@@ -20,6 +20,11 @@
 //! `1 - discount`, then times `1 + tax`), whose result types are above
 //! precision 18; `decimal_add/wide_38_0` has values the proof cannot bound
 //! (the 128-bit checked lanes plus the proof's cost).
+//!
+//! `decimal_carrier/*` run the same data on `Decimal64` and `Decimal128`
+//! columns (P2-T160 step 2): `+` to `decimal(11,2)`, Q01's first product to
+//! `decimal(32,4)` and `=` on `decimal(15,2)`. Design goal: `Decimal64` at
+//! least as fast as `Decimal128` (half the bytes read and written).
 
 #![expect(
     missing_docs,
@@ -32,11 +37,14 @@
 
 use std::hint::black_box;
 
-use arrow_array::types::{Decimal128Type, Float64Type, Int64Type};
+use arrow_array::types::{Decimal64Type, Decimal128Type, Float64Type, Int64Type};
 use arrow_array::{Decimal128Array, Float64Array, Int64Array, PrimitiveArray};
 use criterion::{Criterion, criterion_group, criterion_main};
 use krishiv_kernels::compare::{Equal, compare};
-use krishiv_kernels::decimal::{DecimalOp, DecimalPlan, DecimalStorage, decimal_binary};
+use krishiv_kernels::decimal::{
+    DecimalCarrier, DecimalOp, DecimalOperand, DecimalPlan, DecimalStorage, decimal_arith_any,
+    decimal_binary,
+};
 use krishiv_kernels::integer::{binary, binary_nulls_path};
 use krishiv_kernels::reference;
 use krishiv_kernels::{
@@ -249,6 +257,97 @@ fn decimal_proof(c: &mut Criterion) {
     });
 }
 
+/// A `Decimal128` column on the `Decimal64` carrier.
+fn narrow(a: &Decimal128Array) -> PrimitiveArray<Decimal64Type> {
+    a.unary::<_, Decimal64Type>(|v| i64::try_from(v).unwrap())
+        .with_precision_and_scale(a.precision(), a.scale())
+        .unwrap()
+}
+
+fn decimal_carrier(c: &mut Criterion) {
+    let ctx = KernelCtx::new();
+    let (a, b) = (decimals(7919), decimals(104_729));
+    let price = decimal_range(15, 2, 90_000, 10_410_000, 7919);
+    let disc = decimal_range(16, 2, 90, 11, 104_729);
+    let (a64, b64, price64, disc64) = (narrow(&a), narrow(&b), narrow(&price), narrow(&disc));
+    let add = DecimalPlan::new(ArithOp::Add, (10, 2), (10, 2), (11, 2)).unwrap();
+    let mul = DecimalPlan::new(DecimalOp::Multiply, (15, 2), (16, 2), (32, 4)).unwrap();
+    type Case<'a> = (
+        &'a str,
+        &'a str,
+        DecimalOperand<'a>,
+        DecimalOperand<'a>,
+        &'a DecimalPlan,
+        DecimalCarrier,
+    );
+    let cases: [Case<'_>; 4] = [
+        (
+            "add_11_2",
+            "d64",
+            DecimalOperand::Decimal64(&a64),
+            DecimalOperand::Decimal64(&b64),
+            &add,
+            DecimalCarrier::Decimal64,
+        ),
+        (
+            "add_11_2",
+            "d128",
+            DecimalOperand::Decimal128(&a),
+            DecimalOperand::Decimal128(&b),
+            &add,
+            DecimalCarrier::Decimal128,
+        ),
+        (
+            "q01_mul_32_4",
+            "d64",
+            DecimalOperand::Decimal64(&price64),
+            DecimalOperand::Decimal64(&disc64),
+            &mul,
+            DecimalCarrier::Decimal128,
+        ),
+        (
+            "q01_mul_32_4",
+            "d128",
+            DecimalOperand::Decimal128(&price),
+            DecimalOperand::Decimal128(&disc),
+            &mul,
+            DecimalCarrier::Decimal128,
+        ),
+    ];
+    for (name, carrier, l, r, plan, out) in cases {
+        c.bench_function(&format!("decimal_carrier/{name}/{carrier}"), |bench| {
+            bench.iter(|| {
+                if plan.overflow_impossible() {
+                    decimal_arith_any::<Unchecked>(black_box(l), black_box(r), plan, out, &ctx)
+                } else {
+                    decimal_arith_any::<AnsiError>(black_box(l), black_box(r), plan, out, &ctx)
+                }
+                .unwrap()
+            });
+        });
+    }
+    c.bench_function("decimal_carrier/eq_15_2/d64", |bench| {
+        bench.iter(|| {
+            compare::<Decimal64Type, Equal>(
+                Operand::Array(black_box(&price64)),
+                Operand::Array(black_box(&price64)),
+                &ctx,
+            )
+            .unwrap()
+        });
+    });
+    c.bench_function("decimal_carrier/eq_15_2/d128", |bench| {
+        bench.iter(|| {
+            compare::<Decimal128Type, Equal>(
+                Operand::Array(black_box(&price)),
+                Operand::Array(black_box(&price)),
+                &ctx,
+            )
+            .unwrap()
+        });
+    });
+}
+
 fn float(c: &mut Criterion) {
     let ctx = KernelCtx::new();
     #[expect(clippy::cast_precision_loss, reason = "bench data")]
@@ -267,5 +366,12 @@ fn float(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, integer, decimal, decimal_proof, float);
+criterion_group!(
+    benches,
+    integer,
+    decimal,
+    decimal_proof,
+    decimal_carrier,
+    float
+);
 criterion_main!(benches);

@@ -264,7 +264,42 @@ proptest! {
         let narrow = arrow_array::Decimal128Array::from(vec![i128::from(small)]).with_precision_and_scale(18, 0).unwrap();
         let long = Int64Array::from(vec![small]);
         prop_assert_eq!(h(&[&narrow]), h(&[&long]));
+        // The carrier never changes a hash: precision decides (long for
+        // p <= 18), on Decimal64 as on Decimal128.
+        let d64 = arrow_array::Decimal64Array::from(vec![Some(small), None]).with_precision_and_scale(18, 0).unwrap();
+        let d128 = arrow_array::Decimal128Array::from(vec![Some(i128::from(small)), None]).with_precision_and_scale(18, 0).unwrap();
+        prop_assert_eq!(h(&[&d64]), h(&[&d128]));
+        prop_assert_eq!(x(&[&d64]), x(&[&d128]));
     }
+}
+
+/// Spark 4.2 (`hash`/`xxhash64` of `CAST(123.45 AS DECIMAL(10,2))`, the same
+/// value as `DECIMAL(20,2)`, and `CAST(-999999999999999999 AS
+/// DECIMAL(18,0))`): precision, not the carrier, picks long or bytes.
+#[test]
+fn decimal_hashes_follow_precision_on_either_carrier() {
+    let d64 = |v: i64, p, s| {
+        arrow_array::Decimal64Array::from(vec![v])
+            .with_precision_and_scale(p, s)
+            .unwrap()
+    };
+    let d128 = |v: i128, p, s| {
+        arrow_array::Decimal128Array::from(vec![v])
+            .with_precision_and_scale(p, s)
+            .unwrap()
+    };
+    assert_eq!(h(&[&d64(12_345, 10, 2)]), [1_416_086_240]);
+    assert_eq!(h(&[&d128(12_345, 10, 2)]), [1_416_086_240]);
+    assert_eq!(x(&[&d64(12_345, 10, 2)]), [8_791_244_235_932_249_694]);
+    assert_eq!(h(&[&d128(12_345, 20, 2)]), [589_679_666]);
+    assert_eq!(x(&[&d128(12_345, 20, 2)]), [-3_765_588_051_240_043_440]);
+    let m = -999_999_999_999_999_999;
+    assert_eq!(h(&[&d64(m, 18, 0)]), [1_962_370_902]);
+    assert_eq!(x(&[&d64(m, 18, 0)]), [4_265_531_446_127_695_490]);
+    assert_eq!(
+        x(&[&d128(i128::from(m), 18, 0)]),
+        [4_265_531_446_127_695_490]
+    );
 }
 
 #[test]

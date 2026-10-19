@@ -84,6 +84,7 @@ const fn arith_op(op: u8) -> ArithOp {
 }
 
 impl<F: SparkFloat, const OP: u8> LaneOp<F> for ArithLane<OP> {
+    type Out = F;
     #[inline(always)]
     fn wrapping(self, a: F, b: F) -> F {
         a.arith(arith_op(OP), b)
@@ -136,6 +137,7 @@ where
 struct DivLane<const REM: bool>;
 
 impl<F: SparkFloat, const REM: bool> LaneOp<F> for DivLane<REM> {
+    type Out = F;
     const MAY_DIVIDE_BY_ZERO: bool = true;
     #[inline(always)]
     fn wrapping(self, a: F, b: F) -> F {
