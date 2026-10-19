@@ -1,0 +1,23 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT t.a FROM t JOIN (SELECT k, n FROM (SELECT a AS k, count(*) AS n FROM u GROUP BY a) WHERE n > 1) g ON t.a = g.k WHERE t.b = 'x' AND t.c < (SELECT max(c) FROM t)"
+---
+Project [a#0]
++- Join Inner, (a#0 == k#5)
+   :- Project [a#0]
+   :  +- Filter ((b#1 == 'x') and (c#2 < scalar-subquery))
+   :     :  +- Aggregate [], [max(c#9) AS max(c)#10] (shared #1)
+   :     :     +- Project [c#9]
+   :     :        +- Shift +7
+   :     :           +- Scan spark_catalog.default.t [a#0, b#1, c#2] (shared #2)
+   :     +- Shared #2, printed above
+   +- Project [k#5]
+      +- Filter (n#6 > 1L)
+         +- Aggregate [a#3], [a#3 AS k#5, count(1) AS n#6]
+            +- Join LeftSemi, (a#3 == a#11)
+               :- Scan spark_catalog.default.u [a#3]
+               +- Shift +11
+                  +- Project [a#0]
+                     +- Filter ((b#1 == 'x') and (c#2 < scalar-subquery))
+                        :  +- Shared #1, printed above
+                        +- Shared #2, printed above

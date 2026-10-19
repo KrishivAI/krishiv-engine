@@ -50,7 +50,10 @@ returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket
   runner-side seconds, `run` dumps the result to Parquet (outside the timed region) and returns the rows for correctness checks.
   Build (always `dist` at the shipped x86-64-v3 level; the runner refuses to start on a CPU without it):
   `RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner` (on arm64: `-C target-cpu=neoverse-n1`). The result's engine `config` records `build_profile` and `target_cpu` (from `krishiv-bench-runner --build-info`). Override the path with `$KRISHIV_BENCH_RUNNER`.
-- Adding Sail/Polars/Flink: subclass `Engine`, register in `adapters/__init__.py`.
+- `polars` (lazy `scan_parquet` + `SQLContext`), `datafusion` (datafusion-python, fair spill pool), `spark-local` (Spark 4.2 `local[N]`, AQE on,
+  `shuffle.partitions` = cores) and `sail` (pysail Spark Connect server on loopback, pinned pyspark client): used by `reproduce`, hosted by
+  `worker.py` (one process session per engine). Versions are pinned in `pyproject.toml`/`uv.lock`; Java 21 must be on `PATH` for Spark.
+- Adding Flink etc.: subclass `Engine`, register in `adapters/__init__.py`.
 Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (none needed so far).
 
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
@@ -68,6 +71,18 @@ Krishiv, DuckDB, DuckDB, Krishiv give `2 * reps` samples per engine. Same Parque
 Reported: median per engine, ratio of medians with a bootstrap 95% CI, the geomean of the ratios (bootstrap CI) and the worst query.
 `/proc/loadavg` is recorded around every query; a run whose maximum exceeds 4 is marked indicative. The run holds
 `$KRISHIV_DATA/.bench.lock` (`flock`). Output: `$KRISHIV_DATA/results/<ts>_abba_tpch_sf<N>.json` plus the Markdown table on stdout.
+
+## Reference engines, two methods (`reproduce`, P2-T156)
+```bash
+uv run krishiv-bench reproduce --suite tpch --sf 10 --reps 3        # tpch | tpcds | clickbench; --engines, --methods ours,theirs
+```
+Every engine runs in its own worker process (12 threads, 32 GiB where the engine has a knob; recorded per engine). Correctness first:
+each engine's rows are compared with DuckDB's (and Krishiv's); a mismatch, error or timeout is recorded for that query and never timed.
+* `ours`: `--reps` blocks, each engine in list order then reversed (`2 * reps` samples), medians, bootstrap CIs, geomean of ratios to DuckDB.
+* `theirs`: a fresh process per (engine, query), `--runs` hot runs, best of them, per-run `--their-timeout`. Defaults per source: TPC-H/TPC-DS
+  5 runs / 60 s (Polars benchmark), ClickBench 3 runs / 300 s (3 runs per the ClickBench rules; the timeout is ours). The page cache is never dropped.
+Output: `$KRISHIV_DATA/results/<ts>_reproduce_<suite>_sf<N>.json` (versions, thread/memory pins, CPU model, load average, per-query verdicts).
+ClickBench reads `$KRISHIV_DATA/clickbench` (`hits.parquet` or a `hits/` directory of parts).
 
 ## Result JSON (`$KRISHIV_DATA/results/<ts>_<engine>_<suite>_sf<N>.json`)
 `machine` (CPU model, cores, RAM, OS, governor), `git` (krishiv-engine commit/branch/dirty), `engine` (name, version, config (Krishiv: threads, memory limit, `build_profile`, `target_cpu`), build, and `allocator` when the engine reports it, e.g. `mimalloc`; the CLI prints it as `allocator=<name>` in `krishiv --version`, the wheel via `krishiv.build_info()`),

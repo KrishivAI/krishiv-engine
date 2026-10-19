@@ -9,9 +9,14 @@ Aggregate [], [(sum(l_extendedprice#5) / 7.0) AS avg_yearly#42]
       +- Project [(0.2 * avg(l_quantity))#41, p_partkey#16]
          +- Join Inner, (p_partkey#16 == l_partkey#26)
             :- Aggregate [l_partkey#26], [(0.2 * avg(l_quantity#29)) AS (0.2 * avg(l_quantity))#41, l_partkey#26]
-            :  +- Project [l_partkey#26, l_quantity#29]
-            :     +- Shift +25
-            :        +- Shared #1, printed above
+            :  +- Join LeftSemi, (l_partkey#26 == p_partkey#59)
+            :     :- Project [l_partkey#26, l_quantity#29]
+            :     :  +- Shift +25
+            :     :     +- Shared #1, printed above
+            :     +- Shift +43
+            :        +- Project [p_partkey#16]
+            :           +- Filter ((p_brand#19 == 'Brand#23') and (p_container#22 == 'MED BOX'))
+            :              +- Scan spark_catalog.default.part [p_partkey#16, p_brand#19, p_container#22] (shared #2)
             +- Project [p_partkey#16]
                +- Filter ((p_brand#19 == 'Brand#23') and (p_container#22 == 'MED BOX'))
-                  +- Scan spark_catalog.default.part [p_partkey#16, p_brand#19, p_container#22]
+                  +- Shared #2, printed above

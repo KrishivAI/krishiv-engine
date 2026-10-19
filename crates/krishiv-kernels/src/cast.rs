@@ -27,8 +27,8 @@ use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{
     Array, ArrayRef, ArrowPrimitiveType, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
@@ -40,6 +40,7 @@ use arrow_schema::{DataType, TimeUnit};
 pub use datetime::{FixedOffset, TimeZoneRules};
 pub use timestamp::{TimestampText, timestamp_text};
 
+use crate::decimal::DecimalNative;
 use crate::error::{KernelError, with_capacity};
 use crate::integer::SparkIntegral;
 use crate::version::IntWidth;
@@ -77,7 +78,7 @@ pub fn spark_type_name(t: &DataType) -> String {
         DataType::Int64 => "BIGINT".to_owned(),
         DataType::Float32 => "FLOAT".to_owned(),
         DataType::Float64 => "DOUBLE".to_owned(),
-        DataType::Decimal128(p, s) => format!("DECIMAL({p},{s})"),
+        DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => format!("DECIMAL({p},{s})"),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => "STRING".to_owned(),
         DataType::Binary | DataType::LargeBinary => "BINARY".to_owned(),
         DataType::Date32 => "DATE".to_owned(),
@@ -521,6 +522,27 @@ pub fn cast(
     let from = input.data_type();
     if from == to {
         return Ok(arrow_array::make_array(input.to_data()));
+    }
+    // `Decimal64` is a carrier of `decimal(p <= 18, s)` (design P2-T160):
+    // the cast is the `Decimal128` one, with the operand widened and the
+    // result narrowed; Spark sees the same type, values and errors.
+    if let DataType::Decimal64(p, s) = from {
+        let wide = input
+            .as_primitive::<Decimal64Type>()
+            .unary::<_, Decimal128Type>(i128::from)
+            .with_data_type(DataType::Decimal128(*p, *s));
+        return cast(&wide, to, opts);
+    }
+    if let DataType::Decimal64(p, s) = to {
+        let out = cast(input, &DataType::Decimal128(*p, *s), opts)?;
+        // A valid value is within precision `p <= 18`, so it fits an `i64`;
+        // values under NULL slots are arbitrary.
+        let narrow = out
+            .as_primitive::<Decimal128Type>()
+            .unary::<_, Decimal64Type>(|v| v.low64().0)
+            .with_precision_and_scale(*p, *s)
+            .map_err(|e| KernelError::internal(e.to_string()))?;
+        return Ok(Arc::new(narrow));
     }
     let unsupported = || {
         KernelError::unsupported(format!(

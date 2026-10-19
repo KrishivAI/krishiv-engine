@@ -1,0 +1,24 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT x1.c1 AS c0, count(*) AS c1 FROM (SELECT a + 1 AS c0, d AS c1 FROM u WHERE d >= 'x') x1 LEFT SEMI JOIN (SELECT x4.c0, count(*) AS c1 FROM (SELECT c AS c0, count(*) AS c1 FROM t WHERE NOT (coalesce(a, 3) = 3) GROUP BY c) x4 GROUP BY x4.c0) x3 ON x1.c0 = x3.c0 AND x3.c1 IN (3, -2) WHERE x1.c1 IS NOT NULL GROUP BY x1.c1"
+---
+Aggregate [c1#3], [c1#3 AS c0#10, count(1) AS c1#11]
++- Project [c1#3]
+   +- Join LeftSemi, (CAST(c0#2 AS BIGINT) == c0#7)
+      :- Project [(a#0 + 1) AS c0#2, d#1 AS c1#3]
+      :  +- Filter ((d#1 >= 'x') and isnotnull(d#1)) (shared #1)
+      :     +- Scan spark_catalog.default.u [a#0, d#1]
+      +- Project [c0#7]
+         +- Filter (c1#9 IN (3L, -2L))
+            +- Aggregate [c0#7], [c0#7, count(1) AS c1#9]
+               +- Join LeftSemi, (c0#7 == CAST(c0#14 AS BIGINT))
+                  :- Aggregate [c#6], [c#6 AS c0#7]
+                  :  +- Join LeftSemi, (c#6 == CAST(c0#30 AS BIGINT))
+                  :     :- Project [c#6]
+                  :     :  +- Filter (NOT (coalesce(a#4, 3) == 3))
+                  :     :     +- Scan spark_catalog.default.t [a#4, c#6]
+                  :     +- Shift +16
+                  :        +- Shift +12 (shared #2)
+                  :           +- Project [(a#0 + 1) AS c0#2]
+                  :              +- Shared #1, printed above
+                  +- Shared #2, printed above

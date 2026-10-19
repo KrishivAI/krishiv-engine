@@ -37,8 +37,8 @@ use arrow_array::{Array, Float64Array};
 pub use extremum::{Extremum, extremum_bool, extremum_bytes, extremum_float, extremum_primitive};
 pub use pmod::{pmod_decimal, pmod_float, pmod_integral};
 pub use round::{
-    DecimalRounding, RoundMode, ceil_floor_to_long, round_decimal, round_decimal_type, round_f32,
-    round_f64, round_integral,
+    DecimalRounding, RoundMode, ceil_floor_to_long, round_decimal, round_decimal_any,
+    round_decimal_type, round_f32, round_f64, round_integral,
 };
 
 use crate::dispatch::KernelCtx;
