@@ -21,6 +21,11 @@ use super::table::TableProvider;
 use crate::error::Result;
 use crate::operators::{FileScan, ScanPushdown};
 
+/// Pending footer reads of [`FileTable::open`], in multiples of the
+/// stores' request limit: enough to keep that many requests in flight
+/// across most of a chunk.
+const FOOTER_CHUNK: usize = 4;
+
 /// A table of `files` read by one [`FileFormat`] (spec 13 §7): the file
 /// scan with Spark's split planning, and the row counts, null counts and
 /// min/max values of the files' footers as the optimizer's statistics.
@@ -51,23 +56,27 @@ impl FileTable {
         // The footers are read concurrently, up to the stores' request
         // limit (the scheduler bounds requests per store too); `buffered`
         // keeps file order, so the merged statistics do not depend on
-        // which read finishes first.
+        // which read finishes first. Files go in chunks of
+        // `FOOTER_CHUNK` times that limit, so a table of many files holds
+        // a bounded number of pending reads, not one per file.
+        // The read futures of a chunk are built before its stream: a
+        // closure that borrows into `stream::iter` makes the future of
+        // `open` lose `Send` (the borrow's lifetime is not provably
+        // general enough), so it could not run on a multi-threaded
+        // runtime's task.
         let width = io.config().max_concurrent_requests.max(1);
-        let (fmt, opts) = (format.as_ref(), &options);
-        let mut footers = stream::iter(&files)
-            .map(|f| io.read_metadata(fmt, f, MetadataNeeds::default(), opts))
-            .buffered(width);
         let mut stats: Option<FileStatistics> = None;
         let mut known = true;
-        while let Some(meta) = footers.try_next().await? {
+        let read = |f| io.read_metadata(format.as_ref(), f, MetadataNeeds::default(), &options);
+        in_order(&files, width, read, |meta| {
             let s = meta.statistics();
             known &= s.rows.exact().is_some();
-            stats = Some(match stats {
+            stats = Some(match stats.take() {
                 None => s,
                 Some(acc) => merge(acc, &s),
             });
-        }
-        drop(footers);
+        })
+        .await?;
         let statistics = known
             .then(|| stats.map(|s| table_stats(&s, &table)))
             .flatten();
@@ -92,6 +101,30 @@ impl TableProvider for FileTable {
     fn statistics(&self) -> Option<TableStats> {
         self.statistics.clone()
     }
+}
+
+/// Runs `start(item)` for every item, at most `width` at a time, and
+/// hands each result to `each` in item order. Items go in chunks of
+/// `width * FOOTER_CHUNK`: no more futures than that exist at once. A
+/// chunk's futures are built before its stream, which keeps the caller's
+/// future `Send`.
+async fn in_order<'a, T, O, E, F>(
+    items: &'a [T],
+    width: usize,
+    start: impl Fn(&'a T) -> F,
+    mut each: impl FnMut(O),
+) -> std::result::Result<(), E>
+where
+    F: Future<Output = std::result::Result<O, E>>,
+{
+    for chunk in items.chunks(width.saturating_mul(FOOTER_CHUNK)) {
+        let futures: Vec<F> = chunk.iter().map(&start).collect();
+        let mut results = stream::iter(futures).buffered(width);
+        while let Some(o) = results.try_next().await? {
+            each(o);
+        }
+    }
+    Ok(())
 }
 
 /// The statistics of two files together.
@@ -234,4 +267,94 @@ fn literal(v: &ScalarValue, t: &arrow_schema::DataType) -> Option<Literal> {
         },
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `FileTable::open`'s future is `Send`, so a multi-threaded runtime
+    /// can run it as a task: this function only compiles if it is.
+    fn open_on_any_thread(
+        format: Arc<dyn FileFormat>,
+        io: IoContext,
+        table: SchemaRef,
+        files: Vec<FileRef>,
+        options: FormatOptions,
+        config: &Config,
+    ) -> impl Future<Output = Result<FileTable>> + Send + '_ {
+        FileTable::open(format, io, table, files, options, config, 1)
+    }
+
+    /// Counts live futures: one more while a [`Live`] exists.
+    struct Live(Arc<std::sync::Mutex<(usize, usize)>>);
+
+    impl Live {
+        fn new(c: &Arc<std::sync::Mutex<(usize, usize)>>) -> Self {
+            let mut g = c.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            g.0 += 1;
+            g.1 = g.1.max(g.0);
+            Self(Arc::clone(c))
+        }
+    }
+
+    impl Drop for Live {
+        fn drop(&mut self) {
+            let mut g = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            g.0 -= 1;
+        }
+    }
+
+    #[test]
+    fn reads_hold_a_bounded_number_of_futures_in_order() {
+        let counts = Arc::new(std::sync::Mutex::new((0, 0)));
+        let items: Vec<usize> = (0..301).collect();
+        let mut seen = Vec::new();
+        let run = in_order(
+            &items,
+            3,
+            |i| {
+                // Counted from creation, not from the first poll.
+                let live = Live::new(&counts);
+                async move {
+                    // Later items finish first within a window.
+                    for _ in 0..(301 - *i) % 4 {
+                        tokio::task::yield_now().await;
+                    }
+                    drop(live);
+                    Ok::<_, ()>(*i)
+                }
+            },
+            |i| seen.push(i),
+        );
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap_or_else(|e| unreachable!("{e}"));
+        rt.block_on(run)
+            .unwrap_or_else(|()| unreachable!("no error"));
+        assert_eq!(seen, items, "in item order");
+        let (live, peak) = *counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(live, 0);
+        assert_eq!(peak, 3 * FOOTER_CHUNK, "at most a chunk of futures");
+        // An error stops the reads and comes back.
+        let failing = in_order(
+            &items,
+            3,
+            |i| async move { if *i == 7 { Err(*i) } else { Ok(*i) } },
+            |_| {},
+        );
+        assert_eq!(rt.block_on(failing), Err(7));
+    }
+
+    #[test]
+    fn open_future_is_send() {
+        // A compile-time check: naming the function type-checks its
+        // `Send` bound; nothing runs.
+        let _ = open_on_any_thread;
+    }
 }

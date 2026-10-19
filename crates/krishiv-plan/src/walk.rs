@@ -136,6 +136,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Sql { .. }
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
+                | PlanNode::SetOp { .. }
                 | PlanNode::Distinct { .. } => false,
                 PlanNode::Union { by_name, .. } => !by_name,
                 PlanNode::Join { condition, .. } => match condition {
@@ -153,7 +154,8 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Limit { .. }
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
-                | PlanNode::JoinHint { .. } => true,
+                | PlanNode::JoinHint { .. }
+                | PlanNode::ReplicateRows { .. } => true,
             },
             Node::Expr(e) => match &e.node {
                 ExprNode::Column(_)
@@ -250,7 +252,8 @@ impl Teardown {
                 input,
                 predicate: e,
             }
-            | PlanNode::Limit { input, limit: e } => {
+            | PlanNode::Limit { input, limit: e }
+            | PlanNode::ReplicateRows { input, count: e } => {
                 self.plans.push(input);
                 self.exprs.push(e);
             }
@@ -298,6 +301,7 @@ impl Teardown {
                 self.plans.push(input);
                 self.exprs.extend(params);
             }
+            PlanNode::SetOp { left, right, .. } => self.plans.extend([left, right]),
             PlanNode::Union { inputs, .. } => self.plans.extend(inputs),
             PlanNode::WithCte { input, ctes } => {
                 self.plans.push(input);

@@ -278,6 +278,16 @@ impl Display for NodeLine<'_> {
                 Ok(())
             }
             PlanNode::Distinct { .. } => f.write_str("Distinct"),
+            // Spark's `Intersect false`, `Except All true`, ...
+            PlanNode::SetOp { op, all, .. } => match (op, all) {
+                (crate::SetOperation::Intersect, false) => f.write_str("Intersect false"),
+                (crate::SetOperation::Intersect, true) => f.write_str("Intersect All true"),
+                (crate::SetOperation::Except, false) => f.write_str("Except false"),
+                (crate::SetOperation::Except, true) => f.write_str("Except All true"),
+            },
+            PlanNode::ReplicateRows { count, .. } => {
+                write!(f, "Generate replicaterows({})", Text(count))
+            }
             PlanNode::WithCte { ctes, .. } => {
                 f.write_str("WithCte [")?;
                 for (i, c) in ctes.iter().enumerate() {

@@ -67,6 +67,13 @@ impl Statistics for NoStatistics {
     }
 }
 
+/// The estimated number of rows `plan` returns, as the join orderer sees it
+/// (at least 1; [`DEFAULT_ROWS`] per table without statistics).
+#[must_use]
+pub fn estimated_rows(plan: &Arc<LogicalPlan>, stats: &dyn Statistics) -> f64 {
+    Estimator::new(stats).plan(plan).rows
+}
+
 /// What is known of one attribute.
 #[derive(Debug, Clone)]
 pub(crate) struct Col {
@@ -228,7 +235,10 @@ impl<'a> Estimator<'a> {
             PlanNode::Sort { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::WithCte { input, .. }
-            | PlanNode::JoinHint { input, .. } => Est::clone(&self.plan(input)),
+            | PlanNode::JoinHint { input, .. }
+            // Each distinct row of an `INTERSECT ALL` / `EXCEPT ALL` count:
+            // no count is known, the input's rows bound it from below.
+            | PlanNode::ReplicateRows { input, .. } => Est::clone(&self.plan(input)),
             PlanNode::Union { inputs, .. } => {
                 let rows = inputs.iter().map(|i| self.plan(i).rows).sum();
                 Est::unknown(rows, ids())

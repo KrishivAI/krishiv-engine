@@ -41,6 +41,12 @@
     ],
     "sqlState" : "22023"
   },
+  "KRISHIV_INVALID_PARTITION_NUMBER" : {
+    "message" : [
+      "Number of partitions (<numPartitions>) must be positive."
+    ],
+    "sqlState" : "22023"
+  },
   "KRISHIV_JOIN_PARTITION_TOO_LARGE" : {
     "message" : [
       "A hash join partition with <buildRows> build rows still does not fit in memory after <depth> rounds of repartitioning: its build side is skewed on very few join keys. Increase \"krishiv.memory.limit\", or rewrite the query so the skewed keys are joined separately."
