@@ -501,7 +501,11 @@ mod tests {
             .as_mut()
             .poll(&mut std::task::Context::from_waker(&waker));
         drop(waiting);
-        assert!(rx.recv_timeout(std::time::Duration::from_secs(5)).is_err());
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected),
+            "the aborted task must drop its sender"
+        );
     }
 
     fn files(col: &str) -> TempTable {
