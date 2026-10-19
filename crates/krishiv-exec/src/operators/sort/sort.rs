@@ -282,7 +282,7 @@ impl Sort {
         Ok(written)
     }
 
-    /// Merges consecutive runs, `fan_in` at a time and level by level,
+    /// Merges consecutive runs, up to `fan_in` at a time and level by level,
     /// until at most `fan_in` (what the memory pool allows) remain. A merged
     /// group takes its first run's place, so runs keep their relative order
     /// (and ties their input order).
@@ -308,7 +308,8 @@ impl Sort {
                     runs.extend(level.by_ref());
                     break;
                 }
-                let group: Vec<SpillRun> = level.by_ref().take(fan_in).collect();
+                let take = group_size(runs.len() + level.len(), fan_in);
+                let group: Vec<SpillRun> = level.by_ref().take(take).collect();
                 let row_bytes = group.iter().map(|r| r.row_bytes).max().unwrap_or(1);
                 let rows = spill_rows(row_bytes, batch_rows);
                 let merged = self.write(Vec::new(), group, rows, &handle, ctx);
@@ -318,6 +319,13 @@ impl Sort {
         }
         Ok(())
     }
+}
+
+/// Runs to merge next when `total` remain at a level (more than `fan_in`):
+/// a group of `g` leaves `g - 1` fewer, so never more than it takes to get
+/// down to the fan-in, and as few bytes as possible are written again.
+pub(super) fn group_size(total: usize, fan_in: usize) -> usize {
+    fan_in.min(total.saturating_sub(fan_in) + 1)
 }
 
 /// Reserves (with arbitration) the memory to merge up to `max_fan_in` of
