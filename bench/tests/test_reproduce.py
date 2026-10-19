@@ -213,3 +213,43 @@ def test_summarize_theirs_and_krishiv_gap():
     assert s["theirs"]["polars"]["geomean"] == pytest.approx(2**0.5)
     assert s["theirs"]["polars"]["krishiv_over_engine_geomean"] == pytest.approx((2.0 * 9.0) ** 0.5)
     assert s["theirs"]["krishiv"]["worst_query"] == "q02"
+
+
+def test_failed_setup_kills_worker_and_retries_clean(tmp_path: Path):
+    ds = Dataset("d", 1, tmp_path, ["missing"])  # table_path raises in the worker's setup
+    eng = ProcessEngine("duckdb", 2, 1, 60)
+    with pytest.raises(EngineError):
+        eng.setup(ds)
+    assert eng._proc is None  # not left half-initialised; the next request starts a fresh worker
+    with pytest.raises(EngineError):
+        eng.run(q("SELECT 1"))
+    assert eng._proc is None
+    eng.teardown()
+
+
+class BadSetup(Fake):
+    def setup(self, dataset: Dataset) -> None:
+        raise EngineError("no tables")
+
+
+def test_setup_engines_drops_failed_non_reference_engine(tiny):
+    engines = {"duckdb": Fake([(1,)]), "polars": BadSetup(), "datafusion": Fake([(1,)])}
+    failed = reproduce.setup_engines(engines, tiny)
+    assert list(engines) == ["duckdb", "datafusion"]
+    assert failed["polars"]["status"] == "error"
+    assert "no tables" in failed["polars"]["reason"]
+
+
+def test_setup_engines_reference_failure_is_fatal(tiny):
+    with pytest.raises(SystemExit, match="setup failed"):
+        reproduce.setup_engines({"duckdb": BadSetup(), "polars": Fake([(1,)])}, tiny)
+
+
+def test_cli_rejects_bad_methods(capsys):
+    from krishiv_bench import cli
+
+    for bad in ("our", "", "ours,,x"):
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["reproduce", "--methods", bad])
+        assert exc.value.code == 2
+    assert "--methods" in capsys.readouterr().err

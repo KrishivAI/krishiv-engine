@@ -407,7 +407,7 @@ jobs:
       - name: Miri (Arrow C stream bridge of krishiv-python)
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi --locked
-      # Wheels are release builds without overflow checks: hostile producer
+      # Wheels are dist builds (release settings, no overflow checks): hostile producer
       # headers must be rejected before arrow-rs computes with them, not by a
       # debug-build overflow panic.
       - name: Miri (Arrow C stream bridge, overflow checks off as in release)

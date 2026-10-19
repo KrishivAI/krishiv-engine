@@ -224,6 +224,40 @@ pub enum PushdownExpr {
     /// A constant: `true` (every row matches) or `false` (none does). The
     /// schema mapper produces it, e.g. for a literal outside the file type.
     Constant(bool),
+    /// `column`'s value, cast to the filter's key type, may be one of a
+    /// runtime filter's keys (design P2-T163): statistics answer unknown;
+    /// stages that see values (rows, dictionaries) evaluate it with
+    /// [`KeyFilter::evaluate`](crate::KeyFilter::evaluate). Never in a plan.
+    Membership {
+        /// The column.
+        column: ColumnPath,
+        /// The filter's knowledge at one generation.
+        filter: MembershipFilter,
+    },
+}
+
+/// The [`KeyFilter`](crate::KeyFilter) of a [`PushdownExpr::Membership`], identified by
+/// filter id and generation: two are equal when both are.
+#[derive(Clone)]
+pub struct MembershipFilter {
+    /// The runtime filter.
+    pub id: crate::FilterId,
+    /// The generation `keys` were published as.
+    pub generation: u64,
+    /// The keys.
+    pub keys: Arc<crate::KeyFilter>,
+}
+
+impl PartialEq for MembershipFilter {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.generation == other.generation
+    }
+}
+
+impl fmt::Debug for MembershipFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RuntimeFilter {}@{}", self.id, self.generation)
+    }
 }
 
 impl PushdownExpr {
@@ -247,7 +281,7 @@ impl PushdownExpr {
     /// The expression with negations pushed to the leaves (negation normal
     /// form), so pruning never has to negate a three-valued answer. A
     /// negated `IN` becomes a conjunction of `<>`; a negated `StartsWith`
-    /// stays a `Not` leaf (pruning answers unknown for it).
+    /// or `Membership` stays a `Not` leaf (pruning answers unknown for it).
     #[must_use]
     pub fn to_nnf(&self) -> Self {
         self.nnf(false)
@@ -295,7 +329,9 @@ impl PushdownExpr {
                     })
                     .collect(),
             ),
-            (leaf @ Self::StartsWith { .. }, true) => Self::Not(Box::new(leaf.clone())),
+            (leaf @ (Self::StartsWith { .. } | Self::Membership { .. }), true) => {
+                Self::Not(Box::new(leaf.clone()))
+            }
             (leaf, false) => leaf.clone(),
         }
     }
@@ -313,6 +349,7 @@ impl PushdownExpr {
             Self::Cmp { column, .. }
             | Self::In { column, .. }
             | Self::StartsWith { column, .. }
+            | Self::Membership { column, .. }
             | Self::IsNull(column)
             | Self::IsNotNull(column) => out.push(column),
             Self::And(xs) | Self::Or(xs) => xs.iter().for_each(|x| x.collect_columns(out)),
@@ -320,15 +357,6 @@ impl PushdownExpr {
             Self::Constant(_) => {}
         }
     }
-}
-
-/// A runtime filter (join build side, Top-N bound) that tightens while the
-/// scan runs. Formats re-read it at unit (and, where they can, page)
-/// boundaries and prune with it like the static predicate.
-pub trait DynamicFilter: Send + Sync + fmt::Debug {
-    /// The current filter over the request's columns, or `None` while it
-    /// is not known yet. Successive values only get more selective.
-    fn current(&self) -> Option<PushdownExpr>;
 }
 
 /// File-relative rows to read: sorted, disjoint, non-empty ranges of row
@@ -506,8 +534,9 @@ pub struct ScanRequest {
     pub projection: Vec<ColumnPath>,
     /// Pushed predicate (pruning only: a superset of matching rows).
     pub predicate: Option<PushdownExpr>,
-    /// Runtime filters, re-read at unit boundaries.
-    pub dynamic: Vec<Arc<dyn DynamicFilter>>,
+    /// Runtime filters (design P2-T163) on this level's columns, re-read
+    /// at unit boundaries.
+    pub dynamic: Vec<crate::ScanFilter>,
     /// File-relative rows to read.
     pub selection: Option<RowSelection>,
     /// Late-materialisation policy.

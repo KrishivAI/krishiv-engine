@@ -1,4 +1,4 @@
-"""Krishiv adapter: drives the bench-only ``krishiv-bench-runner`` binary (release build of ``krishiv-session``).
+"""Krishiv adapter: drives the bench-only ``krishiv-bench-runner`` binary (dist-profile build of ``krishiv-session``).
 
 The Python facade cannot execute queries yet, so the adapter speaks the runner's line protocol
 (see ``crates/krishiv-bench-runner/src/lib.rs``) over stdin/stdout: tables are registered once as Parquet
@@ -9,7 +9,8 @@ views at ``setup()`` (no pre-loading, for parity with the other adapters), then 
 * ``run(query)`` -> rows: ``DUMP`` (the result is written to Parquet outside the timed region, then read back),
   for correctness checks. The generic suite runner times this call, so use ``abba`` for Krishiv timings.
 
-Build the runner first: ``cargo build --release -p krishiv-bench-runner`` (path override: ``$KRISHIV_BENCH_RUNNER``).
+Build the runner first: ``cargo build --profile dist -p krishiv-bench-runner``
+(path override: ``$KRISHIV_BENCH_RUNNER``).
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ def runner_binary() -> Path:
     if env:
         return Path(env)
     target = Path(os.environ.get("CARGO_TARGET_DIR", Path(__file__).resolve().parents[4] / "target"))
-    return target / "release" / "krishiv-bench-runner"
+    return target / "dist" / "krishiv-bench-runner"
 
 
 class KrishivEngine(Engine):
@@ -69,13 +70,13 @@ class KrishivEngine(Engine):
         return {"threads": self.threads, "memory_limit": self.memory_limit, "binary": self.binary.name}
 
     def build_info(self) -> dict[str, str]:
-        return {"allocator": "mimalloc", "runner": "krishiv-bench-runner (release)"}
+        return {"allocator": "mimalloc", "runner": "krishiv-bench-runner (dist)"}
 
     # ------------------------------------------------------------------ process
     def _start(self) -> None:
         assert self._dataset is not None, "setup() not called"
         if not self.binary.exists():
-            raise FileNotFoundError(f"{self.binary} missing: cargo build --release -p krishiv-bench-runner")
+            raise FileNotFoundError(f"{self.binary} missing: cargo build --profile dist -p krishiv-bench-runner")
         cmd = [
             str(self.binary),
             "--data",

@@ -40,6 +40,14 @@ taplo fmt --check; typos                                                # TOML f
 Markdown is checked with markdownlint-cli2 (config in `.markdownlint-cli2.yaml`). `CLAUDE.md` lists the full set of
 checks CI runs, including `cargo deny`, `cargo xtask layering` and the size budgets.
 
+## License policy
+
+Rust crates may use only the licenses in `deny.toml` (`[licenses] allow`, enforced by `cargo deny check`). The
+dependency-review check (`security.yml`) applies the same list plus `CC0-1.0`, which it needs for Python dependencies:
+numpy's compound license (BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0) is permissive, but CC0-1.0 carries no
+patent grant, so it is kept out of the Rust allow list to keep such code out of the engine binary. A policy test in
+`xtask/tests/policy.rs` fails if the two lists differ in anything but `CC0-1.0`.
+
 ## Coverage
 
 Pull requests must cover at least 90% of the executable lines they add (`diff-coverage` is a required

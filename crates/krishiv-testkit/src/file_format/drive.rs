@@ -162,7 +162,12 @@ fn pushdowns(req: &ScanRequest) -> ScanPushdowns {
         projection: Some(req.projection.clone()),
         filters,
         limit: req.limit,
-        dynamic: req.dynamic.clone(),
+        dynamic: krishiv_exec::RuntimeFilters::new(
+            req.dynamic
+                .iter()
+                .map(|d| std::sync::Arc::clone(d.filter()))
+                .collect(),
+        ),
         selection: req
             .selection
             .clone()

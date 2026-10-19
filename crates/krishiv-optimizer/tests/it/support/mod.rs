@@ -89,7 +89,12 @@ impl FunctionRegistry for Functions {
 
 /// An analysis context over [`catalog`].
 pub(crate) fn ctx() -> AnalysisContext {
-    let mut ctx = context(catalog(), ResolutionConf::default());
+    ctx_over(catalog())
+}
+
+/// An analysis context over `catalog`.
+pub(crate) fn ctx_over(catalog: MemoryCatalog) -> AnalysisContext {
+    let mut ctx = context(catalog, ResolutionConf::default());
     ctx.functions = Arc::new(Functions);
     ctx
 }

@@ -162,6 +162,8 @@ jobs:
   # admission and arbitration (`crates/krishiv-memory/src/loom_tests.rs`);
   # P2-T050: the executor's morsel cursor, finalize countdown, cancellation
   # and result channel (`crates/krishiv-exec/src/loom_tests.rs`).
+  # P2-T163: runtime filter snapshot publication
+  # (`crates/krishiv-io/src/runtime_filter/tests.rs`).
   # P2-T103: every wheel target, built and tested (wheels.yml).
   wheels:
     if: github.repository == 'KrishivAI/krishiv-engine'
@@ -190,6 +192,8 @@ jobs:
         run: cargo test -p krishiv-memory --lib --release --locked
       - name: loom models (krishiv-exec)
         run: cargo test -p krishiv-exec --lib --release --locked
+      - name: loom models (krishiv-io runtime filters)
+        run: cargo test -p krishiv-io --lib --release --locked runtime_filter
 
   # cargo-fuzz targets (`fuzz/`), one hour each: the reusable `fuzz.yml`
   # (regression replay, cached corpus, crash triage). The weekly long run is

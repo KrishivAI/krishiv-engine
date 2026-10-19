@@ -5,10 +5,10 @@ expression: tpch.plan(q).to_string()
 Project [(sum(l_extendedprice#5)#4611686018427387911 / 7.0) AS avg_yearly#42]
 +- HashAggregate keys=[], functions=[sum(l_extendedprice#5)]
    +- Project [l_extendedprice#5]
-      +- HashJoin Inner, [l_partkey#1] = [p_partkey#16], residual: (CAST(l_quantity#4 AS DECIMAL(21,7)) < (0.2 * avg(l_quantity))#41)
+      +- HashJoin Inner, [l_partkey#1] = [p_partkey#16], residual: (CAST(l_quantity#4 AS DECIMAL(21,7)) < (0.2 * avg(l_quantity))#41), RuntimeFilter #2: l_partkey#1 -> spark_catalog.default.lineitem.l_partkey
          :- Scan spark_catalog.default.lineitem [l_partkey#1, l_quantity#4, l_extendedprice#5]
          +- Project [(0.2 * avg(l_quantity))#41, p_partkey#16]
-            +- HashJoin Inner, [l_partkey#26] = [p_partkey#16]
+            +- HashJoin Inner, [l_partkey#26] = [p_partkey#16], RuntimeFilter #1: l_partkey#26 -> spark_catalog.default.lineitem.l_partkey
                :- Project [(0.2 * avg(l_quantity#29)#4611686018427387904) AS (0.2 * avg(l_quantity))#41, l_partkey#26]
                :  +- HashAggregate keys=[l_partkey#26], functions=[avg(l_quantity#29)]
                :     +- Project [l_partkey#26, l_quantity#29]

@@ -13,6 +13,13 @@
 //! 128-bit path. `.../nulls_path` runs the same no-null data with an
 //! all-valid bitmap attached: parity with the plain path is why elementwise
 //! kernels have no has-nulls axis (keeps that decision measurable).
+//!
+//! Decimal `+ - *` take a per-batch range proof (P2-T160): `decimal_add/i128`
+//! now proves its batch fits 64 bits and runs the 64-bit lanes unchecked;
+//! `decimal_mul/q01_*` are TPC-H Q01's products (`decimal(15,2)` price times
+//! `1 - discount`, then times `1 + tax`), whose result types are above
+//! precision 18; `decimal_add/wide_38_0` has values the proof cannot bound
+//! (the 128-bit checked lanes plus the proof's cost).
 
 #![expect(
     missing_docs,
@@ -29,12 +36,12 @@ use arrow_array::types::{Decimal128Type, Float64Type, Int64Type};
 use arrow_array::{Decimal128Array, Float64Array, Int64Array, PrimitiveArray};
 use criterion::{Criterion, criterion_group, criterion_main};
 use krishiv_kernels::compare::{Equal, compare};
-use krishiv_kernels::decimal::{DecimalPlan, DecimalStorage, decimal_binary};
+use krishiv_kernels::decimal::{DecimalOp, DecimalPlan, DecimalStorage, decimal_binary};
 use krishiv_kernels::integer::{binary, binary_nulls_path};
 use krishiv_kernels::reference;
 use krishiv_kernels::{
-    Add, AnsiError, ArithOp, JavaWrap, KernelCtx, NullOnOverflow, Operand, Overflow, SparkVersion,
-    Target, Unchecked,
+    Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Operand, Overflow,
+    SparkVersion, Target, Unchecked,
 };
 
 /// The engine's shipped allocator, so 8 MB outputs reuse memory instead of
@@ -167,6 +174,81 @@ fn decimal(c: &mut Criterion) {
     }
 }
 
+/// `ROWS` values of `decimal(p, s)` in `[lo, lo + span)`, spread over the
+/// whole span (a span beyond `2^40` in steps of `span / 1_000_003`).
+fn decimal_range(p: u8, s: i8, lo: i128, span: i128, seed: i128) -> Decimal128Array {
+    const STEPS: i128 = 1_000_003;
+    let a: PrimitiveArray<Decimal128Type> = (0..i128::from(ROWS))
+        .map(|i| {
+            let x = i.wrapping_mul(seed);
+            Some(if span > 1 << 40 {
+                lo + (x % STEPS) * (span / STEPS)
+            } else {
+                lo + x % span
+            })
+        })
+        .collect();
+    a.with_precision_and_scale(p, s).unwrap()
+}
+
+fn decimal_proof(c: &mut Criterion) {
+    let ctx = KernelCtx::new();
+    // l_extendedprice (15,2), 1 - l_discount and 1 + l_tax (16,2).
+    let price = decimal_range(15, 2, 90_000, 10_410_000, 7919);
+    let disc = decimal_range(16, 2, 90, 11, 104_729);
+    let tax = decimal_range(16, 2, 100, 9, 15_485_863);
+    let mul1 = DecimalPlan::new(DecimalOp::Multiply, (15, 2), (16, 2), (32, 4)).unwrap();
+    let disc_price = decimal_binary::<Mul, Unchecked>(
+        Operand::Array(&price),
+        Operand::Array(&disc),
+        &mul1,
+        &ctx,
+    )
+    .unwrap();
+    c.bench_function("decimal_mul/q01_32_4/unchecked", |bench| {
+        bench.iter(|| {
+            decimal_binary::<Mul, Unchecked>(
+                Operand::Array(black_box(&price)),
+                Operand::Array(black_box(&disc)),
+                &mul1,
+                &ctx,
+            )
+            .unwrap()
+        });
+    });
+    let mul2 = DecimalPlan::new(DecimalOp::Multiply, (32, 4), (16, 2), (38, 6)).unwrap();
+    c.bench_function("decimal_mul/q01_38_6/ansi", |bench| {
+        bench.iter(|| {
+            decimal_binary::<Mul, AnsiError>(
+                Operand::Array(black_box(&disc_price)),
+                Operand::Array(black_box(&tax)),
+                &mul2,
+                &ctx,
+            )
+            .unwrap()
+        });
+    });
+    // `a` in [0, 9e37), `b` in [-9e37, 0): no sum overflows, but the
+    // magnitudes alone cannot prove it.
+    let big = 90_000_000_000_000_000_000_000_000_000_000_000_000_i128;
+    let (a, b) = (
+        decimal_range(38, 0, 0, big, 7919),
+        decimal_range(38, 0, -big, big, 104_729),
+    );
+    let add = DecimalPlan::new(DecimalOp::Add, (38, 0), (38, 0), (38, 0)).unwrap();
+    c.bench_function("decimal_add/wide_38_0/ansi", |bench| {
+        bench.iter(|| {
+            decimal_binary::<Add, AnsiError>(
+                Operand::Array(black_box(&a)),
+                Operand::Array(black_box(&b)),
+                &add,
+                &ctx,
+            )
+            .unwrap()
+        });
+    });
+}
+
 fn float(c: &mut Criterion) {
     let ctx = KernelCtx::new();
     #[expect(clippy::cast_precision_loss, reason = "bench data")]
@@ -185,5 +267,5 @@ fn float(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, integer, decimal, float);
+criterion_group!(benches, integer, decimal, decimal_proof, float);
 criterion_main!(benches);

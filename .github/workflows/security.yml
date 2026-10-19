@@ -3,7 +3,8 @@ name: Security
 # Supply-chain and workflow security checks:
 # - `dependency-review` (pull requests): fails when a PR adds a dependency
 #   with a high or critical advisory, or under a license outside the
-#   cargo-deny allow list (deny.toml [licenses]; keep the two in sync).
+#   cargo-deny allow list plus CC0-1.0 (deny.toml [licenses]; the one deliberate
+#   difference is CC0-1.0, allowed for Python dependencies only; see CONTRIBUTING.md).
 # - `zizmor`: static analysis of the workflows. On pull requests it fails on
 #   any finding (read-only job); on main and on the schedule `zizmor-sarif`
 #   uploads SARIF to code scanning instead.
@@ -42,10 +43,10 @@ jobs:
           # Dev-only and unscoped dependencies count too (the default is
           # runtime only).
           fail-on-scopes: runtime, development, unknown
-          # deny.toml [licenses] allow list.
+          # deny.toml [licenses] allow list plus CC0-1.0 (Python-only; see CONTRIBUTING.md).
           allow-licenses: >-
             Apache-2.0, Apache-2.0 WITH LLVM-exception, MIT, BSD-2-Clause,
-            BSD-3-Clause, ISC, Zlib, Unicode-3.0, MPL-2.0
+            BSD-3-Clause, ISC, Zlib, Unicode-3.0, MPL-2.0, 0BSD, CC0-1.0
           # deny.toml [licenses] exceptions (tiny-keccak is CC0-1.0, reached
           # only on wasm32).
           allow-dependencies-licenses: pkg:cargo/tiny-keccak

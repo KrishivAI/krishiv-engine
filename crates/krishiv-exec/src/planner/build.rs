@@ -28,13 +28,14 @@ use krishiv_plan::{
 use super::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
 use super::explain::ExplainNode;
 use super::nodes::{BreakerNode, FanInNode, OperatorNode, SourceNode};
+use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
 use super::subquery::{Kind, Slot, SubquerySink, SubqueryValue, WithSubqueries};
 use super::{PhysicalPlan, PhysicalPlanner, PlanningContext, pushdown};
 use crate::error::Result;
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
     Filter, FilterPushdown, Limit, Project, ProjectItem, PushedFilter, ReplicateRows,
-    ScanPushdowns, Sort, SortKey, TopN,
+    RuntimeFilters, ScanPushdowns, Sort, SortKey, TopN,
 };
 use crate::pipeline::ExecNode;
 
@@ -74,6 +75,8 @@ pub(crate) struct Planned {
     /// The attribute id of each column of `schema`.
     pub(crate) layout: Vec<AttrId>,
     pub(crate) explain: ExplainNode,
+    /// Scan columns a runtime filter from above may target.
+    pub(crate) sites: Vec<Site>,
 }
 
 impl Planned {
@@ -98,6 +101,7 @@ impl Planned {
                 input: self.node,
                 op,
             }),
+            sites: kept(&self.sites, &layout),
             layout,
             explain: ExplainNode::new(explain.0, explain.1, vec![self.explain]),
         }
@@ -120,6 +124,10 @@ pub(crate) struct Planner<'a> {
     /// The join hints a join read, by address.
     pub(crate) consumed_hints: HashSet<usize>,
     next_id: u64,
+    /// Runtime filter settings.
+    pub(crate) rf: Settings,
+    /// The next runtime filter's id.
+    pub(crate) next_filter: u64,
 }
 
 impl<'a> Planner<'a> {
@@ -131,6 +139,8 @@ impl<'a> Planner<'a> {
             ctes: HashMap::new(),
             consumed_hints: HashSet::new(),
             next_id: max_id(root).saturating_add(1).max(1 << 62),
+            rf: Settings::new(&cx.config),
+            next_filter: 1,
         }
     }
 
@@ -143,12 +153,12 @@ impl<'a> Planner<'a> {
 
     pub(crate) fn plan(&mut self, p: &Arc<LogicalPlan>) -> Result<Planned> {
         match &p.node {
-            PlanNode::Scan(scan) => self.scan(scan, None),
+            PlanNode::Scan(scan) => self.scan(p, scan, None),
             PlanNode::Filter { input, predicate } => {
                 if let PlanNode::Scan(scan) = &input.node
                     && !has_subquery(predicate)
                 {
-                    return self.scan(scan, Some(predicate));
+                    return self.scan(p, scan, Some(predicate));
                 }
                 let input = self.plan(input)?;
                 self.filter(input, predicate)
@@ -178,6 +188,13 @@ impl<'a> Planner<'a> {
                     id.0 =
                         id.0.checked_add(*offset)
                             .ok_or_else(|| internal("attribute id overflow"))?;
+                }
+                for site in &mut planned.sites {
+                    site.attr.0 = site
+                        .attr
+                        .0
+                        .checked_add(*offset)
+                        .ok_or_else(|| internal("attribute id overflow"))?;
                 }
                 // The subtree prints its own ids; its output reads shifted.
                 planned
@@ -217,6 +234,8 @@ impl<'a> Planner<'a> {
                     .collect();
                 let mut planned = select(planned, &source, "CteRef")?;
                 planned.layout = r.output.iter().map(|c| c.id).collect();
+                // Each reference is planned anew: its scans are its own.
+                planned.sites = renamed(&planned.sites, &r.source, &planned.layout);
                 planned.explain.detail = format!("{} [{}]", r.name, columns(&r.output));
                 Ok(planned)
             }
@@ -235,7 +254,10 @@ impl<'a> Planner<'a> {
                 let input = self.plan(input)?;
                 let op = Limit::new(Arc::clone(&input.schema), n);
                 let layout = input.layout.clone();
-                Ok(input.operator(op, layout, ("Limit", n.to_string())))
+                let mut planned = input.operator(op, layout, ("Limit", n.to_string()));
+                // A filter below a limit would change which rows it keeps.
+                planned.sites.clear();
+                Ok(planned)
             }
             PlanNode::Sort { input, order, .. } => {
                 let input = self.plan(input)?;
@@ -278,6 +300,7 @@ impl<'a> Planner<'a> {
         let mut schema: Option<SchemaRef> = None;
         let mut nodes = Vec::with_capacity(inputs.len());
         let mut explain = Vec::with_capacity(inputs.len());
+        let mut sites = Vec::new();
         for input in inputs {
             let cols = input
                 .resolved_output()
@@ -292,6 +315,8 @@ impl<'a> Planner<'a> {
                 .map(|(c, o)| Ok(ProjectItem::aliased(planned.column(c.id)?, &o.name)))
                 .collect::<Result<Vec<_>>>()?;
             let op = Project::try_new_nullable(&planned.schema, items, &nullable)?;
+            let branch: Vec<AttrId> = cols.iter().map(|c| c.id).collect();
+            sites.extend(renamed(&planned.sites, &branch, &layout));
             let planned = planned.operator(op, layout.clone(), ("Project", columns(&cols)));
             match &schema {
                 None => schema = Some(Arc::clone(&planned.schema)),
@@ -309,6 +334,7 @@ impl<'a> Planner<'a> {
             schema,
             layout,
             explain: ExplainNode::new("Union", columns(&out), explain),
+            sites,
         })
     }
 
@@ -393,6 +419,7 @@ impl<'a> Planner<'a> {
         let mut children = vec![input.explain];
         children.extend(compiled.explain);
         Planned {
+            sites: kept(&input.sites, &layout),
             schema: op.schema(),
             node: Arc::new(WithSubqueries {
                 subqueries: compiled.subqueries,
@@ -404,7 +431,18 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn scan(&mut self, scan: &krishiv_plan::Scan, filter: Option<&Arc<Expr>>) -> Result<Planned> {
+    /// The optimizer's estimate of `plan`'s rows (runtime filter costs).
+    pub(crate) fn estimated_rows(&self, plan: &Arc<LogicalPlan>) -> f64 {
+        let stats = super::ProviderStatistics(Arc::clone(&self.cx.tables));
+        krishiv_optimizer::estimated_rows(plan, &stats)
+    }
+
+    fn scan(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        scan: &krishiv_plan::Scan,
+        filter: Option<&Arc<Expr>>,
+    ) -> Result<Planned> {
         let provider = self.cx.tables.provider(scan)?;
         let factory = provider.scan()?;
         let table = factory.table_schema();
@@ -448,16 +486,36 @@ impl<'a> Planner<'a> {
             detail.push_str(&format!(", PushedFilters: [{predicate}]"));
             filters.push(pushed);
         }
+        let slot = RuntimeFilters::default();
         let source = factory.build(ScanPushdowns {
-            projection: Some(projection),
+            projection: Some(projection.clone()),
             filters,
+            dynamic: slot.clone(),
             ..ScanPushdowns::default()
         })?;
+        let sites = if self.rf.enabled() {
+            let scan_rows = self.estimated_rows(plan);
+            let name = source_name(scan);
+            scan.output
+                .iter()
+                .zip(projection)
+                .map(|(c, column)| Site {
+                    attr: c.id,
+                    column,
+                    slot: slot.clone(),
+                    scan_rows,
+                    scan: name.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let planned = Planned {
             schema: source.schema(),
             node: Arc::new(SourceNode(source)),
             layout: scan.output.iter().map(|c| c.id).collect(),
             explain: ExplainNode::leaf("Scan", detail),
+            sites,
         };
         match filter {
             Some(predicate) if !exact => self.filter(planned, predicate),
@@ -491,13 +549,16 @@ impl<'a> Planner<'a> {
             .ok_or_else(|| internal("a replication without a count"))?;
         let op = ReplicateRows::new(Arc::clone(&input.schema), Arc::new(Compiled(e)));
         let layout = input.layout.clone();
-        Ok(Self::attach(
+        let mut planned = Self::attach(
             input,
             op,
             compiled,
             layout,
             ("ReplicateRows", count.to_string()),
-        ))
+        );
+        // The replication count is computed over groups the filter cuts.
+        planned.sites.clear();
+        Ok(planned)
     }
 
     /// `SELECT exprs`: plain columns pass through without a copy.
@@ -532,13 +593,21 @@ impl<'a> Planner<'a> {
             layout.push(id);
         }
         let op = Project::try_new(&input.schema, items)?;
-        Ok(Self::attach(
-            input,
-            op,
-            compiled,
-            layout,
-            ("Project", list(exprs)),
-        ))
+        // A site passes as each output that is its column (renamed) or a
+        // widening cast of it.
+        let types = |id: AttrId| column_type(&input, id);
+        let mut sites = Vec::new();
+        for (e, out) in exprs.iter().zip(&layout) {
+            if let Some(src) = key_source(e, &types) {
+                sites.extend(input.sites.iter().filter(|s| s.attr == src).map(|s| Site {
+                    attr: *out,
+                    ..s.clone()
+                }));
+            }
+        }
+        let mut planned = Self::attach(input, op, compiled, layout, ("Project", list(exprs)));
+        planned.sites = sites;
+        Ok(planned)
     }
 
     /// `input` with a column for each sort key that is not one already, and
@@ -632,13 +701,15 @@ impl<'a> Planner<'a> {
         let (input, keys) = self.sort_keys(input, order)?;
         let limit = usize::try_from(n).map_err(|_| internal("top-N limit out of range"))?;
         let top = Arc::new(TopN::new(Arc::clone(&input.schema), &keys, 0, limit)?);
-        Ok(breaker(
+        let mut planned = breaker(
             input,
             Arc::clone(&top) as Arc<dyn Sink>,
             top,
             ("TopN", format!("{n}, {}", orders(order))),
             true,
-        ))
+        );
+        planned.sites.clear();
+        Ok(planned)
     }
 }
 
@@ -717,6 +788,7 @@ pub(crate) fn breaker(
     Planned {
         schema: source.schema(),
         layout: input.layout.clone(),
+        sites: input.sites,
         node: Arc::new(BreakerNode {
             input: input.node,
             sink,
@@ -766,6 +838,7 @@ fn one_row() -> Result<Planned> {
         node: Arc::new(SourceNode(source)),
         layout: Vec::new(),
         explain: ExplainNode::leaf("OneRowRelation", ""),
+        sites: Vec::new(),
     })
 }
 

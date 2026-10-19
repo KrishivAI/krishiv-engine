@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from . import compare
-from .abba import LOAD_INDICATIVE, bootstrap_ci, geomean, geomean_ci, loadavg
+from .abba import LOAD_INDICATIVE, bootstrap_ci, discover_tables, geomean, geomean_ci, loadavg
 from .adapters import Dataset, Engine, Query
 from .adapters.process import EngineCrashed, EngineError, EngineTimeout, ProcessEngine
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
@@ -59,16 +59,10 @@ LIBS = ["duckdb", "polars", "datafusion", "pysail", "pyspark", "pyarrow"]
 def resolve_dataset(suite: str, dataset: str | None, sf: float) -> Dataset:
     name = dataset or SUITE_DATASET[suite]
     root = data_root() / name if suite == "clickbench" else dataset_dir(name, sf)
-    tables = set()
-    if root.is_dir():
-        for p in root.iterdir():
-            if p.is_file() and p.suffix == ".parquet":
-                tables.add(p.stem)
-            elif p.is_dir() and any(p.glob("*.parquet")):
-                tables.add(p.name.removesuffix(".parquet"))
+    tables = discover_tables(root)
     if not tables:
         raise SystemExit(f"no dataset at {root}")
-    return Dataset(name, sf, root, sorted(tables))
+    return Dataset(name, sf, root, tables)
 
 
 def _wait_idle(limit: float = 2.0, max_wait_s: float = 900.0) -> None:
@@ -84,6 +78,24 @@ def _fail(status: str, e: Exception | str) -> dict:
 
 def _status_of(e: Exception) -> str:
     return "timeout" if isinstance(e, EngineTimeout) else "error"
+
+
+def setup_engines(engines: dict[str, Engine], ds: Dataset) -> dict[str, dict]:
+    """Set up every engine; one that fails is torn down, removed from ``engines`` and returned as a failure verdict.
+
+    A failed reference engine is fatal for the run (nothing can be checked without it), so it raises.
+    """
+    failed: dict[str, dict] = {}
+    for n, e in list(engines.items()):
+        try:
+            e.setup(ds)
+        except (EngineError, EngineTimeout, EngineCrashed) as exc:
+            e.teardown()
+            if n == REFERENCE:
+                raise SystemExit(f"{REFERENCE} setup failed: {exc}") from exc
+            failed[n] = _fail(_status_of(exc), f"setup: {exc}")
+            del engines[n]
+    return failed
 
 
 def correctness(qm: Mapping[str, Query], engines: Mapping[str, Engine]) -> tuple[dict[str, dict], int]:
@@ -214,8 +226,8 @@ def run_reproduce(
         }
         engs: dict[str, Engine] = {n: ProcessEngine(n, threads, memory_gb, timeout_s) for n in names}
         try:
+            record["setup_failures"] = setup_engines(engs, ds)
             for n, e in engs.items():
-                e.setup(ds)
                 record["engines"][n] = {"version": e.version(), "config": e.config(), "build": e.build_info()}
             for qm in queries:
                 qid = qm[REFERENCE].id
@@ -226,6 +238,7 @@ def run_reproduce(
             for e in engs.values():
                 e.teardown()
         if "theirs" in methods:
+            names = [n for n in names if n not in record["setup_failures"]]
             _run_theirs(record, queries, ds, names, threads, memory_gb, runs, their_timeout_s, "ours" in methods)
     record["finished_utc"] = dt.datetime.now(dt.UTC).isoformat()
     record["summary"] = summarize(record)
@@ -246,9 +259,9 @@ def _run_theirs(record, queries, ds, names, threads, memory_gb, runs, timeout_s,
         if not have_ours:
             probes = {n: ProcessEngine(n, threads, memory_gb, 600) for n in names}
             try:
-                for p in probes.values():
-                    p.setup(ds)
-                verdict, nrows = correctness(qm, probes)
+                verdict = setup_engines(probes, ds)
+                checked, nrows = correctness(qm, probes)
+                verdict.update(checked)
             finally:
                 for p in probes.values():
                     p.teardown()
@@ -345,6 +358,8 @@ def summarize(record: dict) -> dict:
 def markdown(record: dict) -> str:
     names = list(record["engines"])
     out = [f"### {record['suite']} sf{record['dataset']['scale_factor']}  (threads {record['pinned']['threads']})", ""]
+    for n, f in record.get("setup_failures", {}).items():
+        out += [f"Setup {f['status']} for {n}, not run: {f['reason']}", ""]
     for method in record["methods"]:
         note = f"; ratio vs {REFERENCE} in parentheses" if method == "ours" else "; best of N hot runs"
         out += [f"**{method}** (ms{note})", ""]

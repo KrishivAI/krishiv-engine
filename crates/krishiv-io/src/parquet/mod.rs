@@ -8,7 +8,10 @@
 //! - **Pruning, stage 1** ([`FileFormat::plan_units`]): a split owns the
 //!   row groups whose byte midpoint it holds; their min/max/null-count
 //!   statistics prune with the (re-typed, file-level) predicate and the
-//!   current dynamic filters. Only exact bounds prune (see `meta.rs`).
+//!   current runtime filters, which the decoder re-reads at each row-group
+//!   boundary and prunes the row groups left with when a filter changed
+//!   (a filter published while the scan runs). Only exact bounds prune
+//!   (see `meta.rs`).
 //! - **Decoding** (`decode.rs`): arrow-rs decodes the projected leaves of the
 //!   surviving row groups, with the row selection mapped into each row
 //!   group, strings as `Utf8View`; fetches are the framework's.
@@ -29,7 +32,10 @@
 //!   sans-IO encoder, with Spark's codecs, file names and calendar markers,
 //!   page indexes always written.
 //! - Page indexes, bloom filters and dictionary pruning on read are
-//!   P2-T080b.
+//!   P2-T080b; runtime filters reach those stages through
+//!   [`ScanFilter::predicate`](crate::ScanFilter::predicate) (statistics
+//!   comparisons for page indexes, `Membership` for dictionary values and
+//!   stored Bloom filters) once the reader exposes them.
 
 mod calendar;
 mod decode;
@@ -284,18 +290,30 @@ impl FileFormat for ParquetFormat {
         let meta = any
             .downcast_ref::<ParquetMetadata>()
             .ok_or_else(|| FormatError::Corrupt("not Parquet metadata".to_owned()))?;
-        let mut predicates: Vec<_> = req.predicate.iter().cloned().collect();
-        predicates.extend(req.dynamic.iter().filter_map(|d| d.current()));
+        let runtime: Vec<_> = req
+            .dynamic
+            .iter()
+            .filter_map(|d| Some((d.predicate()?, d.filter())))
+            .collect();
         let mut plan = UnitPlan::default();
         for (index, rg) in meta.row_groups.iter().enumerate() {
             if !split.owns(&rg.bytes) {
                 continue;
             }
             plan.owned += 1;
-            if predicates
-                .iter()
-                .any(|p| prune(p, &rg.statistics) == TriState::False)
+            if req
+                .predicate
+                .as_ref()
+                .is_some_and(|p| prune(p, &rg.statistics) == TriState::False)
             {
+                plan.pruned_by_statistics += 1;
+                continue;
+            }
+            if let Some((_, f)) = runtime
+                .iter()
+                .find(|(p, _)| prune(p, &rg.statistics) == TriState::False)
+            {
+                f.stats().add_unit(rg.bytes.end - rg.bytes.start);
                 plan.pruned_by_statistics += 1;
                 continue;
             }

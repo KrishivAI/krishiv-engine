@@ -51,8 +51,8 @@ use krishiv_common::error::{
 
 use crate::error::{FormatError, Result, internal};
 use crate::request::{
-    ColumnPath, DynamicFilter, FieldMapping, PushdownExpr, ROW_INDEX_COLUMN, ScalarValue,
-    ScanRequest, project_schema,
+    ColumnPath, FieldMapping, PushdownExpr, ROW_INDEX_COLUMN, ScalarValue, ScanRequest,
+    project_schema,
 };
 
 /// Arrow field-metadata key of a field id (Parquet's, as arrow-rs reads it).
@@ -85,7 +85,7 @@ enum Plan {
     Take(usize, Conv),
 }
 
-/// Resolution rules shared by the mapper and its mapped dynamic filters.
+/// Resolution rules of the mapper.
 #[derive(Debug)]
 struct Resolver {
     table: SchemaRef,
@@ -180,7 +180,8 @@ impl SchemaMapper {
     }
 
     /// The file-level request: file names, nested pruning, the predicate
-    /// and dynamic filters re-typed to the file.
+    /// re-typed to the file, and runtime filters on the file's columns
+    /// (each lowers to the file's type when read).
     #[must_use]
     pub fn file_request(&self, req: &ScanRequest) -> ScanRequest {
         ScanRequest {
@@ -190,11 +191,15 @@ impl SchemaMapper {
             dynamic: req
                 .dynamic
                 .iter()
-                .map(|d| {
-                    Arc::new(MappedDynamic {
-                        inner: Arc::clone(d),
-                        resolver: Arc::clone(&self.resolver),
-                    }) as Arc<dyn DynamicFilter>
+                .filter_map(|d| {
+                    // The file's column and type (`None`: missing, NULL);
+                    // an unresolvable path is not filtered.
+                    let (path, _) = d.column()?;
+                    let column = self
+                        .resolver
+                        .resolve_path(path)?
+                        .map(|(fc, ft, _)| (fc, ft));
+                    Some(crate::ScanFilter::at(Arc::clone(d.filter()), column))
                 })
                 .collect(),
             selection: req.selection.clone(),
@@ -633,6 +638,19 @@ impl Resolver {
                     }
                 })
             }
+            P::Membership { column, filter } => {
+                let Some((fc, ft, _)) = self.resolve_path(column)? else {
+                    return Some(P::Constant(filter.keys.nulls_pass()));
+                };
+                // Values are cast to the key type; a file type that does
+                // not widen to it is not filtered.
+                crate::runtime_filter::widens_to(&ft, filter.keys.key_type()).then(|| {
+                    P::Membership {
+                        column: fc,
+                        filter: filter.clone(),
+                    }
+                })
+            }
             P::StartsWith {
                 column,
                 prefix,
@@ -666,7 +684,7 @@ fn needs_struct_resolution(dt: &DataType) -> bool {
 }
 
 /// A literal re-typed from the table type to the file type.
-enum Retyped {
+pub(crate) enum Retyped {
     /// The equivalent literal of the file type.
     Exact(ScalarValue),
     /// Every non-null value satisfies the comparison.
@@ -677,7 +695,7 @@ enum Retyped {
 
 /// `value` (of table type `t`) as a literal of file type `f` for `op`;
 /// `None` when the comparison cannot be expressed (it is then not pushed).
-fn retype(
+pub(crate) fn retype(
     value: &ScalarValue,
     t: &DataType,
     f: &DataType,
@@ -838,21 +856,6 @@ fn int_scalar(dt: &DataType, n: i128) -> Option<ScalarValue> {
         DataType::Int64 => ScalarValue::Int64(i64::try_from(n).ok()?),
         _ => return None,
     })
-}
-
-/// A dynamic filter mapped to one file.
-#[derive(Debug)]
-struct MappedDynamic {
-    inner: Arc<dyn DynamicFilter>,
-    resolver: Arc<Resolver>,
-}
-
-impl DynamicFilter for MappedDynamic {
-    fn current(&self) -> Option<PushdownExpr> {
-        self.inner
-            .current()
-            .and_then(|e| self.resolver.map_predicate(&e))
-    }
 }
 
 /// `array` converted by `conv` to `target`.

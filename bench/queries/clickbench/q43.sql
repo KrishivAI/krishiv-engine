@@ -1,0 +1,1 @@
+SELECT EventTime - EventTime % 60 AS M, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= 15900 AND EventDate <= 15901 AND IsRefresh = 0 AND DontCountHits = 0 GROUP BY EventTime - EventTime % 60 ORDER BY EventTime - EventTime % 60 LIMIT 10 OFFSET 1000;

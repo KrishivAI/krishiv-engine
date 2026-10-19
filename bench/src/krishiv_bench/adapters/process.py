@@ -46,7 +46,11 @@ class ProcessEngine(Engine):
             stdout=subprocess.PIPE,
             start_new_session=True,
         )
-        self.info = self._call({"op": "setup", "dataset": self._dataset}, self.setup_timeout_s)
+        try:
+            self.info = self._call({"op": "setup", "dataset": self._dataset}, self.setup_timeout_s)
+        except BaseException:
+            self.kill()  # a worker that failed setup has no tables; the next request must start a clean one
+            raise
 
     setup_timeout_s = 900.0
 

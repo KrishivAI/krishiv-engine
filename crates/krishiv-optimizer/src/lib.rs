@@ -5,6 +5,8 @@
 //! Rules run in batches, each batch to a fixed point (at most
 //! [`MAX_ITERATIONS`] rounds, as Spark's `spark.sql.optimizer.maxIterations`):
 //!
+//! 0. **Implied join filters**, once: each input of an inner join is
+//!    filtered with what its condition's disjunctions imply on it alone.
 //! 1. **Rewrite**: constant folding and boolean simplification, filter
 //!    pushdown (through projections, aggregates onto their grouping keys,
 //!    sorts, aliases, CTE bodies, self-join instances and joins, turning
@@ -104,6 +106,7 @@ fn run(plan: &Plan, stats: Option<&dyn Statistics>) -> Result<Plan, KrishivError
     }
     let root = Arc::clone(plan.root());
     let run = move || -> Result<Arc<LogicalPlan>, KrishivError> {
+        let root = dag::rewrite_up(root, &mut |p| Ok(pushdown::imply_join_condition(p)))?;
         let root = batch(root)?;
         let root = match stats {
             Some(stats) => join_order::reorder(&root, stats),

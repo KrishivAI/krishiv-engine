@@ -7,14 +7,14 @@ TopN 100, [numwait#68 DESC NULLS LAST, s_name#1 ASC NULLS FIRST]
    +- HashAggregate keys=[s_name#1], functions=[count(1)]
       +- Project [s_name#1]
          +- HashJoin LeftAnti, [l_orderkey#7] = [l_orderkey#52], residual: (NOT (l_suppkey#54 == l_suppkey#9))
-            :- HashJoin LeftSemi, [l_orderkey#7] = [l_orderkey#36], residual: (NOT (l_suppkey#38 == l_suppkey#9))
+            :- HashJoin LeftSemi, [l_orderkey#7] = [l_orderkey#36], residual: (NOT (l_suppkey#38 == l_suppkey#9)), RuntimeFilter #4: l_orderkey#7 -> spark_catalog.default.lineitem.l_orderkey
             :  :- Project [s_name#1, l_orderkey#7, l_suppkey#9]
-            :  :  +- HashJoin Inner, [s_nationkey#3] = [n_nationkey#32]
+            :  :  +- HashJoin Inner, [s_nationkey#3] = [n_nationkey#32], RuntimeFilter #3: s_nationkey#3 -> spark_catalog.default.supplier.s_nationkey
             :  :     :- Project [s_name#1, s_nationkey#3, l_orderkey#7, l_suppkey#9]
-            :  :     :  +- HashJoin Inner, [s_suppkey#0] = [l_suppkey#9]
+            :  :     :  +- HashJoin Inner, [s_suppkey#0] = [l_suppkey#9], RuntimeFilter #2: s_suppkey#0 -> spark_catalog.default.supplier.s_suppkey
             :  :     :     :- Scan spark_catalog.default.supplier [s_suppkey#0, s_name#1, s_nationkey#3]
             :  :     :     +- Project [l_orderkey#7, l_suppkey#9]
-            :  :     :        +- HashJoin Inner, [l_orderkey#7] = [o_orderkey#23]
+            :  :     :        +- HashJoin Inner, [l_orderkey#7] = [o_orderkey#23], RuntimeFilter #1: l_orderkey#7 -> spark_catalog.default.lineitem.l_orderkey
             :  :     :           :- Project [l_orderkey#7, l_suppkey#9]
             :  :     :           :  +- Filter (l_receiptdate#19 > l_commitdate#18)
             :  :     :           :     +- Scan spark_catalog.default.lineitem [l_orderkey#7, l_suppkey#9, l_commitdate#18, l_receiptdate#19], PushedFilters: [(l_receiptdate#19 > l_commitdate#18)]

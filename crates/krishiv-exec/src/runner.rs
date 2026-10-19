@@ -230,13 +230,15 @@ async fn run_pipelines(
 }
 
 /// Reads the operator-specific counters of each finished pipeline's
-/// operators and sink into the query's metrics.
+/// source, operators and sink into the query's metrics.
 fn record_extra_metrics(query: &QueryContext, runs: &[Arc<PipelineRun>]) {
     query.merge_metrics(|m| {
         for run in runs {
             let p = &run.pipeline;
+            let source = std::iter::once((p.source.0, p.source.1.extra_metrics()));
             let ops = p.operators.iter().map(|(id, op)| (*id, op.extra_metrics()));
-            for (id, extra) in ops.chain(std::iter::once((p.sink.0, p.sink.1.extra_metrics()))) {
+            let sink = std::iter::once((p.sink.0, p.sink.1.extra_metrics()));
+            for (id, extra) in source.chain(ops).chain(sink) {
                 if !extra.is_empty() {
                     m.operators.entry(id).or_default().extra = extra;
                 }

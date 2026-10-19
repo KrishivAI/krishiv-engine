@@ -286,7 +286,9 @@ fn security_workflows_are_wired() {
     ] {
         assert!(sec.contains(needle), "security.yml lacks {needle:?}");
     }
-    // The license allow list matches deny.toml's.
+    // The dependency-review allow list is deny.toml's plus exactly one deliberate extra:
+    // CC0-1.0, allowed for Python dependencies only (numpy's compound license), never for
+    // Rust crates (no patent grant in the engine binary). Any other difference fails.
     let deny = read("deny.toml");
     let allow = deny
         .split("[licenses]")
@@ -305,9 +307,15 @@ fn security_workflows_are_wired() {
         .collect::<Vec<_>>()
         .join(" ");
     let listed: Vec<&str> = listed.split(',').map(str::trim).collect();
+    let mut expected = licenses.clone();
+    expected.push("CC0-1.0");
     assert_eq!(
-        listed, licenses,
-        "dependency-review allow-licenses != deny.toml"
+        listed, expected,
+        "dependency-review allow-licenses must be deny.toml's list + CC0-1.0 (Python-only)"
+    );
+    assert!(
+        !licenses.contains(&"CC0-1.0"),
+        "CC0-1.0 must stay out of deny.toml's global allow list"
     );
     let osv = read(".github/workflows/osv-scanner.yml");
     for lock in ["Cargo.lock", "python/uv.lock", "bench/uv.lock"] {

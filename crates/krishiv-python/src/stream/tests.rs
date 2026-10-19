@@ -13,6 +13,8 @@
 
 #[path = "ffi.rs"]
 mod ffi;
+#[path = "query.rs"]
+mod query;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -850,4 +852,105 @@ fn an_exported_stream_stays_done_after_an_error() {
     let mut consumer = ArrowArrayStreamReader::try_new(stream).unwrap();
     assert!(consumer.next().unwrap().is_err());
     assert!(consumer.next().is_none(), "no batch after an error");
+}
+
+/// A source that counts the batches it produces and records that it was dropped.
+struct Probe {
+    produced: Arc<AtomicUsize>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl futures::Stream for Probe {
+    type Item = Result<RecordBatch, krishiv_common::error::KrishivError>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.produced.fetch_add(1, Ordering::SeqCst);
+        std::task::Poll::Ready(Some(Ok(batch())))
+    }
+}
+
+impl Drop for Probe {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Releasing the exported C stream drops the engine stream (which cancels
+/// the query) and nothing polls it afterwards.
+#[test]
+fn releasing_the_exported_query_stream_drops_the_engine_stream() {
+    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+    use futures::StreamExt as _;
+
+    let produced = Arc::new(AtomicUsize::new(0));
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut stream: krishiv_session::RecordBatchStream = Box::pin(Probe {
+        produced: Arc::clone(&produced),
+        dropped: Arc::clone(&dropped),
+    });
+    // As `DataFrame.execute` does: one batch is read to learn the schema.
+    let first = futures::executor::block_on(stream.next()).unwrap().unwrap();
+    let reader = query::QueryReader::new(first.schema(), Some(first), stream);
+    let exported = ffi::export_stream(Box::new(reader), None);
+    let mut consumer = ArrowArrayStreamReader::try_new(exported).unwrap();
+    consumer.next().unwrap().unwrap(); // the first batch
+    consumer.next().unwrap().unwrap(); // one pulled from the engine
+    assert_eq!(produced.load(Ordering::SeqCst), 2);
+    assert!(!dropped.load(Ordering::SeqCst));
+    drop(consumer);
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "the engine stream was not dropped"
+    );
+    assert_eq!(produced.load(Ordering::SeqCst), 2, "polled after release");
+}
+
+/// A stream that yields `batches` then fails.
+fn failing(batches: usize) -> krishiv_session::RecordBatchStream {
+    let mut items: Vec<Result<RecordBatch, krishiv_common::error::KrishivError>> =
+        (0..batches).map(|_| Ok(batch())).collect();
+    items.push(Err(krishiv_common::error::InternalError {
+        message: "boom".to_owned(),
+    }
+    .into()));
+    Box::pin(futures::stream::iter(items))
+}
+
+/// An engine error after the first batch reaches the consumer as an Arrow error and
+/// is left, intact, in the error slot for the caller to raise.
+#[test]
+fn a_later_engine_error_is_kept_in_the_error_slot() {
+    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+
+    let reader = query::QueryReader::new(schema(), Some(batch()), failing(1));
+    let slot = reader.error_slot();
+    let exported = ffi::export_stream(Box::new(reader), None);
+    let mut consumer = ArrowArrayStreamReader::try_new(exported).unwrap();
+    consumer.next().unwrap().unwrap();
+    consumer.next().unwrap().unwrap();
+    let err = consumer.next().unwrap().unwrap_err();
+    assert!(err.to_string().contains("boom"), "{err}");
+    let kept = slot
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the engine error is kept");
+    assert!(kept.to_string().contains("boom"));
+    assert!(consumer.next().is_none());
+}
+
+/// A batch without columns keeps its row count.
+#[test]
+fn a_batch_without_columns_keeps_its_rows() {
+    let empty = Arc::new(Schema::empty());
+    let options = arrow_array::RecordBatchOptions::new().with_row_count(Some(7));
+    let batch = RecordBatch::try_new_with_options(Arc::clone(&empty), vec![], &options).unwrap();
+    let stream: krishiv_session::RecordBatchStream =
+        Box::pin(futures::stream::iter(vec![Ok(batch)]));
+    let mut reader = query::QueryReader::new(empty, None, stream);
+    assert_eq!(reader.next().unwrap().unwrap().num_rows(), 7);
+    assert!(reader.next().is_none());
 }

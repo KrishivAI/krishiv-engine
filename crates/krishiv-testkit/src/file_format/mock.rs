@@ -827,7 +827,7 @@ struct Plan {
     selection: Option<RowSelection>,
     row_index: bool,
     verify: bool,
-    dynamic: Vec<Arc<dyn krishiv_io::DynamicFilter>>,
+    dynamic: Vec<krishiv_io::ScanFilter>,
 }
 
 impl Plan {
@@ -862,14 +862,14 @@ impl Plan {
         })
     }
 
-    /// The next unit not pruned by a dynamic filter.
+    /// The next unit not pruned by a runtime filter (re-read per unit).
     fn next_unit(&mut self) -> Option<ScanUnit> {
         while let Some(u) = self.units.pop_front() {
             let stats = &self.meta.units[u.index].stats;
             let pruned = self
                 .dynamic
                 .iter()
-                .filter_map(|d| d.current())
+                .filter_map(krishiv_io::ScanFilter::predicate)
                 .any(|e| prune(&e, stats) == TriState::False);
             if !pruned {
                 return Some(u);

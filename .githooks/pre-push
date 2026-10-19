@@ -3,6 +3,9 @@
 # Krishiv pre-push (P2-T134): refuse pushes to main and non-fast-forward
 # (force) pushes. Interim guard until branch protection is available on the
 # org plan. Override deliberately with KRISHIV_ALLOW_MAIN_PUSH=1.
+# Also runs the ruff version pinned in python/uv.lock (via uvx) on the Python
+# files a push changes (format --check + check), as CI does; skipped with a
+# message when uv is not installed (KRISHIV_UVX overrides the command).
 # Install with `cargo xtask setup`.
 set -eu
 
@@ -13,6 +16,29 @@ fi
 
 zero=0000000000000000000000000000000000000000
 status=0
+
+# ruff_check <base> <local sha>: lint the .py files changed since <base>.
+ruff_check() {
+  files=$(git diff --name-only --diff-filter=d "$1" "$2" -- '*.py' 2>/dev/null || true)
+  [ -n "$files" ] || return 0
+  uvx_cmd="${KRISHIV_UVX:-uvx}"
+  if ! command -v "$uvx_cmd" >/dev/null 2>&1; then
+    echo "pre-push: uv is not installed, skipping the ruff check of changed Python files (CI still runs it)" >&2
+    return 0
+  fi
+  lock="$(git rev-parse --show-toplevel)/python/uv.lock"
+  version=$(awk '/^name = "ruff"$/ { f = 1; next } f && /^version = / { gsub(/[" ]|version=/, ""); print; exit }' "$lock" 2>/dev/null | sed 's/^version=//')
+  if [ -z "$version" ]; then
+    echo "pre-push: no ruff version in python/uv.lock, skipping the ruff check" >&2
+    return 0
+  fi
+  # shellcheck disable=SC2086 # file names without spaces, one per line
+  set -- $files
+  if ! "$uvx_cmd" "ruff@$version" format --check "$@" || ! "$uvx_cmd" "ruff@$version" check "$@"; then
+    echo "pre-push: ruff $version found problems in changed Python files (fix with: uvx ruff@$version format <files> && uvx ruff@$version check --fix <files>)" >&2
+    return 1
+  fi
+}
 # stdin: <local ref> <local sha> <remote ref> <remote sha> per ref being pushed.
 while read -r local_ref local_sha remote_ref remote_sha; do
   case "$remote_ref" in
@@ -22,6 +48,15 @@ while read -r local_ref local_sha remote_ref remote_sha; do
       continue
       ;;
   esac
+  if [ "$local_sha" != "$zero" ]; then
+    base="$remote_sha"
+    if [ "$base" = "$zero" ]; then
+      base=$(git merge-base "$local_sha" origin/main 2>/dev/null || true)
+    fi
+    if [ -n "$base" ] && ! ruff_check "$base" "$local_sha"; then
+      status=1
+    fi
+  fi
   # Branch deletion or creation cannot rewrite history.
   if [ "$local_sha" = "$zero" ] || [ "$remote_sha" = "$zero" ]; then
     continue

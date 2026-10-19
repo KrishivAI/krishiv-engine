@@ -7,6 +7,8 @@ from .adapters import ENGINES
 from .report import write_report
 from .runner import run_suite
 
+ABBA_DATASET = {"tpch": "tpch-duckdb", "tpcds": "tpcds", "clickbench": "clickbench"}
+
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="krishiv-bench")
@@ -25,9 +27,12 @@ def main(argv=None) -> None:
     r.add_argument("--duckdb-threads", type=int)
     r.add_argument("--duckdb-memory-limit", default="12GB")
     r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
-    ab = sub.add_parser("abba", help="interleaved ABBA Krishiv vs DuckDB (P2-T142); needs the release runner binary")
+    ab = sub.add_parser(
+        "abba", help="interleaved ABBA Krishiv vs DuckDB (P2-T142); needs the dist-profile runner binary"
+    )
+    ab.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
     ab.add_argument("--sf", type=float, default=10)
-    ab.add_argument("--dataset", default="tpch-duckdb")
+    ab.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
     ab.add_argument("--reps", type=int, default=3, help="ABBA blocks per query (2 samples per engine each)")
     ab.add_argument("--queries", help="comma list, e.g. q01,q05")
     ab.add_argument("--threads", type=int, default=8, help="threads for both engines")
@@ -59,12 +64,15 @@ def main(argv=None) -> None:
     if a.cmd == "reproduce":
         from .reproduce import run_reproduce
 
+        methods = tuple(m.strip() for m in a.methods.split(",") if m.strip())
+        if not methods or set(methods) - {"ours", "theirs"}:
+            ap.error(f"--methods must be a comma list of: ours, theirs (got {a.methods!r})")
         run_reproduce(
             a.suite,
             a.sf,
             a.dataset,
             a.engines.split(",") if a.engines else None,
-            tuple(a.methods.split(",")),
+            methods,
             a.reps,
             a.queries.split(",") if a.queries else None,
             a.threads,
@@ -78,12 +86,13 @@ def main(argv=None) -> None:
 
         run_abba(
             a.sf,
-            a.dataset,
+            a.dataset or ABBA_DATASET[a.suite],
             a.reps,
             a.queries.split(",") if a.queries else None,
             a.threads,
             a.memory_limit,
             a.timeout,
+            a.suite,
         )
     elif a.cmd == "run":
         kw = {}
