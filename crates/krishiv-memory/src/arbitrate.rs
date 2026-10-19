@@ -10,8 +10,10 @@
 //!    pending releases (memory of already-aborted queries) do not. Victims
 //!    are ranked by how far their query holds memory above its fair share
 //!    (`limit / active queries`), then by spillable bytes; the requester's
-//!    own consumer and every consumer of its driver ([`crate::SpillOwner`])
-//!    are never asked. Tickets are awaited together, each completed victim
+//!    own consumer is never asked, and the other consumers of its driver
+//!    ([`crate::SpillOwner`]) only after every other victim (the driver
+//!    services them while it waits; a caller that does not is given up on
+//!    at `spillWaitTimeout`, as any victim that never begins). Tickets are awaited together, each completed victim
 //!    is trimmed so its exact freed bytes count, and the request is retried
 //!    on every release. `spillWaitTimeout` bounds the wait for a victim to
 //!    *begin* its spill; a spill in progress is awaited to its end.
@@ -336,20 +338,23 @@ impl Round {
         let me = &self.consumer;
         let mut victims: Vec<_> = consumers
             .iter()
-            .filter(|(c, n)| {
-                c.id != me.id && (c.owner.is_none() || c.owner != me.owner) && !aborted(n)
-            })
+            .filter(|(c, n)| c.id != me.id && !aborted(n))
             .filter_map(|(c, n)| {
                 let spill = c.spillable()?;
                 let bytes = spill.spillable_bytes().min(c.used());
                 let excess = plan.excess(n.group_node().as_ref());
-                (bytes > 0).then(|| (excess, bytes, spill, Arc::clone(c), Arc::clone(n)))
+                // The requester's own driver services requests while it
+                // waits, but has already spilled what `SpillOwner::reserve`
+                // asked of it: its other consumers are asked last.
+                let own = c.owner.is_some() && c.owner == me.owner;
+                (bytes > 0).then(|| (own, excess, bytes, spill, Arc::clone(c), Arc::clone(n)))
             })
             .collect();
-        victims.sort_by_key(|(excess, bytes, ..)| std::cmp::Reverse((*excess, *bytes)));
+        victims
+            .sort_by_key(|(own, excess, bytes, ..)| (*own, std::cmp::Reverse((*excess, *bytes))));
         let mut remaining = shortfall;
         let mut tickets = Vec::new();
-        for (_, bytes, spill, c, n) in victims {
+        for (_, _, bytes, spill, c, n) in victims {
             if remaining == 0 {
                 break;
             }

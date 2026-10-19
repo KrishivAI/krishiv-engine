@@ -13,9 +13,13 @@
 //! the spill's I/O takes, so a slow but working spill never turns into an
 //! abort.
 //!
-//! **Self-spill contract.** The arbitrator never asks the requester's own
-//! driver to spill (that driver is busy waiting). A driver whose operator
-//! needs memory therefore spills its *own* consumers first, then asks the
+//! **Self-spill contract.** The arbitrator never asks the requesting
+//! consumer to spill, and asks the other consumers of the requester's
+//! driver only after every other victim: a driver services its own
+//! requests while it waits for memory (a source's or a flush step's
+//! `Reservation::grow` included), so its spillable state, say a sink
+//! downstream of a scan, can make room for it. A driver whose operator
+//! needs memory spills its *own* consumers first, then asks the
 //! arbitrator: [`SpillOwner::reserve`] does both. Sync operator code never
 //! spills or waits inline; on a failed `try_grow` it returns `NeedMemory`
 //! with its state unchanged, and the driver calls [`SpillOwner::reserve`].
@@ -47,7 +51,7 @@ pub trait Spillable: Send + Sync {
     /// boundary, so it must be cheap (one atomic load for [`SpillSignal`]).
     fn spill_requested(&self) -> Option<usize>;
     /// The driver that services this consumer's requests, if any. The
-    /// arbitrator never sends requests to the requester's own driver.
+    /// arbitrator asks the requester's own driver last.
     fn owner(&self) -> Option<OwnerId> {
         None
     }

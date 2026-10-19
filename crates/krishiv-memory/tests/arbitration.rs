@@ -543,8 +543,9 @@ async fn victims_are_chosen_above_their_fair_share() {
     drop(a);
 }
 
-/// The arbitrator never asks the requester's own driver; the driver spills
-/// its own consumers first through `SpillOwner::reserve`.
+/// The arbitrator asks the requester's own driver last (a driver services
+/// its requests while it waits); the driver spills its own consumers first
+/// through `SpillOwner::reserve`.
 #[tokio::test(start_paused = true)]
 async fn a_driver_spills_its_own_consumers_before_arbitrating() {
     let tree = new_root(8 * MIB);
@@ -564,13 +565,56 @@ async fn a_driver_spills_its_own_consumers_before_arbitrating() {
         Some(Arc::clone(&requester_signal) as Arc<dyn Spillable>),
     );
 
-    // Plain arbitration does not ask the sibling (same driver): the lone
-    // query fails instead of waiting for a request nobody would service.
+    // Plain arbitration asks the sibling (same driver) too; nobody services
+    // it here, so the round gives up at the timeout and the lone query
+    // fails.
     let start = Instant::now();
     let e = q.reserve(id, 4 * MIB).await.unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
-    assert!(start.elapsed() < TIMEOUT);
-    assert_eq!(sibling_signal.spill_requested(), None);
+    assert!(start.elapsed() >= TIMEOUT);
+    assert_eq!(sibling_signal.spill_requested(), Some(4 * MIB - 2 * MIB));
+    sibling_signal.complete(0);
+    assert!(q.check_aborted().is_err());
+
+    // Its driver servicing the request while it waits (as a pipeline
+    // driver does) is enough.
+    let tree = new_root(8 * MIB);
+    let q = tree.child("query", None);
+    let owner = SpillOwner::new();
+    let sibling_signal = owner.signal();
+    let sibling_id = q.register(
+        "join",
+        Some(Arc::clone(&sibling_signal) as Arc<dyn Spillable>),
+    );
+    let sibling = Arc::new(Mutex::new(Reservation::new(Arc::clone(&q), sibling_id)));
+    sibling.lock().unwrap().try_grow(6 * MIB).unwrap();
+    sibling_signal.set_spillable_bytes(6 * MIB);
+    let requester_signal = owner.signal();
+    let id = q.register(
+        "scan",
+        Some(Arc::clone(&requester_signal) as Arc<dyn Spillable>),
+    );
+    let serviced = {
+        let (signal, sibling) = (Arc::clone(&sibling_signal), Arc::clone(&sibling));
+        tokio::spawn(async move {
+            loop {
+                if let Some(service) = signal.begin() {
+                    let mut r = sibling.lock().unwrap();
+                    let freed = service.target().min(r.size());
+                    r.shrink(freed);
+                    signal.set_spillable_bytes(r.size());
+                    service.complete(freed);
+                    return freed;
+                }
+                sleep(Duration::from_millis(1)).await;
+            }
+        })
+    };
+    q.reserve(id, 4 * MIB).await.unwrap();
+    assert_eq!(serviced.await.unwrap(), 2 * MIB);
+    assert_eq!(tree.stats().aborts, 0);
+    q.release(id, 4 * MIB);
+    drop(sibling);
 
     // The driver protocol spills the sibling locally and succeeds.
     let tree = new_root(8 * MIB);

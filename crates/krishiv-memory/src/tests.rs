@@ -731,8 +731,11 @@ async fn a_queued_driver_services_a_later_rounds_request() {
         start.elapsed() < Duration::from_secs(2),
         "serviced, no timeout"
     );
-    assert_eq!(x.lock().unwrap().size(), 4 * Q);
-    d1_task.abort();
+    // D1's own round then asks X too (its own driver, asked last, which
+    // it services while it waits) for the 3 Q it needs.
+    d1_task.await.unwrap().unwrap();
+    assert_eq!(x.lock().unwrap().size(), Q);
+    assert_eq!(root.stats().aborts, 0);
 }
 
 #[test]

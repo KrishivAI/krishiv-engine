@@ -32,8 +32,8 @@
 //! [`SpillOwner::pending`] (atomic loads) and services spill requests on its
 //! own task. A sync operator whose `try_grow` fails returns `NeedMemory`
 //! with its state unchanged; the driver then calls [`SpillOwner::reserve`],
-//! which spills the driver's own consumers first (the arbitrator never asks
-//! the requester's driver), then arbitrates while still servicing requests
+//! which spills the driver's own consumers first (the arbitrator asks the
+//! requester's driver only after every other victim), then arbitrates while still servicing requests
 //! from other rounds. The bytes it obtained are parked as grant credit on
 //! the consumer's [`ConsumerHandle`] and taken by the operator's retried
 //! `try_grow`, so the retry never reserves twice.
@@ -128,7 +128,8 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// Slow path: may run arbitration. Called only by drivers between
     /// batches or from async code, never with a sync lock held; any executor
     /// works (deadlines use the pool's [`Clock`]). The arbitrator never asks the requester
-    /// (or its driver) to spill: drivers use [`SpillOwner::reserve`], which
+    /// to spill, and its driver's other consumers last (the driver services
+    /// them while it waits): drivers use [`SpillOwner::reserve`], which
     /// spills the driver's own consumers first. Consumers outside a query
     /// (external pools, the root) get the fast path only.
     ///

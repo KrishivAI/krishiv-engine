@@ -1338,3 +1338,70 @@ async fn a_driver_in_a_flush_step_services_spill_requests() {
     assert_eq!(rows(&out), 10_000);
     assert_released(&root);
 }
+
+/// A source that reserves `per_batch` working bytes through arbitration
+/// for each batch (a scan's decoder buffers), released once the batch is
+/// out.
+struct GrowingScan(Arc<RangeSource>, usize);
+
+struct GrowingLocal(LocalState, krishiv_memory::Reservation);
+
+impl krishiv_exec::Source for GrowingScan {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn global_state(&self, ctx: &TaskContext) -> Result<krishiv_exec::GlobalState> {
+        self.0.global_state(ctx)
+    }
+
+    fn max_parallelism(&self, g: &krishiv_exec::GlobalState) -> usize {
+        self.0.max_parallelism(g)
+    }
+
+    fn local_state(&self, ctx: &TaskContext, g: &krishiv_exec::GlobalState) -> Result<LocalState> {
+        let inner = self.0.local_state(ctx, g)?;
+        Ok(Box::new(GrowingLocal(inner, ctx.consumer().reservation())))
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        g: &'a krishiv_exec::GlobalState,
+    ) -> BoxFuture<'a, Result<Option<Batch>>> {
+        Box::pin(async move {
+            let l = local.downcast_mut::<GrowingLocal>().unwrap();
+            l.1.grow(self.1).await?;
+            let out = self.0.get_data(&mut l.0, g).await;
+            l.1.shrink(self.1);
+            out
+        })
+    }
+}
+
+/// A source growing through arbitration while its own driver's sink holds
+/// the pool in spillable state: the arbitrator asks that sink (the source's
+/// driver services it while the source waits) instead of failing the query.
+#[tokio::test]
+async fn a_source_waiting_for_memory_is_served_by_its_own_drivers_sink() {
+    let runner = QueryRunner::new(executor(1));
+    let root = root(4 * MIB);
+    let q = query(&root, 1, ExecConfig::default());
+    let sink = Buffer::new(true, None);
+    let source = Arc::new(GrowingScan(
+        RangeSource::new(1000 * DEFAULT_BATCH_SIZE as u64),
+        MIB,
+    ));
+    let plan: Arc<dyn ExecNode> = Arc::new(Break(
+        Arc::new(Scan(source as Arc<dyn krishiv_exec::Source>)),
+        Arc::clone(&sink),
+        false,
+    ));
+    let out = tokio::time::timeout(Duration::from_secs(60), run(&runner, plan, &q))
+        .await
+        .expect("no hang");
+    out.unwrap();
+    assert!(!sink.spilled_at().is_empty(), "the sink spilled");
+    assert_eq!(root.stats().aborts, 0);
+    assert_released(&root);
+}
