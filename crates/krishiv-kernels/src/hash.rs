@@ -28,8 +28,8 @@ mod xxh64;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type, Int8Type,
-    Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrowPrimitiveType, Int32Array, Int64Array};
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
@@ -188,6 +188,8 @@ impl<'a> Col<'a> {
             }
             DataType::Float32 => Self::Float32(Prim::of::<Float32Type>(a)),
             DataType::Float64 => Self::Float64(Prim::of::<Float64Type>(a)),
+            // `decimal(p <= 18, s)` on its 64-bit carrier: the long as is.
+            DataType::Decimal64(..) => Self::Int64(Prim::of::<Decimal64Type>(a)),
             DataType::Decimal128(p, _) => {
                 let d = Prim::of::<Decimal128Type>(a);
                 if *p <= 18 {
