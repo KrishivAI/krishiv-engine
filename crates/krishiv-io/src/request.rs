@@ -236,7 +236,7 @@ pub enum PushdownExpr {
     },
 }
 
-/// The [`KeyFilter`] of a [`PushdownExpr::Membership`], identified by
+/// The [`KeyFilter`](crate::KeyFilter) of a [`PushdownExpr::Membership`], identified by
 /// filter id and generation: two are equal when both are.
 #[derive(Clone)]
 pub struct MembershipFilter {

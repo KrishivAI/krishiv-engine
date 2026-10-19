@@ -377,6 +377,19 @@ fn filters_prune_splits_row_groups_and_rows() {
     let off = sorted(&run(&t.plan_sql(q).unwrap()).0);
     configured(&mut t, &[]);
     assert_eq!(sorted(&run(&plan).0), off);
+    // Every scan a key reaches gets a filter: both branches of a union.
+    let q = "SELECT u.k, s.v FROM (SELECT k32 AS k FROM big UNION ALL SELECT k32 FROM big) u \
+             JOIN small s ON u.k = s.k32";
+    let plan = t.plan_sql(q).unwrap();
+    assert_eq!(
+        plan.to_string().matches("RuntimeFilter #").count(),
+        2,
+        "{plan}"
+    );
+    configured(&mut t, MODES[0].1);
+    let off = sorted(&run(&t.plan_sql(q).unwrap()).0);
+    configured(&mut t, &[]);
+    assert_eq!(sorted(&run(&plan).0), off);
     // Unclustered keys: rows are dropped at the row stage.
     let q = "SELECT b.v FROM big b JOIN small s ON b.s = s.s";
     let (_, c) = run(&t.plan_sql(q).unwrap());
@@ -523,4 +536,59 @@ fn runtime_filter_bench() {
     let geomean = (log_sum / f64::from(n.max(1))).exp();
     println!("geomean on/off over {n} queries: {geomean:.3}");
     assert!(mismatched.is_empty(), "results differ: {mismatched:?}");
+}
+
+/// The Bloom filter settings: the Krishiv key of Spark's switch, the item
+/// cap and the byte cap each keep Bloom filters out of the plan or the
+/// build, and results never change.
+#[test]
+fn bloom_settings_are_honoured() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tpch-sf0.01-parquet");
+    let mut tpch = parquet_tables(&dir, &rt);
+    let answers = answers(&dir.join("spark-answers.json"));
+    let want = expected_rows(&answers, "q17");
+    let forced = ("krishiv.runtimeFilter.bloom.minApplicationRows", "0");
+    let no_values = ("krishiv.runtimeFilter.inList.maxValues", "0");
+    let cases: [(&[(&str, &str)], bool); 4] = [
+        (&[forced, no_values], true),
+        (
+            &[
+                forced,
+                no_values,
+                ("krishiv.sql.optimizer.runtime.bloomFilter.enabled", "false"),
+            ],
+            false,
+        ),
+        (
+            &[
+                forced,
+                no_values,
+                ("krishiv.runtimeFilter.bloom.maxItems", "0"),
+            ],
+            false,
+        ),
+        // Planned, but a 32-byte filter is too inaccurate to publish.
+        (
+            &[
+                forced,
+                no_values,
+                ("krishiv.runtimeFilter.bloom.maxBytes", "32"),
+            ],
+            true,
+        ),
+    ];
+    for (mode, planned) in cases {
+        configured(&mut tpch, mode);
+        let plan = tpch.plan_sql(&sql(17)).unwrap();
+        assert_eq!(
+            plan.to_string().contains("(bloom)"),
+            planned,
+            "{mode:?}\n{plan}"
+        );
+        assert_eq!(rows(&run(&plan).0), want, "{mode:?}");
+    }
 }

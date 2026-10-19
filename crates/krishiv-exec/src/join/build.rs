@@ -432,9 +432,6 @@ impl Sink for BuildSink {
         if s.join_type == JoinType::NullAwareAnti && any_invalid(keys.valid.as_ref()) {
             g.null_key.store(true, Ordering::Release);
         }
-        if !s.runtime.is_empty() {
-            l.runtime.add(s, &key_columns, keys.valid.as_ref());
-        }
         let payload = match &s.payload {
             Some((conv, _)) => Some(
                 conv.convert_columns(columns)
@@ -457,6 +454,11 @@ impl Sink for BuildSink {
         }
         if let Err(bytes) = reserve_chunks(&mut l.parts, &chunks) {
             return Ok(SinkStatus::NeedMemory { bytes });
+        }
+        // Only once the batch is stored: a `NeedMemory` retry sinks the same
+        // batch again, which must not count its keys twice.
+        if !s.runtime.is_empty() {
+            l.runtime.add(s, &key_columns, keys.valid.as_ref());
         }
         for (p, c) in chunks {
             l.parts[p].chunks.push(c);

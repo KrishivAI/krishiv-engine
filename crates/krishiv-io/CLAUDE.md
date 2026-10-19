@@ -14,10 +14,11 @@ typed format options, and the scan/write drivers (`ScanStream`, `FileWriter`) th
 sound `prune` (TriState) · `options.rs` OptionSchema/FormatOptions (unknown-option warning, strict mode,
 secrets) · `schema_map.rs` SchemaMapper (case rules, field ids, Delta column mapping, widening, predicate
 re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.2.0/file-splits.json`) ·
-`scan.rs` ScanStream · `runtime_filter/` (P2-T163) `RuntimeFilter` (generation-numbered snapshots, the atomic a
-hint only), `ScanFilter` (per-level lowering cache), `KeyFilter`/`KeyFilterBuilder` (min/max, value set, Bloom),
-`normalize_key_bytes` + `widens_to` (the one key normalization producers and consumers share), `RuntimeBloom`
-(Parquet's SBBF over hashes), a loom model of publication · `write.rs` FileWriter · `commit.rs` `SaveMode` + `DirectoryWrite` (Spark's save modes on a
+`scan.rs` ScanStream · `runtime_filter/` (P2-T163): `RuntimeFilter` (snapshots numbered by generation; the
+atomic generation is only a "changed?" hint), `ScanFilter` (lowering cached per scan level), `KeyFilter` and
+`KeyFilterBuilder` (min/max, value set, Bloom filter), `normalize_key_bytes` and `widens_to` (the single key
+normalization that producers and consumers share), `RuntimeBloom` (Parquet's split-block Bloom filter over hashes),
+and a loom model of publication · `write.rs` FileWriter · `commit.rs` `SaveMode` + `DirectoryWrite` (Spark's save modes on a
 directory, `_SUCCESS`, the empty-output file; files written under final names, never renamed) · `io/` IoScheduler,
 IoContext (reads, uploads, listing), coalescing, metadata cache,
 multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detection), `pace.rs` prefix pacing

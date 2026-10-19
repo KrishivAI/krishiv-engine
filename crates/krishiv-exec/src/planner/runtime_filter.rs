@@ -178,41 +178,43 @@ impl Planner<'_> {
             if !krishiv_io::runtime_filter::supported_key_type(key_type) {
                 continue;
             }
-            let Some(site) =
-                key_source(e, &input_type).and_then(|id| probe.sites.iter().find(|s| s.attr == id))
-            else {
+            let Some(source) = key_source(e, &input_type) else {
                 continue;
             };
-            #[expect(clippy::cast_precision_loss, reason = "estimates")]
-            let bloom = s.bloom
-                && build_rows <= s.bloom_max_items as f64
-                && site.scan_rows >= (4.0 * build_rows).max(s.min_application_rows as f64);
-            let id = FilterId(self.next_filter);
-            self.next_filter += 1;
-            let filter = Arc::new(RuntimeFilter::new(
-                id,
-                site.column.clone(),
-                key_type.clone(),
-            ));
-            site.slot.push(Arc::clone(&filter));
-            site.slot.set_settings(s.row);
-            out.explain.push(format!(
-                "RuntimeFilter {id}: {e} -> {}.{}{}",
-                site.scan,
-                site.column.0.join("."),
-                if bloom { " (bloom)" } else { "" }
-            ));
-            out.filters.push(JoinRuntimeFilter {
-                key,
-                filter,
-                options: KeyFilterOptions {
-                    max_values: s.max_values,
-                    bloom,
-                    bloom_max_items: s.bloom_max_items,
-                    bloom_max_bytes: s.bloom_max_bytes,
-                    ..KeyFilterOptions::default()
-                },
-            });
+            // Every scan the key reaches gets its own filter (the branches
+            // of a union, both inputs of an inner join below).
+            for site in probe.sites.iter().filter(|s| s.attr == source) {
+                #[expect(clippy::cast_precision_loss, reason = "estimates")]
+                let bloom = s.bloom
+                    && build_rows <= s.bloom_max_items as f64
+                    && site.scan_rows >= (4.0 * build_rows).max(s.min_application_rows as f64);
+                let id = FilterId(self.next_filter);
+                self.next_filter += 1;
+                let filter = Arc::new(RuntimeFilter::new(
+                    id,
+                    site.column.clone(),
+                    key_type.clone(),
+                ));
+                site.slot.push(Arc::clone(&filter));
+                site.slot.set_settings(s.row);
+                out.explain.push(format!(
+                    "RuntimeFilter {id}: {e} -> {}.{}{}",
+                    site.scan,
+                    site.column.0.join("."),
+                    if bloom { " (bloom)" } else { "" }
+                ));
+                out.filters.push(JoinRuntimeFilter {
+                    key,
+                    filter,
+                    options: KeyFilterOptions {
+                        max_values: s.max_values,
+                        bloom,
+                        bloom_max_items: s.bloom_max_items,
+                        bloom_max_bytes: s.bloom_max_bytes,
+                        ..KeyFilterOptions::default()
+                    },
+                });
+            }
         }
         out
     }

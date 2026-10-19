@@ -132,7 +132,7 @@ async fn builds_publish_the_keys_they_store() {
 /// pressure the Bloom filter's hashes may be dropped, never the range.
 #[tokio::test]
 async fn spilled_builds_cover_every_key() {
-    let build: Vec<super::Row> = (0..20_000).map(|i| r(Some(i * 3), Some("k"), i)).collect();
+    let build: Vec<super::Row> = (0..200_000).map(|i| r(Some(i * 3), Some("k"), i)).collect();
     let bloom = KeyFilterOptions {
         max_values: 0,
         ..KeyFilterOptions::default()
@@ -149,12 +149,14 @@ async fn spilled_builds_cover_every_key() {
         .unwrap();
         let k = published(&fs[0]);
         assert!(k.has_range());
+        // A `NeedMemory` retry sinks a batch again: its keys count once.
+        assert_eq!(k.key_count(), 200_000, "limit {limit}");
         if limit == SPILL_FREE {
             assert!(k.bloom_bytes().is_some());
         }
-        let keys = Int64Array::from_iter_values((0..20_000).map(|i| i * 3));
+        let keys = Int64Array::from_iter_values((0..200_000).map(|i| i * 3));
         let pass = k.evaluate(&keys).unwrap();
-        assert_eq!(pass.true_count(), 20_000, "limit {limit}");
+        assert_eq!(pass.true_count(), 200_000, "limit {limit}");
     }
 }
 

@@ -302,6 +302,7 @@ impl KeyFilterBuilder {
             bloom,
             nulls_pass: self.nulls,
             empty: self.rows == 0,
+            keys: self.rows,
             key_type: self.key_type,
         }
     }
@@ -326,6 +327,8 @@ pub struct KeyFilter {
     bloom: Option<RuntimeBloom>,
     nulls_pass: bool,
     empty: bool,
+    /// Non-null keys the producer stored (with duplicates).
+    keys: u64,
 }
 
 impl KeyFilter {
@@ -340,6 +343,12 @@ impl KeyFilter {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.empty
+    }
+
+    /// Non-null keys the producer stored, duplicates included.
+    #[must_use]
+    pub fn key_count(&self) -> u64 {
+        self.keys
     }
 
     /// A NULL key can match (a null-safe key with a NULL build key).
