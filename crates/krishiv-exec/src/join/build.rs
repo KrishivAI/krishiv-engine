@@ -179,6 +179,22 @@ impl BuildSink {
     }
 }
 
+/// What indexing a partition's in-memory rows reserves: `(index, copy)`,
+/// its [`JoinTable`] index and its transient concatenation copy (none for a
+/// single chunk); `None` if no rows are in memory.
+fn build_need(part: &Part) -> Option<(usize, usize)> {
+    if part.chunks.is_empty() {
+        return None;
+    }
+    let index = JoinTable::index_bytes(part.mem_rows(), key_bytes(&part.chunks));
+    let copy = if part.chunks.len() > 1 {
+        part.bytes()
+    } else {
+        0
+    };
+    Some((index, copy))
+}
+
 fn mem_bytes(parts: &[Part]) -> usize {
     parts.iter().map(Part::bytes).sum()
 }
@@ -328,70 +344,117 @@ impl Sink for BuildSink {
             let g = state(global)?;
             let s = &self.0;
             // Write what is left of spilled partitions; reserve the index of
-            // the rest, spilling the largest while it does not fit.
+            // the rest, spilling the largest while it does not fit. A
+            // partition's table is built only while its concatenation copy
+            // is reserved, so the copies never need the build's size again.
             let mut index = ctx.consumer().reservation();
-            let concat = loop {
-                // Once memory ran short, every partition goes to disk: the
-                // probe phase then holds one partition's table per driver,
-                // never tables that fill the budget and cannot spill.
-                if g.spilled.load(Ordering::Acquire) != 0 {
-                    g.spilled
-                        .store(u64::MAX >> (64 - PARTITIONS), Ordering::Release);
-                }
-                let spilled = g.spilled.load(Ordering::Acquire);
-                let remnants = {
-                    let c = lock(&g.collect);
-                    (0..PARTITIONS)
-                        .any(|p| spilled & (1 << p) != 0 && !c.parts[p].chunks.is_empty())
-                };
-                if remnants {
-                    // These must go to disk.
-                    self.spill_collected(g, 0, ctx, true).await?;
-                    continue;
-                }
-                let (need, concat) = {
-                    let c = lock(&g.collect);
-                    let mut need = 0;
-                    let mut concat = 0;
-                    for part in c.parts.iter().filter(|p| !p.chunks.is_empty()) {
-                        need += JoinTable::index_bytes(part.mem_rows(), key_bytes(&part.chunks));
-                        if part.chunks.len() > 1 {
-                            concat += part.bytes();
-                        }
+            let mut held_copy = 0;
+            if s.spill.is_some() {
+                held_copy = loop {
+                    // Once memory ran short, every partition goes to disk: the
+                    // probe phase then holds one partition's table per driver,
+                    // never tables that fill the budget and cannot spill.
+                    if g.spilled.load(Ordering::Acquire) != 0 {
+                        g.spilled
+                            .store(u64::MAX >> (64 - PARTITIONS), Ordering::Release);
                     }
-                    (need + concat, concat)
+                    let spilled = g.spilled.load(Ordering::Acquire);
+                    let remnants = {
+                        let c = lock(&g.collect);
+                        (0..PARTITIONS)
+                            .any(|p| spilled & (1 << p) != 0 && !c.parts[p].chunks.is_empty())
+                    };
+                    if remnants {
+                        // These must go to disk.
+                        self.spill_collected(g, 0, ctx, true).await?;
+                        continue;
+                    }
+                    let (indexes, copy) = {
+                        let c = lock(&g.collect);
+                        let needs = c.parts.iter().filter_map(build_need);
+                        needs.fold((0usize, 0usize), |(i, m), (index, copy)| {
+                            (i.saturating_add(index), usize::max(m, copy))
+                        })
+                    };
+                    if index.try_grow(indexes.saturating_add(copy)).is_ok() {
+                        break copy;
+                    }
+                    self.spill_collected(g, 1, ctx, true).await?;
                 };
-                if index.try_grow(need).is_ok() {
-                    break concat;
-                }
-                if s.spill.is_none() {
-                    index.grow(need).await.map_err(KrishivError::from)?;
-                    break concat;
-                }
-                self.spill_collected(g, 1, ctx, true).await?;
-            };
-            let jobs: Vec<(usize, Vec<Batch>)> = {
+            }
+            let jobs: Vec<(usize, Vec<Batch>, (usize, usize))> = {
                 let mut c = lock(&g.collect);
                 c.parts
                     .iter_mut()
                     .enumerate()
-                    .filter(|(_, p)| !p.chunks.is_empty())
-                    .map(|(i, p)| (i, std::mem::take(&mut p.chunks)))
+                    .filter_map(|(i, p)| Some((i, build_need(p)?, p)))
+                    .map(|(i, need, p)| (i, std::mem::take(&mut p.chunks), need))
                     .collect()
             };
-            // One blocking task per partition: the executor's blocking pool
-            // bounds how many run at once, and a large build no longer
-            // builds every partition's table on one thread.
-            let builds = jobs.into_iter().map(|(p, chunks)| {
-                let shared = Arc::clone(&self.0);
-                ctx.run_blocking(move || {
-                    let arena = RowArena::concat(&shared.arena_schema, &chunks)?;
-                    drop(chunks);
-                    Ok((p, JoinTable::build(arena)?))
-                })
-            });
-            let tables = futures::future::try_join_all(builds).await?;
-            index.shrink(concat);
+            // Nothing in memory is spillable any more.
+            ctx.consumer().signal().set_spillable_bytes(0);
+            // One blocking task per partition (the executor's blocking pool
+            // bounds how many run at once), each started only once its
+            // concatenation copy is reserved. A spilling build's reservation
+            // already funds the largest copy (`spare`), so one partition can
+            // always run; without a spill scope a partition's index and copy
+            // are asked for through arbitration when nothing else runs.
+            let spill = s.spill.is_some();
+            let mut spare = held_copy;
+            let mut jobs = std::collections::VecDeque::from(jobs);
+            let mut running = futures::stream::FuturesUnordered::new();
+            let mut tables = Vec::with_capacity(jobs.len());
+            loop {
+                if let Some(&(_, _, (index_bytes, copy))) = jobs.front() {
+                    // A spilling build reserved every index already.
+                    let grow = if spill {
+                        copy
+                    } else {
+                        index_bytes.saturating_add(copy)
+                    };
+                    let funded = if spill && copy <= spare {
+                        spare -= copy;
+                        true
+                    } else if index.try_grow(grow).is_ok() {
+                        true
+                    } else if running.is_empty() {
+                        index.grow(grow).await.map_err(KrishivError::from)?;
+                        true
+                    } else {
+                        false
+                    };
+                    if let Some((p, chunks, (_, copy))) = jobs.pop_front_if(|_| funded) {
+                        let shared = Arc::clone(&self.0);
+                        running.push(async move {
+                            let table = ctx
+                                .run_blocking(move || {
+                                    let arena = RowArena::concat(&shared.arena_schema, &chunks)?;
+                                    drop(chunks);
+                                    JoinTable::build(arena)
+                                })
+                                .await?;
+                            Ok::<_, KrishivError>((p, table, copy))
+                        });
+                        continue;
+                    }
+                }
+                let Some(done) = futures::StreamExt::next(&mut running).await else {
+                    break;
+                };
+                let (p, table, copy) = done?;
+                tables.push((p, table));
+                if spill {
+                    // Keep the largest copy funded; return the rest.
+                    spare = spare.saturating_add(copy);
+                    if spare > held_copy {
+                        index.shrink(spare - held_copy);
+                        spare = held_copy;
+                    }
+                } else {
+                    index.shrink(copy);
+                }
+            }
+            index.shrink(spare);
             let mut c = lock(&g.collect);
             // Spilled partitions that hold rows: the probe defers only these
             // (an empty partition matches nothing, spilled or not).
@@ -416,7 +479,6 @@ impl Sink for BuildSink {
             n.add(Counter::BuildRows, c.stored);
             n.add(Counter::SpilledPartitions, u64::from(spilled.count_ones()));
             n.add(Counter::BuildSpillBytes, c.file_bytes);
-            ctx.consumer().signal().set_spillable_bytes(0);
             g.built
                 .set(Built {
                     tables: all,

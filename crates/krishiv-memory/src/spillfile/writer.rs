@@ -42,8 +42,11 @@ const BUF_BYTES: usize = 64 << 10;
 /// the bytes go out; the charge is returned when the finished [`SpillFile`]
 /// is dropped, or at once when the writer fails or is dropped unfinished.
 /// Arrow encodes one batch at a time, so a write needs scratch memory of up
-/// to about twice the batch's size. The writer reserves it from the
-/// [`Reservation`] it was given and returns it after the write. Pass a
+/// to about twice the batch's size, plus, for view columns that share
+/// larger buffers, a compacted copy of the bytes their rows reference (only
+/// those are written, see [`frame_bytes`](Self::frame_bytes)). The writer
+/// reserves it from the [`Reservation`] it was given and returns it after
+/// the write. Pass a
 /// *dedicated scratch* reservation: whatever it already holds is not treated
 /// as free, so the reservation that holds the state being spilled would be
 /// charged on top of that state.
