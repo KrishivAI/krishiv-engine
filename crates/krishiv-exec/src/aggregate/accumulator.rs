@@ -1509,9 +1509,12 @@ mod proof_tests {
     }
 
     /// Spark 4.2's grouped `sum`/`avg` over rows in a fixed order, ANSI on
-    /// and off (`tests/scripts/gen_decimal_sum_avg.py`): the same rows
-    /// folded in one batch, one row per batch (the running bound decides
-    /// each proof) and on the per-row path give Spark's value or error.
+    /// and off (`tests/scripts/gen_decimal_sum_avg.py`): row `i` is in group
+    /// `i % groups` and in Spark's `range` partition (contiguous ranges).
+    /// Each partition is folded in one batch or one row per batch (the
+    /// running bound decides each proof), or on the per-row path; several
+    /// partitions are merged as partial states in partition order. Every
+    /// run gives Spark's values or error.
     #[test]
     fn spark_sum_avg_goldens() {
         let path = concat!(
@@ -1520,7 +1523,8 @@ mod proof_tests {
         );
         let cases: Vec<serde_json::Value> =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(cases.len(), 112);
+        assert_eq!(cases.len(), 172);
+        let num = |v: &serde_json::Value| usize::try_from(v.as_u64().unwrap()).unwrap();
         for c in &cases {
             let ansi = c["ansi"].as_bool().unwrap();
             let f = match c["fn"].as_str().unwrap() {
@@ -1531,23 +1535,45 @@ mod proof_tests {
             let p = u8::try_from(ty[0].as_u64().unwrap()).unwrap();
             let s = i8::try_from(ty[1].as_u64().unwrap()).unwrap();
             let t = DataType::Decimal128(p, s);
+            let (groups, parts) = (num(&c["groups"]), num(&c["partitions"]));
+            let g32 = u32::try_from(groups).unwrap();
             let rows: Vec<Row> = c["values"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|v| (0, v.as_str().unwrap().parse().unwrap(), true, 1))
+                .enumerate()
+                .map(|(i, v)| {
+                    let g = u32::try_from(i % groups).unwrap();
+                    (g, v.as_str().unwrap().parse().unwrap(), true, 1)
+                })
                 .collect();
+            let n = rows.len();
+            let ids: Vec<u32> = (0..g32).collect();
             let mut runs = Vec::new();
             for (proofs, one_batch) in [(true, true), (true, false), (false, true)] {
+                let fold = |part: &[Row], a: &mut Accumulator| {
+                    if one_batch {
+                        feed(a, g32, part, &t, 0);
+                    } else {
+                        for r in part {
+                            feed(a, g32, std::slice::from_ref(r), &t, 0);
+                        }
+                    }
+                };
                 let mut a = acc(f, &t, ansi, proofs);
-                if one_batch {
-                    feed(&mut a, 1, &rows, &t, 0);
+                a.resize(groups);
+                if parts == 1 {
+                    fold(&rows, &mut a);
                 } else {
-                    for r in &rows {
-                        feed(&mut a, 1, std::slice::from_ref(r), &t, 0);
+                    for k in 0..parts {
+                        let part = &rows[k * n / parts..(k + 1) * n / parts];
+                        let mut partial = acc(f, &t, ansi, proofs);
+                        partial.resize(groups);
+                        fold(part, &mut partial);
+                        a.merge(&ids, &partial.state(&ids).unwrap()).unwrap();
                     }
                 }
-                runs.push(a.evaluate(&[0]).map_err(|e| e.to_string()));
+                runs.push(a.evaluate(&ids).map_err(|e| e.to_string()));
             }
             for got in &runs {
                 match (got, c.get("error")) {
@@ -1560,8 +1586,12 @@ mod proof_tests {
                         };
                         assert_eq!(c["type_out"], format!("decimal({op},{os})"), "{c}");
                         let v = v.as_primitive::<Decimal128Type>();
-                        let text = (!v.is_null(0)).then(|| plain(v.value(0), *os));
-                        assert_eq!(c["value"].as_str(), text.as_deref(), "{c}");
+                        let want = c["value"].as_array().unwrap();
+                        assert_eq!(want.len(), groups.min(n), "{c}");
+                        for (g, w) in want.iter().enumerate() {
+                            let text = (!v.is_null(g)).then(|| plain(v.value(g), *os));
+                            assert_eq!(w.as_str(), text.as_deref(), "{c} group {g}");
+                        }
                     }
                     (got, _) => panic!("{c}: {got:?}"),
                 }
