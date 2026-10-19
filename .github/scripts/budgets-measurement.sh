@@ -19,21 +19,23 @@
 #      POLL_SECS (default 30), RETRY_ATTEMPTS (default 5),
 #      RETRY_BASE_SECS (default 5), JOB, ARTIFACT, SKIP_JOB (see above).
 set -euo pipefail
-wait_secs="${WAIT_SECS:-4500}"
-poll_secs="${POLL_SECS:-30}"
 job_name="${JOB:-budgets-measure}"
 artifact="${ARTIFACT:-budgets-current}"
 skip_job="${SKIP_JOB:-}"
-retry_attempts="${RETRY_ATTEMPTS:-5}"
-retry_base="${RETRY_BASE_SECS:-5}"
-for v in retry_attempts retry_base; do
-  case "${!v}" in
-    '' | *[!0-9]*)
-      echo "::error::RETRY_ATTEMPTS and RETRY_BASE_SECS must be non-negative integers (got ${v}='${!v}')" >&2
+# Numeric settings: 1-9 digits, then normalised to decimal so a leading zero
+# (08) is not read as octal by Bash arithmetic.
+for v in WAIT_SECS:4500 POLL_SECS:30 RETRY_ATTEMPTS:5 RETRY_BASE_SECS:5; do
+  name=${v%%:*}
+  val=${!name:-${v##*:}}
+  case "$val" in
+    '' | *[!0-9]* | ??????????*)
+      echo "::error::$name must be a non-negative integer of at most 9 digits (got '$val')" >&2
       exit 1
       ;;
   esac
+  printf -v "$name" '%s' "$((10#$val))"
 done
+wait_secs=$WAIT_SECS poll_secs=$POLL_SECS retry_attempts=$RETRY_ATTEMPTS retry_base=$RETRY_BASE_SECS
 deadline=$((SECONDS + wait_secs))
 
 # gh_retry <gh args>: stdout of the successful attempt is printed; stderr of a

@@ -45,6 +45,10 @@ case "$1 $2" in
 esac
 FAKE
 chmod +x "$tmp/bin/gh"
+# A fake sleep records its argument so backoff values can be asserted quickly.
+printf '#!/usr/bin/env bash\necho "$1" >> "$FAKE_SLEEPS"\n' > "$tmp/bin/sleep"
+chmod +x "$tmp/bin/sleep"
+export FAKE_SLEEPS="$tmp/sleeps"
 export PATH="$tmp/bin:$PATH" REPO=o/r HEAD_SHA=abc POLL_SECS=0 GH_TOKEN=x RETRY_BASE_SECS=0
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -53,11 +57,11 @@ case_() {
   rm -rf "$tmp/out" "$tmp/count" "$tmp/count.fail"
   local got rc=0
   got=$(FAKE_RUN="$run" FAKE_JOBS="$jobs" FAKE_COUNT="$tmp/count" OUT_DIR="$tmp/out" \
-    WAIT_SECS="$wait" bash "$script" 2>/dev/null) || rc=$?
+    WAIT_SECS="$wait" bash "$script" 2>"$tmp/stderr") || rc=$?
   if [ "$want" = fail ]; then
     [ "$rc" -ne 0 ] || fail "$desc: expected failure, got '$got'"
   else
-    [ "$rc" -eq 0 ] || fail "$desc: exit $rc"
+    [ "$rc" -eq 0 ] || fail "$desc: exit $rc: $(tail -3 "$tmp/stderr")"
     [ "$got" = "$want" ] || fail "$desc: got '$got', want '$want'"
   fi
   echo "ok: $desc"
@@ -97,14 +101,20 @@ retry_case "auth error fails immediately" fail 99 "gh: Bad credentials (HTTP 401
 [ "$(cat "$tmp/count.fail")" = 1 ] || fail "401 was retried"
 
 # Malformed retry settings fail fast instead of silently disabling the cap.
-for bad in RETRY_ATTEMPTS=abc RETRY_BASE_SECS=1.5 RETRY_ATTEMPTS=-1; do
+for bad in RETRY_ATTEMPTS=abc RETRY_BASE_SECS=1.5 RETRY_ATTEMPTS=-1 WAIT_SECS=x POLL_SECS=1.5 RETRY_BASE_SECS=12345678901; do
   rc=0
-  env "$bad" FAKE_RUN=7 FAKE_JOBS="completed${tab}success" FAKE_COUNT="$tmp/count" \
-    OUT_DIR="$tmp/out" WAIT_SECS=5 bash "$script" >/dev/null 2>"$err" || rc=$?
+  env FAKE_RUN=7 FAKE_JOBS="completed${tab}success" FAKE_COUNT="$tmp/count" \
+    OUT_DIR="$tmp/out" WAIT_SECS=5 "$bad" bash "$script" >/dev/null 2>"$err" || rc=$?
   [ "$rc" -ne 0 ] || fail "$bad was accepted"
-  grep -q "must be non-negative integers" "$err" || fail "$bad: unclear message: $(cat "$err")"
+  grep -q "must be a non-negative integer" "$err" || fail "$bad: unclear message: $(cat "$err")"
   echo "ok: $bad rejected"
 done
+
+# Leading zeros are decimal, not octal (08 must neither crash nor be rejected).
+rm -f "$tmp/sleeps"
+FAKE_FAIL_TIMES=1 FAKE_FAIL_MSG="gh: Server Error (HTTP 502)" RETRY_BASE_SECS=08 POLL_SECS=00 \
+  case_ "leading-zero settings are decimal" measured 7 "completed${tab}success" 60
+[ "$(cat "$tmp/sleeps")" = 8 ] || fail "RETRY_BASE_SECS=08 did not back off 8s: $(cat "$tmp/sleeps")"
 
 # The wheel sizes: the job lives in the called workflow, and a skipped
 # `wheels-targets` (no Python change) is the only skip that means "nothing".
