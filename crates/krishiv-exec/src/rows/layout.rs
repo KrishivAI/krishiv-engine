@@ -83,6 +83,9 @@ impl Kind {
 #[derive(Clone, Debug)]
 struct Column {
     kind: Kind,
+    /// The key type; fixed-width columns must have exactly this type (a
+    /// string or binary column may use any string/binary carrier).
+    data_type: DataType,
     /// Byte offset of the value in the row.
     offset: usize,
     /// Bit of the validity bytes that is set when the value is NULL.
@@ -161,10 +164,12 @@ impl RowLayout {
         let stride = round8(at).max(KEYS_START + 8);
         let columns: Vec<Column> = kinds
             .iter()
+            .zip(types)
             .zip(offsets)
             .zip(null_bits)
-            .map(|((&kind, offset), null_bit)| Column {
+            .map(|(((&kind, data_type), offset), null_bit)| Column {
                 kind,
+                data_type: data_type.clone(),
                 offset,
                 null_bit,
             })
@@ -237,7 +242,20 @@ impl RowLayout {
             }
             match column.kind {
                 Kind::View => keys.write_views(column.offset, array, nulls.as_ref(), &strings)?,
-                kind => keys.write_fixed(column.offset, kind, array, nulls.as_ref())?,
+                kind => {
+                    // Raw buffer bytes are copied for fixed widths, so the
+                    // exact type matters: an `Int64` buffer under an `f64`
+                    // key would skip float normalization, and a decimal of
+                    // another scale would compare by unscaled value.
+                    if array.data_type() != &column.data_type {
+                        return Err(internal(format!(
+                            "key column of type {} for a {} key",
+                            array.data_type(),
+                            column.data_type
+                        )));
+                    }
+                    keys.write_fixed(column.offset, kind, array, nulls.as_ref())?;
+                }
             }
         }
         for (i, h) in keys.hashes.iter_mut().enumerate() {

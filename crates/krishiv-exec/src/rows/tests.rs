@@ -257,3 +257,35 @@ proptest! {
         prop_assert_eq!(grouped(&[a], &mut HashbrownTable::new(), 4096), want);
     }
 }
+
+#[test]
+fn fixed_keys_need_their_exact_type() {
+    // Same width, other type: no silent reinterpretation of the bytes.
+    let layout = RowLayout::new(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
+    let floats: ArrayRef = Arc::new(Float64Array::from(vec![-0.0, 0.0]));
+    assert!(layout.encode(&[floats], 0).is_err());
+    let dec = DataType::Decimal128(38, 2);
+    let layout = RowLayout::new(&[dec], &[false]).unwrap_or_else(|e| panic!("{e}"));
+    let other_scale: ArrayRef = Arc::new(
+        Decimal128Array::from(vec![1i128])
+            .with_precision_and_scale(38, 3)
+            .unwrap_or_else(|e| panic!("{e}")),
+    );
+    assert!(layout.encode(&[other_scale], 0).is_err());
+}
+
+#[test]
+fn push_refuses_rows_of_another_layout_without_writing() {
+    let wide = RowLayout::new(&[DataType::Int64, DataType::Int64], &[false, false])
+        .unwrap_or_else(|e| panic!("{e}"));
+    let narrow = RowLayout::new(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
+    let a: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+    let keys = narrow.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let mut pages = RowPages::new(&wide);
+    assert!(pages.push(&keys, 0).is_err(), "row of another stride");
+    let mut pages = RowPages::new(&narrow);
+    assert!(pages.push(&keys, 9).is_err(), "row index out of range");
+    assert!(pages.is_empty() && pages.memory_size() == 0);
+    assert_eq!(pages.push(&keys, 1).ok(), Some(0));
+    assert_eq!(pages.hash(0), keys.hashes()[1]);
+}

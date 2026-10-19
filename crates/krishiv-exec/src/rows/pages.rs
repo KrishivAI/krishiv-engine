@@ -75,6 +75,29 @@ impl RowPages {
     /// # Errors
     /// `INTERNAL_ERROR` once the row ids are exhausted (`2^32 - 1` slots).
     pub fn push(&mut self, keys: &EncodedKeys, i: usize) -> Result<u32> {
+        // Validate before any mutation: a short row (an out-of-range `i`,
+        // or keys of another layout) or a view outside its heap would
+        // otherwise shift every later row of the page.
+        let stride = self.stride;
+        let row = keys.row(i);
+        if row.len() != stride {
+            return Err(internal(format!(
+                "row {i} has {} bytes for a {stride}-byte layout",
+                row.len()
+            )));
+        }
+        let mut long = Vec::new();
+        for &v in &self.views {
+            let len = view_len(row, v);
+            if len > INLINE_MAX {
+                let from = usize::try_from(word(row, v + 8)).unwrap_or(usize::MAX);
+                let bytes = keys
+                    .heap()
+                    .get(from..from.saturating_add(len))
+                    .ok_or_else(|| internal("view outside its heap".to_owned()))?;
+                long.push((v, bytes));
+            }
+        }
         let full = self
             .pages
             .last()
@@ -85,38 +108,28 @@ impl RowPages {
                 return Err(internal("row ids exhausted in one row table".to_owned()));
             }
             self.pages.push(Page {
-                rows: Vec::with_capacity(self.page_rows() * self.stride),
+                rows: Vec::with_capacity(self.page_rows() * stride),
                 heap: Vec::new(),
                 len: 0,
             });
         }
         let page_index = self.pages.len() - 1;
         let shift = self.shift;
-        let stride = self.stride;
         let Some(page) = self.pages.last_mut() else {
             return Err(internal("no page to write".to_owned()));
         };
-        let row = keys.row(i);
+        let id = u32::try_from((page_index << shift) | page.len)
+            .map_err(|_| internal("row id out of range".to_owned()))?;
         let start = page.rows.len();
         page.rows.extend_from_slice(row);
-        for &v in &self.views {
-            let len = view_len(row, v);
-            if len > INLINE_MAX {
-                let from = usize::try_from(word(row, v + 8)).unwrap_or(usize::MAX);
-                let bytes = keys
-                    .heap()
-                    .get(from..from.saturating_add(len))
-                    .ok_or_else(|| internal("view outside its heap".to_owned()))?;
-                let at = page.heap.len() as u64;
-                page.heap.extend_from_slice(bytes);
-                page.rows[start + v + 8..start + v + 16].copy_from_slice(&at.to_le_bytes());
-            }
+        for (v, bytes) in long {
+            let at = page.heap.len() as u64;
+            page.heap.extend_from_slice(bytes);
+            page.rows[start + v + 8..start + v + 16].copy_from_slice(&at.to_le_bytes());
         }
-        debug_assert_eq!(page.rows.len(), start + stride);
-        let id = (page_index << shift) | page.len;
         page.len += 1;
         self.len += 1;
-        u32::try_from(id).map_err(|_| internal("row id out of range".to_owned()))
+        Ok(id)
     }
 
     /// Row `id`'s bytes and its page's heap (both empty if `id` is unknown).
