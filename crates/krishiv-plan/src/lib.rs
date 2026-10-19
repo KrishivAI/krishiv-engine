@@ -75,6 +75,10 @@
 //! | `PlanNode::WithCte` | U, R | Q15 | - |
 //! | `PlanNode::CteRef` | R | - | - |
 //! | `PlanNode::Shift` | R | - | - |
+//! | `PlanNode::Hint` | U | - | - |
+//! | `PlanNode::JoinHint` | R | - | - |
+//! | `PlanNode::Union` | U, R | - | - |
+//! | `PlanNode::Distinct` | U | - | - |
 //! | `ExprNode::Column` | U | all | `col`, `df["a"]` |
 //! | `ExprNode::Literal` | U, R | all | `lit` |
 //! | `ExprNode::Star` | U | Q1, Q4, Q13, Q21, Q22 | `select("*")` |
@@ -116,7 +120,7 @@ pub use function::{Builtin, FunctionId, FunctionKind};
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use plan::{
-    Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, LogicalPlan, Plan, PlanNode,
-    ReadSource, Scan, SqlArgs, TableVersion,
+    Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan, Plan,
+    PlanNode, ReadSource, Scan, SqlArgs, TableVersion,
 };
 pub use walk::{MAX_DEPTH, check_depth};

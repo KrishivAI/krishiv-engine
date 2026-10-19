@@ -234,7 +234,12 @@ impl<'a> Estimator<'a> {
             }
             PlanNode::Sort { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
-            | PlanNode::WithCte { input, .. } => Est::clone(&self.plan(input)),
+            | PlanNode::WithCte { input, .. }
+            | PlanNode::JoinHint { input, .. } => Est::clone(&self.plan(input)),
+            PlanNode::Union { inputs, .. } => {
+                let rows = inputs.iter().map(|i| self.plan(i).rows).sum();
+                Est::unknown(rows, ids())
+            }
             PlanNode::Limit { input, limit } => {
                 let est = Est::clone(&self.plan(input));
                 let n = limit_value(limit).map_or(est.rows, to_f64);
