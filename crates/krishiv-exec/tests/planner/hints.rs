@@ -83,6 +83,17 @@ fn hint_precedence_and_overrides() {
         w[0],
         "Hint (strategy=broadcast) is overridden by another hint and will not take effect."
     );
+    // A `WITH` reference and a table by a suffix of its name.
+    let (_, y, w) = join(
+        "WITH x AS (SELECT * FROM t) SELECT /*+ BROADCAST(x) */ x.s FROM x \
+         JOIN (SELECT * FROM t WHERE b > 50) y ON x.a = y.a",
+    );
+    assert!(!y && w.is_empty(), "{w:?}");
+    let (_, y, w) = join(
+        "SELECT /*+ BROADCAST('default.t') */ t.s FROM t \
+         JOIN (SELECT * FROM t WHERE b > 50) y ON t.a = y.a",
+    );
+    assert!(!y && w.is_empty(), "{w:?}");
     // A hint in a derived table reaches the join through its projection.
     let (_, y, w) = join(
         "SELECT x.s FROM (SELECT /*+ BROADCAST */ * FROM t) x \
