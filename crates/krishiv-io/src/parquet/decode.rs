@@ -3,6 +3,12 @@
 //! the framework's step/push interface. The framework fetches what it asks
 //! for on the I/O runtime; decoding runs where `step` is called (a compute
 //! worker), one batch per step.
+//!
+//! The decoder hands out one row group's reader at a time, so between row
+//! groups it sits at a clean boundary: there, when a runtime filter
+//! published a new generation since the units were planned, the row groups
+//! not started yet are pruned again with it and the push decoder is
+//! rebuilt over the survivors (its buffered bytes carry over).
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -19,7 +25,9 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, SchemaRef, TimeUnit};
 use bytes::Bytes;
 use parquet::DecodeResult;
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, RowSelection as ParquetSelection};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ParquetRecordBatchReader, RowSelection as ParquetSelection,
+};
 use parquet::arrow::push_decoder::{
     ParquetPushDecoder, ParquetPushDecoderBuilder, RowGroupSelection,
 };
@@ -32,6 +40,8 @@ use crate::error::{FormatError, FormatResult};
 use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
 use crate::options::FormatOptions;
 use crate::request::{ColumnPath, ScanRequest, project_batch};
+use crate::runtime_filter::ScanFilter;
+use crate::stats::{TriState, prune};
 
 /// Rows per decoded batch (`krishiv.exec.batchSize`'s default).
 pub(crate) const BATCH_ROWS: usize = 4096;
@@ -47,11 +57,28 @@ fn decode_error(e: &ParquetError) -> FormatError {
     }
 }
 
+/// A planned row group.
+struct Unit {
+    index: usize,
+    selection: Option<ParquetSelection>,
+    /// Projected column chunk ranges.
+    chunks: Vec<Range<u64>>,
+    /// Compressed bytes of the row group.
+    bytes: u64,
+}
+
 /// See the module docs.
 pub(crate) struct ParquetDecoder {
-    decoder: ParquetPushDecoder,
-    /// Planned row groups, in order, with their projected chunk ranges.
-    planned: Vec<Vec<Range<u64>>>,
+    /// `None` only while it is rebuilt.
+    decoder: Option<ParquetPushDecoder>,
+    /// The current row group's reader.
+    reader: Option<ParquetRecordBatchReader>,
+    /// Planned row groups, in order.
+    planned: Vec<Unit>,
+    meta: Arc<ParquetMetadata>,
+    /// Runtime filters (file level) and the generation each had when the
+    /// remaining units were last pruned with it.
+    dynamic: Vec<(ScanFilter, u64)>,
     projection: Vec<ColumnPath>,
     output: SchemaRef,
     row_index: bool,
@@ -110,7 +137,6 @@ impl ParquetDecoder {
         let guard = Guard::new(meta.calendars, meta.reader.parquet_schema(), &roots, o);
         let row_index = req.metadata_cols.row_index;
         let (mask, leaves) = projection_mask(meta, &req.projection);
-        let mut selections = Vec::with_capacity(units.units.len());
         let mut planned = Vec::with_capacity(units.units.len());
         let mut pruned = 0u64;
         for u in &units.units {
@@ -130,10 +156,11 @@ impl ParquetDecoder {
                     Some(ParquetSelection::from_consecutive_ranges(ranges, rows))
                 }
             };
-            selections.push(RowGroupSelection::new(u.index, selection));
             let rg = meta.reader.metadata().row_group(u.index);
-            planned.push(
-                leaves
+            planned.push(Unit {
+                index: u.index,
+                selection,
+                chunks: leaves
                     .iter()
                     .filter_map(|&l| {
                         let c = rg.columns().get(l)?;
@@ -145,8 +172,13 @@ impl ParquetDecoder {
                         Some(start..start + len)
                     })
                     .collect(),
-            );
+                bytes: u.bytes.end - u.bytes.start,
+            });
         }
+        let selections = planned
+            .iter()
+            .map(|u| RowGroupSelection::new(u.index, u.selection.clone()))
+            .collect();
         let reader = if row_index {
             let rn = Arc::new(
                 Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber),
@@ -177,8 +209,16 @@ impl ParquetDecoder {
             ..ScanUnitMetrics::default()
         };
         Ok(Self {
-            decoder,
+            decoder: Some(decoder),
+            reader: None,
             planned,
+            meta: Arc::clone(meta),
+            // The units were planned with these generations' filters.
+            dynamic: req
+                .dynamic
+                .iter()
+                .map(|d| (d.clone(), d.generation()))
+                .collect(),
             projection: req.projection.clone(),
             output,
             row_index,
@@ -245,6 +285,110 @@ impl ParquetDecoder {
     }
 }
 
+impl ParquetDecoder {
+    fn decoder(&mut self) -> FormatResult<&mut ParquetPushDecoder> {
+        self.decoder
+            .as_mut()
+            .ok_or_else(|| FormatError::Corrupt("the decoder failed earlier".to_owned()))
+    }
+
+    /// At a row-group boundary, prunes the row groups not started yet with
+    /// the runtime filters that changed since they were planned (see the
+    /// module docs).
+    fn prune_remaining(&mut self) -> FormatResult<()> {
+        let Some(decoder) = self.decoder.as_ref() else {
+            return Ok(());
+        };
+        let changed = self
+            .dynamic
+            .iter()
+            .any(|(f, seen)| f.filter().generation_hint() != *seen);
+        if !changed || !decoder.is_at_row_group_boundary() {
+            return Ok(());
+        }
+        let remaining = decoder.row_groups_remaining();
+        let start = self.planned.len().saturating_sub(remaining);
+        let mut predicates = Vec::new();
+        for (f, seen) in &mut self.dynamic {
+            *seen = f.generation();
+            if let Some(p) = f.predicate() {
+                predicates.push((p, Arc::clone(f.filter())));
+            }
+        }
+        let rows = &self.meta.row_groups;
+        let pruned_by = |u: &Unit| {
+            let stats = &rows.get(u.index)?.statistics;
+            predicates
+                .iter()
+                .find(|(p, _)| prune(p, stats) == TriState::False)
+                .map(|(_, f)| f)
+        };
+        let tail = self.planned.split_off(start);
+        let before = tail.len();
+        for u in tail {
+            match pruned_by(&u) {
+                Some(f) => {
+                    f.stats().add_unit(u.bytes);
+                    self.metrics.units_pruned += 1;
+                }
+                None => self.planned.push(u),
+            }
+        }
+        if self.planned.len() - start == before {
+            return Ok(());
+        }
+        let selections = self.planned[start..]
+            .iter()
+            .map(|u| RowGroupSelection::new(u.index, u.selection.clone()))
+            .collect();
+        let decoder = self
+            .decoder
+            .take()
+            .ok_or_else(|| FormatError::Corrupt("the decoder failed earlier".to_owned()))?;
+        let rebuilt = super::contain("planning", FormatError::Corrupt, || {
+            decoder
+                .into_builder()
+                .and_then(|b| b.with_row_group_selections(selections).build())
+                .map_err(|e| FormatError::Corrupt(e.to_string()))
+        })?;
+        self.decoder = Some(rebuilt);
+        Ok(())
+    }
+
+    fn step_inner(&mut self) -> FormatResult<Step> {
+        loop {
+            if let Some(reader) = self.reader.as_mut() {
+                let next = super::contain("decoding", FormatError::Corrupt, || {
+                    reader
+                        .next()
+                        .transpose()
+                        .map_err(|e| decode_error(&ParquetError::from(e)))
+                })?;
+                match next {
+                    Some(batch) => {
+                        self.metrics.rows += batch.num_rows() as u64;
+                        return Ok(Step::Batch(self.finish(batch)?));
+                    }
+                    None => {
+                        self.reader = None;
+                        continue;
+                    }
+                }
+            }
+            self.prune_remaining()?;
+            let decoder = self.decoder()?;
+            let result = super::contain("decoding", FormatError::Corrupt, || {
+                decoder.try_next_reader().map_err(|e| decode_error(&e))
+            })?;
+            match result {
+                DecodeResult::NeedsData(ranges) => return Ok(Step::NeedData(ranges)),
+                DecodeResult::Data(reader) => self.reader = Some(reader),
+                DecodeResult::Finished => return Ok(Step::Done),
+            }
+        }
+    }
+}
+
 impl Decoder for ParquetDecoder {
     fn step(&mut self) -> FormatResult<Step> {
         if self.poisoned {
@@ -252,25 +396,15 @@ impl Decoder for ParquetDecoder {
                 "the decoder failed earlier".to_owned(),
             ));
         }
-        let decoder = &mut self.decoder;
-        let result = super::contain("decoding", FormatError::Corrupt, || {
-            decoder.try_decode().map_err(|e| decode_error(&e))
-        });
+        let result = self.step_inner();
         self.poisoned = result.is_err();
-        match result? {
-            DecodeResult::NeedsData(ranges) => Ok(Step::NeedData(ranges)),
-            DecodeResult::Data(batch) => {
-                self.metrics.rows += batch.num_rows() as u64;
-                Ok(Step::Batch(self.finish(batch)?))
-            }
-            DecodeResult::Finished => Ok(Step::Done),
-        }
+        result
     }
 
     fn push(&mut self, data: Vec<(Range<u64>, Bytes)>) -> FormatResult<()> {
         let (ranges, bytes): (Vec<_>, Vec<_>) = data.into_iter().unzip();
         self.metrics.bytes_pushed += bytes.iter().map(|b| b.len() as u64).sum::<u64>();
-        let decoder = &mut self.decoder;
+        let decoder = self.decoder()?;
         let result = super::contain("buffering", FormatError::Corrupt, || {
             decoder
                 .push_ranges(ranges, bytes)
@@ -281,13 +415,16 @@ impl Decoder for ParquetDecoder {
     }
 
     fn upcoming(&self, max_bytes: u64) -> Vec<Range<u64>> {
+        let Some(decoder) = self.decoder.as_ref() else {
+            return Vec::new();
+        };
         let next = self
             .planned
             .len()
-            .saturating_sub(self.decoder.row_groups_remaining());
+            .saturating_sub(decoder.row_groups_remaining());
         let mut out = Vec::new();
         let mut total = 0u64;
-        for chunks in self.planned.iter().skip(next) {
+        for chunks in self.planned.iter().skip(next).map(|u| &u.chunks) {
             let size: u64 = chunks.iter().map(|r| r.end - r.start).sum();
             if total + size > max_bytes {
                 break;
@@ -299,7 +436,9 @@ impl Decoder for ParquetDecoder {
     }
 
     fn buffered_bytes(&self) -> usize {
-        usize::try_from(self.decoder.buffered_bytes()).unwrap_or(usize::MAX)
+        self.decoder.as_ref().map_or(0, |d| {
+            usize::try_from(d.buffered_bytes()).unwrap_or(usize::MAX)
+        })
     }
 
     fn metrics(&self) -> ScanUnitMetrics {

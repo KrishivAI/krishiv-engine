@@ -181,8 +181,9 @@ fn eval(expr: &PushdownExpr, stats: &FileStatistics) -> TriState {
                 TriState::Unknown
             }
         }
-        // After `to_nnf`, only a negated `StartsWith` remains under `Not`.
-        PushdownExpr::Not(_) => TriState::Unknown,
+        // After `to_nnf`, only a negated `StartsWith` or `Membership`
+        // remains under `Not`. Statistics cannot test membership.
+        PushdownExpr::Not(_) | PushdownExpr::Membership { .. } => TriState::Unknown,
         PushdownExpr::IsNull(c) => is_null(stats, c),
         PushdownExpr::IsNotNull(c) => match is_null(stats, c) {
             TriState::True => TriState::False,

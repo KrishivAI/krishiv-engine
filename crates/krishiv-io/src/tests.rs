@@ -1542,26 +1542,47 @@ fn predicates_are_retyped_to_the_file() {
         map(PushdownExpr::Not(Box::new(sw("s")))),
         Some(PushdownExpr::Not(Box::new(sw("s"))))
     );
-    // Dynamic filters are mapped when read.
-    #[derive(Debug)]
-    struct Dyn;
-    impl DynamicFilter for Dyn {
-        fn current(&self) -> Option<PushdownExpr> {
-            Some(PushdownExpr::cmp(
-                col("i"),
-                CmpOp::Gt,
-                ScalarValue::Int64(4),
-            ))
-        }
-    }
+    // Runtime filters lower to the file's column and type when read.
+    let filter = Arc::new(crate::RuntimeFilter::new(
+        crate::FilterId(1),
+        col("i"),
+        DataType::Int64,
+    ));
+    let mut b = crate::KeyFilterBuilder::new(DataType::Int64, crate::KeyFilterOptions::default())
+        .unwrap_or_else(|| panic!("int64 keys"));
+    b.add(&arrow_array::Int64Array::from(vec![9, 5]), None)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let keys = Arc::new(b.finish());
     let mut req = ScanRequest::all(Arc::clone(&table));
-    req.dynamic.push(Arc::new(Dyn));
+    req.dynamic
+        .push(crate::ScanFilter::new(Arc::clone(&filter), &table).unwrap_or_else(|| panic!("i")));
     req.predicate = Some(c("i", CmpOp::Eq, big));
     let fr = m.file_request(&req);
+    assert_eq!(fr.dynamic[0].predicate(), None, "pending");
+    filter.publish(crate::FilterSnapshot::Final(Arc::clone(&keys)));
+    let membership = PushdownExpr::Membership {
+        column: col("i"),
+        filter: crate::MembershipFilter {
+            id: crate::FilterId(1),
+            generation: 1,
+            keys,
+        },
+    };
     assert_eq!(
-        fr.dynamic[0].current(),
-        Some(c("i", CmpOp::Gt, ScalarValue::Int32(4)))
+        fr.dynamic[0].predicate(),
+        Some(PushdownExpr::And(vec![
+            c("i", CmpOp::GtEq, ScalarValue::Int32(5)),
+            c("i", CmpOp::LtEq, ScalarValue::Int32(9)),
+            PushdownExpr::In {
+                column: col("i"),
+                values: vec![ScalarValue::Int32(5), ScalarValue::Int32(9)],
+                collation: Collation::Utf8Binary,
+            },
+            membership.clone(),
+        ]))
     );
+    // A membership test maps like a comparison.
+    assert_eq!(map(membership.clone()), Some(membership));
     assert_eq!(fr.predicate, Some(PushdownExpr::Constant(false)));
 }
 

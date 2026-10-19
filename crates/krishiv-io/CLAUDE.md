@@ -14,7 +14,11 @@ typed format options, and the scan/write drivers (`ScanStream`, `FileWriter`) th
 sound `prune` (TriState) · `options.rs` OptionSchema/FormatOptions (unknown-option warning, strict mode,
 secrets) · `schema_map.rs` SchemaMapper (case rules, field ids, Delta column mapping, widening, predicate
 re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.2.0/file-splits.json`) ·
-`scan.rs` ScanStream · `write.rs` FileWriter · `commit.rs` `SaveMode` + `DirectoryWrite` (Spark's save modes on a
+`scan.rs` ScanStream · `runtime_filter/` (P2-T163): `RuntimeFilter` (snapshots numbered by generation; the
+atomic generation is only a "changed?" hint), `ScanFilter` (lowering cached per scan level), `KeyFilter` and
+`KeyFilterBuilder` (min/max, value set, Bloom filter), `normalize_key_bytes` and `widens_to` (the single key
+normalization that producers and consumers share), `RuntimeBloom` (Parquet's split-block Bloom filter over hashes),
+and a loom model of publication · `write.rs` FileWriter · `commit.rs` `SaveMode` + `DirectoryWrite` (Spark's save modes on a
 directory, `_SUCCESS`, the empty-output file; files written under final names, never renamed) · `io/` IoScheduler,
 IoContext (reads, uploads, listing), coalescing, metadata cache,
 multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detection), `pace.rs` prefix pacing
@@ -22,7 +26,7 @@ multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detectio
 `parquet/` (P2-T080a) `ParquetFormat` over arrow-rs's `ParquetPushDecoder`, no custom decoders: `meta.rs` footer
 (one tail read, checked against the file size, engine types, exact-only row-group statistics, calendar markers) ·
 `decode.rs` the sans-IO decoder (projection mask, row-group selections, row index, unsigned widening, millisecond
-timestamps as microseconds) · `write.rs` (P2-T082a) the encoder: `ArrowWriter` over a drained buffer, Spark codec names
+timestamps as microseconds, runtime filters re-read at row-group boundaries) · `write.rs` (P2-T082a) the encoder: `ArrowWriter` over a drained buffer, Spark codec names
 and file suffixes, `parquet.block.size`/`page.size`/`enable.dictionary`/`writer.version`, page indexes always,
 `outputTimestampType` (INT96 refused), `datetimeRebaseModeInWrite`, `org.apache.spark.version` footer marker · `tests.rs`.
 Interop fixtures (pyarrow codecs/pages, INT96, unsigned, DuckDB, Spark 4.2): `tests/fixtures/parquet/`
@@ -44,6 +48,8 @@ target `fuzz/fuzz_targets/parquet_read.rs` (seeds: `tests/scripts/fuzz_seed_parq
 - The parquet crate's `object_store` feature stays off; Parquet bytes come only from `IoContext`.
 - object_store and parquet versions from the workspace (Arrow 60 family). `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
+- Runtime filters only drop rows their producer would drop: key values are compared after `normalize_key_bytes`
+  (lossless casts to the key type only; any other column type is not filtered); consumers never wait for a filter.
 
 ## ADRs (in `../krishiv-internal/adr/`)
 0014, 0028, 0007, 0026, 0037, 0038; the P2-T117 design note

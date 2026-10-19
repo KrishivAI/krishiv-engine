@@ -55,6 +55,7 @@ impl Planner<'_> {
             return Err(unsupported("FULL OUTER JOIN"));
         }
         let hints = (self.side_hint(left), self.side_hint(right));
+        let logical = (Arc::clone(left), Arc::clone(right));
         let left = self.plan(left)?;
         let right = self.plan(right)?;
         let left_ids: HashSet<AttrId> = left.layout.iter().copied().collect();
@@ -132,19 +133,37 @@ impl Planner<'_> {
         let (build, build_keys) = self.with_columns(build, &build_exprs)?;
         let filter = self.residual(&probe, &build, &residual)?;
         let null_safe = keys.iter().map(|k| k.2).collect();
-        let join = HashJoin::try_new(JoinSpec {
+        let mut join = HashJoin::try_new(JoinSpec {
             join_type,
             probe_schema: Arc::clone(&probe.schema),
             build_schema: Arc::clone(&build.schema),
-            probe_keys,
+            probe_keys: probe_keys.clone(),
             build_keys,
             null_safe,
             filter,
             spill: self.cx.spill.clone(),
         })?;
+        // Inner and left semi joins drop unmatched probe rows: the build
+        // publishes runtime filters to the probe side's scans.
+        let mut published = Vec::new();
+        if matches!(join_type, JoinType::Inner | JoinType::LeftSemi) {
+            let build_plan = if build_left { &logical.0 } else { &logical.1 };
+            let build_rows = self.estimated_rows(build_plan);
+            let key_types: Vec<_> = probe_keys
+                .iter()
+                .map(|&k| probe.schema.field(k).data_type().clone())
+                .collect();
+            let rf = self.runtime_filters(&probe, &probe_exprs, &key_types, build_rows);
+            published = rf.explain;
+            join = join.with_runtime_filters(rf.filters)?;
+        }
         let mut layout = probe.layout.clone();
+        let mut sites = probe.sites.clone();
         if matches!(join_type, JoinType::Inner | JoinType::LeftOuter) {
             layout.extend(&build.layout);
+        }
+        if join_type == JoinType::Inner {
+            sites.extend(build.sites.iter().cloned());
         }
         let mut detail = format!(
             "{join_type:?}, [{}] = [{}]",
@@ -155,6 +174,9 @@ impl Planner<'_> {
             let r: Vec<String> = residual.iter().map(ToString::to_string).collect();
             detail.push_str(&format!(", residual: {}", r.join(" AND ")));
         }
+        for p in published {
+            detail.push_str(&format!(", {p}"));
+        }
         Ok(Planned {
             schema: join.schema(),
             node: Arc::new(HashJoinNode {
@@ -164,6 +186,7 @@ impl Planner<'_> {
             }),
             layout,
             explain: ExplainNode::new("HashJoin", detail, vec![probe.explain, build.explain]),
+            sites,
         })
     }
 }
@@ -215,8 +238,12 @@ impl Planner<'_> {
             filter,
         })?;
         let mut layout = probe.layout.clone();
+        let mut sites = probe.sites.clone();
         if matches!(join_type, JoinType::Inner | JoinType::LeftOuter) {
             layout.extend(&build.layout);
+        }
+        if join_type == JoinType::Inner {
+            sites.extend(build.sites.iter().cloned());
         }
         let r: Vec<String> = residual.iter().map(ToString::to_string).collect();
         let detail = if r.is_empty() {
@@ -233,6 +260,7 @@ impl Planner<'_> {
             }),
             layout,
             explain: ExplainNode::new("NestedLoopJoin", detail, vec![probe.explain, build.explain]),
+            sites,
         })
     }
 }
