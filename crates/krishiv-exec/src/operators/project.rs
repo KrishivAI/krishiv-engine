@@ -92,6 +92,41 @@ impl Project {
         let schema = Arc::new(Schema::new_with_metadata(fields, input.metadata().clone()));
         Ok(Arc::new(Self { items, schema }))
     }
+
+    /// As [`try_new`](Self::try_new), with output column `i` nullable if
+    /// `nullable[i]` (the inputs of a union meet at the nullability of
+    /// any of them).
+    ///
+    /// # Errors
+    /// As [`try_new`](Self::try_new); `INTERNAL_ERROR` if `nullable` is
+    /// not one flag per item.
+    pub fn try_new_nullable(
+        input: &SchemaRef,
+        items: Vec<ProjectItem>,
+        nullable: &[bool],
+    ) -> Result<Arc<Self>> {
+        if nullable.len() != items.len() {
+            return Err(internal(
+                "one nullability flag per projected column".to_owned(),
+            ));
+        }
+        let p = Self::try_new(input, items)?;
+        let fields: Vec<Field> = p
+            .schema
+            .fields()
+            .iter()
+            .zip(nullable)
+            .map(|(f, n)| f.as_ref().clone().with_nullable(f.is_nullable() || *n))
+            .collect();
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            p.schema.metadata().clone(),
+        ));
+        Ok(Arc::new(Self {
+            items: p.items.clone(),
+            schema,
+        }))
+    }
 }
 
 impl Operator for Project {

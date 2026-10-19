@@ -6,6 +6,13 @@
 //!   puts the smaller input of an inner join there. A right outer join is
 //!   a left outer join with the sides swapped (the layout keeps the column
 //!   order right).
+//! - Join strategy hints follow Spark's `JoinSelection` (see
+//!   [`Planner::strategy`]): `BROADCAST` and `SHUFFLE_HASH` pick the build
+//!   side, `SHUFFLE_REPLICATE_NL` makes an inner join a nested loop over
+//!   every pair of rows. A hint Spark would honour but a single-node plan
+//!   cannot (`MERGE`: there is no sort-merge join; a build side this join
+//!   type cannot build) is a warning, as Spark warns of the hints it
+//!   ignores.
 //! - `NOT IN (subquery)` arrives as a left anti join on Spark's null-aware
 //!   key `(a = b) OR isnull(a = b)` and runs as the null-aware anti join.
 //! - A join without an equality conjunct (a cross join, `a < b`, a
@@ -18,8 +25,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_plan::{
-    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, LogicalPlan,
-    ResolvedExpr, ResolvedFunction,
+    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, JoinStrategy,
+    LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
 };
 
 use super::build::{Planned, Planner, concat_schemas, internal, unsupported};
@@ -44,36 +51,33 @@ impl Planner<'_> {
             JoinCondition::None => None,
             _ => return Err(unsupported("JOIN ... USING in physical plans")),
         };
-        let (probe, build, join_type) = match kind {
-            JoinKind::Inner | JoinKind::Cross => (left, right, JoinType::Inner),
-            JoinKind::LeftOuter => (left, right, JoinType::LeftOuter),
-            JoinKind::RightOuter => (right, left, JoinType::LeftOuter),
-            JoinKind::LeftSemi => (left, right, JoinType::LeftSemi),
-            JoinKind::LeftAnti => (left, right, JoinType::LeftAnti),
-            _ => return Err(unsupported("FULL OUTER JOIN")),
-        };
-        let probe = self.plan(probe)?;
-        let build = self.plan(build)?;
-        let probe_ids: HashSet<AttrId> = probe.layout.iter().copied().collect();
-        let build_ids: HashSet<AttrId> = build.layout.iter().copied().collect();
+        if kind == JoinKind::FullOuter {
+            return Err(unsupported("FULL OUTER JOIN"));
+        }
+        let hints = (self.side_hint(left), self.side_hint(right));
+        let left = self.plan(left)?;
+        let right = self.plan(right)?;
+        let left_ids: HashSet<AttrId> = left.layout.iter().copied().collect();
+        let right_ids: HashSet<AttrId> = right.layout.iter().copied().collect();
         let mut conjuncts = Vec::new();
         if let Some(on) = on {
             split_and(on, &mut conjuncts);
         }
-        let mut join_type = join_type;
+        // Keys as (left side, right side, null-safe).
         let mut keys: Vec<(Arc<Expr>, Arc<Expr>, bool)> = Vec::new();
         let mut residual: Vec<&Expr> = Vec::new();
-        if join_type == JoinType::LeftAnti
+        let mut null_aware = false;
+        if kind == JoinKind::LeftAnti
             && let [only] = conjuncts.as_slice()
             && let Some((l, r)) = null_aware_key(only)
-            && let Some((p, b)) = sides(l, r, &probe_ids, &build_ids)
+            && let Some((p, b)) = sides(l, r, &left_ids, &right_ids)
         {
-            join_type = JoinType::NullAwareAnti;
+            null_aware = true;
             keys.push((p, b, false));
         } else {
             for c in &conjuncts {
                 let key = equality(c).and_then(|(l, r, null_safe)| {
-                    sides(l, r, &probe_ids, &build_ids).map(|(p, b)| (p, b, null_safe))
+                    sides(l, r, &left_ids, &right_ids).map(|(p, b)| (p, b, null_safe))
                 });
                 match key {
                     Some(k) => keys.push(k),
@@ -87,7 +91,7 @@ impl Planner<'_> {
                 for c in &residual {
                     for e in common_equalities(c) {
                         if let Some((l, r, null_safe)) = equality(e)
-                            && let Some((p, b)) = sides(l, r, &probe_ids, &build_ids)
+                            && let Some((p, b)) = sides(l, r, &left_ids, &right_ids)
                         {
                             keys.push((p, b, null_safe));
                         }
@@ -95,6 +99,30 @@ impl Planner<'_> {
                 }
             }
         }
+        let choice = self.strategy(kind, hints, !keys.is_empty());
+        if choice.cartesian {
+            // `SHUFFLE_REPLICATE_NL`: every pair of rows, the whole
+            // condition as the filter.
+            return self.nested_loop(left, right, JoinType::Inner, &conjuncts);
+        }
+        // The build side: right, else left (a right outer join is a left
+        // outer join with the sides swapped).
+        let build_left = choice.build_left || kind == JoinKind::RightOuter;
+        let join_type = match kind {
+            JoinKind::LeftOuter | JoinKind::RightOuter => JoinType::LeftOuter,
+            JoinKind::LeftSemi => JoinType::LeftSemi,
+            JoinKind::LeftAnti if null_aware => JoinType::NullAwareAnti,
+            JoinKind::LeftAnti => JoinType::LeftAnti,
+            _ => JoinType::Inner,
+        };
+        let (probe, build) = if build_left {
+            for k in &mut keys {
+                std::mem::swap(&mut k.0, &mut k.1);
+            }
+            (right, left)
+        } else {
+            (left, right)
+        };
         if keys.is_empty() {
             return self.nested_loop(probe, build, join_type, &residual);
         }
@@ -206,6 +234,168 @@ impl Planner<'_> {
             layout,
             explain: ExplainNode::new("NestedLoopJoin", detail, vec![probe.explain, build.explain]),
         })
+    }
+}
+
+/// What the hints decided for one join.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Choice {
+    /// Build the left input (an inner join), else the right.
+    pub(crate) build_left: bool,
+    /// A nested loop over every pair of rows (`SHUFFLE_REPLICATE_NL`).
+    pub(crate) cartesian: bool,
+}
+
+/// Spark's `JoinType.sql`.
+fn kind_sql(kind: JoinKind) -> &'static str {
+    match kind {
+        JoinKind::LeftOuter => "LEFT OUTER",
+        JoinKind::RightOuter => "RIGHT OUTER",
+        JoinKind::FullOuter => "FULL OUTER",
+        JoinKind::LeftSemi => "LEFT SEMI",
+        JoinKind::LeftAnti => "LEFT ANTI",
+        _ => "INNER",
+    }
+}
+
+/// The sides this planner can build: the right of every join it runs, the
+/// left of an inner or right outer join.
+fn can_build(left: bool, kind: JoinKind) -> bool {
+    if left {
+        matches!(
+            kind,
+            JoinKind::Inner | JoinKind::Cross | JoinKind::RightOuter
+        )
+    } else {
+        !matches!(kind, JoinKind::RightOuter | JoinKind::FullOuter)
+    }
+}
+
+/// The sides Spark's shuffled hash join builds.
+fn spark_shuffle_hash(left: bool, kind: JoinKind) -> bool {
+    !left || !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti)
+}
+
+impl Planner<'_> {
+    /// The strategy hint of one join side: the first hint above its
+    /// relation through single-input nodes (Spark's `EliminateResolvedHint`),
+    /// a later different one overridden. The hints seen are consumed.
+    fn side_hint(&mut self, p: &Arc<LogicalPlan>) -> Option<JoinStrategy> {
+        let mut found: Option<JoinStrategy> = None;
+        let mut cur = p;
+        loop {
+            match &cur.node {
+                PlanNode::JoinHint { input, strategy } => {
+                    self.consumed_hints.insert(Arc::as_ptr(cur) as usize);
+                    match found {
+                        None => found = Some(*strategy),
+                        Some(f) if f != *strategy => self.warnings.push(format!(
+                            "Hint (strategy={}) is overridden by another hint and will not take effect.",
+                            strategy.name()
+                        )),
+                        Some(_) => {}
+                    }
+                    cur = input;
+                }
+                PlanNode::Project { input, .. }
+                | PlanNode::Filter { input, .. }
+                | PlanNode::Aggregate { input, .. }
+                | PlanNode::Sort { input, .. }
+                | PlanNode::Limit { input, .. }
+                | PlanNode::SubqueryAlias { input, .. }
+                | PlanNode::Shift { input, .. } => cur = input,
+                _ => return found,
+            }
+        }
+    }
+
+    /// Spark's `JoinSelection` over the hints of the two sides, in its
+    /// order: `BROADCAST`, `MERGE`, `SHUFFLE_HASH`, `SHUFFLE_REPLICATE_NL`.
+    pub(crate) fn strategy(
+        &mut self,
+        kind: JoinKind,
+        (left, right): (Option<JoinStrategy>, Option<JoinStrategy>),
+        equi: bool,
+    ) -> Choice {
+        let mut choice = Choice::default();
+        let hinted = |s: JoinStrategy| (left == Some(s), right == Some(s));
+        let warn = |this: &mut Self, s: JoinStrategy, why: String| {
+            this.warnings.push(format!(
+                "Hint (strategy={}) is not supported in the query: {why}",
+                s.name()
+            ));
+        };
+        let build = |side_left: bool| if side_left { "left" } else { "right" };
+        // BROADCAST: Spark builds what this planner can (a nested loop
+        // builds either side in Spark).
+        let (bl, br) = hinted(JoinStrategy::Broadcast);
+        if bl || br {
+            let spark = |l: bool| !equi || can_build(l, kind);
+            let (sl, sr) = (bl && spark(true), br && spark(false));
+            if sl || sr {
+                let want_left = sl && !sr;
+                if can_build(want_left, kind) {
+                    choice.build_left = want_left;
+                } else {
+                    let why = format!(
+                        "build {} for {} join (a single-node nested-loop join cannot).",
+                        build(want_left),
+                        kind_sql(kind)
+                    );
+                    warn(self, JoinStrategy::Broadcast, why);
+                }
+                return choice;
+            }
+            for (on, l) in [(bl, true), (br, false)] {
+                if on {
+                    let why = format!("build {} for {} join.", build(l), kind_sql(kind));
+                    warn(self, JoinStrategy::Broadcast, why);
+                }
+            }
+        }
+        if !equi {
+            // Already a nested loop; Spark ignores the other hints here.
+            return choice;
+        }
+        let (ml, mr) = hinted(JoinStrategy::ShuffleMerge);
+        if ml || mr {
+            warn(
+                self,
+                JoinStrategy::ShuffleMerge,
+                "no sort-merge join in a single-node plan; a hash join runs instead.".to_owned(),
+            );
+            return choice;
+        }
+        let (hl, hr) = hinted(JoinStrategy::ShuffleHash);
+        if hl || hr {
+            let (sl, sr) = (
+                hl && spark_shuffle_hash(true, kind),
+                hr && spark_shuffle_hash(false, kind),
+            );
+            if sl || sr {
+                let want_left = sl && !sr;
+                if can_build(want_left, kind) {
+                    choice.build_left = want_left;
+                } else {
+                    let why = format!(
+                        "build {} for {} join (a single-node hash join cannot).",
+                        build(want_left),
+                        kind_sql(kind)
+                    );
+                    warn(self, JoinStrategy::ShuffleHash, why);
+                }
+                return choice;
+            }
+            for (on, l) in [(hl, true), (hr, false)] {
+                if on {
+                    let why = format!("build {} for {} join.", build(l), kind_sql(kind));
+                    warn(self, JoinStrategy::ShuffleHash, why);
+                }
+            }
+        }
+        let (nl, nr) = hinted(JoinStrategy::ShuffleReplicateNl);
+        choice.cartesian = (nl || nr) && matches!(kind, JoinKind::Inner | JoinKind::Cross);
+        choice
     }
 }
 

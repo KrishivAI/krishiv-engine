@@ -14,7 +14,7 @@
 //! deterministic CTEs too); a shared subtree (`Arc`) is planned once per
 //! parent, because plan nodes hold per-query state.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef};
@@ -27,7 +27,7 @@ use krishiv_plan::{
 
 use super::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
 use super::explain::ExplainNode;
-use super::nodes::{BreakerNode, OperatorNode, SourceNode};
+use super::nodes::{BreakerNode, FanInNode, OperatorNode, SourceNode};
 use super::subquery::{Kind, Slot, SubquerySink, SubqueryValue, WithSubqueries};
 use super::{PhysicalPlan, PhysicalPlanner, PlanningContext, pushdown};
 use crate::error::Result;
@@ -117,6 +117,8 @@ pub(crate) struct Planner<'a> {
     pub(crate) warnings: Vec<String>,
     /// `WITH` definitions in scope, by their output attributes.
     ctes: HashMap<Vec<AttrId>, Arc<LogicalPlan>>,
+    /// The join hints a join read, by address.
+    pub(crate) consumed_hints: HashSet<usize>,
     next_id: u64,
 }
 
@@ -127,6 +129,7 @@ impl<'a> Planner<'a> {
             env: EvalEnv::new(&cx.config),
             warnings: Vec::new(),
             ctes: HashMap::new(),
+            consumed_hints: HashSet::new(),
             next_id: max_id(root).saturating_add(1).max(1 << 62),
         }
     }
@@ -238,6 +241,17 @@ impl<'a> Planner<'a> {
                 let input = self.plan(input)?;
                 self.sort(input, order)
             }
+            PlanNode::JoinHint { input, strategy } => {
+                if !self.consumed_hints.contains(&(Arc::as_ptr(p) as usize)) {
+                    self.warnings.push(format!(
+                        "A join hint (strategy={}) is specified but it is not part of a join relation.",
+                        strategy.name()
+                    ));
+                }
+                self.plan(input)
+            }
+            PlanNode::Union { inputs, .. } => self.union(p, inputs),
+            PlanNode::OneRowRelation => one_row(),
             _ => {
                 let text = p.to_string();
                 let name = text.split_whitespace().next().unwrap_or_default();
@@ -246,6 +260,52 @@ impl<'a> Planner<'a> {
                 )))
             }
         }
+    }
+
+    /// `UNION ALL`: each input projected to the union's columns (the first
+    /// input's attributes, nullable where any input's column is), fanned
+    /// into the pipeline above.
+    fn union(&mut self, p: &Arc<LogicalPlan>, inputs: &[Arc<LogicalPlan>]) -> Result<Planned> {
+        let out = p
+            .resolved_output()
+            .ok_or_else(|| internal("a union without output"))?;
+        let layout: Vec<AttrId> = out.iter().map(|c| c.id).collect();
+        let nullable: Vec<bool> = out.iter().map(|c| c.nullable).collect();
+        let mut schema: Option<SchemaRef> = None;
+        let mut nodes = Vec::with_capacity(inputs.len());
+        let mut explain = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let cols = input
+                .resolved_output()
+                .ok_or_else(|| internal("a union input without output"))?;
+            if cols.len() != out.len() {
+                return Err(internal("union inputs of different widths"));
+            }
+            let planned = self.plan(input)?;
+            let items = cols
+                .iter()
+                .zip(&out)
+                .map(|(c, o)| Ok(ProjectItem::aliased(planned.column(c.id)?, &o.name)))
+                .collect::<Result<Vec<_>>>()?;
+            let op = Project::try_new_nullable(&planned.schema, items, &nullable)?;
+            let planned = planned.operator(op, layout.clone(), ("Project", columns(&cols)));
+            match &schema {
+                None => schema = Some(Arc::clone(&planned.schema)),
+                Some(s) if s.fields() != planned.schema.fields() => {
+                    return Err(internal("union inputs of different physical types"));
+                }
+                Some(_) => {}
+            }
+            nodes.push(planned.node);
+            explain.push(planned.explain);
+        }
+        let schema = schema.ok_or_else(|| internal("a union without inputs"))?;
+        Ok(Planned {
+            node: Arc::new(FanInNode { inputs: nodes }),
+            schema,
+            layout,
+            explain: ExplainNode::new("Union", columns(&out), explain),
+        })
     }
 
     /// Compiles `exprs` over `input`, planning the uncorrelated subqueries
@@ -665,6 +725,26 @@ pub(crate) fn select(planned: Planned, output: &[BoundColumn], name: &str) -> Re
     let op = Project::try_new(&planned.schema, items)?;
     let detail = columns(output);
     Ok(planned.operator(op, ids, (name, detail)))
+}
+
+/// One row without columns (`SELECT` without `FROM`).
+fn one_row() -> Result<Planned> {
+    let schema = Arc::new(Schema::empty());
+    let options = arrow_array::RecordBatchOptions::new().with_row_count(Some(1));
+    let batch =
+        arrow_array::RecordBatch::try_new_with_options(Arc::clone(&schema), Vec::new(), &options)
+            .map_err(|e| internal(&e.to_string()))?;
+    let scan = crate::operators::MemoryScan::try_new(
+        Arc::clone(&schema),
+        vec![krishiv_types::batch::Batch::new(batch)],
+    )?;
+    let source = crate::operators::ScanPushdown::build(&scan, ScanPushdowns::default())?;
+    Ok(Planned {
+        schema: source.schema(),
+        node: Arc::new(SourceNode(source)),
+        layout: Vec::new(),
+        explain: ExplainNode::leaf("OneRowRelation", ""),
+    })
 }
 
 /// The schema of `l`'s columns then `r`'s.
