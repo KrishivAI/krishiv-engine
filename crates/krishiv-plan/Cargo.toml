@@ -9,6 +9,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# One-row arrays: constant arguments fold through the cast kernels.
+arrow-array.workspace = true
+arrow-schema.workspace = true
 krishiv-common = { path = "../krishiv-common" }
 # The built-in function registry and the signature types it shares.
 krishiv-functions = { path = "../krishiv-functions" }

@@ -144,10 +144,12 @@ pub(crate) struct EvalEnv {
     /// The query's clock (microseconds since the epoch, UTC), read once at
     /// planning: `current_date` and `now()` see one instant per query.
     pub(crate) query_start_micros: i64,
+    /// The session user (`current_user()`).
+    pub(crate) user: Arc<str>,
 }
 
 impl EvalEnv {
-    pub(crate) fn new(config: &Config) -> Self {
+    pub(crate) fn new(config: &Config, user: Arc<str>) -> Self {
         let ansi = config
             .get(&ANSI_ENABLED)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
@@ -166,6 +168,7 @@ impl EvalEnv {
             zone,
             kernels: KernelCtx::new(),
             query_start_micros,
+            user,
         }
     }
 }
