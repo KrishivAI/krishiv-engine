@@ -649,6 +649,9 @@ struct Loading {
     asked: Option<Asked>,
     /// Loading alone: missing memory is asked of the arbitrator.
     arbitrate: bool,
+    /// The arbitrator refused an estimate of the rest: ask for what is
+    /// missing now only from then on.
+    estimate_refused: bool,
 }
 
 /// A `NeedMemory` a loading step returned.
@@ -685,6 +688,7 @@ impl Loading {
             pending: None,
             asked: None,
             arbitrate,
+            estimate_refused: false,
         }
     }
 
@@ -785,7 +789,41 @@ impl Loading {
         Ok(Loaded::Table(Box::new(JoinTable::build(arena)?), headroom))
     }
 
-    /// Bytes to ask for when `now` are missing: on the first ask, an
+    /// Records a `NeedMemory` for `now` missing bytes, the consumer holding
+    /// `credit`; returns the bytes to ask for.
+    fn ask(&mut self, now: usize, credit: usize) -> usize {
+        let bytes = if self.estimate_refused {
+            now
+        } else {
+            self.estimate(now)
+        };
+        self.asked = Some(Asked {
+            expect: credit.saturating_add(bytes),
+            now,
+            estimated: bytes > now,
+        });
+        bytes
+    }
+
+    /// After a `NeedMemory`, with the consumer now holding `credit`: `None`
+    /// if the driver got the bytes (or nothing was asked), else what to do:
+    /// ask again for the bytes missing now after a refused estimate, or give
+    /// up ([`Loaded::TooLarge`]).
+    fn check_grant(&mut self, credit: usize) -> Option<Loaded> {
+        let asked = self.asked.take().filter(|a| credit < a.expect)?;
+        if !asked.estimated {
+            return Some(Loaded::TooLarge);
+        }
+        self.estimate_refused = true;
+        self.asked = Some(Asked {
+            expect: credit.saturating_add(asked.now),
+            now: asked.now,
+            estimated: false,
+        });
+        Some(Loaded::Need(asked.now))
+    }
+
+    /// Bytes to ask for when `now` are missing: until refused once, an
     /// estimate of the whole rest of the partition (from the bytes per row
     /// read so far), so a large partition takes few arbitration rounds.
     fn estimate(&self, now: usize) -> usize {
@@ -814,19 +852,8 @@ async fn load(
     ctx: &TaskContext,
 ) -> Result<(Loading, Loaded)> {
     let handle = Arc::clone(ctx.consumer().consumer());
-    if let Some(asked) = loading.asked.take()
-        && handle.credit() < asked.expect
-    {
-        if !asked.estimated {
-            return Ok((loading, Loaded::TooLarge));
-        }
-        // The estimate was refused: ask for what is missing now only.
-        loading.asked = Some(Asked {
-            expect: handle.credit().saturating_add(asked.now),
-            now: asked.now,
-            estimated: false,
-        });
-        return Ok((loading, Loaded::Need(asked.now)));
+    if let Some(refused) = loading.check_grant(handle.credit()) {
+        return Ok((loading, refused));
     }
     let shared = Arc::clone(shared);
     let bctx = BlockingCtx {
@@ -843,12 +870,7 @@ async fn load(
         if !loading.arbitrate {
             return Ok((loading, Loaded::TooLarge));
         }
-        let bytes = loading.estimate(now);
-        loading.asked = Some(Asked {
-            expect: handle.credit().saturating_add(bytes),
-            now,
-            estimated: bytes > now,
-        });
+        let bytes = loading.ask(now, handle.credit());
         return Ok((loading, Loaded::Need(bytes)));
     }
     Ok((loading, loaded))
@@ -1288,6 +1310,66 @@ mod tests {
         assert_eq!(root.reserved(), filler.size(), "the floor is free again");
         drop((parts, filler));
         assert_eq!(root.reserved(), 0);
+    }
+
+    /// An alone load asks for an estimate of the whole rest of the
+    /// partition only until the arbitrator refuses it once; then for the
+    /// bytes missing now, and a refused exact ask gives up.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_refused_estimate_is_not_asked_again() {
+        let root = TreePool::new(&MemoryConfig {
+            limit: Some(64 << 20),
+            quantum: 1,
+            ..MemoryConfig::default()
+        });
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            root.child("q", None),
+        );
+        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
+        let dir = TempDir::new("grace-estimate");
+        let manager = SpillManager::open(&SpillConfig {
+            dir: dir.0.clone(),
+            ..SpillConfig::default()
+        })
+        .unwrap();
+        let scope = manager.scope().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let rows = Batch::new(
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from_iter_values(0..10_000))],
+            )
+            .unwrap(),
+        );
+        let mut parts = vec![Part::with_memory(ctx.consumer().reservation())];
+        reserve_chunks(&mut parts, &[(0, rows.clone())]).unwrap();
+        parts[0].chunks.push(rows.clone());
+        spill_parts(&mut parts, &[0], &schema, &scope, &ctx, true)
+            .await
+            .unwrap();
+        let task = Task {
+            depth: 0,
+            build: parts.pop().unwrap(),
+            probe: Part::default(),
+        };
+        let mut loading = Loading::new(task, true, &ctx);
+        // Some rows read: the estimate covers the other 9,000 too.
+        loading.memory.try_grow(8_000).unwrap();
+        loading.chunks.push(rows.slice(0, 1_000).unwrap());
+        let estimate = loading.ask(100, 0);
+        assert!(estimate > 9_000 * 8, "{estimate}");
+        assert!(loading.check_grant(estimate).is_none(), "granted");
+        assert_eq!(loading.ask(100, 0), estimate, "asked again after a grant");
+        assert!(matches!(loading.check_grant(0), Some(Loaded::Need(100))));
+        assert!(matches!(loading.check_grant(0), Some(Loaded::TooLarge)));
+        assert_eq!(loading.ask(100, 0), 100, "never the estimate again");
+        assert!(loading.check_grant(100).is_none());
+        drop(loading);
+        ctx.consumer().consumer().release_credit();
     }
 
     /// A spill picks at least `SPILL_MIN` bytes when it can, never a part
