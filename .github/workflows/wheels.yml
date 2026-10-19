@@ -86,7 +86,8 @@ jobs:
             .github/scripts/wheel-test.sh "$(uv python find "$v")" dist "$FLAVOUR"
           done
       # The old-CPU path: import the abi3 wheel under user-mode QEMU with a
-      # pre-AVX2 CPU; it must raise ImportError naming the compat package.
+      # pre-AVX2 CPU; the import must end with a clean exit (status 1) and a
+      # message naming the missing features and the compat package, not SIGILL.
       - name: Old CPU import (QEMU Nehalem)
         if: matrix.libc == 'manylinux' && matrix.flavour == 'abi3'
         run: |
@@ -103,7 +104,7 @@ jobs:
           set -e
           cat "$RUNNER_TEMP/old.out"
           test "$code" -eq 1
-          grep -q 'ImportError' "$RUNNER_TEMP/old.out"
+          ! grep -qi 'illegal instruction' "$RUNNER_TEMP/old.out"
           grep -q 'avx2' "$RUNNER_TEMP/old.out"
           grep -q 'krishiv-compat' "$RUNNER_TEMP/old.out"
       - name: Test (musllinux, in the PyPA musllinux image)

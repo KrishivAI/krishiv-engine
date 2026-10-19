@@ -84,8 +84,9 @@ MOVBE, i.e. Intel Haswell (2013) / AMD Excavator and Zen or newer. The arm64 bui
 (`neoverse-n1`: AWS Graviton2 or newer, Apple silicon). On an older CPU the main build refuses to start and says
 which feature is missing, instead of crashing.
 
-For such a CPU use the **compat** build, which targets the plain x86-64 baseline and runs everywhere (a little slower
-on vectorised workloads):
+For an older x86-64 CPU use the **compat** build, which targets the plain x86-64 baseline (a little slower on
+vectorised workloads). It covers Linux x86-64 only: a manylinux x86_64 wheel and an x86-64 CLI binary. No arm64 or
+musllinux compat build is provided:
 
 - Python: `pip install krishiv-compat` (it is the same package and imports as `krishiv`; install one of the two, not both).
 - CLI: download the `krishiv-compat` binary from the release.

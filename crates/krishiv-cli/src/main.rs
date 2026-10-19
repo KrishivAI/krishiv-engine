@@ -55,7 +55,14 @@ enum Command {
 
 fn main() {
     // First, so a CPU older than the build targets gets a message instead of SIGILL.
+    // `run` holds everything else: the compiler may use the build's CPU level in the
+    // prologue of a function with large locals, which must not come before the check.
     krishiv_common::cpu::check_or_exit();
+    run();
+}
+
+#[inline(never)]
+fn run() {
     let cli = Cli::parse();
     match cli.command {
         Command::Sql(args) => std::process::exit(sql::run(&args)),

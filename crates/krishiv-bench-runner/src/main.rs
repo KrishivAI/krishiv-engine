@@ -14,7 +14,13 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> ExitCode {
     // First, so a CPU older than the build targets gets a message instead of SIGILL.
+    // `run` holds everything else (see `krishiv_common::cpu`).
     krishiv_common::cpu::check_or_exit();
+    run()
+}
+
+#[inline(never)]
+fn run() -> ExitCode {
     if std::env::args().nth(1).as_deref() == Some("--build-info") {
         return match writeln!(std::io::stdout(), "{}", krishiv_bench_runner::BUILD_INFO) {
             Ok(()) => ExitCode::SUCCESS,
