@@ -26,6 +26,14 @@ artifact="${ARTIFACT:-budgets-current}"
 skip_job="${SKIP_JOB:-}"
 retry_attempts="${RETRY_ATTEMPTS:-5}"
 retry_base="${RETRY_BASE_SECS:-5}"
+for v in retry_attempts retry_base; do
+  case "${!v}" in
+    '' | *[!0-9]*)
+      echo "::error::RETRY_ATTEMPTS and RETRY_BASE_SECS must be non-negative integers (got ${v}='${!v}')" >&2
+      exit 1
+      ;;
+  esac
+done
 deadline=$((SECONDS + wait_secs))
 
 # gh_retry <gh args>: stdout of the successful attempt is printed; stderr of a

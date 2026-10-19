@@ -96,6 +96,16 @@ retry_case "404 fails immediately" fail 99 "gh: Not Found (HTTP 404)"
 retry_case "auth error fails immediately" fail 99 "gh: Bad credentials (HTTP 401)"
 [ "$(cat "$tmp/count.fail")" = 1 ] || fail "401 was retried"
 
+# Malformed retry settings fail fast instead of silently disabling the cap.
+for bad in RETRY_ATTEMPTS=abc RETRY_BASE_SECS=1.5 RETRY_ATTEMPTS=-1; do
+  rc=0
+  env "$bad" FAKE_RUN=7 FAKE_JOBS="completed${tab}success" FAKE_COUNT="$tmp/count" \
+    OUT_DIR="$tmp/out" WAIT_SECS=5 bash "$script" >/dev/null 2>"$err" || rc=$?
+  [ "$rc" -ne 0 ] || fail "$bad was accepted"
+  grep -q "must be non-negative integers" "$err" || fail "$bad: unclear message: $(cat "$err")"
+  echo "ok: $bad rejected"
+done
+
 # The wheel sizes: the job lives in the called workflow, and a skipped
 # `wheels-targets` (no Python change) is the only skip that means "nothing".
 export JOB="wheels-targets / sizes" ARTIFACT=wheel-sizes SKIP_JOB=wheels-targets
