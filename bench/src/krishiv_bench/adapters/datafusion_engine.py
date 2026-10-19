@@ -39,7 +39,12 @@ class DataFusionEngine(Engine):
     def setup(self, dataset: Dataset) -> None:
         from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
 
-        cfg = SessionConfig().with_target_partitions(self.threads)
+        # ClickBench column names are CamelCase and unquoted in the queries (DuckDB/Spark match case-insensitively).
+        cfg = (
+            SessionConfig()
+            .with_target_partitions(self.threads)
+            .set("datafusion.sql_parser.enable_ident_normalization", "false")
+        )
         rt = RuntimeEnvBuilder().with_fair_spill_pool(parse_bytes(self.memory_limit))
         self._ctx = SessionContext(cfg, rt)
         for t in dataset.tables:

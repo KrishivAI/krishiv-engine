@@ -12,9 +12,12 @@ Both register each Parquet table as a temp view over the same files; Spark ANSI 
 from __future__ import annotations
 
 import os
+import shutil
 import time
+from pathlib import Path
 from typing import Any
 
+from ..paths import data_root
 from .base import Dataset, Engine, Query, table_path
 
 
@@ -61,6 +64,13 @@ class SparkLocalEngine(_SparkSQLEngine):
             cfg["java"] = self.spark._jvm.System.getProperty("java.version")
         return cfg
 
+    @staticmethod
+    def _scratch() -> Path:
+        """Shuffle/spill directory on disk under the data root (``/tmp`` is a small shared tmpfs)."""
+        d = data_root() / "tmp" / f"spark-local-{os.getpid()}"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     def setup(self, dataset: Dataset) -> None:
         from pyspark.sql import SparkSession
 
@@ -70,6 +80,7 @@ class SparkLocalEngine(_SparkSQLEngine):
             .config("spark.driver.memory", self.memory_limit)
             .config("spark.sql.shuffle.partitions", str(self.threads))
             .config("spark.sql.adaptive.enabled", "true")
+            .config("spark.local.dir", str(self._scratch()))
             .config("spark.ui.enabled", "false")
             .config("spark.ui.showConsoleProgress", "false")
             .config("spark.sql.ansi.doubleQuotedIdentifiers", "true")
@@ -77,6 +88,10 @@ class SparkLocalEngine(_SparkSQLEngine):
         )
         self.spark.sparkContext.setLogLevel("ERROR")
         self._register(dataset)
+
+    def teardown(self) -> None:
+        super().teardown()
+        shutil.rmtree(data_root() / "tmp" / f"spark-local-{os.getpid()}", ignore_errors=True)
 
 
 class SailEngine(_SparkSQLEngine):
