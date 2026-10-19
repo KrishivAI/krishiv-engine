@@ -3,7 +3,8 @@
 //! implementation, [`QueryRunner`].
 //!
 //! `submit` instantiates the [`PhysicalPlan`] with the caller's
-//! [`WorkerContext`] ([`instantiate`](crate::physical::instantiate)),
+//! [`WorkerContext`] ([`instantiate`](crate::physical::instantiate)) on
+//! the executor's blocking pool when its future runs,
 //! splits the operator graph into pipelines and spawns a coordinator task,
 //! which starts each pipeline once its dependencies have finalized:
 //! `min(worker slots, source parallelism)` drivers per pipeline (one if it
@@ -154,8 +155,26 @@ impl Scheduler for QueryRunner {
         worker: WorkerContext,
         query: Arc<QueryContext>,
     ) -> BoxFuture<'static, Result<BoxStream<'static, Result<Batch>>>> {
-        let started = instantiate(&plan, &worker).and_then(|node| self.start(node, query));
-        Box::pin(async move { started })
+        let runner = Self {
+            executor: Arc::clone(&self.executor),
+            running: Arc::clone(&self.running),
+        };
+        Box::pin(async move {
+            // Instantiation builds operators and starts a deep-stack
+            // thread: on the blocking pool, not on an async worker.
+            let built = Arc::new(Mutex::new(None));
+            let out = Arc::clone(&built);
+            runner
+                .executor
+                .spawn_blocking(Box::new(move || {
+                    *lock(&out) = Some(instantiate(&plan, &worker));
+                }))
+                .await?;
+            let node = lock(&built)
+                .take()
+                .ok_or_else(|| internal("an instantiation without a result".to_owned()))??;
+            runner.start(node, query)
+        })
     }
 
     fn cancel(&self, query: QueryId) {

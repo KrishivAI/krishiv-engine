@@ -276,3 +276,63 @@ fn inconsistent_plans_are_internal_errors() {
         "without a write sink",
     );
 }
+
+/// Counts the providers it hands out.
+#[derive(Debug)]
+struct Counting(
+    Arc<dyn TableProviderResolver>,
+    std::sync::atomic::AtomicUsize,
+);
+
+impl TableProviderResolver for Counting {
+    fn provider(&self, scan: &krishiv_plan::Scan) -> krishiv_exec::Result<Arc<dyn TableProvider>> {
+        self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.0.provider(scan)
+    }
+}
+
+/// `submit` does no instantiation work on the caller: the plan is
+/// instantiated (on the blocking pool) when the returned future runs.
+#[test]
+fn submit_instantiates_inside_its_future() {
+    use futures::StreamExt as _;
+    use krishiv_exec::Scheduler as _;
+    use std::sync::atomic::Ordering;
+
+    let env = env();
+    let counting = Arc::new(Counting(
+        Arc::clone(&env.tables) as _,
+        std::sync::atomic::AtomicUsize::new(0),
+    ));
+    let plan = env.plan("SELECT a FROM t").unwrap();
+    let root = krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+    let query = krishiv_exec::QueryContext::new(
+        krishiv_exec::QueryId(1),
+        krishiv_exec::WorkloadClass::Interactive,
+        krishiv_exec::ExecConfig::default(),
+        krishiv_memory::MemoryPool::child(root.as_ref(), "q", None),
+    );
+    let runner = krishiv_exec::QueryRunner::new(
+        krishiv_exec::TokioExecutor::new(&krishiv_exec::ExecutorConfig::default()).unwrap(),
+    );
+    let started = runner.submit(
+        plan.plan,
+        WorkerContext::new(Arc::clone(&counting) as _),
+        Arc::clone(&query),
+    );
+    assert_eq!(counting.1.load(Ordering::SeqCst), 0);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let rows = rt.block_on(async {
+        let mut stream = started.await.unwrap();
+        let mut rows = 0;
+        while let Some(b) = stream.next().await {
+            rows += b.unwrap().num_rows();
+        }
+        query.finished().await;
+        rows
+    });
+    assert_eq!(rows, 10);
+    assert_eq!(counting.1.load(Ordering::SeqCst), 1);
+}

@@ -327,8 +327,8 @@ fn physical_plan_types_hold_no_live_handles() {
         [(2, "Arc<dyn"), (3, "Mutex")]
     );
     assert_eq!(
-        plan_handles_in("crates\\krishiv-exec\\src\\physical\\data.rs", node).len(),
-        2
+        plan_handles_in("crates\\krishiv-exec\\src\\physical\\data.rs", node),
+        [(2, "Arc<dyn"), (3, "Mutex")]
     );
     // Comments may name them; instantiation and other files may use them.
     assert!(plan_handles_in("crates/krishiv-exec/src/physical/mod.rs", "// a Mutex\n").is_empty());

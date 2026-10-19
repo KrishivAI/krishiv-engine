@@ -182,6 +182,7 @@ impl ScanPushdown for FileScan {
     }
 
     fn output_schema(&self, pushdowns: &ScanPushdowns) -> Result<SchemaRef> {
+        check_capabilities(self, pushdowns)?;
         Ok(table_request(self, pushdowns)?.2)
     }
 }
@@ -270,6 +271,25 @@ struct FileScanLocal {
     rows: super::RowStage,
 }
 
+/// Rejects pushdowns the format cannot honour (`build` and
+/// `output_schema` alike).
+fn check_capabilities(scan: &FileScan, p: &ScanPushdowns) -> Result<()> {
+    let caps = scan.format.capabilities(&scan.format_options);
+    if p.selection.is_some() && !caps.selection {
+        return Err(unsupported(format!(
+            "row selections over the {} format",
+            scan.format.name()
+        )));
+    }
+    if p.metadata.row_index && !caps.row_index {
+        return Err(unsupported(format!(
+            "_metadata.row_index over the {} format",
+            scan.format.name()
+        )));
+    }
+    Ok(())
+}
+
 /// The table-level request of a scan of `scan` with `p`, the schema its
 /// columns map to (the mapped output does not depend on the file: it maps
 /// onto the table) and the output schema (with `_metadata`).
@@ -302,19 +322,7 @@ fn table_request(
 
 impl FileScanSource {
     fn new(scan: &FileScan, p: ScanPushdowns) -> Result<Self> {
-        let caps = scan.format.capabilities(&scan.format_options);
-        if p.selection.is_some() && !caps.selection {
-            return Err(unsupported(format!(
-                "row selections over the {} format",
-                scan.format.name()
-            )));
-        }
-        if p.metadata.row_index && !caps.row_index {
-            return Err(unsupported(format!(
-                "_metadata.row_index over the {} format",
-                scan.format.name()
-            )));
-        }
+        check_capabilities(scan, &p)?;
         let (request, mapped, output) = table_request(scan, &p)?;
         Ok(Self {
             format: Arc::clone(&scan.format),

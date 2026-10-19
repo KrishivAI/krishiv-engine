@@ -225,20 +225,7 @@ impl MemoryScan {
     /// `INTERNAL_ERROR` if a projected path does not exist, or a selection
     /// or `_metadata` columns are pushed (in-memory batches have no files).
     pub fn with_pushdowns(&self, pushdowns: ScanPushdowns) -> Result<Self> {
-        if pushdowns.selection.is_some() {
-            return Err(internal(
-                "an in-memory scan cannot honour a row selection".to_owned(),
-            ));
-        }
-        if pushdowns.metadata != MetadataCols::default() {
-            return Err(internal(
-                "an in-memory scan has no _metadata columns".to_owned(),
-            ));
-        }
-        let output = match &pushdowns.projection {
-            Some(paths) => krishiv_io::project_schema(&self.table, paths)?,
-            None => Arc::clone(&self.table),
-        };
+        let output = self.output_for(&pushdowns)?;
         let filters: Vec<Arc<dyn Predicate>> = pushdowns
             .filters
             .iter()
@@ -254,6 +241,25 @@ impl MemoryScan {
             rows_read: AtomicU64::new(0),
             runtime: pushdowns.dynamic,
         })
+    }
+
+    /// The output schema of a scan with `pushdowns`, after rejecting those
+    /// an in-memory scan cannot honour (`build` and `output_schema` alike).
+    fn output_for(&self, pushdowns: &ScanPushdowns) -> Result<SchemaRef> {
+        if pushdowns.selection.is_some() {
+            return Err(internal(
+                "an in-memory scan cannot honour a row selection".to_owned(),
+            ));
+        }
+        if pushdowns.metadata != MetadataCols::default() {
+            return Err(internal(
+                "an in-memory scan has no _metadata columns".to_owned(),
+            ));
+        }
+        match &pushdowns.projection {
+            Some(paths) => krishiv_io::project_schema(&self.table, paths),
+            None => Ok(Arc::clone(&self.table)),
+        }
     }
 
     /// Rows read from memory so far, by every driver, before filtering.
@@ -351,10 +357,7 @@ impl ScanPushdown for MemoryScan {
     }
 
     fn output_schema(&self, pushdowns: &ScanPushdowns) -> Result<SchemaRef> {
-        match &pushdowns.projection {
-            Some(paths) => krishiv_io::project_schema(&self.table, paths),
-            None => Ok(Arc::clone(&self.table)),
-        }
+        self.output_for(pushdowns)
     }
 }
 

@@ -754,24 +754,24 @@ fn unsupported_pushdowns_and_writes_are_refused() {
             None
         }
     }
-    let e = scan
-        .source(ScanPushdowns {
-            selection: Some(Arc::new(All)),
-            ..ScanPushdowns::default()
-        })
-        .unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    let metadata = MetadataCols {
-        row_index: true,
-        ..MetadataCols::default()
+    // `source` and `output_schema` refuse the same pushdowns, alike.
+    let refused = |p: ScanPushdowns| {
+        let a = ScanPushdown::output_schema(&scan, &p).unwrap_err();
+        let b = scan.source(p).unwrap_err();
+        assert_eq!(a.to_string(), b.to_string());
+        assert_eq!(b.error_class(), ErrorClass::KrishivUnsupportedFeature);
     };
-    let e = scan
-        .source(ScanPushdowns {
-            metadata,
-            ..ScanPushdowns::default()
-        })
-        .unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    refused(ScanPushdowns {
+        selection: Some(Arc::new(All)),
+        ..ScanPushdowns::default()
+    });
+    refused(ScanPushdowns {
+        metadata: MetadataCols {
+            row_index: true,
+            ..MetadataCols::default()
+        },
+        ..ScanPushdowns::default()
+    });
     let e = FileWriteSink::try_new(
         Arc::new(Limited),
         env.io,
