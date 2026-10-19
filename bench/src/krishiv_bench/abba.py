@@ -107,12 +107,13 @@ def run_abba(
     threads: int = 8,
     memory_limit: str = "12g",
     timeout_s: float = 600,
+    suite: str = "tpch",
 ) -> Path:
-    root = dataset_dir(dataset, sf)
+    root = data_root() / dataset if suite == "clickbench" else dataset_dir(dataset, sf)
     tables = sorted(p.stem for p in root.glob("*.parquet"))
     if not tables:
         raise SystemExit(f"no dataset at {root}")
-    queries = load_queries("tpch", "krishiv", only)
+    queries = load_queries(suite, "krishiv", only)
     ds = Dataset(dataset, sf, root, tables)
     lock_path = data_root() / ".bench.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -121,10 +122,10 @@ def run_abba(
         fcntl.flock(lock, fcntl.LOCK_EX)
         waited = time.perf_counter() - t_wait
         print(f"bench lock acquired (waited {waited:.0f}s)")
-        return _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, waited)
+        return _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, waited, suite)
 
 
-def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s) -> Path:
+def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s, suite) -> Path:
     krishiv = KrishivEngine(threads=threads, memory_limit=memory_limit.lower())
     duck = DuckDBEngine(threads=threads, memory_limit=memory_limit.upper())
     krishiv.timeout_s = timeout_s or None  # 0 disables the timeout
@@ -133,6 +134,7 @@ def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s
     record: dict[str, Any] = {
         "schema": 1,
         "kind": "abba",
+        "suite": suite,
         "started_utc": started.isoformat(),
         "machine": machine_info(),
         "git": git_info(),
@@ -163,7 +165,7 @@ def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s
     record["summary"] = summarize(record)
     out = results_dir()
     out.mkdir(parents=True, exist_ok=True)
-    f = out / f"{started.strftime('%Y%m%dT%H%M%SZ')}_abba_tpch_sf{fmt_sf(ds.sf)}.json"
+    f = out / f"{started.strftime('%Y%m%dT%H%M%SZ')}_abba_{suite}_sf{fmt_sf(ds.sf)}.json"
     f.write_text(json.dumps(record, indent=2))
     print(markdown(record))
     print(f"result: {f}")
