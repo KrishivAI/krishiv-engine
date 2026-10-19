@@ -39,6 +39,17 @@ use crate::planner::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
 use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, SourceNode};
 use crate::planner::subquery::{Slot, SubquerySink, SubqueryValue, WithSubqueries};
 
+/// Creates the spill scope of one instantiation: the query's own spill
+/// directory on this worker, removed when the scope's last holder (the
+/// operators, the result stream) is dropped.
+pub trait SpillScopes: Send + Sync + fmt::Debug {
+    /// A new scope.
+    ///
+    /// # Errors
+    /// When the spill directory cannot be created.
+    fn scope(&self) -> Result<SpillScope>;
+}
+
 /// What a worker resolves a plan's references against: the tables its
 /// scans read, the spill scope of the query, the sink of a write. One per
 /// query and worker.
@@ -46,6 +57,7 @@ use crate::planner::subquery::{Slot, SubquerySink, SubqueryValue, WithSubqueries
 pub struct WorkerContext {
     tables: Arc<dyn TableProviderResolver>,
     spill: Option<SpillScope>,
+    scopes: Option<Arc<dyn SpillScopes>>,
     write: Option<Arc<FileWriteSink>>,
 }
 
@@ -55,6 +67,7 @@ impl WorkerContext {
         Self {
             tables,
             spill: None,
+            scopes: None,
             write: None,
         }
     }
@@ -63,6 +76,15 @@ impl WorkerContext {
     #[must_use]
     pub fn with_spill(mut self, scope: SpillScope) -> Self {
         self.spill = Some(scope);
+        self
+    }
+
+    /// The same context spilling into a scope `scopes` creates for each
+    /// instantiation (unless a fixed scope is set with
+    /// [`Self::with_spill`]).
+    #[must_use]
+    pub fn with_spill_scopes(mut self, scopes: Arc<dyn SpillScopes>) -> Self {
+        self.scopes = Some(scopes);
         self
     }
 
@@ -85,6 +107,7 @@ impl fmt::Debug for WorkerContext {
         f.debug_struct("WorkerContext")
             .field("tables", &self.tables)
             .field("spill", &self.spill.is_some())
+            .field("spill_scopes", &self.scopes.is_some())
             .field("write", &self.write.is_some())
             .finish()
     }
@@ -101,8 +124,14 @@ impl fmt::Debug for WorkerContext {
 /// declares, or writes without a write sink.
 pub fn instantiate(plan: &PhysicalPlan, worker: &WorkerContext) -> Result<Arc<dyn ExecNode>> {
     let run = || {
+        let spill = match (&worker.spill, &worker.scopes) {
+            (Some(scope), _) => Some(scope.clone()),
+            (None, Some(scopes)) => Some(scopes.scope()?),
+            (None, None) => None,
+        };
         let mut cx = Instantiation {
             worker,
+            spill,
             env: EvalEnv::from_plan(plan.env()),
             filters: HashMap::new(),
         };
@@ -124,6 +153,8 @@ pub fn instantiate(plan: &PhysicalPlan, worker: &WorkerContext) -> Result<Arc<dy
 
 struct Instantiation<'a> {
     worker: &'a WorkerContext,
+    /// The query's spill scope on this worker.
+    spill: Option<SpillScope>,
     env: EvalEnv,
     /// One cell per runtime filter of the plan.
     filters: HashMap<FilterId, Arc<RuntimeFilter>>,
@@ -205,7 +236,7 @@ impl Instantiation<'_> {
             }
             PhysNode::Sort { input, keys } => {
                 let input = self.node(input)?;
-                let sort = sort_op(&input.schema, keys, self.worker.spill.clone())?;
+                let sort = sort_op(&input.schema, keys, self.spill.clone())?;
                 Ok(breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort))
             }
             PhysNode::TopN { input, keys, limit } => {
@@ -215,12 +246,8 @@ impl Instantiation<'_> {
             }
             PhysNode::Aggregate { input, aggregate } => {
                 let input = self.node(input)?;
-                let spec = aggregate_spec(
-                    &input.schema,
-                    aggregate,
-                    self.env.ansi,
-                    self.worker.spill.clone(),
-                );
+                let spec =
+                    aggregate_spec(&input.schema, aggregate, self.env.ansi, self.spill.clone());
                 let schema = spec.output_schema()?;
                 let node = aggregate_node(input.node, spec, &aggregate.distinct)?;
                 Ok(Built { node, schema })
@@ -370,7 +397,7 @@ impl Instantiation<'_> {
             &build.schema,
             j,
             &self.env,
-            self.worker.spill.clone(),
+            self.spill.clone(),
             &mut |id| self.cell(id),
         )?;
         Ok(Built {

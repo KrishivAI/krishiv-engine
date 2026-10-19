@@ -19,7 +19,7 @@ use krishiv_common::error::{
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::FileWriteSink;
 use krishiv_exec::files::{FileReads, LocalPaths, PathLocator as _};
-use krishiv_exec::physical::WorkerContext;
+use krishiv_exec::physical::{SpillScopes, WorkerContext};
 use krishiv_exec::planner::{
     DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
 };
@@ -565,49 +565,9 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
-        self.physical_with(analyzed, env, true).await
-    }
-
-    /// [`Self::physical`] for a plan that is only inspected (EXPLAIN,
-    /// warnings): it gets no spill scope, so no directory is made.
-    pub(crate) async fn physical_for_inspection(
-        &self,
-        analyzed: &AnalyzedPlan,
-        env: &QueryEnv,
-    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
-        self.physical_with(analyzed, env, false).await
-    }
-
-    /// The spill scope of one query: its own directory under the session's
-    /// spill directory, removed when the query's plan and streams are
-    /// dropped (cancellation included).
-    fn spill_scope(&self, config: &Config) -> Result<SpillScope, KrishivError> {
-        let mut slot = self
-            .state
-            .spill
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if slot.is_none() {
-            let manager = SpillManager::open(&SpillConfig::from_config(config))
-                .map_err(|e| internal(format!("cannot set up the spill directory: {e}")))?;
-            *slot = Some(manager);
-        }
-        slot.as_ref().map_or_else(
-            || Err(internal("the spill directory is not open".to_owned())),
-            |m| {
-                m.scope().map_err(|e| {
-                    internal(format!("cannot create the query's spill directory: {e}"))
-                })
-            },
-        )
-    }
-
-    async fn physical_with(
-        &self,
-        analyzed: &AnalyzedPlan,
-        env: &QueryEnv,
-        spill: bool,
-    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        // Planning makes no spill directory: a query gets its scope when
+        // its plan is instantiated (`Self::worker`), so a plan that is only
+        // inspected (EXPLAIN, warnings) makes none.
         env.catalog.open_files(analyzed.plan.root()).await?;
         let tables =
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>;
@@ -615,11 +575,8 @@ impl Session {
             &analyzed.plan,
             &ProviderStatistics(Arc::clone(&tables)),
         )?;
-        let mut cx = PlanningContext::new(tables, Arc::clone(&env.config))
+        let cx = PlanningContext::new(tables, Arc::clone(&env.config))
             .with_user(self.state.principal.name.as_str());
-        if spill {
-            cx = cx.with_spill(self.spill_scope(&env.config)?);
-        }
         let physical = self.state.planner.plan(&optimized, &cx)?;
         // Spark logs what analysis and planning ignore (hints) as
         // warnings; `DataFrame::warnings` returns them too.
@@ -635,7 +592,7 @@ impl Session {
         physical: &PhysicalPlan,
         env: &QueryEnv,
     ) -> Result<RecordBatchStream, KrishivError> {
-        self.run_on(physical, worker(env), env).await
+        self.run_on(physical, self.worker(env), env).await
     }
 
     /// Runs `physical` instantiated with `worker`.
@@ -717,7 +674,7 @@ impl Session {
             write.write_options(0),
         )?);
         let plan = physical.into_write(&sink)?;
-        let worker = worker(env).with_write_sink(Arc::clone(&sink));
+        let worker = self.worker(env).with_write_sink(Arc::clone(&sink));
         let mut rows = self.run_on(&plan, worker, env).await?;
         while let Some(batch) = rows.next().await {
             batch?;
@@ -730,12 +687,57 @@ impl Session {
     }
 }
 
-/// What a query's plans are instantiated with in this process: the
-/// query's tables.
-fn worker(env: &QueryEnv) -> WorkerContext {
-    WorkerContext::new(
-        Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
-    )
+impl Session {
+    /// What a query's plans are instantiated with in this process: the
+    /// query's tables, and its spill scope under the session's spill
+    /// directory (created at instantiation).
+    fn worker(&self, env: &QueryEnv) -> WorkerContext {
+        WorkerContext::new(
+            Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
+        )
+        .with_spill_scopes(Arc::new(QuerySpill {
+            state: Arc::clone(&self.state),
+            config: Arc::clone(&env.config),
+        }))
+    }
+}
+
+/// The spill scope of one query: its own directory under the session's
+/// spill directory (opened by the first query that runs; `krishiv.spill.*`
+/// are build-time keys), removed when the query's operators and streams
+/// are dropped (cancellation included).
+struct QuerySpill {
+    state: Arc<SessionState>,
+    config: Arc<Config>,
+}
+
+impl fmt::Debug for QuerySpill {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QuerySpill").finish_non_exhaustive()
+    }
+}
+
+impl SpillScopes for QuerySpill {
+    fn scope(&self) -> krishiv_exec::Result<SpillScope> {
+        let mut slot = self
+            .state
+            .spill
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            let manager = SpillManager::open(&SpillConfig::from_config(&self.config))
+                .map_err(|e| internal(format!("cannot set up the spill directory: {e}")))?;
+            *slot = Some(manager);
+        }
+        slot.as_ref().map_or_else(
+            || Err(internal("the spill directory is not open".to_owned())),
+            |m| {
+                m.scope().map_err(|e| {
+                    internal(format!("cannot create the query's spill directory: {e}"))
+                })
+            },
+        )
+    }
 }
 
 /// Spark's `COLUMN_ALREADY_EXISTS` for a written schema with a repeated

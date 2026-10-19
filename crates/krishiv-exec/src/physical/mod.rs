@@ -46,11 +46,11 @@ use krishiv_plan::{AttrId, Expr, Scan};
 
 use data::plan_data;
 pub use data::{PlanData, assert_plan_data};
+pub use instantiate::{SpillScopes, WorkerContext, instantiate};
 pub(crate) use instantiate::{
     Unbuilt, Values, aggregate_node, aggregate_spec, filter_op, hash_join, nested_loop_join,
     project_op, replicate_op, scan_filter, sort_op, top_n_op,
 };
-pub use instantiate::{WorkerContext, instantiate};
 
 use crate::aggregate::{AggregateExpr, AggregateOutput};
 use crate::error::Result;
