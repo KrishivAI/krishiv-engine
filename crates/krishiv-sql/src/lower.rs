@@ -28,8 +28,8 @@ use krishiv_types::DecimalType;
 
 use crate::ast::{
     Alias, BinaryOp, Expr, ExprKind, FromClause, GroupItemKind, JoinConstraint, JoinKind, Literal,
-    NumKind, Query, Relation, RelationExt, Select, SetExpr, SetExprKind, SetOperator,
-    SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth, UnaryOp,
+    NullTreatment, NumKind, Query, Relation, RelationExt, Select, SetExpr, SetExprKind,
+    SetOperator, SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth, UnaryOp,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_query};
@@ -852,7 +852,10 @@ impl Lowerer {
                 for (present, what) in [
                     (f.over.is_some(), "window functions"),
                     (!f.within_group.is_empty(), "WITHIN GROUP"),
-                    (f.null_treatment.is_some(), "IGNORE NULLS and RESPECT NULLS"),
+                    (
+                        f.null_treatment.is_some() && !takes_null_treatment(&name.value),
+                        "IGNORE NULLS and RESPECT NULLS",
+                    ),
                 ] {
                     if present {
                         return Err(unsupported(what, sp));
@@ -864,6 +867,27 @@ impl Lowerer {
                         return Err(unsupported("named function arguments", a.span));
                     }
                     args.push(self.arg(&a.expr)?);
+                }
+                // `first(x) IGNORE NULLS` is `first(x, true)` and `RESPECT
+                // NULLS` is `first(x, false)`, whatever flag was written;
+                // a flag that is not a literal stays for the analyzer to
+                // refuse, as Spark does.
+                if let Some(t) = f.null_treatment {
+                    let flag = t == NullTreatment::Ignore;
+                    match args.get(1).map(|a| &a.node) {
+                        None | Some(ExprNode::Literal(IrLiteral::Boolean(_))) => {
+                            let flag =
+                                arc(self.ex(ExprNode::Literal(IrLiteral::Boolean(flag)), sp));
+                            // Only the flag slot is replaced: surplus arguments
+                            // stay for the analyzer's arity error.
+                            if args.len() == 1 {
+                                args.push(flag);
+                            } else {
+                                args[1] = flag;
+                            }
+                        }
+                        Some(_) => {}
+                    }
                 }
                 let filter = f.filter.as_ref().map(|x| self.arg(x)).transpose()?;
                 self.ex(
@@ -896,6 +920,14 @@ impl Lowerer {
             sp,
         )
     }
+}
+
+/// The aggregates that take `IGNORE NULLS` / `RESPECT NULLS` (as their
+/// `ignoreNulls` argument).
+fn takes_null_treatment(name: &str) -> bool {
+    ["first", "last", "first_value", "last_value"]
+        .iter()
+        .any(|n| name.eq_ignore_ascii_case(n))
 }
 
 /// A path written as a quoted name part (`parquet.`s3://b/k``).

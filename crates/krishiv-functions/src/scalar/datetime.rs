@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Datetime functions (P2-T025a kernels): `date_add`/`date_sub`/`datediff`,
 //! the field functions (`year`, `month`, `day`, `extract`/`date_part`) and
-//! the query clock (`current_date`, `current_timestamp`).
+//! the query clock (`current_date`, `current_timestamp`, `localtimestamp`).
 //!
 //! Day arithmetic raises `ARITHMETIC_OVERFLOW` under ANSI where the day
 //! number leaves the `int` range and wraps like Java's `int` otherwise (ADR
@@ -17,7 +17,7 @@ use krishiv_kernels::datetime::{
     DatePart, current_date, date_add, date_diff, date_sub, extract_date, extract_timestamp,
 };
 
-use super::args::{Inputs, is_string, is_timestamp, to_utf8, unsupported};
+use super::args::{Inputs, internal, is_string, is_timestamp, to_utf8, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
@@ -37,6 +37,7 @@ pub(super) const NAMES: &[&str] = &[
     "curdate",
     "current_timestamp",
     "now",
+    "localtimestamp",
 ];
 
 /// The Arrow type of `timestamp` results.
@@ -155,6 +156,31 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 let a = TimestampMicrosecondArray::from(vec![now; x.rows()]).with_timezone("UTC");
                 Ok(Arc::new(a) as ArrayRef)
             })
+        }
+        ("localtimestamp", []) => {
+            // The wall clock of the session zone, as a `timestamp_ntz`.
+            let now = opts.query_start_micros;
+            let offset = i64::from(opts.time_zone.offset_at_utc(now.div_euclid(1_000_000)));
+            let Some(local) = offset
+                .checked_mul(1_000_000)
+                .and_then(|o| now.checked_add(o))
+            else {
+                return Some((
+                    listed,
+                    Err(internal(
+                        "localtimestamp: the query clock leaves the timestamp range".to_owned(),
+                    )),
+                ));
+            };
+            Binding::new(
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                move |x: &Inputs<'_>| {
+                    Ok(
+                        Arc::new(TimestampMicrosecondArray::from(vec![local; x.rows()]))
+                            as ArrayRef,
+                    )
+                },
+            )
         }
         _ => return Some((listed, Err(bad_types(listed, args)))),
     };

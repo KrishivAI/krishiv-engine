@@ -98,9 +98,11 @@ pub enum Constant {
     /// A `STRING`.
     String(String),
     /// A `FLOAT`, `DOUBLE` or `DECIMAL`, as the integer it truncates to (what
-    /// a cast to `INT` gives: the scale of `round(x, 1.5)`); never for a
-    /// value outside the `BIGINT` range.
+    /// a cast to `INT` gives: the scale of `round(x, 1.5)`).
     Fractional(i64),
+    /// A cast of a literal that Spark raises while folding it (overflow,
+    /// malformed input); the function that reads the value raises it.
+    Error(KrishivError),
 }
 
 /// The type of a value, as function signatures see it.

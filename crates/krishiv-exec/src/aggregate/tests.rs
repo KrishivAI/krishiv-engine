@@ -1267,3 +1267,131 @@ async fn combined_tables_move_to_the_last_driver() {
     drop((g, drivers));
     assert_eq!(root.reserved(), 0);
 }
+
+fn picks_input() -> (SchemaRef, Vec<Vec<ArrayRef>>) {
+    let s = schema(vec![
+        ("k", DataType::Int64),
+        ("x", DataType::Int64),
+        ("s", DataType::Utf8View),
+    ]);
+    let k = i64s(&[Some(1), Some(1), Some(1), Some(2), Some(2), Some(3)]);
+    let x = i64s(&[None, Some(5), Some(7), None, None, Some(9)]);
+    let t: ArrayRef = Arc::new(StringViewArray::from(vec![
+        Some("a"),
+        None,
+        Some("c"),
+        None,
+        None,
+        Some("z"),
+    ]));
+    // Two batches, so the group state carries across them.
+    let split = |a: &ArrayRef| (a.slice(0, 2), a.slice(2, 4));
+    let ((k1, k2), (x1, x2), (t1, t2)) = (split(&k), split(&x), split(&t));
+    (s, vec![vec![k1, x1, t1], vec![k2, x2, t2]])
+}
+
+/// One slot, so batches reach the aggregate in order.
+async fn run_one(plan: Arc<dyn ExecNode>) -> Vec<String> {
+    let o = Opts {
+        slots: 1,
+        ..Opts::default()
+    };
+    rows(&exec(plan, o).await.unwrap().0)
+}
+
+fn picks() -> Vec<(AggregateFunction, usize)> {
+    use AggregateFunction::{First, Last};
+    let mut out = Vec::new();
+    for col in [1, 2] {
+        for f in [
+            First {
+                ignore_nulls: false,
+            },
+            Last {
+                ignore_nulls: false,
+            },
+            First { ignore_nulls: true },
+            Last { ignore_nulls: true },
+        ] {
+            out.push((f, col));
+        }
+    }
+    out
+}
+
+/// `first`/`last` of a group in input order, a NULL counting unless
+/// `ignoreNulls` (Spark 4.2: `SELECT k, first(x), last(x), first(x, true),
+/// last(x, true), first(s), ... FROM t GROUP BY k` over this input).
+#[tokio::test]
+async fn first_and_last_pick_rows_in_input_order() {
+    let (s, b) = picks_input();
+    let aggs: Vec<_> = picks().into_iter().map(|(f, c)| agg(f, c, &s)).collect();
+    let single = || node(scan(&s, b.clone()), spec(&s, vec![0], aggs.clone()));
+    let expected = [
+        // k | first x, last x, first x ignoring NULLs, last x ignoring NULLs,
+        //   | the same for s
+        "1|NULL|7|5|7|a|c|a|c",
+        "2|NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL",
+        "3|9|9|9|9|z|z|z|z",
+    ];
+    assert_eq!(run_one(single()).await, expected);
+    // Partial states merge to the same result (one partial phase keeps the
+    // input order).
+    let mut first = spec(&s, vec![0], aggs.clone());
+    first.output = AggregateOutput::Partial;
+    let second = second_phase(&first, None);
+    let partial = PartialAggregate::new(first, BypassPolicy::default(), Some(7)).unwrap();
+    let plan = node(PartialNode::new(scan(&s, b.clone()), partial), second);
+    assert_eq!(run_one(plan).await, expected);
+    // A global aggregate over no rows is NULL, not an error.
+    let none = node(
+        scan(
+            &s,
+            vec![vec![
+                i64s(&[]),
+                i64s(&[]),
+                Arc::new(StringViewArray::from(Vec::<&str>::new())),
+            ]],
+        ),
+        spec(&s, vec![], aggs),
+    );
+    assert_eq!(
+        run_one(none).await,
+        ["NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL"]
+    );
+}
+
+#[test]
+fn first_and_last_types_and_states() {
+    use AggregateFunction::{First, Last};
+    let s = schema(vec![("x", DataType::Int32), ("a", DataType::Boolean)]);
+    for f in [
+        First { ignore_nulls: true },
+        Last {
+            ignore_nulls: false,
+        },
+    ] {
+        let a = agg(f, 0, &s);
+        assert_eq!(a.result_type().unwrap(), DataType::Int32);
+        let names: Vec<_> = a
+            .state_fields()
+            .unwrap()
+            .iter()
+            .map(|f| (f.name().clone(), f.data_type().clone()))
+            .collect();
+        assert_eq!(names[1].1, DataType::Boolean);
+        assert_eq!(a.merging(3).args, [3, 4]);
+    }
+    let unsupported = AggregateExpr::new(
+        First {
+            ignore_nulls: false,
+        },
+        0,
+        DataType::Null,
+        "f",
+    );
+    assert_eq!(
+        unsupported.result_type().unwrap_err().error_class(),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+}

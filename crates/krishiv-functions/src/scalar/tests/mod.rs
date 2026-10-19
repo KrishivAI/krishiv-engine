@@ -562,3 +562,35 @@ fn results_are_checked_against_the_binding() {
 }
 
 mod families;
+
+#[test]
+fn session_user_and_local_clock() {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::TimestampMicrosecondType;
+    let opts = BindOptions::new().with_user("etl");
+    for name in ["current_user", "USER", "session_user"] {
+        let f = bind_scalar(name, &[], &opts).unwrap();
+        assert_eq!(f.return_type(), &DataType::Utf8);
+        let out = f.invoke(&[], 3).unwrap();
+        let out: Vec<_> = out.as_string::<i32>().iter().collect();
+        assert_eq!(out, [Some("etl"), Some("etl"), Some("etl")]);
+    }
+    assert!(bind_scalar("current_user", &[BindArg::Column(DataType::Int32)], &opts).is_err());
+    // `localtimestamp` is the wall clock of the session zone, without a zone.
+    let micros = 1_700_000_000_123_456;
+    let opts = BindOptions::new()
+        .with_query_start(micros)
+        .with_time_zone(Arc::new(FixedOffset(19_800)));
+    let f = bind_scalar("localtimestamp", &[], &opts).unwrap();
+    assert_eq!(
+        f.return_type(),
+        &DataType::Timestamp(TimeUnit::Microsecond, None)
+    );
+    let out = f.invoke(&[], 2).unwrap();
+    assert_eq!(
+        out.as_primitive::<TimestampMicrosecondType>()
+            .iter()
+            .collect::<Vec<_>>(),
+        [Some(micros + 19_800_000_000); 2]
+    );
+}
