@@ -129,7 +129,7 @@ def test_lit_rejects_other_types() -> None:
 
 def test_to_pandas_needs_pandas(df: DataFrame, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "pandas", None)
-    with pytest.raises(ImportError, match="toPandas needs pandas"):
+    with pytest.raises(ImportError, match=r"toPandas needs pandas.*krishiv\[pandas\]"):
         df.toPandas()
 
 

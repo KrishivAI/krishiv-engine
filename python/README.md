@@ -30,7 +30,7 @@ and releasing the stream cancels it.
 
 `krishiv.sql` mirrors `pyspark.sql` (signatures and import paths); errors are in `krishiv.errors`, shaped like
 `pyspark.errors`. pyarrow is optional: install `krishiv[pyarrow]`; `toArrow`, `collect`, `show` and `toPandas` need it (`count` and
-the PyCapsule interface do not). `toPandas` also needs pandas, which has no extra yet. SQL expression strings
+the PyCapsule interface do not). `toPandas` also needs pandas (`pip install krishiv[pandas]`). SQL expression strings
 (`selectExpr`, `where("...")`, `expr`) are not available yet.
 
 ## Develop
