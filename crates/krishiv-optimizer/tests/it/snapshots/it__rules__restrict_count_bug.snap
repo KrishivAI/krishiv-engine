@@ -1,0 +1,15 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a, (SELECT count(*) FROM u WHERE u.a = t.a) AS n FROM t WHERE b = 'x'"
+---
+Project [a#0, CASE WHEN isnull(count(1)#5) THEN 0L ELSE count(1)#5 END AS n#6]
++- Join LeftOuter, (a#0 == a#3)
+   :- Project [a#0]
+   :  +- Filter (b#1 == 'x') (shared #1)
+   :     +- Scan spark_catalog.default.t [a#0, b#1]
+   +- Aggregate [a#3], [count(1) AS count(1)#5, a#3]
+      +- Join LeftSemi, (a#3 == a#7)
+         :- Scan spark_catalog.default.u [a#3]
+         +- Shift +7
+            +- Project [a#0]
+               +- Shared #1, printed above
