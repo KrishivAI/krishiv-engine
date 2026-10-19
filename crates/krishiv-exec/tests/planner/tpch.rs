@@ -734,3 +734,54 @@ fn tpch_sf10_join_order_within_2x_of_hand_ordered() {
     }
     assert!(slow.is_empty(), "over 2x the hand-ordered time: {slow:?}");
 }
+
+/// TPC-H Q21 at SF10 (`KRISHIV_TPCH_SF10_DIR`) under a memory limit
+/// (`KRISHIV_TPCH_MEMORY_MIB`, default 12 GiB) completes, without a spill
+/// scope (as a session runs it) or with one (`KRISHIV_TPCH_SPILL=1`), and
+/// reports the operators' peak reservations. Run with `cargo test --release
+/// -p krishiv-exec --test planner tpch_sf10_q21 -- --ignored --nocapture`.
+#[test]
+#[ignore = "needs the TPC-H SF10 data set"]
+fn tpch_sf10_q21_completes_under_the_memory_limit() {
+    let dir = std::env::var("KRISHIV_TPCH_SF10_DIR").expect("KRISHIV_TPCH_SF10_DIR");
+    let mib: usize = std::env::var("KRISHIV_TPCH_MEMORY_MIB")
+        .map_or(12 << 10, |v| v.parse().expect("KRISHIV_TPCH_MEMORY_MIB"));
+    let spill = std::env::var("KRISHIV_TPCH_SPILL").is_ok_and(|v| v == "1");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = parquet_tables(Path::new(&dir), &rt);
+    let spill_dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("tpch-sf10-q21-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: spill_dir,
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    let plan = tpch
+        .plan_sql_in(&sql(21), Order::Statistics, spill.then_some(&scope))
+        .unwrap();
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(mib << 20),
+        ..MemoryConfig::default()
+    });
+    let start = std::time::Instant::now();
+    let (out, query) = super::run_in(&plan, &root);
+    let elapsed = start.elapsed();
+    let metrics = query.metrics();
+    let mut peaks: Vec<(u64, &str)> = metrics
+        .operators
+        .values()
+        .map(|e| (e.metrics.peak_reserved, e.name))
+        .collect();
+    peaks.sort_unstable_by(|a, b| b.cmp(a));
+    let total: u64 = peaks.iter().map(|(p, _)| p).sum();
+    eprintln!(
+        "q21 under {mib} MiB (spill {spill}): {elapsed:.2?}, operator peaks summed {total} bytes, largest {:?}",
+        &peaks[..peaks.len().min(4)]
+    );
+    let got = rows(&out.unwrap_or_else(|e| panic!("q21 under {mib} MiB: {e}")));
+    assert_eq!(got.len(), 100, "q21 returns 100 rows");
+}
