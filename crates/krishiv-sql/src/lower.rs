@@ -878,8 +878,13 @@ impl Lowerer {
                         None | Some(ExprNode::Literal(IrLiteral::Boolean(_))) => {
                             let flag =
                                 arc(self.ex(ExprNode::Literal(IrLiteral::Boolean(flag)), sp));
-                            args.truncate(1);
-                            args.push(flag);
+                            // Only the flag slot is replaced: surplus arguments
+                            // stay for the analyzer's arity error.
+                            if args.len() == 1 {
+                                args.push(flag);
+                            } else {
+                                args[1] = flag;
+                            }
                         }
                         Some(_) => {}
                     }

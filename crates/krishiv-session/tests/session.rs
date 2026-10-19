@@ -697,8 +697,17 @@ fn first_and_last_aggregates() {
         let e = sql_error(&s, sql);
         assert_eq!(e.error_class(), ErrorClass::LegacyErrorTemp1210, "{sql}");
     }
-    let e = sql_error(&s, "SELECT first(id, true, true) FROM events");
-    assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
+    for sql in [
+        "SELECT first(id, true, true) FROM events",
+        "SELECT first(id, true, 1) IGNORE NULLS FROM events",
+    ] {
+        let e = sql_error(&s, sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::WrongNumArgsWithoutSuggestion,
+            "{sql}"
+        );
+    }
     let e = sql_error(&s, "SELECT sum(id) IGNORE NULLS FROM events");
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
@@ -815,6 +824,14 @@ fn round_scales_written_as_casts_fold() {
         ),
         ("floor(2.345, id)", ErrorClass::NonFoldableArgument),
         (
+            "floor(2.345, CAST('x' AS INT))",
+            ErrorClass::CastInvalidInput,
+        ),
+        (
+            "ceil(2.345, CAST(300 AS TINYINT))",
+            ErrorClass::NonFoldableArgument,
+        ),
+        (
             "ceil(2.345, CAST(1.5 AS FLOAT))",
             ErrorClass::NonFoldableArgument,
         ),
@@ -822,4 +839,17 @@ fn round_scales_written_as_casts_fold() {
         let e = sql_error(&s, &format!("SELECT {sql} FROM events"));
         assert_eq!(e.error_class(), class, "{sql}: {e}");
     }
+}
+
+/// A table registered from `Utf8` batches aggregates strings like `Utf8View` ones.
+#[test]
+fn string_aggregates_over_utf8_tables() {
+    let s = session();
+    assert_eq!(
+        row(
+            &s,
+            "SELECT min(name), max(name), first(name), last(name, true) FROM people"
+        ),
+        ["b", "c", "c", "b"]
+    );
 }

@@ -68,6 +68,7 @@ fn non_foldable_input(c: &CallTypes<'_>, function: &str, i: usize) -> KrishivErr
 /// The scale of `ceil`/`floor`: an `int` literal.
 fn int_scale(c: &CallTypes<'_>, function: &str) -> Result<i32, KrishivError> {
     match (c.data_type(1), c.constant(1)) {
+        (Some(DataType::Integer), Some(Constant::Error(e))) => Err(e.clone()),
         (Some(DataType::Integer), Some(Constant::Integral(n))) => {
             Ok(i32::try_from(*n).unwrap_or(0))
         }

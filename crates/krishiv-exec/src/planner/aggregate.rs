@@ -98,8 +98,18 @@ impl Planner<'_> {
             if function != AggregateFunction::Count && args.len() != 1 {
                 return Err(internal("an aggregate of several arguments"));
             }
+            // Spark's STRING and BINARY are views here whatever carrier a
+            // registered table uses; the accumulators read any carrier.
             let arg_type = args.first().map_or(arrow_schema::DataType::Null, |a| {
-                input.schema.field(*a).data_type().clone()
+                match input.schema.field(*a).data_type() {
+                    arrow_schema::DataType::Utf8 | arrow_schema::DataType::LargeUtf8 => {
+                        arrow_schema::DataType::Utf8View
+                    }
+                    arrow_schema::DataType::Binary | arrow_schema::DataType::LargeBinary => {
+                        arrow_schema::DataType::BinaryView
+                    }
+                    t => t.clone(),
+                }
             });
             let agg = AggregateExpr {
                 function,
