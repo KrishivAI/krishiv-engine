@@ -61,6 +61,7 @@ impl DataType {
     /// The canonical Arrow type for this Spark type.
     pub fn to_arrow(&self) -> ArrowType {
         match self {
+            Self::Null => ArrowType::Null,
             Self::Boolean => ArrowType::Boolean,
             Self::Byte => ArrowType::Int8,
             Self::Short => ArrowType::Int16,
@@ -90,6 +91,7 @@ impl DataType {
     /// Spark decimal bound errors for an out-of-range decimal.
     pub fn from_arrow(arrow: &ArrowType) -> Result<Self> {
         Ok(match arrow {
+            ArrowType::Null => Self::Null,
             ArrowType::Boolean => Self::Boolean,
             ArrowType::Int8 => Self::Byte,
             ArrowType::Int16 => Self::Short,

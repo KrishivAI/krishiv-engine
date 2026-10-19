@@ -1490,14 +1490,6 @@
       "reason": "SELECT coalesce(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 1, NULL) | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "coalesce#49a02bc673f3/ansi_off",
-      "reason": "SELECT coalesce(NULL, NULL, NULL) | KRISHIV_UNSUPPORTED_FEATURE: values of the NULL and interval types"
-    },
-    {
-      "id": "coalesce#49a02bc673f3/ansi_on",
-      "reason": "SELECT coalesce(NULL, NULL, NULL) | KRISHIV_UNSUPPORTED_FEATURE: values of the NULL and interval types"
-    },
-    {
       "id": "coalesce#5740df8b5857/ansi_off",
       "reason": "SELECT coalesce(NULL, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', NULL) | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
     },
@@ -2048,22 +2040,6 @@
     {
       "id": "csc#ec3407fe091a/ansi_on",
       "reason": "SELECT csc(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "current_date#bca2753e9dd7/ansi_off",
-      "reason": "SELECT current_date | UNRESOLVED_COLUMN.WITH_SUGGESTION"
-    },
-    {
-      "id": "current_date#bca2753e9dd7/ansi_on",
-      "reason": "SELECT current_date | UNRESOLVED_COLUMN.WITH_SUGGESTION"
-    },
-    {
-      "id": "current_timestamp#ac6b160c7830/ansi_off",
-      "reason": "SELECT current_timestamp | UNRESOLVED_COLUMN.WITH_SUGGESTION"
-    },
-    {
-      "id": "current_timestamp#ac6b160c7830/ansi_on",
-      "reason": "SELECT current_timestamp | UNRESOLVED_COLUMN.WITH_SUGGESTION"
     },
     {
       "id": "date_add#21463b8ad243/ansi_off",
@@ -4690,14 +4666,6 @@
       "reason": "SELECT if(map('a', 1), 'a', 'b') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "ifnull#0070836fa224/ansi_off",
-      "reason": "SELECT ifnull(NULL, NULL) | KRISHIV_UNSUPPORTED_FEATURE: values of the NULL and interval types"
-    },
-    {
-      "id": "ifnull#0070836fa224/ansi_on",
-      "reason": "SELECT ifnull(NULL, NULL) | KRISHIV_UNSUPPORTED_FEATURE: values of the NULL and interval types"
-    },
-    {
       "id": "ifnull#01f264e6f2a4/ansi_off",
       "reason": "SELECT ifnull(CAST(1.5 AS DECIMAL(10,2)), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -6682,14 +6650,6 @@
       "reason": "SELECT nullif(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
-      "id": "nullif#d4909702709d/ansi_off",
-      "reason": "SELECT nullif(NULL, 2) | KRISHIV_UNSUPPORTED_FEATURE: values of the NULL and interval types"
-    },
-    {
-      "id": "nullif#d4909702709d/ansi_on",
-      "reason": "SELECT nullif(NULL, 2) | KRISHIV_UNSUPPORTED_FEATURE: values of the NULL and interval types"
-    },
-    {
       "id": "nullif#dddf827b7218/ansi_off",
       "reason": "SELECT nullif(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -6728,14 +6688,6 @@
     {
       "id": "nullif#fe646dc83299/ansi_on",
       "reason": "SELECT nullif(INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "nullifzero#0e8704fdfc61/ansi_off",
-      "reason": "SELECT nullifzero(NULL) | KRISHIV_UNSUPPORTED_FEATURE: values of the NULL and interval types"
-    },
-    {
-      "id": "nullifzero#0e8704fdfc61/ansi_on",
-      "reason": "SELECT nullifzero(NULL) | KRISHIV_UNSUPPORTED_FEATURE: values of the NULL and interval types"
     },
     {
       "id": "nullifzero#92aa389f4ff9/ansi_off",
@@ -6896,14 +6848,6 @@
     {
       "id": "nvl#707b2299b507/ansi_on",
       "reason": "SELECT nvl(1, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#771af5ab6234/ansi_off",
-      "reason": "SELECT nvl(NULL, NULL) | KRISHIV_UNSUPPORTED_FEATURE: values of the NULL and interval types"
-    },
-    {
-      "id": "nvl#771af5ab6234/ansi_on",
-      "reason": "SELECT nvl(NULL, NULL) | KRISHIV_UNSUPPORTED_FEATURE: values of the NULL and interval types"
     },
     {
       "id": "nvl#7b57963d6974/ansi_off",
@@ -11711,7 +11655,7 @@
     {
       "cases": 128,
       "function": "coalesce",
-      "pass": 84
+      "pass": 86
     },
     {
       "cases": 124,
@@ -11756,12 +11700,12 @@
     {
       "cases": 4,
       "function": "current_date",
-      "pass": 2
+      "pass": 4
     },
     {
       "cases": 4,
       "function": "current_timestamp",
-      "pass": 2
+      "pass": 4
     },
     {
       "cases": 100,
@@ -11861,7 +11805,7 @@
     {
       "cases": 90,
       "function": "ifnull",
-      "pass": 26
+      "pass": 28
     },
     {
       "cases": 54,
@@ -11961,17 +11905,17 @@
     {
       "cases": 98,
       "function": "nullif",
-      "pass": 68
+      "pass": 70
     },
     {
       "cases": 52,
       "function": "nullifzero",
-      "pass": 36
+      "pass": 38
     },
     {
       "cases": 90,
       "function": "nvl",
-      "pass": 26
+      "pass": 28
     },
     {
       "cases": 136,
@@ -12164,5 +12108,5 @@
       "pass": 36
     }
   ],
-  "pass": 5916
+  "pass": 5930
 }

@@ -22,6 +22,7 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
     out.insert(match &plan.node {
         PlanNode::Read(_) => "PlanNode::Read",
         PlanNode::Sql { .. } => "PlanNode::Sql",
+        PlanNode::OneRowRelation => "PlanNode::OneRowRelation",
         PlanNode::Scan(_) => "PlanNode::Scan",
         PlanNode::Project { .. } => "PlanNode::Project",
         PlanNode::WithColumns { .. } => "PlanNode::WithColumns",

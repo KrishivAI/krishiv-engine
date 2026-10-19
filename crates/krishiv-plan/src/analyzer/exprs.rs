@@ -75,6 +75,45 @@ pub(super) struct Bound {
     pub(super) shown: Option<Arc<Expr>>,
 }
 
+/// The function Spark rewrites `extract(field FROM x)` (or `date_part`)
+/// to, when `field` is a literal naming one.
+fn extract_function(function: &str, call: &Expr) -> Option<&'static str> {
+    use krishiv_kernels::datetime::DatePart as P;
+    if !matches!(function, "extract" | "date_part") {
+        return None;
+    }
+    let ExprNode::Function(f) = &call.node else {
+        return None;
+    };
+    let ExprNode::Literal(Literal::String(field)) = &f.args.first()?.node else {
+        return None;
+    };
+    Some(match P::parse(field)? {
+        P::Year => "year",
+        P::YearOfWeek => "yearofweek",
+        P::Quarter => "quarter",
+        P::Month => "month",
+        P::Week => "weekofyear",
+        P::Day => "dayofmonth",
+        P::DayOfWeek => "dayofweek",
+        P::DayOfWeekIso => "weekday",
+        P::DayOfYear => "dayofyear",
+        P::Hour => "hour",
+        P::Minute => "minute",
+        P::Second => "secondwithfraction",
+    })
+}
+
+/// Functions Spark resolves from a bare name no column matches, with the
+/// function each calls (`USER` and `SESSION_USER` are `current_user`).
+const LITERAL_FUNCTIONS: &[(&str, &str)] = &[
+    ("current_date", "current_date"),
+    ("current_timestamp", "current_timestamp"),
+    ("current_user", "current_user"),
+    ("user", "current_user"),
+    ("session_user", "current_user"),
+];
+
 impl Bound {
     /// The expression as Spark shows it.
     pub(super) fn shown(&self) -> Arc<Expr> {
@@ -239,15 +278,21 @@ fn folded_cast(inner: &Expr, to: &DataType) -> Option<Constant> {
 }
 
 fn column(c: &BoundColumn) -> ArgType {
+    arg_type(c.data_type.clone(), c.nullable)
+}
+
+/// The type of a value as typing sees it: `VOID` is an untyped `NULL`
+/// (`data_type: None`) everywhere but in plans and schemas.
+fn arg_type(data_type: DataType, nullable: bool) -> ArgType {
     ArgType {
-        data_type: Some(c.data_type.clone()),
-        nullable: c.nullable,
+        data_type: (data_type != DataType::Null).then_some(data_type),
+        nullable,
     }
 }
 
 pub(super) fn literal_type(v: &Literal) -> Option<DataType> {
     Some(match v {
-        Literal::Null(t) => return t.clone(),
+        Literal::Null(t) => return t.clone().filter(|t| *t != DataType::Null),
         Literal::Boolean(_) => DataType::Boolean,
         Literal::Byte(_) => DataType::Byte,
         Literal::Short(_) => DataType::Short,
@@ -442,6 +487,9 @@ impl Resolver<'_> {
         let args: Vec<Arc<Expr>> = kids.iter().map(|k| Arc::clone(&k.expr)).collect();
         let mut b = match &e.node {
             ExprNode::Column(c) => self.column(c, e.origin, in_agg, cx)?,
+            ExprNode::Literal(
+                Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. },
+            ) => return Err(unsupported("interval values", e.origin)),
             ExprNode::Literal(v) => keep(ArgType {
                 nullable: matches!(v, Literal::Null(_)),
                 data_type: literal_type(v),
@@ -495,9 +543,7 @@ impl Resolver<'_> {
                     return Err(AnalysisError::new(NestedAggregateFunction {}, inner));
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
-                let data_type = ty.data_type.clone().ok_or_else(|| {
-                    unsupported("values of the NULL and interval types", e.origin)
-                })?;
+                let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
                 call_kids.extend(kids.get(n).cloned());
                 let call = ResolvedFunction {
                     id: entry.id,
@@ -545,14 +591,11 @@ impl Resolver<'_> {
                         to: to.clone(),
                         mode,
                     }),
-                    ..keep(ArgType {
-                        data_type: Some(to.clone()),
-                        nullable,
-                    })
+                    ..keep(arg_type(to.clone(), nullable))
                 }
             }
             ExprNode::Alias { name, .. } => {
-                let output = self.attr(name, &kids[0].ty, e.origin)?;
+                let output = self.attr(name, &kids[0].ty);
                 Bound {
                     expr: rebuilt(ExprNode::Resolved(ResolvedExpr::Alias {
                         expr: Arc::clone(&args[0]),
@@ -574,7 +617,10 @@ impl Resolver<'_> {
                                 e.origin,
                             ));
                         }
-                        (Some(rel.out[0].col.data_type.clone()), true)
+                        (
+                            arg_type(rel.out[0].col.data_type.clone(), true).data_type,
+                            true,
+                        )
                     }
                     SubqueryKind::Exists => (Some(DataType::Boolean), false),
                     SubqueryKind::In(_) => (Some(DataType::Boolean), true),
@@ -605,10 +651,7 @@ impl Resolver<'_> {
             ExprNode::Resolved(r) => keep(match r {
                 ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) => column(c),
                 ResolvedExpr::Alias { output, .. } => column(output),
-                ResolvedExpr::Function(f) => ArgType {
-                    data_type: Some(f.data_type.clone()),
-                    nullable: f.nullable,
-                },
+                ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
             }),
         };
         if b.shown.is_none() && kids.iter().any(|k| k.shown.is_some()) {
@@ -788,10 +831,7 @@ impl Resolver<'_> {
         Ok(Bound {
             shown: shown_call(&expr, kids, &cast),
             expr,
-            ty: ArgType {
-                data_type: Some(typed.data_type),
-                nullable: typed.nullable,
-            },
+            ty: arg_type(typed.data_type, typed.nullable),
             agg: kids.iter().find_map(|k| k.agg),
             outer: kids.iter().filter_map(|k| k.outer).min(),
             lateral,
@@ -914,7 +954,7 @@ impl Resolver<'_> {
                 continue;
             }
             let cast = self.implicit_cast(&column, to);
-            let output = self.attr(&a.col.name, &cast.ty, Origin::UNKNOWN)?;
+            let output = self.attr(&a.col.name, &cast.ty);
             exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Alias {
                     expr: cast.expr,
@@ -960,19 +1000,33 @@ impl Resolver<'_> {
                 param,
                 ty,
                 required,
-            } => DatatypeMismatchUnexpectedInputType {
-                sql_expr,
-                param_index: ordinal(param),
-                required_type: required,
-                input_sql: format!(
-                    "\"{}\"",
-                    kids.get(arg)
-                        .map(|k| pretty(&k.shown()))
-                        .unwrap_or_default()
-                ),
-                input_type: quoted_type(ty.as_ref()),
+            } => {
+                // `extract(year FROM x)` and `date_part('year', x)` are
+                // `year(x)` to Spark, which names that in the error.
+                let (sql_expr, param) = match extract_function(function, call) {
+                    Some(name) if param == 1 => (
+                        format!(
+                            "\"{name}({})\"",
+                            kids.get(1).map(|k| pretty(&k.shown())).unwrap_or_default()
+                        ),
+                        0,
+                    ),
+                    _ => (sql_expr, param),
+                };
+                DatatypeMismatchUnexpectedInputType {
+                    sql_expr,
+                    param_index: ordinal(param),
+                    required_type: required,
+                    input_sql: format!(
+                        "\"{}\"",
+                        kids.get(arg)
+                            .map(|k| pretty(&k.shown()))
+                            .unwrap_or_default()
+                    ),
+                    input_type: quoted_type(ty.as_ref()),
+                }
+                .into()
             }
-            .into(),
             Mismatch::DataDiff(types, list) => {
                 let types: Vec<String> = types.iter().map(|t| quoted_type(t.as_ref())).collect();
                 let data_type = if list {
@@ -997,22 +1051,14 @@ impl Resolver<'_> {
     }
 
     /// A new attribute named `name` of type `ty`.
-    pub(super) fn attr(
-        &mut self,
-        name: &str,
-        ty: &ArgType,
-        origin: Origin,
-    ) -> Result<BoundColumn, AnalysisError> {
-        let data_type = ty
-            .data_type
-            .clone()
-            .ok_or_else(|| unsupported("values of the NULL and interval types", origin))?;
-        Ok(BoundColumn {
+    pub(super) fn attr(&mut self, name: &str, ty: &ArgType) -> BoundColumn {
+        let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
+        BoundColumn {
             id: self.fresh(),
             name: name.to_owned(),
             data_type,
             nullable: ty.nullable,
-        })
+        }
     }
 
     /// A column reference, in Spark's order: the input, lateral column
@@ -1065,6 +1111,27 @@ impl Resolver<'_> {
                     None,
                 ));
             }
+        }
+        // A name no input column has may be a function written without
+        // parentheses (what the parser leaves a column unless ANSI reserved
+        // keywords are on). Spark 4.2 tries it before lateral aliases,
+        // GROUP BY aliases and outer references.
+        if let [name] = &c.name[..]
+            && let Some(function) = LITERAL_FUNCTIONS
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, f)| *f)
+        {
+            let call = Arc::new(
+                Expr::new(ExprNode::Function(FunctionCall {
+                    name: function.to_owned(),
+                    args: Vec::new(),
+                    distinct: false,
+                    filter: None,
+                }))
+                .with_origin(origin),
+            );
+            return self.expr(&call, cx);
         }
         if let ([name], Some(lateral)) = (&c.name[..], cx.lateral) {
             let cs = self.ctx.conf.case_sensitive;
@@ -1452,6 +1519,7 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
         (Some(Builtin::Multiply), 2) => infix("*"),
         (Some(Builtin::Divide), 2) => infix("/"),
         (Some(Builtin::Remainder), 2) => infix("%"),
+        (Some(Builtin::IntegralDivide), 2) => infix("div"),
         (Some(Builtin::Like), 2) => format!("{} LIKE {}", k[0], k[1]),
         (Some(Builtin::Not), 1) => format!("(NOT {})", k[0]),
         (Some(Builtin::Negative), 1) => format!("(- {})", k[0]),

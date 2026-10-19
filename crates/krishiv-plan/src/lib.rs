@@ -62,6 +62,7 @@
 //! |---|---|---|---|
 //! | `PlanNode::Read` | U | all | `read.table`, `read.parquet` |
 //! | `PlanNode::Sql` | U | - | `sql` |
+//! | `PlanNode::OneRowRelation` | U, R | - | - |
 //! | `PlanNode::Scan` | R | - | - |
 //! | `PlanNode::Project` | U, R | Q2, Q4, Q6-Q9, Q11, Q14-Q17, Q19-Q22 | `select` |
 //! | `PlanNode::WithColumns` | U | - | `withColumn` |

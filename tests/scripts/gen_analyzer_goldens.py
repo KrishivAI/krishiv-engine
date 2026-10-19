@@ -452,6 +452,73 @@ CASTS = [
     for cast, conf in [("CAST", {}), ("CAST", NO_ANSI), ("TRY_CAST", {})]
 ]
 
+NO_ANSI_CONF = {"spark.sql.ansi.enabled": "false"}
+
+# Analyzer fixes (U-an3): a name two select items output, SELECT without FROM,
+# bare current_date, the void type, coalesce's common type, extract's errors
+# and div.
+ANALYZER_FIXES = [
+    (sql, conf)
+    for sql, conf in [
+        ("SELECT a, CAST(a AS STRING) AS a FROM t ORDER BY a", {}),
+        ("SELECT CAST(a AS STRING) AS a, a FROM t ORDER BY a", {}),
+        ("SELECT a, CAST(a AS STRING) AS a FROM t ORDER BY a + 1", {}),
+        ("SELECT a, CAST(a AS STRING) AS a FROM (SELECT a FROM t) ORDER BY a", {}),
+        ("SELECT 1", {}),
+        ("SELECT 1 AS x, 'y' AS z, 2.5, TRUE", {}),
+        ("SELECT 1 WHERE 1 = 1", {}),
+        ("SELECT 1 LIMIT 1", {}),
+        ("SELECT count(*)", {}),
+        ("SELECT a", {}),
+        ("SELECT (SELECT 1)", {}),
+        ("SELECT current_date", {}),
+        ("SELECT CURRENT_TIMESTAMP AS ts", {}),
+        ("SELECT current_date FROM t", {}),
+        ("SELECT a, current_date FROM t ORDER BY current_date", {}),
+        ("SELECT 1 AS current_date, current_date FROM t", {}),
+        ("SELECT a AS current_date, count(*) FROM t GROUP BY current_date", {}),
+        ("SELECT (SELECT current_date) FROM t", {}),
+        ("SELECT NULL", {}),
+        ("SELECT NULL AS n, 1", {}),
+        ("SELECT CAST(NULL AS VOID)", {}),
+        ("SELECT CAST(a AS VOID) FROM t", {}),
+        ("SELECT TRY_CAST(b AS VOID) FROM t", {}),
+        ("SELECT coalesce(NULL, NULL)", {}),
+        ("SELECT CASE WHEN TRUE THEN NULL END", {}),
+        ("SELECT (SELECT NULL)", {}),
+        ("SELECT n FROM (SELECT NULL AS n FROM t) WHERE n IS NULL", {}),
+        ("SELECT 1 FROM t WHERE NULL", {}),
+        ("SELECT 1 FROM t LIMIT NULL", {}),
+        ("SELECT a + NULL, NULL = NULL, -NULL FROM t", {}),
+        ("SELECT coalesce(a, b) FROM t", NO_ANSI_CONF),
+        ("SELECT coalesce(a, b) FROM t", {}),
+        ("SELECT coalesce(c, CAST(a AS FLOAT)) FROM t", NO_ANSI_CONF),
+        ("SELECT coalesce(c, CAST(a AS FLOAT)) FROM t", {}),
+        ("SELECT coalesce(b, DATE '2020-01-01', a) FROM t", NO_ANSI_CONF),
+        ("SELECT coalesce(a, TRUE) FROM t", NO_ANSI_CONF),
+        ("SELECT coalesce(b, CAST(a AS BINARY)) FROM t", NO_ANSI_CONF),
+        ("SELECT coalesce(CAST(a AS DECIMAL(38,0)), CAST(a AS DECIMAL(10,5))) FROM t", {}),
+        ("SELECT coalesce(CAST(a AS DECIMAL(36,0)), CAST(a AS DECIMAL(10,5))) FROM t", NO_ANSI_CONF),
+        ("SELECT coalesce(CAST(a AS DECIMAL(38,10)), CAST(a AS DECIMAL(38,2))) FROM t", {}),
+        ("SELECT extract(year FROM a) FROM t", {}),
+        ("SELECT extract(w FROM a) FROM t", {}),
+        ("SELECT extract(dow_iso FROM a) FROM t", {}),
+        ("SELECT extract(second FROM a) FROM t", {}),
+        ("SELECT extract(hour FROM a) FROM t", {}),
+        ("SELECT date_part('doy', a) FROM t", {}),
+        ("SELECT extract(epoch FROM a) FROM t", {}),
+        ("SELECT a div 2, c div a, 7.5 div 2, a div NULL, b div 2 FROM t", {}),
+        ("SELECT CAST(a AS DECIMAL(38,10)) div CAST(a AS DECIMAL(20,0)) FROM t", {}),
+        ("SELECT a div 0 + 1 FROM t", {}),
+        ("SELECT 1.5D div 2 FROM t", {}),
+        ("SELECT b div b FROM t", {}),
+        ("SELECT DATE '2020-01-01' div 2", {}),
+        ("SELECT CAST(a AS FLOAT) div CAST(a AS FLOAT) FROM t", {}),
+        ("SELECT b div 2 FROM t", NO_ANSI_CONF),
+        ("SELECT b div b FROM t", NO_ANSI_CONF),
+    ]
+]
+
 TPCH_DIR = Path(__file__).resolve().parents[2] / "bench" / "queries" / "tpch"
 
 
@@ -589,7 +656,9 @@ def main() -> None:
     for path in sorted(TPCH_DIR.glob("q*.sql")):
         sql = path.read_text(encoding="utf-8").strip().rstrip(";")
         tpch.append({"id": path.stem, **run_sql(sql, {})})
-    corpus = [{"sql": sql, "conf": conf, **run_sql(sql, conf)} for sql, conf in CORPUS + MATRIX + CASTS]
+    corpus = [
+        {"sql": sql, "conf": conf, **run_sql(sql, conf)} for sql, conf in CORPUS + MATRIX + CASTS + ANALYZER_FIXES
+    ]
     plan_ids = [{"id": i, "dataframe": d, **analyze(f)} for i, d, f in plan_id_cases(spark)]
     for name in TABLES:
         spark.sql(f"DROP TABLE IF EXISTS {name}")

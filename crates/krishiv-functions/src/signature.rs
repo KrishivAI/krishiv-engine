@@ -267,6 +267,15 @@ impl InputType {
             Self::Exact(t) | Self::Strict(t) => format!("\"{}\"", t.sql()),
             Self::Numeric { intervals: false } => "\"NUMERIC\"".to_owned(),
             Self::Numeric { intervals: true } => "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned(),
+            // Spark's `AnyTimestampType` names itself in words.
+            Self::OneOf(types)
+                if matches!(
+                    types.as_slice(),
+                    [DataType::Timestamp, DataType::TimestampNtz]
+                ) =>
+            {
+                "\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\"".to_owned()
+            }
             Self::OneOf(types) => {
                 let names: Vec<String> = types.iter().map(|t| format!("\"{}\"", t.sql())).collect();
                 format!("({})", names.join(" or "))

@@ -128,11 +128,19 @@ fn as_decimal(a: &Arg<'_>, t: &DataType, literal: bool) -> DecimalType {
     }
 }
 
-/// `DecimalPrecision.widerDecimalType`.
+/// `DecimalPrecision.widerDecimalType`: the larger integer range and scale;
+/// past 38 digits the fraction gives way and the range stays (checked
+/// against Spark 4.2: `decimal(38,0)` and `decimal(10,5)` meet at
+/// `decimal(38,0)`).
 fn wider_decimal(a: DecimalType, b: DecimalType) -> DecimalType {
-    let scale = a.scale().max(b.scale());
-    let range = (a.precision() - a.scale()).max(b.precision() - b.scale());
-    decimal(u32::from(range) + u32::from(scale), u32::from(scale))
+    let scale = u32::from(a.scale().max(b.scale()));
+    let range = u32::from((a.precision() - a.scale()).max(b.precision() - b.scale()));
+    let max = u32::from(DecimalType::MAX_PRECISION);
+    if range + scale <= max {
+        decimal(range + scale, scale)
+    } else {
+        decimal(max, max.saturating_sub(range))
+    }
 }
 
 /// The type `a` and `b` meet at (ANSI `findWiderTypeForTwo` with string
@@ -325,6 +333,7 @@ fn operator_types(
         (B::Add | B::Subtract | B::Multiply | B::Divide | B::Remainder, [a, b]) => {
             arithmetic(op, a, b, ansi, loss)
         }
+        (B::IntegralDivide, [a, b]) => integral_divide(a, b, ansi),
         (B::Negative, [a]) => {
             let t = match a.ty {
                 None | Some(DataType::String) => DataType::Double,
@@ -424,7 +433,7 @@ fn when(args: &[Arg<'_>], ansi: bool) -> Result<Typed, Mismatch> {
     legacy_strings(&vals, ansi)?;
     let t = common_all(&vals, ansi)
         .ok_or_else(|| Mismatch::DataDiff(vals.iter().map(|a| a.ty.cloned()).collect(), true))?
-        .ok_or(Mismatch::Unsupported("values of the NULL type"))?;
+        .unwrap_or(DataType::Null);
     for (i, v) in &values {
         casts[*i] = cast_to(v.ty, Some(&t));
     }
@@ -433,6 +442,62 @@ fn when(args: &[Arg<'_>], ansi: bool) -> Result<Typed, Mismatch> {
         data_type: t,
         nullable: any_nullable(&vals) || args.len().is_multiple_of(2),
     })
+}
+
+/// The operand types `div` takes, as Spark's errors print them.
+const INTEGRAL_DIVIDABLE: &str =
+    r#"("BIGINT" or "DECIMAL" or "INTERVAL YEAR TO MONTH" or "INTERVAL DAY TO SECOND")"#;
+
+/// `a div b` (`IntegralDivide`): integral operands widen to `bigint`,
+/// decimals meet as decimals, and the result is a `bigint` that is NULL
+/// for a zero divisor. A string is read as `bigint` under ANSI and as a
+/// `double` otherwise, which `div` does not take.
+fn integral_divide(a: &Arg<'_>, b: &Arg<'_>, ansi: bool) -> Result<Typed, Mismatch> {
+    use DataType as T;
+    let typed = |casts: Vec<Option<DataType>>| Typed {
+        casts,
+        data_type: T::Long,
+        nullable: true,
+    };
+    // What an operand is after Spark's implicit casts to `bigint`.
+    let seen = |x: &Arg<'_>, other: &Arg<'_>| match x.ty {
+        Some(t) if integral_digits(t).is_some() => Some(T::Long),
+        Some(T::String) if !ansi => Some(T::Double),
+        Some(T::String) if other.ty.is_some_and(|o| integral_digits(o).is_some()) => Some(T::Long),
+        t => t.cloned(),
+    };
+    let (x, y) = (seen(a, b), seen(b, a));
+    let ok = |t: &Option<DataType>| matches!(t, None | Some(T::Long | T::Decimal(_)));
+    if !ok(&x) || !ok(&y) {
+        return Err(if x == y {
+            Mismatch::WrongType(x, INTEGRAL_DIVIDABLE)
+        } else if x.as_ref().is_some_and(|t| *t == T::String)
+            || y.as_ref().is_some_and(|t| *t == T::String)
+        {
+            Mismatch::Unsupported("div with a string and a non-integral operand")
+        } else {
+            Mismatch::DiffTypes(x, y)
+        });
+    }
+    match (a.ty, b.ty) {
+        (Some(T::Decimal(_)), _) | (_, Some(T::Decimal(_))) => {
+            let wider = match (x, y) {
+                (Some(T::Decimal(p)), Some(T::Decimal(q))) => wider_decimal(p, q),
+                (Some(T::Decimal(p)), _) => wider_decimal(p, as_decimal(b, &T::Long, true)),
+                (_, Some(T::Decimal(q))) => wider_decimal(as_decimal(a, &T::Long, true), q),
+                _ => DecimalType::SYSTEM_DEFAULT,
+            };
+            let to = T::Decimal(wider);
+            Ok(typed(vec![
+                cast_to(a.ty, Some(&to)),
+                cast_to(b.ty, Some(&to)),
+            ]))
+        }
+        _ => Ok(typed(vec![
+            cast_to(a.ty, Some(&T::Long)),
+            cast_to(b.ty, Some(&T::Long)),
+        ])),
+    }
 }
 
 /// `+ - * / %`.
@@ -710,7 +775,14 @@ pub(super) fn can_cast(
         CastMode::Try => Err(BadCast::Without),
         _ => Err(BadCast::Conf),
     };
-    if from == to || *from == T::String || *to == T::String {
+    if from == to {
+        return Ok(());
+    }
+    // Nothing but a NULL casts to VOID (an untyped NULL returned above).
+    if *to == T::Null {
+        return Err(BadCast::Without);
+    }
+    if *from == T::String || *to == T::String {
         return Ok(());
     }
     match (from, to) {

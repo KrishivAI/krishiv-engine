@@ -464,6 +464,7 @@ impl Resolver<'_> {
                     _ => Err(unsupported("SQL text", o)),
                 }
             }
+            PlanNode::OneRowRelation => Ok(self.wrap(Arc::clone(p), o.plan_id, Vec::new(), &[])),
             PlanNode::Scan(s) => {
                 let name = match &s.source {
                     ReadSource::Table { name, .. } => name.clone(),
