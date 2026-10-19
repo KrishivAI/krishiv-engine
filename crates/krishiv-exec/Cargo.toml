@@ -48,6 +48,10 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync
 [target.'cfg(loom)'.dev-dependencies]
 loom = { workspace = true, features = ["futures"] }
 
+[features]
+# Row-layout key-page prototype (P2-T157); not part of the default build.
+row-table-prototype = []
+
 [[bench]]
 name = "pipeline"
 harness = false
@@ -67,3 +71,12 @@ harness = false
 [[bench]]
 name = "hash_join"
 harness = false
+
+[[bench]]
+name = "row_table"
+harness = false
+required-features = ["row-table-prototype"]
+
+[[example]]
+name = "row_table_matrix"
+required-features = ["row-table-prototype"]

@@ -121,7 +121,7 @@ pub(crate) struct FileScans {
     pub(crate) config: Arc<Config>,
     /// The executor's drivers, for split planning.
     pub(crate) slots: u64,
-    /// The I/O runtime, entered by the thread that opens file tables.
+    /// The executor's I/O runtime, which opens the file tables.
     pub(crate) runtime: tokio::runtime::Handle,
 }
 
@@ -274,14 +274,9 @@ impl QueryCatalog {
     }
 }
 
-/// [`FileTable::open`] on a thread of its own. Its future cannot be proven
-/// `Send` (a higher-ranked closure in its footer stream), so it cannot run
-/// on the session's executor; the thread enters the I/O runtime, whose
-/// tasks and timers its reads use (on a deterministic executor that is the
-/// caller's current-thread runtime, which drives them while the action
-/// awaits this thread). The
-/// thread only waits for footers, so no compute or blocking-pool slot is
-/// held. Dropping the returned future abandons the open.
+/// [`FileTable::open`] on the executor's I/O runtime: footer reads are
+/// object-store requests, which belong there and not on the compute
+/// runtime. Dropping the returned future aborts the open.
 async fn open_table(
     format: Arc<dyn krishiv_io::FileFormat>,
     scans: FileScans,
@@ -289,34 +284,44 @@ async fn open_table(
     files: Vec<krishiv_io::FileRef>,
     options: krishiv_io::FormatOptions,
 ) -> Result<FileTable, KrishivError> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    std::thread::Builder::new()
-        .name("krishiv-file-table".to_owned())
-        .spawn(move || {
-            let _runtime = scans.runtime.enter();
-            let opened = futures::executor::block_on(FileTable::open(
-                format,
-                scans.io,
-                table,
-                files,
-                options,
-                &scans.config,
-                scans.slots,
-            ));
-            // The query may be gone; its table is then not needed.
-            let _ = tx.send(opened);
-        })
-        .map_err(|e| {
-            internal(format!(
-                "could not start a thread to read file footers: {e}"
-            ))
-        })?;
-    rx.await
-        .map_err(|_| internal("reading file footers ended without a result".to_owned()))?
+    let runtime = scans.runtime.clone();
+    run_on(&runtime, async move {
+        FileTable::open(
+            format,
+            scans.io,
+            table,
+            files,
+            options,
+            &scans.config,
+            scans.slots,
+        )
+        .await
+    })
+    .await
 }
 
-fn internal(message: String) -> KrishivError {
-    InternalError { message }.into()
+/// Aborts its task when dropped.
+struct AbortGuard<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortGuard<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Runs `work` as a task of `runtime` and waits for it; dropping the
+/// returned future aborts the task.
+async fn run_on<T: Send + 'static>(
+    runtime: &tokio::runtime::Handle,
+    work: impl Future<Output = Result<T, KrishivError>> + Send + 'static,
+) -> Result<T, KrishivError> {
+    let mut guard = AbortGuard(runtime.spawn(work));
+    match (&mut guard.0).await {
+        Ok(result) => result,
+        Err(e) => Err(KrishivError::from(InternalError {
+            message: format!("reading file footers ended without a result: {e}"),
+        })),
+    }
 }
 
 /// The scans of `plan` and of the subqueries in its expressions.
@@ -471,6 +476,37 @@ impl TableProviderResolver for QueryCatalog {
 mod tests {
     use super::*;
     use krishiv_types::DataType;
+
+    #[test]
+    fn work_runs_on_the_given_runtime_and_a_drop_aborts_it() {
+        let io = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("test-io")
+            .enable_all()
+            .build()
+            .unwrap();
+        let name = futures::executor::block_on(run_on(io.handle(), async {
+            Ok(std::thread::current().name().map(str::to_owned))
+        }))
+        .unwrap();
+        assert_eq!(name.as_deref(), Some("test-io"));
+        // Dropping the waiting future aborts a task that never finishes.
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let mut waiting = Box::pin(run_on(io.handle(), async move {
+            let _held = tx;
+            std::future::pending::<Result<(), KrishivError>>().await
+        }));
+        let waker = futures::task::noop_waker();
+        let _ = waiting
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(&waker));
+        drop(waiting);
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected),
+            "the aborted task must drop its sender"
+        );
+    }
 
     fn files(col: &str) -> TempTable {
         TempTable::Files {

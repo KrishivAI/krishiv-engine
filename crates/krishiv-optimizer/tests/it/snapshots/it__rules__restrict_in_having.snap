@@ -1,0 +1,16 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM t WHERE b = 'x' AND a IN (SELECT a FROM u GROUP BY a HAVING count(*) > 1)"
+---
+Join LeftSemi, (a#0 == a#3)
+:- Project [a#0]
+:  +- Filter (b#1 == 'x') (shared #1)
+:     +- Scan spark_catalog.default.t [a#0, b#1]
++- Project [a#3]
+   +- Filter (count(1)#5 > 1L)
+      +- Aggregate [a#3], [a#3, count(1) AS count(1)#5]
+         +- Join LeftSemi, (a#3 == a#6)
+            :- Scan spark_catalog.default.u [a#3]
+            +- Shift +6
+               +- Project [a#0]
+                  +- Shared #1, printed above

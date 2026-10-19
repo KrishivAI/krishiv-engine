@@ -1,0 +1,11 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT t.a, g.f FROM t JOIN (SELECT a, nondeterministic_first(d) AS f FROM u GROUP BY a) g ON t.a = g.a WHERE t.b = 'x'"
+---
+Project [a#0, f#5]
++- Join Inner, (a#0 == a#3)
+   :- Aggregate [a#3], [a#3, nondeterministic_first(d#4) AS f#5]
+   :  +- Scan spark_catalog.default.u [a#3, d#4]
+   +- Project [a#0]
+      +- Filter (b#1 == 'x')
+         +- Scan spark_catalog.default.t [a#0, b#1]

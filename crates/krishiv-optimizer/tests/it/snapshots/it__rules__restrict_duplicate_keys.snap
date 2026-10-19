@@ -1,0 +1,20 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE t.b = 'x' AND t.c > (SELECT max(u2.a) FROM u u2 WHERE u2.a = t.a)"
+---
+Project [a#0]
++- Join Inner, (a#0 == a#3)
+   :- Scan spark_catalog.default.u [a#3] (shared #1)
+   +- Project [a#0]
+      +- Join Inner, ((a#0 == a#5) and (c#2 > CAST(max(a)#7 AS BIGINT)))
+         :- Project [a#0, c#2]
+         :  +- Filter (b#1 == 'x')
+         :     +- Scan spark_catalog.default.t [a#0, b#1, c#2] (shared #2)
+         +- Aggregate [a#5], [max(a#5) AS max(a)#7, a#5]
+            +- Join LeftSemi, (a#5 == a#8)
+               :- Shift +2
+               :  +- Shared #1, printed above
+               +- Shift +8
+                  +- Project [a#0]
+                     +- Filter (b#1 == 'x')
+                        +- Shared #2, printed above

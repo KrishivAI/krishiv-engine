@@ -25,8 +25,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Decimal128Array, Float64Array,
@@ -34,6 +34,7 @@ use arrow_array::{
 };
 use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType, TimeUnit};
+use krishiv_kernels::decimal::DecimalNative;
 use krishiv_types::batch::Weights;
 
 use super::{
@@ -53,6 +54,7 @@ pub(crate) fn min_max_supported(t: &DataType) -> bool {
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64
+            | DataType::Decimal64(..)
             | DataType::Decimal128(..)
             | DataType::Date32
             | DataType::Timestamp(TimeUnit::Microsecond, _)
@@ -175,10 +177,11 @@ pub(crate) struct Accumulator {
 
 /// `Σ |w_i|·|v_i|` over the valid rows of a batch (saturating; unit
 /// weights when `w` is `None`, as for merged partial states).
-fn batch_abs(v: &[i128], nulls: Option<&NullBuffer>, w: Option<&Weights>) -> u128 {
-    let at = |i: usize, x: i128| match w {
-        None | Some(Weights::Const(1)) => x.unsigned_abs(),
+fn batch_abs<N: DecimalNative>(v: &[N], nulls: Option<&NullBuffer>, w: Option<&Weights>) -> u128 {
+    let at = |i: usize, x: N| match w {
+        None | Some(Weights::Const(1)) => x.wide().unsigned_abs(),
         Some(w) => x
+            .wide()
             .unsigned_abs()
             .saturating_mul(u128::from(weight(w, i).unsigned_abs())),
     };
@@ -204,11 +207,11 @@ fn batch_abs(v: &[i128], nulls: Option<&NullBuffer>, w: Option<&Weights>) -> u12
 /// the batch, in any row order. The fold may then add with wrapping
 /// arithmetic and no range test, and its result is exactly the per-row
 /// path's. Proofs are local to one batch; the next batch is tested afresh.
-fn proven(
+fn proven<N: DecimalNative>(
     enabled: bool,
     bound: Option<u128>,
     max_sum: u128,
-    v: &[i128],
+    v: &[N],
     nulls: Option<&NullBuffer>,
     w: Option<&Weights>,
 ) -> bool {
@@ -224,10 +227,10 @@ fn proven(
 /// OR + 1`, branch-free) over every slot, NULL ones included. When it is
 /// too loose (values near the bound, large values under NULLs) the caller
 /// takes the exact sum.
-fn quick_abs(v: &[i128], w: Option<&Weights>) -> u128 {
+fn quick_abs<N: DecimalNative>(v: &[N], w: Option<&Weights>) -> u128 {
     let or = v
         .iter()
-        .fold(0_u128, |m, &x| m | (x ^ (x >> 127)).cast_unsigned())
+        .fold(0_u128, |m, &x| m | x.ones_magnitude())
         .saturating_add(1);
     let wmax = match w {
         None => 1,
@@ -257,6 +260,126 @@ fn refresh_max(old: u128, sum: &[i128], groups: &[u32]) -> u128 {
             .filter_map(|&g| sum.get(g as usize))
             .map(abs)
             .fold(old, u128::max)
+    }
+}
+
+/// One batch of a decimal `sum`/`avg` fold, over input values of either
+/// carrier (`N`): raw rows (`w` is `Some`) or merged partial states.
+struct DecFold<'a> {
+    groups: &'a [u32],
+    /// The validity of the value column.
+    nulls: Option<&'a NullBuffer>,
+    /// Row weights; `None` for partial states.
+    w: Option<&'a Weights>,
+    bound: Option<u128>,
+    max_sum: u128,
+    proofs: bool,
+}
+
+impl DecFold<'_> {
+    fn valid(&self, i: usize) -> bool {
+        self.nulls.is_none_or(|n| n.is_valid(i))
+    }
+
+    fn fits(&self, s: i128) -> bool {
+        self.bound.is_none_or(|b| s.unsigned_abs() < b)
+    }
+
+    /// Whether the batch takes the proof path (see [`proven`]).
+    fn proven<N: DecimalNative>(&self, v: &[N]) -> bool {
+        proven(self.proofs, self.bound, self.max_sum, v, self.nulls, self.w)
+    }
+
+    /// `sum` (`st`: 0 no value, 1 a value, 2 overflowed); a partial state
+    /// has a `nonempty` column.
+    fn sum<N: DecimalNative>(
+        &self,
+        sum: &mut [i128],
+        st: &mut [u8],
+        v: &[N],
+        nonempty: Option<&BooleanArray>,
+    ) {
+        let fast = self.proven(v);
+        for (i, &g) in self.groups.iter().enumerate() {
+            let g = g as usize;
+            let x = v[i].wide();
+            match self.w {
+                None => {
+                    if nonempty.is_some_and(|b| b.value(i)) {
+                        // An overflowed partial (sum NULL, nonempty) has
+                        // no magnitude: it is sticky on both paths.
+                        if !self.valid(i) {
+                            st[g] = 2;
+                        } else if st[g] != 2 {
+                            (sum[g], st[g]) = if fast {
+                                (sum[g].wrapping_add(x), 1)
+                            } else {
+                                sum[g]
+                                    .checked_add(x)
+                                    .filter(|&s| self.fits(s))
+                                    .map_or((0, 2), |s| (s, 1))
+                            };
+                        }
+                    }
+                }
+                Some(w) if self.valid(i) && st[g] != 2 => {
+                    let s = if fast && matches!(w, Weights::Const(1)) {
+                        Some(sum[g].wrapping_add(x))
+                    } else if fast {
+                        Some(sum[g].wrapping_add(x.wrapping_mul(i128::from(weight(w, i)))))
+                    } else {
+                        x.checked_mul(i128::from(weight(w, i)))
+                            .and_then(|x| sum[g].checked_add(x))
+                            .filter(|&s| self.fits(s))
+                    };
+                    (sum[g], st[g]) = s.map_or((0, 2), |s| (s, 1));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
+    /// `avg`; a partial state has a `counts` column.
+    fn avg<N: DecimalNative>(
+        &self,
+        sum: &mut [i128],
+        count: &mut [i64],
+        overflow: &mut [bool],
+        v: &[N],
+        counts: Option<&[i64]>,
+    ) {
+        let fast = self.proven(v);
+        for (i, &g) in self.groups.iter().enumerate() {
+            let g = g as usize;
+            let x = v[i].wide();
+            let (add, n) = match (counts, self.w) {
+                (Some(c), _) if self.valid(i) => (Some(x), c[i]),
+                (Some(c), _) => {
+                    overflow[g] |= c[i] != 0;
+                    (Some(0), c[i])
+                }
+                (None, Some(w)) if self.valid(i) => {
+                    let wt = weight(w, i);
+                    if fast {
+                        (Some(x.wrapping_mul(i128::from(wt))), wt)
+                    } else {
+                        (x.checked_mul(i128::from(wt)), wt)
+                    }
+                }
+                (None, _) => continue,
+            };
+            let s = if fast {
+                add.map(|x| sum[g].wrapping_add(x))
+            } else {
+                add.and_then(|x| sum[g].checked_add(x))
+                    .filter(|&s| self.fits(s))
+            };
+            match s {
+                Some(s) => sum[g] = s,
+                None => overflow[g] = true,
+            }
+            count[g] = count[g].wrapping_add(n);
+        }
     }
 }
 
@@ -333,17 +456,29 @@ fn booleans_of(a: &ArrayRef) -> Result<&BooleanArray> {
         .ok_or_else(|| internal(format!("boolean state of type {}", a.data_type())))
 }
 
-fn decimals(a: &ArrayRef) -> Result<&[i128]> {
-    a.as_primitive_opt::<Decimal128Type>()
-        .map(|d| d.values().as_ref())
-        .ok_or_else(|| internal(format!("decimal argument of type {}", a.data_type())))
+/// The values of a decimal column of either carrier.
+#[derive(Clone, Copy)]
+enum Decimals<'a> {
+    I64(&'a [i64]),
+    I128(&'a [i128]),
+}
+
+fn decimals(a: &ArrayRef) -> Result<Decimals<'_>> {
+    match a.data_type() {
+        DataType::Decimal64(..) => Ok(Decimals::I64(a.as_primitive::<Decimal64Type>().values())),
+        DataType::Decimal128(..) => Ok(Decimals::I128(a.as_primitive::<Decimal128Type>().values())),
+        t => Err(internal(format!("decimal argument of type {t}"))),
+    }
 }
 
 /// `min`/`max` input as `i128`s (integral, boolean, decimal, temporal).
 fn int_like(a: &ArrayRef) -> Result<Cow<'_, [i128]>> {
     let conv = |v: Vec<i128>| Cow::Owned(v);
     Ok(match a.data_type() {
-        DataType::Decimal128(..) => Cow::Borrowed(decimals(a)?),
+        DataType::Decimal128(..) | DataType::Decimal64(..) => match decimals(a)? {
+            Decimals::I128(v) => Cow::Borrowed(v),
+            Decimals::I64(v) => conv(v.iter().map(|&x| i128::from(x)).collect()),
+        },
         DataType::Boolean => {
             let b = a.as_boolean();
             conv((0..b.len()).map(|i| i128::from(b.value(i))).collect())
@@ -567,7 +702,9 @@ impl Accumulator {
             },
         };
         let sum_bound = match (expr.function, expr.avg_sum_type()) {
-            (F::Sum | F::Avg, DataType::Decimal128(p, _)) => Some(pow10(p).unsigned_abs()),
+            (F::Sum | F::Avg, DataType::Decimal64(p, _) | DataType::Decimal128(p, _)) => {
+                Some(pow10(p).unsigned_abs())
+            }
             _ => None,
         };
         Ok(Self {
@@ -773,7 +910,6 @@ impl Accumulator {
         }
         let ansi = self.ansi;
         let bound = self.sum_bound;
-        let fits = |s: &i128| bound.is_none_or(|b| s.unsigned_abs() < b);
         let (proofs, max_sum) = (self.proofs, self.max_sum);
         // Validity bitmaps, read once per batch (no virtual call per row);
         // logical, so an untyped NULL column (`count(NULL)`) counts nothing.
@@ -838,42 +974,18 @@ impl Accumulator {
                 }
             }
             (Kind::SumDec { sum, state: st }, _) => {
-                let a = args[0];
-                let v = decimals(a)?;
                 let nonempty = args.get(1).map(|b| booleans_of(b)).transpose()?;
-                let fast = proven(proofs, bound, max_sum, v, first, (!state).then_some(w));
-                let unit = matches!(w, Weights::Const(1));
-                for (i, &g) in groups.iter().enumerate() {
-                    let g = g as usize;
-                    if state {
-                        if nonempty.is_some_and(|b| b.value(i)) {
-                            // An overflowed partial (sum NULL, nonempty) has
-                            // no magnitude: it is sticky on both paths.
-                            if !valid(i) {
-                                st[g] = 2;
-                            } else if st[g] != 2 {
-                                (sum[g], st[g]) = if fast {
-                                    (sum[g].wrapping_add(v[i]), 1)
-                                } else {
-                                    sum[g]
-                                        .checked_add(v[i])
-                                        .filter(fits)
-                                        .map_or((0, 2), |s| (s, 1))
-                                };
-                            }
-                        }
-                    } else if valid(i) && st[g] != 2 {
-                        let s = if fast && unit {
-                            Some(sum[g].wrapping_add(v[i]))
-                        } else if fast {
-                            Some(sum[g].wrapping_add(v[i].wrapping_mul(i128::from(weight(w, i)))))
-                        } else {
-                            v[i].checked_mul(i128::from(weight(w, i)))
-                                .and_then(|x| sum[g].checked_add(x))
-                                .filter(fits)
-                        };
-                        (sum[g], st[g]) = s.map_or((0, 2), |s| (s, 1));
-                    }
+                let f = DecFold {
+                    groups,
+                    nulls: first,
+                    w: (!state).then_some(w),
+                    bound,
+                    max_sum,
+                    proofs,
+                };
+                match decimals(args[0])? {
+                    Decimals::I64(v) => f.sum(sum, st, v, nonempty),
+                    Decimals::I128(v) => f.sum(sum, st, v, nonempty),
                 }
             }
             (Kind::AvgFloat { sum, count }, _) => {
@@ -904,39 +1016,18 @@ impl Accumulator {
                 },
                 _,
             ) => {
-                let a = args[0];
-                let v = decimals(a)?;
                 let counts = args.get(1).map(|c| counts_of(c)).transpose()?;
-                let weights = counts.is_none().then_some(w);
-                let fast = proven(proofs, bound, max_sum, v, first, weights);
-                for (i, &g) in groups.iter().enumerate() {
-                    let g = g as usize;
-                    let (add, n) = match counts {
-                        Some(c) if valid(i) => (Some(v[i]), c[i]),
-                        Some(c) => {
-                            overflow[g] |= c[i] != 0;
-                            (Some(0), c[i])
-                        }
-                        None if valid(i) => {
-                            let wt = weight(w, i);
-                            if fast {
-                                (Some(v[i].wrapping_mul(i128::from(wt))), wt)
-                            } else {
-                                (v[i].checked_mul(i128::from(wt)), wt)
-                            }
-                        }
-                        None => continue,
-                    };
-                    let s = if fast {
-                        add.map(|x| sum[g].wrapping_add(x))
-                    } else {
-                        add.and_then(|x| sum[g].checked_add(x)).filter(fits)
-                    };
-                    match s {
-                        Some(s) => sum[g] = s,
-                        None => overflow[g] = true,
-                    }
-                    count[g] = count[g].wrapping_add(n);
+                let f = DecFold {
+                    groups,
+                    nulls: first,
+                    w: counts.is_none().then_some(w),
+                    bound,
+                    max_sum,
+                    proofs,
+                };
+                match decimals(args[0])? {
+                    Decimals::I64(v) => f.avg(sum, count, overflow, v, counts),
+                    Decimals::I128(v) => f.avg(sum, count, overflow, v, counts),
                 }
             }
             (
@@ -1141,9 +1232,14 @@ impl Accumulator {
         })
     }
 
+    /// A decimal state or result column of type `t` (either carrier).
     fn decimal(&self, v: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayRef> {
-        let a = Decimal128Array::from_iter(v).with_data_type(t.clone());
-        Ok(Arc::new(a))
+        match t {
+            DataType::Decimal64(..) => narrow(v, t),
+            _ => Ok(Arc::new(
+                Decimal128Array::from_iter(v).with_data_type(t.clone()),
+            )),
+        }
     }
 
     /// `values` of groups `ids` as the result type; `on(group)` says
@@ -1202,7 +1298,7 @@ impl Accumulator {
         let ansi = self.ansi;
         Ok(match &self.kind {
             Kind::SumDec { sum, state } => {
-                let DataType::Decimal128(p, s) = self.result else {
+                let (DataType::Decimal64(p, s) | DataType::Decimal128(p, s)) = self.result else {
                     return Err(internal("decimal sum type".to_owned()));
                 };
                 let mut out = Vec::with_capacity(ids.len());
@@ -1233,8 +1329,10 @@ impl Accumulator {
                 count,
                 overflow,
             } => {
-                let (DataType::Decimal128(p, s), DataType::Decimal128(_, ss)) =
-                    (&self.result, self.expr.avg_sum_type())
+                let (
+                    DataType::Decimal64(p, s) | DataType::Decimal128(p, s),
+                    DataType::Decimal64(_, ss) | DataType::Decimal128(_, ss),
+                ) = (&self.result, self.expr.avg_sum_type())
                 else {
                     return Err(internal("decimal avg type".to_owned()));
                 };
@@ -1282,7 +1380,7 @@ fn narrow(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayR
         let v: Vec<Option<T::Native>> = it
             .map(|x| x.map(T::Native::try_from).transpose())
             .collect::<Result<_, _>>()
-            .map_err(|_| internal(format!("min/max value out of range of {t}")))?;
+            .map_err(|_| internal(format!("value out of range of {t}")))?;
         let a: PrimitiveArray<T> = v.into_iter().collect();
         Ok(Arc::new(a.with_data_type(t.clone())))
     }
@@ -1296,9 +1394,14 @@ fn narrow(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayR
         DataType::Int64 => prim::<Int64Type>(it, t),
         DataType::Date32 => prim::<Date32Type>(it, t),
         DataType::Timestamp(..) => prim::<TimestampMicrosecondType>(it, t),
+        DataType::Decimal64(..) => prim::<Decimal64Type>(it, t),
         _ => prim::<Decimal128Type>(it, t),
     }
 }
+
+#[cfg(test)]
+#[cfg(not(loom))]
+mod differential;
 
 /// The per-batch proofs (design P2-T160) against the per-row path.
 #[cfg(test)]
@@ -1621,13 +1724,13 @@ mod proof_tests {
     #[test]
     fn proof_boundaries() {
         let b = Some(100_u128);
-        assert!(proven(true, b, 89, &[10], None, None));
-        assert!(!proven(true, b, 90, &[10], None, None));
-        assert!(!proven(false, b, 0, &[1], None, None));
-        assert!(!proven(true, None, 0, &[1], None, None));
+        assert!(proven(true, b, 89, &[10_i128], None, None));
+        assert!(!proven(true, b, 90, &[10_i128], None, None));
+        assert!(!proven(false, b, 0, &[1_i128], None, None));
+        assert!(!proven(true, None, 0, &[1_i128], None, None));
         let w = Weights::Column(Int64Array::from(vec![-3_i64, 2]));
-        assert_eq!(batch_abs(&[-10, 5], None, Some(&w)), 40);
-        assert_eq!(batch_abs(&[7], None, Some(&Weights::Const(-4))), 28);
+        assert_eq!(batch_abs(&[-10_i128, 5], None, Some(&w)), 40);
+        assert_eq!(batch_abs(&[7_i64], None, Some(&Weights::Const(-4))), 28);
         let nulls = NullBuffer::from(vec![true, false]);
         assert_eq!(batch_abs(&[1, i128::MAX], Some(&nulls), None), 1);
         assert_eq!(batch_abs(&[i128::MIN, i128::MIN], None, None), u128::MAX);
@@ -1746,9 +1849,12 @@ mod proof_tests {
         // Many groups, one row: only the touched group raises the bound.
         assert_eq!(refresh_max(9, &[1, -20, 3], &[2]), 9);
         assert_eq!(refresh_max(9, &[1, -20, 3], &[1]), 20);
-        assert_eq!(quick_abs(&[3, -2], Some(&Weights::Const(-2))), 2 * 4 * 2);
+        assert_eq!(
+            quick_abs(&[3_i128, -2], Some(&Weights::Const(-2))),
+            2 * 4 * 2
+        );
         let w = Weights::Column(Int64Array::from(vec![1_i64, -3]));
-        assert_eq!(quick_abs(&[3, -2], Some(&w)), 2 * 4 * 4);
+        assert_eq!(quick_abs(&[3_i64, -2], Some(&w)), 2 * 4 * 4);
         feed(&mut a, 1, &[(0, 7, true, 1)], &t, 0);
         let v = a.evaluate(&[0]).unwrap();
         assert_eq!(v.as_primitive::<Decimal128Type>().value(0), 7);

@@ -1,0 +1,11 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON CAST(t.b AS INT) = g.a WHERE t.c = 1"
+---
+Project [a#0]
++- Join Inner, (CAST(b#1 AS INT) == a#3)
+   :- Aggregate [a#3], [a#3]
+   :  +- Scan spark_catalog.default.u [a#3]
+   +- Project [a#0, b#1]
+      +- Filter (c#2 == 1L)
+         +- Scan spark_catalog.default.t [a#0, b#1, c#2]

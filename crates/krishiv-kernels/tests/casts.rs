@@ -737,3 +737,81 @@ impl AsPrimitiveRef for ArrayRef {
             .unwrap_or_else(|| panic!("{:?}", self.data_type()))
     }
 }
+
+/// A one-row `Decimal64` column.
+fn dec64(v: i64, p: u8, sc: i8) -> ArrayRef {
+    Arc::new(
+        arrow_array::Decimal64Array::from(vec![v])
+            .with_precision_and_scale(p, sc)
+            .unwrap(),
+    )
+}
+
+proptest! {
+    // No failure file (Miri's isolation forbids `getcwd`); two cases under Miri.
+    #![proptest_config(ProptestConfig {
+        cases: if cfg!(miri) { 2 } else { 256 },
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    /// `Decimal64` is a carrier of `decimal(p <= 18, s)` (P2-T160): casts
+    /// to and from it give the `Decimal128` cast's values and errors, and a
+    /// result on the requested carrier.
+    #[test]
+    fn decimal64_casts_equal_decimal128(
+        v in prop_oneof![Just(999_999_999_999_999_999_i64), Just(-1_i64), Just(0_i64), any::<i64>()],
+        p in 1..=18_u8,
+        s in 0..=18_i8,
+        p2 in 1..=38_u8,
+        s2 in 0..=20_i8,
+        text in prop_oneof![Just("12.345".to_owned()), Just("-1e3".to_owned()), Just("abc".to_owned()), "-?[0-9]{1,20}(\\.[0-9]{0,6})?"],
+        f in prop_oneof![Just(1.005_f64), Just(-0.5), Just(1e300), Just(f64::NAN), any::<f64>()],
+    ) {
+        let s = s.min(i8::try_from(p).unwrap());
+        let s2 = s2.min(i8::try_from(p2).unwrap());
+        let bound = 10_i64.pow(u32::from(p));
+        let v = v % bound;
+        for mode in [CastMode::Ansi, CastMode::Legacy] {
+            // To decimal(p, s) on either carrier.
+            let sources: [ArrayRef; 4] = [
+                Arc::new(StringArray::from(vec![text.as_str()])),
+                Arc::new(Float64Array::from(vec![f])),
+                Arc::new(Int64Array::from(vec![v])),
+                dec(i128::from(v), p, s),
+            ];
+            for a in &sources {
+                let wide = run(a.as_ref(), &DataType::Decimal128(p, s), mode);
+                let narrow = run(a.as_ref(), &DataType::Decimal64(p, s), mode);
+                if let Ok(n) = &narrow {
+                    prop_assert_eq!(n.data_type(), &DataType::Decimal64(p, s));
+                }
+                prop_assert_eq!(
+                    one(Arc::clone(a), DataType::Decimal64(p, s), mode),
+                    one(Arc::clone(a), DataType::Decimal128(p, s), mode)
+                );
+                prop_assert_eq!(wide.is_ok(), narrow.is_ok());
+            }
+            // From decimal(p, s) on either carrier.
+            let mut targets = vec![
+                DataType::Utf8,
+                DataType::Float64,
+                DataType::Float32,
+                DataType::Int32,
+                DataType::Int64,
+                DataType::Int8,
+                DataType::Boolean,
+                DataType::Decimal128(p2, s2),
+            ];
+            if p2 <= 18 {
+                targets.push(DataType::Decimal64(p2, s2));
+            }
+            for t in targets {
+                prop_assert_eq!(
+                    one(dec64(v, p, s), t.clone(), mode),
+                    one(dec(i128::from(v), p, s), t, mode)
+                );
+            }
+        }
+    }
+}

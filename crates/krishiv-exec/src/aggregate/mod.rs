@@ -180,9 +180,11 @@ impl AggregateExpr {
             (F::Avg, t) if is_integral(t) => DataType::Float64,
             // Spark refuses negative decimal scales by default
             // (`spark.sql.legacy.allowNegativeScaleOfDecimal`).
-            (F::Sum, DataType::Decimal128(p, s)) if *s >= 0 => sum_decimal(*p, *s),
-            (F::Avg, DataType::Decimal128(p, s)) if *s >= 0 => {
-                DataType::Decimal128((*p + 4).min(38), s.saturating_add(4).min(38))
+            (F::Sum, DataType::Decimal64(p, s) | DataType::Decimal128(p, s)) if *s >= 0 => {
+                sum_decimal(t, *p, *s)
+            }
+            (F::Avg, DataType::Decimal64(p, s) | DataType::Decimal128(p, s)) if *s >= 0 => {
+                decimal_on(t, (*p + 4).min(38), s.saturating_add(4).min(38))
             }
             (F::Min | F::Max | F::First { .. } | F::Last { .. }, t)
                 if accumulator::min_max_supported(t) =>
@@ -203,7 +205,7 @@ impl AggregateExpr {
         let n = |suffix: &str| format!("{}#{suffix}", self.name);
         Ok(match (self.function, &out) {
             (F::Count, _) => vec![Field::new(n("count"), DataType::Int64, false)],
-            (F::Sum, DataType::Decimal128(..)) => vec![
+            (F::Sum, DataType::Decimal64(..) | DataType::Decimal128(..)) => vec![
                 Field::new(n("sum"), out.clone(), true),
                 Field::new(n("nonempty"), DataType::Boolean, false),
             ],
@@ -224,14 +226,28 @@ impl AggregateExpr {
     /// The type `avg` sums in: `double`, or `sum`'s decimal type.
     fn avg_sum_type(&self) -> DataType {
         match self.arg_type {
-            DataType::Decimal128(p, s) => sum_decimal(p, s),
+            DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => {
+                sum_decimal(&self.arg_type, p, s)
+            }
             _ => DataType::Float64,
         }
     }
 }
 
-fn sum_decimal(p: u8, s: i8) -> DataType {
-    DataType::Decimal128((p + 10).min(38), s)
+fn sum_decimal(like: &DataType, p: u8, s: i8) -> DataType {
+    decimal_on(like, (p + 10).min(38), s)
+}
+
+/// `decimal(p, s)` on the carrier of the input type `like` (design
+/// P2-T160): `Decimal64` when `like` is `Decimal64` and `p <= 18`, else
+/// `Decimal128`. Inputs on the canonical carrier by precision give results
+/// on the canonical carrier.
+fn decimal_on(like: &DataType, p: u8, s: i8) -> DataType {
+    if matches!(like, DataType::Decimal64(..)) && p <= 18 {
+        DataType::Decimal64(p, s)
+    } else {
+        DataType::Decimal128(p, s)
+    }
 }
 
 fn is_integral(t: &DataType) -> bool {

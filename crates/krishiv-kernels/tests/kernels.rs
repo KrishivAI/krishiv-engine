@@ -729,3 +729,118 @@ fn decimal_div_and_unary_match_spark() {
     let abs = decimal_unary(UnaryOp::Abs, &dec(vec![Some(-150)], 10, 2)).unwrap();
     assert_eq!(abs, dec(vec![Some(150)], 10, 2));
 }
+
+/// The carrier API of the decimal kernels (P2-T160): `Decimal64` operands,
+/// mixed carriers, a result on either carrier, and the checks.
+#[test]
+fn decimal_carriers() {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Decimal64Type, Decimal128Type};
+    use arrow_array::{ArrayRef, Decimal64Array};
+    use krishiv_kernels::decimal::{
+        DecimalCarrier, DecimalOperand, decimal_arith_any, decimal_unary,
+    };
+    use krishiv_kernels::integer::UnaryOp;
+    let d64 = |v: Vec<Option<i64>>, p, s| {
+        Decimal64Array::from(v)
+            .with_precision_and_scale(p, s)
+            .unwrap()
+    };
+    let neg = decimal_unary(UnaryOp::Negate, &d64(vec![Some(150), None], 10, 2)).unwrap();
+    assert_eq!(neg, d64(vec![Some(-150), None], 10, 2));
+    let abs = decimal_unary(UnaryOp::Abs, &d64(vec![Some(-150)], 10, 2)).unwrap();
+    assert_eq!(abs.value(0), 150);
+    // `of_array` takes either carrier and nothing else.
+    let a = d64(vec![Some(125), None, Some(-1)], 10, 2);
+    let b = dec(vec![Some(250), Some(1), Some(1)], 20, 2);
+    assert!(matches!(
+        DecimalOperand::of_array(&a).unwrap(),
+        DecimalOperand::Decimal64(_)
+    ));
+    assert!(matches!(
+        DecimalOperand::of_array(&b).unwrap(),
+        DecimalOperand::Decimal128(_)
+    ));
+    let e = DecimalOperand::of_array(&arrow_array::Int64Array::from(vec![1])).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(
+        e.to_string()
+            .contains("decimal kernel operand of type Int64"),
+        "{e}"
+    );
+    // Mixed carriers: decimal(10,2) + decimal(20,2) -> decimal(21,2).
+    let plan = DecimalPlan::new(ArithOp::Add, (10, 2), (20, 2), (21, 2)).unwrap();
+    let (l, r) = (
+        DecimalOperand::Decimal64(&a),
+        DecimalOperand::Decimal128(&b),
+    );
+    let sum =
+        decimal_arith_any::<AnsiError>(l, r, &plan, DecimalCarrier::Decimal128, &ctx()).unwrap();
+    assert_eq!(
+        sum.as_primitive::<Decimal128Type>(),
+        &dec(vec![Some(375), None, Some(0)], 21, 2)
+    );
+    // A `Decimal64` result above precision 18 is an engine bug.
+    let e =
+        decimal_arith_any::<AnsiError>(l, r, &plan, DecimalCarrier::Decimal64, &ctx()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    // An operand of another type than the plan's.
+    let wrong = DecimalPlan::new(ArithOp::Add, (11, 2), (20, 2), (21, 2)).unwrap();
+    let e = decimal_arith_any::<AnsiError>(l, r, &wrong, DecimalCarrier::Decimal128, &ctx())
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("plan expects (11, 2)"), "{e}");
+    // A NULL literal: every row NULL, on the requested carrier.
+    let small = DecimalPlan::new(ArithOp::Add, (10, 2), (10, 2), (11, 2)).unwrap();
+    for (carrier, t) in [
+        (
+            DecimalCarrier::Decimal64,
+            arrow_schema::DataType::Decimal64(11, 2),
+        ),
+        (
+            DecimalCarrier::Decimal128,
+            arrow_schema::DataType::Decimal128(11, 2),
+        ),
+    ] {
+        let n: ArrayRef = decimal_arith_any::<AnsiError>(
+            DecimalOperand::Decimal64(&a),
+            DecimalOperand::Scalar(None),
+            &small,
+            carrier,
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!((n.data_type(), n.null_count()), (&t, 3));
+    }
+    // A literal beyond `i64` next to a `Decimal64` column takes the 128-bit
+    // lanes; a rounding plan (the 256-bit path) narrows its result.
+    let wide_lit = DecimalPlan::new(ArithOp::Add, (10, 2), (20, 2), (21, 2)).unwrap();
+    let big = 10_i128.pow(19);
+    let s = decimal_arith_any::<AnsiError>(
+        DecimalOperand::Decimal64(&a),
+        DecimalOperand::Scalar(Some(big)),
+        &wide_lit,
+        DecimalCarrier::Decimal128,
+        &ctx(),
+    )
+    .unwrap();
+    assert_eq!(s.as_primitive::<Decimal128Type>().value(0), big + 125);
+    let div = DecimalPlan::new(
+        krishiv_kernels::decimal::DecimalOp::Divide,
+        (10, 2),
+        (10, 2),
+        (18, 6),
+    )
+    .unwrap();
+    let q = decimal_arith_any::<AnsiError>(
+        DecimalOperand::Decimal64(&a),
+        DecimalOperand::Scalar(Some(300)),
+        &div,
+        DecimalCarrier::Decimal64,
+        &ctx(),
+    )
+    .unwrap();
+    // 1.25 / 3.00 = 0.416667 (HALF_UP).
+    assert_eq!(q.as_primitive::<Decimal64Type>().value(0), 416_667);
+    assert_eq!(q.data_type(), &arrow_schema::DataType::Decimal64(18, 6));
+}
