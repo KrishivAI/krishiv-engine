@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``DataFrame``: a lazily evaluated query, as ``pyspark.sql.DataFrame`` (transformations and analysis;
-the actions arrive with the executor)."""
+"""``DataFrame``: a lazily evaluated query, as ``pyspark.sql.DataFrame``.
+
+Transformations and analysis build and check plans; actions (``collect``, ``show``, ``toArrow``, ``toPandas``,
+``count``, ``__arrow_c_stream__``) run the query in-process with the GIL released."""
 
 from __future__ import annotations
 
+import importlib
 from functools import reduce
 from typing import TYPE_CHECKING, Any, cast
 
@@ -15,8 +18,10 @@ from krishiv.errors import (
     not_expected_type,
     not_implemented,
 )
+from krishiv.sql import _convert
 from krishiv.sql.column import Column, _named
 from krishiv.sql.group import GroupedData
+from krishiv.sql.row import Row
 from krishiv.sql.types import StructType, _struct_from_columns
 
 if TYPE_CHECKING:
@@ -44,6 +49,9 @@ _HOW = {
     "left_anti": "anti",
 }
 
+
+#: The most rows ``show`` prints, as Spark: ``ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH - 1``.
+_SHOW_MAX = 2**31 - 17
 
 ColumnOrName = Column | str
 ColumnsOrNames = ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...]
@@ -192,3 +200,72 @@ class DataFrame:
         if not isinstance(num, int):
             raise not_expected_type("num", "int", num)
         return self._new(self._df.limit(num))
+
+    # Actions: each runs the query again (as each PySpark action does), with the GIL released.
+    def __arrow_c_stream__(self, requested_schema: object = None) -> object:
+        """The result as an Arrow C stream capsule (the Arrow PyCapsule interface), so pyarrow, Polars and
+        DuckDB read it directly. The query runs now; its batches are computed as the consumer reads them,
+        and releasing the stream cancels it."""
+        return self._df.execute().__arrow_c_stream__(requested_schema)
+
+    def _session_zone(self) -> Any:
+        return _convert.session_zone(self._session.conf.get("spark.sql.session.timeZone", "UTC") or "UTC")
+
+    def toArrow(self) -> Any:
+        """The result as a ``pyarrow.Table`` (needs pyarrow)."""
+        pa = _convert.require_pyarrow("toArrow")
+        stream = self._df.execute()
+        try:
+            table = pa.table(stream)
+        except Exception:
+            # The C stream carries only an Arrow error message: raise the engine's own error if that was the cause.
+            stream.check_error()
+            raise
+        stream.check_error()
+        return table
+
+    def toPandas(self) -> Any:
+        """The result as a ``pandas.DataFrame``, converted from Arrow (needs pyarrow and pandas). Instants are
+        wall-clock times in the session time zone without a zone, as Spark's ``toPandas``."""
+        table = self.toArrow()
+        try:
+            importlib.import_module("pandas")  # pandas itself is optional: only checked here
+        except ImportError as e:
+            raise ImportError("toPandas needs pandas; install it with `pip install pandas`") from e
+        return _convert.session_local(table, self._session_zone()).to_pandas()
+
+    def collect(self) -> list[Row]:
+        """All result rows (needs pyarrow)."""
+        return _convert.rows_of(self.toArrow())
+
+    def take(self, num: int) -> list[Row]:
+        return self.limit(num).collect()
+
+    def head(self, n: int | None = None) -> Row | list[Row] | None:
+        if n is None:
+            rows = self.take(1)
+            return rows[0] if rows else None
+        return self.take(n)
+
+    def first(self) -> Row | None:
+        return cast("Row | None", self.head())
+
+    def count(self) -> int:
+        """The number of rows."""
+        return self._df.count()
+
+    def show(self, n: int = 20, truncate: bool | int = True, vertical: bool = False) -> None:
+        """Prints the first ``n`` rows as a table (needs pyarrow)."""
+        if not isinstance(n, int) or isinstance(n, bool):
+            raise not_expected_type("n", "int", n)
+        if not isinstance(truncate, bool | int):
+            raise not_expected_type("truncate", "bool or int", truncate)
+        rows = min(max(n, 0), _SHOW_MAX)  # Spark's bounds: MAX_ROUNDED_ARRAY_LENGTH - 1
+        cells = _convert.table_cells(self.limit(rows + 1).toArrow(), self._session_zone())
+        print(_convert.show_string(self.columns, cells, rows, truncate, vertical), end="")
+
+    def createOrReplaceTempView(self, name: str) -> None:
+        """Registers this DataFrame as the temporary view ``name`` (views of reads by path only, so far)."""
+        if not isinstance(name, str):
+            raise not_expected_type("name", "str", name)
+        self._df.create_or_replace_temp_view(name)

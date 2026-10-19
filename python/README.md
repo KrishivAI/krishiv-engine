@@ -18,12 +18,20 @@ spark = krishiv.session()  # SparkSession.builder.getOrCreate()
 df = spark.sql("SELECT 1 AS a")
 df = df.withColumn("b", F.col("a") + 1)
 print(df.columns, df.schema)  # analysis only, nothing runs
+print(df.collect())  # runs the query in-process: [Row(a=1, b=2)]
+df.show()
+table = df.toArrow()  # a pyarrow.Table
 ```
 
+Actions (`collect`, `show`, `toArrow`, `toPandas`, `count`) run the query in-process with the GIL released. A
+DataFrame also implements the Arrow PyCapsule interface (`__arrow_c_stream__`), so `pa.table(df)`,
+`polars.DataFrame(df)` and `duckdb.from_arrow(df)` read the result without copying; each read runs the query again,
+and releasing the stream cancels it.
+
 `krishiv.sql` mirrors `pyspark.sql` (signatures and import paths); errors are in `krishiv.errors`, shaped like
-`pyspark.errors`. pyarrow is optional: install `krishiv[pyarrow]`. Actions
-(`collect`, `show`, `toArrow`, `toPandas`) and SQL expression strings (`selectExpr`, `where("...")`, `expr`) are not
-available yet.
+`pyspark.errors`. pyarrow is optional: install `krishiv[pyarrow]`; `toArrow`, `collect`, `show` and `toPandas` need it (`count` and
+the PyCapsule interface do not). `toPandas` also needs pandas, which has no extra yet. SQL expression strings
+(`selectExpr`, `where("...")`, `expr`) are not available yet.
 
 ## Develop
 

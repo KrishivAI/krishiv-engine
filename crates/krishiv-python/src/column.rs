@@ -3,7 +3,7 @@
 //! column expression. All builder semantics live in `krishiv-session`.
 
 use krishiv_session::Column;
-use krishiv_session::functions::{call_function, col, count_distinct, count_star, lit};
+use krishiv_session::functions::{call_function, col, count_distinct, count_star, lit, lit_null};
 use krishiv_types::DataType;
 use pyo3::exceptions::{PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -150,12 +150,14 @@ pub(crate) fn column(name: &str) -> PyColumn {
     PyColumn::wrap(col(name))
 }
 
-/// A literal: `bool`, `int` (Spark `int`, or `bigint` beyond 32 bits),
+/// A literal: `None` (an untyped null), `bool`, `int` (Spark `int`, or `bigint` beyond 32 bits),
 /// `float` (`double`) or `str`.
 #[pyfunction(name = "lit")]
 pub(crate) fn literal(value: &Bound<'_, PyAny>) -> PyResult<PyColumn> {
     // `bool` is an `int` subclass: test it first.
-    let column = if let Ok(b) = value.cast::<PyBool>() {
+    let column = if value.is_none() {
+        lit_null()
+    } else if let Ok(b) = value.cast::<PyBool>() {
         lit(b.is_true())
     } else if value.is_instance_of::<PyInt>() {
         let n: i64 = value

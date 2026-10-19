@@ -9,6 +9,9 @@
 //! no pyo3 dependency so that it can be tested under Miri.
 
 mod ffi;
+mod query;
+
+pub(crate) use self::query::{ErrorSlot, QueryReader};
 
 use std::ffi::CStr;
 use std::sync::Mutex;
@@ -63,6 +66,8 @@ pub struct ArrowStream {
     schema: SchemaRef,
     /// Taken by the first `__arrow_c_stream__` call.
     reader: Mutex<Option<Box<dyn RecordBatchReader + Send>>>,
+    /// Set when the stream is a query's result: where its reader leaves the engine error.
+    error: Option<ErrorSlot>,
 }
 
 impl std::fmt::Debug for ArrowStream {
@@ -75,11 +80,18 @@ impl std::fmt::Debug for ArrowStream {
 }
 
 impl ArrowStream {
-    fn new(reader: Box<dyn RecordBatchReader + Send>) -> Self {
+    pub(crate) fn new(reader: Box<dyn RecordBatchReader + Send>) -> Self {
         Self {
             schema: reader.schema(),
             reader: Mutex::new(Some(reader)),
+            error: None,
         }
+    }
+
+    /// This stream, reporting engine errors through `slot` (see [`Self::check_error`]).
+    pub(crate) fn with_error_slot(mut self, slot: ErrorSlot) -> Self {
+        self.error = Some(slot);
+        self
     }
 
     /// Reads all the batches (once: the stream is then consumed); the
@@ -210,6 +222,16 @@ impl ArrowStream {
             .take()
             .ok_or_else(|| PyValueError::new_err("the Arrow stream was already consumed"))?;
         PyCapsule::new_with_value(py, ffi::export_stream(reader, requested), STREAM_CAPSULE)
+    }
+
+    /// Raises the engine error that ended the stream, with its Spark error class
+    /// (the C stream carries only an Arrow error message); does nothing if there was none.
+    fn check_error(&self, py: Python<'_>) -> PyResult<()> {
+        let taken = self
+            .error
+            .as_ref()
+            .and_then(|slot| slot.lock().ok()?.take());
+        taken.map_or(Ok(()), |e| Err(crate::errors::to_py(py, &e)))
     }
 
     /// Whether the stream was already handed out by `__arrow_c_stream__`.

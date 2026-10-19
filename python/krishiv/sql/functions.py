@@ -22,7 +22,8 @@ column = col
 
 
 def lit(col: Any) -> Column:
-    """A literal (``bool``, ``int``, ``float``, ``str``); a Column is returned as is."""
+    """A literal (``None``, ``bool``, ``int``, ``float``, ``str``); a Column is returned as is. ``lit(None)`` is
+    an untyped null (Spark's ``void``)."""
     return col if isinstance(col, Column) else Column(_literal(col))
 
 
