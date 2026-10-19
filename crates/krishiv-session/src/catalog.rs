@@ -243,6 +243,16 @@ impl QueryCatalog {
             .collect()
     }
 
+    /// Whether this query loaded a file view: its files are listed again
+    /// by the next query, so an analysis that did must not be reused.
+    pub(crate) fn loaded_file_views(&self) -> bool {
+        self.loaded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .any(|t| matches!(&**t, TempTable::Files { .. }))
+    }
+
     fn opened(&self, key: &FilesKey) -> Option<Arc<FileTable>> {
         self.opened
             .lock()

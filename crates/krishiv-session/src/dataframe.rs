@@ -433,8 +433,8 @@ impl DataFrame {
     }
 
     /// The analysis to run with: the cached one while the configuration and
-    /// the temporary tables are unchanged and no files are read, else a
-    /// fresh one.
+    /// the temporary tables are unchanged and no files are read (by path or
+    /// through a file view), else a fresh one, which lists them again.
     async fn analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
         let cached = self
             .analysis
@@ -444,6 +444,7 @@ impl DataFrame {
         let env = self.session.query_env();
         if let Some(a) = cached
             && !a.analyzed.reads_files
+            && !a.env.catalog.loaded_file_views()
             && a.env.conf_version == env.conf_version
             && a.env.catalog_epoch == env.catalog_epoch
         {

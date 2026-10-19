@@ -621,6 +621,13 @@ fn file_views_read_the_files_there_when_the_query_runs() {
     let sorted =
         |df: krishiv_session::DataFrame| ids(&block_on(df.order_by(["id"]).collect()).unwrap());
     assert_eq!(sorted(s.table("v")), [1, 2, 3]);
+    // One DataFrame run before and after the overwrite lists the files
+    // again too.
+    let same = block_on(s.sql("SELECT id FROM v")).unwrap();
+    assert_eq!(ids(&block_on(same.collect()).unwrap()).len(), 3);
+    // A file added by another writer shows up in the next run.
+    parquet_file(&dir.path().join("t/extra.parquet"));
+    assert_eq!(ids(&block_on(same.collect()).unwrap()).len(), 5);
     block_on(
         s.table("people")
             .filter(col("id").gt(lit(1)))
@@ -746,7 +753,6 @@ fn ignored_hints_come_back_as_warnings() {
     let warnings = |sql: &str| block_on(block_on(s.sql(sql)).unwrap().warnings()).unwrap();
     // Analysis: an unknown hint and a hint naming no relation.
     let w = warnings("SELECT /*+ NOPE, BROADCAST(missing) */ id FROM people");
-    eprintln!("{w:?}");
     assert!(
         w.iter().any(|w| w.starts_with("Unrecognized hint: NOPE")),
         "{w:?}"
@@ -754,7 +760,6 @@ fn ignored_hints_come_back_as_warnings() {
     assert!(w.iter().any(|w| w.contains("relation 'missing'")), "{w:?}");
     // Planning: a join hint the join cannot follow.
     let w = warnings("SELECT /*+ MERGE(o) */ p.id FROM people p JOIN other o ON p.id = o.id");
-    eprintln!("{w:?}");
     assert!(
         w.iter().any(|w| w.starts_with("Hint (strategy=merge)")),
         "{w:?}"
