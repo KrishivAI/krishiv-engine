@@ -409,7 +409,8 @@ fn measure_budgets(root: &Path, build_time: bool) -> Result<(Budgets, PathBuf), 
     let status = cargo_cmd()
         .args([
             "build",
-            "--release",
+            "--profile",
+            "dist",
             "--locked",
             "-p",
             "krishiv-cli",
@@ -420,11 +421,11 @@ fn measure_budgets(root: &Path, build_time: bool) -> Result<(Budgets, PathBuf), 
         .status()
         .map_err(|e| format!("failed to run cargo build: {e}"))?;
     if !status.success() {
-        return Err("release build of krishiv-cli failed".to_owned());
+        return Err("dist-profile build of krishiv-cli failed".to_owned());
     }
     let clean_build_secs = build_time.then(|| started.elapsed().as_secs());
     let bin = build_dir
-        .join("release")
+        .join("dist")
         .join(format!("krishiv{}", std::env::consts::EXE_SUFFIX));
     let binary_bytes = std::fs::metadata(&bin)
         .map_err(|e| format!("cannot stat {}: {e}", bin.display()))?

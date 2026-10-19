@@ -22,17 +22,17 @@ use serde::{Deserialize, Serialize};
 pub enum Mode {
     /// Measure, then compare with `budgets.json` and apply the verdict.
     Check {
-        /// Also measure a clean release build's wall time.
+        /// Also measure a clean `dist`-profile build's wall time.
         build_time: bool,
     },
     /// Measure and write `budgets-current.json` only; no verdict.
     Measure {
-        /// Also measure a clean release build's wall time.
+        /// Also measure a clean `dist`-profile build's wall time.
         build_time: bool,
     },
     /// Measure and overwrite the `budgets.json` baseline.
     WriteBaseline {
-        /// Also measure a clean release build's wall time.
+        /// Also measure a clean `dist`-profile build's wall time.
         build_time: bool,
     },
     /// Compare an existing measurement file with `budgets.json`.
@@ -78,9 +78,9 @@ pub struct Budgets {
     /// dev/test crates). Informational, never gated.
     #[serde(default)]
     pub transitive_crates_all_features: Option<u64>,
-    /// Size in bytes of the release `krishiv` binary.
+    /// Size in bytes of the `dist`-profile `krishiv` binary.
     pub binary_bytes: Option<u64>,
-    /// Clean release build wall time in seconds (CI only).
+    /// Clean `dist`-profile build wall time in seconds (CI only).
     pub clean_build_secs: Option<u64>,
     /// Lines with an `unsafe` keyword per crate (`crates/<name>/src`), for
     /// crates that have any. Any growth needs approval (ADR 0029: every new
@@ -229,7 +229,7 @@ pub fn compare(base: &Budgets, now: &Budgets) -> Comparison {
             Some(base.transitive_crates),
             Some(now.transitive_crates),
         ),
-        ("release binary bytes", base.binary_bytes, now.binary_bytes),
+        ("dist binary bytes", base.binary_bytes, now.binary_bytes),
         (
             "clean build seconds",
             base.clean_build_secs,
