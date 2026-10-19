@@ -33,8 +33,8 @@ use super::{PhysicalPlan, PhysicalPlanner, PlanningContext, pushdown};
 use crate::error::Result;
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
-    Filter, FilterPushdown, Limit, Project, ProjectItem, PushedFilter, ScanPushdowns, Sort,
-    SortKey, TopN,
+    Filter, FilterPushdown, Limit, Project, ProjectItem, PushedFilter, ReplicateRows,
+    ScanPushdowns, Sort, SortKey, TopN,
 };
 use crate::pipeline::ExecNode;
 
@@ -251,6 +251,10 @@ impl<'a> Planner<'a> {
                 self.plan(input)
             }
             PlanNode::Union { inputs, .. } => self.union(p, inputs),
+            PlanNode::ReplicateRows { input, count } => {
+                let input = self.plan(input)?;
+                self.replicate(input, count)
+            }
             PlanNode::OneRowRelation => one_row(),
             _ => {
                 let text = p.to_string();
@@ -475,6 +479,24 @@ impl<'a> Planner<'a> {
             compiled,
             layout,
             ("Filter", predicate.to_string()),
+        ))
+    }
+
+    /// Each row `count` times (`INTERSECT ALL` / `EXCEPT ALL`).
+    fn replicate(&mut self, input: Planned, count: &Expr) -> Result<Planned> {
+        let mut compiled = self.compile(&[count], &input)?;
+        let e = compiled
+            .exprs
+            .pop()
+            .ok_or_else(|| internal("a replication without a count"))?;
+        let op = ReplicateRows::new(Arc::clone(&input.schema), Arc::new(Compiled(e)));
+        let layout = input.layout.clone();
+        Ok(Self::attach(
+            input,
+            op,
+            compiled,
+            layout,
+            ("ReplicateRows", count.to_string()),
         ))
     }
 

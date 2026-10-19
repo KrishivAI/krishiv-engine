@@ -38,7 +38,7 @@ pub(super) fn col_expr(c: &BoundColumn, origin: Origin) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(c.clone()))).with_origin(origin))
 }
 
-fn column_bound(a: &Attr, origin: Origin) -> Bound {
+pub(super) fn column_bound(a: &Attr, origin: Origin) -> Bound {
     Bound {
         expr: col_expr(&a.col, origin),
         ty: ArgType {
@@ -252,7 +252,7 @@ impl Resolver<'_> {
     /// A select list: stars expanded, every item named. A name the input
     /// lacks may be an alias defined earlier in the list (a lateral column
     /// alias), when `spark.sql.lateralColumnAlias.enableImplicitResolution`.
-    fn select_items(
+    pub(super) fn select_items(
         &mut self,
         c: &Rel,
         exprs: &[Arc<Expr>],
@@ -326,7 +326,13 @@ impl Resolver<'_> {
     /// another item reads is computed by a projection below the items that
     /// read it (one projection per level of the chain), unless `base`
     /// outputs it already.
-    fn lateral_project(&self, origin: Origin, base: &Rel, items: &[Bound], pass: &[Attr]) -> Rel {
+    pub(super) fn lateral_project(
+        &self,
+        origin: Origin,
+        base: &Rel,
+        items: &[Bound],
+        pass: &[Attr],
+    ) -> Rel {
         if pass.is_empty() && items.iter().all(|b| b.lateral.is_empty()) {
             let out = items.iter().map(|b| out_attr(b, &base.out)).collect();
             let exprs = items.iter().map(|b| Arc::clone(&b.expr)).collect();
@@ -473,7 +479,7 @@ impl Resolver<'_> {
     /// the bound expressions and the relation they read, wider than `c`
     /// when something was added. `lenient`: a name `c` outputs several
     /// times is looked up below.
-    fn bind_missing(
+    pub(super) fn bind_missing(
         &mut self,
         c: &Rel,
         exprs: &[Arc<Expr>],
@@ -872,7 +878,7 @@ impl Resolver<'_> {
     /// read lateral column aliases are computed by projections above it,
     /// the aggregate calls and grouping expressions they use computed by
     /// the aggregate, as Spark plans them.
-    fn build_aggregate(
+    pub(super) fn build_aggregate(
         &mut self,
         origin: Origin,
         c: &Rel,
@@ -1204,7 +1210,7 @@ impl Resolver<'_> {
     }
 
     /// A resolved call of `name` on resolved arguments.
-    fn call(
+    pub(super) fn call(
         &mut self,
         name: &str,
         args: Vec<Arc<Expr>>,

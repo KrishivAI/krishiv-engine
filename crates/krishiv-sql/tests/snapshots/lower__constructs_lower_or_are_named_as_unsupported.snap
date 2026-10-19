@@ -53,9 +53,9 @@ WITH RECURSIVE r AS (SELECT a FROM t) SELECT * FROM r
 SELECT * EXCEPT (a) FROM t
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature SELECT * EXCEPT is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..19
 SELECT a FROM t INTERSECT SELECT a FROM u
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature INTERSECT and EXCEPT is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..41
+  => Intersect false | :- Project [a] | :  +- Read t | +- Project [a] |    +- Read u | 
 SELECT a FROM t EXCEPT ALL SELECT a FROM u
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature INTERSECT and EXCEPT is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..42
+  => Except All true | :- Project [a] | :  +- Read t | +- Project [a] |    +- Read u | 
 SELECT /*+ BROADCAST(t), MERGE(u) */ /*+ COALESCE(2) */ DISTINCT a FROM t, u
   => Hint BROADCAST (t) | +- Hint MERGE (u) |    +- Hint COALESCE (2) |       +- Distinct |          +- Project [a] |             +- Join Inner |                :- Read t |                +- Read u | 
 SELECT a FROM t UNION ALL SELECT b FROM u UNION SELECT c FROM v

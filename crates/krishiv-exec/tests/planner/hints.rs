@@ -197,22 +197,18 @@ fn ignored_hints_warn() {
         plan.warnings(),
         ["A join hint (strategy=broadcast) is specified but it is not part of a join relation."]
     );
-    let sql = "SELECT /*+ REPARTITION(3) */ a FROM t";
-    let plan = krishiv_sql::parse_and_lower(
-        sql,
-        &krishiv_sql::ParserOptions::default(),
-        krishiv_plan::SourceId(0),
-    )
-    .unwrap();
-    let err = krishiv_plan::analyzer::testing::block_on(krishiv_plan::analyzer::Analyzer::analyze(
-        &krishiv_plan::analyzer::DefaultAnalyzer,
-        &plan,
-        &env.ctx,
-    ))
-    .unwrap_err();
+    // Partitioning hints are checked, then have no effect on one node.
+    let sql = "SELECT /*+ REPARTITION(3, a), COALESCE(1), REBALANCE */ \
+               /*+ REPARTITION_BY_RANGE('b') */ s FROM t";
+    env.plan(sql).unwrap();
     assert_eq!(
-        err.error.error_class().name(),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        env.analyzed(sql).warnings,
+        [
+            "Hint REPARTITION_BY_RANGE('b') has no effect in a single-node plan.",
+            "Hint REBALANCE() has no effect in a single-node plan.",
+            "Hint COALESCE(1) has no effect in a single-node plan.",
+            "Hint REPARTITION(3, a) has no effect in a single-node plan.",
+        ]
     );
 }
 
@@ -235,6 +231,34 @@ fn set_operation_and_hint_errors() {
             "SELECT /*+ BROADCAST(1) */ a FROM t",
             ErrorClass::LegacyErrorTemp1046,
         ),
+        (
+            "SELECT a FROM t INTERSECT ALL SELECT a, b FROM t",
+            ErrorClass::NumColumnsMismatch,
+        ),
+        (
+            "SELECT /*+ COALESCE(0) */ a FROM t",
+            ErrorClass::KrishivInvalidPartitionNumber,
+        ),
+        (
+            "SELECT /*+ REPARTITION(-1, a) */ a FROM t",
+            ErrorClass::KrishivInvalidPartitionNumber,
+        ),
+        (
+            "SELECT /*+ REBALANCE(0) */ a FROM t",
+            ErrorClass::KrishivInvalidPartitionNumber,
+        ),
+        (
+            "SELECT /*+ COALESCE(2, 3) */ a FROM t",
+            ErrorClass::LegacyErrorTemp1048,
+        ),
+        (
+            "SELECT /*+ REPARTITION(0, 1.5, NULL, true, 3L, a) */ a FROM t",
+            ErrorClass::LegacyErrorTemp1047,
+        ),
+        (
+            "SELECT /*+ REPARTITION(a) */ b FROM t GROUP BY b",
+            ErrorClass::UnresolvedColumnWithSuggestion,
+        ),
     ] {
         let plan = krishiv_sql::parse_and_lower(
             sql,
@@ -250,5 +274,43 @@ fn set_operation_and_hint_errors() {
             ))
             .unwrap_err();
         assert_eq!(err.error.error_class(), class, "{sql}: {}", err.error);
+    }
+}
+
+/// Spark's messages for partitioning hint parameters: invalid ones by
+/// value, a partition number below 1.
+#[test]
+fn partitioning_hint_messages() {
+    let env = env();
+    for (sql, message) in [
+        (
+            "SELECT /*+ REPARTITION(0, 1.5, NULL, true, 3L, 4, 1Y, 2S, a) */ a FROM t",
+            "REPARTITION Hint parameters should include an optional integral partitionNum \
+             and/or columns, but \"1.5\", \"NULL\", \"true\", \"3\", \"4\", \"1\", \"2\" can \
+             not be recognized as either partitionNum or columns.",
+        ),
+        (
+            "SELECT /*+ REPARTITION_BY_RANGE(-2, a) */ a FROM t",
+            "Number of partitions (-2) must be positive.",
+        ),
+        (
+            "SELECT /*+ coalesce(a) */ a FROM t",
+            "COALESCE Hint expects a partition number as a parameter.",
+        ),
+    ] {
+        let plan = krishiv_sql::parse_and_lower(
+            sql,
+            &krishiv_sql::ParserOptions::default(),
+            krishiv_plan::SourceId(0),
+        )
+        .unwrap();
+        let err =
+            krishiv_plan::analyzer::testing::block_on(krishiv_plan::analyzer::Analyzer::analyze(
+                &krishiv_plan::analyzer::DefaultAnalyzer,
+                &plan,
+                &env.ctx,
+            ))
+            .unwrap_err();
+        assert_eq!(err.error.message(), message, "{sql}");
     }
 }

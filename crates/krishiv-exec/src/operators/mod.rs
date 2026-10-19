@@ -31,6 +31,7 @@ mod file_write;
 mod filter;
 mod limit;
 mod project;
+mod replicate;
 mod scan;
 mod sort;
 mod union;
@@ -41,6 +42,7 @@ pub use file_write::{FileWrite, FileWriteSink};
 pub use filter::Filter;
 pub use limit::Limit;
 pub use project::{Project, ProjectItem};
+pub use replicate::ReplicateRows;
 pub use scan::{
     FileSelections, FilterPushdown, MemoryScan, PushedFilter, ScanPushdown, ScanPushdowns,
 };

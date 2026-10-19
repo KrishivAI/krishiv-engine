@@ -228,7 +228,10 @@ impl<'a> Estimator<'a> {
             PlanNode::Sort { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::WithCte { input, .. }
-            | PlanNode::JoinHint { input, .. } => Est::clone(&self.plan(input)),
+            | PlanNode::JoinHint { input, .. }
+            // Each distinct row of an `INTERSECT ALL` / `EXCEPT ALL` count:
+            // no count is known, the input's rows bound it from below.
+            | PlanNode::ReplicateRows { input, .. } => Est::clone(&self.plan(input)),
             PlanNode::Union { inputs, .. } => {
                 let rows = inputs.iter().map(|i| self.plan(i).rows).sum();
                 Est::unknown(rows, ids())
