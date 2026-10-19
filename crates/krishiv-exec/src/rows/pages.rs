@@ -13,6 +13,9 @@ const MIN_PAGE_ROWS: usize = 64;
 /// page (one future spill frame) stays bounded.
 const MAX_PAGE_HEAP: usize = 16 << 20;
 
+/// Rows reserved by a new page before it grows on demand.
+const FIRST_ROWS: usize = 64;
+
 #[derive(Debug)]
 struct Page {
     rows: Vec<u8>,
@@ -86,29 +89,35 @@ impl RowPages {
                 row.len()
             )));
         }
-        let mut long = Vec::new();
+        // One validation pass (no per-row allocation); the copy pass below
+        // re-reads the same views.
+        let mut long_bytes = 0usize;
         for &v in &self.views {
             let len = view_len(row, v);
             if len > INLINE_MAX {
                 let from = usize::try_from(word(row, v + 8)).unwrap_or(usize::MAX);
-                let bytes = keys
-                    .heap()
+                keys.heap()
                     .get(from..from.saturating_add(len))
                     .ok_or_else(|| internal("view outside its heap".to_owned()))?;
-                long.push((v, bytes));
+                long_bytes = long_bytes.saturating_add(len);
             }
         }
-        let full = self
-            .pages
-            .last()
-            .is_none_or(|p| p.len == self.page_rows() || p.heap.len() >= MAX_PAGE_HEAP);
+        if long_bytes > MAX_PAGE_HEAP {
+            return Err(internal(format!(
+                "key row holds {long_bytes} bytes of long values; a page heap is limited to {MAX_PAGE_HEAP}"
+            )));
+        }
+        let full = self.pages.last().is_none_or(|p| {
+            p.len == self.page_rows() || p.heap.len().saturating_add(long_bytes) > MAX_PAGE_HEAP
+        });
         if full {
             let next = self.pages.len();
             if u32::try_from((next + 1) << self.shift).is_err() {
                 return Err(internal("row ids exhausted in one row table".to_owned()));
             }
+            // Rows grow geometrically up to the page size.
             self.pages.push(Page {
-                rows: Vec::with_capacity(self.page_rows() * stride),
+                rows: Vec::with_capacity(self.page_rows().min(FIRST_ROWS) * stride),
                 heap: Vec::new(),
                 len: 0,
             });
@@ -122,7 +131,16 @@ impl RowPages {
             .map_err(|_| internal("row id out of range".to_owned()))?;
         let start = page.rows.len();
         page.rows.extend_from_slice(row);
-        for (v, bytes) in long {
+        for &v in &self.views {
+            let len = view_len(row, v);
+            if len <= INLINE_MAX {
+                continue;
+            }
+            let from = usize::try_from(word(row, v + 8)).unwrap_or(usize::MAX);
+            let bytes = keys
+                .heap()
+                .get(from..from.saturating_add(len))
+                .ok_or_else(|| internal("view outside its heap".to_owned()))?;
             let at = page.heap.len() as u64;
             page.heap.extend_from_slice(bytes);
             page.rows[start + v + 8..start + v + 16].copy_from_slice(&at.to_le_bytes());

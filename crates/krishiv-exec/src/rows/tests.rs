@@ -289,3 +289,34 @@ fn push_refuses_rows_of_another_layout_without_writing() {
     assert_eq!(pages.push(&keys, 1).ok(), Some(0));
     assert_eq!(pages.hash(0), keys.hashes()[1]);
 }
+
+#[test]
+fn a_new_page_reserves_a_few_rows_and_a_page_heap_stays_bounded() {
+    let layout = RowLayout::new(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
+    let a: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+    let keys = layout.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let mut pages = RowPages::new(&layout);
+    assert_eq!(pages.push(&keys, 0).ok(), Some(0));
+    assert!(
+        pages.memory_size() < 64 * 1024,
+        "one row must not reserve a whole page: {}",
+        pages.memory_size()
+    );
+
+    let layout = RowLayout::new(&[DataType::Utf8], &[false]).unwrap_or_else(|e| panic!("{e}"));
+    let big = "x".repeat(10 << 20);
+    let a: ArrayRef = Arc::new(StringArray::from(vec![big.as_str(), big.as_str()]));
+    let keys = layout.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let mut pages = RowPages::new(&layout);
+    let (first, second) = (pages.push(&keys, 0), pages.push(&keys, 1));
+    assert!(first.is_ok() && second.is_ok());
+    // 2 x 10 MiB would exceed the 16 MiB page heap: the second row opens a page.
+    assert_eq!(pages.row(second.unwrap_or(0)).1.len(), 10 << 20);
+
+    let huge = "y".repeat(17 << 20);
+    let a: ArrayRef = Arc::new(StringArray::from(vec![huge.as_str()]));
+    let keys = layout.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let before = pages.len();
+    assert!(pages.push(&keys, 0).is_err(), "value over the heap limit");
+    assert_eq!(pages.len(), before);
+}
