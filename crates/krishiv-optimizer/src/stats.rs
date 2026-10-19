@@ -67,6 +67,13 @@ impl Statistics for NoStatistics {
     }
 }
 
+/// The estimated number of rows `plan` returns, as the join orderer sees it
+/// (at least 1; [`DEFAULT_ROWS`] per table without statistics).
+#[must_use]
+pub fn estimated_rows(plan: &Arc<LogicalPlan>, stats: &dyn Statistics) -> f64 {
+    Estimator::new(stats).plan(plan).rows
+}
+
 /// What is known of one attribute.
 #[derive(Debug, Clone)]
 pub(crate) struct Col {

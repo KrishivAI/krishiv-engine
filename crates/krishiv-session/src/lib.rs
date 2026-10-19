@@ -45,6 +45,7 @@ mod catalog;
 mod column;
 mod conf;
 mod dataframe;
+mod explain;
 pub mod functions;
 mod session;
 

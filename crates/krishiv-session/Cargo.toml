@@ -32,6 +32,7 @@ object_store = { workspace = true, features = ["fs"] }
 [dev-dependencies]
 arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
+insta.workspace = true
 parquet = { workspace = true, features = ["arrow"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
