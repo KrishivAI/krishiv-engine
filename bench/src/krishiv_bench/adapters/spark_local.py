@@ -1,8 +1,8 @@
 """Spark and Sail as in-process-session adapters sharing one Spark-SQL driver.
 
 * ``SparkLocalEngine`` (``spark-local``): Apache Spark 4.2 ``local[N]`` in this process (``pyspark==4.2.0``, a JVM
-  child of the host process). Tuned for a single node: UI off, 24 shuffle partitions (same as the Connect baseline),
-  driver heap = the pinned memory limit, off-heap off, Kryo not needed (no shuffle serialisation across processes).
+  child of the host process). Tuned for a single node: AQE on, ``shuffle.partitions`` = cores, UI off,
+  driver heap = the pinned memory limit.
 * ``SailEngine`` (``sail``): LakeSail's ``pysail`` Spark Connect server started on a loopback port in this process
   (Rust, no JVM), driven by the pinned ``pyspark`` Connect client.
 
@@ -53,7 +53,8 @@ class SparkLocalEngine(_SparkSQLEngine):
         cfg: dict = {
             "master": f"local[{self.threads}]",
             "driver_memory": self.memory_limit,
-            "shuffle_partitions": 24,
+            "shuffle_partitions": self.threads,
+            "aqe": True,
             "ui": False,
         }
         if self.spark is not None:
@@ -67,7 +68,8 @@ class SparkLocalEngine(_SparkSQLEngine):
             SparkSession.builder.master(f"local[{self.threads}]")
             .appName("krishiv-bench-spark-local")
             .config("spark.driver.memory", self.memory_limit)
-            .config("spark.sql.shuffle.partitions", "24")
+            .config("spark.sql.shuffle.partitions", str(self.threads))
+            .config("spark.sql.adaptive.enabled", "true")
             .config("spark.ui.enabled", "false")
             .config("spark.ui.showConsoleProgress", "false")
             .config("spark.sql.ansi.doubleQuotedIdentifiers", "true")

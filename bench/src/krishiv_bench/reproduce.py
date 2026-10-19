@@ -314,7 +314,9 @@ def summarize(record: dict) -> dict:
                     per[n].update(geomean=geomean(ratios), geomean_ci95=[lo, hi], n=len(ratios))
                 else:
                     ratios = [a / b for a, b in pairs.values()]
-                    per[n].update(geomean=geomean(ratios), n=len(ratios))
+                    # the Polars post reports sums of query times as well as geomeans
+                    sum_ratio = sum(a for a, _ in pairs.values()) / sum(b for _, b in pairs.values())
+                    per[n].update(geomean=geomean(ratios), n=len(ratios), sum_ratio=sum_ratio)
                 per[n]["worst_query"] = max(zip(pairs, ratios, strict=True), key=lambda t: t[1])[0]
         if "krishiv" in names:
             for n in names:
@@ -360,6 +362,8 @@ def markdown(record: dict) -> str:
             if "geomean" in p:
                 ci = p.get("geomean_ci95")
                 ci_s = f" (95% CI {ci[0]:.2f}-{ci[1]:.2f})" if ci else ""
+                if "sum_ratio" in p:
+                    ci_s += f"; sum of times {p['sum_ratio']:.2f}x"
                 out.append(
                     f"- {n}: geomean {p['geomean']:.2f}x of {REFERENCE} over {p['n']} queries{ci_s}; {p['statuses']}"
                 )
