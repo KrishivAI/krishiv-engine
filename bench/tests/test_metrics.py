@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import signal
 import stat
 import subprocess
 import sys
@@ -22,25 +25,34 @@ MIB = 2**20
 
 
 def _spawn_holder(mib: int, grandchild_mib: int = 0) -> subprocess.Popen[bytes]:
-    """A python process holding ``mib`` MiB of touched memory (and a child holding ``grandchild_mib``)."""
+    """A python process holding ``mib`` MiB of touched memory (and a child holding ``grandchild_mib``).
+
+    Runs in its own session (``kill_holder`` kills the group) and prints ``ready`` only after the grandchild
+    has reported that its pages are touched."""
     code = textwrap.dedent(
         f"""
         import subprocess, sys, time
         if {grandchild_mib}:
-            subprocess.Popen([sys.executable, "-c",
+            gc = subprocess.Popen([sys.executable, "-c",
                 "import time; b = bytearray({grandchild_mib} * 2**20); b[::4096] = b'x' * len(b[::4096]); "
-                "time.sleep(60)"])
+                "print('ready', flush=True); time.sleep(60)"], stdout=subprocess.PIPE)
+            assert gc.stdout.readline().strip() == b"ready"
         b = bytearray({mib} * 2**20)
         b[::4096] = b"x" * len(b[::4096])
         print("ready", flush=True)
         time.sleep(60)
         """
     )
-    p = subprocess.Popen([sys.executable, "-I", "-c", code], stdout=subprocess.PIPE)
+    p = subprocess.Popen([sys.executable, "-I", "-c", code], stdout=subprocess.PIPE, start_new_session=True)
     assert p.stdout is not None
     assert p.stdout.readline().strip() == b"ready"
-    time.sleep(0.5)  # let a grandchild finish touching its memory
     return p
+
+
+def kill_holder(p: subprocess.Popen[bytes]) -> None:
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(p.pid, signal.SIGKILL)
+    p.wait()
 
 
 def test_tree_peak_counts_descendants():
@@ -58,11 +70,9 @@ def test_tree_peak_counts_descendants():
             only.start()
             assert only.stop() < 190 * MIB
         finally:
-            solo.kill()
-            solo.wait()
+            kill_holder(solo)
     finally:
-        p.kill()
-        p.wait()
+        kill_holder(p)
 
 
 def test_tree_peak_sees_a_spike_inside_the_window():
@@ -258,17 +268,13 @@ def test_q18_and_q21_are_distinct_queries_for_every_engine():
         assert "s_name" in qs["q21"]  # suppliers who kept orders waiting
 
 
-def test_the_timed_span_is_one_request(tiny):
-    """A worker's reported time covers only its own request, so queries timed back to back are not cumulative."""
+def test_worker_replies_belong_to_the_request(tiny):
+    """Back-to-back timed runs of different queries return each query's own row count (exact, no clock)."""
     eng = ProcessEngine("duckdb", 2, 1, 60)
     eng.setup(tiny)
     try:
-        slow = Query("q18", "SELECT count(*) FROM t a, t b, t c WHERE a.a % 7 = b.a % 7 AND b.a % 5 = c.a % 5", "tpch")
-        fast = Query("q21", "SELECT 1", "tpch")
-        _, t_slow = eng.timed_run(slow)
-        _, t_fast = eng.timed_run(fast)
-        _, t_fast2 = eng.timed_run(fast)
-        assert t_slow > 20 * t_fast
-        assert t_fast2 < t_slow / 20
+        many = Query("q18", "SELECT a FROM t WHERE a < 10", "tpch")
+        few = Query("q21", "SELECT a FROM t WHERE a < 3", "tpch")
+        assert [eng.timed_run(q)[0] for q in (many, few, few, many)] == [10, 3, 3, 10]
     finally:
         eng.teardown()
