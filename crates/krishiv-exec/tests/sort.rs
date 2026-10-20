@@ -508,9 +508,26 @@ async fn external_sort_spills_under_an_eighth_of_its_data() {
         m.runs_spilled >= 8 && m.merge_passes > 0 && m.final_fan_in <= 4,
         "{m:?}"
     );
-    let metrics = q.metrics().operators.into_values();
-    let sink = metrics.into_iter().find(|e| e.name == "Sort").unwrap();
+    let qm = q.metrics();
+    let limit = u64::try_from(budget << 20).unwrap();
+    assert_eq!(qm.memory.limit, Some(limit));
+    assert!(
+        qm.memory.peak_reserved > 0 && qm.memory.peak_reserved <= limit,
+        "{:?}",
+        qm.memory
+    );
+    let sink = qm
+        .operators
+        .into_values()
+        .find(|e| e.name == "Sort")
+        .unwrap();
     assert!(sink.metrics.spills > 0, "the drivers spilled on request");
+    // Every run and every merge pass's output is a file of the sort's.
+    assert!(
+        sink.metrics.spill_files >= m.runs_spilled && sink.metrics.spill_write_bytes > 0,
+        "{:?} {m:?}",
+        sink.metrics
+    );
     assert_released(&root);
     assert_eq!(manager.used_bytes(), 0, "every spill file is gone");
     // Reported by the full-size local run (`--no-capture`).

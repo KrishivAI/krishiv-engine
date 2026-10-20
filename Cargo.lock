@@ -1384,15 +1384,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "krishiv-alloc"
+version = "0.1.0-dev"
+dependencies = [
+ "libmimalloc-sys",
+]
+
+[[package]]
 name = "krishiv-bench-runner"
 version = "0.1.0-dev"
 dependencies = [
  "arrow-array",
+ "arrow-schema",
  "futures",
+ "krishiv-alloc",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-memory",
  "krishiv-session",
  "mimalloc",
+ "parquet",
+ "proptest",
  "tempfile",
  "thiserror",
 ]
@@ -1404,7 +1416,9 @@ dependencies = [
  "clap",
  "futures",
  "krishiv",
+ "krishiv-alloc",
  "krishiv-common",
+ "krishiv-memory",
  "krishiv-server",
  "krishiv-sql",
  "libmimalloc-sys",

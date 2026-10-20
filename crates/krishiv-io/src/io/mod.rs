@@ -243,6 +243,14 @@ impl Default for IoConfig {
     }
 }
 
+/// A coalesced request of `span` bytes is wasteful when more than 1/16 of
+/// it is gap bytes outside the `wanted` ranges: its ranges are then copied
+/// out instead of sliced, so what callers hold is within 1/16 of what they
+/// reserve.
+fn wasteful(span: u64, wanted: u64) -> bool {
+    span.saturating_sub(wanted) > span / 16
+}
+
 fn size_of(c: &Config, e: &'static krishiv_common::config::ConfigEntry, default: u64) -> u64 {
     c.get(e).and_then(ConfigValue::as_size).unwrap_or(default)
 }
@@ -708,6 +716,20 @@ impl IoContext {
         let wanted: Vec<Range<u64>> = ranges.iter().filter(|r| r.start < r.end).cloned().collect();
         let (requests, owner) = coalesce(&wanted, cfg.coalesce_bytes, cfg.max_request_bytes);
         let fetched = try_join_all(requests.iter().map(|r| self.get_one(file, r.clone()))).await?;
+        // A request that read gap bytes between its ranges: its ranges are
+        // copied out, so the request's buffer (gaps included) is freed here.
+        // A slice would keep the whole buffer alive while callers account
+        // only their ranges' bytes (a coalesced projection of 4 of 16
+        // columns read about 3x the bytes it reserved).
+        let mut wanted_bytes = vec![0u64; requests.len()];
+        for (r, &i) in wanted.iter().zip(&owner) {
+            wanted_bytes[i] = wanted_bytes[i].saturating_add(r.end - r.start);
+        }
+        let copy: Vec<bool> = requests
+            .iter()
+            .zip(&wanted_bytes)
+            .map(|(req, &w)| wasteful(req.end - req.start, w))
+            .collect();
         let mut owner = owner.into_iter();
         ranges
             .iter()
@@ -723,7 +745,13 @@ impl IoContext {
                 usize::try_from(a)
                     .ok()
                     .zip(usize::try_from(b).ok())
-                    .map(|(a, b)| fetched[i].slice(a..b))
+                    .map(|(a, b)| {
+                        if copy[i] {
+                            Bytes::copy_from_slice(&fetched[i][a..b])
+                        } else {
+                            fetched[i].slice(a..b)
+                        }
+                    })
                     .ok_or_else(|| internal("range offset overflows usize"))
             })
             .collect()

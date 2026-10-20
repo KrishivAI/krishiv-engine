@@ -234,6 +234,8 @@ async fn memory_pool_defaults_for_scratch_and_spill_only() {
     pool.release(id, 1 << 20);
     pool.reserve_without_abort(id, 1).await.unwrap();
     assert_eq!(pool.reserved(), 4096);
+    // Without its own high-water mark, a pool reports what it holds now.
+    assert_eq!(pool.peak_reserved(), 4096);
 }
 
 #[test]
@@ -1179,4 +1181,68 @@ async fn the_arbitrator_sees_transferred_bytes() {
     state.shrink(target);
     signal.complete(target);
     waiting.await.unwrap().unwrap();
+}
+
+#[test]
+fn peak_reserved_is_the_high_water_mark_of_accepted_grants() {
+    let r = root(Some(4 << 20), 1);
+    let q = r.child("q", None);
+    let id = q.register("c", None);
+    let mut a = Reservation::new(Arc::clone(&q), id);
+    a.try_grow(3 << 20).unwrap();
+    // The query accepts 2 MiB more, the root refuses: rolled back, not a peak.
+    assert!(a.try_grow(2 << 20).is_err());
+    assert_eq!((q.peak_reserved(), r.peak_reserved()), (3 << 20, 3 << 20));
+    a.shrink(2 << 20);
+    a.try_grow(1 << 20).unwrap();
+    assert_eq!(q.reserved(), 2 << 20);
+    assert_eq!((q.peak_reserved(), r.peak_reserved()), (3 << 20, 3 << 20));
+    let other = r.child("other", None);
+    let oid = other.register("c", None);
+    let mut b = Reservation::new(Arc::clone(&other), oid);
+    b.try_grow(2 << 20).unwrap();
+    // The root saw both queries at once; each query only itself.
+    assert_eq!(r.peak_reserved(), 4 << 20);
+    assert_eq!(
+        (q.peak_reserved(), other.peak_reserved()),
+        (3 << 20, 2 << 20)
+    );
+    drop((a, b));
+    assert_eq!(r.reserved(), 0);
+    assert_eq!(r.peak_reserved(), 4 << 20);
+}
+
+#[test]
+fn refusals_start_pressure_epochs_that_drivers_release_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    fn hook() {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+    // The hook is process-wide: this is the only test that installs one.
+    assert!(set_release_hook(hook));
+    assert!(!set_release_hook(hook), "installed once");
+    let mut seen = pressure_epoch();
+    assert!(!release_if_pressured(&mut seen), "no pressure yet");
+    let r = root(Some(1 << 20), 1);
+    let q = r.child("q", None);
+    let id = q.register("c", None);
+    let mut a = Reservation::new(Arc::clone(&q), id);
+    a.try_grow(1 << 20).unwrap();
+    // Wait out the interval so this test's refusal starts its own epoch.
+    std::thread::sleep(EPOCH_INTERVAL);
+    assert!(a.try_grow(1).is_err());
+    assert!(pressure_epoch() > seen);
+    let before = CALLS.load(Ordering::SeqCst);
+    assert!(release_if_pressured(&mut seen));
+    assert_eq!(CALLS.load(Ordering::SeqCst), before + 1);
+    // This thread's own record: the epoch is new to it once, then not.
+    let before = CALLS.load(Ordering::SeqCst);
+    // The epoch is new to this thread's record: it releases once, then not
+    // again for the same epoch (nextest runs each test in its own process,
+    // so no other test starts an epoch meanwhile).
+    assert!(release_if_pressured_here());
+    assert_eq!(CALLS.load(Ordering::SeqCst), before + 1);
+    assert!(!release_if_pressured_here());
+    assert_eq!(CALLS.load(Ordering::SeqCst), before + 1);
 }

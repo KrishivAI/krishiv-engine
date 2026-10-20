@@ -491,6 +491,10 @@ esac
             .args(args)
             .env("CARGO", &fake)
             .env("FAKE_TARGET", &target)
+            // The unsafe-site gate compares the real workspace with
+            // budgets.json, which a PR adding reviewed `unsafe` changes; it
+            // has its own test, so this one, about the measurement, approves it.
+            .env("UNSAFE_APPROVED", "1")
             .env_remove("GITHUB_STEP_SUMMARY")
             // The measurement must land in FAKE_TARGET, whatever the caller exports.
             .env_remove("CARGO_TARGET_DIR");
