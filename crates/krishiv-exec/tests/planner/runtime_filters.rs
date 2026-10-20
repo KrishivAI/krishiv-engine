@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Runtime filters (design P2-T163) never change results: TPC-H with
-//! filters off, on and forced (a Bloom filter for every key, no adaptive
-//! switch-off, or a switch-off after the first batch), and randomized joins
+//! filters off, on and forced (a Bloom filter for every key, an exact set
+//! for every key, no adaptive switch-off, or a switch-off after the first
+//! batch), and randomized joins
 //! over Parquet files whose key types differ from the join's (`int` against
 //! `bigint`, decimal widths, `float` against `double`, signed zeros and NaN,
 //! strings, NULLs), with scans below aggregates and unions; and the
@@ -24,7 +25,7 @@ use proptest::prelude::*;
 use super::tpch::{Tpch, answers, expected_rows, parquet_files, parquet_tables, rows, sql};
 
 /// Configurations compared: off, the defaults, and forced forms.
-const MODES: [(&str, &[(&str, &str)]); 5] = [
+const MODES: [(&str, &[(&str, &str)]); 6] = [
     ("off", &[("krishiv.runtimeFilter.enabled", "false")]),
     ("default", &[]),
     (
@@ -32,6 +33,14 @@ const MODES: [(&str, &[(&str, &str)]); 5] = [
         &[
             ("krishiv.runtimeFilter.bloom.minApplicationRows", "0"),
             ("krishiv.runtimeFilter.inList.maxValues", "0"),
+            ("krishiv.runtimeFilter.exactSet.maxValues", "0"),
+            ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
+        ],
+    ),
+    (
+        "exact",
+        &[
+            ("krishiv.runtimeFilter.exactSet.maxValues", "1000000"),
             ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
         ],
     ),
@@ -39,6 +48,7 @@ const MODES: [(&str, &[(&str, &str)]); 5] = [
         "values",
         &[
             ("krishiv.runtimeFilter.inList.maxValues", "3"),
+            ("krishiv.runtimeFilter.exactSet.maxValues", "3"),
             ("spark.sql.optimizer.runtime.bloomFilter.enabled", "false"),
             ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
         ],
@@ -133,7 +143,7 @@ fn tpch_results_do_not_depend_on_runtime_filters() {
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
     assert_eq!(dropped[0], 0, "no filters when off");
     assert!(
-        dropped[1] > 0 && dropped[2] > 0 && dropped[3] > 0,
+        dropped[1] > 0 && dropped[2] > 0 && dropped[3] > 0 && dropped[4] > 0,
         "{dropped:?}"
     );
     assert!(blooms >= 20, "{blooms} Bloom filters planned");
@@ -569,16 +579,20 @@ fn bloom_settings_are_honoured() {
     let want = sorted(&run(&t.plan_sql(q).unwrap()).0);
     let forced = ("krishiv.runtimeFilter.bloom.minApplicationRows", "0");
     let no_values = ("krishiv.runtimeFilter.inList.maxValues", "0");
+    // 600 keys would otherwise be an exact set, not a Bloom filter.
+    let no_exact = ("krishiv.runtimeFilter.exactSet.maxValues", "0");
     // The row stage never switches off, so its drops are deterministic.
     let always = ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100");
     let spark_off = ("krishiv.sql.optimizer.runtime.bloomFilter.enabled", "false");
     let no_items = ("krishiv.runtimeFilter.bloom.maxItems", "0");
     let tiny = ("krishiv.runtimeFilter.bloom.maxBytes", "32");
-    let cases: [(&[(&str, &str)], bool); 4] = [
+    let cases: [(&[(&str, &str)], bool); 5] = [
+        (&[forced, no_values, no_exact, always], true),
+        (&[forced, no_values, no_exact, always, spark_off], false),
+        (&[forced, no_values, no_exact, always, no_items], false),
+        (&[forced, no_values, no_exact, always, tiny], true),
+        // The exact set: planned as a Bloom, published exact.
         (&[forced, no_values, always], true),
-        (&[forced, no_values, always, spark_off], false),
-        (&[forced, no_values, always, no_items], false),
-        (&[forced, no_values, always, tiny], true),
     ];
     let mut dropped = Vec::new();
     for (mode, planned) in cases {
@@ -598,4 +612,6 @@ fn bloom_settings_are_honoured() {
     assert!(dropped[0] > dropped[1], "{dropped:?}");
     assert_eq!(dropped[2], dropped[1], "{dropped:?}");
     assert_eq!(dropped[3], dropped[1], "{dropped:?}");
+    // An exact set passes no false positive: it drops at least as many.
+    assert!(dropped[4] >= dropped[0], "{dropped:?}");
 }

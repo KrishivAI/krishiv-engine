@@ -22,9 +22,11 @@ mod unit {
         TriState, prune,
     };
 
+    /// Exact forms only up to the `IN` list (a Bloom beyond).
     fn options(max_values: usize) -> KeyFilterOptions {
         KeyFilterOptions {
             max_values,
+            exact_max_values: max_values,
             ..KeyFilterOptions::default()
         }
     }
@@ -276,6 +278,7 @@ mod unit {
     fn builder_forms_nulls_and_merges() {
         let opts = KeyFilterOptions {
             max_values: 3,
+            exact_max_values: 3,
             bloom_max_items: 10,
             ..KeyFilterOptions::default()
         };
@@ -341,6 +344,7 @@ mod unit {
         // A Bloom with too high an expected false-positive rate is not built.
         let capped = KeyFilterOptions {
             max_values: 0,
+            exact_max_values: 0,
             bloom_max_bytes: 32,
             ..KeyFilterOptions::default()
         };

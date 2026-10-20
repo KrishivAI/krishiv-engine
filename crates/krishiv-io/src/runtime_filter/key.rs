@@ -20,10 +20,9 @@ use arrow_array::types::{
     Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef};
-use arrow_buffer::NullBuffer;
+use arrow_buffer::{NullBuffer, ScalarBuffer};
 use arrow_schema::{DataType, TimeUnit};
 
-use super::bloom::xxh64;
 use crate::request::ScalarValue;
 
 /// Whether `t` can be a runtime filter's key type.
@@ -112,7 +111,10 @@ pub(crate) enum KeyValue {
 pub(crate) enum Norm {
     /// Integers, dates, timestamps and booleans (0/1), widened to `i64`;
     /// `width` is the key type's size in bytes.
-    Int { values: Vec<i64>, width: usize },
+    Int {
+        values: ScalarBuffer<i64>,
+        width: usize,
+    },
     /// Unscaled decimals at the key type's scale.
     Decimal(Vec<i128>),
     /// Floats after Spark's normalization; `single` for a `float` key.
@@ -144,29 +146,33 @@ fn pow10(n: u32) -> Option<i128> {
     10_i128.checked_pow(n)
 }
 
-fn ints(a: &dyn Array) -> Option<Vec<i64>> {
-    Some(match a.data_type() {
-        DataType::Int8 => a
-            .as_primitive::<Int8Type>()
-            .values()
-            .iter()
-            .map(|&v| i64::from(v))
-            .collect(),
-        DataType::Int16 => a
-            .as_primitive::<Int16Type>()
-            .values()
-            .iter()
-            .map(|&v| i64::from(v))
-            .collect(),
-        DataType::Int32 => a
-            .as_primitive::<Int32Type>()
-            .values()
-            .iter()
-            .map(|&v| i64::from(v))
-            .collect(),
-        DataType::Int64 => a.as_primitive::<Int64Type>().values().to_vec(),
-        _ => return None,
-    })
+fn ints(a: &dyn Array) -> Option<ScalarBuffer<i64>> {
+    Some(
+        match a.data_type() {
+            DataType::Int8 => a
+                .as_primitive::<Int8Type>()
+                .values()
+                .iter()
+                .map(|&v| i64::from(v))
+                .collect::<Vec<i64>>(),
+            DataType::Int16 => a
+                .as_primitive::<Int16Type>()
+                .values()
+                .iter()
+                .map(|&v| i64::from(v))
+                .collect::<Vec<i64>>(),
+            DataType::Int32 => a
+                .as_primitive::<Int32Type>()
+                .values()
+                .iter()
+                .map(|&v| i64::from(v))
+                .collect::<Vec<i64>>(),
+            // Zero-copy: the column's own buffer.
+            DataType::Int64 => return Some(a.as_primitive::<Int64Type>().values().clone()),
+            _ => return None,
+        }
+        .into(),
+    )
 }
 
 /// `array` normalized to `key_type` (see the module docs), or `None` when
@@ -181,7 +187,13 @@ pub fn normalize_key_bytes(array: &dyn Array, key_type: &DataType) -> Option<Nor
     }
     let norm = match key_type {
         D::Boolean => Norm::Int {
-            values: array.as_boolean().values().iter().map(i64::from).collect(),
+            values: array
+                .as_boolean()
+                .values()
+                .iter()
+                .map(i64::from)
+                .collect::<Vec<_>>()
+                .into(),
             width: 1,
         },
         D::Int8 | D::Int16 | D::Int32 | D::Int64 => Norm::Int {
@@ -194,14 +206,15 @@ pub fn normalize_key_bytes(array: &dyn Array, key_type: &DataType) -> Option<Nor
                 .values()
                 .iter()
                 .map(|&d| i64::from(d))
-                .collect(),
+                .collect::<Vec<_>>()
+                .into(),
             width: 4,
         },
         D::Timestamp(..) => Norm::Int {
             values: array
                 .as_primitive::<TimestampMicrosecondType>()
                 .values()
-                .to_vec(),
+                .clone(),
             width: 8,
         },
         D::Float32 | D::Float64 => {
@@ -222,7 +235,7 @@ pub fn normalize_key_bytes(array: &dyn Array, key_type: &DataType) -> Option<Nor
                     .iter()
                     .map(|&v| spark_float(v))
                     .collect(),
-                _ => ints(array)?.into_iter().map(|v| v as f64).collect(),
+                _ => ints(array)?.iter().map(|&v| v as f64).collect(),
             };
             Norm::Float {
                 values,
@@ -235,7 +248,7 @@ pub fn normalize_key_bytes(array: &dyn Array, key_type: &DataType) -> Option<Nor
                     array.as_primitive::<Decimal128Type>().values().to_vec(),
                     *fs,
                 ),
-                _ => (ints(array)?.into_iter().map(i128::from).collect(), 0),
+                _ => (ints(array)?.iter().map(|&v| i128::from(v)).collect(), 0),
             };
             let up = u32::try_from(i16::from(*s) - i16::from(from_scale)).ok()?;
             let factor = pow10(up)?;
@@ -314,36 +327,19 @@ impl NormalizedKeys {
         self.nulls.as_ref().is_some_and(|n| n.is_null(i))
     }
 
-    /// The XXH64 of each row's normalized bytes (NULL rows hash as zero
-    /// bytes; callers skip them).
+    /// The row hash `h` of each row ([`super::hash`]: XXH64 of the
+    /// normalized bytes; NULL rows hash their placeholder value, callers
+    /// skip them).
     #[must_use]
     pub fn hashes(&self) -> Vec<u64> {
-        match &self.norm {
-            Norm::Int { values, width } => values
-                .iter()
-                .map(|v| xxh64(&v.to_le_bytes()[..*width]))
-                .collect(),
-            Norm::Decimal(values) => values.iter().map(|v| xxh64(&v.to_le_bytes())).collect(),
-            Norm::Float { values, single } => {
-                values.iter().map(|&v| float_hash(v, *single)).collect()
-            }
-            Norm::Bytes(a) => {
-                let mut out = vec![0; self.len];
-                for_each_bytes(a.as_ref(), |i, b| out[i] = xxh64(b));
-                out
-            }
-        }
+        let mut out = Vec::with_capacity(self.len);
+        super::hash::row_hashes(self, None, &mut out);
+        out
     }
-}
 
-#[inline]
-pub(crate) fn float_hash(v: f64, single: bool) -> u64 {
-    if single {
-        #[expect(clippy::cast_possible_truncation, reason = "a widened float32")]
-        let f = v as f32;
-        xxh64(&f.to_le_bytes())
-    } else {
-        xxh64(&v.to_le_bytes())
+    /// The validity of the rows (`None`: no NULL).
+    pub(crate) fn nulls(&self) -> Option<&NullBuffer> {
+        self.nulls.as_ref()
     }
 }
 

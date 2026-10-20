@@ -125,9 +125,43 @@ impl RuntimeBloom {
             reason = "the SBBF uses the low half"
         )]
         let m = mask(hash as u32);
+        // Every tested bit set: OR the missing bits of the eight words
+        // (no early exit, so the eight lanes vectorize).
         self.blocks
             .get(i)
-            .is_some_and(|b| b.iter().zip(m).all(|(w, bit)| w & bit == bit))
+            .is_some_and(|b| b.iter().zip(m).fold(0, |miss, (w, bit)| miss | (bit & !w)) == 0)
+    }
+
+    /// Checks every hash of `hashes`, packed 64 answers a word: answer
+    /// `i` is whether `hashes[i]` may have been added. One pass over the
+    /// batch's hash vector: the eight words of a block are tested together
+    /// (a SIMD compare where the target has one), as the Parquet and Impala
+    /// SBBF probes do.
+    #[must_use]
+    pub fn check_batch(&self, hashes: &[u64]) -> arrow_buffer::BooleanBuffer {
+        super::member::pack(hashes, |h| self.check_hash(h))
+    }
+
+    /// A filter over the Parquet-layout bitset `bytes` (see
+    /// [`Self::to_bytes`]); `None` unless it is a non-empty whole number of
+    /// blocks.
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let (chunks, rest) = bytes.as_chunks::<BLOCK_BYTES>();
+        if chunks.is_empty() || !rest.is_empty() {
+            return None;
+        }
+        let blocks = chunks
+            .iter()
+            .map(|b| {
+                let mut block = [0u32; 8];
+                for (w, c) in block.iter_mut().zip(b.as_chunks::<4>().0) {
+                    *w = u32::from_le_bytes(*c);
+                }
+                block
+            })
+            .collect();
+        Some(Self { blocks })
     }
 
     /// The expected false-positive rate after `items` distinct hashes:

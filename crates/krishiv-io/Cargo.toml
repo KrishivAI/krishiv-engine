@@ -18,6 +18,8 @@ arrow-schema.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
+# Exact runtime-filter sets, placed by the row hash (P2-T163).
+hashbrown.workspace = true
 futures = { workspace = true, features = ["alloc", "std"] }
 krishiv-common = { path = "../krishiv-common" }
 # Spark value text conversions and datetime patterns (CSV, JSON, text).
