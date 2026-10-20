@@ -76,10 +76,10 @@ Reported: median per engine, ratio of medians with a bootstrap 95% CI, the geome
 Compares two Krishiv builds (for example `main` against a PR branch), or two configs of one build, with the `abba` protocol.
 `--runner PATH` (on `run`, `abba`, `reproduce`) picks the runner binary and wins over `$KRISHIV_BENCH_RUNNER`.
 ```bash
-# build both runners (each in its own target dir), then compare; ratio = B / A, below 1 means B is faster
+# build both runners at the shipped x86-64-v3 level (each in its own target dir), then compare; ratio = B / A, below 1 means B is faster
 git worktree add ../main-build origin/main && git worktree add ../pr-build my-branch
-(cd ../main-build && CARGO_TARGET_DIR=$HOME/target/ab-main cargo build --profile dist -p krishiv-bench-runner)
-(cd ../pr-build   && CARGO_TARGET_DIR=$HOME/target/ab-pr   cargo build --profile dist -p krishiv-bench-runner)
+(cd ../main-build && RUSTFLAGS="-C target-cpu=x86-64-v3" CARGO_TARGET_DIR=$HOME/target/ab-main cargo build --profile dist -p krishiv-bench-runner)
+(cd ../pr-build   && RUSTFLAGS="-C target-cpu=x86-64-v3" CARGO_TARGET_DIR=$HOME/target/ab-pr cargo build --profile dist -p krishiv-bench-runner)
 uv run krishiv-bench ab --suite tpch --sf 10 --dataset tpch-duckdb --reps 3 --queries q01,q03,q09 \
   --a-runner $HOME/target/ab-main/dist/krishiv-bench-runner --a-sha "$(git -C ../main-build rev-parse HEAD)" \
   --b-runner $HOME/target/ab-pr/dist/krishiv-bench-runner   --b-sha "$(git -C ../pr-build rev-parse HEAD)"

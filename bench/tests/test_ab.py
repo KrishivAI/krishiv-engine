@@ -248,3 +248,19 @@ def test_run_ab_writes_both_sides_into_the_result(tmp_path: Path, monkeypatch: p
     assert rec["queries"]["q01"]["status"] == "ok"
     assert rec["summary"]["queries_ok"] == 1
     assert "B/A geomean" in ab.markdown(rec)
+
+
+def test_summary_geomean_and_ci_use_the_b_over_a_direction():
+    log: list[str] = []
+    entries = {
+        f"q{i}": ab.one_query(q(), Scripted("a", [(1,)], log, 1.0), Scripted("b", [(1,)], log, 4.0), reps=2)
+        for i in range(3)
+    }
+    record = {"queries": entries, "load_at_start": 0.0}
+    summary = ab.summarize_ab(record)
+    assert summary["geomean"] == pytest.approx(4.0)
+    lo, hi = summary["geomean_ci95"]
+    assert lo <= summary["geomean"] <= hi
+    assert lo == pytest.approx(4.0)
+    assert hi == pytest.approx(4.0)
+    assert summary["median_spread_a"] == 0.0

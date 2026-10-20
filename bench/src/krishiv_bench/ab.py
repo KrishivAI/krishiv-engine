@@ -138,6 +138,16 @@ def markdown(record: dict) -> str:
     return "\n".join(lines)
 
 
+def summarize_ab(record: dict) -> dict:
+    """The shared summary with the ratio direction B / A (the numerator side goes first), plus the spreads."""
+    summary = summarize(record, "b", "a")
+    ok = [e for e in record["queries"].values() if e["status"] == "ok"]
+    if ok:
+        summary["median_spread_a"] = statistics.median(e["a_spread"] for e in ok)
+        summary["median_spread_b"] = statistics.median(e["b_spread"] for e in ok)
+    return summary
+
+
 def run_ab(
     sf: float,
     dataset: str,
@@ -194,11 +204,7 @@ def run_ab(
             a.teardown()
             b.teardown()
     record["finished_utc"] = dt.datetime.now(dt.UTC).isoformat()
-    record["summary"] = summarize(record, "a", "b")
-    ok = [e for e in record["queries"].values() if e["status"] == "ok"]
-    if ok:
-        record["summary"]["median_spread_a"] = statistics.median(e["a_spread"] for e in ok)
-        record["summary"]["median_spread_b"] = statistics.median(e["b_spread"] for e in ok)
+    record["summary"] = summarize_ab(record)
     out = results_dir()
     out.mkdir(parents=True, exist_ok=True)
     f = out / f"{started.strftime('%Y%m%dT%H%M%SZ')}_ab_{suite}_sf{fmt_sf(ds.sf)}.json"
@@ -208,4 +214,4 @@ def run_ab(
     return f
 
 
-__all__ = ["markdown", "one_query", "parse_conf", "run_ab", "spread"]
+__all__ = ["markdown", "one_query", "parse_conf", "run_ab", "spread", "summarize_ab"]
