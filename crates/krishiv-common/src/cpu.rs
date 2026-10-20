@@ -61,16 +61,19 @@ struct X86Feature {
     /// The feature's bit in that register.
     bit: u32,
     compiled: bool,
+    /// The flag the Linux kernel lists in `/proc/cpuinfo` for it ("" when it lists none).
+    flag: &'static str,
 }
 
 #[cfg(any(target_arch = "x86_64", test))]
 macro_rules! x86 {
-    ($name:literal, $reg:literal, $bit:literal, $cfg:literal) => {
+    ($name:literal, $reg:literal, $bit:literal, $cfg:literal, $flag:literal) => {
         X86Feature {
             name: $name,
             reg: $reg,
             bit: 1 << $bit,
             compiled: cfg!(target_feature = $cfg),
+            flag: $flag,
         }
     };
 }
@@ -78,22 +81,22 @@ macro_rules! x86 {
 /// The x86-64-v3 features (`osxsave` stands for the OS having enabled the AVX state).
 #[cfg(any(target_arch = "x86_64", test))]
 static X86_V3: [X86Feature; 16] = [
-    x86!("sse3", 0, 0, "sse3"),
-    x86!("ssse3", 0, 9, "ssse3"),
-    x86!("fma", 0, 12, "fma"),
-    x86!("cmpxchg16b", 0, 13, "cmpxchg16b"),
-    x86!("sse4.1", 0, 19, "sse4.1"),
-    x86!("sse4.2", 0, 20, "sse4.2"),
-    x86!("movbe", 0, 22, "movbe"),
-    x86!("popcnt", 0, 23, "popcnt"),
-    x86!("xsave", 0, 26, "xsave"),
-    x86!("osxsave", 0, 27, "avx"),
-    x86!("avx", 0, 28, "avx"),
-    x86!("f16c", 0, 29, "f16c"),
-    x86!("bmi1", 1, 3, "bmi1"),
-    x86!("avx2", 1, 5, "avx2"),
-    x86!("bmi2", 1, 8, "bmi2"),
-    x86!("lzcnt", 2, 5, "lzcnt"),
+    x86!("sse3", 0, 0, "sse3", "pni"),
+    x86!("ssse3", 0, 9, "ssse3", "ssse3"),
+    x86!("fma", 0, 12, "fma", "fma"),
+    x86!("cmpxchg16b", 0, 13, "cmpxchg16b", "cx16"),
+    x86!("sse4.1", 0, 19, "sse4.1", "sse4_1"),
+    x86!("sse4.2", 0, 20, "sse4.2", "sse4_2"),
+    x86!("movbe", 0, 22, "movbe", "movbe"),
+    x86!("popcnt", 0, 23, "popcnt", "popcnt"),
+    x86!("xsave", 0, 26, "xsave", "xsave"),
+    x86!("osxsave", 0, 27, "avx", ""),
+    x86!("avx", 0, 28, "avx", "avx"),
+    x86!("f16c", 0, 29, "f16c", "f16c"),
+    x86!("bmi1", 1, 3, "bmi1", "bmi1"),
+    x86!("avx2", 1, 5, "avx2", "avx2"),
+    x86!("bmi2", 1, 8, "bmi2", "bmi2"),
+    x86!("lzcnt", 2, 5, "lzcnt", "abm"),
 ];
 
 /// The `cpuid` bits this build requires in register `reg` (see [`X86Feature::reg`]).
@@ -135,9 +138,59 @@ pub fn is_supported() -> bool {
     // A static, read at run time: a compat build's all-zero masks are not a constant condition.
     static REQUIRED: [u32; 3] = [x86_required(0), x86_required(1), x86_required(2)];
     let (leaf1, leaf7, ext) = x86_regs();
-    leaf1 & REQUIRED[0] == REQUIRED[0]
+    let cpu_ok = leaf1 & REQUIRED[0] == REQUIRED[0]
         && leaf7 & REQUIRED[1] == REQUIRED[1]
-        && ext & REQUIRED[2] == REQUIRED[2]
+        && ext & REQUIRED[2] == REQUIRED[2];
+    // The OS side runs only once `cpuid` has passed. Code that reads and parses a file is
+    // compiled for the build's CPU level, so it may only run on a CPU that has it.
+    cpu_ok && x86_os_supported()
+}
+
+/// Whether the OS has enabled the state the required features need.
+///
+/// `cpuid` only says what the CPU can do. AVX also needs the OS to have enabled the YMM
+/// register state (`XCR0`); reading `XCR0` takes `unsafe` (`_xgetbv`), which this crate
+/// forbids. On Linux the kernel does the equivalent for us: it lists `avx`, `avx2`, `fma`
+/// and the other flags in `/proc/cpuinfo` only when the matching state is enabled, so the
+/// flags line reflects `XCR0`. Where that file cannot be read, `cpuid` alone decides.
+#[cfg(target_arch = "x86_64")]
+fn x86_os_supported() -> bool {
+    #[cfg(target_os = "linux")]
+    if let Some(line) = x86_flags_line() {
+        let mut any = false;
+        x86_os_missing(&line, true, &mut |_| any = true);
+        return !any;
+    }
+    true
+}
+
+/// The `flags` line of the first CPU in `/proc/cpuinfo`; `None` when it cannot be read.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+fn x86_flags_line() -> Option<String> {
+    let info = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+    let line = info
+        .lines()
+        .find(|l| l.split(':').next().is_some_and(|k| k.trim() == "flags"))?;
+    Some(line.split_once(':').map_or("", |(_, v)| v).to_owned())
+}
+
+/// Calls `sink` with the name of every feature the kernel's flag list lacks (every feature
+/// when `honor_build` is false, else only those this build assumes).
+#[cfg(any(all(target_arch = "x86_64", target_os = "linux"), test))]
+fn x86_os_missing(flags_line: &str, honor_build: bool, sink: &mut dyn FnMut(&str)) {
+    let mut first = true;
+    for f in &X86_V3 {
+        if f.flag.is_empty() || !(f.compiled || !honor_build) {
+            continue;
+        }
+        if !flags_line.split_whitespace().any(|k| k == f.flag) {
+            if !first {
+                sink(", ");
+            }
+            first = false;
+            sink(f.name);
+        }
+    }
 }
 
 /// Calls `sink` with the name of every x86-64-v3 feature a CPU with these `cpuid` results lacks,
@@ -237,7 +290,18 @@ pub fn unsupported_message(sink: &mut dyn FnMut(&str)) {
     #[cfg(target_arch = "x86_64")]
     {
         let (leaf1, leaf7, ext) = x86_regs();
-        x86_missing((leaf1, leaf7, ext), true, sink);
+        let mut any = false;
+        x86_missing((leaf1, leaf7, ext), true, &mut |piece| {
+            any = true;
+            sink(piece);
+        });
+        // The CPU can do it all: then it is the OS state that is missing.
+        #[cfg(target_os = "linux")]
+        if !any && let Some(line) = x86_flags_line() {
+            x86_os_missing(&line, true, sink);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = any;
     }
     #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
     if let Some(line) = arm_features_line() {
@@ -365,6 +429,51 @@ mod tests {
         } else {
             assert!(msg.contains("No compat build"), "{msg}");
         }
+    }
+
+    #[test]
+    fn kernel_flags_reflect_what_the_os_enabled() {
+        // A CPU with AVX2 whose kernel did not enable the YMM state lists no avx family.
+        let no_ymm = " fpu sse sse2 pni ssse3 cx16 sse4_1 sse4_2 popcnt xsave movbe bmi1 bmi2 abm";
+        assert_eq!(
+            collect(|s| x86_os_missing(no_ymm, false, s)),
+            "fma, avx, f16c, avx2"
+        );
+        let full = " fpu sse sse2 pni ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt xsave avx f16c bmi1 avx2 bmi2 abm";
+        assert_eq!(collect(|s| x86_os_missing(full, false, s)), "");
+        // osxsave has no kernel flag and is not looked up.
+        assert!(!collect(|s| x86_os_missing(full, false, s)).contains("osxsave"));
+    }
+
+    #[test]
+    fn kernel_flag_names_match_the_python_check() {
+        // python/krishiv/_cpu.py carries the same list for the wheels; the two must agree.
+        let py = include_str!("../../../python/krishiv/_cpu.py");
+        let block = py
+            .split("_X86_V3 = {")
+            .nth(1)
+            .and_then(|r| r.split('}').next())
+            .unwrap();
+        let python: Vec<(String, String)> = block
+            .lines()
+            .filter_map(|l| {
+                let (k, v) = l.trim().trim_end_matches(',').split_once(": ")?;
+                Some((
+                    k.trim_matches('"').to_owned(),
+                    v.trim_matches('"').to_owned(),
+                ))
+            })
+            .collect();
+        let rust: Vec<(String, String)> = X86_V3
+            .iter()
+            .filter(|f| !f.flag.is_empty())
+            .map(|f| (f.name.to_owned(), f.flag.to_owned()))
+            .collect();
+        let mut python = python;
+        let mut rust = rust;
+        python.sort();
+        rust.sort();
+        assert_eq!(python, rust);
     }
 
     #[test]
