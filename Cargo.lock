@@ -1657,6 +1657,7 @@ dependencies = [
  "krishiv-types",
  "object_store",
  "parquet",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",

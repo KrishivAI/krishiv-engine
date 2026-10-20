@@ -28,8 +28,8 @@ use crate::metrics::{Metric, OperatorEntry, OperatorRole};
 #[non_exhaustive]
 pub struct TextOptions {
     /// Print `<t>` for times, `<mem>` for memory and `<n>` for driver and
-    /// thread counts: the values that change from run to run (golden
-    /// tests).
+    /// thread counts and the hash-seed-dependent table statistics: the
+    /// values that change from run to run (golden tests).
     pub mask_volatile: bool,
 }
 
@@ -61,9 +61,9 @@ impl QueryProfile {
             m.pipelines.len(),
             plural(m.pipelines.len() as u64),
             p.count(m.drivers.drivers),
-            plural(m.drivers.drivers),
+            p.pl(m.drivers.drivers),
             p.count(threads),
-            plural(threads),
+            p.pl(threads),
             m.workers,
             plural(m.workers),
         );
@@ -100,9 +100,9 @@ impl QueryProfile {
                 "   p{id}: wall {}, {} driver{}, {} thread{}: {}",
                 p.time(pm.wall_time()),
                 p.count(pm.drivers),
-                plural(pm.drivers),
+                p.pl(pm.drivers),
                 p.count(pm.threads),
-                plural(pm.threads),
+                p.pl(pm.threads),
                 names.join(" -> ")
             );
         }
@@ -127,6 +127,10 @@ fn by_node(p: &QueryProfile) -> BTreeMap<u32, Vec<(OperatorId, &OperatorEntry)>>
     map.retain(|n, _| ids.contains(n));
     map
 }
+
+/// Extra metrics that depend on the query's hash seed (how keys spread
+/// over partitions and collide), masked with the other volatile values.
+const VOLATILE: [&str; 3] = ["hash_buckets", "probe_key_compares", "max_probe_length"];
 
 struct Printer<'a> {
     opts: TextOptions,
@@ -188,9 +192,11 @@ impl Printer<'_> {
             self.time(m.compute_time),
             self.time(m.max_driver_compute_time),
             self.count(m.drivers),
-            plural(m.drivers)
+            self.pl(m.drivers)
         ));
-        if !m.blocked_on_io.is_zero() {
+        // Sources always show their I/O wait (a golden text stays stable
+        // when a run happens not to wait).
+        if e.role == OperatorRole::Source || !m.blocked_on_io.is_zero() {
             parts.push(format!(
                 "io {} (max {})",
                 self.time(m.blocked_on_io),
@@ -229,6 +235,10 @@ impl Printer<'_> {
     fn extra(&self, e: &OperatorEntry) -> String {
         let mut out = Vec::new();
         for (name, v) in &e.extra {
+            if self.opts.mask_volatile && VOLATILE.contains(&name.as_ref()) {
+                out.push(format!("{name}=<n>"));
+                continue;
+            }
             let text = match v {
                 Metric::Count(n) | Metric::Max(n) if name.ends_with("_bytes") => self.bytes(*n),
                 Metric::Count(n) | Metric::Max(n) => n.to_string(),
@@ -269,6 +279,16 @@ impl Printer<'_> {
             format!("{:.1} ms", d.as_secs_f64() * 1e3)
         } else {
             format!("{:.1} µs", d.as_secs_f64() * 1e6)
+        }
+    }
+
+    /// The plural ending of a [`count`](Self::count): always `s` when the
+    /// count is masked.
+    fn pl(&self, n: u64) -> &'static str {
+        if self.opts.mask_volatile {
+            "s"
+        } else {
+            plural(n)
         }
     }
 

@@ -65,15 +65,29 @@ pub const MAX_ITERATIONS: usize = 100;
 /// A rewrite of one relation whose inputs are already rewritten.
 type Rule = fn(Arc<LogicalPlan>) -> Arc<LogicalPlan>;
 
-/// The rewrite batch, in order.
-const REWRITE: [Rule; 6] = [
-    project::remove_alias,
-    fold_node,
-    pushdown::push_filter,
-    pushdown::push_join_condition,
-    project::collapse,
-    limit::push_limit,
+/// The rewrite batch, in order, with the rules' names.
+const REWRITE: [(&str, Rule); 6] = [
+    ("RemoveAlias", project::remove_alias),
+    ("ConstantFolding", fold_node),
+    ("PushDownFilter", pushdown::push_filter),
+    ("PushDownJoinCondition", pushdown::push_join_condition),
+    ("CollapseProject", project::collapse),
+    ("PushDownLimit", limit::push_limit),
 ];
+
+/// A rule application that changed the plan (`EXPLAIN VERBOSE`).
+#[derive(Debug, Clone)]
+pub struct RuleStep {
+    /// The batch it ran in: `ImpliedJoinFilters`, `Rewrite`, `Restrict`,
+    /// `JoinOrder`, `Prune` or `Tidy`.
+    pub batch: &'static str,
+    /// The round of a fixed-point batch, from 1.
+    pub round: usize,
+    /// The rule.
+    pub rule: &'static str,
+    /// The plan after it.
+    pub plan: Arc<LogicalPlan>,
+}
 
 /// Optimises a resolved plan without statistics; see [`optimize_with`].
 ///
@@ -90,7 +104,21 @@ pub fn optimize(plan: &Plan) -> Result<Plan, KrishivError> {
 /// be started. A rewrite nesting deeper than [`krishiv_plan::MAX_DEPTH`] is
 /// not an error: the input plan is returned unoptimised.
 pub fn optimize_with(plan: &Plan, stats: &dyn Statistics) -> Result<Plan, KrishivError> {
-    run(plan, Some(stats))
+    Ok(run(plan, Some(stats), false)?.0)
+}
+
+/// As [`optimize_with`], also returning every rule application that
+/// changed the plan, in order (`EXPLAIN VERBOSE`). Tracing keeps each
+/// changed plan (they share unchanged subtrees); the plan it returns is
+/// the one [`optimize_with`] returns.
+///
+/// # Errors
+/// As [`optimize_with`].
+pub fn optimize_traced(
+    plan: &Plan,
+    stats: &dyn Statistics,
+) -> Result<(Plan, Vec<RuleStep>), KrishivError> {
+    run(plan, Some(stats), true)
 }
 
 /// As [`optimize_with`], keeping the joins in the order the query wrote
@@ -99,10 +127,52 @@ pub fn optimize_with(plan: &Plan, stats: &dyn Statistics) -> Result<Plan, Krishi
 /// # Errors
 /// As [`optimize_with`].
 pub fn optimize_as_written(plan: &Plan) -> Result<Plan, KrishivError> {
-    run(plan, None)
+    Ok(run(plan, None, false)?.0)
 }
 
-fn run(plan: &Plan, stats: Option<&dyn Statistics>) -> Result<Plan, KrishivError> {
+/// Records the steps that changed the plan, when tracing.
+struct Trace {
+    on: bool,
+    steps: Vec<RuleStep>,
+}
+
+impl Trace {
+    fn step(
+        &mut self,
+        batch: &'static str,
+        round: usize,
+        rule: &'static str,
+        before: &Arc<LogicalPlan>,
+        after: &Arc<LogicalPlan>,
+    ) {
+        if self.on && !Arc::ptr_eq(before, after) {
+            self.steps.push(RuleStep {
+                batch,
+                round,
+                rule,
+                plan: Arc::clone(after),
+            });
+        }
+    }
+
+    /// Runs the one-off `rule` of `batch` and records it.
+    fn once(
+        &mut self,
+        batch: &'static str,
+        root: &Arc<LogicalPlan>,
+        rule: impl FnOnce(&Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError>,
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        let after = rule(root)?;
+        self.step(batch, 1, batch, root, &after);
+        Ok(after)
+    }
+}
+
+fn run(
+    plan: &Plan,
+    stats: Option<&dyn Statistics>,
+    tracing: bool,
+) -> Result<(Plan, Vec<RuleStep>), KrishivError> {
     if !plan.root().is_resolved() {
         return Err(InternalError {
             message: "the optimizer needs a resolved plan".to_owned(),
@@ -110,33 +180,54 @@ fn run(plan: &Plan, stats: Option<&dyn Statistics>) -> Result<Plan, KrishivError
         .into());
     }
     let root = Arc::clone(plan.root());
-    let run = move || -> Result<Arc<LogicalPlan>, KrishivError> {
-        let root = dag::rewrite_up(root, &mut |p| Ok(pushdown::imply_join_condition(p)))?;
-        let root = batch(root)?;
+    let run = move || -> Result<(Arc<LogicalPlan>, Vec<RuleStep>), KrishivError> {
+        let mut t = Trace {
+            on: tracing,
+            steps: Vec::new(),
+        };
+        let root = t.once("ImpliedJoinFilters", &root, |r| {
+            dag::rewrite_up(Arc::clone(r), &mut |p| {
+                Ok(pushdown::imply_join_condition(p))
+            })
+        })?;
+        let root = batch(root, "Rewrite", &mut t)?;
         // Before join ordering, which then sees the restricted estimates.
-        let root = restrict::restrict(root, stats.unwrap_or(&NoStatistics))?;
+        let root = t.once("Restrict", &root, |r| {
+            restrict::restrict(Arc::clone(r), stats.unwrap_or(&NoStatistics))
+        })?;
         let root = match stats {
-            Some(stats) => join_order::reorder(&root, stats),
+            Some(stats) => t.once("JoinOrder", &root, |r| Ok(join_order::reorder(r, stats)))?,
             None => root,
         };
-        let root = prune::prune(&root);
-        batch(root)
+        let root = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
+        let root = batch(root, "Tidy", &mut t)?;
+        Ok((root, t.steps))
     };
     // Passes recurse once per level and nest; rewrites may deepen the plan.
-    let root = krishiv_common::stack::on_big_stack(run).ok_or_else(|| InternalError {
-        message: "cannot start an optimizer thread".to_owned(),
-    })??;
+    let (root, steps) =
+        krishiv_common::stack::on_big_stack(run).ok_or_else(|| InternalError {
+            message: "cannot start an optimizer thread".to_owned(),
+        })??;
     // A plan the rewrites made deeper than the IR allows runs unoptimised:
     // the input was valid, and the optimizer never makes a query fail.
-    Ok(Plan::try_new(root).unwrap_or_else(|_| plan.clone()))
+    match Plan::try_new(root) {
+        Ok(p) => Ok((p, steps)),
+        Err(_) => Ok((plan.clone(), Vec::new())),
+    }
 }
 
 /// Runs [`REWRITE`] to a fixed point.
-fn batch(mut root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
-    for _ in 0..MAX_ITERATIONS {
+fn batch(
+    mut root: Arc<LogicalPlan>,
+    name: &'static str,
+    t: &mut Trace,
+) -> Result<Arc<LogicalPlan>, KrishivError> {
+    for round in 1..=MAX_ITERATIONS {
         let before = Arc::clone(&root);
-        for rule in REWRITE {
+        for (rule_name, rule) in REWRITE {
+            let prev = Arc::clone(&root);
             root = dag::rewrite_up(root, &mut |p| Ok(rule(p)))?;
+            t.step(name, round, rule_name, &prev, &root);
         }
         if Arc::ptr_eq(&before, &root) {
             break;

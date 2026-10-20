@@ -47,6 +47,7 @@ mod conf;
 mod dataframe;
 mod explain;
 pub mod functions;
+mod profile;
 mod session;
 
 pub use column::Column;
@@ -54,4 +55,6 @@ pub use conf::RuntimeConf;
 pub use dataframe::{
     DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, GroupedData, JoinType,
 };
+pub use krishiv_exec::profile::{QueryProfile, TextOptions};
+pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use session::{RecordBatchStream, Session, SessionBuilder};

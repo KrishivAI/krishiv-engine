@@ -127,6 +127,12 @@ pub enum ExplainMode {
     Codegen,
     /// `COST`: the optimized plan with statistics.
     Cost,
+    /// `ANALYZE` (a Krishiv extension; Spark has none): runs the query and
+    /// prints the physical plan with each operator's metrics.
+    Analyze,
+    /// `VERBOSE` (a Krishiv extension): the logical plan after each
+    /// optimizer rule that changed it, then the physical plan.
+    Verbose,
 }
 
 /// A query: `[WITH ...] body [ORDER BY ...] [LIMIT ...] [OFFSET ...]`.

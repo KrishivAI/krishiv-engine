@@ -312,26 +312,31 @@ fn text_places_operators_under_their_nodes() {
     let text = p.to_text(TextOptions::masked());
     let want = "\
 == Physical Plan (analyzed) ==
-wall <t>, 1 pipeline, <n> drivers, <n> thread (most in one pipeline), 1 worker
+wall <t>, 1 pipeline, <n> drivers, <n> threads (most in one pipeline), 1 worker
 Limit 5
-:  · operator #1 Limit p0: in 1 rows (1 batch); out 1 rows (1 batch); compute <t> (max <t>, <n> driver); peak mem <mem>
+:  · operator #1 Limit p0: in 1 rows (1 batch); out 1 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>
 +- Union
    :- OneRowRelation
-   :     · source #2 OneRow p0: out 1 rows (1 batch); compute <t> (max <t>, <n> driver); peak mem <mem>; \
-hash_entries=3 hash_buckets=4 (load 0.75) probe_lookups=4 probe_key_compares=6 (avg 1.50) max_probe_length=3 \
+   :     · source #2 OneRow p0: out 1 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>); peak mem <mem>; \
+hash_entries=3 hash_buckets=<n> probe_lookups=4 probe_key_compares=<n> max_probe_length=<n> \
 spill_bytes=<mem> hash_index=swiss
    +- Limit 1
       +- OneRowRelation
 Result:
-   sink   #0 ResultSink p0: in 1 rows (1 batch); compute <t> (max <t>, <n> driver); peak mem <mem>
+   sink   #0 ResultSink p0: in 1 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>
 Pipelines:
-   p0: wall <t>, <n> driver, <n> thread: #2 OneRow -> #1 Limit -> #0 ResultSink
+   p0: wall <t>, <n> drivers, <n> threads: #2 OneRow -> #1 Limit -> #0 ResultSink
 ";
     assert_eq!(text, want);
     let plain = p.to_text(TextOptions::default());
     assert!(plain.contains("wall 3.0 ms"), "{plain}");
     assert!(plain.contains("compute 10.0 µs"), "{plain}");
     assert!(plain.contains("spill_bytes=2.0 KiB"), "{plain}");
+    assert!(plain.contains("hash_buckets=4 (load 0.75)"), "{plain}");
+    assert!(
+        plain.contains("probe_key_compares=6 (avg 1.50) max_probe_length=3"),
+        "{plain}"
+    );
     let undetailed = QueryProfile::new(&plan(matching()), metrics(), false);
     assert!(
         undetailed
