@@ -49,7 +49,12 @@ jobs:
             BSD-3-Clause, ISC, Zlib, Unicode-3.0, MPL-2.0, 0BSD, CC0-1.0
           # deny.toml [licenses] exceptions (tiny-keccak is CC0-1.0, reached
           # only on wasm32).
-          allow-dependencies-licenses: pkg:cargo/tiny-keccak
+          # GitHub Actions used only in CI: Swatinem/rust-cache is LGPL-3.0, but it is
+          # CI tooling that runs on the build runner and is never distributed with, or
+          # linked into, any Krishiv artifact, so the copyleft terms do not reach us.
+          allow-dependencies-licenses: >-
+            pkg:cargo/tiny-keccak,
+            pkg:githubactions/Swatinem/rust-cache
 
   # Pull requests: read-only, fails on any finding.
   zizmor:

@@ -44,8 +44,6 @@ def spread(samples: list[float]) -> float:
 
 def _side_record(label: str, eng: KrishivEngine, sha: str | None) -> dict:
     info = eng.runner_build_info()  # None for runners that predate --build-info
-    if sha is None and info:
-        sha = next((str(info[k]) for k in ("git_sha", "git_commit", "commit") if info.get(k)), None)
     return {
         "label": label,
         "runner": str(eng.binary),

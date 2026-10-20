@@ -1404,6 +1404,7 @@ dependencies = [
  "clap",
  "futures",
  "krishiv",
+ "krishiv-common",
  "krishiv-server",
  "krishiv-sql",
  "libmimalloc-sys",

@@ -54,7 +54,7 @@ def make_runner(tmp_path: Path, name: str, build_info: dict | None = None) -> Pa
     binary.write_text(FAKE)
     binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
     if build_info is not None:
-        Path(str(binary) + ".buildinfo").write_text(json.dumps(build_info))
+        Path(str(binary) + ".buildinfo").write_text(" ".join(f"{k}={v}" for k, v in build_info.items()))
     return binary
 
 
@@ -138,9 +138,9 @@ def test_conf_argv_exact(tmp_path: Path):
 
 def test_build_info_is_recorded_when_supported_and_skipped_otherwise(tmp_path: Path):
     old = KrishivEngine(binary=make_runner(tmp_path, "old"))
-    new = KrishivEngine(binary=make_runner(tmp_path, "new", {"git_sha": "abc123", "target_cpu": "x86-64-v3"}))
+    new = KrishivEngine(binary=make_runner(tmp_path, "new", {"profile": "dist", "target-cpu": "x86-64-v3"}))
     assert old.runner_build_info() is None
-    assert new.runner_build_info() == {"git_sha": "abc123", "target_cpu": "x86-64-v3"}
+    assert new.runner_build_info() == {"build_profile": "dist", "target_cpu": "x86-64-v3"}
     assert KrishivEngine(binary=tmp_path / "missing").runner_build_info() is None
     ds = Dataset("tpch", 1, tmp_path, ["t"])
     try:
@@ -149,7 +149,8 @@ def test_build_info_is_recorded_when_supported_and_skipped_otherwise(tmp_path: P
         rec_old, rec_new = ab._side_record("A", old, None), ab._side_record("B", new, None)
         assert rec_old["build_info"] is None
         assert rec_old["git_sha"] is None
-        assert rec_new["git_sha"] == "abc123"
+        assert rec_new["git_sha"] is None
+        assert rec_new["build_info"] == {"build_profile": "dist", "target_cpu": "x86-64-v3"}
         assert ab._side_record("B", new, "explicit")["git_sha"] == "explicit"  # an explicit SHA wins
         assert rec_old["runner"] == str(old.binary)
         assert rec_old["version"] == "1.0.0"
@@ -222,18 +223,26 @@ def test_run_ab_writes_both_sides_into_the_result(tmp_path: Path, monkeypatch: p
     ds = data / "tpch-duckdb" / "sf1"
     ds.mkdir(parents=True)
     pq.write_table(pa.table({"a": [1]}), ds / "t.parquet")
-    main_runner = make_runner(tmp_path, "main-runner", {"git_sha": "mainsha"})
+    main_runner = make_runner(tmp_path, "main-runner", {"profile": "dist", "target-cpu": "x86-64-v3"})
     pr_runner = make_runner(tmp_path, "pr-runner")
     monkeypatch.setenv("KRISHIV_DATA", str(data))
     monkeypatch.setattr(ab, "load_queries", lambda *_: [q()])
     out = ab.run_ab(
-        1, "tpch-duckdb", str(main_runner), str(pr_runner), [("mode", "x")], [("mode", "x")], reps=1, b_sha="prsha"
+        1,
+        "tpch-duckdb",
+        str(main_runner),
+        str(pr_runner),
+        [("mode", "x")],
+        [("mode", "x")],
+        reps=1,
+        a_sha="mainsha",
+        b_sha="prsha",
     )
     rec = json.loads(out.read_text())
     assert rec["kind"] == "ab"
     side_a, side_b = rec["sides"]["a"], rec["sides"]["b"]
     assert (side_a["runner"], side_a["git_sha"]) == (str(main_runner), "mainsha")
-    assert side_a["build_info"] == {"git_sha": "mainsha"}
+    assert side_a["build_info"] == {"build_profile": "dist", "target_cpu": "x86-64-v3"}
     assert (side_b["runner"], side_b["git_sha"], side_b["build_info"]) == (str(pr_runner), "prsha", None)
     assert side_a["conf"] == side_b["conf"] == ["mode=x"]
     assert rec["queries"]["q01"]["status"] == "ok"

@@ -46,6 +46,14 @@ pub enum RunnerError {
     Engine(#[from] KrishivError),
 }
 
+/// How this runner was built, as `profile=<cargo profile> target-cpu=<cpu>` (`--build-info`).
+pub const BUILD_INFO: &str = concat!(
+    "profile=",
+    env!("KRISHIV_BUILD_PROFILE"),
+    " target-cpu=",
+    env!("KRISHIV_BUILD_TARGET_CPU")
+);
+
 /// Name of the temporary view a `DUMP` writes from.
 const DUMP_VIEW: &str = "__krishiv_bench_dump";
 

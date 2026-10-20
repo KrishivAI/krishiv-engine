@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `krishiv-bench-runner --data DIR [--threads N] [--memory-limit 12g] [--conf k=v]...`: see the library docs for
+//! `krishiv-bench-runner --data DIR [--threads N] [--memory-limit 12g] [--conf k=v]...` (or `--build-info`): see the library docs for
 //! the stdin/stdout protocol.
 
 #![forbid(unsafe_code)]
@@ -13,6 +13,20 @@ use krishiv_bench_runner::{Runner, RunnerConfig, serve};
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> ExitCode {
+    // First, so a CPU older than the build targets gets a message instead of SIGILL.
+    // `run` holds everything else (see `krishiv_common::cpu`).
+    krishiv_common::cpu::check_or_exit();
+    run()
+}
+
+#[inline(never)]
+fn run() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("--build-info") {
+        return match writeln!(std::io::stdout(), "{}", krishiv_bench_runner::BUILD_INFO) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::FAILURE,
+        };
+    }
     let result = RunnerConfig::from_args(std::env::args().skip(1))
         .map_err(|e| e.to_string())
         .and_then(|config| Runner::new(&config).map_err(|e| e.to_string()))

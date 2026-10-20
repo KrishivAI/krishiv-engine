@@ -1,0 +1,129 @@
+name: Binaries
+
+# The `krishiv` command line binary at the shipped CPU levels: x86-64-v3 and
+# the plain x86-64 baseline (published as `krishiv-compat`), and neoverse-n1 on
+# aarch64. The level is set through RUSTFLAGS on these build steps only, never
+# in .cargo/config.toml, so development, tests, regular CI and the benchmark
+# jobs keep the default target. The binary checks the CPU on start and names
+# the missing feature and the compat binary (krishiv_common::cpu). Nothing is
+# published here.
+#
+# Runs when this file changes, by hand, and from other workflows.
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/binaries.yml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  cli-x86_64:
+    name: cli (${{ matrix.artifact }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: krishiv-linux-x86_64
+            rustflags: -C target-cpu=x86-64-v3
+          - artifact: krishiv-compat-linux-x86_64
+            rustflags: ""
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.artifact }}
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - name: Build
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          cargo build --profile dist --locked -p krishiv-cli
+          mkdir -p out
+          cp target/dist/krishiv "out/$ARTIFACT"
+      - name: Smoke test
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          "out/$ARTIFACT" --version
+          "out/$ARTIFACT" sql -e "SELECT 1"
+      # The old-CPU path: user-mode QEMU with a pre-AVX2 CPU (Nehalem). The
+      # v3 binary must exit cleanly with a message naming the missing
+      # features and the compat binary; the compat binary must start.
+      - name: Old CPU (QEMU Nehalem)
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user
+          if [ "$ARTIFACT" = krishiv-compat-linux-x86_64 ]; then
+            qemu-x86_64 -L / -cpu Nehalem "out/$ARTIFACT" --version
+          else
+            set +e
+            qemu-x86_64 -L / -cpu Nehalem "out/$ARTIFACT" --version >old-cpu.out 2>&1
+            code=$?
+            set -e
+            cat old-cpu.out
+            # 1 is the clean exit; 132 (SIGILL) or 139 would mean the check came too late.
+            test "$code" -eq 1
+            grep -q 'avx2' old-cpu.out
+            grep -q 'krishiv-compat' old-cpu.out
+            ! grep -qi 'illegal instruction' old-cpu.out
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: out/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  cli-aarch64:
+    name: cli (krishiv-linux-aarch64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      ARTIFACT: krishiv-linux-aarch64
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: krishiv-linux-aarch64
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - name: Build
+        env:
+          RUSTFLAGS: -C target-cpu=neoverse-n1
+        run: |
+          cargo build --profile dist --locked -p krishiv-cli
+          mkdir -p out
+          cp target/dist/krishiv "out/$ARTIFACT"
+      - name: Smoke test
+        run: |
+          "out/$ARTIFACT" --version
+          "out/$ARTIFACT" sql -e "SELECT 1"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: krishiv-linux-aarch64
+          path: out/krishiv-linux-aarch64
+          if-no-files-found: error
