@@ -88,16 +88,15 @@ pub fn release_if_pressured_here() -> bool {
 /// `seen` (then updates `seen`). Returns whether it called the hook. Cheap
 /// otherwise: one atomic load.
 pub fn release_if_pressured(seen: &mut u64) -> bool {
+    // Epochs only start once a hook is installed.
+    let Some(hook) = HOOK.get() else {
+        return false;
+    };
     let epoch = pressure_epoch();
     if epoch == *seen {
         return false;
     }
     *seen = epoch;
-    match HOOK.get() {
-        Some(hook) => {
-            hook();
-            true
-        }
-        None => false,
-    }
+    hook();
+    true
 }

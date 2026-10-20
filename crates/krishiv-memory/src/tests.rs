@@ -234,6 +234,8 @@ async fn memory_pool_defaults_for_scratch_and_spill_only() {
     pool.release(id, 1 << 20);
     pool.reserve_without_abort(id, 1).await.unwrap();
     assert_eq!(pool.reserved(), 4096);
+    // Without its own high-water mark, a pool reports what it holds now.
+    assert_eq!(pool.peak_reserved(), 4096);
 }
 
 #[test]

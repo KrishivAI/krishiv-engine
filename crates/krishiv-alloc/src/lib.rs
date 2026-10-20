@@ -82,11 +82,7 @@ mod init {
     /// The constructor; allocates nothing (the options must be set before
     /// the first allocation).
     extern "C" fn init(argc: c_int, argv: *const *const c_char, _envp: *const *const c_char) {
-        let count = if argv.is_null() {
-            0
-        } else {
-            usize::try_from(argc).unwrap_or(0)
-        };
+        let count = usize::try_from(argc).unwrap_or(0);
         // SAFETY: glibc (and only glibc, hence the `cfg`) calls
         // `.init_array` functions with the program's `argc`, `argv` and
         // `envp`: `argv` holds `argc` pointers to NUL-terminated strings
@@ -161,9 +157,6 @@ mod tests {
     /// test process has no limit, so mimalloc's defaults are in force.
     #[test]
     fn the_option_numbers_are_the_linked_mimalloc_s() {
-        if std::env::var_os("KRISHIV_ALLOC_CHILD").is_some() {
-            return;
-        }
         assert_eq!(read(), (1000, 1, 0));
         // SAFETY: plain getter.
         let version = unsafe { libmimalloc_sys::mi_version() };
