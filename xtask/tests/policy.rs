@@ -225,6 +225,21 @@ fn budgets_measurement_script_waits_and_fetches() {
     );
 }
 
+#[test]
+fn large_file_guard_rejects_new_large_files() {
+    let script = root().join(".github/scripts/test-check-large-files.sh");
+    let out = Command::new("bash").arg(&script).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let policy = read(".github/workflows/pr-policy.yml");
+    assert!(policy.contains(".github/scripts/check-large-files.sh"));
+    assert!(read(".githooks/pre-commit").contains("check-large-files.sh"));
+}
+
 /// Every job that runs steps starts with Harden-Runner (audit mode), and
 /// every checkout drops its credentials (zizmor `artipacked`). Jobs that
 /// call a reusable workflow have no steps of their own.

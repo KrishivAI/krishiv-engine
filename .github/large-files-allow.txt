@@ -1,0 +1,6 @@
+# Paths (or shell globs) allowed to be added at more than 1 MiB.
+# One per line; `#` starts a comment. Checked by .github/scripts/check-large-files.sh
+# (pre-commit hook and the `policy` CI job). Existing files are not re-checked.
+crates/krishiv-exec/tests/fixtures/tpch-sf0.01-parquet/*
+crates/krishiv-exec/tests/fixtures/tpch-sf0.01/*
+tests/fixtures/spark-4.2.0/*

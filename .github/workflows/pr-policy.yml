@@ -53,6 +53,12 @@ jobs:
       - run: cargo xtask spdx
       - run: cargo xtask source-guard
       - run: cargo xtask registry-coverage
+      - name: Large-file guard (new files over 1 MiB need .github/large-files-allow.txt)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .github/scripts/check-large-files.sh "$BASE_SHA" "$HEAD_SHA"
       - name: DCO sign-off (ADR 0033)
         if: github.event_name == 'pull_request'
         env:

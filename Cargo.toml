@@ -159,3 +159,14 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "unwind"
+
+# Benchmarks (`cargo bench`, `cargo codspeed build`) use the same codegen as the shipped
+# `dist` profile, except strip. With the default 16 codegen units an unrelated module
+# flipped an inlining decision and slowed `aggregate/grouped_sum` by 8-9%; with
+# codegen-units = 1 (the shipped setting) the effect disappears. Keep in step with
+# [profile.dist] (lto, codegen-units, panic).
+[profile.bench]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
