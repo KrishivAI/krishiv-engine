@@ -17,7 +17,10 @@ def test_scratch_under_data_root_with_quote_and_removed_on_teardown(tmp_path, mo
     eng = DuckDBEngine(threads=1, memory_limit="1GB")
     eng.setup(Dataset(name="t", sf=1, root=tmp_path, tables=[]))
     assert _scratch(data).is_dir()
-    assert eng.con.execute("SELECT current_setting('temp_directory')").fetchone()[0] == str(_scratch(data))
+    assert eng.con is not None
+    row = eng.con.execute("SELECT current_setting('temp_directory')").fetchone()
+    assert row is not None
+    assert row[0] == str(_scratch(data))
     eng.teardown()
     assert not _scratch(data).exists()
 
