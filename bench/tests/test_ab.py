@@ -229,8 +229,9 @@ def test_run_ab_writes_both_sides_into_the_result(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("KRISHIV_DATA", str(data))
     monkeypatch.setattr(ab, "load_queries", lambda *_: [q()])
     settles: list[bool] = []
-    # The settle wait must come before any runner starts (a started fake runner leaves its argv file behind).
-    monkeypatch.setattr(ab, "wait_idle", lambda: settles.append(Path(str(main_runner) + ".argv").exists()))
+    # The settle wait must come before either runner starts (a started fake runner leaves its argv file behind).
+    markers = [Path(str(r) + ".argv") for r in (main_runner, pr_runner)]
+    monkeypatch.setattr(ab, "wait_idle", lambda: settles.append(any(m.exists() for m in markers)))
     out = ab.run_ab(
         1,
         "tpch-duckdb",
