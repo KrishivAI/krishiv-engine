@@ -16,11 +16,9 @@ use krishiv_plan::{
 };
 
 use super::build::{Planned, Planner, column_of, internal, list, unsupported};
-use crate::aggregate::{
-    AggregateExpr, AggregateFunction, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
-    distinct_plan,
-};
+use crate::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
 use crate::error::Result;
+use crate::physical::{AggregatePlan, PhysNode, aggregate_node, aggregate_spec};
 
 /// One aggregate call of the output expressions.
 struct Call {
@@ -129,21 +127,17 @@ impl Planner<'_> {
             aggregates.push(agg);
             distinct.push(c.f.distinct);
         }
-        let spec = AggregateSpec {
-            input: Arc::clone(&input.schema),
+        let plan = AggregatePlan {
             group_by: columns[..k].to_vec(),
             aggregates,
+            distinct,
             output: AggregateOutput::Final,
-            ansi: self.env.ansi,
-            spill: self.cx.spill.clone(),
-            require_unit_weights: false,
         };
-        let node = if distinct.iter().any(|d| *d) {
-            distinct_plan(Arc::clone(&input.node), spec.clone(), &distinct)?
-        } else {
-            AggregateNode::new(Arc::clone(&input.node), HashAggregate::new(spec.clone())?)
-        };
+        // Validates the aggregate (over an input that is never run) and
+        // gives its schema.
+        let spec = aggregate_spec(&input.schema, &plan, self.env.ansi, None);
         let schema = spec.output_schema()?;
+        aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
         let mut layout: Vec<AttrId> = columns[..k].iter().map(|c| input.layout[*c]).collect();
         layout.extend(calls.iter().map(|c| c.id));
         let detail = format!(
@@ -159,7 +153,10 @@ impl Planner<'_> {
         // groups, which the producer above would drop anyway.
         let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
         let agg = Planned {
-            node,
+            node: PhysNode::Aggregate {
+                input: Box::new(input.node),
+                aggregate: plan,
+            },
             schema,
             layout,
             explain: super::explain::ExplainNode::new("HashAggregate", detail, vec![input.explain]),

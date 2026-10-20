@@ -168,6 +168,41 @@ pub fn confined_idents_in(rel_path: &str, text: &str) -> Vec<(usize, &'static st
     out
 }
 
+/// Live-handle markers a physical-plan file must not use in code (design
+/// P2-T171 invariant I1; the `PlanData` marker is the compile-time check,
+/// this is the backstop).
+const PLAN_HANDLE_MARKERS: &[&str] = &[
+    "Arc<dyn", "Box<dyn", "Mutex", "RwLock", "Atomic", "OnceLock", "Cell<", "dyn Fn",
+];
+
+/// The physical-plan sources the backstop covers: the plan data types,
+/// not the instantiation that builds operators from them.
+fn is_plan_data_source(rel_path: &str) -> bool {
+    rel_path.starts_with("crates/krishiv-exec/src/physical/")
+        && rel_path.ends_with(".rs")
+        && !rel_path.ends_with("/instantiate.rs")
+}
+
+/// Live-handle markers in code lines (not `//` comments) of a physical-plan
+/// source, as `(line, marker)`.
+#[must_use]
+pub fn plan_handles_in(rel_path: &str, text: &str) -> Vec<(usize, &'static str)> {
+    let rel_path = rel_path.replace('\\', "/");
+    if !is_plan_data_source(&rel_path) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let code = line.split("//").next().unwrap_or_default();
+        for marker in PLAN_HANDLE_MARKERS {
+            if code.contains(marker) {
+                out.push((n + 1, *marker));
+            }
+        }
+    }
+    out
+}
+
 /// Banned identifiers found in `text` as `(line number, identifier)`.
 #[must_use]
 pub fn banned_idents_in(text: &str) -> Vec<(usize, &'static str)> {

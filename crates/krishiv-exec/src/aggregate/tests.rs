@@ -28,7 +28,7 @@ use super::*;
 use crate::testing::{Batches, Scan};
 use crate::{
     ExecConfig, ExecNode, Executor, OperatorId, QueryContext, QueryId, QueryMetrics, QueryRunner,
-    Scheduler, Sink, Source, TaskContext, TokioClock, TokioExecutor, WorkloadClass,
+    Sink, Source, TaskContext, TokioClock, TokioExecutor, WorkloadClass,
 };
 
 use AggregateFunction::{Avg, Count, Max, Min, Sum};
@@ -77,7 +77,7 @@ async fn exec(plan: Arc<dyn ExecNode>, o: Opts) -> crate::Result<(Vec<Batch>, Qu
         config,
         root.child("q", Some(o.limit)),
     );
-    let mut stream = runner.submit(plan, Arc::clone(&q)).await?;
+    let mut stream = runner.execute(plan, Arc::clone(&q)).await?;
     let mut out = Vec::new();
     let mut err = None;
     while let Some(b) = stream.next().await {

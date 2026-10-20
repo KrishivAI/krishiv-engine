@@ -5,8 +5,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -19,6 +19,7 @@ use krishiv_common::error::{
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::FileWriteSink;
 use krishiv_exec::files::{FileReads, LocalPaths, PathLocator as _};
+use krishiv_exec::physical::{SpillScopes, WorkerContext};
 use krishiv_exec::planner::{
     DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
 };
@@ -28,7 +29,7 @@ use krishiv_exec::{
 };
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
-use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_plan::analyzer::{
     AllowAll, AnalysisContext, AnalyzedPlan, Analyzer as _, BuiltinFunctions, DefaultAnalyzer,
     FunctionRegistry, Principal, ResolutionConf, SparkProfile, TableColumn,
@@ -95,6 +96,9 @@ pub(crate) struct SessionState {
     executor: Arc<dyn Executor>,
     runner: QueryRunner,
     memory: Arc<dyn MemoryPool>,
+    /// The spill directory, opened by the first query that plans for
+    /// execution (`krishiv.spill.*` are build-time keys).
+    spill: Mutex<Option<SpillManager>>,
     io: Arc<IoScheduler>,
     formats: Vec<Arc<dyn FileFormat>>,
     cwd: String,
@@ -237,6 +241,7 @@ impl SessionBuilder {
                 runner: QueryRunner::new(Arc::clone(&executor)),
                 executor,
                 memory,
+                spill: Mutex::new(None),
                 io,
                 formats: vec![Arc::new(ParquetFormat)],
                 cwd,
@@ -560,6 +565,9 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        // Planning makes no spill directory: a query gets its scope when
+        // its plan is instantiated (`Self::worker`), so a plan that is only
+        // inspected (EXPLAIN, warnings) makes none.
         env.catalog.open_files(analyzed.plan.root()).await?;
         let tables =
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>;
@@ -584,6 +592,16 @@ impl Session {
         physical: &PhysicalPlan,
         env: &QueryEnv,
     ) -> Result<RecordBatchStream, KrishivError> {
+        self.run_on(physical, self.worker(env), env).await
+    }
+
+    /// Runs `physical` instantiated with `worker`.
+    async fn run_on(
+        &self,
+        physical: &PhysicalPlan,
+        worker: WorkerContext,
+        env: &QueryEnv,
+    ) -> Result<RecordBatchStream, KrishivError> {
         let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
         let pool = self.state.memory.child(&format!("query-{}", id.0), None);
         let query = QueryContext::new(
@@ -595,7 +613,7 @@ impl Session {
         let stream = self
             .state
             .runner
-            .submit(Arc::clone(physical.root()), query)
+            .submit(physical.clone(), worker, query)
             .await?;
         Ok(Box::pin(stream.map(|b| b.and_then(into_record_batch))))
     }
@@ -655,8 +673,9 @@ impl Session {
             options.clone(),
             write.write_options(0),
         )?);
-        let plan = physical.into_write(Arc::clone(&sink))?;
-        let mut rows = self.run(&plan, env).await?;
+        let plan = physical.into_write(&sink)?;
+        let worker = self.worker(env).with_write_sink(Arc::clone(&sink));
+        let mut rows = self.run_on(&plan, worker, env).await?;
         while let Some(batch) = rows.next().await {
             batch?;
         }
@@ -665,6 +684,59 @@ impl Session {
             .commit(&io, format.as_ref(), schema, &options, sink.files())
             .await?;
         Ok(())
+    }
+}
+
+impl Session {
+    /// What a query's plans are instantiated with in this process: the
+    /// query's tables, and its spill scope under the session's spill
+    /// directory (created at instantiation).
+    fn worker(&self, env: &QueryEnv) -> WorkerContext {
+        WorkerContext::new(
+            Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
+        )
+        .with_spill_scopes(Arc::new(QuerySpill {
+            state: Arc::clone(&self.state),
+            config: Arc::clone(&env.config),
+        }))
+    }
+}
+
+/// The spill scope of one query: its own directory under the session's
+/// spill directory (opened by the first query that runs; `krishiv.spill.*`
+/// are build-time keys), removed when the query's operators and streams
+/// are dropped (cancellation included).
+struct QuerySpill {
+    state: Arc<SessionState>,
+    config: Arc<Config>,
+}
+
+impl fmt::Debug for QuerySpill {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QuerySpill").finish_non_exhaustive()
+    }
+}
+
+impl SpillScopes for QuerySpill {
+    fn scope(&self) -> krishiv_exec::Result<SpillScope> {
+        let mut slot = self
+            .state
+            .spill
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            let manager = SpillManager::open(&SpillConfig::from_config(&self.config))
+                .map_err(|e| internal(format!("cannot set up the spill directory: {e}")))?;
+            *slot = Some(manager);
+        }
+        slot.as_ref().map_or_else(
+            || Err(internal("the spill directory is not open".to_owned())),
+            |m| {
+                m.scope().map_err(|e| {
+                    internal(format!("cannot create the query's spill directory: {e}"))
+                })
+            },
+        )
     }
 }
 
