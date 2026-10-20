@@ -52,25 +52,26 @@ pub struct OperatorMetrics {
 }
 
 impl OperatorMetrics {
-    /// Adds `o` (another driver's or worker's counters).
+    /// Adds `o` (another driver's or worker's counters), saturating (a
+    /// merged profile may come from a document).
     pub fn merge(&mut self, o: &Self) {
-        self.drivers += o.drivers;
-        self.rows_in += o.rows_in;
-        self.batches_in += o.batches_in;
-        self.rows_out += o.rows_out;
-        self.batches_out += o.batches_out;
-        self.compute_time += o.compute_time;
+        self.drivers = self.drivers.saturating_add(o.drivers);
+        self.rows_in = self.rows_in.saturating_add(o.rows_in);
+        self.batches_in = self.batches_in.saturating_add(o.batches_in);
+        self.rows_out = self.rows_out.saturating_add(o.rows_out);
+        self.batches_out = self.batches_out.saturating_add(o.batches_out);
+        self.compute_time = self.compute_time.saturating_add(o.compute_time);
         self.max_driver_compute_time = self.max_driver_compute_time.max(o.max_driver_compute_time);
-        self.blocked_on_io += o.blocked_on_io;
+        self.blocked_on_io = self.blocked_on_io.saturating_add(o.blocked_on_io);
         self.max_driver_blocked_on_io = self
             .max_driver_blocked_on_io
             .max(o.max_driver_blocked_on_io);
-        self.morsels += o.morsels;
-        self.peak_reserved += o.peak_reserved;
-        self.spills += o.spills;
-        self.spilled_bytes += o.spilled_bytes;
-        self.blocked_on_memory += o.blocked_on_memory;
-        self.blocked_on_sink += o.blocked_on_sink;
+        self.morsels = self.morsels.saturating_add(o.morsels);
+        self.peak_reserved = self.peak_reserved.saturating_add(o.peak_reserved);
+        self.spills = self.spills.saturating_add(o.spills);
+        self.spilled_bytes = self.spilled_bytes.saturating_add(o.spilled_bytes);
+        self.blocked_on_memory = self.blocked_on_memory.saturating_add(o.blocked_on_memory);
+        self.blocked_on_sink = self.blocked_on_sink.saturating_add(o.blocked_on_sink);
     }
 
     /// One driver's counters as a contribution: one driver, whose times
@@ -110,11 +111,11 @@ pub struct DriverStats {
 impl DriverStats {
     /// Adds `o`.
     pub fn merge(&mut self, o: &Self) {
-        self.drivers += o.drivers;
-        self.batches += o.batches;
-        self.yields += o.yields;
+        self.drivers = self.drivers.saturating_add(o.drivers);
+        self.batches = self.batches.saturating_add(o.batches);
+        self.yields = self.yields.saturating_add(o.yields);
         self.max_slice = self.max_slice.max(o.max_slice);
-        self.stalls += o.stalls;
+        self.stalls = self.stalls.saturating_add(o.stalls);
     }
 }
 
@@ -136,7 +137,9 @@ impl Metric {
     pub fn merge(&mut self, o: &Self) {
         match (&mut *self, o) {
             (Self::Max(a), Self::Max(b)) => *a = (*a).max(*b),
-            (Self::Count(a) | Self::Max(a), Self::Count(b) | Self::Max(b)) => *a += *b,
+            (Self::Count(a) | Self::Max(a), Self::Count(b) | Self::Max(b)) => {
+                *a = a.saturating_add(*b);
+            }
             (Self::Text(a), Self::Text(b)) => {
                 if !a.split("; ").any(|part| part == b) {
                     a.push_str("; ");
@@ -300,8 +303,8 @@ impl PipelineMetrics {
             self.started = self.started.min(o.started);
         }
         self.ended = self.ended.max(o.ended);
-        self.drivers += o.drivers;
-        self.threads += o.threads;
+        self.drivers = self.drivers.saturating_add(o.drivers);
+        self.threads = self.threads.saturating_add(o.threads);
     }
 }
 
@@ -334,7 +337,7 @@ impl QueryMetrics {
         }
         self.drivers.merge(&o.drivers);
         self.wall_time = self.wall_time.max(o.wall_time);
-        self.workers += o.workers;
+        self.workers = self.workers.saturating_add(o.workers);
     }
 }
 

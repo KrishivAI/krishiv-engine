@@ -15,6 +15,7 @@
 //! after every task has ended and every pipeline's state is dropped, so the
 //! query's memory pool is empty by then.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
@@ -29,8 +30,6 @@ use crate::context::{OperatorId, QueryContext, QueryId, TaskContext};
 use crate::driver::{PipelineRun, spawn_driver};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, TaskHandle};
-use std::borrow::Cow;
-
 use crate::metrics::OperatorEntry;
 use crate::morsel::{Barrier, Countdown};
 use crate::operator::GlobalState;

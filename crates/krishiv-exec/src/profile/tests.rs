@@ -383,3 +383,81 @@ fn bytes_are_human() {
     assert_eq!(human_bytes(3 << 30), "3.0 GiB");
     assert_eq!(human_bytes(u64::MAX), "16777216.0 TiB");
 }
+
+/// The checked-in JSON Schema lists exactly the members the writer emits,
+/// at every level (a drift test: a new member needs a schema change, and a
+/// removed one a version bump).
+#[test]
+fn schema_matches_the_writer() {
+    use serde_json::Value;
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/reference/query-profile-v1.schema.json"
+    );
+    let schema: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_default())
+        .unwrap_or_default();
+    let doc = QueryProfile::new(&plan(matching()), metrics(), true).to_json_value();
+    let keys = |v: &Value| -> Vec<String> {
+        let mut k: Vec<String> = v
+            .as_object()
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default();
+        k.sort();
+        k
+    };
+    let required = |s: &Value| -> Vec<String> {
+        let mut k: Vec<String> = s["required"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        k.sort();
+        k
+    };
+    let props = &schema["properties"];
+    assert_eq!(required(&schema), keys(&doc));
+    assert_eq!(props["format"]["const"], PROFILE_FORMAT);
+    assert_eq!(props["version"]["const"], PROFILE_VERSION);
+    assert_eq!(required(&props["query"]), keys(&doc["query"]));
+    assert_eq!(
+        required(&props["pipelines"]["items"]),
+        keys(&doc["pipelines"][0])
+    );
+    assert_eq!(required(&props["plan"]["items"]), keys(&doc["plan"][0]));
+    let op = &props["operators"]["items"];
+    assert_eq!(required(op), keys(&doc["operators"][0]));
+    assert_eq!(
+        required(&op["properties"]["metrics"]),
+        keys(&doc["operators"][0]["metrics"])
+    );
+    for variant in op["properties"]["extra"]["items"]["oneOf"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        assert_eq!(required(variant), keys(&doc["operators"][2]["extra"][0]));
+    }
+}
+
+/// Merging documents with extreme counters saturates instead of
+/// overflowing.
+#[test]
+fn merging_extreme_documents_saturates() {
+    let mut m = metrics();
+    if let Some(e) = m.operators.get_mut(&OperatorId(1)) {
+        e.metrics.rows_out = u64::MAX;
+        e.metrics.compute_time = Duration::MAX;
+        e.extra = vec![(Cow::Borrowed("groups"), Metric::Count(u64::MAX))];
+    }
+    let doc = QueryProfile::new(&plan(matching()), m, true).to_json();
+    let mut a = QueryProfile::from_json(&doc).unwrap_or_else(|e| panic!("{e}"));
+    let b = a.clone();
+    a.merge(&b).unwrap_or_else(|e| panic!("{e}"));
+    let e = &a.metrics.operators[&OperatorId(1)];
+    assert_eq!(e.metrics.rows_out, u64::MAX);
+    assert_eq!(e.extra("groups"), Some(&Metric::Count(u64::MAX)));
+    assert!(e.metrics.compute_time >= Duration::from_nanos(u64::MAX));
+}
