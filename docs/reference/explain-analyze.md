@@ -67,7 +67,7 @@ of a hash join) has a sink in one pipeline and a source in the next.
 | `peak mem` | Peak bytes reserved through the operator's memory consumer, summed over drivers (an upper bound of the true peak). |
 | `spilled` | Spills serviced and the bytes they freed. |
 | `runtime_filter_*`, `runtime_filters` | Rows a scan's runtime filters tested and dropped, units and splits they pruned, and per filter the form its producer chose (`range`, `small set of N`, `hash set of N`, `bloom N B`). |
-| `hash_entries`, `hash_buckets` (load), `hash_index` | The operator's hash tables: distinct keys, buckets and the index kind (`swiss`: an open-addressing table of keys; `swiss+chain`: the same with duplicate build rows chained). |
+| `hash_entries`, `hash_buckets` (load), `hash_index` | The operator's hash tables: distinct keys, buckets and the index kind (a join's probe side reports the tables its grace phase built after spilling as `grace_hash_entries` and `grace_hash_buckets`) (`swiss`: an open-addressing table of keys; `swiss+chain`: the same with duplicate build rows chained). |
 | `probe_lookups`, `probe_key_compares` (avg), `max_probe_length` | Lookups, the keys compared to answer them (the probe length) and the longest probe. Collected only by `EXPLAIN ANALYZE` (`ExecConfig::detailed_metrics`), because they cost a counter per lookup; other runs show `(probe lengths not collected)`. |
 | Pipelines | Per pipeline: wall time from its first driver's start to its last driver's end, drivers, threads that ran them, and its operators from source to sink. |
 

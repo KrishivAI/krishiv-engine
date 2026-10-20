@@ -29,6 +29,7 @@ pub(crate) enum Format {
 
 /// Arguments of `krishiv sql`.
 #[derive(Args, Debug)]
+#[command(group(clap::ArgGroup::new("explain").args(["explain_analyze", "explain_verbose"])))]
 pub(crate) struct SqlArgs {
     /// SQL to run (one or more `;`-separated statements).
     #[arg(
@@ -63,7 +64,7 @@ pub(crate) struct SqlArgs {
     /// With --explain-analyze or --explain-verbose: print the versioned JSON
     /// document (one line per statement) instead of text (experimental: may
     /// change before 1.0).
-    #[arg(long)]
+    #[arg(long, requires = "explain")]
     json: bool,
 }
 
@@ -104,9 +105,6 @@ fn read_input(args: &SqlArgs) -> Result<String, String> {
 }
 
 fn run_inner(args: &SqlArgs) -> Result<(), String> {
-    if args.json && !args.explain_analyze && !args.explain_verbose {
-        return Err("--json needs --explain-analyze or --explain-verbose".to_owned());
-    }
     let input = read_input(args)?;
     let mut builder = Session::builder();
     for (k, v) in &args.conf {

@@ -194,6 +194,11 @@ pub(crate) enum Counter {
     KeyCompares,
     /// The most key comparisons of one lookup.
     MaxProbeLength,
+    /// Distinct keys of the tables the grace phase built (probe side: it
+    /// runs after the build's metrics are read).
+    GraceHashEntries,
+    /// Their buckets.
+    GraceHashBuckets,
 }
 
 /// The index a join's hash tables use, for `EXPLAIN ANALYZE`: a hashbrown
@@ -209,13 +214,15 @@ const BUILD_COUNTERS: [(Counter, &str); 5] = [
     (Counter::BuildSpillBytes, "spill_file_bytes"),
 ];
 /// The probe operator's counters, by name.
-const PROBE_COUNTERS: [(Counter, &str); 6] = [
+const PROBE_COUNTERS: [(Counter, &str); 8] = [
     (Counter::ProbeRows, "probe_rows"),
     (Counter::ProbeSpilledRows, "probe_spilled_rows"),
     (Counter::ProbeSpillBytes, "spill_file_bytes"),
     (Counter::GracePartitions, "grace_partitions"),
     (Counter::Repartitions, "repartitions"),
     (Counter::RecursionDepth, "recursion_depth"),
+    (Counter::GraceHashEntries, "grace_hash_entries"),
+    (Counter::GraceHashBuckets, "grace_hash_buckets"),
 ];
 /// The probe operator's per-lookup counters (detailed metrics only).
 const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
@@ -226,7 +233,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug, Default)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 14]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 16]);
 
 impl Counters {
     pub(crate) fn add(&self, c: Counter, v: u64) {

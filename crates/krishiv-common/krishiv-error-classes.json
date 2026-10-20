@@ -41,6 +41,12 @@
     ],
     "sqlState" : "22023"
   },
+  "KRISHIV_INVALID_PROFILE_DOCUMENT" : {
+    "message" : [
+      "The <document> document is invalid: <reason>."
+    ],
+    "sqlState" : "22000"
+  },
   "KRISHIV_INVALID_PARTITION_NUMBER" : {
     "message" : [
       "Number of partitions (<numPartitions>) must be positive."

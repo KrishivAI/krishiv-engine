@@ -812,8 +812,10 @@ impl Loading {
         self.memory.shrink(concat);
         let table = JoinTable::build(arena)?;
         let (keys, buckets) = table.index_size();
-        shared.counters.add(Counter::HashEntries, keys as u64);
-        shared.counters.add(Counter::HashBuckets, buckets as u64);
+        shared.counters.add(Counter::GraceHashEntries, keys as u64);
+        shared
+            .counters
+            .add(Counter::GraceHashBuckets, buckets as u64);
         Ok(Loaded::Table(Box::new(table), headroom))
     }
 

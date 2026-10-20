@@ -7,12 +7,11 @@ use std::fmt::Write as _;
 
 use arrow_array::RecordBatch;
 use futures::StreamExt as _;
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivInvalidProfileDocument};
 use krishiv_exec::profile::QueryProfile;
 use serde_json::{Value, json};
 
 use crate::dataframe::DataFrame;
-use crate::session::internal;
 
 /// The `format` member of an [`ExplainVerbose`] document.
 pub const VERBOSE_FORMAT: &str = "krishiv.explain-verbose";
@@ -97,10 +96,16 @@ impl ExplainVerbose {
     /// Reads a document [`to_json`](Self::to_json) wrote.
     ///
     /// # Errors
-    /// `INTERNAL_ERROR` naming the problem: malformed JSON, another format
+    /// `KRISHIV_INVALID_PROFILE_DOCUMENT` naming the problem: malformed JSON, another format
     /// or version, a missing or mistyped member.
     pub fn from_json(text: &str) -> Result<Self, KrishivError> {
-        let bad = |m: &str| internal(format!("invalid EXPLAIN VERBOSE document: {m}"));
+        let bad = |m: &str| -> KrishivError {
+            KrishivInvalidProfileDocument {
+                document: VERBOSE_FORMAT.to_owned(),
+                reason: m.to_owned(),
+            }
+            .into()
+        };
         let v: Value = serde_json::from_str(text).map_err(|e| bad(&e.to_string()))?;
         let s = |v: &Value, k: &str| {
             v.get(k)
@@ -163,6 +168,16 @@ pub(crate) fn line_diff(before: &str, after: &str) -> String {
         }
         return out;
     }
+    // Shared leading and trailing lines are never in the diff: only the
+    // window between them needs the table.
+    let pre = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let suf = a[pre..]
+        .iter()
+        .rev()
+        .zip(b[pre..].iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    let (a, b) = (&a[pre..a.len() - suf], &b[pre..b.len() - suf]);
     // lcs[i][j]: the common subsequence of a[i..] and b[j..].
     let mut lcs = vec![vec![0_u32; b.len() + 1]; a.len() + 1];
     for i in (0..a.len()).rev() {
@@ -318,6 +333,8 @@ mod tests {
         assert_eq!(line_diff("a\nc", "a\nb\nc"), "+ b\n");
         assert_eq!(line_diff("x\ny", "x\nz"), "- y\n+ z\n");
         assert_eq!(line_diff("same", "same"), "");
+        assert_eq!(line_diff("h\na\nt", "h\nb\nt"), "- a\n+ b\n");
+        assert_eq!(line_diff("h\nt", "h\nx\nt"), "+ x\n");
         let big: String = (0..=DIFF_MAX_LINES).map(|i| format!("{i}\n")).collect();
         let d = line_diff(&big, "0");
         assert!(d.starts_with("- 0\n- 1\n") && d.ends_with("+ 0\n"));
@@ -343,7 +360,7 @@ mod tests {
         let text = v.to_text();
         assert!(text.contains("== Optimizer: Rewrite round 1, PushDownFilter ==\n- a\n+ b\n"));
         for (bad, want) in [
-            ("{", "invalid EXPLAIN VERBOSE document"),
+            ("{", "The krishiv.explain-verbose document is invalid"),
             (r#"{"format":"x","version":1}"#, "unknown format"),
             (
                 r#"{"format":"krishiv.explain-verbose","version":9}"#,
@@ -358,7 +375,10 @@ mod tests {
                 "batch is not a string",
             ),
         ] {
-            let e = ExplainVerbose::from_json(bad).err().map(|e| e.to_string());
+            let e = ExplainVerbose::from_json(bad).err();
+            assert!(e.as_ref().is_some_and(|e| e.error_class()
+                == krishiv_common::error::ErrorClass::KrishivInvalidProfileDocument));
+            let e = e.map(|e| e.to_string());
             assert!(
                 e.as_deref().is_some_and(|e| e.contains(want)),
                 "{bad}: {e:?}"

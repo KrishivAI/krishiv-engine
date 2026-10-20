@@ -259,6 +259,18 @@ fn corrupt_documents_are_rejected() {
             Box::new(|v| v["plan"][1]["children"] = serde_json::json!([2])),
         ),
         (
+            "the plan is too deep",
+            Box::new(|v| {
+                let n = 2 * krishiv_plan::MAX_DEPTH + 1;
+                v["plan"] = (0..n)
+                    .map(|i| {
+                        let children: Vec<usize> = if i + 1 < n { vec![i + 1] } else { vec![] };
+                        serde_json::json!({"id": null, "name": "x", "detail": "", "children": children})
+                    })
+                    .collect();
+            }),
+        ),
+        (
             "operator 1 listed twice",
             Box::new(|v| {
                 let first = v["operators"][1].clone();
@@ -460,4 +472,17 @@ fn merging_extreme_documents_saturates() {
     assert_eq!(e.metrics.rows_out, u64::MAX);
     assert_eq!(e.extra("groups"), Some(&Metric::Count(u64::MAX)));
     assert!(e.metrics.compute_time >= Duration::from_nanos(u64::MAX));
+}
+
+#[test]
+fn profile_errors_carry_their_class() {
+    let e = QueryProfile::from_json("[]")
+        .err()
+        .unwrap_or_else(|| ProfileError::new("x"));
+    let k = krishiv_common::error::KrishivError::from(e);
+    assert_eq!(
+        k.error_class(),
+        krishiv_common::error::ErrorClass::KrishivInvalidProfileDocument
+    );
+    assert!(k.to_string().contains("profile is not an object"), "{k}");
 }

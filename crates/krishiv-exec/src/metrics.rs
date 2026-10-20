@@ -126,25 +126,27 @@ pub enum Metric {
     Count(u64),
     /// A maximum (a recursion depth, a longest probe): merges by `max`.
     Max(u64),
-    /// A description (a filter's form, a hash table's index kind): equal
-    /// texts merge to one, different ones are joined with `"; "`.
+    /// A description (a filter's form, a hash table's index kind): merging
+    /// keeps each distinct `"; "`-separated part once, sorted.
     Text(String),
 }
 
 impl Metric {
-    /// Merges `o` into this value. Two maxima take the larger; otherwise
-    /// two numbers add. A text wins over a number.
+    /// Merges `o` into this value, associatively and commutatively: two
+    /// maxima take the larger; any other two numbers add as a count; texts
+    /// keep their distinct `"; "`-separated parts, sorted; a text wins over
+    /// a number.
     pub fn merge(&mut self, o: &Self) {
         match (&mut *self, o) {
             (Self::Max(a), Self::Max(b)) => *a = (*a).max(*b),
             (Self::Count(a) | Self::Max(a), Self::Count(b) | Self::Max(b)) => {
-                *a = a.saturating_add(*b);
+                *self = Self::Count(a.saturating_add(*b));
             }
             (Self::Text(a), Self::Text(b)) => {
-                if !a.split("; ").any(|part| part == b) {
-                    a.push_str("; ");
-                    a.push_str(b);
-                }
+                let mut parts: Vec<&str> = a.split("; ").chain(b.split("; ")).collect();
+                parts.sort_unstable();
+                parts.dedup();
+                *a = parts.join("; ");
             }
             (Self::Text(_), _) => {}
             (_, Self::Text(b)) => *self = Self::Text(b.clone()),
@@ -413,6 +415,21 @@ mod tests {
         m.merge(&Metric::Text("range".to_owned()));
         m.merge(&Metric::Text("bloom".to_owned()));
         assert_eq!(m, Metric::Text("bloom; range".to_owned()));
+        // Merged texts merge part by part, in either order.
+        let mut x = Metric::Text("range; bloom".to_owned());
+        x.merge(&m);
+        assert_eq!(x, m);
+        let mut y = Metric::Text("small".to_owned());
+        y.merge(&Metric::Text("bloom; range".to_owned()));
+        let mut z = Metric::Text("bloom; range".to_owned());
+        z.merge(&Metric::Text("small".to_owned()));
+        assert_eq!(y, z);
+        // A count and a maximum merge to a count, in either order.
+        let mut c = Metric::Count(2);
+        c.merge(&Metric::Max(5));
+        let mut d = Metric::Max(5);
+        d.merge(&Metric::Count(2));
+        assert_eq!((c, d), (Metric::Count(7), Metric::Count(7)));
         m.merge(&Metric::Count(1));
         assert_eq!(m, Metric::Text("bloom; range".to_owned()));
         let mut m = Metric::Count(1);

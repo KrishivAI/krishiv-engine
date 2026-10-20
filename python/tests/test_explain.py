@@ -75,6 +75,11 @@ def test_bad_arguments(df: DataFrame, kwargs: dict[str, Any], error: type[Except
         df.explainString(**kwargs)
 
 
-def test_unknown_mode(df: DataFrame) -> None:
-    with pytest.raises(ValueError, match="Unknown explain mode: nope"):
-        df.explainString(mode="nope")
+@pytest.mark.parametrize(
+    ("kwargs", "mode"),
+    [({"mode": "nope"}, "nope"), ({"mode": "analyze"}, "analyze"), ({"extended": "VERBOSE"}, "verbose")],
+)
+def test_unknown_mode(df: DataFrame, kwargs: dict[str, Any], mode: str) -> None:
+    # Krishiv's modes are keywords only: a mode string never runs the query.
+    with pytest.raises(errors.PySparkValueError, match=f"Unknown explain mode: {mode}"):
+        df.explainString(**kwargs)

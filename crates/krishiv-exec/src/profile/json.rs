@@ -187,6 +187,10 @@ fn operator_json(id: OperatorId, e: &OperatorEntry) -> Value {
     })
 }
 
+/// The deepest plan a document may hold: the IR's limit, doubled for the
+/// headings `EXPLAIN` adds (a subquery's).
+const MAX_PLAN_DEPTH: usize = 2 * krishiv_plan::MAX_DEPTH;
+
 /// Reads [`plan_json`]'s list: node 0 is the root, every other node is
 /// the input of exactly one node listed before it.
 fn plan_of(v: &Value) -> R<ProfileNode> {
@@ -194,6 +198,10 @@ fn plan_of(v: &Value) -> R<ProfileNode> {
         .as_array()
         .ok_or_else(|| ProfileError::new("plan is not an array"))?;
     let mut nodes = Vec::with_capacity(list.len());
+    // Each node's depth (inputs come after their parent, so a parent's
+    // depth is known first): a flat list could describe a chain deeper
+    // than any plan, which the recursive tree must not get.
+    let mut depth = vec![1_usize; list.len()];
     let mut inputs = Vec::with_capacity(list.len());
     let mut used = vec![false; list.len()];
     for (at, n) in list.iter().enumerate() {
@@ -211,6 +219,10 @@ fn plan_of(v: &Value) -> R<ProfileNode> {
                 .ok_or_else(|| ProfileError::new("a plan input is not a later node"))?;
             if std::mem::replace(&mut used[c], true) {
                 return Err(ProfileError::new("a plan node is the input of two nodes"));
+            }
+            depth[c] = depth[at].saturating_add(1);
+            if depth[c] > MAX_PLAN_DEPTH {
+                return Err(ProfileError::new("the plan is too deep"));
             }
             mine.push(c);
         }

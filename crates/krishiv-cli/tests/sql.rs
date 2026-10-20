@@ -310,10 +310,11 @@ fn explain_verbose_prints_the_rules() {
 
 #[test]
 fn explain_flags_are_checked() {
+    // Usage errors exit 2.
     let o = krishiv(&["sql", "--json", "-e", "select 1"], None);
-    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(o.status.code(), Some(2));
     assert!(
-        err(&o).contains("--json needs --explain-analyze or --explain-verbose"),
+        err(&o).contains("the following required arguments were not provided"),
         "{}",
         err(&o)
     );

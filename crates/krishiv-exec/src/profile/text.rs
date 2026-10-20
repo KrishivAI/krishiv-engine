@@ -130,7 +130,12 @@ fn by_node(p: &QueryProfile) -> BTreeMap<u32, Vec<(OperatorId, &OperatorEntry)>>
 
 /// Extra metrics that depend on the query's hash seed (how keys spread
 /// over partitions and collide), masked with the other volatile values.
-const VOLATILE: [&str; 3] = ["hash_buckets", "probe_key_compares", "max_probe_length"];
+const VOLATILE: [&str; 4] = [
+    "hash_buckets",
+    "grace_hash_buckets",
+    "probe_key_compares",
+    "max_probe_length",
+];
 
 struct Printer<'a> {
     opts: TextOptions,

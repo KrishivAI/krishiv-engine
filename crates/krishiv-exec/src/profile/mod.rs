@@ -16,7 +16,7 @@
 mod json;
 mod text;
 
-use std::fmt;
+use krishiv_common::error::{KrishivError, KrishivInvalidProfileDocument};
 
 use crate::metrics::QueryMetrics;
 use crate::physical::{PhysNode, PhysicalPlan};
@@ -157,8 +157,10 @@ impl QueryProfile {
     }
 }
 
-/// A profile document that does not parse.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A profile document that does not parse, or profiles that do not merge.
+/// As a [`KrishivError`] it is `KRISHIV_INVALID_PROFILE_DOCUMENT`.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("invalid query profile: {0}")]
 pub struct ProfileError(String);
 
 impl ProfileError {
@@ -167,13 +169,15 @@ impl ProfileError {
     }
 }
 
-impl fmt::Display for ProfileError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid query profile: {}", self.0)
+impl From<ProfileError> for KrishivError {
+    fn from(e: ProfileError) -> Self {
+        KrishivInvalidProfileDocument {
+            document: PROFILE_FORMAT.to_owned(),
+            reason: e.0,
+        }
+        .into()
     }
 }
-
-impl std::error::Error for ProfileError {}
 
 #[cfg(all(test, not(loom)))]
 mod tests;

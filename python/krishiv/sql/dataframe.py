@@ -323,7 +323,11 @@ class DataFrame:
             )
         if chosen is None:
             chosen = "extended" if extended is True else "simple"
-        return self._df.explain(chosen.lower(), False)
+        chosen = chosen.lower()
+        # Only Spark's modes here: Krishiv's run through the keywords above.
+        if chosen not in ("simple", "extended", "codegen", "cost", "formatted"):
+            raise PySparkValueError(f"Unknown explain mode: {chosen}")
+        return self._df.explain(chosen, False)
 
     def createOrReplaceTempView(self, name: str) -> None:
         """Registers this DataFrame as the temporary view ``name`` (views of reads by path only, so far)."""
