@@ -299,11 +299,46 @@ pub(crate) fn evaluate(
     keys: &NormalizedKeys,
     valid: Option<&BooleanBuffer>,
 ) -> BooleanBuffer {
+    if let Norm::Bytes(a) = &keys.norm {
+        return bytes_evaluate(range, member, a.as_ref(), valid);
+    }
     let mut pass = range_pass(range, keys);
     if let Some(v) = valid {
         pass = &pass & v;
     }
     member_pass(member, keys, pass)
+}
+
+/// [`evaluate`] for string and binary keys in one pass over the values:
+/// range, then the row form on the rows still passing, each hashed once
+/// from its bytes in place (no copy), packed 64 rows a word.
+fn bytes_evaluate(
+    range: Option<&KeyRange>,
+    member: &Member,
+    a: &dyn Array,
+    valid: Option<&BooleanBuffer>,
+) -> BooleanBuffer {
+    let n = a.len();
+    let bounds = match range {
+        Some(KeyRange::Bytes(lo, hi)) => Some((lo.as_ref(), hi.as_ref())),
+        _ => None,
+    };
+    let mut words = vec![0u64; n.div_ceil(64)];
+    for_each_bytes(a, |i, b| {
+        let ok = valid.is_none_or(|v| v.value(i))
+            && bounds.is_none_or(|(lo, hi)| b >= lo && b <= hi)
+            && match member {
+                Member::Small(Small::Bytes(set)) => set.iter().any(|x| x.as_ref() == b),
+                Member::Exact(Exact::Bytes(t)) => t.find(xxh64(b), |x| x.as_ref() == b).is_some(),
+                Member::Bloom(bloom) => bloom.check_hash(xxh64(b)),
+                // The range decided; a form of another class keeps the row.
+                _ => true,
+            };
+        if ok && let Some(w) = words.get_mut(i / 64) {
+            *w |= 1 << (i % 64);
+        }
+    });
+    BooleanBuffer::new(Buffer::from_vec(words), 0, n)
 }
 
 /// Whether each row is in `range` (every row without one): one compare
@@ -321,13 +356,6 @@ fn range_pass(range: Option<&KeyRange>, keys: &NormalizedKeys) -> BooleanBuffer 
         // no NaN key.
         (Norm::Float { values, .. }, Some(&KeyRange::Float(lo, hi))) => {
             pack(values, |v| (v >= lo) & (v <= hi))
-        }
-        (Norm::Bytes(a), Some(KeyRange::Bytes(lo, hi))) => {
-            let mut out = BooleanBufferBuilder::new(n);
-            for_each_bytes(a.as_ref(), |_, b| {
-                out.append(b >= lo.as_ref() && b <= hi.as_ref());
-            });
-            out.finish()
         }
         _ => BooleanBuffer::new_set(n),
     }
@@ -351,15 +379,6 @@ fn member_pass(member: &Member, keys: &NormalizedKeys, pass: BooleanBuffer) -> B
         (Member::Small(Small::Wide(set)), Norm::Decimal(values)) => {
             let hit = pack(values, |v| set.iter().fold(false, |a, &x| a | (x == v)));
             &pass & &hit
-        }
-        (Member::Small(Small::Bytes(set)), Norm::Bytes(a)) => {
-            bytes_pass(a.as_ref(), &pass, |b| set.iter().any(|x| x.as_ref() == b))
-        }
-        (Member::Exact(Exact::Bytes(t)), Norm::Bytes(a)) => bytes_pass(a.as_ref(), &pass, |b| {
-            t.find(xxh64(b), |x| x.as_ref() == b).is_some()
-        }),
-        (Member::Bloom(bloom), Norm::Bytes(a)) => {
-            bytes_pass(a.as_ref(), &pass, |b| bloom.check_hash(xxh64(b)))
         }
         (Member::Exact(Exact::Int(t)), Norm::Int { values, .. }) => {
             hashed(keys, pass, |rows, hashes| match rows {
@@ -386,22 +405,10 @@ fn member_pass(member: &Member, keys: &NormalizedKeys, pass: BooleanBuffer) -> B
         (Member::Bloom(bloom), Norm::Int { .. } | Norm::Float { .. } | Norm::Decimal(_)) => {
             hashed(keys, pass, |_, hashes| bloom.check_batch(hashes))
         }
-        // The range decided; a form that does not fit the keys' class
-        // keeps every row (a superset).
+        // The range decided; string keys take `bytes_evaluate`; a form
+        // that does not fit the keys' class keeps every row (a superset).
         _ => pass,
     }
-}
-
-/// `pass` restricted to the rows whose bytes satisfy `hit` (tested only on
-/// rows still passing).
-fn bytes_pass(
-    a: &dyn Array,
-    pass: &BooleanBuffer,
-    mut hit: impl FnMut(&[u8]) -> bool,
-) -> BooleanBuffer {
-    let mut out = BooleanBufferBuilder::new(pass.len());
-    for_each_bytes(a, |i, b| out.append(pass.value(i) && hit(b)));
-    out.finish()
 }
 
 /// `probe(i, h)` of every row `i` with hash `hashes[i]`, packed.
