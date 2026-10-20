@@ -25,6 +25,8 @@ const NULL_HASH: u64 = 0xA5A5_5A5A_C3C3_3C3C;
 /// Odd constants for the hash mix (from the fractional digits of pi and e).
 const MIX: u64 = 0x243F_6A88_85A3_08D3;
 const FINISH: u64 = 0xB7E1_5162_8AED_2A6B;
+/// Odd constant of [`finalize`] (the fractional digits of sqrt(2)).
+const FIN: u64 = 0x6A09_E667_F3BC_C909;
 
 /// How a column is stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +115,10 @@ pub struct RowLayout {
     /// Offsets of the views (their second word is compared separately).
     views: Vec<usize>,
     compare: Compare,
+    /// A NULL in a key without a validity bit is written as zero bytes
+    /// instead of refused: the caller drops such rows (a join key compared
+    /// with `=` never matches when NULL).
+    lenient: bool,
 }
 
 impl RowLayout {
@@ -194,7 +200,22 @@ impl RowLayout {
             words,
             views,
             compare,
+            lenient: false,
         })
+    }
+
+    /// The layout of a hash join's keys: only keys compared with `<=>`
+    /// (`null_safe`) get a validity bit. A NULL in a key compared with `=`
+    /// is written as zero bytes, so the caller must drop every row with
+    /// such a NULL before it stores or probes the row (the join does: such
+    /// a row can never match).
+    ///
+    /// # Errors
+    /// As [`new`](Self::new).
+    pub fn for_join(types: &[DataType], null_safe: &[bool]) -> Result<Self> {
+        let mut layout = Self::new(types, null_safe)?;
+        layout.lenient = true;
+        Ok(layout)
     }
 
     /// Bytes per row (a multiple of 8).
@@ -203,7 +224,7 @@ impl RowLayout {
     }
 
     /// Offsets of the string/binary views in a row.
-    pub(super) fn views(&self) -> &[usize] {
+    pub fn views(&self) -> &[usize] {
         &self.views
     }
 
@@ -237,7 +258,7 @@ impl RowLayout {
             let nulls = array.logical_nulls();
             if let Some(bit) = column.null_bit {
                 keys.write_nulls(bit, nulls.as_ref());
-            } else if nulls.as_ref().is_some_and(|v| v.null_count() > 0) {
+            } else if !self.lenient && nulls.as_ref().is_some_and(|v| v.null_count() > 0) {
                 return Err(internal("NULL in a key declared non-nullable".to_owned()));
             }
             match column.kind {
@@ -263,6 +284,12 @@ impl RowLayout {
             keys.rows[i * self.stride..i * self.stride + 8].copy_from_slice(&h.to_le_bytes());
         }
         Ok(keys)
+    }
+
+    /// Whether the rows have string or binary views (and so may point into
+    /// a heap).
+    pub fn has_views(&self) -> bool {
+        !self.views.is_empty()
     }
 
     /// Whether row `a` (with heap `a_heap`) has the same key as row `b`
@@ -325,6 +352,55 @@ impl EncodedKeys {
     /// The heap long strings of these rows point into.
     pub fn heap(&self) -> &[u8] {
         &self.heap
+    }
+
+    /// Rows `idx` with self-contained heaps: the row bytes back to back in
+    /// `fixed`, and, if the layout has views, each row's long values in
+    /// `heap` between `offsets[j]` and `offsets[j + 1]`, with the views'
+    /// offsets rewritten to be relative to the row's own heap value. Such
+    /// rows survive `take`, concatenation and spilling as plain Arrow
+    /// `FixedSizeBinary` and `LargeBinary` columns.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for an index out of range or a view outside the
+    /// heap.
+    pub fn gather(&self, layout: &RowLayout, idx: &[usize]) -> Result<GatheredRows> {
+        let stride = self.stride;
+        let mut fixed = Vec::new();
+        fixed
+            .try_reserve_exact(idx.len().saturating_mul(stride))
+            .map_err(|e| internal(e.to_string()))?;
+        let mut heap = layout.has_views().then(|| (vec![0i64], Vec::new()));
+        for &i in idx {
+            let row = self
+                .rows
+                .get(i * stride..(i + 1) * stride)
+                .ok_or_else(|| internal(format!("key row {i} out of range")))?;
+            let start = fixed.len();
+            fixed.extend_from_slice(row);
+            let Some((offsets, bytes)) = heap.as_mut() else {
+                continue;
+            };
+            let base = bytes.len();
+            for &v in layout.views() {
+                let len = view_len(row, v);
+                if len <= INLINE_MAX {
+                    continue;
+                }
+                let from = usize::try_from(word(row, v + 8)).unwrap_or(usize::MAX);
+                let value = self
+                    .heap
+                    .get(from..from.saturating_add(len))
+                    .ok_or_else(|| internal("view outside its heap".to_owned()))?;
+                let at = (bytes.len() - base) as u64;
+                bytes.extend_from_slice(value);
+                fixed[start + v + 8..start + v + 16].copy_from_slice(&at.to_le_bytes());
+            }
+            let end = i64::try_from(bytes.len())
+                .map_err(|_| internal("key heap over 2^63 bytes".to_owned()))?;
+            offsets.push(end);
+        }
+        Ok(GatheredRows { fixed, heap })
     }
 
     fn row_mut(&mut self, i: usize) -> &mut [u8] {
@@ -493,6 +569,27 @@ impl EncodedKeys {
         }
         Ok(())
     }
+}
+
+/// Rows taken out of [`EncodedKeys`] by [`EncodedKeys::gather`].
+#[derive(Debug)]
+pub struct GatheredRows {
+    /// The row bytes, back to back.
+    pub fixed: Vec<u8>,
+    /// Per-row heap values: offsets (one more than rows) and bytes; `None`
+    /// when the layout has no views.
+    pub heap: Option<(Vec<i64>, Vec<u8>)>,
+}
+
+/// The table-local hash `g = fin(h ^ seed)` of a stored row hash `h`
+/// (P2-T157 Appendix C): one folded multiply. Salts, directory and bucket
+/// indexes and grace sub-partitions come from `g`, so keys with different
+/// `h` cannot be aimed at one slot run without the seed (keys with equal
+/// `h` share `g` under every seed); `g` never leaves the operator instance
+/// that drew `seed`.
+#[inline]
+pub fn finalize(h: u64, seed: u64) -> u64 {
+    fold(h ^ seed, FIN)
 }
 
 /// The little-endian word at `at` of `row` (0 if out of range).

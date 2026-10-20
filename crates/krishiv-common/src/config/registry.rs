@@ -15,6 +15,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &STORE_ASSIGNMENT_POLICY,
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
+    &EXEC_JOIN_ROW_LAYOUT,
     &SHUFFLE_PARTITIONS_HINT,
     &NETWORK_TIMEOUT,
     &MEMORY_LIMIT,
@@ -79,6 +80,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
+    ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
@@ -240,6 +242,20 @@ pub static EXEC_BATCH_SIZE: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Int(4096)),
     doc: "Rows per batch passed between operators. Operators do about a millisecond of work \
           per batch, so the scheduler can switch tasks between batches.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Hash join keys in the row layout with a size-adaptive index (P2-T158).
+pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.rowLayout",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Internal: hash joins store their keys as fixed-width rows and index them with a \
+          table that switches by size between a flat and a salted directory. Results are \
+          the same either way; joins whose key types have no row encoding keep the \
+          default path.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

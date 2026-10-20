@@ -37,9 +37,25 @@
 //! "exists" depends on the net multiplicity of all its rows, which a hash
 //! table of individual rows does not track.
 //!
+//! # Key formats (P2-T158)
+//! By default keys are arrow-row bytes indexed by the shared `KeyTable`.
+//! With `krishiv.exec.join.rowLayout` on (an internal setting, off by
+//! default, read when the join is instantiated), a join whose keys are all
+//! fixed-width (integers, dates, timestamps, decimals, floats, booleans)
+//! stores them as fixed-width rows ([`RowLayout`](crate::rows::RowLayout):
+//! Spark-normalized, NULL-safe; string keys keep arrow rows for now) with a
+//! seedless stored hash `h`, and indexes each partition with a
+//! [`JoinIndex`](crate::rows::JoinIndex): `hashbrown` while the index is
+//! small, a salted linear-probing directory above that, both keyed by the
+//! seeded `g = fin(h ^ seed)`. Results are the same in both formats.
+//! Payload columns stay arrow-row bytes in both.
+//!
 //! # Memory and spill
-//! Build rows are radix-partitioned (8 ways, shared `spill_partition` bits) as they
-//! arrive, into row-arena chunks reserved in the driver's consumer. A spill
+//! Build rows are radix-partitioned (8 ways) as they arrive, into row-arena
+//! chunks reserved in the driver's consumer. Arrow-row keys take the
+//! partition from the shared `spill_partition` bits of their seeded hash;
+//! row-layout keys take level 0 from the top bits of `h` and every deeper
+//! grace level from bits of `g` (P2-T157 Appendix C). A spill
 //! request writes whole partitions to spill files. If memory ran short at
 //! all, `finalize` spills **every** partition, so the probe never pins tables
 //! that fill the budget; otherwise it indexes them all. Probe rows of
@@ -242,7 +258,10 @@ pub(crate) struct Shared {
     filter_schema: SchemaRef,
     schema: SchemaRef,
     probe_schema: SchemaRef,
-    arena_schema: SchemaRef,
+    /// The row arena's schema with arrow-row keys.
+    arrow_arena: SchemaRef,
+    /// The row arena's schema with row-layout keys, if they have a layout.
+    row_arena: Option<SchemaRef>,
     spill: Option<SpillScope>,
     counters: Counters,
     runtime: Vec<JoinRuntimeFilter>,
@@ -359,12 +378,17 @@ impl Shared {
             JoinType::LeftOuter => joined(true),
             _ => Arc::clone(&probe_schema),
         };
+        let row_arena = match keys.layout() {
+            Some(l) => Some(table::arena_schema(payload.is_some(), Some(l))?),
+            None => None,
+        };
         Ok(Self {
             join_type,
             probe_keys,
             build_keys,
+            arrow_arena: table::arena_schema(payload.is_some(), None)?,
+            row_arena,
             keys,
-            arena_schema: table::arena_schema(payload.is_some()),
             payload,
             build_fields,
             filter,
@@ -375,6 +399,21 @@ impl Shared {
             counters: Counters::default(),
             runtime: Vec::new(),
         })
+    }
+
+    /// The row arena's schema in the key format `hashing` chose.
+    fn arena_schema(&self, hashing: &keys::Hashing) -> &SchemaRef {
+        match (&self.row_arena, hashing.rows()) {
+            (Some(rows), true) => rows,
+            _ => &self.arrow_arena,
+        }
+    }
+
+    /// The key format of a join instance under `config`: the row layout
+    /// when `krishiv.exec.join.rowLayout` is on and the keys have one.
+    fn hashing(&self, config: &crate::ExecConfig) -> keys::Hashing {
+        let rows = config.join_row_layout && self.keys.layout().is_some();
+        keys::Hashing::new(config.seed, rows)
     }
 
     /// Decodes build rows (payload bytes) into build columns.
@@ -567,5 +606,36 @@ mod tests {
             HashJoin::try_new(spec(JoinType::LeftSemi, 1, false)).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(j.schema().fields().len(), 2);
         assert!(format!("{j:?}").contains("LeftSemi"));
+    }
+
+    /// The row layout is used only when asked for and when every key type
+    /// has a row encoding; other joins keep arrow rows.
+    #[test]
+    fn the_row_layout_is_chosen_per_instance_and_key_types() {
+        let on = crate::ExecConfig {
+            join_row_layout: true,
+            ..crate::ExecConfig::default()
+        };
+        let j =
+            HashJoin::try_new(spec(JoinType::Inner, 1, false)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(j.0.hashing(&on).rows());
+        assert!(!j.0.hashing(&crate::ExecConfig::default()).rows());
+        // hash, key rows, payload.
+        assert_eq!(j.0.arena_schema(&j.0.hashing(&on)).fields().len(), 3);
+        // A string key keeps arrow rows.
+        let j =
+            HashJoin::try_new(spec(JoinType::Inner, 2, false)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!j.0.hashing(&on).rows());
+        let list = DataType::List(Arc::new(Field::new("x", DataType::Int64, true)));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", list, true)]));
+        let mut s = spec(JoinType::Inner, 1, false);
+        (s.probe_schema, s.build_schema) = (Arc::clone(&schema), schema);
+        let j = HashJoin::try_new(s).unwrap_or_else(|e| panic!("{e}"));
+        let h = j.0.hashing(&on);
+        assert!(!h.rows());
+        assert_eq!(
+            j.0.arena_schema(&h).field(1).data_type(),
+            &DataType::LargeBinary
+        );
     }
 }

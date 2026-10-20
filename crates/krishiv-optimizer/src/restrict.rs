@@ -161,7 +161,7 @@ impl Restrict<'_> {
     ) -> Option<Arc<LogicalPlan>> {
         let mine = output_ids(side)?;
         let theirs = output_ids(other)?;
-        let pairs: Vec<Pair<'_>> = conj
+        let mut pairs: Vec<Pair<'_>> = conj
             .iter()
             .filter_map(|c| {
                 let (op, args, eq) = builtin(c)?;
@@ -208,6 +208,36 @@ impl Restrict<'_> {
                 PlanNode::Aggregate { .. } => break,
                 PlanNode::Filter { input, .. } => {
                     let next = Arc::clone(input);
+                    path.push(at);
+                    at = next;
+                }
+                // Through inner joins too, into the input that holds the
+                // keys: a group that meets no value of `other` only
+                // feeds rows the join above drops. Join ordering moves
+                // aggregates in and out of such trees, so without this the
+                // result would depend on the order the query wrote.
+                PlanNode::Join {
+                    left,
+                    right,
+                    kind: JoinKind::Inner | JoinKind::Cross,
+                    ..
+                } => {
+                    let within = |c: &Arc<LogicalPlan>, k: &Arc<Expr>| {
+                        output_ids(c).is_some_and(|o| references(k).is_subset(&o))
+                    };
+                    let next = if keys.iter().any(|k| within(left, k)) {
+                        Arc::clone(left)
+                    } else {
+                        Arc::clone(right)
+                    };
+                    let keep: Vec<bool> = keys.iter().map(|k| within(&next, k)).collect();
+                    let mut it = keep.iter();
+                    pairs.retain(|_| *it.next().unwrap_or(&false));
+                    let mut it = keep.iter();
+                    keys.retain(|_| *it.next().unwrap_or(&false));
+                    if keys.is_empty() {
+                        return None;
+                    }
                     path.push(at);
                     at = next;
                 }
@@ -328,8 +358,28 @@ impl Restrict<'_> {
         // pass, so the result is a fixed point).
         let semi = self.join(semi);
         let mut out = with_input(&at, semi);
+        let mut below = at;
         for node in path.iter().rev() {
-            out = with_input(node, out);
+            let rebuilt = match &node.node {
+                PlanNode::Join { left, right, .. } => {
+                    let mut join = LogicalPlan::clone(node);
+                    if let PlanNode::Join {
+                        left: l, right: r, ..
+                    } = &mut join.node
+                    {
+                        if Arc::ptr_eq(left, &below) {
+                            *l = out;
+                        } else {
+                            debug_assert!(Arc::ptr_eq(right, &below));
+                            *r = out;
+                        }
+                    }
+                    Arc::new(join)
+                }
+                _ => with_input(node, out),
+            };
+            below = Arc::clone(node);
+            out = rebuilt;
         }
         Some(out)
     }
@@ -408,8 +458,12 @@ fn key_ndv(est: &Rc<Est>, want: &Attrs) -> f64 {
         .min(est.rows)
 }
 
-/// Whether `input` is already restricted by a semi join on `keys` with
-/// a domain instance (a shifted relation).
+/// Whether `input` is already reduced by a semi join on `keys` (this
+/// pass's own, or one the query wrote): restricting again adds little.
+/// Only the join's kind and condition count, never the shape of its
+/// right side, which pruning changes between optimizer runs (a `Shift`
+/// gains a projection above it), so the answer is the same on every run
+/// and the optimizer stays a fixed point.
 fn restricted(input: &Arc<LogicalPlan>, keys: &[Arc<Expr>]) -> bool {
     let mut at = input;
     loop {
@@ -419,7 +473,7 @@ fn restricted(input: &Arc<LogicalPlan>, keys: &[Arc<Expr>]) -> bool {
                 kind: JoinKind::LeftSemi,
                 condition: JoinCondition::On(cond),
                 left,
-                right,
+                ..
             } => {
                 let conj = conjuncts(cond);
                 let has = |k: &Arc<Expr>| {
@@ -429,7 +483,7 @@ fn restricted(input: &Arc<LogicalPlan>, keys: &[Arc<Expr>]) -> bool {
                         })
                     })
                 };
-                if matches!(right.node, PlanNode::Shift { .. }) && keys.iter().all(has) {
+                if keys.iter().all(has) {
                     return true;
                 }
                 at = left;

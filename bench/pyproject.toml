@@ -41,6 +41,11 @@ packages = ["src/krishiv_bench"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.coverage.report]
+# Report unimported files in directories without __init__.py too, so a new
+# untested module counts against the diff-coverage gate.
+include_namespace_packages = true
+
 [tool.ruff]
 target-version = "py311"
 line-length = 120
