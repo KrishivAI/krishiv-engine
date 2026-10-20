@@ -6,6 +6,8 @@ views at ``setup()`` (no pre-loading, for parity with the other adapters), then 
 
 * ``timed_run(query)`` -> ``(row_count, seconds)``: ``RUN``; the seconds are measured inside the runner
   around parse + analyse + plan + execute + materialising every batch.
+* ``profile(query)`` -> dict: ``PROFILE``; as ``timed_run`` plus the wall time of the parse+analyse and the
+  plan+execute phases (per-operator rows and times wait for the session to expose the executor's metrics).
 * ``run(query)`` -> rows: ``DUMP`` (the result is written to Parquet outside the timed region, then read back),
   for correctness checks. The generic suite runner times this call, so use ``abba`` for Krishiv timings.
 
@@ -17,6 +19,7 @@ Build the runner first (the shipped build level, see bench/README.md):
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import select
 import shutil
@@ -203,6 +206,11 @@ class KrishivEngine(Engine):
         """Executes to completion; returns the row count and the runner-measured seconds."""
         rows, secs = self._command(f"RUN {_enc(self._sql_file(query))}").split()
         return int(rows), float(secs)
+
+    def profile(self, query: Query) -> dict:
+        """One ``PROFILE`` run: row count, total seconds and the runner's per-phase wall times."""
+        rows, secs, detail = self._command(f"PROFILE {_enc(self._sql_file(query))}").split(" ", 2)
+        return {"rows": int(rows), "seconds": float(secs), **json.loads(detail)}
 
     def run(self, query: Query) -> list[tuple]:
         import pyarrow.parquet as pq

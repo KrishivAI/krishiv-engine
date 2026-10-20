@@ -592,7 +592,17 @@ impl Session {
         physical: &PhysicalPlan,
         env: &QueryEnv,
     ) -> Result<RecordBatchStream, KrishivError> {
-        self.run_on(physical, self.worker(env), env).await
+        Ok(self.run_with_query(physical, env).await?.0)
+    }
+
+    /// As [`Self::run`], also returning the query's context: its metrics
+    /// are complete once the stream has ended.
+    pub(crate) async fn run_with_query(
+        &self,
+        physical: &PhysicalPlan,
+        env: &QueryEnv,
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
+        self.run_on_query(physical, self.worker(env), env).await
     }
 
     /// Runs `physical` instantiated with `worker`.
@@ -602,6 +612,15 @@ impl Session {
         worker: WorkerContext,
         env: &QueryEnv,
     ) -> Result<RecordBatchStream, KrishivError> {
+        Ok(self.run_on_query(physical, worker, env).await?.0)
+    }
+
+    async fn run_on_query(
+        &self,
+        physical: &PhysicalPlan,
+        worker: WorkerContext,
+        env: &QueryEnv,
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
         let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
         let pool = self.state.memory.child(&format!("query-{}", id.0), None);
         let query = QueryContext::new(
@@ -613,9 +632,12 @@ impl Session {
         let stream = self
             .state
             .runner
-            .submit(physical.clone(), worker, query)
+            .submit(physical.clone(), worker, Arc::clone(&query))
             .await?;
-        Ok(Box::pin(stream.map(|b| b.and_then(into_record_batch))))
+        Ok((
+            Box::pin(stream.map(|b| b.and_then(into_record_batch))),
+            query,
+        ))
     }
 }
 

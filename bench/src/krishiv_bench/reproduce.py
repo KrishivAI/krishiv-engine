@@ -127,7 +127,16 @@ def correctness(qm: Mapping[str, Query], engines: Mapping[str, Engine]) -> tuple
     return verdict, len(ref)
 
 
-def ours_query(qm: Mapping[str, Query], engines: Mapping[str, Engine], reps: int, timeout_s: float) -> dict:
+def _note_peak(peaks: dict[str, int], name: str, eng: Engine) -> None:
+    """Keeps the highest per-run peak RSS of ``eng`` (its worker process tree) seen for the query."""
+    peak = eng.last_peak_rss_bytes
+    if peak is not None:
+        peaks[name] = max(peaks.get(name, 0), peak)
+
+
+def ours_query(
+    qm: Mapping[str, Query], engines: Mapping[str, Engine], reps: int, timeout_s: float, profile: bool = False
+) -> dict:
     load_before = loadavg()
     verdict, nrows = correctness(qm, engines)
     entry: dict[str, Any] = {"rows": nrows, "engines": {n: dict(v) for n, v in verdict.items()}}
@@ -135,6 +144,7 @@ def ours_query(qm: Mapping[str, Query], engines: Mapping[str, Engine], reps: int
     if REFERENCE not in live:
         return entry
     samples: dict[str, list[float]] = {n: [] for n in live}
+    peaks: dict[str, int] = {}
     for _ in range(reps):
         for name in [*live, *reversed(live)]:
             if name not in samples:
@@ -144,6 +154,7 @@ def ours_query(qm: Mapping[str, Query], engines: Mapping[str, Engine], reps: int
                 if n != nrows:
                     raise EngineError(f"timed run returned {n} rows, expected {nrows}")
                 samples[name].append(secs)
+                _note_peak(peaks, name, engines[name])
             except (EngineError, EngineTimeout, EngineCrashed) as e:
                 entry["engines"][name] = _fail(_status_of(e), f"timed run: {e}")
                 del samples[name]
@@ -151,9 +162,16 @@ def ours_query(qm: Mapping[str, Query], engines: Mapping[str, Engine], reps: int
     for name, s in samples.items():
         e = entry["engines"][name]
         e.update(samples_s=s, median_s=statistics.median(s))
+        if name in peaks:
+            e["peak_rss_bytes"] = peaks[name]
         if base and name != REFERENCE:
             lo, hi = bootstrap_ci(s, base)
             e.update(ratio=e["median_s"] / statistics.median(base), ratio_ci95=[lo, hi])
+    if profile and "krishiv" in samples:  # one extra untimed-for-the-ratio run, after all samples
+        try:
+            entry["engines"]["krishiv"]["profile"] = engines["krishiv"].profile(qm["krishiv"])
+        except (EngineError, EngineTimeout, EngineCrashed, NotImplementedError) as e:
+            entry["engines"]["krishiv"]["profile_error"] = str(e)[:300]
     entry["load_before"], entry["load_after"] = load_before, loadavg()
     return entry
 
@@ -175,12 +193,17 @@ def theirs_query(
     try:
         eng.setup(ds)
         times: list[float] = []
+        peaks: dict[str, int] = {}
         for _ in range(runs):
             n, secs = eng.timed_run(q)
+            _note_peak(peaks, name, eng)
             if n != nrows:
                 raise EngineError(f"timed run returned {n} rows, expected {nrows}")
             times.append(secs)
-        return {"status": "ok", "runs_s": times, "first_s": times[0], "best_s": min(times)}
+        res: dict[str, Any] = {"status": "ok", "runs_s": times, "first_s": times[0], "best_s": min(times)}
+        if name in peaks:
+            res["peak_rss_bytes"] = peaks[name]
+        return res
     except (EngineError, EngineTimeout, EngineCrashed) as e:
         return _fail(_status_of(e), e)
     finally:
@@ -200,6 +223,7 @@ def run_reproduce(
     timeout_s: float = 600,
     runs: int | None = None,
     their_timeout_s: float | None = None,
+    profile: bool = False,
 ) -> Path:
     names = engines or DEFAULT_ENGINES
     if REFERENCE not in names:
@@ -247,7 +271,7 @@ def run_reproduce(
                 record["engines"][n] = {"version": e.version(), "config": e.config(), "build": e.build_info()}
             for qm in queries:
                 qid = qm[REFERENCE].id
-                ent = ours_query(qm, engs, reps, timeout_s) if "ours" in methods else {}
+                ent = ours_query(qm, engs, reps, timeout_s, profile) if "ours" in methods else {}
                 record["queries"][qid] = ent
                 print(_line(qid, ent), flush=True)
         finally:
@@ -341,6 +365,9 @@ def summarize(record: dict) -> dict:
                 st = e.get("engines", {}).get(n, {}).get("status", "missing")
                 statuses[st] = statuses.get(st, 0) + 1
             per[n] = {"statuses": statuses}
+            peaks = [p for e in record["queries"].values() if (p := peak_rss(e, n, method)) is not None]
+            if peaks:
+                per[n]["max_peak_rss_bytes"] = max(peaks)
             if n == REFERENCE:
                 continue
             pairs = _pairs(record, n, REFERENCE, method)
@@ -397,6 +424,7 @@ def markdown(record: dict) -> str:
                     )
             out.append(f"| {qid} | " + " | ".join(str(c) for c in cells) + " |")
         out.append("")
+        out += _peak_table(record, method, names)
         for n, p in record["summary"][method].items():
             if "geomean" in p:
                 ci = p.get("geomean_ci95")
@@ -416,6 +444,26 @@ def markdown(record: dict) -> str:
         f"max 1-min load during the run {s['max_load']:.1f} (includes the benchmark itself)."
     )
     return "\n".join(out)
+
+
+def peak_rss(ent: dict, engine: str, method: str) -> int | None:
+    """Peak RSS in bytes of ``engine`` for one query entry and method (``None`` when not recorded)."""
+    e = ent.get("engines", {}).get(engine, {})
+    return e.get("theirs", {}).get("peak_rss_bytes") if method == "theirs" else e.get("peak_rss_bytes")
+
+
+def _peak_table(record: dict, method: str, names: list[str]) -> list[str]:
+    rows = []
+    for qid, ent in record["queries"].items():
+        peaks = [peak_rss(ent, n, method) for n in names]
+        if any(p is not None for p in peaks):
+            cells = ["-" if p is None else f"{p / 2**20:.0f}" for p in peaks]
+            rows.append(f"| {qid} | " + " | ".join(cells) + " |")
+    if not rows:
+        return []
+    head = [f"**{method} peak memory** (MiB, RSS of each engine's whole process tree)", ""]
+    head += ["| query | " + " | ".join(names) + " |", "|---|" + "---:|" * len(names)]
+    return [*head, *rows, ""]
 
 
 def report_from_file(path: Path) -> str:

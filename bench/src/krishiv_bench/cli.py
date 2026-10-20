@@ -54,6 +54,7 @@ def main(argv=None) -> None:
     rr.add_argument("--timeout", type=float, default=600, help="per-run timeout for the ours method (seconds)")
     rr.add_argument("--runs", type=int, help="hot runs per process for theirs (default: the published source's)")
     rr.add_argument("--their-timeout", type=float, help="per-run timeout for theirs (default: the source's)")
+    rr.add_argument("--profile", action="store_true", help="also record Krishiv's per-phase wall times (ours method)")
     rp = sub.add_parser("report", help="Markdown comparison of the newest result per engine")
     rp.add_argument("--suite", default="tpch")
     rp.add_argument("--sf", type=float, default=1)
@@ -80,6 +81,7 @@ def main(argv=None) -> None:
             a.timeout,
             a.runs,
             a.their_timeout,
+            a.profile,
         )
     elif a.cmd == "abba":
         from .abba import run_abba
