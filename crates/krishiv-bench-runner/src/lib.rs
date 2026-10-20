@@ -86,9 +86,12 @@ impl RunnerConfig {
                 "--memory-limit" => memory_limit = value()?,
                 "--conf" => {
                     let kv = value()?;
-                    let (k, v) = kv.split_once('=').ok_or_else(|| {
-                        RunnerError::Config(format!("--conf {kv}: expected key=value"))
-                    })?;
+                    let (k, v) = kv
+                        .split_once('=')
+                        .filter(|(k, _)| !k.trim().is_empty())
+                        .ok_or_else(|| {
+                            RunnerError::Config(format!("--conf {kv}: expected key=value"))
+                        })?;
                     conf.push((k.to_owned(), v.to_owned()));
                 }
                 other => return Err(RunnerError::Config(format!("unknown argument {other}"))),

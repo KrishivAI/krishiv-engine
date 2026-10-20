@@ -138,12 +138,14 @@ fn arguments() {
             ("a".to_owned(), "b=c".to_owned()),
         ]
     );
-    assert!(
-        args("--data /d --conf novalue")
-            .unwrap_err()
-            .to_string()
-            .contains("key=value")
-    );
+    for bad in ["novalue", "=true", " =true"] {
+        let e = RunnerConfig::from_args(
+            ["--data", "/d", "--conf", bad]
+                .into_iter()
+                .map(str::to_owned),
+        );
+        assert!(e.unwrap_err().to_string().contains("key=value"), "{bad}");
+    }
     assert!(
         args("--threads 4")
             .unwrap_err()

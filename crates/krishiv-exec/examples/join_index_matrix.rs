@@ -224,10 +224,11 @@ fn index(f: &Fixture, choice: IndexChoice) -> JoinIndex {
 /// Probes every batch; returns the matches (so nothing is optimized out).
 fn probe_rows(f: &Fixture, ix: &JoinIndex, touch: bool, out: &mut Vec<u32>) -> usize {
     let mut found = 0;
+    // Row ids of a full batch, built once: no allocation in the timed loop.
+    let ids: Vec<u32> = (0..u32::try_from(BATCH).expect("batch")).collect();
     for (keys, _, _) in &f.probes {
         out.clear();
-        let which: Vec<u32> = (0..u32::try_from(keys.len()).expect("batch")).collect();
-        ix.find_with(&f.layout, keys, &which, &f.arena, out, touch);
+        ix.find_with(&f.layout, keys, &ids[..keys.len()], &f.arena, out, touch);
         found += out.iter().filter(|&&h| h != NO_MATCH).count();
     }
     found
