@@ -13,10 +13,11 @@
 //!    outer joins inner where a filter rejects their NULL rows), join
 //!    conditions into the side they read, projection collapse and removal,
 //!    limit pushdown.
-//! 2. **Restrict**, once: an aggregate below a join that drops its
-//!    unmatched groups groups only the input rows whose keys the join's
-//!    other side holds (a semi join on that side's key domain, see
-//!    `restrict`), when estimates say the domain is small.
+//! 2. **Restrict**, then alternating with join order until neither
+//!    changes the plan: an aggregate below a join that drops its unmatched
+//!    groups groups only the input rows whose keys the join's other side
+//!    holds (a semi join on that side's key domain, see `restrict`), when
+//!    estimates say the domain is small.
 //! 3. **Join order**: each tree of inner joins is re-planned from
 //!    cardinality estimates ([`Statistics`]): exact dynamic programming up
 //!    to [`DP_LIMIT`] inputs, greedy above, never a cross product the query
@@ -113,12 +114,23 @@ fn run(plan: &Plan, stats: Option<&dyn Statistics>) -> Result<Plan, KrishivError
     let run = move || -> Result<Arc<LogicalPlan>, KrishivError> {
         let root = dag::rewrite_up(root, &mut |p| Ok(pushdown::imply_join_condition(p)))?;
         let root = batch(root)?;
-        // Before join ordering, which then sees the restricted estimates.
-        let root = restrict::restrict(root, stats.unwrap_or(&NoStatistics))?;
-        let root = match stats {
-            Some(stats) => join_order::reorder(&root, stats),
-            None => root,
-        };
+        // Restriction and join ordering alternate until neither changes
+        // the plan: ordering sees the restricted estimates, and restriction
+        // sees every join the ordering forms (which side an aggregate joins
+        // decides its domain), so a second optimization finds nothing new.
+        let estimates = stats.unwrap_or(&NoStatistics);
+        let mut root = restrict::restrict(root, estimates)?;
+        if let Some(stats) = stats {
+            for _ in 0..MAX_ITERATIONS {
+                let ordered = join_order::reorder(&root, stats);
+                let restricted = restrict::restrict(Arc::clone(&ordered), estimates)?;
+                let done = Arc::ptr_eq(&restricted, &ordered);
+                root = restricted;
+                if done {
+                    break;
+                }
+            }
+        }
         let root = prune::prune(&root);
         batch(root)
     };

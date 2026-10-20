@@ -1,0 +1,14 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT t.a FROM (SELECT a, count(*) AS n FROM u GROUP BY a) g CROSS JOIN u v JOIN t ON g.a + v.a = t.a WHERE t.b = 'x'"
+---
+Project [a#5]
++- Join Inner, ((a#0 + a#3) == a#5)
+   :- Join Inner
+   :  :- Aggregate [a#0], [a#0]
+   :  :  +- Scan spark_catalog.default.u [a#0] (shared #1)
+   :  +- Shift +3
+   :     +- Shared #1, printed above
+   +- Project [a#5]
+      +- Filter (b#6 == 'x')
+         +- Scan spark_catalog.default.t [a#5, b#6]
