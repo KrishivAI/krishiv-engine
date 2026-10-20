@@ -302,7 +302,9 @@ impl QueryContext {
                 started,
                 ended,
             });
-            p.threads = count;
+            // The set only grows, but a driver that read it earlier may
+            // merge later: keep the larger count.
+            p.threads = p.threads.max(count);
         });
     }
 }
