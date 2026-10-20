@@ -266,14 +266,18 @@ pub fn check_or_exit() {
 #[cold]
 #[inline(never)]
 fn fail() -> ! {
-    let mut err = std::io::stderr();
+    write_failure(&mut std::io::stderr());
+    std::process::exit(1)
+}
+
+/// `error: <message>` and a newline, piece by piece (see the module docs).
+fn write_failure(err: &mut impl Write) {
     // Best effort: a closed stderr leaves nothing to report to.
     let _ = err.write_all(b"error: ");
     unsupported_message(&mut |piece| {
         let _ = err.write_all(piece.as_bytes());
     });
     let _ = err.write_all(b"\n");
-    std::process::exit(1)
 }
 
 #[cfg(test)]
@@ -361,6 +365,25 @@ mod tests {
         } else {
             assert!(msg.contains("No compat build"), "{msg}");
         }
+    }
+
+    #[test]
+    fn failure_text_is_one_error_line() {
+        let mut out = Vec::new();
+        write_failure(&mut out);
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.starts_with("error: this build of Krishiv requires a "),
+            "{text}"
+        );
+        assert!(text.ends_with(".\n"), "{text}");
+        assert_eq!(text.lines().count(), 1, "{text}");
+    }
+
+    #[test]
+    fn check_or_exit_returns_on_a_supported_cpu() {
+        // The test machine runs its own build, so this must not exit the test process.
+        check_or_exit();
     }
 
     /// The machine running the tests built them, so it must pass its own check.
