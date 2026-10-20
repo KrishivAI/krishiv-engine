@@ -130,22 +130,19 @@ fn arguments() {
         ("/d", 4, "2g")
     );
     assert!(args("--data /d").unwrap().threads >= 1);
-    let c = args("--data /d --conf krishiv.exec.join.rowLayout=true --conf a=b=c").unwrap();
+    let c = args("--data /d --conf a.b=1 --conf c=x=y").unwrap();
     assert_eq!(
         c.conf,
-        [
-            ("krishiv.exec.join.rowLayout".to_owned(), "true".to_owned()),
-            ("a".to_owned(), "b=c".to_owned()),
+        vec![
+            ("a.b".to_owned(), "1".to_owned()),
+            ("c".to_owned(), "x=y".to_owned())
         ]
     );
-    for bad in ["novalue", "=true", " =true"] {
-        let e = RunnerConfig::from_args(
-            ["--data", "/d", "--conf", bad]
-                .into_iter()
-                .map(str::to_owned),
-        );
-        assert!(e.unwrap_err().to_string().contains("key=value"), "{bad}");
-    }
+    assert!(args("--data /d --conf novalue").is_err());
+    assert!(args("--data /d --conf =v").is_err());
+    // A blank key is no key.
+    let blank = RunnerConfig::from_args(["--data", "/d", "--conf", " =v"].map(str::to_owned));
+    assert!(blank.unwrap_err().to_string().contains("key=value"));
     assert!(
         args("--threads 4")
             .unwrap_err()
@@ -330,4 +327,28 @@ fn each_query_file_is_attributed_its_own_rows() {
     };
     let order = [&one, &seven, &seven, &one];
     assert_eq!(order.map(|q| rows(q)), [1, 7, 7, 1]);
+}
+
+#[test]
+fn conf_is_applied_after_the_memory_limit_and_unknown_keys_are_rejected() {
+    let dir = data_dir();
+    let new = |conf: Vec<(&str, &str)>| {
+        Runner::new(&RunnerConfig {
+            data: dir.path().to_str().unwrap().to_owned(),
+            threads: 1,
+            memory_limit: "1g".to_owned(),
+            conf: conf
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect(),
+        })
+    };
+    // The valid --memory-limit is overridden by a later, invalid conf value: proves conf reaches the session.
+    let bad = new(vec![("krishiv.memory.limit", "not-a-size")]).unwrap_err();
+    assert!(bad.to_string().contains("not-a-size"), "{bad}");
+    // An unknown key would otherwise be dropped with only a warning.
+    let unknown = new(vec![("no.such.setting", "1")]).unwrap_err();
+    assert!(unknown.to_string().contains("no.such.setting"), "{unknown}");
+    assert!(unknown.to_string().contains("not applied"), "{unknown}");
+    assert!(new(vec![("krishiv.memory.limit", "2g")]).is_ok());
 }

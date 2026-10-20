@@ -8,19 +8,35 @@
 //!   that the planner fills and the scan reads when it starts running
 //!   (plans run once, after planning).
 //! - **Row stage.** Each driver evaluates every filter whose column the
-//!   batch holds and drops the rows no filter passes (a superset of the
-//!   rows the producer keeps). A filter that is pending applies nothing; it
-//!   is adopted at the next batch once published.
-//! - **Adaptive switch-off.** A driver measures each filter's pass rate over
-//!   windows of at least `min_rows` rows; above `max_pass_rate` it stops
-//!   evaluating that filter on rows (statistics stages keep using it: they
-//!   cost nothing) until the filter publishes a new generation.
+//!   batch holds and drops the rows some filter rejects (a superset of the
+//!   rows the producers keep). Filters run cheapest form first (range,
+//!   small set, hash set, Bloom; ties in attachment order), and once fewer
+//!   than half the rows survive, a later filter sees only the survivors (as
+//!   Velox orders and narrows conjuncts, research `papers.md` A5 claim 3,
+//!   but by a static cost so the order never depends on timing). A filter
+//!   that is pending applies nothing; it is adopted at the next batch once
+//!   published.
+//! - **Adaptive switch-off.** Per scan partition, a driver measures each
+//!   filter's pass rate over windows of at least `min_rows` rows that reach
+//!   it. A filter pays for itself when the rows it drops save more than it
+//!   costs on every row it tests: `(1 - pass) * DROP_SAVES_NS > cost`, with
+//!   the form's per-row cost from the `runtime_filter` microbenchmark
+//!   ([`KeyFilter::row_cost_ns`]). Above `min(max_pass_rate, 1 - cost /
+//!   DROP_SAVES_NS)` it stops evaluating that filter on rows for the rest
+//!   of the partition (statistics stages keep using it: they cost
+//!   nothing), or until the filter publishes a new generation.
+//! - **Deterministic per partition (P2-T171 I10).** The measurement and the
+//!   decision restart at every partition a driver claims
+//!   ([`RowStage::start_partition`]) and depend only on row counts, never
+//!   on time or on which driver read what before: the same partition gets
+//!   the same decisions on any run, worker or attempt.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::{BooleanArray, RecordBatch};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_schema::Schema;
-use krishiv_io::{FilterCounts, RuntimeFilter, ScanFilter};
+use krishiv_io::{FilterCounts, KeyFilter, RuntimeFilter, ScanFilter};
 
 use crate::error::{Result, internal};
 
@@ -127,6 +143,12 @@ impl RuntimeFilters {
     }
 }
 
+/// What one row a runtime filter drops saves downstream, in nanoseconds:
+/// at least the join's own probe of that row (key encoding, hash, a
+/// probe that misses), from the `hash_join` microbenchmark's probe time
+/// per row, rounded down.
+pub(crate) const DROP_SAVES_NS: f64 = 20.0;
+
 /// One filter in one driver's row stage.
 #[derive(Debug)]
 struct RowFilter {
@@ -135,7 +157,8 @@ struct RowFilter {
     column: usize,
     window_rows: u64,
     window_passed: u64,
-    /// Off for rows since this generation (until the filter changes).
+    /// Off for rows since this generation (until the filter changes or the
+    /// next partition starts).
     off_at: Option<u64>,
 }
 
@@ -169,6 +192,23 @@ impl RowStage {
         Self { filters, settings }
     }
 
+    /// A new scan partition starts: every filter is measured afresh, so
+    /// the switch-off decisions depend on that partition's rows only.
+    pub(crate) fn start_partition(&mut self) {
+        for f in &mut self.filters {
+            f.window_rows = 0;
+            f.window_passed = 0;
+            f.off_at = None;
+        }
+    }
+
+    /// The pass rate above which `keys` stops paying for itself.
+    fn cut_off(&self, keys: &KeyFilter) -> f64 {
+        self.settings
+            .max_pass_rate
+            .min(1.0 - keys.row_cost_ns() / DROP_SAVES_NS)
+    }
+
     /// The rows of `batch` some producer may keep, with the selection
     /// applied (`None`: every row passes, nothing was filtered).
     ///
@@ -179,43 +219,69 @@ impl RowStage {
         if rows == 0 {
             return Ok(None);
         }
-        let mut all: Option<BooleanArray> = None;
-        for f in &mut self.filters {
+        // The applicable filters, cheapest first (stable: ties keep their
+        // attachment order).
+        let mut active: Vec<(usize, Arc<KeyFilter>, u64)> = Vec::new();
+        for (i, f) in self.filters.iter_mut().enumerate() {
             let generation = f.filter.generation();
             if f.off_at.is_some_and(|g| g == generation) {
                 continue;
             }
             f.off_at = None;
+            if let Some(keys) = f.filter.current() {
+                active.push((i, keys, generation));
+            }
+        }
+        active.sort_by(|a, b| a.1.row_cost_ns().total_cmp(&b.1.row_cost_ns()));
+        let mut all: Option<BooleanBuffer> = None;
+        for (i, keys, generation) in active {
+            let cut_off = self.cut_off(&keys);
+            let Some(f) = self.filters.get_mut(i) else {
+                continue;
+            };
             let column = batch
                 .columns()
                 .get(f.column)
                 .ok_or_else(|| internal("a runtime filter's column is missing".to_owned()))?;
-            let Some(mask) = f.filter.evaluate(column.as_ref()) else {
+            // Once most rows are gone, only the survivors reach this filter.
+            let narrowed = match &all {
+                Some(m) if m.count_set_bits() * 2 < rows => Some(
+                    arrow_select::filter::filter(
+                        column.as_ref(),
+                        &BooleanArray::new(m.clone(), None),
+                    )
+                    .map_err(|e| internal(e.to_string()))?,
+                ),
+                _ => None,
+            };
+            let input = narrowed.as_deref().unwrap_or(column.as_ref());
+            let Some(mask) = keys.evaluate(input) else {
                 continue;
             };
+            let tested = input.len() as u64;
             let passed = mask.true_count() as u64;
-            f.filter
-                .filter()
-                .stats()
-                .add_rows(rows as u64, rows as u64 - passed);
-            f.window_rows += rows as u64;
+            f.filter.filter().stats().add_rows(tested, tested - passed);
+            f.window_rows += tested;
             f.window_passed += passed;
             if f.window_rows >= self.settings.min_rows {
                 #[expect(clippy::cast_precision_loss, reason = "a rate")]
                 let rate = f.window_passed as f64 / f.window_rows as f64;
-                if rate > self.settings.max_pass_rate {
+                if rate > cut_off {
                     f.off_at = Some(generation);
                 }
                 f.window_rows = 0;
                 f.window_passed = 0;
             }
             // Runtime filter masks have no nulls.
-            all = Some(match all {
-                None => mask,
-                Some(prev) => BooleanArray::new(prev.values() & mask.values(), None),
+            all = Some(match (all, narrowed.is_some()) {
+                (None, _) => mask.values().clone(),
+                (Some(prev), false) => &prev & mask.values(),
+                (Some(prev), true) => scatter(&prev, mask.values()),
             });
         }
-        Ok(all.filter(|m| m.true_count() < rows))
+        Ok(all
+            .filter(|m| m.count_set_bits() < rows)
+            .map(|m| BooleanArray::new(m, None)))
     }
 
     /// `batch` without the rows no producer keeps.
@@ -229,6 +295,19 @@ impl RowStage {
                 .map_err(|e| internal(e.to_string())),
         }
     }
+}
+
+/// `prev` with its set rows replaced by `answers` (one per set row, in
+/// order).
+fn scatter(prev: &BooleanBuffer, answers: &BooleanBuffer) -> BooleanBuffer {
+    let mut out = BooleanBufferBuilder::new(prev.len());
+    out.append_n(prev.len(), false);
+    for (k, i) in prev.set_indices().enumerate() {
+        if k < answers.len() && answers.value(k) {
+            out.set_bit(i, true);
+        }
+    }
+    out.finish()
 }
 
 #[cfg(all(test, not(loom)))]
@@ -317,6 +396,80 @@ mod tests {
         assert_eq!(get("runtime_filter_rows_tested"), Some(4 + 4 + 2 + 4));
         assert_eq!(get("runtime_filter_rows_dropped"), Some(1 + 3 + 2 + 1));
         assert!(RuntimeFilters::default().extra_metrics().is_empty());
+    }
+
+    fn publish_with(f: &RuntimeFilter, keys: &[i64], options: KeyFilterOptions) {
+        let mut b = KeyFilterBuilder::new(DataType::Int64, options)
+            .unwrap_or_else(|| unreachable!("int64"));
+        b.add(&Int64Array::from(keys.to_vec()), None)
+            .unwrap_or_else(|e| unreachable!("{e}"));
+        f.publish(FilterSnapshot::Final(Arc::new(b.finish())));
+    }
+
+    fn tested(f: &RuntimeFilter) -> u64 {
+        f.stats().counts().rows_tested
+    }
+
+    /// A filter that drops too few rows to pay for its per-row cost
+    /// switches off even under a 100% pass-rate cap; the decision restarts
+    /// with every partition and depends only on that partition's rows; a
+    /// later (costlier) filter sees only the rows the cheaper ones kept.
+    #[test]
+    fn cost_based_per_partition_switch_off_and_narrowing() {
+        let set = Arc::new(RuntimeFilter::new(
+            FilterId(1),
+            ColumnPath::new("a"),
+            DataType::Int64,
+        ));
+        // Spread keys: an exact hash set (no range help on 0..=63).
+        let keys: Vec<i64> = (0..64).filter(|k| k % 8 != 7).chain([1000]).collect();
+        publish_with(&set, &keys, KeyFilterOptions::default());
+        let form = set.published();
+        let FilterSnapshot::Final(k) = &form.snapshot else {
+            unreachable!("published")
+        };
+        assert!(matches!(k.form(), krishiv_io::FilterForm::HashSet(_)));
+        let cut_off = 1.0 - k.row_cost_ns() / super::DROP_SAVES_NS;
+        assert!(cut_off < 7.0 / 8.0, "{cut_off}");
+        let settings = RowStageSettings {
+            min_rows: 8,
+            max_pass_rate: 1.0,
+        };
+        let slot = RuntimeFilters::new(vec![Arc::clone(&set)]);
+        let mut stage = RowStage::new(&slot.scan_filters(&schema()), &schema(), settings);
+        let loose: Vec<i64> = (0..8).collect();
+        // 7 of 8 pass: above the cost cut-off, the filter stops.
+        assert_eq!(rows(&mut stage, &loose), 7);
+        assert_eq!(rows(&mut stage, &[7, 15, 23]), 3, "off for this partition");
+        // A new partition measures afresh: the same rows, the same
+        // decisions.
+        stage.start_partition();
+        assert_eq!(rows(&mut stage, &loose), 7);
+        assert_eq!(rows(&mut stage, &[7, 15, 23]), 3);
+        stage.start_partition();
+        let tight = [7i64, 15, 23, 31, 39, 47, 55, 1];
+        assert_eq!(rows(&mut stage, &tight), 1, "1 of 8 pass: stays on");
+        assert_eq!(rows(&mut stage, &[7, 15]), 0);
+
+        // Narrowing: a cheap range filter first, then the set on the
+        // survivors only.
+        let range = Arc::new(RuntimeFilter::new(
+            FilterId(2),
+            ColumnPath::new("a"),
+            DataType::Int64,
+        ));
+        publish_with(&range, &[0, 1, 2], KeyFilterOptions::default());
+        // Attached after the set: the cheaper range still runs first.
+        let both = RuntimeFilters::new(vec![Arc::clone(&set), Arc::clone(&range)]);
+        let mut stage = RowStage::new(&both.scan_filters(&schema()), &schema(), settings);
+        let before = tested(&set);
+        let batch: Vec<i64> = (0..100).collect();
+        assert_eq!(rows(&mut stage, &batch), 3, "keys 0, 1 and 2");
+        assert_eq!(tested(&range), 100);
+        assert_eq!(tested(&set) - before, 3, "the set tests the survivors only");
+        // A batch the range mostly keeps is tested by both in full.
+        assert_eq!(rows(&mut stage, &[0, 1, 2, 7000]), 3);
+        assert_eq!(tested(&set) - before, 3 + 4);
     }
 
     /// Filters on nested or absent columns have no row stage; a batch

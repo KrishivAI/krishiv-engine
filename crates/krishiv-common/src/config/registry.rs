@@ -47,6 +47,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ENABLED,
     &RUNTIME_FILTER_BLOOM_ENABLED,
     &RUNTIME_FILTER_IN_LIST_MAX_VALUES,
+    &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
     &RUNTIME_FILTER_BLOOM_MAX_ITEMS,
     &RUNTIME_FILTER_BLOOM_MAX_BYTES,
     &RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
@@ -161,6 +162,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.leafNodeDefaultParallelism",
         &LEAF_NODE_DEFAULT_PARALLELISM,
+    ),
+    (
+        "krishiv.runtimeFilter.exactSet.maxValues",
+        &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
     ),
     (
         "krishiv.experimental.unalignedCheckpoints",
@@ -635,6 +640,19 @@ pub static RUNTIME_FILTER_IN_LIST_MAX_VALUES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Int(50)),
     doc: "Most distinct build keys a runtime filter keeps as a value set; with more, a Bloom \
           filter (when planned) or only the min/max range is published.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.runtimeFilter.exactSet.maxValues`.
+pub static RUNTIME_FILTER_EXACT_SET_MAX_VALUES: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.exactSet.maxValues",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(4096)),
+    doc: "Most distinct build keys a runtime filter tests rows against exactly (a small set or \
+          a hash set); with more, a Bloom filter (when planned) or only the min/max range is \
+          used on rows.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

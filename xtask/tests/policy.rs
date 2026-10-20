@@ -200,6 +200,23 @@ fn ci_policy_wiring() {
         assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
     }
     assert!(ci.contains("  wheels-targets:\n") && ci.contains("  wheels-ok:\n"));
+    // Python diff coverage is gated in the required wheels job (python/krishiv)
+    // and in the diff-coverage job (bench/src), each at 90% on its own.
+    for needle in [
+        "--cov-report=lcov:python-coverage.lcov",
+        "--lcov python-coverage.lcov --fail-under 90",
+        "fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}",
+    ] {
+        assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
+    }
+    let coverage = read(".github/workflows/coverage.yml");
+    for needle in [
+        "--cov-report=\"lcov:$RUNNER_TEMP/bench.lcov\"",
+        "--lcov \"$RUNNER_TEMP/bench.lcov:bench\" --fail-under 90",
+        "cargo xtask diff-coverage --base \"$BASE_SHA\" --head \"$HEAD_SHA\" --fail-under 90",
+    ] {
+        assert!(coverage.contains(needle), "coverage.yml lacks {needle:?}");
+    }
     assert!(
         !ci.contains("--all-features --locked --no-tests"),
         "PR nextest must use default features"
@@ -331,6 +348,55 @@ fn security_workflows_are_wired() {
     assert!(
         !licenses.contains(&"CC0-1.0"),
         "CC0-1.0 must stay out of deny.toml's global allow list"
+    );
+    // Per-package exceptions, in two deliberate categories only: Rust crates, which must be
+    // exactly deny.toml's `[licenses] exceptions`, and GitHub Actions used only in CI
+    // (tooling on the build runner, never distributed or linked), which must really be used
+    // by a workflow and never be a dependency of the workspace.
+    let listed = sec
+        .split("allow-dependencies-licenses: >-")
+        .nth(1)
+        .unwrap()
+        .lines()
+        .skip(1)
+        .take_while(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let purls: Vec<&str> = listed.split(',').map(str::trim).collect();
+    let exception_crates: Vec<&str> = deny
+        .lines()
+        .filter(|l| l.starts_with("exceptions = ["))
+        .flat_map(|l| l.split("crate = \"").skip(1))
+        .filter_map(|l| l.split('"').next())
+        .collect();
+    let cargo: Vec<&str> = purls
+        .iter()
+        .filter_map(|p| p.strip_prefix("pkg:cargo/"))
+        .collect();
+    assert_eq!(
+        cargo, exception_crates,
+        "pkg:cargo purls must be deny.toml's exceptions"
+    );
+    let workflows: String = std::fs::read_dir(root().join(".github/workflows"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect();
+    for purl in &purls {
+        if let Some(action) = purl.strip_prefix("pkg:githubactions/") {
+            assert!(
+                workflows.contains(&format!("uses: {action}@")),
+                "{purl} is a CI-only exception but no workflow uses {action}"
+            );
+        } else {
+            assert!(
+                purl.starts_with("pkg:cargo/"),
+                "unknown exception category: {purl}"
+            );
+        }
+    }
+    assert!(
+        purls.contains(&"pkg:githubactions/Swatinem/rust-cache"),
+        "the CI-only rust-cache exception is missing"
     );
     let osv = read(".github/workflows/osv-scanner.yml");
     for lock in ["Cargo.lock", "python/uv.lock", "bench/uv.lock"] {

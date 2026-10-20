@@ -30,8 +30,10 @@
 //! q81 and q74 ran 1.6–1.9x slower with it).
 //!
 //! # Cost model
-//! min/max and the value set (up to `krishiv.runtimeFilter.inList.maxValues`
-//! keys) are always collected; a Bloom filter's hashes only when
+//! min/max and the distinct keys (up to the larger of
+//! `krishiv.runtimeFilter.inList.maxValues`, the statistics `IN` list, and
+//! `krishiv.runtimeFilter.exactSet.maxValues`, the exact row form) are
+//! always collected; a Bloom filter's hashes only when
 //! `spark.sql.optimizer.runtime.bloomFilter.enabled`, the build is
 //! estimated at most `krishiv.runtimeFilter.bloom.maxItems` rows, and the
 //! scan at least four times the build and at least
@@ -46,7 +48,7 @@ use krishiv_common::config::{
     Config, ConfigValue, RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, RUNTIME_FILTER_BLOOM_ENABLED, RUNTIME_FILTER_BLOOM_MAX_BYTES,
     RUNTIME_FILTER_BLOOM_MAX_ITEMS, RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
-    RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
+    RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_EXACT_SET_MAX_VALUES, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
 };
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{AttrId, Expr, ExprNode, ResolvedExpr};
@@ -76,6 +78,7 @@ pub(crate) struct Settings {
     enabled: bool,
     bloom: bool,
     max_values: usize,
+    exact_max_values: usize,
     bloom_max_items: u64,
     bloom_max_bytes: usize,
     min_application_rows: u64,
@@ -102,6 +105,11 @@ impl Settings {
             bloom: flag(&RUNTIME_FILTER_BLOOM_ENABLED),
             max_values: usize::try_from(count(&RUNTIME_FILTER_IN_LIST_MAX_VALUES, 50))
                 .unwrap_or(50),
+            exact_max_values: usize::try_from(count(
+                &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
+                krishiv_io::runtime_filter::EXACT_SET_MAX as u64,
+            ))
+            .unwrap_or(krishiv_io::runtime_filter::EXACT_SET_MAX),
             bloom_max_items: count(&RUNTIME_FILTER_BLOOM_MAX_ITEMS, 4_000_000),
             bloom_max_bytes: config
                 .get(&RUNTIME_FILTER_BLOOM_MAX_BYTES)
@@ -214,6 +222,7 @@ impl Planner<'_> {
                     key,
                     options: KeyFilterOptions {
                         max_values: s.max_values,
+                        exact_max_values: s.exact_max_values,
                         bloom,
                         bloom_max_items: s.bloom_max_items,
                         bloom_max_bytes: s.bloom_max_bytes,

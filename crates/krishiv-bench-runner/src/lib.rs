@@ -16,6 +16,8 @@
 //!   (replacing it). The write is not in the reported seconds.
 //! * `QUIT`: exits.
 //!
+//! `--conf key=value` (repeatable) sets extra session settings, for A/B runs of one binary.
+//!
 //! A failure replies `ERR <one-line message>`; the process keeps serving.
 
 #![forbid(unsafe_code)]
@@ -25,6 +27,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use arrow_array::RecordBatch;
+use krishiv_common::config::Config;
 use krishiv_common::error::KrishivError;
 use krishiv_exec::{ExecutorConfig, QueryMetrics, TokioExecutor};
 use krishiv_session::{DataFrame, Session};
@@ -43,6 +46,14 @@ pub enum RunnerError {
     Engine(#[from] KrishivError),
 }
 
+/// How this runner was built, as `profile=<cargo profile> target-cpu=<cpu>` (`--build-info`).
+pub const BUILD_INFO: &str = concat!(
+    "profile=",
+    env!("KRISHIV_BUILD_PROFILE"),
+    " target-cpu=",
+    env!("KRISHIV_BUILD_TARGET_CPU")
+);
+
 /// Name of the temporary view a `DUMP` writes from.
 const DUMP_VIEW: &str = "__krishiv_bench_dump";
 
@@ -55,8 +66,8 @@ pub struct RunnerConfig {
     pub threads: usize,
     /// `krishiv.memory.limit` (for example `12g`).
     pub memory_limit: String,
-    /// Further session settings (`--conf key=value`, repeatable), for
-    /// A/B runs of a setting.
+    /// Extra session settings (`--conf key=value`, repeatable), applied after the memory limit so a
+    /// repeated key (including `krishiv.memory.limit`) wins.
     pub conf: Vec<(String, String)>,
 }
 
@@ -90,7 +101,7 @@ impl RunnerConfig {
                         .split_once('=')
                         .filter(|(k, _)| !k.trim().is_empty())
                         .ok_or_else(|| {
-                            RunnerError::Config(format!("--conf {kv}: expected key=value"))
+                            RunnerError::Config(format!("--conf expects key=value, got {kv:?}"))
                         })?;
                     conf.push((k.to_owned(), v.to_owned()));
                 }
@@ -125,16 +136,21 @@ impl Runner {
             io_threads: 2,
             blocking_threads: threads,
         })?;
-        let session = config
-            .conf
-            .iter()
-            .fold(
-                Session::builder()
-                    .executor(executor)
-                    .config("krishiv.memory.limit", config.memory_limit.as_str()),
-                |b, (k, v)| b.config(k.as_str(), v.as_str()),
-            )
-            .build()?;
+        // `SessionBuilder::build` drops configuration warnings; an unknown key would leave the A/B sides
+        // identical without saying so, so reject it here.
+        let pairs = std::iter::once(("krishiv.memory.limit", config.memory_limit.as_str()))
+            .chain(config.conf.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        let (_, warnings) = Config::from_pairs(pairs)?;
+        if let Some(w) = warnings.first() {
+            return Err(RunnerError::Config(format!("--conf not applied: {w}")));
+        }
+        let mut builder = Session::builder()
+            .executor(executor)
+            .config("krishiv.memory.limit", config.memory_limit.as_str());
+        for (k, v) in &config.conf {
+            builder = builder.config(k.as_str(), v.as_str());
+        }
+        let session = builder.build()?;
         let mut tables = Vec::new();
         let entries = std::fs::read_dir(&config.data)
             .map_err(|e| RunnerError::Io(format!("cannot read {}: {e}", config.data)))?;

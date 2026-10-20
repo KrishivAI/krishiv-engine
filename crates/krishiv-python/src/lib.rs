@@ -25,6 +25,8 @@ const ALLOCATOR: &str = "system";
 /// The `krishiv._native` module.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // No CPU check here: raising from this module on a CPU below the build level would run
+    // v3-compiled code on it. `krishiv/_cpu.py` checks first, in pure Python.
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__allocator__", ALLOCATOR)?;
     m.add_class::<stream::ArrowStream>()?;

@@ -46,7 +46,9 @@ Rust crates may use only the licenses in `deny.toml` (`[licenses] allow`, enforc
 dependency-review check (`security.yml`) applies the same list plus `CC0-1.0`, which it needs for Python dependencies:
 numpy's compound license (BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0) is permissive, but CC0-1.0 carries no
 patent grant, so it is kept out of the Rust allow list to keep such code out of the engine binary. A policy test in
-`xtask/tests/policy.rs` fails if the two lists differ in anything but `CC0-1.0`.
+`xtask/tests/policy.rs` fails if the two lists differ in anything but `CC0-1.0`. GitHub Actions used only in CI
+(for example the LGPL-3.0 `Swatinem/rust-cache`) are excepted by name in `security.yml`: they run on the build runner and
+are never distributed or linked, and the same test requires each such exception to be a real workflow dependency.
 
 ## Coverage
 
