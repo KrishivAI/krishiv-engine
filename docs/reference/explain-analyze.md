@@ -77,6 +77,8 @@ by name. A name ending in `_bytes` is a size.
 
 ## The JSON document
 
+**Experimental: the JSON documents may change before 1.0.**
+
 `QueryProfile::to_json` writes one JSON object with `"format":
 "krishiv.query-profile"` and `"version": 1`; its JSON Schema is
 [`query-profile-v1.schema.json`](query-profile-v1.schema.json). Times are

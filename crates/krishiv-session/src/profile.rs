@@ -73,7 +73,7 @@ impl ExplainVerbose {
     }
 
     /// The JSON document (format [`VERBOSE_FORMAT`], version
-    /// [`VERBOSE_VERSION`]).
+    /// [`VERBOSE_VERSION`]; experimental: may change before 1.0).
     #[must_use]
     pub fn to_json(&self) -> String {
         json!({

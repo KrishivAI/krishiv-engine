@@ -7,7 +7,8 @@
 //! node with its operators' counters ([`QueryProfile::to_text`]) and
 //! serializes to a versioned JSON document ([`QueryProfile::to_json`],
 //! format [`PROFILE_FORMAT`] version [`PROFILE_VERSION`]; the schema is
-//! `docs/reference/query-profile-v1.schema.json`).
+//! `docs/reference/query-profile-v1.schema.json`). The document is
+//! experimental: it may change before 1.0.
 //!
 //! A profile is plain data owned by the caller. Profiles of one plan run by
 //! several workers merge ([`QueryProfile::merge`]) as their metrics do.

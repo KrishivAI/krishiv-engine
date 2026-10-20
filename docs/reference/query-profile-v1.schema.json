@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/KrishivAI/krishiv-engine/docs/reference/query-profile-v1.schema.json",
-  "title": "Krishiv query profile, version 1",
-  "description": "The document EXPLAIN ANALYZE writes as JSON (QueryProfile::to_json, `krishiv sql --explain-analyze --json`, DataFrame.explainString(analyze=True, json=True)). Times are integer nanoseconds, sizes integer bytes.",
+  "title": "Krishiv query profile, version 1 (experimental: may change before 1.0)",
+  "description": "Experimental: may change before 1.0. The document EXPLAIN ANALYZE writes as JSON (QueryProfile::to_json, `krishiv sql --explain-analyze --json`, DataFrame.explainString(analyze=True, json=True)). Times are integer nanoseconds, sizes integer bytes.",
   "type": "object",
   "required": ["format", "version", "detailed", "query", "pipelines", "plan", "operators"],
   "additionalProperties": false,

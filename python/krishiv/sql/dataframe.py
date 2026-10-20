@@ -292,7 +292,8 @@ class DataFrame:
         json: bool = False,
     ) -> str:
         """What :meth:`explain` prints; with ``json=True`` (``analyze`` or ``verbose`` only) the
-        versioned JSON document (``krishiv.query-profile`` or ``krishiv.explain-verbose``)."""
+        versioned JSON document (``krishiv.query-profile`` or ``krishiv.explain-verbose``;
+        experimental: may change before 1.0)."""
         if extended is not None and mode is not None:
             raise PySparkValueError(
                 errorClass="CANNOT_SET_TOGETHER", messageParameters={"arg_list": "extended and mode"}

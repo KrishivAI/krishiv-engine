@@ -61,7 +61,8 @@ pub(crate) struct SqlArgs {
     #[arg(long = "explain-verbose")]
     explain_verbose: bool,
     /// With --explain-analyze or --explain-verbose: print the versioned JSON
-    /// document (one line per statement) instead of text.
+    /// document (one line per statement) instead of text (experimental: may
+    /// change before 1.0).
     #[arg(long)]
     json: bool,
 }
