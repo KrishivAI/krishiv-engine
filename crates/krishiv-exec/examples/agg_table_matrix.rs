@@ -1452,9 +1452,12 @@ fn main() {
     let reps: usize =
         std::env::var("AGG_REPS").map_or(6, |s| s.parse().expect("AGG_REPS: a positive integer"));
     assert!(reps > 0, "AGG_REPS must be positive");
-    // ABBA needs as many reversed passes as forward ones: round odd counts
-    // up, so no candidate runs first (or last) more often than another.
-    let reps = reps.next_multiple_of(2);
+    // ABBA needs as many reversed passes as forward ones, so each
+    // candidate's position is balanced by its mirrored position: round odd
+    // counts up.
+    let reps = reps
+        .checked_next_multiple_of(2)
+        .expect("AGG_REPS too large");
     let mut out = std::io::stdout().lock();
     writeln!(
         out,
