@@ -82,8 +82,6 @@ const MAX_SINK_SLOTS: usize = 1 << 22;
 pub(crate) const ADAPT_ROWS: usize = 1 << 20;
 /// Bytes per index bucket: a `u32` reference and hashbrown's control byte.
 const BUCKET_BYTES: usize = size_of::<u32>() + 1;
-/// Odd constant of the `g` finalizer (the fractional digits of sqrt(3)).
-const G_MIX: u64 = 0xBB67_AE85_84CA_A73B;
 
 /// How a table's index treats a full index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,16 +112,10 @@ impl Mode {
     }
 }
 
-/// `g = fin(h ^ seed)` (P2-T157 Appendix C): one folded multiply.
+/// `g = fin(h ^ seed)` (P2-T157 Appendix C), shared with the join.
 #[inline]
 fn fin(h: u64, seed: u64) -> u64 {
-    let p = u128::from(h ^ seed) * u128::from(G_MIX);
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "the low half of the product is intended"
-    )]
-    let low = p as u64;
-    low ^ ((p >> 64) as u64)
+    crate::rows::finalize(h, seed)
 }
 
 /// The radix partition of `h`.

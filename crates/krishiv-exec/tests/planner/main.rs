@@ -191,7 +191,8 @@ fn run(plan: &Runnable) -> Result<Vec<RecordBatch>, KrishivError> {
 
 thread_local! {
     /// Run aggregates on the row-layout tables (`krishiv.exec.agg.rowLayout`),
-    /// as `KRISHIV_AGG_ROW_LAYOUT=1` does for every test.
+    /// as `KRISHIV_AGG_ROW_LAYOUT=1` does for every test
+    /// (`KRISHIV_JOIN_ROW_LAYOUT=1` turns the join's row layout on).
     static AGG_ROW_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -208,6 +209,7 @@ fn run_in(
         WorkloadClass::Interactive,
         ExecConfig {
             agg_row_layout,
+            join_row_layout: std::env::var("KRISHIV_JOIN_ROW_LAYOUT").is_ok_and(|v| v == "1"),
             ..ExecConfig::default()
         },
         root.child("q", None),
