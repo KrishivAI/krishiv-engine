@@ -203,7 +203,7 @@ impl RowLayout {
     }
 
     /// Offsets of the string/binary views in a row.
-    pub(super) fn views(&self) -> &[usize] {
+    pub fn views(&self) -> &[usize] {
         &self.views
     }
 
