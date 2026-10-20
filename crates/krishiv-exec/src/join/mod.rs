@@ -84,12 +84,15 @@
 //! the scans feeding the probe side ([`HashJoin::with_runtime_filters`]).
 //! Each build driver keeps a partial per filter while it sinks rows (the
 //! rows it stores: a key compared with `=` that is NULL is not stored):
-//! min/max, a value set that stops past
-//! `krishiv.runtimeFilter.inList.maxValues`, and the XXH64 hashes of the
-//! normalized keys when a Bloom filter is planned, reserved in the driver's
-//! consumer (a failed reservation drops the Bloom, never the query).
-//! `combine` merges the partials, `finalize` builds each filter (a Bloom
-//! sized exactly for the hashes collected), reserves it with the build and
+//! min/max, the distinct keys while they are few (up to the larger of
+//! `krishiv.runtimeFilter.inList.maxValues` and
+//! `krishiv.runtimeFilter.exactSet.maxValues`), and the row hashes `h`
+//! (XXH64 of the normalized keys) when a Bloom filter is planned, reserved
+//! in the driver's consumer (a failed reservation drops the Bloom and the
+//! larger sets, never the query). `combine` merges the partials,
+//! `finalize` builds each filter in the row form its distinct key count
+//! picks (the range alone, a small or hashed exact set, or a Bloom sized
+//! exactly for the hashes collected), reserves it with the build and
 //! publishes it before indexing the table. A build that fails or is
 //! cancelled publishes `Disabled`, so no consumer waits for it.
 //!

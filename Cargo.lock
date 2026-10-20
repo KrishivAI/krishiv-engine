@@ -1518,6 +1518,7 @@ dependencies = [
  "chrono",
  "codspeed-criterion-compat",
  "futures",
+ "hashbrown",
  "krishiv-common",
  "krishiv-kernels",
  "krishiv-memory",

@@ -332,6 +332,8 @@ impl MemoryScan {
                 .ok_or_else(|| internal(format!("morsel {m} out of {}", g.morsels.len())))?;
             local.offset = 0;
             local.claimed += 1;
+            // Runtime filter decisions are per morsel (the partition here).
+            local.rows.start_partition();
         }
         // One piece per call, even an empty input batch or one a pushed
         // filter emptied: the driver must reach a batch boundary (cancel,

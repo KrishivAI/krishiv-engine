@@ -3,9 +3,12 @@
 //! - building a filter from 262,144 distinct `bigint` keys (min/max, the
 //!   value set overflowing at once, XXH64 of every key, an exactly sized
 //!   split-block Bloom filter);
-//! - probing 262,144 `bigint` rows against a min/max range, a 50-key value
-//!   set and that Bloom filter, and `int` rows widened to the `bigint` key;
-//! - probing 262,144 strings against a Bloom filter of 65,536 keys.
+//! - probing 262,144 `bigint` rows (almost all misses, as a selective join
+//!   filter sees them) against each row form: a min/max range, a small set
+//!   (8 keys), and an exact hash set and a Bloom filter of 1,024, 4,096
+//!   and 65,536 keys (the exact-set cutoff is chosen from these);
+//! - `int` rows widened to the `bigint` key, and 262,144 strings against a
+//!   Bloom filter of 65,536 keys.
 
 #![expect(
     missing_docs,
@@ -20,13 +23,18 @@ use std::hint::black_box;
 
 use arrow_array::{Array, Int32Array, Int64Array, StringViewArray};
 use criterion::{Criterion, criterion_group, criterion_main};
-use krishiv_io::{KeyFilter, KeyFilterBuilder, KeyFilterOptions};
+use krishiv_io::{FilterForm, KeyFilter, KeyFilterBuilder, KeyFilterOptions};
 
 const ROWS: i64 = 1 << 18;
 
 fn build(keys: &dyn Array, max_values: usize, bloom: bool) -> KeyFilter {
+    build_exact(keys, max_values, max_values, bloom)
+}
+
+fn build_exact(keys: &dyn Array, max_values: usize, exact: usize, bloom: bool) -> KeyFilter {
     let options = KeyFilterOptions {
         max_values,
+        exact_max_values: exact,
         bloom,
         ..KeyFilterOptions::default()
     };
@@ -49,6 +57,19 @@ fn bench(c: &mut Criterion) {
     let range = build(&Int64Array::from(vec![1 << 20, 1 << 30]), 0, false);
     let values = build(&spread(50), 50, false);
     assert_eq!(values.value_count(), Some(50));
+    let small = build_exact(&spread(8), 0, 8, false);
+    assert_eq!(small.form(), FilterForm::SmallSet(8));
+    let sized: Vec<(i64, KeyFilter, KeyFilter)> = [1i64 << 10, 1 << 12, 1 << 16]
+        .into_iter()
+        .map(|n| {
+            let keys = spread(n);
+            let exact = build_exact(&keys, 0, usize::MAX, false);
+            let bloom = build_exact(&keys, 0, 0, true);
+            assert!(matches!(exact.form(), FilterForm::HashSet(_)));
+            assert!(matches!(bloom.form(), FilterForm::Bloom(_)));
+            (n, exact, bloom)
+        })
+        .collect();
     let strings: Vec<String> = (0..ROWS).map(|i| format!("customer#{i:09}")).collect();
     let probe_strings = StringViewArray::from_iter_values(strings.iter());
     let string_bloom = build(
@@ -70,6 +91,17 @@ fn bench(c: &mut Criterion) {
     group.bench_function("probe_bloom_256k_i64", |b| {
         b.iter(|| black_box(bloom.evaluate(black_box(&probe))));
     });
+    group.bench_function("probe_small8_256k_i64", |b| {
+        b.iter(|| black_box(small.evaluate(black_box(&probe))));
+    });
+    for (n, exact, bloom) in &sized {
+        group.bench_function(format!("probe_set{n}_256k_i64"), |b| {
+            b.iter(|| black_box(exact.evaluate(black_box(&probe))));
+        });
+        group.bench_function(format!("probe_bloom{n}_256k_i64"), |b| {
+            b.iter(|| black_box(bloom.evaluate(black_box(&probe))));
+        });
+    }
     group.bench_function("probe_bloom_256k_i32_widened", |b| {
         b.iter(|| black_box(bloom.evaluate(black_box(&narrow))));
     });

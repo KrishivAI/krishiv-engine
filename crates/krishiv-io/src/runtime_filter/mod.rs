@@ -35,8 +35,11 @@
 //! cached per generation. [`ScanFilter::evaluate`] filters rows.
 
 mod bloom;
+mod codec;
 mod filter;
+mod hash;
 mod key;
+mod member;
 mod sync;
 
 use std::fmt;
@@ -46,8 +49,11 @@ use arrow_array::{Array, BooleanArray};
 use arrow_schema::{DataType, Schema};
 
 pub use self::bloom::{BLOCK_BYTES, RuntimeBloom, xxh64};
+pub use self::codec::{FORMAT_VERSION, NORMALIZATION_VERSION};
 pub use self::filter::{KeyFilter, KeyFilterBuilder, KeyFilterOptions};
+pub use self::hash::{RowHash, xxh64_fixed};
 pub use self::key::{NormalizedKeys, normalize_key_bytes, supported_key_type, widens_to};
+pub use self::member::{EXACT_SET_MAX, FilterForm, SMALL_SET_MAX};
 use self::sync::{AtomicU64, Mutex, Ordering, RwLock};
 use crate::request::{ColumnPath, PushdownExpr};
 
@@ -406,3 +412,6 @@ fn resolve(schema: &Schema, path: &ColumnPath) -> Option<DataType> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod form_tests;

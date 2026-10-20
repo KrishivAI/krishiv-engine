@@ -64,8 +64,8 @@ pub use request::{
     project_schema,
 };
 pub use runtime_filter::{
-    DisabledReason, FilterCounts, FilterId, FilterSnapshot, KeyFilter, KeyFilterBuilder,
-    KeyFilterOptions, Published, RuntimeFilter, ScanFilter,
+    DisabledReason, FilterCounts, FilterForm, FilterId, FilterSnapshot, KeyFilter,
+    KeyFilterBuilder, KeyFilterOptions, Published, RowHash, RuntimeFilter, ScanFilter,
 };
 pub use scan::{ScanOptions, ScanStream};
 pub use schema_map::{FIELD_ID_KEY, SchemaMapper};

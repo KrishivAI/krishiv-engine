@@ -494,6 +494,8 @@ impl FileScanSource {
             }
             local.partition = Some((p, 0));
             local.claimed += 1;
+            // Runtime filter decisions depend on this partition's rows only.
+            local.rows.start_partition();
         }
     }
 
