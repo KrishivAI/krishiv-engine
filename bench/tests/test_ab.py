@@ -311,6 +311,7 @@ def test_wait_idle_waits_for_the_load_to_decay(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(abba, "loadavg", lambda: next(loads))
     monkeypatch.setattr(abba.time, "sleep", sleeps.append)
     abba.wait_idle()
-    assert len(sleeps) == 2
+    assert sleeps == [15, 15]
     monkeypatch.setattr(abba, "loadavg", lambda: 99.0)
-    abba.wait_idle(max_wait_s=0)  # bounded: gives up instead of hanging
+    abba.wait_idle(max_wait_s=0)  # bounded: gives up without another sleep
+    assert sleeps == [15, 15]
