@@ -4,10 +4,11 @@
 //! The shipped builds target a CPU level above the architecture baseline
 //! (`x86-64-v3` on x86-64, `neoverse-n1` on aarch64; see `README.md`,
 //! "Supported CPUs"). On an older CPU the first instruction of that level
-//! faults with SIGILL and gives the user nothing to act on. [`check`] runs
+//! faults with SIGILL and gives the user nothing to act on. [`check_or_exit`] runs
 //! once, as early as possible, compares every feature the compiler was allowed
-//! to assume with what the CPU reports, and returns an error that names the
-//! missing features and the compat build to use instead.
+//! to assume with what the CPU reports ([`is_supported`]), and otherwise prints
+//! a message ([`unsupported_message`]) that names the missing features and the
+//! compat build to use instead.
 //!
 //! What is checked is decided at compile time with `cfg!(target_feature)`, so
 //! a baseline (compat) build checks nothing and costs nothing. The detection
