@@ -177,7 +177,12 @@ pub(crate) fn metric(q: &QueryContext, op: &str, name: &str) -> u64 {
         .operators
         .values()
         .filter(|e| e.name == op)
-        .flat_map(|e| e.extra.iter().filter(|(n, _)| *n == name).map(|(_, v)| *v))
+        .flat_map(|e| {
+            e.extra
+                .iter()
+                .filter(|(n, _)| *n == name)
+                .filter_map(|(_, v)| v.value())
+        })
         .sum()
 }
 

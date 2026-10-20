@@ -220,7 +220,10 @@ fn extra(m: &QueryMetrics, op: &str, name: &str) -> u64 {
         .filter(|e| e.name == op)
         .flat_map(|e| e.extra.iter())
         .filter(|(n, _)| *n == name)
-        .map(|(_, v)| *v)
+        .map(|(_, v)| match v {
+            crate::metrics::Metric::Count(n) | crate::metrics::Metric::Max(n) => *n,
+            crate::metrics::Metric::Text(_) => 0,
+        })
         .sum()
 }
 

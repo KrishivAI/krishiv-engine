@@ -35,7 +35,7 @@ use super::{AggregateSpec, unsupported};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::executor::{Executor, run_blocking};
-use crate::hash::{HashSeed, MAX_LEVEL, PARTITIONS};
+use crate::hash::{HashSeed, MAX_LEVEL, PARTITIONS, ProbeTotals};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::sync::{Mutex, lock};
 
@@ -64,6 +64,11 @@ pub struct AggregateMetrics {
 #[derive(Debug, Default)]
 struct Counters {
     groups: AtomicU64,
+    /// Distinct keys of the tables the output came from.
+    hash_entries: AtomicU64,
+    /// Their buckets.
+    hash_buckets: AtomicU64,
+    probes: Arc<ProbeTotals>,
     spill_runs: AtomicU64,
     spill_files: AtomicU64,
     spill_bytes: AtomicU64,
@@ -192,6 +197,8 @@ impl Spiller {
             out.write(&b).map_err(KrishivError::from)?;
         }
         bump(&self.counters.groups, u64::from(n));
+        bump(&self.counters.hash_entries, u64::from(n));
+        bump(&self.counters.hash_buckets, table.buckets() as u64);
         Ok(())
     }
 }
@@ -266,6 +273,8 @@ enum Final {
 
 struct Global {
     seed: HashSeed,
+    /// Where tables count probe lengths (a detailed profile only).
+    probes: Option<Arc<ProbeTotals>>,
     /// Bytes of the combined tables, before `finalize`.
     combined: AtomicUsize,
     inner: Mutex<Inner>,
@@ -397,7 +406,7 @@ impl HashAggregate {
             return Err(no_memory(cur.reservation.size()));
         }
         inner.busy = true;
-        let fresh = AggTable::new(&self.core, cur.table.seed())?;
+        let fresh = AggTable::new(&self.core, cur.table.seed())?.with_probes(cur.table.probes());
         let table = std::mem::replace(&mut cur.table, fresh);
         let mut held = std::mem::replace(&mut cur.reservation, s.consumer.reservation());
         let level = cur.level + 1;
@@ -455,11 +464,13 @@ impl HashAggregate {
             let (table, reservation) = match tables.pop() {
                 Some(t) => t,
                 None => (
-                    AggTable::new(&self.core, &g.seed)?,
+                    AggTable::new(&self.core, &g.seed)?.with_probes(g.probes.clone()),
                     ctx.consumer().reservation(),
                 ),
             };
             bump(&self.counters.groups, table.len() as u64);
+            bump(&self.counters.hash_entries, table.len() as u64);
+            bump(&self.counters.hash_buckets, table.buckets() as u64);
             let mut held = std::mem::take(&mut inner.granted);
             held.push(reservation);
             let _ = g.done.set(Final::Table { table, _held: held });
@@ -512,7 +523,7 @@ impl HashAggregate {
             };
             inner.current = Some(Current {
                 level,
-                table: AggTable::new(&self.core, &g.seed)?,
+                table: AggTable::new(&self.core, &g.seed)?.with_probes(g.probes.clone()),
                 reservation: ctx.consumer().reservation(),
                 files,
                 reader: None,
@@ -657,6 +668,11 @@ impl Sink for HashAggregate {
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         Ok(Arc::new(Global {
             seed: HashSeed::new(ctx.query().config().seed),
+            probes: ctx
+                .query()
+                .config()
+                .detailed_metrics
+                .then(|| Arc::clone(&self.counters.probes)),
             combined: AtomicUsize::new(0),
             inner: Mutex::new(Inner::default()),
             done: OnceLock::new(),
@@ -667,7 +683,8 @@ impl Sink for HashAggregate {
     fn local_state(&self, ctx: &TaskContext, g: &GlobalState) -> Result<LocalState> {
         let memory = ctx.consumer();
         Ok(Box::new(Local {
-            table: AggTable::new(&self.core, &global(g)?.seed)?,
+            table: AggTable::new(&self.core, &global(g)?.seed)?
+                .with_probes(global(g)?.probes.clone()),
             reservation: memory.reservation(),
             signal: Arc::clone(memory.signal()),
             consumer: Arc::clone(memory.consumer()),
@@ -781,7 +798,8 @@ impl Sink for HashAggregate {
             let own = if l.table.not_worth_spilling() {
                 None
             } else {
-                let fresh = AggTable::new(&self.core, l.table.seed())?;
+                let fresh =
+                    AggTable::new(&self.core, l.table.seed())?.with_probes(l.table.probes());
                 Some(std::mem::replace(&mut l.table, fresh))
             };
             if own.is_none() && combined.is_empty() {
@@ -842,15 +860,24 @@ impl Sink for HashAggregate {
         })
     }
 
-    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         let m = self.metrics();
-        vec![
+        let c = &self.counters;
+        let mut out = crate::metrics::counts([
             ("groups", m.groups),
             ("spill_runs", m.spill_runs),
             ("spill_files", m.spill_files),
             ("spill_bytes", m.spill_bytes),
             ("repartitions", m.repartitions),
-        ]
+            ("hash_entries", c.hash_entries.load(AtomicOrdering::Relaxed)),
+            ("hash_buckets", c.hash_buckets.load(AtomicOrdering::Relaxed)),
+        ]);
+        out.push((
+            std::borrow::Cow::Borrowed("hash_index"),
+            crate::metrics::Metric::Text("swiss".to_owned()),
+        ));
+        out.extend(crate::metrics::probe_metrics(&c.probes.get()));
+        out
     }
 }
 

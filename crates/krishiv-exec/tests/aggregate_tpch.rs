@@ -188,7 +188,7 @@ fn spilled(m: &QueryMetrics) -> u64 {
         .values()
         .flat_map(|e| e.extra.iter())
         .filter(|(n, _)| *n == "spill_runs")
-        .map(|(_, v)| *v)
+        .filter_map(|(_, v)| v.value())
         .sum()
 }
 

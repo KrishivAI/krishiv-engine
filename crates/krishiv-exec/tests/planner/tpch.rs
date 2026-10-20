@@ -508,7 +508,7 @@ fn tpch_sf1_tight_memory_spills_and_matches_spark() {
             .values()
             .flat_map(|e| &e.extra)
             .filter(|(name, _)| name.contains("spill") && name.ends_with("bytes"))
-            .map(|(_, v)| v)
+            .filter_map(|(_, v)| v.value())
             .sum();
         let stats = root.stats();
         eprintln!(
@@ -775,7 +775,7 @@ fn tpch_sf10_q21_completes_under_the_memory_limit() {
     let mut peaks: Vec<(u64, &str)> = metrics
         .operators
         .values()
-        .map(|e| (e.metrics.peak_reserved, e.name))
+        .map(|e| (e.metrics.peak_reserved, e.name.as_ref()))
         .collect();
     peaks.sort_unstable_by(|a, b| b.cmp(a));
     let total: u64 = peaks.iter().map(|(p, _)| p).sum();

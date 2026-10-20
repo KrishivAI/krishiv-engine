@@ -29,6 +29,8 @@ use crate::context::{OperatorId, QueryContext, QueryId, TaskContext};
 use crate::driver::{PipelineRun, spawn_driver};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, TaskHandle};
+use std::borrow::Cow;
+
 use crate::metrics::OperatorEntry;
 use crate::morsel::{Barrier, Countdown};
 use crate::operator::GlobalState;
@@ -86,17 +88,34 @@ impl QueryRunner {
         }));
         plan.build_pipelines(&mut b)?;
         let (pipelines, names) = b.finish()?;
+        let mut member: HashMap<OperatorId, Vec<u32>> = HashMap::new();
+        for p in &pipelines {
+            let ops = std::iter::once(p.source.0)
+                .chain(p.operators.iter().map(|(id, _)| *id))
+                .chain(std::iter::once(p.sink.0));
+            for id in ops {
+                member.entry(id).or_default().push(p.index);
+            }
+        }
         query.merge_metrics(|m| {
-            for (id, name) in names {
+            m.workers = 1;
+            for n in names {
+                let mut pipelines = member.remove(&n.id).unwrap_or_default();
+                pipelines.sort_unstable();
+                pipelines.dedup();
                 m.operators.insert(
-                    id,
+                    n.id,
                     OperatorEntry {
-                        name,
+                        name: Cow::Borrowed(n.name),
+                        node: n.node,
+                        role: n.role,
+                        pipelines,
                         ..OperatorEntry::default()
                     },
                 );
             }
         });
+        query.start_clock(self.executor.now());
         {
             let mut running = lock(&self.running);
             running.retain(|_, q| q.upgrade().is_some_and(|q| !q.is_finished()));
@@ -110,6 +129,7 @@ impl QueryRunner {
         }
         let finish = Finish {
             query: Arc::clone(&query),
+            executor: Arc::clone(&self.executor),
             channel: Arc::clone(&channel),
             running: Arc::clone(&self.running),
             completed: false,
@@ -189,6 +209,7 @@ impl Scheduler for QueryRunner {
 /// runtime shut down): marks it finished and closes the result stream.
 struct Finish {
     query: Arc<QueryContext>,
+    executor: Arc<dyn Executor>,
     channel: Arc<Channel>,
     running: Running,
     completed: bool,
@@ -207,6 +228,8 @@ impl Drop for Finish {
         if !self.completed {
             self.query.fail(cancelled());
         }
+        let ended = self.query.offset(self.executor.now());
+        self.query.merge_metrics(|m| m.wall_time = ended);
         self.query.mark_finished();
         lock(&self.running).remove(&self.query.id());
         self.channel.close(self.query.error());
@@ -283,8 +306,11 @@ fn record_extra_metrics(query: &QueryContext, runs: &[Arc<PipelineRun>]) {
             let ops = p.operators.iter().map(|(id, op)| (*id, op.extra_metrics()));
             let sink = std::iter::once((p.sink.0, p.sink.1.extra_metrics()));
             for (id, extra) in source.chain(ops).chain(sink) {
-                if !extra.is_empty() {
-                    m.operators.entry(id).or_default().extra = extra;
+                // An operator shared by the pipelines of a fan-in reports
+                // its query-wide counters once.
+                let entry = m.operators.entry(id).or_default();
+                if !extra.is_empty() && entry.extra.is_empty() {
+                    entry.extra = extra;
                 }
             }
         }

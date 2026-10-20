@@ -122,6 +122,7 @@ use krishiv_types::batch::{Batch, Weights};
 pub use nested::{NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec};
 
 use crate::error::{Result, internal};
+use crate::metrics::Metric;
 use crate::operator::{Operator, Sink};
 use crate::operators::Predicate;
 use crate::pipeline::{ExecNode, PipelineBuilder};
@@ -183,11 +184,27 @@ pub(crate) enum Counter {
     GracePartitions,
     Repartitions,
     RecursionDepth,
+    /// Keys indexed by the build's hash tables (distinct keys).
+    HashEntries,
+    /// Buckets of the build's hash tables.
+    HashBuckets,
+    /// Probe lookups counted (detailed metrics only).
+    Lookups,
+    /// Key comparisons of those lookups.
+    KeyCompares,
+    /// The most key comparisons of one lookup.
+    MaxProbeLength,
 }
 
+/// The index a join's hash tables use, for `EXPLAIN ANALYZE`: a hashbrown
+/// table of distinct keys whose duplicate rows are chained.
+const INDEX_KIND: &str = "swiss+chain";
+
 /// The build sink's counters, by name.
-const BUILD_COUNTERS: [(Counter, &str); 3] = [
+const BUILD_COUNTERS: [(Counter, &str); 5] = [
     (Counter::BuildRows, "build_rows"),
+    (Counter::HashEntries, "hash_entries"),
+    (Counter::HashBuckets, "hash_buckets"),
     (Counter::SpilledPartitions, "spilled_partitions"),
     (Counter::BuildSpillBytes, "spill_file_bytes"),
 ];
@@ -200,10 +217,16 @@ const PROBE_COUNTERS: [(Counter, &str); 6] = [
     (Counter::Repartitions, "repartitions"),
     (Counter::RecursionDepth, "recursion_depth"),
 ];
+/// The probe operator's per-lookup counters (detailed metrics only).
+const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
+    (Counter::Lookups, "probe_lookups"),
+    (Counter::KeyCompares, "probe_key_compares"),
+    (Counter::MaxProbeLength, "max_probe_length"),
+];
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug, Default)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 9]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 14]);
 
 impl Counters {
     pub(crate) fn add(&self, c: Counter, v: u64) {
@@ -214,17 +237,41 @@ impl Counters {
         self.0[c as usize].fetch_max(v, std::sync::atomic::Ordering::Relaxed);
     }
 
-    fn report(&self, which: &[(Counter, &'static str)]) -> Vec<(&'static str, u64)> {
-        let get = |c: Counter| self.0[c as usize].load(std::sync::atomic::Ordering::Relaxed);
-        which.iter().map(|&(c, name)| (name, get(c))).collect()
+    fn get(&self, c: Counter) -> u64 {
+        self.0[c as usize].load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub(crate) fn build(&self) -> Vec<(&'static str, u64)> {
-        self.report(&BUILD_COUNTERS)
+    fn report(&self, which: &[(Counter, &'static str)]) -> crate::metrics::ExtraMetrics {
+        which
+            .iter()
+            .map(|&(c, name)| {
+                let v = self.get(c);
+                let v = match c {
+                    Counter::RecursionDepth | Counter::MaxProbeLength => Metric::Max(v),
+                    _ => Metric::Count(v),
+                };
+                (std::borrow::Cow::Borrowed(name), v)
+            })
+            .collect()
     }
 
-    pub(crate) fn probe(&self) -> Vec<(&'static str, u64)> {
-        self.report(&PROBE_COUNTERS)
+    pub(crate) fn build(&self) -> crate::metrics::ExtraMetrics {
+        let mut out = self.report(&BUILD_COUNTERS);
+        out.push((
+            std::borrow::Cow::Borrowed("hash_index"),
+            Metric::Text(INDEX_KIND.to_owned()),
+        ));
+        out
+    }
+
+    pub(crate) fn probe(&self) -> crate::metrics::ExtraMetrics {
+        let mut out = self.report(&PROBE_COUNTERS);
+        // Probe-length counters exist only when a detailed profile asked
+        // for them (`ExecConfig::detailed_metrics`).
+        if self.get(Counter::Lookups) > 0 {
+            out.extend(self.report(&PROBE_DETAIL_COUNTERS));
+        }
+        out
     }
 }
 

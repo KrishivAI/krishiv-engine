@@ -21,7 +21,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use krishiv_types::batch::{Batch, Weights};
 
 use crate::error::{Result, internal};
-use crate::hash::KeyTable;
+use crate::hash::{KeyTable, ProbeCount};
 
 /// End of a chain / no match.
 pub(crate) const NONE: u32 = u32::MAX;
@@ -194,6 +194,30 @@ impl JoinTable {
             id.and_then(|id| self.heads.get(id as usize).copied())
                 .unwrap_or(NONE)
         }));
+    }
+
+    /// As [`find_heads`](Self::find_heads), counting probe lengths.
+    pub(crate) fn find_heads_counted(
+        &self,
+        keys: &Rows,
+        hashes: &[u64],
+        rows: &[u32],
+        heads: &mut Vec<u32>,
+        count: &mut ProbeCount,
+    ) {
+        heads.extend(rows.iter().map(|&i| {
+            let key = keys.row(i as usize);
+            let id = self
+                .keys
+                .find_counted(key.as_ref(), hashes[i as usize], count);
+            id.and_then(|id| self.heads.get(id as usize).copied())
+                .unwrap_or(NONE)
+        }));
+    }
+
+    /// Distinct keys and buckets of the index.
+    pub(crate) fn index_size(&self) -> (usize, usize) {
+        (self.keys.len(), self.keys.buckets())
     }
 
     /// `next()[r]`: the next build row with the same key as `r`, or [`NONE`].

@@ -737,7 +737,7 @@ impl Source for FileScanSource {
             .map_or(0, |l| l.claimed)
     }
 
-    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         self.runtime.extra_metrics()
     }
 }

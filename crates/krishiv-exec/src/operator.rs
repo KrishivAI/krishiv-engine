@@ -84,7 +84,7 @@ pub trait Source: Send + Sync {
     }
     /// Source-specific `EXPLAIN ANALYZE` counters (name, value), read once
     /// the pipeline ended. Default: none.
-    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         Vec::new()
     }
 }
@@ -181,7 +181,7 @@ pub trait Operator: Send + Sync {
     }
     /// Operator-specific `EXPLAIN ANALYZE` counters (name, value), read
     /// once when the query ends. Default: none.
-    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         Vec::new()
     }
     /// Whether the operator has work left that needs **every** driver's
@@ -331,7 +331,7 @@ pub trait Sink: Send + Sync {
         Box::pin(async { Ok(0) })
     }
     /// As [`Operator::extra_metrics`].
-    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         Vec::new()
     }
 }

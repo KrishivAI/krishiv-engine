@@ -497,7 +497,8 @@ pub(crate) async fn step(
         match next_probe(a, ctx).await? {
             Some(b) => {
                 let tables = Tables::Single(&a.table);
-                a.cursor = Some(Cursor::new(shared, seed, b, &tables)?.0);
+                let detailed = ctx.query().config().detailed_metrics;
+                a.cursor = Some(Cursor::new(shared, seed, b, &tables, detailed)?.0);
             }
             None => {
                 st.active = None;
@@ -809,7 +810,11 @@ impl Loading {
         drop(chunks);
         self.chunks.clear();
         self.memory.shrink(concat);
-        Ok(Loaded::Table(Box::new(JoinTable::build(arena)?), headroom))
+        let table = JoinTable::build(arena)?;
+        let (keys, buckets) = table.index_size();
+        shared.counters.add(Counter::HashEntries, keys as u64);
+        shared.counters.add(Counter::HashBuckets, buckets as u64);
+        Ok(Loaded::Table(Box::new(table), headroom))
     }
 
     /// Records a `NeedMemory` for `now` missing bytes, the consumer holding
