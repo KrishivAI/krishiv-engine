@@ -58,15 +58,10 @@ fn main() {
     // `run` holds everything else: the compiler may use the build's CPU level in the
     // prologue of a function with large locals, which must not come before the check.
     krishiv_common::cpu::check_or_exit();
-    // Before any thread starts: mimalloc's settings only apply from process start.
-    #[cfg(feature = "mimalloc")]
-    if let Some(e) = krishiv_common::alloc::reexec_with_allocator_env() {
-        // Best effort: the CLI still works with the allocator's defaults.
-        let _ = std::io::Write::write_fmt(
-            &mut std::io::stderr(),
-            format_args!("krishiv: running with the allocator's defaults: {e}\n"),
-        );
-    }
+    // mimalloc's options were set before the first allocation; under memory
+    // pressure, drivers now return freed memory to the OS.
+    #[cfg(all(feature = "mimalloc", target_os = "linux"))]
+    krishiv_memory::mimalloc::install();
     run();
 }
 

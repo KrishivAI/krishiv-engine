@@ -1209,3 +1209,31 @@ fn peak_reserved_is_the_high_water_mark_of_accepted_grants() {
     assert_eq!(r.reserved(), 0);
     assert_eq!(r.peak_reserved(), 4 << 20);
 }
+
+#[test]
+fn refusals_start_pressure_epochs_that_drivers_release_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    fn hook() {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+    // The hook is process-wide: this is the only test that installs one.
+    assert!(set_release_hook(hook));
+    assert!(!set_release_hook(hook), "installed once");
+    let mut seen = pressure_epoch();
+    assert!(!release_if_pressured(&mut seen), "no pressure yet");
+    let r = root(Some(1 << 20), 1);
+    let q = r.child("q", None);
+    let id = q.register("c", None);
+    let mut a = Reservation::new(Arc::clone(&q), id);
+    a.try_grow(1 << 20).unwrap();
+    // Wait out the interval so this test's refusal starts its own epoch.
+    std::thread::sleep(EPOCH_INTERVAL);
+    assert!(a.try_grow(1).is_err());
+    assert!(pressure_epoch() > seen);
+    let before = CALLS.load(Ordering::SeqCst);
+    assert!(release_if_pressured(&mut seen));
+    assert_eq!(CALLS.load(Ordering::SeqCst), before + 1);
+    // Once per epoch: the same epoch does not call it again.
+    assert!(!release_if_pressured(&mut seen.clone()) || pressure_epoch() != seen);
+}

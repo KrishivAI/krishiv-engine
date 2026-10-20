@@ -16,14 +16,10 @@ fn main() -> ExitCode {
     // First, so a CPU older than the build targets gets a message instead of SIGILL.
     // `run` holds everything else (see `krishiv_common::cpu`).
     krishiv_common::cpu::check_or_exit();
-    // Before any thread starts: the allocator settings only apply from process start.
-    if let Some(e) = krishiv_common::alloc::reexec_with_allocator_env() {
-        // Best effort: the runner still works with the allocator's defaults.
-        let _ = writeln!(
-            std::io::stderr(),
-            "krishiv-bench-runner: running with the allocator's defaults: {e}"
-        );
-    }
+    // mimalloc's options were set before the first allocation; under memory
+    // pressure, drivers now return freed memory to the OS.
+    #[cfg(target_os = "linux")]
+    krishiv_memory::mimalloc::install();
     run()
 }
 

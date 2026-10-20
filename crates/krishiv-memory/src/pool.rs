@@ -610,10 +610,13 @@ impl Node {
                 Ok(())
             }
             Err((_, Refusal::Aborted)) => Err(Denied::Error(self.group_error())),
-            Err((binding, Refusal::Limit)) => Err(Denied::Limit {
-                need: new_used - u.granted,
-                binding,
-            }),
+            Err((binding, Refusal::Limit)) => {
+                crate::release::note_pressure();
+                Err(Denied::Limit {
+                    need: new_used - u.granted,
+                    binding,
+                })
+            }
         }
     }
 

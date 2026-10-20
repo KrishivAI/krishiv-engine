@@ -3,7 +3,6 @@
 
 #![forbid(unsafe_code)]
 
-pub mod alloc;
 pub mod config;
 pub mod cpu;
 pub mod error;
