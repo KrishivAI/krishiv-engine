@@ -219,19 +219,7 @@ fn peak_rss_stays_within_the_bound_while_queries_spill() {
         let reserved = memory_field(&reply, "peak_reserved_bytes").unwrap();
         let spilled = memory_field(&reply, "spill_files").unwrap();
         eprintln!("{name}: peak RSS {peak} B, peak reserved {reserved} B, {spilled} spill files");
-        // Under the cap, completing is the check (the kernel splits and
-        // reclaims partly used huge pages under the cgroup's pressure, so
-        // the peak RSS may read above the cap). Without one there is no such
-        // pressure: the peak may hold up to a quarter more in those pages.
-        let allowed = if cap.is_some() {
-            u64::MAX
-        } else {
-            bound + bound / 4
-        };
-        assert!(
-            peak <= allowed,
-            "{name}: peak RSS {peak} B above {allowed} B"
-        );
+        assert!(peak <= bound, "{name}: peak RSS {peak} B above {bound} B");
         assert!(
             reserved <= LIMIT,
             "{name}: reserved {reserved} B above the limit"

@@ -19,6 +19,7 @@ doc = false
 clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context"] }
 futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv = { path = "../krishiv" }
+krishiv-alloc = { path = "../krishiv-alloc", optional = true }
 krishiv-memory = { path = "../krishiv-memory", optional = true }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-server = { path = "../krishiv-server", optional = true }
@@ -47,5 +48,5 @@ python = ["krishiv/python"]
 wasm-udf = ["krishiv/wasm-udf"]
 ui = ["krishiv/ui", "dep:krishiv-server"]
 celeborn = ["krishiv/celeborn"]
-mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-memory", "krishiv-memory/mimalloc"]
+mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-alloc", "dep:krishiv-memory"]
 full = ["krishiv/full"]

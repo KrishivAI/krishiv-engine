@@ -68,8 +68,6 @@ mod consumer;
 mod error;
 mod event;
 mod limit;
-#[cfg(all(feature = "mimalloc", target_os = "linux"))]
-pub mod mimalloc;
 mod pool;
 mod release;
 mod reservation;

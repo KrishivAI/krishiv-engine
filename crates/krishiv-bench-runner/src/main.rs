@@ -16,10 +16,10 @@ fn main() -> ExitCode {
     // First, so a CPU older than the build targets gets a message instead of SIGILL.
     // `run` holds everything else (see `krishiv_common::cpu`).
     krishiv_common::cpu::check_or_exit();
-    // mimalloc's options were set before the first allocation; under memory
-    // pressure, drivers now return freed memory to the OS.
-    #[cfg(target_os = "linux")]
-    krishiv_memory::mimalloc::install();
+    // Allocator policy is this binary's (it owns the global allocator): with a
+    // configured limit mimalloc purges promptly (set before `main`, see
+    // `krishiv_alloc`), and under memory pressure threads return freed memory.
+    krishiv_memory::set_release_hook(krishiv_alloc::install());
     run()
 }
 

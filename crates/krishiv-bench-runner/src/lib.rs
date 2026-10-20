@@ -93,13 +93,11 @@ pub const RSS_FLOOR_PER_THREAD: u64 = 16 << 20;
 /// The most resident memory a runner with memory limit `limit` and `threads` compute threads may use:
 /// `1.25 x limit + RSS_FLOOR_BASE + threads x RSS_FLOOR_PER_THREAD`. The 25% covers what the memory pool
 /// cannot see exactly (allocator size classes and retention after a purge delay, estimates of decoder
-/// pages); the floor what does not scale with the limit. The memory gate runs the process in a cgroup
-/// with `memory.max` at this bound: the process must complete. Its peak RSS (VmHWM) can read above
-/// it, by partly used transparent huge pages that the kernel splits and reclaims only under the
-/// cgroup's pressure.
+/// pages); the floor what does not scale with the limit. The memory gate checks peak RSS against it
+/// and runs the process in a cgroup with `memory.max` at it.
 ///
 /// It holds for a process whose global allocator is configured for it: mimalloc with
-/// `krishiv_memory::mimalloc` (as this runner and the CLI). Memory an allocator retains is outside the
+/// `krishiv_alloc` (this runner and the CLI, when a memory limit is configured). Memory an allocator retains is outside the
 /// pools' control, so an embedding host with another allocator, or without a release hook
 /// (`krishiv_memory::set_release_hook`), can exceed it by what its allocator keeps.
 ///

@@ -19,12 +19,6 @@ arrow-schema.workspace = true
 krishiv-common = { path = "../krishiv-common" }
 krishiv-types = { path = "../krishiv-types" }
 thiserror.workspace = true
-# The mimalloc settings of `mimalloc` (feature): FFI only, no global allocator.
-libmimalloc-sys = { workspace = true, features = ["extended"], optional = true }
-
-[features]
-# For binaries whose global allocator is mimalloc (`krishiv_memory::mimalloc`).
-mimalloc = ["dep:libmimalloc-sys"]
 
 [dev-dependencies]
 criterion.workspace = true

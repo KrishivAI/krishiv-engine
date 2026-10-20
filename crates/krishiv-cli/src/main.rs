@@ -58,10 +58,11 @@ fn main() {
     // `run` holds everything else: the compiler may use the build's CPU level in the
     // prologue of a function with large locals, which must not come before the check.
     krishiv_common::cpu::check_or_exit();
-    // mimalloc's options were set before the first allocation; under memory
-    // pressure, drivers now return freed memory to the OS.
-    #[cfg(all(feature = "mimalloc", target_os = "linux"))]
-    krishiv_memory::mimalloc::install();
+    // Allocator policy is this binary's (it owns the global allocator):
+    // under memory pressure, threads return freed memory to the OS. With a
+    // configured limit mimalloc also purges promptly (set before `main`).
+    #[cfg(feature = "mimalloc")]
+    krishiv_memory::set_release_hook(krishiv_alloc::install());
     run();
 }
 

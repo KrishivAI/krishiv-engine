@@ -18,7 +18,8 @@ arrow-array.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
-krishiv-memory = { path = "../krishiv-memory", features = ["mimalloc"] }
+krishiv-alloc = { path = "../krishiv-alloc" }
+krishiv-memory = { path = "../krishiv-memory" }
 krishiv-session = { path = "../krishiv-session" }
 mimalloc.workspace = true
 thiserror.workspace = true
