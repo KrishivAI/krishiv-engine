@@ -87,7 +87,7 @@ the highest RSS of the engine's whole worker process tree (runner child, JVM and
 every 20 ms and bounded below by the per-process VmHWM (`adapters/proc_mem.py`, `TreeProc`). `ours`: max over the
 interleaved samples (a JVM keeps its heap, so later queries inherit it); `theirs`: max over the runs in the fresh process.
 `--profile` adds `profile` to Krishiv's entry (the runner's `PROFILE` command): wall time of parse+analyse and
-plan+execute. Per-operator rows and times need the session to expose the executor's `QueryMetrics`.
+plan+execute plus the executor's per-operator rows and compute time (`DataFrame::collect_with_metrics`; seconds are summed over drivers).
 ClickBench reads `$KRISHIV_DATA/clickbench` (`hits.parquet` or a `hits/` directory of parts).
 
 ## Result JSON (`$KRISHIV_DATA/results/<ts>_<engine>_<suite>_sf<N>.json`)
