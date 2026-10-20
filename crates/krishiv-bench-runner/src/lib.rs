@@ -27,6 +27,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use arrow_array::RecordBatch;
+use krishiv_common::config::Config;
 use krishiv_common::error::KrishivError;
 use krishiv_exec::{ExecutorConfig, QueryMetrics, TokioExecutor};
 use krishiv_session::{DataFrame, Session};
@@ -127,6 +128,14 @@ impl Runner {
             io_threads: 2,
             blocking_threads: threads,
         })?;
+        // `SessionBuilder::build` drops configuration warnings; an unknown key would leave the A/B sides
+        // identical without saying so, so reject it here.
+        let pairs = std::iter::once(("krishiv.memory.limit", config.memory_limit.as_str()))
+            .chain(config.conf.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        let (_, warnings) = Config::from_pairs(pairs)?;
+        if let Some(w) = warnings.first() {
+            return Err(RunnerError::Config(format!("--conf not applied: {w}")));
+        }
         let mut builder = Session::builder()
             .executor(executor)
             .config("krishiv.memory.limit", config.memory_limit.as_str());
