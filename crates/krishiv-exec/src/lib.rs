@@ -82,11 +82,8 @@ mod operators;
 pub mod physical;
 mod pipeline;
 pub mod planner;
-// The row-layout key-page prototype is not wired into any operator yet. Linking
-// it into the library measurably shifted the grouped-aggregate benchmarks
-// (code placement), so it is built only for its tests and, via the
-// `row-table-prototype` feature, for its benchmark and example.
-#[cfg(any(test, feature = "row-table-prototype"))]
+// Row layout and the join's key index (P2-T158); the key-page prototypes
+// inside stay behind the `row-table-prototype` feature.
 pub mod rows;
 mod runner;
 mod sync;

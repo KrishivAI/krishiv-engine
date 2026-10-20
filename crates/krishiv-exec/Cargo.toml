@@ -80,3 +80,7 @@ required-features = ["row-table-prototype"]
 [[example]]
 name = "row_table_matrix"
 required-features = ["row-table-prototype"]
+
+[[example]]
+name = "agg_table_matrix"
+required-features = ["row-table-prototype"]

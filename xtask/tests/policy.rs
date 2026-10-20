@@ -200,6 +200,23 @@ fn ci_policy_wiring() {
         assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
     }
     assert!(ci.contains("  wheels-targets:\n") && ci.contains("  wheels-ok:\n"));
+    // Python diff coverage is gated in the required wheels job (python/krishiv)
+    // and in the diff-coverage job (bench/src), each at 90% on its own.
+    for needle in [
+        "--cov-report=lcov:python-coverage.lcov",
+        "--lcov python-coverage.lcov --fail-under 90",
+        "fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}",
+    ] {
+        assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
+    }
+    let coverage = read(".github/workflows/coverage.yml");
+    for needle in [
+        "--cov-report=\"lcov:$RUNNER_TEMP/bench.lcov\"",
+        "--lcov \"$RUNNER_TEMP/bench.lcov:bench\" --fail-under 90",
+        "cargo xtask diff-coverage --base \"$BASE_SHA\" --head \"$HEAD_SHA\" --fail-under 90",
+    ] {
+        assert!(coverage.contains(needle), "coverage.yml lacks {needle:?}");
+    }
     assert!(
         !ci.contains("--all-features --locked --no-tests"),
         "PR nextest must use default features"

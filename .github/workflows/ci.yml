@@ -481,8 +481,11 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+      # A pull request is checked out as the merge commit; two commits of
+      # history give the diff gate below its first parent (the base tip).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
           persist-credentials: false
       - run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -531,10 +534,25 @@ jobs:
             # current directory on sys.path, so the installed wheel is still what is tested.
             cd "$GITHUB_WORKSPACE"
             "$RUNNER_TEMP/venv/bin/pytest" python/tests -q --cov=krishiv --cov-config=python/pyproject.toml \
-              --cov-report=xml:python-coverage.xml --cov-report=term
+              --cov-report=xml:python-coverage.xml --cov-report=lcov:python-coverage.lcov --cov-report=term
           else
             "$RUNNER_TEMP/venv/bin/pytest" "$GITHUB_WORKSPACE/python/tests" -q
           fi
+      # Python diff coverage is a merge gate (this job is part of the required
+      # `wheels-ok`): at least 90% of the executable lines a PR adds under
+      # python/krishiv must run in the pytest run above, counted as coverage.py
+      # defines them. It is gated on its own, not summed with the Rust gate
+      # (`diff-coverage` in coverage.yml), so a well-covered Rust diff cannot
+      # mask untested Python or the reverse. The merge commit is what was
+      # tested, so the diff is first parent..merge commit, in its line numbers.
+      - name: Python diff coverage (gate at 90% of added lines)
+        if: matrix.coverage && github.event_name == 'pull_request'
+        run: |
+          # The lcov paths must be repository-relative, or no added line matches
+          # and the gate would pass vacuously.
+          grep -q '^SF:python/krishiv/' python-coverage.lcov \
+            || { echo "::error::python-coverage.lcov has no python/krishiv paths"; exit 1; }
+          cargo xtask diff-coverage --base HEAD^1 --head HEAD --lcov python-coverage.lcov --fail-under 90
       - name: Upload Python coverage to Codecov (informational)
         if: matrix.coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1

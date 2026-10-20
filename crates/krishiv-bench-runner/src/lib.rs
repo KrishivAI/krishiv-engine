@@ -163,7 +163,7 @@ impl RunnerConfig {
                     let kv = value()?;
                     let (k, v) = kv
                         .split_once('=')
-                        .filter(|(k, _)| !k.is_empty())
+                        .filter(|(k, _)| !k.trim().is_empty())
                         .ok_or_else(|| {
                             RunnerError::Config(format!("--conf expects key=value, got {kv:?}"))
                         })?;
@@ -258,6 +258,12 @@ impl Runner {
     #[must_use]
     pub fn tables(&self) -> &[String] {
         &self.tables
+    }
+
+    /// The session's value of `key` (`--conf` settings included).
+    #[must_use]
+    pub fn conf(&self, key: &str) -> Option<String> {
+        self.session.conf().get(key)
     }
 
     /// Runs the SQL text to completion; returns the row count and the seconds taken.

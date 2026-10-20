@@ -11,6 +11,8 @@
 //!   half match (inner join, build columns decoded).
 //! - `hash_join/grace_spill_256k_rows`: 256 Ki ⋈ 256 Ki rows under a 4 MiB
 //!   budget: partitions spill, are reloaded and joined (the spill path).
+//! - `…_row_layout`: the same joins with `krishiv.exec.join.rowLayout` on
+//!   (P2-T158: row-layout keys and the size-adaptive index).
 
 #![expect(
     missing_docs,
@@ -107,6 +109,7 @@ fn run(
     caller: &tokio::runtime::Runtime,
     plan: Arc<dyn ExecNode>,
     limit: Option<usize>,
+    join_row_layout: bool,
 ) -> usize {
     // The pool's spill and abort waits on the caller's paused clock: they
     // pass only while every task waits, never because the machine is slow.
@@ -120,7 +123,10 @@ fn run(
     let query = QueryContext::new(
         QueryId(1),
         WorkloadClass::Batch,
-        ExecConfig::default(),
+        ExecConfig {
+            join_row_layout,
+            ..ExecConfig::default()
+        },
         root.child("bench", None),
     );
     caller.block_on(async {
@@ -157,29 +163,41 @@ fn bench(c: &mut Criterion) {
     g.sample_size(10);
 
     let (big, one) = (data(1 << 20, 1), data(1, 1));
-    g.throughput(Throughput::Elements(1 << 20));
-    g.bench_function("build_1m_rows", |b| {
-        b.iter(|| black_box(run(&runner, &caller, plan(&big, &one, None), None)));
-    });
-    g.bench_function("build_1m_rows_runtime_filter", |b| {
-        b.iter(|| {
-            let plan = plan_with(&big, &one, None, true);
-            black_box(run(&runner, &caller, plan, None))
-        });
-    });
     let (small, probe) = (data(1 << 16, 2), data(1 << 20, 1));
-    g.bench_function("probe_1m_rows", |b| {
-        b.iter(|| black_box(run(&runner, &caller, plan(&small, &probe, None), None)));
-    });
     let side = data(1 << 18, 1);
-    g.throughput(Throughput::Elements(1 << 18));
-    g.bench_function("grace_spill_256k_rows", |b| {
-        b.iter(|| {
-            let scope = manager.scope().expect("scope");
-            let plan = plan(&side, &side, Some(scope));
-            black_box(run(&runner, &caller, plan, Some(4 << 20)))
+    for (suffix, rows) in [("", false), ("_row_layout", true)] {
+        g.throughput(Throughput::Elements(1 << 20));
+        g.bench_function(format!("build_1m_rows{suffix}"), |b| {
+            b.iter(|| black_box(run(&runner, &caller, plan(&big, &one, None), None, rows)));
         });
-    });
+        if !rows {
+            g.bench_function("build_1m_rows_runtime_filter", |b| {
+                b.iter(|| {
+                    let plan = plan_with(&big, &one, None, true);
+                    black_box(run(&runner, &caller, plan, None, false))
+                });
+            });
+        }
+        g.bench_function(format!("probe_1m_rows{suffix}"), |b| {
+            b.iter(|| {
+                black_box(run(
+                    &runner,
+                    &caller,
+                    plan(&small, &probe, None),
+                    None,
+                    rows,
+                ))
+            });
+        });
+        g.throughput(Throughput::Elements(1 << 18));
+        g.bench_function(format!("grace_spill_256k_rows{suffix}"), |b| {
+            b.iter(|| {
+                let scope = manager.scope().expect("scope");
+                let plan = plan(&side, &side, Some(scope));
+                black_box(run(&runner, &caller, plan, Some(4 << 20), rows))
+            });
+        });
+    }
     g.finish();
     drop(manager);
     // Best effort: the scratch directory is empty once every file dropped.

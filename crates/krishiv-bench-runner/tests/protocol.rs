@@ -100,6 +100,27 @@ fn a_directory_of_parts_is_one_table_and_an_empty_directory_is_refused() {
     assert!(missing.unwrap_err().to_string().contains("cannot read"));
 }
 
+/// `--conf` settings reach the session.
+#[test]
+fn conf_settings_reach_the_session() {
+    let dir = data_dir();
+    let key = "krishiv.exec.join.rowLayout";
+    let r = |conf: Vec<(String, String)>| {
+        Runner::new(&RunnerConfig {
+            data: dir.path().to_str().unwrap().to_owned(),
+            threads: 1,
+            memory_limit: "1g".to_owned(),
+            conf,
+        })
+        .unwrap()
+    };
+    assert_eq!(r(Vec::new()).conf(key).as_deref(), Some("false"));
+    let on = r(vec![(key.to_owned(), "true".to_owned())]);
+    assert_eq!(on.conf(key).as_deref(), Some("true"));
+    // The built-in setting is kept next to `--conf` (normalized).
+    assert_eq!(on.conf("krishiv.memory.limit").as_deref(), Some("1GB"));
+}
+
 #[test]
 fn arguments() {
     let args = |s: &str| RunnerConfig::from_args(s.split_whitespace().map(str::to_owned));
@@ -119,6 +140,9 @@ fn arguments() {
     );
     assert!(args("--data /d --conf novalue").is_err());
     assert!(args("--data /d --conf =v").is_err());
+    // A blank key is no key.
+    let blank = RunnerConfig::from_args(["--data", "/d", "--conf", " =v"].map(str::to_owned));
+    assert!(blank.unwrap_err().to_string().contains("key=value"));
     assert!(
         args("--threads 4")
             .unwrap_err()
