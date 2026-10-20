@@ -310,6 +310,19 @@ struct Inner {
     /// Memory granted by arbitration for the in-memory merge target (no
     /// spill directory): held with it.
     granted: Vec<Reservation>,
+    /// The row tables' parallel merge runs and can spill (`spill_global`
+    /// asks it through `spill_asked`).
+    row_merge: bool,
+    /// A spill request arrived during the row tables' merge: it stops
+    /// starting tasks and spills what is left once the running ones end.
+    spill_asked: bool,
+}
+
+/// Whether the row tables' parallel merge is running (tests time spill
+/// requests with it).
+#[cfg(test)]
+pub(super) fn row_merge_running(g: &GlobalState) -> bool {
+    global(g).is_ok_and(|g| lock(&g.inner).row_merge)
 }
 
 /// The finalized output, read by the source side.
@@ -912,6 +925,11 @@ impl Sink for HashAggregate {
             let g = global(g)?;
             let (job, before) = {
                 let mut inner = lock(&g.inner);
+                if inner.row_merge {
+                    // Freed by the merge itself, between its tasks.
+                    inner.spill_asked = true;
+                    return Ok(0);
+                }
                 if inner.busy || g.done.get().is_some() {
                     return Ok(0);
                 }

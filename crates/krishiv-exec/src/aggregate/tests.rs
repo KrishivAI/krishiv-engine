@@ -97,6 +97,19 @@ async fn exec(plan: Arc<dyn ExecNode>, o: Opts) -> crate::Result<(Vec<Batch>, Qu
     off
 }
 
+/// Runs a fresh plan from `make` on each layout (operator counters add up
+/// across runs of one plan) and requires the same rows; returns both
+/// metrics, default first, so tests check each layout's spill counters.
+async fn exec_each(
+    make: impl Fn() -> Arc<dyn ExecNode>,
+    o: Opts,
+) -> (Vec<String>, [QueryMetrics; 2]) {
+    let (off, m_off) = exec_with(make(), o, false).await.unwrap();
+    let (on, m_on) = exec_with(make(), o, true).await.unwrap();
+    assert_eq!(rows(&on), rows(&off), "row layout changed the rows");
+    (rows(&off), [m_off, m_on])
+}
+
 /// [`exec`] with `krishiv.exec.agg.rowLayout` set to `rows`.
 async fn exec_with(
     plan: Arc<dyn ExecNode>,
@@ -720,14 +733,14 @@ async fn spill_matches_in_memory() {
             limit,
             ..Opts::default()
         };
-        let (out, m) = exec(node(scan(&s, b.clone()), sp), o).await.unwrap();
-        assert_eq!(rows(&out), expected, "limit {limit}");
-        assert!(
-            extra(&m, "HashAggregate", "spill_runs") > 0,
-            "limit {limit}"
-        );
-        assert!(extra(&m, "HashAggregate", "spill_bytes") > 0);
-        assert_eq!(extra(&m, "HashAggregate", "groups"), 75_000);
+        let (out, metrics) = exec_each(|| node(scan(&s, b.clone()), sp.clone()), o).await;
+        assert_eq!(out, expected, "limit {limit}");
+        // Both layouts spilled.
+        for m in &metrics {
+            assert!(extra(m, "HashAggregate", "spill_runs") > 0, "limit {limit}");
+            assert!(extra(m, "HashAggregate", "spill_bytes") > 0);
+            assert_eq!(extra(m, "HashAggregate", "groups"), 75_000);
+        }
         let policy = BypassPolicy::default();
         let (plan, _) = two_phase(scan(&s, b.clone()), &s, policy, Some(scope));
         assert_eq!(rows(&exec(plan, o).await.unwrap().0), expected);
@@ -747,9 +760,12 @@ async fn spill_repartitions_a_partition_that_does_not_fit() {
         slots: 2,
         ..Opts::default()
     };
-    let (out, m) = exec(node(scan(&s, b), sp), o).await.unwrap();
-    assert_eq!(rows(&out), expected);
-    assert!(extra(&m, "HashAggregate", "repartitions") > 0);
+    let (out, metrics) = exec_each(|| node(scan(&s, b.clone()), sp.clone()), o).await;
+    assert_eq!(out, expected);
+    // Both layouts split a partition.
+    for m in &metrics {
+        assert!(extra(m, "HashAggregate", "repartitions") > 0);
+    }
 }
 
 /// Without a spill directory a table that outgrows the pool fails the
@@ -1699,10 +1715,11 @@ async fn first_and_last_keep_input_order_through_spills() {
         seed: None,
         ..Opts::default()
     };
-    let (out, m) = exec(node(scan(&s, b.clone()), sp.clone()), o)
-        .await
-        .unwrap();
-    assert!(extra(&m, "HashAggregate", "spill_runs") > 1);
+    let (out, metrics) = exec_each(|| node(scan(&s, b.clone()), sp.clone()), o).await;
+    // Both layouts spilled several runs.
+    for m in &metrics {
+        assert!(extra(m, "HashAggregate", "spill_runs") > 1);
+    }
     let expected: Vec<String> = {
         let mut v: Vec<String> = (0..keys)
             .map(|k| {
@@ -1721,12 +1738,13 @@ async fn first_and_last_keep_input_order_through_spills() {
         v.sort();
         v
     };
-    assert_eq!(rows(&out), expected);
+    assert_eq!(out, expected);
     let agg = HashAggregate::with_row_mode(sp, rowtable::Mode::Fixed { limit: 300 }).unwrap();
     let on = exec_with(AggregateNode::new(scan(&s, b), agg), o, true)
         .await
         .unwrap();
     assert_eq!(rows(&on.0), expected);
+    assert!(extra(&on.1, "HashAggregate", "spill_runs") > 1);
 }
 
 /// The row tables' final phase: several partition tasks in parallel over
@@ -1998,4 +2016,64 @@ proptest! {
     ) {
         row_case(&data, keys, nkeys, batch, slots, mode, limit, two, Some(768 << 10))?;
     }
+}
+
+/// A spill request during the row tables' parallel merge stops new tasks
+/// and moves what is left to disk; the rows are unchanged and nothing
+/// leaks.
+#[tokio::test]
+async fn row_merge_spills_on_request() {
+    let (s, b) = grouped_input(200_000, 90_000);
+    let expected = run_rows(single(&s, &b)).await;
+    let (_m, scope) = spill_dir();
+    let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+    sp.spill = Some(scope);
+    let agg = HashAggregate::with_row_mode(sp, rowtable::Mode::Fixed { limit: 5_000 }).unwrap();
+    let root = pool(1 << 30);
+    let config = ExecConfig {
+        agg_row_layout: true,
+        ..ExecConfig::default()
+    };
+    let q = QueryContext::new(
+        QueryId(5),
+        WorkloadClass::Batch,
+        config,
+        root.child("q", None),
+    );
+    // One worker: the merge runs one task at a time.
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let ctx = |id, name| {
+        let e = Arc::clone(&executor);
+        TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(id), name)
+    };
+    let sink_ctx = ctx(0, "agg");
+    let g = Sink::global_state(&*agg, &sink_ctx).unwrap();
+    for part in b.chunks(70) {
+        let mut l = Sink::local_state(&*agg, &sink_ctx, &g).unwrap();
+        for cols in part {
+            let batch = Batch::new(RecordBatch::try_new(Arc::clone(&s), cols.clone()).unwrap());
+            agg.sink(batch, &mut l, &g).unwrap();
+        }
+        agg.combine(l, &g).unwrap();
+    }
+    let request = async {
+        while !super::row_merge_running(&g) {
+            tokio::task::yield_now().await;
+        }
+        // Asked, not freed yet: the merge frees between its tasks.
+        assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
+    };
+    let (done, ()) = tokio::join!(agg.finalize(&g, &sink_ctx), request);
+    done.unwrap();
+    assert!(agg.metrics().spill_runs > 0);
+    let src = ctx(1, "src").with_dependency(Arc::clone(&g));
+    let sg = Source::global_state(&*agg, &src).unwrap();
+    let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
+    let mut out = Vec::new();
+    while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
+        out.push(b);
+    }
+    assert_eq!(rows(&out), expected);
+    drop((sl, sg, src, g, sink_ctx));
+    assert_eq!(root.reserved(), 0);
 }

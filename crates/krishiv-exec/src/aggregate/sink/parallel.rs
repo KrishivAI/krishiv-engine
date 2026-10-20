@@ -21,6 +21,11 @@
 //! input once merged needs per-partition (or inline) states; until then
 //! the setting stays off by default.
 //!
+//! With a spill directory the merge publishes the driver tables as
+//! spillable. A spill request (`spill_global`) stops new tasks; once the
+//! running ones end, every merge table and every row not yet merged is
+//! written as spill runs and the disk phase takes over.
+//!
 //! When a task cannot get memory and none is running: with a spill
 //! directory, every merge table and every row not yet merged is written as
 //! spill runs and the disk phase takes over (the default path's in-memory
@@ -145,8 +150,16 @@ impl HashAggregate {
             return Ok(true);
         }
         let inputs: Arc<[RowTable]> = inputs.into();
-        // The driver tables are read by the tasks, never spilled from here.
-        ctx.consumer().signal().set_spillable_bytes(0);
+        // With a spill directory the merge stays spillable: a request stops
+        // new tasks, and what is left is spilled once the running ones end.
+        let spill = self.core.spec.spill.is_some();
+        lock(&g.inner).row_merge = spill;
+        let spillable = if spill {
+            held.iter().map(Reservation::size).sum()
+        } else {
+            0
+        };
+        ctx.consumer().signal().set_spillable_bytes(spillable);
         let mut queue = VecDeque::new();
         {
             let refs: Vec<&RowTable> = inputs.iter().collect();
@@ -166,7 +179,8 @@ impl HashAggregate {
         let mut running: Running<'_> = FuturesUnordered::new();
         let mut done = Vec::new();
         loop {
-            while running.len() < limit {
+            let asked = spill && lock(&g.inner).spill_asked;
+            while !asked && running.len() < limit {
                 let Some(mut task) = queue.pop_front() else {
                     break;
                 };
@@ -176,7 +190,7 @@ impl HashAggregate {
                             queue.push_front(task);
                             break;
                         }
-                        if self.core.spec.spill.is_some() {
+                        if spill {
                             queue.push_front(task);
                             queue.extend(done);
                             self.spill_rows(g, ctx, inputs, held, queue).await?;
@@ -196,6 +210,13 @@ impl HashAggregate {
                 })));
             }
             let Some(next) = running.next().await else {
+                if asked && !queue.is_empty() {
+                    queue.extend(done);
+                    self.spill_rows(g, ctx, inputs, held, queue).await?;
+                    return Ok(false);
+                }
+                // Done (or only finished tasks left: finishing frees the
+                // driver tables).
                 break;
             };
             let (mut task, stall) = next?;
@@ -227,6 +248,8 @@ impl HashAggregate {
         bump(&self.counters.groups, groups as u64);
         let mut inner = lock(&g.inner);
         inner.busy = false;
+        inner.row_merge = false;
+        inner.spill_asked = false;
         let _ = g.done.set(Final::Parts {
             tables,
             chunks,
@@ -288,6 +311,8 @@ impl HashAggregate {
             .await?;
         let mut inner = lock(&g.inner);
         inner.busy = false;
+        inner.row_merge = false;
+        inner.spill_asked = false;
         inner.disk = true;
         tasks_of(runs, 0, &mut inner.tasks);
         Ok(())

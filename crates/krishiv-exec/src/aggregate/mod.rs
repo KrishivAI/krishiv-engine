@@ -74,6 +74,8 @@ use krishiv_memory::SpillScope;
 
 pub use node::{AggregateNode, PartialNode, distinct_plan, union_distinct};
 pub use partial::{BypassPolicy, PartialAggregate};
+#[cfg(test)]
+use sink::row_merge_running;
 pub use sink::{AggregateMetrics, HashAggregate};
 
 use crate::error::{Result, internal};
