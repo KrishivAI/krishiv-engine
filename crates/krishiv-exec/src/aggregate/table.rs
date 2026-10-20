@@ -45,11 +45,11 @@ impl AggCore {
             .collect::<Result<_>>()?;
         let types: Vec<_> = fields.iter().map(|f| f.data_type().clone()).collect();
         let encoder = KeyEncoder::new(&types)?;
-        // A key gets a validity bit when its field is nullable (a batch
-        // cannot hold NULLs in a non-nullable field; the layout refuses one).
-        let nullable: Vec<bool> = fields.iter().map(|f| f.is_nullable()).collect();
+        // Every key gets a validity bit: batches may hold NULLs in a field
+        // the spec's schema declares non-nullable (the arrow-row path
+        // accepts them), and the row path must do what it does.
         let rows = (!types.is_empty())
-            .then(|| RowLayout::new(&types, &nullable).ok())
+            .then(|| RowLayout::new(&types, &vec![true; types.len()]).ok())
             .flatten()
             .filter(RowLayout::is_fixed_width);
         let state_schema = spec.state_schema()?;
@@ -427,11 +427,18 @@ impl Table {
         }
     }
 
-    /// Group ids per spill partition at `level`.
-    pub(crate) fn ids_by_partition(&self, level: u32) -> Vec<Vec<u32>> {
+    /// Group ids per spill partition at `level`, of the groups at
+    /// positions `from..` (ids are positions only for an `AggTable`).
+    pub(crate) fn ids_by_partition(&self, level: u32, from: usize) -> Vec<Vec<u32>> {
         match self {
-            Self::Keys(t) => t.ids_by_partition(level),
-            Self::Rows(t) => t.ids_by_partition(level),
+            Self::Keys(t) => {
+                let mut parts = t.ids_by_partition(level);
+                for ids in &mut parts {
+                    ids.retain(|&i| i as usize >= from);
+                }
+                parts
+            }
+            Self::Rows(t) => t.ids_by_partition(level, from),
         }
     }
 

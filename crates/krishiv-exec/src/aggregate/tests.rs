@@ -1619,7 +1619,10 @@ proptest! {
         };
         let o = Opts {
             slots,
-            limit: if tight { 768 << 10 } else { 1 << 30 },
+            // Tight, but not below what the row tables need beyond the
+            // default ones: 20 KiB of sketches per driver table, and a
+            // fixed index of capacity 1 keeps one row per input row.
+            limit: if tight { 1 << 20 } else { 1 << 30 },
             both_layouts: false,
             ..Opts::default()
         };
@@ -1764,4 +1767,159 @@ async fn row_final_phase_parallel_and_spill_fallback() {
         drop((sl, sg, src, g, sink_ctx));
         assert_eq!(root.reserved(), 0);
     }
+}
+
+/// Every fixed-width key type through the row tables (fixed indexes that
+/// abandon, several drivers, two keys at a time) returns the default
+/// tables' rows, NULL keys included.
+#[tokio::test]
+async fn row_layout_key_types_equal_default() {
+    use arrow_array::{
+        BooleanArray, Decimal64Array, Float32Array, TimestampMicrosecondArray, UInt16Array,
+    };
+    let n = 5_000usize;
+    let i =
+        |m: usize| (0..n).map(move |r| (r % 11 != 0).then(|| i64::try_from(r * 7919 % m).unwrap()));
+    let cols: Vec<(&str, ArrayRef)> = vec![
+        (
+            "d128",
+            Arc::new(
+                Decimal128Array::from_iter(i(300).map(|v| v.map(|v| i128::from(v) - 150)))
+                    .with_precision_and_scale(20, 3)
+                    .unwrap(),
+            ),
+        ),
+        (
+            "d64",
+            Arc::new(
+                Decimal64Array::from_iter(i(70))
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ),
+        ),
+        (
+            "date",
+            Arc::new(Date32Array::from_iter(
+                i(400).map(|v| v.map(|v| i32::try_from(v - 200).unwrap())),
+            )),
+        ),
+        (
+            "ts",
+            Arc::new(
+                TimestampMicrosecondArray::from_iter(i(90).map(|v| v.map(|v| v * 1_000)))
+                    .with_timezone("UTC"),
+            ),
+        ),
+        (
+            "f32",
+            Arc::new(Float32Array::from_iter(
+                i(9).map(|v| v.map(|v| f32::from(i16::try_from(v).unwrap()) - 4.0)),
+            )),
+        ),
+        (
+            "u16",
+            Arc::new(UInt16Array::from_iter(
+                i(50).map(|v| v.map(|v| u16::try_from(v).unwrap())),
+            )),
+        ),
+        (
+            "b",
+            Arc::new(BooleanArray::from_iter(i(2).map(|v| v.map(|v| v == 1)))),
+        ),
+        ("x", Arc::new(Int64Array::from_iter(i(1_000)))),
+    ];
+    let s: SchemaRef = Arc::new(Schema::new(
+        cols.iter()
+            .map(|(n, c)| Field::new(*n, c.data_type().clone(), true))
+            .collect::<Vec<_>>(),
+    ));
+    let arrays: Vec<ArrayRef> = cols.into_iter().map(|(_, c)| c).collect();
+    let batches: Vec<Vec<ArrayRef>> = (0..n)
+        .step_by(700)
+        .map(|at| {
+            arrays
+                .iter()
+                .map(|a| a.slice(at, 700.min(n - at)))
+                .collect()
+        })
+        .collect();
+    let x = s.fields().len() - 1;
+    let aggs = || {
+        vec![
+            AggregateExpr::count_star("c"),
+            agg(Sum, x, &s),
+            agg(Min, 0, &s),
+            agg(Max, 2, &s),
+        ]
+    };
+    for keys in [
+        vec![0],
+        vec![1],
+        vec![2],
+        vec![3],
+        vec![4],
+        vec![5],
+        vec![6],
+        vec![0, 3],
+        vec![2, 6],
+    ] {
+        let sp = spec(&s, keys.clone(), aggs());
+        let o = Opts {
+            both_layouts: false,
+            ..Opts::default()
+        };
+        let want = rows(
+            &exec(node(scan(&s, batches.clone()), sp.clone()), o)
+                .await
+                .unwrap()
+                .0,
+        );
+        assert!(!want.is_empty());
+        for mode in [
+            rowtable::Mode::Grow,
+            rowtable::Mode::Fixed { limit: 7 },
+            rowtable::Mode::Append,
+        ] {
+            let agg = HashAggregate::with_row_mode(sp.clone(), mode).unwrap();
+            let got = exec_with(AggregateNode::new(scan(&s, batches.clone()), agg), o, true).await;
+            assert_eq!(rows(&got.unwrap().0), want, "keys {keys:?} {mode:?}");
+        }
+    }
+}
+
+/// A spec whose key field is non-nullable over batches that hold NULL keys
+/// (their own schema is nullable): both layouts fail the same way, when
+/// the output batch is checked against the declared schema (the row
+/// tables give every key a validity bit, so they group the NULLs first,
+/// as the default tables do).
+#[tokio::test]
+async fn row_layout_nullable_batches_under_a_non_nullable_spec() {
+    let nullable = schema(vec![("k", DataType::Int64), ("x", DataType::Int64)]);
+    let strict: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("x", DataType::Int64, true),
+    ]));
+    let b = vec![
+        vec![
+            i64s(&[Some(1), None, Some(1), None]),
+            i64s(&[Some(1), Some(2), Some(3), Some(4)]),
+        ],
+        vec![i64s(&[None, Some(2)]), i64s(&[Some(5), Some(6)])],
+    ];
+    let plan = node(
+        scan(&nullable, b),
+        spec(
+            &strict,
+            vec![0],
+            vec![AggregateExpr::count_star("c"), agg(Sum, 1, &strict)],
+        ),
+    );
+    // `exec` runs both layouts and requires the same error.
+    let e = exec(plan, Opts::default()).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(
+        e.to_string()
+            .contains("declared as non-nullable but contains null"),
+        "{e}"
+    );
 }

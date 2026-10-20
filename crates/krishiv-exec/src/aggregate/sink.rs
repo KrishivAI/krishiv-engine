@@ -194,10 +194,7 @@ impl Spiller {
     /// Writes groups `from..` of `table` as one run of partition files at
     /// `level` (blocking I/O).
     fn write_run(&self, table: &Table, from: usize, level: u32) -> Result<Run> {
-        let mut parts = table.ids_by_partition(level);
-        for ids in &mut parts {
-            ids.retain(|&i| i as usize >= from);
-        }
+        let parts = table.ids_by_partition(level, from);
         let chunk = spill_chunk(table.memory_size(), table.len());
         self.write_parts(parts, chunk, &|ids| table.state_batch(ids))
     }
@@ -210,7 +207,7 @@ impl Spiller {
         keep: &dyn Fn(u32) -> bool,
         level: u32,
     ) -> Result<Run> {
-        let mut parts = table.ids_by_partition(level);
+        let mut parts = table.ids_by_partition(level, 0);
         for ids in &mut parts {
             ids.retain(|&r| keep(r));
         }

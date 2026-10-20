@@ -614,11 +614,19 @@ impl RowTable {
         rows.map(|i| ref_of(p, i)).collect()
     }
 
-    /// Row references per spill partition at `level` (by `g`).
-    pub(crate) fn ids_by_partition(&self, level: u32) -> Vec<Vec<u32>> {
+    /// Row references per spill partition at `level` (by `g`) of the rows
+    /// at positions `from..` of the partition order (see [`ids`](Self::ids)).
+    pub(crate) fn ids_by_partition(&self, level: u32, from: usize) -> Vec<Vec<u32>> {
         let mut out = vec![Vec::new(); PARTITIONS];
+        let mut start = 0;
         for p in 0..PARTS {
-            for (i, row) in self.parts[p].chunks_exact(self.stride).enumerate() {
+            let skip = from.saturating_sub(start);
+            start += self.part_len(p);
+            for (i, row) in self.parts[p]
+                .chunks_exact(self.stride)
+                .enumerate()
+                .skip(skip)
+            {
                 let g = fin(word(row, 0), self.gseed);
                 out[spill_partition(g, level)].push(ref_of(p, i));
             }
@@ -1054,6 +1062,14 @@ mod tests {
         // Every row is in its partition of `h`, and positions cover them.
         let all = append.ids(0..append.len());
         assert_eq!(all.len(), 40);
+        // Spilling from a position skips exactly the rows before it.
+        for from in [0, 1, 17, 39, 40, 41] {
+            let mut got: Vec<u32> = append.ids_by_partition(0, from).concat();
+            let mut want = append.ids(from..append.len());
+            got.sort_unstable();
+            want.sort_unstable();
+            assert_eq!(got, want, "from {from}");
+        }
         let per: usize = (0..PARTS).map(|p| append.part_len(p)).sum();
         assert_eq!(per, 40);
         let out = grow.output_batch(&grow.ids(0..grow.len())).unwrap();

@@ -14,6 +14,13 @@
 //! at most the executor's parallelism at once, each started once its
 //! memory is reserved (as the join's partition builds are).
 //!
+//! **Memory.** The driver tables stay until every task is done (their
+//! states are per-driver accumulators, not per partition), so this phase
+//! holds the driver tables and the merged tables together: up to about
+//! twice the default path's in-place merge. Releasing each partition's
+//! input once merged needs per-partition (or inline) states; until then
+//! the setting stays off by default.
+//!
 //! When a task cannot get memory and none is running: with a spill
 //! directory, every merge table and every row not yet merged is written as
 //! spill runs and the disk phase takes over (the default path's in-memory
