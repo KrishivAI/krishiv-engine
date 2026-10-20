@@ -319,7 +319,9 @@ pub struct SpillScope {
 
 impl SpillScope {
     /// Starts a spill file for batches of `schema`. `reservation` accounts
-    /// the writer's scratch memory (see [`SpillWriter`]).
+    /// the writer's scratch memory (see [`SpillWriter`]); when it comes from
+    /// a [`ConsumerHandle`](crate::ConsumerHandle), the finished file is
+    /// counted in the handle's [`SpillStats`](crate::SpillStats).
     ///
     /// # Errors
     /// [`SpillError::Cancelled`] after [`cancel`](Self::cancel);

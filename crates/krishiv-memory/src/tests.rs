@@ -1180,3 +1180,32 @@ async fn the_arbitrator_sees_transferred_bytes() {
     signal.complete(target);
     waiting.await.unwrap().unwrap();
 }
+
+#[test]
+fn peak_reserved_is_the_high_water_mark_of_accepted_grants() {
+    let r = root(Some(4 << 20), 1);
+    let q = r.child("q", None);
+    let id = q.register("c", None);
+    let mut a = Reservation::new(Arc::clone(&q), id);
+    a.try_grow(3 << 20).unwrap();
+    // The query accepts 2 MiB more, the root refuses: rolled back, not a peak.
+    assert!(a.try_grow(2 << 20).is_err());
+    assert_eq!((q.peak_reserved(), r.peak_reserved()), (3 << 20, 3 << 20));
+    a.shrink(2 << 20);
+    a.try_grow(1 << 20).unwrap();
+    assert_eq!(q.reserved(), 2 << 20);
+    assert_eq!((q.peak_reserved(), r.peak_reserved()), (3 << 20, 3 << 20));
+    let other = r.child("other", None);
+    let oid = other.register("c", None);
+    let mut b = Reservation::new(Arc::clone(&other), oid);
+    b.try_grow(2 << 20).unwrap();
+    // The root saw both queries at once; each query only itself.
+    assert_eq!(r.peak_reserved(), 4 << 20);
+    assert_eq!(
+        (q.peak_reserved(), other.peak_reserved()),
+        (3 << 20, 2 << 20)
+    );
+    drop((a, b));
+    assert_eq!(r.reserved(), 0);
+    assert_eq!(r.peak_reserved(), 4 << 20);
+}

@@ -28,10 +28,16 @@ pub struct OperatorMetrics {
     /// Peak bytes reserved through the operator's memory consumer, summed
     /// over its drivers (an upper bound of the true peak).
     pub peak_reserved: u64,
-    /// Spills serviced.
+    /// Spill requests serviced (from the memory arbitrator).
     pub spills: u64,
-    /// Bytes freed by spills.
+    /// Bytes freed by the spill requests serviced.
     pub spilled_bytes: u64,
+    /// Spill files the operator wrote, requested or on its own (a grace
+    /// join's partitions, an aggregate's or sort's runs); filled in by
+    /// `QueryContext::metrics`.
+    pub spill_files: u64,
+    /// Bytes written to those files (as stored: compressed, framed).
+    pub spill_write_bytes: u64,
     /// Time waiting for memory after `NeedMemory`.
     pub blocked_on_memory: Duration,
     /// Time waiting on a `Blocked` sink (backpressure).
@@ -50,6 +56,8 @@ impl OperatorMetrics {
         self.peak_reserved += o.peak_reserved;
         self.spills += o.spills;
         self.spilled_bytes += o.spilled_bytes;
+        self.spill_files += o.spill_files;
+        self.spill_write_bytes += o.spill_write_bytes;
         self.blocked_on_memory += o.blocked_on_memory;
         self.blocked_on_sink += o.blocked_on_sink;
     }
@@ -102,6 +110,16 @@ pub struct OperatorEntry {
     pub extra: Vec<(&'static str, u64)>,
 }
 
+/// The query's memory pool, as `QueryContext::metrics` read it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueryMemory {
+    /// The query pool's own limit (`None`: bounded only by the pools above
+    /// it, e.g. the process limit).
+    pub limit: Option<u64>,
+    /// The most bytes the query held reserved at once.
+    pub peak_reserved: u64,
+}
+
 /// A query's metrics.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct QueryMetrics {
@@ -109,4 +127,6 @@ pub struct QueryMetrics {
     pub operators: BTreeMap<OperatorId, OperatorEntry>,
     /// Scheduling.
     pub drivers: DriverStats,
+    /// Memory.
+    pub memory: QueryMemory,
 }

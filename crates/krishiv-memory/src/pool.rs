@@ -321,6 +321,9 @@ pub(crate) struct Node {
     floor: usize,
     /// Bytes held by the subtree; on a query node, plus the abort bit.
     word: AtomicUsize,
+    /// The most bytes the subtree held after a grant that every pool on its
+    /// path accepted (statistics: a grant rolled back is not counted).
+    peak: AtomicUsize,
     parent: Option<Arc<Node>>,
     /// 0 = process root, 1 = query or external pool, deeper = task etc.
     pub(crate) depth: usize,
@@ -355,6 +358,10 @@ enum Refusal {
 impl Node {
     pub(crate) fn reserved(&self) -> usize {
         self.load_word() & MAX_BYTES
+    }
+
+    pub(crate) fn peak(&self) -> usize {
+        self.peak.load(Ordering::Relaxed)
     }
 
     /// Reads the counter word. Every decision taken from this read is
@@ -468,6 +475,13 @@ impl Node {
                 }
                 return Err((Arc::clone(node), why));
             }
+            cur = node.parent.as_ref();
+        }
+        let mut cur = Some(self);
+        while let Some(node) = cur {
+            // A value the counter held after this grant (others may have
+            // moved it since; any such value is a true holding).
+            node.peak.fetch_max(node.reserved(), Ordering::Relaxed);
             cur = node.parent.as_ref();
         }
         Ok(())
@@ -682,6 +696,7 @@ impl TreePool {
                 limit: config.limit.map(|l| l.min(MAX_BYTES)),
                 floor: floor(config.limit, config.spill_scratch_reserve),
                 word: AtomicUsize::new(0),
+                peak: AtomicUsize::new(0),
                 parent: None,
                 depth: 0,
                 group: None,
@@ -703,6 +718,7 @@ impl TreePool {
                 limit: limit.map(|l| l.min(MAX_BYTES)),
                 floor: floor(limit, parent.shared.scratch_reserve),
                 word: AtomicUsize::new(0),
+                peak: AtomicUsize::new(0),
                 parent: Some(Arc::clone(parent)),
                 depth: parent.depth + 1,
                 group: Some(group),
@@ -879,6 +895,10 @@ impl MemoryPool for TreePool {
 
     fn reserved(&self) -> usize {
         self.node.reserved()
+    }
+
+    fn peak_reserved(&self) -> usize {
+        self.node.peak()
     }
 
     fn limit(&self) -> Option<usize> {

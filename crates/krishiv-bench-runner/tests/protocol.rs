@@ -276,6 +276,35 @@ fn profile_reports_the_phases_and_matches_run() {
         (phases[0] + phases[1] - total).abs() < 1e-4,
         "phases {phases:?} must add up to {total}"
     );
+    // Memory: the limit, what the pool granted, spills and the resident set.
+    let field = |key: &str| -> Option<u64> {
+        let mem = &json[json.find("\"memory\":{").unwrap()..];
+        let at = mem.find(&format!("\"{key}\":")).unwrap() + key.len() + 3;
+        let v: String = mem[at..].chars().take_while(char::is_ascii_digit).collect();
+        v.parse().ok()
+    };
+    assert_eq!(field("limit_bytes"), Some(1 << 30), "{json}");
+    assert!(
+        field("peak_reserved_bytes").is_some_and(|b| b > 0),
+        "{json}"
+    );
+    assert_eq!(field("spill_files"), Some(0), "{json}");
+    assert_eq!(field("spill_bytes"), Some(0), "{json}");
+    if cfg!(target_os = "linux") {
+        let (before, peak) = (field("rss_before_bytes"), field("peak_rss_bytes"));
+        assert!(before.is_some_and(|b| b > 0), "{json}");
+        assert!(peak >= before, "{json}");
+    }
+    for key in [
+        "\"peak_reserved_bytes\":",
+        "\"spill_requests\":0",
+        "\"spill_files\":0",
+        "\"spill_bytes\":0",
+        "\"blocked_memory_seconds\":",
+        "\"extra\":{",
+    ] {
+        assert!(json.contains(key), "{key} in {json}");
+    }
     assert!(reply_for(&r, "RUN", &sql).starts_with("OK 3 "));
     assert!(
         r.handle_line("PROFILE")
