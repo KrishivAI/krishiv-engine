@@ -77,11 +77,14 @@ def missing_features(level: str, cpuinfo: str) -> list[str]:
 
 def failure_message(level: str, missing: list[str]) -> str:
     """The ``ImportError`` text."""
-    return (
-        f"this build of Krishiv requires a {level} CPU, but this CPU lacks: {', '.join(missing)}. "
-        f"Use the compat build instead: `pip install {COMPAT_PACKAGE}` "
-        "(uninstall krishiv first; it imports as krishiv)."
-    )
+    head = f"this build of Krishiv requires a {level} CPU, but this CPU lacks: {', '.join(missing)}. "
+    if level == "x86-64-v3":
+        return head + (
+            f"Use the compat build instead: `pip install {COMPAT_PACKAGE}` "
+            "(uninstall krishiv first; it imports as krishiv)."
+        )
+    # The compat package is published for x86-64 only.
+    return head + "No compat build is published for this architecture."
 
 
 def ensure_supported(

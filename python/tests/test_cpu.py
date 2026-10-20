@@ -61,10 +61,21 @@ def test_unsupported_cpu_raises_a_clean_import_error(tmp_path):
     level_file, info = _files(tmp_path, "x86-64-v3", NEHALEM)
     with pytest.raises(ImportError) as err:
         _cpu.ensure_supported(level_file, info, "linux")
-    message = str(err.value)
-    assert "avx2" in message
-    assert "x86-64-v3" in message
-    assert "krishiv-compat" in message
+    assert str(err.value) == (
+        "this build of Krishiv requires a x86-64-v3 CPU, but this CPU lacks: "
+        "avx, avx2, bmi1, bmi2, f16c, fma, lzcnt, movbe, xsave. "
+        "Use the compat build instead: `pip install krishiv-compat` (uninstall krishiv first; it imports as krishiv)."
+    )
+
+
+def test_unsupported_arm_cpu_gets_no_compat_instruction(tmp_path):
+    level_file, info = _files(tmp_path, "neoverse-n1", A72)
+    with pytest.raises(ImportError) as err:
+        _cpu.ensure_supported(level_file, info, "linux")
+    assert str(err.value) == (
+        "this build of Krishiv requires a neoverse-n1 CPU, but this CPU lacks: dotprod, fp16, lse, rcpc, rdm. "
+        "No compat build is published for this architecture."
+    )
 
 
 def test_supported_cpu_passes(tmp_path):

@@ -77,7 +77,8 @@ class KrishivEngine(Engine):
         }
 
     def build_info(self) -> dict[str, str]:
-        return {"allocator": "mimalloc", "runner": "krishiv-bench-runner (dist)", **self._runner_build()}
+        build = self._runner_build()
+        return {"allocator": "mimalloc", "runner": f"krishiv-bench-runner ({build['build_profile']})", **build}
 
     def _runner_build(self) -> dict[str, str]:
         """The runner's own ``--build-info`` (``profile=dist target-cpu=x86-64-v3``), so a result says what it measured.

@@ -12,11 +12,16 @@ fn build_info_names_the_profile_and_the_target_cpu() {
     assert!(out.status.success(), "{out:?}");
     let text = String::from_utf8(out.stdout).unwrap();
     assert_eq!(text.trim_end(), krishiv_bench_runner::BUILD_INFO);
+    // The profile is the cargo output directory the binary sits in (`debug`, `dist`, ...).
+    let profile_dir = std::path::Path::new(env!("CARGO_BIN_EXE_krishiv-bench-runner"))
+        .parent()
+        .and_then(|d| d.file_name())
+        .and_then(|d| d.to_str())
+        .expect("the binary sits in <target>/<profile>/");
     let mut fields = text.split_whitespace();
-    assert!(
-        fields
-            .next()
-            .is_some_and(|f| f.starts_with("profile=") && f.len() > "profile=".len()),
+    assert_eq!(
+        fields.next(),
+        Some(format!("profile={profile_dir}").as_str()),
         "{text}"
     );
     assert!(

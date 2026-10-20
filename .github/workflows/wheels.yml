@@ -76,6 +76,9 @@ jobs:
           target: x86_64
           manylinux: ${{ matrix.libc == 'manylinux' && '2_28' || 'musllinux_1_2' }}
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
+      - name: The wheel carries the CPU level marker
+        run: |
+          for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/_cpu_level$'; done
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         if: matrix.libc == 'manylinux'
       - name: Test (manylinux, on the runner)
@@ -113,7 +116,10 @@ jobs:
           cat "$RUNNER_TEMP/old.out"
           test "$code" -eq 1
           grep -q 'ImportError' "$RUNNER_TEMP/old.out"
-          ! grep -qi 'illegal instruction' "$RUNNER_TEMP/old.out"
+          if grep -qi 'illegal instruction' "$RUNNER_TEMP/old.out"; then
+            echo "::error::import hit SIGILL under QEMU Nehalem"
+            exit 1
+          fi
           grep -q 'avx2' "$RUNNER_TEMP/old.out"
           grep -q 'krishiv-compat' "$RUNNER_TEMP/old.out"
       - name: Test (musllinux, in the PyPA musllinux image)
@@ -160,6 +166,8 @@ jobs:
           target: x86_64
           manylinux: 2_28
           args: ${{ env.ABI3_ARGS }} --out ../dist
+      - name: The compat wheel has no CPU level marker
+        run: "! unzip -l dist/*.whl | grep -q '_cpu_level'"
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - name: Test
         run: |
@@ -202,6 +210,9 @@ jobs:
           target: aarch64
           manylinux: 2_28
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
+      - name: The wheel carries the CPU level marker
+        run: |
+          for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/_cpu_level$'; done
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - name: Test
         env:
