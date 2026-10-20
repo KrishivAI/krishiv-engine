@@ -116,7 +116,11 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: cargo xtask diff-coverage --base "$BASE_SHA" --head "$HEAD_SHA" --lcov "$RUNNER_TEMP/bench.lcov:bench" --fail-under 90
+        run: |
+          # Unmapped paths match no added line, so the gate would pass vacuously.
+          grep -Eq "^SF:(src/krishiv_bench/|$GITHUB_WORKSPACE/bench/src/krishiv_bench/)" "$RUNNER_TEMP/bench.lcov" \
+            || { echo "::error::bench.lcov has no src/krishiv_bench paths"; exit 1; }
+          cargo xtask diff-coverage --base "$BASE_SHA" --head "$HEAD_SHA" --lcov "$RUNNER_TEMP/bench.lcov:bench" --fail-under 90
       - name: Upload to Codecov (informational)
         if: steps.changes.outputs.rust == 'true' && !cancelled()
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
