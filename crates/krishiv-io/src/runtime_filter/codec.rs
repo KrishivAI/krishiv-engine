@@ -27,7 +27,7 @@ use super::KeyFilter;
 use super::bloom::{RuntimeBloom, xxh64};
 use super::hash::{RowHash, decimal_hash};
 use super::key::{KeyRange, KeyValue, supported_key_type};
-use super::member::{Class, Exact, Member, Small};
+use super::member::{Class, Exact, Member, SMALL_SET_MAX, Small};
 
 /// The encoding's format version.
 pub const FORMAT_VERSION: u8 = 1;
@@ -360,6 +360,11 @@ impl Reader<'_> {
 
     fn small(&mut self, class: Class) -> crate::Result<Small> {
         let n = self.count()?;
+        // `finish` builds a small set only up to its cap, and its per-row
+        // cost assumes that: a larger one is not a filter this code wrote.
+        if n > SMALL_SET_MAX {
+            return Err(bad("a small set beyond its cap"));
+        }
         Ok(match class {
             Class::Int { .. } | Class::Float { .. } => {
                 Small::Int((0..n).map(|_| self.i64()).collect::<crate::Result<_>>()?)

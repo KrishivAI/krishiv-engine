@@ -422,4 +422,18 @@ fn corrupt_encodings_are_refused() {
         }
     }
     assert!(KeyFilter::decode(&[]).is_err());
+    // A small set beyond its cap (each probe row compares every member) is
+    // refused: re-encode an 8-member set with a ninth member.
+    let small = filter(
+        &Int64Array::from_iter_values((0..8).map(|i| i * 3)),
+        forced(0, 8, false),
+    );
+    assert_eq!(small.form(), FilterForm::SmallSet(8));
+    let mut bytes = small.encode();
+    let tail = bytes.len() - 8 * 8;
+    let count = tail - 4;
+    assert_eq!(bytes[count..tail], 8u32.to_le_bytes());
+    bytes[count..tail].copy_from_slice(&9u32.to_le_bytes());
+    bytes.extend_from_slice(&99i64.to_le_bytes());
+    assert!(KeyFilter::decode(&bytes).is_err());
 }
