@@ -5,7 +5,7 @@
 //! cargo run --profile bench -p krishiv-exec --features row-table-prototype \
 //!     --example agg_table_matrix
 //! AGG_GROUPS=1,64,10000 AGG_KEYS=i64,i64x2,dec,str AGG_DISTS=uniform,zipf,runs \
-//!     AGG_THREADS=1,12 AGG_CANDS=enc,a,ap,b,c,c128k,d,e,op AGG_REPS=5 \
+//!     AGG_THREADS=1,12 AGG_CANDS=enc,a,ap,b,c,c128k,d,e,op AGG_REPS=6 \
 //!     AGG_RBITS=5 cargo run ...
 //! ```
 //!
@@ -50,7 +50,9 @@
 //! 0, not XXH64; P2-T175 measures that cost.)
 //!
 //! Every candidate's result (group count and state sums) must agree with the
-//! others and with the generated data; a mismatch aborts the run. Repetitions run the candidates in ABBA order.
+//! others and with the generated data; a mismatch aborts the run.
+//! Repetitions run the candidates in ABBA order (an odd `AGG_REPS` is
+//! rounded up to even).
 
 #![expect(
     clippy::expect_used,
@@ -1448,8 +1450,11 @@ fn main() {
     assert!((1..=MAX_R_BITS).contains(&rbits), "AGG_RBITS in 1..=8");
     R_BITS.store(rbits, Ordering::Relaxed);
     let reps: usize =
-        std::env::var("AGG_REPS").map_or(5, |s| s.parse().expect("AGG_REPS: a positive integer"));
+        std::env::var("AGG_REPS").map_or(6, |s| s.parse().expect("AGG_REPS: a positive integer"));
     assert!(reps > 0, "AGG_REPS must be positive");
+    // ABBA needs as many reversed passes as forward ones: round odd counts
+    // up, so no candidate runs first (or last) more often than another.
+    let reps = reps.next_multiple_of(2);
     let mut out = std::io::stdout().lock();
     writeln!(
         out,
