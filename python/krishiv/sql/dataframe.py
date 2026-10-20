@@ -264,6 +264,66 @@ class DataFrame:
         cells = _convert.table_cells(self.limit(rows + 1).toArrow(), self._session_zone())
         print(_convert.show_string(self.columns, cells, rows, truncate, vertical), end="")
 
+    def explain(
+        self,
+        extended: bool | str | None = None,
+        mode: str | None = None,
+        *,
+        analyze: bool = False,
+        verbose: bool = False,
+    ) -> None:
+        """Prints the query's plans, as PySpark's ``explain`` (``extended`` or ``mode``: ``simple``,
+        ``extended``, ``codegen``, ``cost``, ``formatted``).
+
+        Krishiv extensions (keyword only): ``analyze=True`` runs the query and prints the physical
+        plan with each operator's metrics (``EXPLAIN ANALYZE``); ``verbose=True`` prints the logical
+        plan after each optimizer rule that changed it (``EXPLAIN VERBOSE``). Use
+        :meth:`explainString` for the text or the JSON document instead of printing.
+        """
+        print(self.explainString(extended, mode, analyze=analyze, verbose=verbose))
+
+    def explainString(
+        self,
+        extended: bool | str | None = None,
+        mode: str | None = None,
+        *,
+        analyze: bool = False,
+        verbose: bool = False,
+        json: bool = False,
+    ) -> str:
+        """What :meth:`explain` prints; with ``json=True`` (``analyze`` or ``verbose`` only) the
+        versioned JSON document (``krishiv.query-profile`` or ``krishiv.explain-verbose``)."""
+        if extended is not None and mode is not None:
+            raise PySparkValueError(
+                errorClass="CANNOT_SET_TOGETHER", messageParameters={"arg_list": "extended and mode"}
+            )
+        for name, flag in (("analyze", analyze), ("verbose", verbose), ("json", json)):
+            if not isinstance(flag, bool):
+                raise not_expected_type(name, "bool", flag)
+        if extended is not None and not isinstance(extended, bool | str):
+            raise not_expected_type("extended", "bool or str", extended)
+        if mode is not None and not isinstance(mode, str):
+            raise not_expected_type("mode", "str", mode)
+        chosen = mode if mode is not None else extended if isinstance(extended, str) else None
+        if analyze or verbose:
+            if analyze and verbose:
+                raise PySparkValueError(
+                    errorClass="CANNOT_SET_TOGETHER", messageParameters={"arg_list": "analyze and verbose"}
+                )
+            if extended is not None or mode is not None:
+                raise PySparkValueError(
+                    errorClass="CANNOT_SET_TOGETHER",
+                    messageParameters={"arg_list": "analyze or verbose and extended or mode"},
+                )
+            return self._df.explain("analyze" if analyze else "verbose", json)
+        if json:
+            raise PySparkValueError(
+                errorClass="CANNOT_SET_TOGETHER", messageParameters={"arg_list": "json and a Spark explain mode"}
+            )
+        if chosen is None:
+            chosen = "extended" if extended is True else "simple"
+        return self._df.explain(chosen.lower(), False)
+
     def createOrReplaceTempView(self, name: str) -> None:
         """Registers this DataFrame as the temporary view ``name`` (views of reads by path only, so far)."""
         if not isinstance(name, str):

@@ -257,3 +257,76 @@ fn csv_distinguishes_null_from_empty_and_zone_is_checked() {
     assert!(o.status.success(), "{}", err(&o));
     assert_eq!(out(&o), "a\n1\n");
 }
+
+#[test]
+fn explain_analyze_prints_the_profile() {
+    let view = format!("lineitem={LINEITEM}");
+    let q = "select l_returnflag, count(*) from lineitem group by l_returnflag";
+    let o = krishiv(
+        &["sql", "--table", &view, "--explain-analyze", "-e", q],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert!(t.starts_with("== Physical Plan (analyzed) ==\n"), "{t}");
+    assert!(t.contains("HashAggregate"), "{t}");
+    assert!(t.contains("groups=3"), "{t}");
+    let o = krishiv(
+        &[
+            "sql",
+            "--table",
+            &view,
+            "--explain-analyze",
+            "--json",
+            "-e",
+            q,
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let p = krishiv::QueryProfile::from_json(out(&o).trim()).expect("profile JSON");
+    let result = p
+        .metrics
+        .operators
+        .values()
+        .find(|e| e.node.is_none())
+        .expect("result sink");
+    assert_eq!(result.metrics.rows_in, 3);
+}
+
+#[test]
+fn explain_verbose_prints_the_rules() {
+    let q = "select a from (select 1 as a, 2 as b) where a > 0";
+    let o = krishiv(&["sql", "--explain-verbose", "-e", q], None);
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert!(t.starts_with("== Parsed Logical Plan ==\n"), "{t}");
+    assert!(t.contains("== Optimizer: "), "{t}");
+    let o = krishiv(&["sql", "--explain-verbose", "--json", "-e", q], None);
+    assert!(o.status.success(), "{}", err(&o));
+    let v = krishiv::ExplainVerbose::from_json(out(&o).trim()).expect("verbose JSON");
+    assert!(!v.steps.is_empty());
+}
+
+#[test]
+fn explain_flags_are_checked() {
+    let o = krishiv(&["sql", "--json", "-e", "select 1"], None);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        err(&o).contains("--json needs --explain-analyze or --explain-verbose"),
+        "{}",
+        err(&o)
+    );
+    let o = krishiv(
+        &[
+            "sql",
+            "--explain-analyze",
+            "--explain-verbose",
+            "-e",
+            "select 1",
+        ],
+        None,
+    );
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("cannot be used with"), "{}", err(&o));
+}

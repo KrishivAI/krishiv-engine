@@ -15,6 +15,7 @@ from typing import Any
 # PySpark 4.2's error classes of the same names).
 _TEMPLATES = {
     "NOT_IMPLEMENTED": "<feature> is not implemented.",
+    "CANNOT_SET_TOGETHER": "<arg_list> should not be set together.",
     "NOT_EXPECTED_TYPE": "Argument `<arg_name>` should be <expected_type>, got <arg_type>.",
     "CANNOT_CONVERT_COLUMN_INTO_BOOL": (
         "Cannot convert column into bool: please use '&' for 'and', '|' for 'or', "
