@@ -13,10 +13,11 @@
 //!    outer joins inner where a filter rejects their NULL rows), join
 //!    conditions into the side they read, projection collapse and removal,
 //!    limit pushdown.
-//! 2. **Restrict**, once: an aggregate below a join that drops its
-//!    unmatched groups groups only the input rows whose keys the join's
-//!    other side holds (a semi join on that side's key domain, see
-//!    `restrict`), when estimates say the domain is small.
+//! 2. **Restrict**, then alternating with join order until neither
+//!    changes the plan: an aggregate below a join that drops its unmatched
+//!    groups groups only the input rows whose keys the join's other side
+//!    holds (a semi join on that side's key domain, see `restrict`), when
+//!    estimates say the domain is small.
 //! 3. **Join order**: each tree of inner joins is re-planned from
 //!    cardinality estimates ([`Statistics`]): exact dynamic programming up
 //!    to [`DP_LIMIT`] inputs, greedy above, never a cross product the query
@@ -79,7 +80,8 @@ const REWRITE: [(&str, Rule); 6] = [
 #[derive(Debug, Clone)]
 pub struct RuleStep {
     /// The batch it ran in: `ImpliedJoinFilters`, `Rewrite`, `Restrict`,
-    /// `JoinOrder`, `Prune` or `Tidy`.
+    /// `JoinOrder` (join ordering alternating with restriction), `Prune` or
+    /// `Tidy`.
     pub batch: &'static str,
     /// The round of a fixed-point batch, from 1.
     pub round: usize,
@@ -191,14 +193,27 @@ fn run(
             })
         })?;
         let root = batch(root, "Rewrite", &mut t)?;
-        // Before join ordering, which then sees the restricted estimates.
-        let root = t.once("Restrict", &root, |r| {
-            restrict::restrict(Arc::clone(r), stats.unwrap_or(&NoStatistics))
+        // Restriction and join ordering alternate until neither changes
+        // the plan: ordering sees the restricted estimates, and restriction
+        // sees every join the ordering forms (which side an aggregate joins
+        // decides its domain), so a second optimization finds nothing new.
+        let estimates = stats.unwrap_or(&NoStatistics);
+        let mut root = t.once("Restrict", &root, |r| {
+            restrict::restrict(Arc::clone(r), estimates)
         })?;
-        let root = match stats {
-            Some(stats) => t.once("JoinOrder", &root, |r| Ok(join_order::reorder(r, stats)))?,
-            None => root,
-        };
+        if let Some(stats) = stats {
+            for round in 1..=MAX_ITERATIONS {
+                let ordered = join_order::reorder(&root, stats);
+                t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
+                let restricted = restrict::restrict(Arc::clone(&ordered), estimates)?;
+                t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
+                let done = Arc::ptr_eq(&restricted, &ordered);
+                root = restricted;
+                if done {
+                    break;
+                }
+            }
+        }
         let root = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
         let root = batch(root, "Tidy", &mut t)?;
         Ok((root, t.steps))

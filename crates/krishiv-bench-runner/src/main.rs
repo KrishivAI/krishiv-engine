@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `krishiv-bench-runner --data DIR [--threads N] [--memory-limit 12g]` (or `--build-info`): see the library docs for
+//! `krishiv-bench-runner --data DIR [--threads N] [--memory-limit 12g] [--conf k=v]...` (or `--build-info`): see the library docs for
 //! the stdin/stdout protocol.
 
 #![forbid(unsafe_code)]
