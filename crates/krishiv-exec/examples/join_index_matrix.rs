@@ -54,7 +54,7 @@ use krishiv_exec::rows::{
 use krishiv_exec::testing::{Batches, Scan};
 use krishiv_exec::{
     ExecConfig, ExecNode, ExecutorConfig, HashJoin, HashJoinNode, JoinSpec, JoinType, QueryContext,
-    QueryId, QueryRunner, Scheduler, TokioExecutor, WorkloadClass,
+    QueryId, QueryRunner, TokioExecutor, WorkloadClass,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
 use krishiv_types::batch::Batch;
@@ -379,7 +379,7 @@ fn run_join(
         root.child("join", None),
     );
     rt.block_on(async {
-        let mut s = runner.submit(plan, Arc::clone(&q)).await.expect("plan");
+        let mut s = runner.execute(plan, Arc::clone(&q)).await.expect("plan");
         let mut n = 0;
         while let Some(b) = s.next().await {
             n += b.expect("batch").num_rows();
