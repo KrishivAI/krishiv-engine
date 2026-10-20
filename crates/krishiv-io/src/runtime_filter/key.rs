@@ -327,7 +327,7 @@ impl NormalizedKeys {
         self.nulls.as_ref().is_some_and(|n| n.is_null(i))
     }
 
-    /// The row hash `h` of each row ([`super::hash`]: XXH64 of the
+    /// The row hash `h` of each row ([`RowHash`](super::RowHash): XXH64 of the
     /// normalized bytes; NULL rows hash their placeholder value, callers
     /// skip them).
     #[must_use]

@@ -172,7 +172,7 @@ pub(crate) enum Member {
     Bloom(RuntimeBloom),
 }
 
-/// What [`Member`] a filter holds, for `EXPLAIN` and tests.
+/// The row form a filter holds, for `EXPLAIN` and tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FilterForm {

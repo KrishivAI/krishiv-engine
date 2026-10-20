@@ -95,7 +95,9 @@ fn put_key_type(out: &mut Vec<u8>, t: &DataType) {
 }
 
 impl KeyFilter {
-    /// The filter's stable encoding (see the [module docs](self)).
+    /// The filter's stable encoding: a versioned header (format, row
+    /// hash, normalization), the key type, the range, the `IN` list and
+    /// the row form.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = vec![FORMAT_VERSION, RowHash::CURRENT.id(), NORMALIZATION_VERSION];
