@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Rejects newly added files larger than MAX_BYTES (default 1 MiB) unless the
+# Rejects newly added or renamed files larger than MAX_BYTES (default 1 MiB) unless the
 # path matches a line of the allow-list (default .github/large-files-allow.txt;
 # exact paths or shell globs, `#` comments). Guards against committing spill
 # files, build output or datasets by accident.
@@ -13,11 +13,11 @@ allow=${LARGE_FILES_ALLOW:-$(git rev-parse --show-toplevel)/.github/large-files-
 
 if [ "${1:-}" = "--staged" ]; then
   rev=""   # `git cat-file -s :path` reads the index
-  list() { git diff --cached --name-only -z --diff-filter=A; }
+  list() { git diff --cached --name-only -z --diff-filter=AR; }
 elif [ $# -eq 2 ]; then
   rev=$2
   base=$1
-  list() { git diff --name-only -z --diff-filter=A "$base...$rev"; }
+  list() { git diff --name-only -z --diff-filter=AR "$base...$rev"; }
 else
   echo "usage: $0 --staged | BASE HEAD" >&2
   exit 2

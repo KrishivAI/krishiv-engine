@@ -40,11 +40,16 @@ class DuckDBEngine(Engine):
         # default; keep scratch under $KRISHIV_DATA, off the repo and off the small /tmp tmpfs.
         scratch = data_root() / "tmp" / f"duckdb-{os.getpid()}"
         scratch.mkdir(parents=True, exist_ok=True)
-        con.execute(f"SET temp_directory='{scratch}'")
-        if self.memory_limit:
-            con.execute(f"SET memory_limit='{self.memory_limit}'")
-        for t in dataset.tables:
-            con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{table_source(dataset.root, t)}')")
+        try:
+            quoted = str(scratch).replace("'", "''")  # KRISHIV_DATA may contain a quote
+            con.execute(f"SET temp_directory='{quoted}'")
+            if self.memory_limit:
+                con.execute(f"SET memory_limit='{self.memory_limit}'")
+            for t in dataset.tables:
+                con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{table_source(dataset.root, t)}')")
+        except BaseException:
+            self.teardown()  # the caller's cleanup scope starts only after setup() returns
+            raise
 
     def run(self, query: Query) -> list[tuple]:
         assert self.con is not None, "setup() not called"

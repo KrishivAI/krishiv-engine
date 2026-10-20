@@ -38,9 +38,16 @@ bash "$script" "$base" HEAD || fail "clean diff rejected"
 echo "ok: clean diff accepted"
 
 # Modifying an already-committed large file is not a new addition.
-echo more >> allowed/ok.bin && git commit -q -am mod
+# Not allow-listed, so only the add-only filter keeps this accepted.
+echo more >> exact.bin && git commit -q -am mod
 bash "$script" HEAD~1 HEAD || fail "modified file rejected"
 echo "ok: modification accepted"
+
+# A renamed file counts as added (a spill file can arrive as a rename).
+git mv exact.bin moved.bin && git commit -q -m mv
+expect_rejected bash "$script" HEAD~1 HEAD
+echo "ok: renamed oversize file rejected"
+git reset -q --hard HEAD~1
 
 # The hook itself.
 hooks=$(cd "$(dirname "$script")/../../.githooks" && pwd)
