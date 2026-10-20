@@ -6,6 +6,13 @@ name: Coverage
 # PR changes nothing Rust-relevant it passes without building. Codecov upload
 # stays informational (codecov.yml). The full line+branch run is the nightly
 # `coverage` job in nightly.yml.
+#
+# Python is gated by the same rule, counting executable lines as coverage.py
+# defines them: bench/src here (its pytest run is pure Python), python/krishiv
+# in the `wheels` job of ci.yml (it needs the built extension and reuses that
+# job's pytest run). Each language is gated at 90% on its own rather than as
+# one sum, so a large well-covered diff in one cannot hide untested lines in
+# the other; that is no weaker than the Rust-only gate it extends.
 on:
   pull_request:
 
@@ -53,9 +60,11 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           rust=false
+          bench=false
           while IFS= read -r p; do
             case "$p" in
               .github/*|.claude/*|.githooks/*) rust=true ;;
+              bench/src/*|bench/tests/*|bench/pyproject.toml|bench/uv.lock) bench=true ;;
               docs/*|bench/*|.superpowers/*) ;;
               crates/*|xtask/*) rust=true ;;
               *.md) ;;
@@ -63,16 +72,31 @@ jobs:
             esac
           done < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
           echo "rust=$rust" >> "$GITHUB_OUTPUT"
-          echo "Rust-relevant changes: $rust"
-      - name: Toolchain (from rust-toolchain.toml) and llvm-tools
+          echo "bench=$bench" >> "$GITHUB_OUTPUT"
+          # xtask runs the gate, so it needs cargo for either language.
+          if [ "$rust" = true ] || [ "$bench" = true ]; then echo "cargo=true" >> "$GITHUB_OUTPUT"; else echo "cargo=false" >> "$GITHUB_OUTPUT"; fi
+          echo "Rust-relevant changes: $rust, bench changes: $bench"
+      - name: Toolchain (from rust-toolchain.toml)
+        if: steps.changes.outputs.cargo == 'true'
+        run: rustup show active-toolchain
+      - name: llvm-tools
         if: steps.changes.outputs.rust == 'true'
-        run: |
-          rustup show active-toolchain
-          rustup component add llvm-tools-preview
+        run: rustup component add llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.changes.outputs.rust == 'true'
+        if: steps.changes.outputs.cargo == 'true'
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-        if: steps.changes.outputs.rust == 'true'
+        if: steps.changes.outputs.cargo == 'true'
+      # The benchmark harness tests need no built extension: plain pytest under
+      # coverage.py, writing an lcov tracefile with paths relative to bench/.
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        if: steps.changes.outputs.bench == 'true'
+      - name: bench/ tests under coverage.py
+        id: benchcov
+        if: steps.changes.outputs.bench == 'true'
+        working-directory: bench
+        run: |
+          uv sync --frozen
+          uv run --frozen --no-sync pytest -q --cov=src/krishiv_bench --cov-report="lcov:$RUNNER_TEMP/bench.lcov"
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         if: steps.changes.outputs.rust == 'true'
         with:
@@ -87,6 +111,12 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: cargo xtask diff-coverage --base "$BASE_SHA" --head "$HEAD_SHA" --fail-under 90
+      - name: Diff coverage, bench/ Python (gate at 90% of added lines)
+        if: steps.changes.outputs.bench == 'true' && !cancelled() && steps.benchcov.outcome == 'success'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cargo xtask diff-coverage --base "$BASE_SHA" --head "$HEAD_SHA" --lcov "$RUNNER_TEMP/bench.lcov:bench" --fail-under 90
       - name: Upload to Codecov (informational)
         if: steps.changes.outputs.rust == 'true' && !cancelled()
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1

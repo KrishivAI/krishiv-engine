@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Coverage tooling (P2-T105): `coverage`, `coverage-summary`, `diff-coverage`.
 //!
-//! Report only: nothing here gates a merge. The diff-coverage ratchet is
-//! switched on at P2a exit (P2-T105b). Codecov is informational as well.
+//! `coverage` and `coverage-summary` only report; `diff-coverage --fail-under`
+//! is the merge gate (Rust, and Python through coverage.py lcov tracefiles).
+//! Codecov is informational.
 #![expect(clippy::print_stdout, reason = "command output is the interface")]
 
 use std::collections::{BTreeMap, HashMap};
@@ -133,6 +134,9 @@ pub fn render_summary(map: &BTreeMap<String, CrateCov>, markdown: bool) -> Strin
     out
 }
 
+/// Hit counts of the executable lines of each file, keyed by path.
+pub type LineHits = HashMap<String, BTreeMap<u32, u64>>;
+
 /// Executable lines and hit counts per file from an lcov tracefile.
 #[must_use]
 pub fn parse_lcov(text: &str) -> HashMap<String, BTreeMap<u32, u64>> {
@@ -148,6 +152,69 @@ pub fn parse_lcov(text: &str) -> HashMap<String, BTreeMap<u32, u64>> {
                 it.next().map(str::parse::<u64>),
             ) {
                 *out.entry(file.clone()).or_default().entry(n).or_default() += h;
+            }
+        }
+    }
+    out
+}
+
+/// A tracefile argument: `PATH` or `PATH:PREFIX`. `PREFIX` is the directory,
+/// relative to the repository root, that the tracefile's relative `SF:` paths
+/// are relative to (coverage.py writes paths relative to the directory pytest
+/// ran in, e.g. `src/krishiv_bench/x.py` from `bench/`).
+///
+/// # Errors
+/// Returns an error for an empty path or a prefix containing `..`.
+pub fn parse_lcov_spec(spec: &str) -> Result<(PathBuf, String), String> {
+    let (path, prefix) = spec.split_once(':').unwrap_or((spec, ""));
+    if path.is_empty() {
+        return Err(format!("--lcov {spec:?} has an empty path"));
+    }
+    let prefix = prefix.trim_matches('/');
+    if prefix.split('/').any(|c| c == "..") {
+        return Err(format!(
+            "--lcov prefix {prefix:?} must be a plain repository-relative directory"
+        ));
+    }
+    Ok((PathBuf::from(path), prefix.to_owned()))
+}
+
+/// Repository-relative form of an `SF:` path: an absolute path under `root`
+/// loses it; a relative path loses leading `./` and gains `prefix`. Other
+/// absolute paths are left alone (they match no diff path).
+#[must_use]
+pub fn normalize_sf(sf: &str, root: &str, prefix: &str) -> String {
+    let root = root.trim_end_matches('/');
+    if !root.is_empty()
+        && let Some(rest) = sf.strip_prefix(root).and_then(|r| r.strip_prefix('/'))
+    {
+        return rest.to_owned();
+    }
+    if sf.starts_with('/') {
+        return sf.to_owned();
+    }
+    let mut rel = sf;
+    while let Some(r) = rel.strip_prefix("./") {
+        rel = r;
+    }
+    if prefix.is_empty() {
+        rel.to_owned()
+    } else {
+        format!("{prefix}/{rel}")
+    }
+}
+
+/// Merges tracefiles into one map keyed by repository-relative path, summing
+/// hit counts of lines seen in several files. Each part is a parsed
+/// tracefile and its `PREFIX` (see [`parse_lcov_spec`]).
+#[must_use]
+pub fn merge_lcov(parts: &[(LineHits, String)], root: &str) -> LineHits {
+    let mut out = LineHits::new();
+    for (map, prefix) in parts {
+        for (file, lines) in map {
+            let dst = out.entry(normalize_sf(file, root, prefix)).or_default();
+            for (n, h) in lines {
+                *dst.entry(*n).or_default() += h;
             }
         }
     }
@@ -396,21 +463,24 @@ pub fn run_summary(root: &Path, flags: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// `xtask diff-coverage --base REF [--head REF] [--lcov PATH] [--fail-under PCT]`:
-/// coverage of the lines a PR adds, appended to the step summary in CI. With
+/// `xtask diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT]`:
+/// coverage of the lines a PR adds, appended to the step summary in CI. `--lcov`
+/// may repeat (Rust llvm-cov and Python coverage.py tracefiles are merged; the
+/// threshold applies to the union, so CI gates each language in its own
+/// invocation, which keeps a well-covered diff in one from masking the other). With
 /// `--fail-under`, fails when fewer than `PCT`% of the added executable lines
 /// ran (the merge gate is 90%).
 ///
 /// # Errors
 /// Returns an error for bad flags, a missing tracefile or a git failure.
 pub fn run_diff_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
-    let mut lcov = coverage_dir(root).join("lcov.info");
+    let mut lcovs: Vec<(PathBuf, String)> = Vec::new();
     let mut fail_under = None;
     let mut rest = Vec::new();
     let mut it = flags.iter();
     while let Some(f) = it.next() {
         if *f == "--lcov" {
-            lcov = PathBuf::from(it.next().ok_or("--lcov needs a value")?);
+            lcovs.push(parse_lcov_spec(it.next().ok_or("--lcov needs a value")?)?);
         } else if *f == "--fail-under" {
             let v = it.next().ok_or("--fail-under needs a percentage")?;
             let pct: u64 = v
@@ -424,13 +494,21 @@ pub fn run_diff_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
         }
     }
     let args = crate::policy::DiffArgs::parse(&rest, root)?;
-    let text = std::fs::read_to_string(&lcov)
-        .map_err(|e| format!("cannot read {}: {e}", lcov.display()))?;
+    if lcovs.is_empty() {
+        lcovs.push((coverage_dir(root).join("lcov.info"), String::new()));
+    }
+    let root_str = root.display().to_string();
+    let mut parts = Vec::new();
+    for (path, prefix) in lcovs {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        parts.push((parse_lcov(&text), prefix));
+    }
     let diff = args.unified_zero_diff()?;
     let d = diff_coverage(
         &parse_added_lines(&diff),
-        &parse_lcov(&text),
-        &root.display().to_string(),
+        &merge_lcov(&parts, &root_str),
+        &root_str,
     );
     let md = render_diff(&d);
     print!("{md}");
@@ -509,6 +587,76 @@ mod tests {
         assert!(
             md.contains("1 of 3") && md.contains("33.3%") && md.contains("uncovered lines 2, 3")
         );
+    }
+
+    #[test]
+    fn lcov_specs_split_path_and_prefix() {
+        assert_eq!(
+            parse_lcov_spec("a/lcov.info").unwrap(),
+            (PathBuf::from("a/lcov.info"), String::new())
+        );
+        assert_eq!(
+            parse_lcov_spec("py.lcov:/bench/").unwrap(),
+            (PathBuf::from("py.lcov"), "bench".to_owned())
+        );
+        for (bad, want) in [
+            (":bench", "empty path"),
+            ("x:../y", "plain repository-relative"),
+            ("x:a/../b", "plain repository-relative"),
+        ] {
+            let e = parse_lcov_spec(bad).unwrap_err();
+            assert!(e.contains(want), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn sf_paths_are_made_repository_relative() {
+        assert_eq!(
+            normalize_sf("/w/crates/a/lib.rs", "/w", ""),
+            "crates/a/lib.rs"
+        );
+        assert_eq!(normalize_sf("/w/x.py", "/w/", ""), "x.py");
+        // The root must end at a path boundary.
+        assert_eq!(normalize_sf("/wx/y.py", "/w", ""), "/wx/y.py");
+        assert_eq!(
+            normalize_sf("src/krishiv_bench/a.py", "/w", "bench"),
+            "bench/src/krishiv_bench/a.py"
+        );
+        assert_eq!(
+            normalize_sf("./krishiv/a.py", "/w", "python"),
+            "python/krishiv/a.py"
+        );
+        assert_eq!(
+            normalize_sf("python/krishiv/a.py", "/w", ""),
+            "python/krishiv/a.py"
+        );
+        assert_eq!(
+            normalize_sf("/usr/lib/a.py", "/w", "bench"),
+            "/usr/lib/a.py"
+        );
+    }
+
+    #[test]
+    fn rust_and_python_tracefiles_merge_and_gate() {
+        let rust = parse_lcov("SF:/w/crates/a/src/lib.rs\nDA:1,1\nDA:2,0\nend_of_record\n");
+        let bench = parse_lcov("SF:src/krishiv_bench/a.py\nDA:1,1\nDA:2,0\nend_of_record\n");
+        let again = parse_lcov("SF:/w/bench/src/krishiv_bench/a.py\nDA:2,3\nend_of_record\n");
+        let merged = merge_lcov(
+            &[
+                (rust, String::new()),
+                (bench, "bench".to_owned()),
+                (again, String::new()),
+            ],
+            "/w",
+        );
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged["bench/src/krishiv_bench/a.py"][&2], 3);
+        let diff = "+++ b/crates/a/src/lib.rs\n@@ -0,0 +1,2 @@\n+a\n+b\n+++ b/bench/src/krishiv_bench/a.py\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n";
+        let d = diff_coverage(&parse_added_lines(diff), &merged, "/w");
+        // Python line 3 has no DA record (not executable), so it is not counted;
+        // Python line 2 was hit via the second tracefile.
+        assert_eq!((d.covered, d.total), (3, 4));
+        assert_eq!(d.uncovered["crates/a/src/lib.rs"], vec![2]);
     }
 
     #[test]
