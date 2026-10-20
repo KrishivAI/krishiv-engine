@@ -239,6 +239,14 @@ const CASES: &[(&str, &str)] = &[
         "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON CAST(t.b AS INT) = g.a WHERE t.c = 1",
     ),
     (
+        "restrict_through_inner_join",
+        "SELECT t.a FROM (SELECT a, count(*) AS n FROM u GROUP BY a) g CROSS JOIN u v JOIN t ON g.a = t.a WHERE t.b = 'x'",
+    ),
+    (
+        "restrict_not_key_across_join",
+        "SELECT t.a FROM (SELECT a, count(*) AS n FROM u GROUP BY a) g CROSS JOIN u v JOIN t ON g.a + v.a = t.a WHERE t.b = 'x'",
+    ),
+    (
         "restrict_not_inequality",
         "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON t.a < g.a WHERE t.b = 'x'",
     ),
