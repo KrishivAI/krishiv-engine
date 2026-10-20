@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Fixed-stride key rows (P2-T157), and prototypes of the pages and indexes
-//! over them.
+//! Fixed-stride key rows (P2-T157), indexed by a salted linear-probing slot
+//! table or by `hashbrown` over the same rows.
 //!
-//! The grouped aggregate stores fixed-width keys as [`RowLayout`] rows when
-//! `krishiv.exec.agg.rowLayout` is on (P2-T159; off by default). The
-//! `RowPages`, `SaltedTable` and `HashbrownTable` prototypes are measured
-//! by the `row-table-prototype` benchmark and example only; the hash join
-//! still uses [`KeyTable`](crate::hash::KeyTable). Nothing here is a stable
-//! interface.
+//! The hash join uses [`RowLayout`] and [`JoinIndex`] when
+//! `krishiv.exec.join.rowLayout` is on (P2-T158), and the grouped aggregate
+//! stores fixed-width keys as [`RowLayout`] rows when
+//! `krishiv.exec.agg.rowLayout` is on (P2-T159); both are off by default.
+//! The `RowPages`, `SaltedTable` and `HashbrownTable` prototypes are
+//! measured by the `row-table-prototype` benchmark and example only.
+//! Nothing here is a stable interface.
 //!
 //! # Rows
 //! A [`RowLayout`] fixes, for a list of key types, the bytes of one row:
@@ -44,6 +45,7 @@
 //! so the cache misses of a chunk overlap, before it resolves the chunk in
 //! order.
 
+mod index;
 mod layout;
 // The key-page prototypes are not used by any operator: built only for
 // their tests and, via `row-table-prototype`, their benchmark and example
@@ -56,7 +58,11 @@ mod table;
 #[cfg(test)]
 mod tests;
 
-pub use layout::{EncodedKeys, RowLayout};
+pub use index::{
+    FLAT_MAX_BYTES, IndexChoice, JoinIndex, NO_MATCH, RowSource, TOUCH_MIN_BYTES, flat_bytes,
+    salted_bytes,
+};
+pub use layout::{EncodedKeys, GatheredRows, RowLayout, finalize};
 #[cfg(any(test, feature = "row-table-prototype"))]
 pub use pages::RowPages;
 #[cfg(any(test, feature = "row-table-prototype"))]

@@ -789,11 +789,15 @@ async fn q9(t: &Tpch, s: &SpillScope, limit: usize) -> (Vec<String>, Arc<QueryCo
 async fn tpch_join_shapes_match_duckdb() {
     let t = generate();
     let (_m, s) = spill();
-    assert_eq!(q4(&t, &s).await, expected("q04"));
-    assert_eq!(q13(&t, &s).await, expected("q13"));
-    assert_eq!(q16(&t, &s).await, expected("q16"));
-    assert_eq!(q21(&t, &s).await, expected("q21"));
-    assert_eq!(q22(&t, &s).await, expected("q22"));
+    for row_layout in [false, true] {
+        set_row_layout(row_layout);
+        assert_eq!(q4(&t, &s).await, expected("q04"));
+        assert_eq!(q13(&t, &s).await, expected("q13"));
+        assert_eq!(q16(&t, &s).await, expected("q16"));
+        assert_eq!(q21(&t, &s).await, expected("q21"));
+        assert_eq!(q22(&t, &s).await, expected("q22"));
+    }
+    set_row_layout(false);
 }
 
 /// Q9 matches DuckDB in memory and under a budget that forces the builds
@@ -802,14 +806,24 @@ async fn tpch_join_shapes_match_duckdb() {
 async fn tpch_q9_completes_under_a_tiny_budget_with_spill_recorded() {
     let t = generate();
     let (_m, s) = spill();
-    let (rows, _) = q9(&t, &s, 256 * MIB).await;
-    assert_eq!(rows, expected("q09"));
-    let (rows, q) = q9(&t, &s, 3 * MIB).await;
-    assert_eq!(rows, expected("q09"));
-    assert!(metric(&q, "HashJoinBuild", "spilled_partitions") > 0);
-    assert!(metric(&q, "HashJoinBuild", "spill_file_bytes") > 0);
-    assert!(metric(&q, "HashJoinProbe", "grace_partitions") > 0);
-    assert_eq!(spill_files(&s), 0);
+    for row_layout in [false, true] {
+        set_row_layout(row_layout);
+        let (rows, _) = q9(&t, &s, 256 * MIB).await;
+        assert_eq!(rows, expected("q09"));
+        // The row layout's builds are smaller: a smaller budget spills them.
+        let tiny = if row_layout_forced() {
+            2 * MIB
+        } else {
+            3 * MIB
+        };
+        let (rows, q) = q9(&t, &s, tiny).await;
+        assert_eq!(rows, expected("q09"));
+        assert!(metric(&q, "HashJoinBuild", "spilled_partitions") > 0);
+        assert!(metric(&q, "HashJoinBuild", "spill_file_bytes") > 0);
+        assert!(metric(&q, "HashJoinProbe", "grace_partitions") > 0);
+        assert_eq!(spill_files(&s), 0);
+    }
+    set_row_layout(false);
 }
 
 /// Writes the generated tables as `|`-separated files for DuckDB.

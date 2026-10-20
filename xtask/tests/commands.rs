@@ -288,6 +288,68 @@ fn diff_coverage_gate_passes_and_fails_on_a_real_repo() {
 }
 
 #[test]
+fn diff_coverage_merges_rust_and_python_tracefiles() {
+    let dir = init_repo("diffcov-py");
+    let repo = dir.to_str().unwrap();
+    git(&dir, &["switch", "-q", "-c", "feature"]);
+    let rs: String = (1..=5).map(|i| format!("let x{i} = {i};\n")).collect();
+    write(&dir, "crates/x/src/lib.rs", &rs);
+    // Six Python lines, line 3 a comment that coverage.py does not report.
+    write(
+        &dir,
+        "bench/src/krishiv_bench/m.py",
+        "a = 1\nb = 2\n# note\nc = 3\nd = 4\ne = 5\n",
+    );
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "add"]);
+    let rust = dir.join("rust.info");
+    std::fs::write(
+        &rust,
+        "SF:crates/x/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,1\nDA:4,1\nDA:5,1\nend_of_record\n",
+    )
+    .unwrap();
+    // coverage.py run from bench/: paths relative to that directory.
+    let py = dir.join("py.info");
+    std::fs::write(
+        &py,
+        "SF:src/krishiv_bench/m.py\nDA:1,1\nDA:2,1\nDA:4,1\nDA:5,0\nDA:6,0\nend_of_record\n",
+    )
+    .unwrap();
+    let py_spec = format!("{}:bench", py.to_str().unwrap());
+    let run = |extra: &[&str]| {
+        let mut args = vec!["diff-coverage", "--repo", repo, "--base", "main"];
+        args.extend_from_slice(extra);
+        xtask(&args)
+    };
+    let both = run(&[
+        "--lcov",
+        rust.to_str().unwrap(),
+        "--lcov",
+        &py_spec,
+        "--fail-under",
+        "70",
+    ]);
+    let out = String::from_utf8_lossy(&both.stdout);
+    // 5 Rust + 5 executable Python lines; 3 of the Python ones ran.
+    assert!(both.status.success(), "{out}");
+    assert!(out.contains("8 of 10"), "{out}");
+    assert!(
+        out.contains("bench/src/krishiv_bench/m.py`: uncovered lines 5, 6"),
+        "{out}"
+    );
+    // Python alone is 3/5 = 60%: below 90, and the failure names its file.
+    let alone = run(&["--lcov", &py_spec, "--fail-under", "90"]);
+    assert!(!alone.status.success());
+    assert!(String::from_utf8_lossy(&alone.stderr).contains("3 of 5"));
+    // Without the prefix the relative path matches no diff path: nothing counted.
+    let unmapped = run(&["--lcov", py.to_str().unwrap()]);
+    assert!(String::from_utf8_lossy(&unmapped.stdout).contains("0 of 0"));
+    // A bad prefix is a usage error.
+    let bad = run(&["--lcov", &format!("{}:../x", py.to_str().unwrap())]);
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("plain repository-relative"));
+}
+
+#[test]
 fn diff_coverage_ignores_what_the_base_gained_after_the_branch_point() {
     let dir = init_repo("diffcov-behind");
     let repo = dir.to_str().unwrap();

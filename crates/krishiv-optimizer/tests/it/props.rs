@@ -404,3 +404,105 @@ fn implied_filters_reach_a_fixed_point() {
         assert_eq!(got, want, "seed {seed}");
     }
 }
+
+/// Seed 3574806867649217214 of `random_queries_reach_the_lowest_operator`:
+/// the aggregate's input is already a semi join on its key (the `LEFT SEMI
+/// JOIN` the query writes, its right side a shifted instance of `u`). The
+/// restriction pass took that for its own work on the first run and
+/// skipped; pruning then put a projection above the shift, and the second
+/// run restricted the aggregate, so the plan was not a fixed point. An
+/// existing semi join on the keys now counts whatever its right side looks
+/// like.
+#[test]
+fn restriction_reaches_a_fixed_point() {
+    let sql = "SELECT x1.c0 AS c0, x4.d AS c1, x1.c0 AS c2 FROM (SELECT x2.a AS c0, count(*) AS c1 \
+               FROM u AS x2 LEFT SEMI JOIN u AS x3 ON x2.a = x3.a AND x2.d IS NOT NULL \
+               WHERE x2.a IS NOT NULL GROUP BY x2.a) AS x1 LEFT JOIN u AS x4 ON x1.c0 = x4.a \
+               WHERE x4.d = x4.d";
+    let ctx = support::ctx();
+    let plan = support::resolve(sql, &ctx);
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    for seed in [1, 2, 3_574_806_867_649_217_214] {
+        let db = data::small(seed);
+        assert_eq!(
+            eval::rows(&db, optimized.root()),
+            eval::rows(&db, plan.root()),
+            "seed {seed}"
+        );
+    }
+}
+
+/// Found by `random_queries_reach_the_lowest_operator`: the aggregate `x2`
+/// sits in `u CROSS JOIN x2` and the equality to `x4` on the join above, so
+/// the first run did not restrict it; join ordering then joined `x2` and
+/// `x4` directly and the second run did. The restriction now reaches an
+/// aggregate through inner joins, whatever order the query wrote.
+#[test]
+fn restriction_through_inner_joins_reaches_a_fixed_point() {
+    let sql = "SELECT x1.d AS c0, count(*) AS c1 FROM u AS x1 CROSS JOIN (SELECT x3.a AS c0, \
+               count(*) AS c1 FROM t AS x3 GROUP BY x3.a) AS x2 JOIN (SELECT x5.c0 + 1 AS c0, \
+               x5.c0 AS c1 FROM (SELECT x6.c + 1 AS c0 FROM t AS x6 WHERE x6.a IN (-1, 2)) AS x5 \
+               WHERE x5.c0 <=> 2) AS x4 ON x2.c0 = x4.c1 GROUP BY x1.d";
+    let ctx = support::ctx();
+    let plan = support::resolve(sql, &ctx);
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    let text = optimized.root().to_string();
+    assert!(text.contains("LeftSemi"), "not restricted:\n{text}");
+    for seed in 1..=4 {
+        let db = data::small(seed);
+        assert_eq!(
+            eval::rows(&db, optimized.root()),
+            eval::rows(&db, plan.root()),
+            "seed {seed}"
+        );
+    }
+}
+
+/// Seed 66213344527430992 of `random_queries_reach_the_lowest_operator`:
+/// before join ordering the aggregate `x1` joins plain `u` (no selective
+/// domain); ordering then joins it to `u` already filtered by the
+/// `IN (-1, -2)` side, and only a second optimization restricted it.
+/// Restriction and join ordering now alternate until neither changes the
+/// plan.
+#[test]
+fn restriction_after_join_ordering_reaches_a_fixed_point() {
+    let sql = "SELECT * FROM (SELECT x1.c0 AS c0, count(*) AS c1 FROM (SELECT x2.c AS c0, \
+               count(*) AS c1 FROM t AS x2 WHERE (x2.a >= 3 OR coalesce(x2.c, 3) = -2) \
+               GROUP BY x2.c) AS x1 RIGHT JOIN u AS x3 ON x1.c0 = x3.a RIGHT JOIN u AS x4 \
+               ON x3.a = x4.a AND x4.a IN (-1, -2) WHERE x1.c0 <> 0 GROUP BY x1.c0) \
+               ORDER BY c0, c1 LIMIT 4";
+    let ctx = support::ctx();
+    let plan = support::resolve(sql, &ctx);
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    let text = optimized.root().to_string();
+    assert!(text.contains("LeftSemi"), "not restricted:\n{text}");
+    for seed in [1, 2, 66_213_344_527_430_992] {
+        let db = data::small(seed);
+        assert_eq!(
+            eval::rows(&db, optimized.root()),
+            eval::rows(&db, plan.root()),
+            "seed {seed}"
+        );
+    }
+}

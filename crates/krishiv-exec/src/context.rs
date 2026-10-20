@@ -6,7 +6,7 @@ use std::fmt;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use krishiv_common::config::{Config, EXEC_AGG_ROW_LAYOUT, EXEC_BATCH_SIZE};
+use krishiv_common::config::{Config, EXEC_AGG_ROW_LAYOUT, EXEC_BATCH_SIZE, EXEC_JOIN_ROW_LAYOUT};
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
     ConsumerHandle, ConsumerId, MemoryPool, Reservation, SpillOwner, SpillSignal,
@@ -47,6 +47,9 @@ pub struct ExecConfig {
     /// Grouped aggregations with fixed-width keys use row-layout,
     /// radix-partitioned tables (`krishiv.exec.agg.rowLayout`; P2-T159).
     pub agg_row_layout: bool,
+    /// Hash joins use the row layout and its size-adaptive index
+    /// (`krishiv.exec.join.rowLayout`; P2-T158).
+    pub join_row_layout: bool,
 }
 
 impl Default for ExecConfig {
@@ -59,6 +62,7 @@ impl Default for ExecConfig {
             fail_on_stall: false,
             seed: None,
             agg_row_layout: false,
+            join_row_layout: false,
         }
     }
 }
@@ -76,9 +80,14 @@ impl ExecConfig {
             .get(&EXEC_AGG_ROW_LAYOUT)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(false);
+        let join_row_layout = config
+            .get(&EXEC_JOIN_ROW_LAYOUT)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(false);
         Self {
             batch_size,
             agg_row_layout,
+            join_row_layout,
             ..Self::default()
         }
     }

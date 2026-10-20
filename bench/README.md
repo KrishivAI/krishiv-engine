@@ -72,6 +72,26 @@ Reported: median per engine, ratio of medians with a bootstrap 95% CI, the geome
 `/proc/loadavg` is recorded around every query; a run whose maximum exceeds 4 is marked indicative. The run holds
 `$KRISHIV_DATA/.bench.lock` (`flock`). Output: `$KRISHIV_DATA/results/<ts>_abba_tpch_sf<N>.json` plus the Markdown table on stdout.
 
+## Build vs build, interleaved ABBA (`ab`)
+Compares two Krishiv builds (for example `main` against a PR branch), or two configs of one build, with the `abba` protocol.
+`--runner PATH` (on `run`, `abba`, `reproduce`) picks the runner binary and wins over `$KRISHIV_BENCH_RUNNER`.
+```bash
+# build both runners at the shipped x86-64-v3 level (each in its own target dir), then compare; ratio = B / A, below 1 means B is faster
+git worktree add ../main-build origin/main && git worktree add ../pr-build my-branch
+(cd ../main-build && RUSTFLAGS="-C target-cpu=x86-64-v3" CARGO_TARGET_DIR=$HOME/target/ab-main cargo build --profile dist -p krishiv-bench-runner)
+(cd ../pr-build   && RUSTFLAGS="-C target-cpu=x86-64-v3" CARGO_TARGET_DIR=$HOME/target/ab-pr cargo build --profile dist -p krishiv-bench-runner)
+uv run krishiv-bench ab --suite tpch --sf 10 --dataset tpch-duckdb --reps 3 --queries q01,q03,q09 \
+  --a-runner $HOME/target/ab-main/dist/krishiv-bench-runner --a-sha "$(git -C ../main-build rev-parse HEAD)" \
+  --b-runner $HOME/target/ab-pr/dist/krishiv-bench-runner   --b-sha "$(git -C ../pr-build rev-parse HEAD)"
+# one binary, a setting on versus off (repeat --a-conf / --b-conf for several settings)
+uv run krishiv-bench ab --suite tpch --sf 10 --a-runner $R --b-runner $R --b-conf some.feature.enabled=true
+```
+Both runners stay alive for the run and each keeps its own memory limit (`--memory-limit`, default 12g), so budget for two. Per query
+both sides run once and their rows must match (type-aware, as `abba`); a mismatch or error fails the query and it is never timed. Then
+`--reps` blocks of A B B A. The table and `$KRISHIV_DATA/results/<ts>_ab_<suite>_sf<N>.json` hold the per-query medians, B/A ratio with a
+bootstrap 95% CI, the spread of each side ((max - min) / median), the geomean and the load. The JSON records per side the runner path,
+`--conf` list, `--a-sha`/`--b-sha` and the runner's `--build-info` (stored as `null` for runners that predate it).
+
 ## Reference engines, two methods (`reproduce`, P2-T156)
 ```bash
 uv run krishiv-bench reproduce --suite tpch --sf 10 --reps 3        # tpch | tpcds | clickbench; --engines, --methods ours,theirs

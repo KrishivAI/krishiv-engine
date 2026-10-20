@@ -13,7 +13,8 @@ views at ``setup()`` (no pre-loading, for parity with the other adapters), then 
 
 Build the runner first (the shipped build level, see bench/README.md):
 ``RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner``
-(path override: ``$KRISHIV_BENCH_RUNNER``).
+(path override: ``--runner PATH`` on the CLI, which wins over ``$KRISHIV_BENCH_RUNNER``).
+Extra session settings go through ``conf`` (``--conf key=value`` on the runner).
 """
 
 from __future__ import annotations
@@ -44,7 +45,10 @@ class RunnerCrashed(RuntimeError):
     """The runner died or timed out; it is restarted on the next command."""
 
 
-def runner_binary() -> Path:
+def runner_binary(explicit: Path | str | None = None) -> Path:
+    """The runner path: an explicit ``--runner`` wins over ``$KRISHIV_BENCH_RUNNER``, then the dist target."""
+    if explicit:
+        return Path(explicit)
     env = os.environ.get("KRISHIV_BENCH_RUNNER")
     if env:
         return Path(env)
@@ -55,10 +59,17 @@ def runner_binary() -> Path:
 class KrishivEngine(Engine):
     name = "krishiv"
 
-    def __init__(self, threads: int | None = None, memory_limit: str = "12g", binary: Path | None = None):
+    def __init__(
+        self,
+        threads: int | None = None,
+        memory_limit: str = "12g",
+        binary: Path | str | None = None,
+        conf: list[tuple[str, str]] | None = None,
+    ):
         self.threads = threads or os.cpu_count() or 1
         self.memory_limit = memory_limit
-        self.binary = binary or runner_binary()
+        self.binary = runner_binary(binary)
+        self.conf = list(conf or [])
         self._proc: subprocess.Popen[str] | None = None
         self._dataset: Dataset | None = None
         self._version = "unknown"
@@ -76,6 +87,7 @@ class KrishivEngine(Engine):
             "threads": self.threads,
             "memory_limit": self.memory_limit,
             "binary": self.binary.name,
+            "conf": [f"{k}={v}" for k, v in self.conf],
             **self._runner_build(),
         }
 
@@ -103,6 +115,11 @@ class KrishivEngine(Engine):
                 pass
         return self._build
 
+    def runner_build_info(self) -> dict[str, str] | None:
+        """The runner's ``--build-info`` fields, or None when the binary cannot report them (too old, missing)."""
+        build = self._runner_build()
+        return None if build["build_profile"] == "unknown" else dict(build)
+
     # ------------------------------------------------------------------ process
     def _start(self) -> None:
         assert self._dataset is not None, "setup() not called"
@@ -120,6 +137,8 @@ class KrishivEngine(Engine):
             "--memory-limit",
             self.memory_limit,
         ]
+        for k, v in self.conf:
+            cmd += ["--conf", f"{k}={v}"]
         self._starts += 1
         self._stderr_log = self._tmp / f"runner-{self._starts}.stderr"
         with self._stderr_log.open("wb") as err:

@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use arrow_array::Array;
 use arrow_array::{
     ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int16Array,
     Int32Array, Int64Array, LargeStringArray, StringArray, StringViewArray,
@@ -34,7 +35,7 @@ fn grouped(columns: &[ArrayRef], index: &mut dyn RowIndex, batch: usize) -> Vec<
     let nullable = vec![true; types.len()];
     let layout = RowLayout::new(&types, &nullable).unwrap_or_else(|e| panic!("{e}"));
     let mut pages = RowPages::new(&layout);
-    let n = columns.first().map_or(0, |c| c.len());
+    let n = columns.first().map_or(0, Array::len);
     let mut all = Vec::new();
     let mut ids = Vec::new();
     for start in (0..n).step_by(batch.max(1)) {
@@ -344,6 +345,230 @@ fn a_wide_row_page_starts_within_the_page_byte_budget() {
         "first reservation {} exceeds one page budget",
         pages.memory_size()
     );
+}
+
+/// Gathered build rows as a [`RowSource`] (what a join arena holds).
+struct Gathered {
+    rows: GatheredRows,
+    hashes: Vec<u64>,
+    stride: usize,
+}
+
+impl RowSource for Gathered {
+    fn row(&self, id: u32) -> (&[u8], &[u8]) {
+        let at = id as usize * self.stride;
+        let row = self
+            .rows
+            .fixed
+            .get(at..at + self.stride)
+            .unwrap_or_default();
+        let heap = self.rows.heap.as_ref().map_or(&[][..], |(o, b)| {
+            let at = |i: usize| usize::try_from(o[i]).unwrap_or(0);
+            &b[at(id as usize)..at(id as usize + 1)]
+        });
+        (row, heap)
+    }
+
+    fn hash(&self, id: u32) -> u64 {
+        self.hashes[id as usize]
+    }
+}
+
+/// Builds a [`JoinIndex`] over rows `idx` of `build` (a join stores only
+/// rows whose `=` keys are not NULL) with `choice`, probes every row of
+/// `probe`, and returns the heads found and the chain array (both in
+/// positions of `idx`).
+fn join_index(
+    layout: &RowLayout,
+    build: &[ArrayRef],
+    idx: &[usize],
+    probe: &[ArrayRef],
+    choice: IndexChoice,
+    touch: bool,
+) -> (Vec<u32>, Vec<u32>, bool) {
+    let b = layout.encode(build, 0).unwrap_or_else(|e| panic!("{e}"));
+    let src = Gathered {
+        rows: b.gather(layout, idx).unwrap_or_else(|e| panic!("{e}")),
+        hashes: idx.iter().map(|&i| b.hashes()[i]).collect(),
+        stride: layout.stride(),
+    };
+    let mut next = vec![NO_MATCH; idx.len()];
+    let index = JoinIndex::build(layout, &src, idx.len(), 0xABCD, choice, &mut next)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(index.memory_size() > 0);
+    assert!(index.memory_size() <= choice.bytes(idx.len()));
+    let p = layout.encode(probe, 0).unwrap_or_else(|e| panic!("{e}"));
+    let which: Vec<u32> = (0..u32::try_from(p.len()).unwrap_or(0)).collect();
+    let mut heads = Vec::new();
+    index.find_with(layout, &p, &which, &src, &mut heads, touch);
+    assert_eq!(heads.len(), p.len());
+    (heads, next, index.is_flat())
+}
+
+/// The chain of `head` through `next`.
+fn chain(head: u32, next: &[u32]) -> Vec<u32> {
+    std::iter::successors((head != NO_MATCH).then_some(head), |&r| {
+        let n = next[r as usize];
+        (n != NO_MATCH).then_some(n)
+    })
+    .collect()
+}
+
+/// Every probe row finds exactly the build rows the arrow-row reference
+/// calls equal, newest first, whichever index kind (fast == slow).
+fn check_join_index(build: &[ArrayRef], probe: &[ArrayRef], null_safe: &[bool]) {
+    let types: Vec<DataType> = build.iter().map(|c| c.data_type().clone()).collect();
+    let layout = RowLayout::for_join(&types, null_safe).unwrap_or_else(|e| panic!("{e}"));
+    // The reference: group ids of build and probe rows together.
+    let both: Vec<ArrayRef> = build
+        .iter()
+        .zip(probe)
+        .map(|(b, p)| {
+            arrow_select::concat::concat(&[b.as_ref(), p.as_ref()])
+                .unwrap_or_else(|e| panic!("{e}"))
+        })
+        .collect();
+    let groups = reference(&both);
+    let nb = build.first().map_or(0, Array::len);
+    // Rows with a NULL in an `=` key are never stored or probed by a join.
+    let valid = |cols: &[ArrayRef], i: usize| {
+        cols.iter()
+            .zip(null_safe)
+            .all(|(c, &safe)| safe || c.is_valid(i))
+    };
+    let stored: Vec<usize> = (0..nb).filter(|&i| valid(build, i)).collect();
+    let (flat, flat_next, is_flat) =
+        join_index(&layout, build, &stored, probe, IndexChoice::Flat, false);
+    assert!(is_flat);
+    for (choice, touch) in [
+        (IndexChoice::Salted, false),
+        (IndexChoice::Salted, true),
+        (IndexChoice::Adaptive, false),
+    ] {
+        let (heads, next, flat_kind) = join_index(&layout, build, &stored, probe, choice, touch);
+        assert_eq!(flat_kind, choice != IndexChoice::Salted);
+        assert_eq!(heads, flat, "{choice:?} heads");
+        assert_eq!(next, flat_next, "{choice:?} chains");
+    }
+    for (j, &head) in flat.iter().enumerate() {
+        if !valid(probe, j) {
+            continue;
+        }
+        let want: Vec<u32> = (0..stored.len())
+            .rev()
+            .filter(|&s| groups[stored[s]] == groups[nb + j])
+            .map(|s| u32::try_from(s).unwrap_or(u32::MAX))
+            .collect();
+        assert_eq!(chain(head, &flat_next), want, "probe row {j}");
+    }
+}
+
+#[test]
+fn join_index_kinds_agree_on_spark_key_semantics() {
+    let f = |v: Vec<Option<f64>>| -> ArrayRef { Arc::new(Float64Array::from(v)) };
+    let build = f(vec![Some(0.0), Some(f64::NAN), None, Some(-0.0), Some(1.0)]);
+    let probe = f(vec![Some(-0.0), Some(-f64::NAN), None, Some(2.0)]);
+    for safe in [false, true] {
+        check_join_index(
+            std::slice::from_ref(&build),
+            std::slice::from_ref(&probe),
+            &[safe],
+        );
+    }
+    // Empty build: every probe misses.
+    let empty = f(vec![]);
+    check_join_index(&[empty], &[probe], &[false]);
+}
+
+#[test]
+fn a_large_build_takes_the_salted_directory() {
+    let n = 1 << 20;
+    assert!(flat_bytes(n) > FLAT_MAX_BYTES && salted_bytes(n) >= 16 * n);
+    // Sizes saturate instead of overflowing.
+    assert_eq!(salted_bytes(usize::MAX), usize::MAX);
+    assert_eq!(flat_bytes(usize::MAX), usize::MAX);
+    let a: ArrayRef = Arc::new(Int64Array::from_iter_values(
+        0..i64::try_from(n).unwrap_or(0),
+    ));
+    let layout =
+        RowLayout::for_join(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
+    let probe: ArrayRef = Arc::new(Int64Array::from_iter_values([5, -1, 7]));
+    let all: Vec<usize> = (0..n).collect();
+    let (heads, _, flat) = join_index(
+        &layout,
+        &[Arc::clone(&a)],
+        &all,
+        &[Arc::clone(&probe)],
+        IndexChoice::Adaptive,
+        false,
+    );
+    assert!(!flat);
+    assert_eq!(heads, [5, NO_MATCH, 7]);
+    // `find` touches a directory this large first: the same answer.
+    let b = layout.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let src = Gathered {
+        rows: b.gather(&layout, &all).unwrap_or_else(|e| panic!("{e}")),
+        hashes: b.hashes().to_vec(),
+        stride: layout.stride(),
+    };
+    let mut next = vec![NO_MATCH; n];
+    let index = JoinIndex::build(&layout, &src, n, 1, IndexChoice::Adaptive, &mut next)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(index.memory_size() >= TOUCH_MIN_BYTES);
+    let p = layout.encode(&[probe], 0).unwrap_or_else(|e| panic!("{e}"));
+    let mut found = Vec::new();
+    index.find(&layout, &p, &[0, 1, 2], &src, &mut found);
+    assert_eq!(found, [5, NO_MATCH, 7]);
+}
+
+#[test]
+fn join_index_refuses_more_rows_than_chains() {
+    let layout =
+        RowLayout::for_join(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
+    let src = Gathered {
+        rows: GatheredRows {
+            fixed: Vec::new(),
+            heap: None,
+        },
+        hashes: Vec::new(),
+        stride: layout.stride(),
+    };
+    let r = JoinIndex::build(&layout, &src, 3, 0, IndexChoice::Adaptive, &mut [0; 2]);
+    assert!(r.is_err());
+    let empty = JoinIndex::build(&layout, &src, 0, 0, IndexChoice::Salted, &mut []);
+    let empty = empty.unwrap_or_else(|e| panic!("{e}"));
+    assert!(empty.is_empty() && !empty.is_flat());
+    assert_eq!(empty.len(), 0);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Random int + string keys with duplicates and NULLs, `=` or `<=>`:
+    /// the flat, salted and adaptive indexes return the same heads and
+    /// chains, and exactly the reference's matches (fast == slow).
+    #[test]
+    fn join_index_kinds_match_the_arrow_row_reference(
+        build in proptest::collection::vec(
+            (proptest::option::of(0i64..12), proptest::option::of(0usize..6)),
+            0..400,
+        ),
+        probe in proptest::collection::vec(
+            (proptest::option::of(0i64..14), proptest::option::of(0usize..6)),
+            0..200,
+        ),
+        safe in proptest::collection::vec(any::<bool>(), 2),
+    ) {
+        let words = ["", "a", "abcdefghijkl", "abcdefghijklm", "same prefix 1", "same prefix 2"];
+        let cols = |rows: &[(Option<i64>, Option<usize>)]| -> Vec<[ArrayRef; 2]> {
+            let ints: ArrayRef = Arc::new(Int64Array::from(rows.iter().map(|r| r.0).collect::<Vec<_>>()));
+            let strs: Vec<Option<String>> = rows.iter().map(|r| r.1.map(|i| words[i].to_owned())).collect();
+            strings(&strs).into_iter().map(|s| [Arc::clone(&ints), s]).collect()
+        };
+        for (b, p) in cols(&build).into_iter().zip(cols(&probe)) {
+            check_join_index(&b, &p, &safe);
+        }
+    }
 }
 
 /// `decode` restores fixed-width keys (normalized floats, NULLs) for every

@@ -25,6 +25,8 @@ import random
 import statistics
 import threading
 import time
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +119,19 @@ def discover_tables(root: Path) -> list[str]:
     return sorted(names)
 
 
+@contextmanager
+def bench_lock() -> Generator[float]:
+    """Holds ``$KRISHIV_DATA/.bench.lock`` (flock) for the whole run; yields the seconds spent waiting."""
+    lock_path = data_root() / ".bench.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w") as lock:
+        t_wait = time.perf_counter()
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        waited = time.perf_counter() - t_wait
+        print(f"bench lock acquired (waited {waited:.0f}s)")
+        yield waited
+
+
 def run_abba(
     sf: float,
     dataset: str = "tpch-duckdb",
@@ -126,6 +141,7 @@ def run_abba(
     memory_limit: str = "12g",
     timeout_s: float = 600,
     suite: str = "tpch",
+    runner: str | None = None,
 ) -> Path:
     root = data_root() / dataset if suite == "clickbench" else dataset_dir(dataset, sf)
     tables = discover_tables(root)
@@ -133,18 +149,12 @@ def run_abba(
         raise SystemExit(f"no dataset at {root}")
     queries = load_queries(suite, "krishiv", only)
     ds = Dataset(dataset, sf, root, tables)
-    lock_path = data_root() / ".bench.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("w") as lock:
-        t_wait = time.perf_counter()
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        waited = time.perf_counter() - t_wait
-        print(f"bench lock acquired (waited {waited:.0f}s)")
-        return _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, waited, suite)
+    with bench_lock() as waited:
+        return _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, waited, suite, runner)
 
 
-def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s, suite) -> Path:
-    krishiv = KrishivEngine(threads=threads, memory_limit=memory_limit.lower())
+def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s, suite, runner=None) -> Path:
+    krishiv = KrishivEngine(threads=threads, memory_limit=memory_limit.lower(), binary=runner)
     duck = DuckDBEngine(threads=threads, memory_limit=memory_limit.upper())
     krishiv.timeout_s = timeout_s or None  # 0 disables the timeout
     started = dt.datetime.now(dt.UTC)
@@ -250,7 +260,8 @@ def _one_query(q, krishiv: KrishivEngine, duck: Engine, reps: int, timeout_s: fl
     return entry
 
 
-def summarize(record: dict) -> dict:
+def summarize(record: dict, a: str = "krishiv", b: str = "duckdb") -> dict:
+    """Run summary; ``a``/``b`` name the per-query sample keys (``<a>_s``, ``<b>_s``) of the compared sides."""
     ok = {q: e for q, e in record["queries"].items() if e["status"] == "ok"}
     failed = {q: e["reason"] for q, e in record["queries"].items() if e["status"] != "ok"}
     loads = [x for e in ok.values() for x in (e["load_before"], e["load_after"]) if not math.isnan(x)]
@@ -266,7 +277,7 @@ def summarize(record: dict) -> dict:
     if ok:
         ratios = {q: e["ratio"] for q, e in ok.items()}
         worst = max(ratios, key=lambda q: ratios[q])
-        lo, hi = geomean_ci([(e["krishiv_s"], e["duckdb_s"]) for e in ok.values()])
+        lo, hi = geomean_ci([(e[f"{a}_s"], e[f"{b}_s"]) for e in ok.values()])
         s.update(
             geomean=geomean(list(ratios.values())), geomean_ci95=[lo, hi], worst_query=worst, worst_ratio=ratios[worst]
         )
@@ -305,4 +316,4 @@ def report_from_file(path: Path) -> str:
     return markdown(json.loads(path.read_text()))
 
 
-__all__ = ["bootstrap_ci", "geomean", "markdown", "report_from_file", "run_abba", "summarize"]
+__all__ = ["bench_lock", "bootstrap_ci", "geomean", "markdown", "report_from_file", "run_abba", "summarize"]
