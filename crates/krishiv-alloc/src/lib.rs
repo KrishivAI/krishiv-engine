@@ -82,7 +82,11 @@ mod init {
     /// The constructor; allocates nothing (the options must be set before
     /// the first allocation).
     extern "C" fn init(argc: c_int, argv: *const *const c_char, _envp: *const *const c_char) {
-        let count = usize::try_from(argc).unwrap_or(0);
+        let count = if argv.is_null() {
+            0
+        } else {
+            usize::try_from(argc).unwrap_or(0)
+        };
         // SAFETY: glibc (and only glibc, hence the `cfg`) calls
         // `.init_array` functions with the program's `argc`, `argv` and
         // `envp`: `argv` holds `argc` pointers to NUL-terminated strings
@@ -108,6 +112,27 @@ mod init {
     #[used]
     #[unsafe(link_section = ".init_array")]
     pub(super) static INIT: extern "C" fn(c_int, *const *const c_char, *const *const c_char) = init;
+
+    #[cfg(test)]
+    mod tests {
+        /// Without arguments (a null `argv`) and without the variable, the
+        /// constructor sets nothing and does not read `argv`.
+        #[test]
+        fn a_null_argv_sets_nothing() {
+            // (The test process has no `KRISHIV_MEMORY_LIMIT`, as the other
+            // tests that read mimalloc's defaults assume.)
+            super::init(0, std::ptr::null(), std::ptr::null());
+            // SAFETY: plain getters.
+            let got = unsafe {
+                (
+                    libmimalloc_sys::mi_option_get(15),
+                    libmimalloc_sys::mi_option_get(43),
+                    libmimalloc_sys::mi_option_get(44),
+                )
+            };
+            assert_eq!(got, (1000, 1, 0));
+        }
+    }
 }
 
 /// Returns the calling thread's freed memory to the OS: the pressure
