@@ -86,7 +86,7 @@ uv run krishiv-bench ab --suite tpch --sf 10 --dataset tpch-duckdb --reps 3 --qu
 # one binary, a setting on versus off (repeat --a-conf / --b-conf for several settings)
 uv run krishiv-bench ab --suite tpch --sf 10 --a-runner $R --b-runner $R --b-conf some.feature.enabled=true
 ```
-Both runners stay alive for the run and each keeps its own memory limit (`--memory-limit`, default 12g), so budget for two. Per query
+Before the first sample the run waits (up to 15 min) for the 1-minute load average to fall below 2. Both runners stay alive for the run and each keeps its own memory limit (`--memory-limit`, default 12g), so budget for two. Per query
 both sides run once and their rows must match (type-aware, as `abba`); a mismatch or error fails the query and it is never timed. Then
 `--reps` blocks of A B B A. The table and `$KRISHIV_DATA/results/<ts>_ab_<suite>_sf<N>.json` hold the per-query medians, B/A ratio with a
 bootstrap 95% CI, the spread of each side ((max - min) / median), the geomean and the load. The JSON records per side the runner path,

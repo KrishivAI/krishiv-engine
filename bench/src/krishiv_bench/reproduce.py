@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from . import compare
-from .abba import LOAD_INDICATIVE, bootstrap_ci, discover_tables, geomean, geomean_ci, loadavg
+from .abba import LOAD_INDICATIVE, bootstrap_ci, discover_tables, geomean, geomean_ci, loadavg, wait_idle
 from .adapters import Dataset, Engine, Query
 from .adapters.process import EngineCrashed, EngineError, EngineTimeout, ProcessEngine
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
@@ -63,13 +63,6 @@ def resolve_dataset(suite: str, dataset: str | None, sf: float) -> Dataset:
     if not tables:
         raise SystemExit(f"no dataset at {root}")
     return Dataset(name, sf, root, tables)
-
-
-def _wait_idle(limit: float = 2.0, max_wait_s: float = 900.0) -> None:
-    """Let the 1-minute load average decay (e.g. after the previous benchmark run) before recording anything."""
-    deadline = time.monotonic() + max_wait_s
-    while loadavg() > limit and time.monotonic() < deadline:
-        time.sleep(15)
 
 
 def _fail(status: str, e: Exception | str) -> dict:
@@ -243,7 +236,7 @@ def run_reproduce(
         fcntl.flock(lock, fcntl.LOCK_EX)
         waited = time.perf_counter() - t_wait
         print(f"bench lock acquired (waited {waited:.0f}s)")
-        _wait_idle()
+        wait_idle()
         started = dt.datetime.now(dt.UTC)
         record: dict[str, Any] = {
             "schema": 1,

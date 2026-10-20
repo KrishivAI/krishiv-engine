@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import compare
-from .abba import LOAD_INDICATIVE, bench_lock, bootstrap_ci, discover_tables, loadavg, summarize
+from .abba import LOAD_INDICATIVE, bench_lock, bootstrap_ci, discover_tables, loadavg, summarize, wait_idle
 from .adapters import Dataset
 from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
@@ -175,6 +175,7 @@ def run_ab(
     for eng in (a, b):
         eng.timeout_s = timeout_s or None  # 0 disables the timeout
     with bench_lock() as waited:
+        wait_idle()  # the load left by the previous run must decay before the first sample
         started = dt.datetime.now(dt.UTC)
         record: dict[str, Any] = {
             "schema": 1,
