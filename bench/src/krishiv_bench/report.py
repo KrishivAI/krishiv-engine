@@ -19,6 +19,9 @@ def latest_results(suite: str, sf: float, dataset: str | None = None, directory:
             continue
         if dataset and r["dataset"]["name"] != dataset:
             continue
+        if "engine" not in r:
+            # An `abba` or `reproduce` result (several engines), not a run.
+            continue
         best[r["engine"]["name"]] = (f.name, r)
     return {k: v[1] | {"_file": v[0]} for k, v in best.items()}
 

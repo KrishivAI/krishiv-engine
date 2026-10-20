@@ -33,7 +33,28 @@ pub(crate) fn root(limit: usize) -> Arc<TreePool> {
     )
 }
 
+/// `KRISHIV_TEST_JOIN_ROW_LAYOUT=1` runs every join of this suite with
+/// `krishiv.exec.join.rowLayout` on (P2-T158: the suite with the flag on
+/// and off; tests that pick the format themselves are unaffected when it
+/// is unset).
+pub(crate) fn row_layout_forced() -> bool {
+    std::env::var("KRISHIV_TEST_JOIN_ROW_LAYOUT").is_ok_and(|v| v == "1") || ROW_LAYOUT.get()
+}
+
+thread_local! {
+    /// The row layout for the joins [`query`] creates on this thread (the
+    /// `#[tokio::test]` runtimes are single-threaded).
+    static ROW_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs the joins of this thread's next queries with the row layout on or
+/// off.
+pub(crate) fn set_row_layout(on: bool) {
+    ROW_LAYOUT.set(on);
+}
+
 pub(crate) fn query(root: &TreePool, id: u64, mut config: ExecConfig) -> Arc<QueryContext> {
+    config.join_row_layout |= row_layout_forced();
     config.fail_on_stall = true;
     config.stall_threshold = Duration::from_secs(5);
     QueryContext::new(

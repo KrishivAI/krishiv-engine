@@ -14,12 +14,12 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::build::BuildGlobal;
 use super::grace::{self, Flush, Part, WRITE_SLICE, choose, reserve_chunks, spill_parts};
-use super::keys::{PARTITIONS, partition};
+use super::keys::{Hashing, PARTITIONS};
 use super::table::{JoinTable, NONE, RowArena};
 use super::{Counter, JoinType, Shared, record, take_batch};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
-use crate::hash::{HashSeed, ProbeCount};
+use crate::hash::ProbeCount;
 use crate::operator::{FlushOutput, LocalState, Operator, OperatorOutput};
 use crate::sync::lock;
 
@@ -38,9 +38,9 @@ pub(crate) enum Tables<'a> {
 }
 
 impl<'a> Tables<'a> {
-    fn part(self, hash: u64) -> usize {
+    fn part(self, hashing: &Hashing, hash: u64) -> usize {
         match self {
-            Self::Level0(..) => partition(hash, 0),
+            Self::Level0(..) => hashing.partition(hash, 0),
             Self::Single(_) => 0,
         }
     }
@@ -79,7 +79,7 @@ impl Cursor {
     /// rows of spilled partitions, per partition.
     pub(crate) fn new(
         shared: &Shared,
-        seed: &HashSeed,
+        hashing: &Hashing,
         batch: Batch,
         tables: &Tables<'_>,
         detailed: bool,
@@ -90,7 +90,8 @@ impl Cursor {
             .iter()
             .map(|&k| Arc::clone(batch.data().column(k)))
             .collect();
-        let keys = shared.keys.encode(&cols, seed)?;
+        let keys = shared.keys.encode(&cols, hashing)?;
+        let hashes = keys.hashes();
         let mut state = vec![UNMATCHED; n];
         let mut parts = vec![0u8; n];
         let mut lookup = vec![Vec::new(); PARTITIONS];
@@ -103,7 +104,7 @@ impl Cursor {
                 }
                 continue;
             }
-            let p = tables.part(keys.hashes[i]);
+            let p = tables.part(hashing, hashes[i]);
             parts[i] = u8::try_from(p).unwrap_or(0);
             if tables.get(p).is_some() {
                 lookup[p].push(row);
@@ -119,9 +120,9 @@ impl Cursor {
             if let Some(t) = tables.get(p) {
                 found.clear();
                 if detailed {
-                    t.find_heads_counted(&keys.rows, &keys.hashes, rows, &mut found, &mut count);
+                    t.find_heads_counted(&keys, rows, &mut found, &mut count);
                 } else {
-                    t.find_heads(&keys.rows, &keys.hashes, rows, &mut found);
+                    t.find_heads(&keys, rows, &mut found);
                 }
                 for (&r, &h) in rows.iter().zip(&found) {
                     heads[r as usize] = h;
@@ -351,7 +352,8 @@ impl ProbeOp {
             if input.num_rows() == 0 {
                 return Ok(OperatorOutput::NeedMoreInput(None));
             }
-            let (cursor, deferred) = Cursor::new(s, &g.seed, input.clone(), &tables, l.detailed)?;
+            let (cursor, deferred) =
+                Cursor::new(s, &g.hashing, input.clone(), &tables, l.detailed)?;
             let mut chunks = Vec::new();
             for (p, rows) in deferred
                 .into_iter()
@@ -507,7 +509,7 @@ impl Operator for ProbeOp {
     ) -> BoxFuture<'a, Result<FlushOutput>> {
         Box::pin(async move {
             let l = local_mut(local)?;
-            grace::step(&self.0, &l.build.seed, &l.build, &mut l.flush, ctx).await
+            grace::step(&self.0, &l.build.hashing, &l.build, &mut l.flush, ctx).await
         })
     }
 }

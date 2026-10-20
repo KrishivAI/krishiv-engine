@@ -256,3 +256,31 @@ fn analyze_tpch_q1_on_the_fixture() {
     let text = profile.to_text(TextOptions::default());
     assert!(text.contains("groups=3"), "{text}");
 }
+
+#[test]
+fn row_layout_joins_report_their_index() {
+    let s = session(2);
+    s.conf().set("krishiv.exec.join.rowLayout", "true").unwrap();
+    let df = block_on(s.sql(QUERY)).unwrap();
+    let (rows_got, profile) = block_on(df.collect_with_profile()).unwrap();
+    assert_eq!(rows(&rows_got), 4);
+    let build = profile
+        .metrics
+        .operators
+        .values()
+        .find(|e| e.name == "HashJoinBuild")
+        .unwrap();
+    assert_eq!(
+        build.extra("hash_index"),
+        Some(&Metric::Text("row-flat+chain".to_owned()))
+    );
+    assert_eq!(build.extra("hash_entries"), Some(&Metric::Count(4)));
+    // The row-layout index does not count probe lengths.
+    let probe = profile
+        .metrics
+        .operators
+        .values()
+        .find(|e| e.name == "HashJoinProbe")
+        .unwrap();
+    assert_eq!(probe.extra("probe_lookups"), None);
+}

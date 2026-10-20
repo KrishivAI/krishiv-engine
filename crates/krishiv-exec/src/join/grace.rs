@@ -19,13 +19,12 @@ use krishiv_memory::{
 use krishiv_types::batch::Batch;
 
 use super::build::BuildGlobal;
-use super::keys::{MAX_DEPTH, PARTITIONS, partition};
+use super::keys::{Hashing, MAX_DEPTH, PARTITIONS};
 use super::probe::{Cursor, Tables};
 use super::table::{JoinTable, RowArena, key_bytes};
 use super::{Counter, Shared, take_batch};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
-use crate::hash::HashSeed;
 use crate::operator::FlushOutput;
 use crate::sync::lock;
 
@@ -475,7 +474,7 @@ pub(crate) struct Flush {
 /// next probe batch, or claim, load or split the next partition.
 pub(crate) async fn step(
     shared: &Arc<Shared>,
-    seed: &HashSeed,
+    hashing: &Hashing,
     build: &Arc<BuildGlobal>,
     st: &mut Flush,
     ctx: &TaskContext,
@@ -498,7 +497,7 @@ pub(crate) async fn step(
             Some(b) => {
                 let tables = Tables::Single(&a.table);
                 let detailed = ctx.query().config().detailed_metrics;
-                a.cursor = Some(Cursor::new(shared, seed, b, &tables, detailed)?.0);
+                a.cursor = Some(Cursor::new(shared, hashing, b, &tables, detailed)?.0);
             }
             None => {
                 st.active = None;
@@ -540,7 +539,7 @@ pub(crate) async fn step(
     let Some((loading, held)) = st.task.take() else {
         return Err(internal("grace join claimed no task".to_owned()));
     };
-    let (loading, loaded) = load(shared, loading, ctx).await?;
+    let (loading, loaded) = load(shared, hashing, loading, ctx).await?;
     match loaded {
         Loaded::Need(bytes) => {
             st.task = Some((loading, held));
@@ -585,7 +584,7 @@ pub(crate) async fn step(
             }
             // It does not fit even alone: repartition it, then let every
             // driver claim again.
-            let split = split(shared, seed, task, ctx).await;
+            let split = split(shared, hashing, task, ctx).await;
             ctx.consumer().consumer().release_credit();
             let (tasks, written) = split?;
             shared.counters.add(Counter::Repartitions, 1);
@@ -742,7 +741,7 @@ impl Loading {
     }
 
     /// Reads build batches until done or short of memory (blocking I/O).
-    fn advance(&mut self, shared: &Shared, ctx: &BlockingCtx) -> Result<Loaded> {
+    fn advance(&mut self, shared: &Shared, hashing: &Hashing, ctx: &BlockingCtx) -> Result<Loaded> {
         loop {
             if let Some(b) = self.pending.take() {
                 let bytes = b.data().get_array_memory_size();
@@ -802,16 +801,18 @@ impl Loading {
             0
         };
         let headroom = self.task.probe.read_headroom();
-        let need = JoinTable::index_bytes(rows, key_bytes(&chunks)) + concat + headroom;
+        let need =
+            JoinTable::index_bytes(rows, key_bytes(&chunks), hashing.rows()) + concat + headroom;
         if self.memory.try_grow(need).is_err() {
             return Ok(Loaded::Need(need));
         }
-        let arena = RowArena::concat(&shared.arena_schema, &chunks)?;
+        let arena = RowArena::concat(shared.arena_schema(hashing), &chunks)?;
         drop(chunks);
         self.chunks.clear();
         self.memory.shrink(concat);
-        let table = JoinTable::build(arena)?;
-        let (keys, buckets) = table.index_size();
+        let layout = shared.keys.layout().filter(|_| hashing.rows());
+        let table = JoinTable::build(arena, layout, hashing.g_seed())?;
+        let (keys, buckets, _) = table.index_size();
         shared.counters.add(Counter::GraceHashEntries, keys as u64);
         shared
             .counters
@@ -878,6 +879,7 @@ struct BlockingCtx {
 /// [`Loaded::TooLarge`] when the driver could not have it.
 async fn load(
     shared: &Arc<Shared>,
+    hashing: &Hashing,
     mut loading: Loading,
     ctx: &TaskContext,
 ) -> Result<(Loading, Loaded)> {
@@ -886,13 +888,14 @@ async fn load(
         return Ok((loading, refused));
     }
     let shared = Arc::clone(shared);
+    let hashing = hashing.clone();
     let bctx = BlockingCtx {
         handle: Arc::clone(&handle),
         query: Arc::clone(ctx.query()),
     };
     let (mut loading, loaded) = ctx
         .run_blocking(move || {
-            let loaded = loading.advance(&shared, &bctx)?;
+            let loaded = loading.advance(&shared, &hashing, &bctx)?;
             Ok((loading, loaded))
         })
         .await?;
@@ -910,7 +913,7 @@ async fn load(
 /// new tasks (those with probe rows) and the bytes written.
 async fn split(
     shared: &Arc<Shared>,
-    seed: &HashSeed,
+    hashing: &Hashing,
     task: Task,
     ctx: &TaskContext,
 ) -> Result<(Vec<Task>, u64)> {
@@ -934,15 +937,15 @@ async fn split(
     let handle = Arc::clone(ctx.consumer().consumer());
     let query = Arc::clone(ctx.query());
     let depth = task.depth + 1;
-    let seed = seed.clone();
+    let hashing = hashing.clone();
     ctx.run_blocking(move || {
         let memory = || handle.reservation().releasing_to_credit();
         let query = &query;
         let build = scatter(
             &scope,
-            &shared.arena_schema,
+            shared.arena_schema(&hashing),
             task.build,
-            depth,
+            &|h| hashing.partition(h, depth),
             &memory,
             |b| {
                 query.check_cancelled()?;
@@ -958,7 +961,7 @@ async fn split(
             &scope,
             &shared.probe_schema,
             task.probe,
-            depth,
+            &|h| hashing.partition(h, depth),
             &memory,
             |b| {
                 query.check_cancelled()?;
@@ -967,7 +970,7 @@ async fn split(
                     .iter()
                     .map(|&k| Arc::clone(b.data().column(k)))
                     .collect();
-                Ok(shared.keys.encode(&cols, &seed)?.hashes)
+                Ok(shared.keys.encode(&cols, &hashing)?.hashes().to_vec())
             },
         )?;
         let written = build.1 + probe.1;
@@ -992,7 +995,7 @@ fn scatter(
     scope: &SpillScope,
     schema: &SchemaRef,
     part: Part,
-    depth: u32,
+    partition: &impl Fn(u64) -> usize,
     memory: &impl Fn() -> Reservation,
     hashes: impl Fn(&Batch) -> Result<Vec<u64>>,
 ) -> Result<(Vec<Part>, u64)> {
@@ -1001,7 +1004,7 @@ fn scatter(
     for_each(part, memory, |b| {
         let mut idx = vec![Vec::new(); PARTITIONS];
         for (i, &h) in hashes(&b)?.iter().enumerate() {
-            idx[partition(h, depth)].push(u32::try_from(i).unwrap_or(u32::MAX));
+            idx[partition(h)].push(u32::try_from(i).unwrap_or(u32::MAX));
         }
         for (p, rows_p) in idx.into_iter().enumerate().filter(|(_, r)| !r.is_empty()) {
             rows[p] += rows_p.len() as u64;

@@ -7,7 +7,7 @@ use std::fmt;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use krishiv_common::config::{Config, EXEC_BATCH_SIZE};
+use krishiv_common::config::{Config, EXEC_BATCH_SIZE, EXEC_JOIN_ROW_LAYOUT};
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
     ConsumerHandle, ConsumerId, MemoryPool, Reservation, SpillOwner, SpillSignal,
@@ -49,6 +49,9 @@ pub struct ExecConfig {
     /// ANALYZE`): per-lookup hash-table probe lengths. The always-on
     /// counters do not depend on it.
     pub detailed_metrics: bool,
+    /// Hash joins use the row layout and its size-adaptive index
+    /// (`krishiv.exec.join.rowLayout`; P2-T158).
+    pub join_row_layout: bool,
 }
 
 impl Default for ExecConfig {
@@ -61,6 +64,7 @@ impl Default for ExecConfig {
             fail_on_stall: false,
             seed: None,
             detailed_metrics: false,
+            join_row_layout: false,
         }
     }
 }
@@ -74,8 +78,13 @@ impl ExecConfig {
             .and_then(|n| usize::try_from(n).ok())
             .filter(|n| *n > 0)
             .unwrap_or(DEFAULT_BATCH_SIZE);
+        let join_row_layout = config
+            .get(&EXEC_JOIN_ROW_LAYOUT)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(false);
         Self {
             batch_size,
+            join_row_layout,
             ..Self::default()
         }
     }
