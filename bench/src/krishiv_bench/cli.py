@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from .adapters import ENGINES
@@ -8,6 +9,15 @@ from .report import write_report
 from .runner import run_suite
 
 ABBA_DATASET = {"tpch": "tpch-duckdb", "tpcds": "tpcds", "clickbench": "clickbench"}
+
+
+RUNNER_HELP = "krishiv-bench-runner binary (wins over $KRISHIV_BENCH_RUNNER)"
+
+
+def _set_runner(path: str | None) -> None:
+    """Makes ``--runner`` win everywhere the adapter resolves the binary (worker processes inherit the env)."""
+    if path:
+        os.environ["KRISHIV_BENCH_RUNNER"] = path
 
 
 def main(argv=None) -> None:
@@ -27,6 +37,7 @@ def main(argv=None) -> None:
     r.add_argument("--duckdb-threads", type=int)
     r.add_argument("--duckdb-memory-limit", default="12GB")
     r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
+    r.add_argument("--runner", help=RUNNER_HELP)
     ab = sub.add_parser(
         "abba", help="interleaved ABBA Krishiv vs DuckDB (P2-T142); needs the dist-profile runner binary"
     )
@@ -38,6 +49,25 @@ def main(argv=None) -> None:
     ab.add_argument("--threads", type=int, default=8, help="threads for both engines")
     ab.add_argument("--memory-limit", default="12g", help="memory limit for both engines")
     ab.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
+    ab.add_argument("--runner", help=RUNNER_HELP)
+    xb = sub.add_parser(
+        "ab",
+        help="build-vs-build A/B: two runner binaries, or one binary with two --conf sets, interleaved ABBA",
+    )
+    xb.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    xb.add_argument("--sf", type=float, default=10)
+    xb.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
+    xb.add_argument("--a-runner", required=True, metavar="PATH", help="runner binary of side A (the baseline)")
+    xb.add_argument("--b-runner", required=True, metavar="PATH", help="runner binary of side B (ratio = B / A)")
+    xb.add_argument("--a-conf", action="append", default=[], metavar="K=V", help="session setting for A (repeatable)")
+    xb.add_argument("--b-conf", action="append", default=[], metavar="K=V", help="session setting for B (repeatable)")
+    xb.add_argument("--a-sha", help="git SHA of A's build, recorded in the result (e.g. $(git rev-parse main))")
+    xb.add_argument("--b-sha", help="git SHA of B's build, recorded in the result")
+    xb.add_argument("--reps", type=int, default=3, help="ABBA blocks per query (2 samples per side each)")
+    xb.add_argument("--queries", help="comma list, e.g. q01,q05")
+    xb.add_argument("--threads", type=int, default=8, help="threads for both sides")
+    xb.add_argument("--memory-limit", default="12g", help="memory limit for both sides")
+    xb.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
     rr = sub.add_parser(
         "reproduce",
         help="reference engines side by side: correctness vs DuckDB, then ours (interleaved) and/or theirs (best of N)",
@@ -54,6 +84,7 @@ def main(argv=None) -> None:
     rr.add_argument("--timeout", type=float, default=600, help="per-run timeout for the ours method (seconds)")
     rr.add_argument("--runs", type=int, help="hot runs per process for theirs (default: the published source's)")
     rr.add_argument("--their-timeout", type=float, help="per-run timeout for theirs (default: the source's)")
+    rr.add_argument("--runner", help=RUNNER_HELP)
     rr.add_argument("--profile", action="store_true", help="also record Krishiv's per-phase wall times (ours method)")
     rp = sub.add_parser("report", help="Markdown comparison of the newest result per engine")
     rp.add_argument("--suite", default="tpch")
@@ -62,6 +93,7 @@ def main(argv=None) -> None:
     rp.add_argument("--baseline", default="duckdb")
     rp.add_argument("files", nargs="*", type=Path, help="explicit result JSONs (default: newest per engine)")
     a = ap.parse_args(argv)
+    _set_runner(getattr(a, "runner", None))
     if a.cmd == "reproduce":
         from .reproduce import run_reproduce
 
@@ -95,6 +127,30 @@ def main(argv=None) -> None:
             a.memory_limit,
             a.timeout,
             a.suite,
+            a.runner,
+        )
+    elif a.cmd == "ab":
+        from .ab import parse_conf, run_ab
+
+        try:
+            a_conf, b_conf = parse_conf(a.a_conf), parse_conf(a.b_conf)
+        except ValueError as e:
+            ap.error(f"--a-conf/--b-conf: {e}")
+        run_ab(
+            a.sf,
+            a.dataset or ABBA_DATASET[a.suite],
+            a.a_runner,
+            a.b_runner,
+            a_conf,
+            b_conf,
+            a.reps,
+            a.queries.split(",") if a.queries else None,
+            a.threads,
+            a.memory_limit,
+            a.timeout,
+            a.suite,
+            a.a_sha,
+            a.b_sha,
         )
     elif a.cmd == "run":
         kw = {}

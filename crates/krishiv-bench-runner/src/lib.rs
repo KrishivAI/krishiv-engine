@@ -16,6 +16,8 @@
 //!   (replacing it). The write is not in the reported seconds.
 //! * `QUIT`: exits.
 //!
+//! `--conf key=value` (repeatable) sets extra session settings, for A/B runs of one binary.
+//!
 //! A failure replies `ERR <one-line message>`; the process keeps serving.
 
 #![forbid(unsafe_code)]
@@ -55,6 +57,9 @@ pub struct RunnerConfig {
     pub threads: usize,
     /// `krishiv.memory.limit` (for example `12g`).
     pub memory_limit: String,
+    /// Extra session settings (`--conf key=value`, repeatable), applied after the memory limit so a
+    /// repeated key (including `krishiv.memory.limit`) wins.
+    pub conf: Vec<(String, String)>,
 }
 
 impl RunnerConfig {
@@ -66,6 +71,7 @@ impl RunnerConfig {
         let mut data = None;
         let mut threads = std::thread::available_parallelism().map_or(1, usize::from);
         let mut memory_limit = "12g".to_owned();
+        let mut conf = Vec::new();
         let mut args = args.into_iter();
         while let Some(flag) = args.next() {
             let mut value = || {
@@ -80,6 +86,16 @@ impl RunnerConfig {
                         .map_err(|e| RunnerError::Config(format!("--threads: {e}")))?;
                 }
                 "--memory-limit" => memory_limit = value()?,
+                "--conf" => {
+                    let kv = value()?;
+                    let (k, v) = kv
+                        .split_once('=')
+                        .filter(|(k, _)| !k.is_empty())
+                        .ok_or_else(|| {
+                            RunnerError::Config(format!("--conf expects key=value, got {kv:?}"))
+                        })?;
+                    conf.push((k.to_owned(), v.to_owned()));
+                }
                 other => return Err(RunnerError::Config(format!("unknown argument {other}"))),
             }
         }
@@ -87,6 +103,7 @@ impl RunnerConfig {
             data: data.ok_or_else(|| RunnerError::Config("--data DIR is required".to_owned()))?,
             threads,
             memory_limit,
+            conf,
         })
     }
 }
@@ -110,10 +127,13 @@ impl Runner {
             io_threads: 2,
             blocking_threads: threads,
         })?;
-        let session = Session::builder()
+        let mut builder = Session::builder()
             .executor(executor)
-            .config("krishiv.memory.limit", config.memory_limit.as_str())
-            .build()?;
+            .config("krishiv.memory.limit", config.memory_limit.as_str());
+        for (k, v) in &config.conf {
+            builder = builder.config(k.as_str(), v.as_str());
+        }
+        let session = builder.build()?;
         let mut tables = Vec::new();
         let entries = std::fs::read_dir(&config.data)
             .map_err(|e| RunnerError::Io(format!("cannot read {}: {e}", config.data)))?;
