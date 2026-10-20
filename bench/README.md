@@ -48,7 +48,8 @@ returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket
 - `krishiv`: drives `krishiv-bench-runner` (`dist`-profile build of `krishiv-session` like the shipped artifacts and DuckDB's optimized build, bench-only crate, not the public CLI) over a stdin/stdout
   line protocol until the Python facade can execute queries. Tables are Parquet views registered at `setup()`; `timed_run` reports
   runner-side seconds, `run` dumps the result to Parquet (outside the timed region) and returns the rows for correctness checks.
-  Build: `cargo build --profile dist -p krishiv-bench-runner`; override the path with `$KRISHIV_BENCH_RUNNER`.
+  Build (always `dist` at the shipped x86-64-v3 level; the runner refuses to start on a CPU without it):
+  `RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner` (on arm64: `-C target-cpu=neoverse-n1`). The result's engine `config` records `build_profile` and `target_cpu` (from `krishiv-bench-runner --build-info`). Override the path with `$KRISHIV_BENCH_RUNNER`.
 - `polars` (lazy `scan_parquet` + `SQLContext`), `datafusion` (datafusion-python, fair spill pool), `spark-local` (Spark 4.2 `local[N]`, AQE on,
   `shuffle.partitions` = cores) and `sail` (pysail Spark Connect server on loopback, pinned pyspark client): used by `reproduce`, hosted by
   `worker.py` (one process session per engine). Versions are pinned in `pyproject.toml`/`uv.lock`; Java 21 must be on `PATH` for Spark.
@@ -57,7 +58,7 @@ Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (none neede
 
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash
-cargo build --profile dist -p krishiv-bench-runner
+RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner
 KRISHIV_BENCH_RUNNER=${CARGO_TARGET_DIR:-../target}/dist/krishiv-bench-runner \
   uv run krishiv-bench abba --sf 10 --dataset tpch-duckdb --reps 3 --threads 8 --memory-limit 12g
   uv run krishiv-bench abba --suite clickbench --threads 12   # 43 queries over $KRISHIV_DATA/clickbench/hits.parquet
@@ -91,7 +92,7 @@ plan+execute plus the executor's per-operator rows and compute time (`DataFrame:
 ClickBench reads `$KRISHIV_DATA/clickbench` (`hits.parquet` or a `hits/` directory of parts).
 
 ## Result JSON (`$KRISHIV_DATA/results/<ts>_<engine>_<suite>_sf<N>.json`)
-`machine` (CPU model, cores, RAM, OS, governor), `git` (krishiv-engine commit/branch/dirty), `engine` (name, version, config, build, and `allocator` when the engine reports it, e.g. `mimalloc`; the CLI prints it as `allocator=<name>` in `krishiv --version`, the wheel via `krishiv.build_info()`),
+`machine` (CPU model, cores, RAM, OS, governor), `git` (krishiv-engine commit/branch/dirty), `engine` (name, version, config (Krishiv: threads, memory limit, `build_profile`, `target_cpu`), build, and `allocator` when the engine reports it, e.g. `mimalloc`; the CLI prints it as `allocator=<name>` in `krishiv --version`, the wheel via `krishiv.build_info()`),
 `dataset` (name, SF, path, tables, generator version, manifest sha256), and per query: `iterations`, `times_s`, `p50_s`, `p99_s`, `min_s`, `max_s`, `mean_s`,
 `throughput_qps`, `rows_returned`, `has_order_by`, `answer_check`, `rows_stored`, `peak_rss_bytes`, `baseline_rss_bytes`,
 `cpu_seconds_median`, `spill_bytes` (null when not measurable), or `error`. Percentiles are nearest-rank, so with the default

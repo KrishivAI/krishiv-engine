@@ -11,7 +11,8 @@ views at ``setup()`` (no pre-loading, for parity with the other adapters), then 
 * ``run(query)`` -> rows: ``DUMP`` (the result is written to Parquet outside the timed region, then read back),
   for correctness checks. The generic suite runner times this call, so use ``abba`` for Krishiv timings.
 
-Build the runner first: ``cargo build --profile dist -p krishiv-bench-runner``
+Build the runner first (the shipped build level, see bench/README.md):
+``RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner``
 (path override: ``$KRISHIV_BENCH_RUNNER``).
 """
 
@@ -64,22 +65,52 @@ class KrishivEngine(Engine):
         self._tmp = Path(tempfile.mkdtemp(prefix="krishiv-bench-"))
         self.timeout_s: float | None = None
         self._starts = 0
+        self._build: dict[str, str] | None = None
         self._stderr_log: Path | None = None
 
     def version(self) -> str:
         return self._version
 
     def config(self) -> dict:
-        return {"threads": self.threads, "memory_limit": self.memory_limit, "binary": self.binary.name}
+        return {
+            "threads": self.threads,
+            "memory_limit": self.memory_limit,
+            "binary": self.binary.name,
+            **self._runner_build(),
+        }
 
     def build_info(self) -> dict[str, str]:
-        return {"allocator": "mimalloc", "runner": "krishiv-bench-runner (dist)"}
+        build = self._runner_build()
+        return {"allocator": "mimalloc", "runner": f"krishiv-bench-runner ({build['build_profile']})", **build}
+
+    def _runner_build(self) -> dict[str, str]:
+        """The runner's own ``--build-info`` (``profile=dist target-cpu=x86-64-v3``), so a result says what it measured.
+
+        ``unknown`` when the binary cannot say (missing, too old, or run on a CPU below its build level).
+        """
+        if self._build is None:
+            self._build = {"build_profile": "unknown", "target_cpu": "unknown"}
+            try:
+                out = subprocess.run(
+                    [str(self.binary), "--build-info"], capture_output=True, text=True, timeout=30, check=True
+                ).stdout
+                fields = dict(kv.split("=", 1) for kv in out.split() if "=" in kv)
+                self._build = {
+                    "build_profile": fields.get("profile", "unknown"),
+                    "target_cpu": fields.get("target-cpu", "unknown"),
+                }
+            except (OSError, subprocess.SubprocessError):
+                pass
+        return self._build
 
     # ------------------------------------------------------------------ process
     def _start(self) -> None:
         assert self._dataset is not None, "setup() not called"
         if not self.binary.exists():
-            raise FileNotFoundError(f"{self.binary} missing: cargo build --profile dist -p krishiv-bench-runner")
+            raise FileNotFoundError(
+                f"{self.binary} missing: "
+                "RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner"
+            )
         cmd = [
             str(self.binary),
             "--data",

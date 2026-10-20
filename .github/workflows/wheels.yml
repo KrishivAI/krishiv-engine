@@ -7,6 +7,16 @@ name: Wheels
 # arm64. mimalloc is linked into every wheel (P2-T012). Nothing is published
 # (P2-T147).
 #
+# CPU level: the x86_64 wheels are built for x86-64-v3 and the Linux aarch64
+# wheels for neoverse-n1, through RUSTFLAGS on the maturin step only (never in
+# .cargo/config.toml, so development, tests, regular CI and the benchmark jobs
+# keep the default target). The extra `linux-x86_64-compat` job builds the
+# plain x86-64 baseline wheel under the distribution name `krishiv-compat`
+# (same `krishiv` import name); it is uploaded as `compat-wheel-*`, outside the
+# `wheels-*` set the size budgets measure. The module checks the CPU at import
+# (python/krishiv/_cpu.py, level recorded in `_cpu_level` by the build) and
+# raises an ImportError that points at that package.
+#
 # Called by ci.yml for pull requests that touch the Python package, the
 # extension crate or the packaging, and by nightly.yml; runnable by hand.
 # The size of every wheel is measured by the `sizes` job (artifact
@@ -30,6 +40,9 @@ env:
   # maturin build flags per flavour; `dist` is the LTO + stripped profile of the workspace Cargo.toml.
   ABI3_ARGS: --profile dist --locked
   FT_ARGS: --profile dist --locked --no-default-features --features mimalloc
+  # The shipped CPU levels (see README.md, "Supported CPUs").
+  X86_RUSTFLAGS: -C target-cpu=x86-64-v3
+  ARM_RUSTFLAGS: -C target-cpu=neoverse-n1
 
 jobs:
   # manylinux_2_28 and musllinux_1_2 on x86_64. The wheels are built in the
@@ -52,13 +65,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Record the CPU level the wheel needs (checked by krishiv/_cpu.py)
+        run: echo x86-64-v3 > python/krishiv/_cpu_level
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        env:
+          RUSTFLAGS: ${{ env.X86_RUSTFLAGS }}
         with:
           working-directory: python
           target: x86_64
           manylinux: ${{ matrix.libc == 'manylinux' && '2_28' || 'musllinux_1_2' }}
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
+      - name: The wheel carries the CPU level marker
+        run: |
+          for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/_cpu_level$'; done
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         if: matrix.libc == 'manylinux'
       - name: Test (manylinux, on the runner)
@@ -71,6 +91,37 @@ jobs:
             uv python install "$v"
             .github/scripts/wheel-test.sh "$(uv python find "$v")" dist "$FLAVOUR"
           done
+      # The old-CPU path: import the abi3 wheel under user-mode QEMU with a
+      # pre-AVX2 CPU; the import must raise an ImportError naming the missing
+      # features and the compat package, not die with SIGILL.
+      - name: Old CPU import (QEMU Nehalem)
+        if: matrix.libc == 'manylinux' && matrix.flavour == 'abi3'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user
+          uv python install 3.11
+          uv venv --python 3.11 "$RUNNER_TEMP/oldcpu"
+          uv pip install --python "$RUNNER_TEMP/oldcpu/bin/python" dist/*.whl
+          py=$(uv python find 3.11)
+          # qemu-user shows the host's /proc/cpuinfo, so the check is pointed at a
+          # Nehalem-class one; what is proved is that the ImportError comes before the
+          # native module is loaded (which would die with SIGILL under -cpu Nehalem).
+          printf 'flags\t\t: fpu sse sse2 pni ssse3 cx16 sse4_1 sse4_2 popcnt\n' > "$RUNNER_TEMP/nehalem-cpuinfo"
+          export KRISHIV_CPUINFO="$RUNNER_TEMP/nehalem-cpuinfo"
+          set +e
+          PYTHONPATH=$("$RUNNER_TEMP/oldcpu/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])') \
+            qemu-x86_64 -L / -cpu Nehalem "$py" -c 'import krishiv' >"$RUNNER_TEMP/old.out" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/old.out"
+          test "$code" -eq 1
+          grep -q 'ImportError' "$RUNNER_TEMP/old.out"
+          if grep -qi 'illegal instruction' "$RUNNER_TEMP/old.out"; then
+            echo "::error::import hit SIGILL under QEMU Nehalem"
+            exit 1
+          fi
+          grep -q 'avx2' "$RUNNER_TEMP/old.out"
+          grep -q 'krishiv-compat' "$RUNNER_TEMP/old.out"
       - name: Test (musllinux, in the PyPA musllinux image)
         if: matrix.libc == 'musllinux'
         env:
@@ -85,6 +136,49 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-${{ matrix.libc }}-x86_64-${{ matrix.flavour }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # The compat wheel: the plain x86-64 baseline (no RUSTFLAGS), distribution
+  # name `krishiv-compat`, for CPUs without the x86-64-v3 features. Only the
+  # abi3 manylinux flavour is built. The name is set on a CI checkout; the
+  # import name stays `krishiv`.
+  linux-x86_64-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    name: wheel (manylinux x86_64 compat)
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Name the distribution krishiv-compat
+        run: |
+          sed -i 's/^name = "krishiv"$/name = "krishiv-compat"/' python/pyproject.toml
+          grep -qx 'name = "krishiv-compat"' python/pyproject.toml
+      - name: Build
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          target: x86_64
+          manylinux: 2_28
+          args: ${{ env.ABI3_ARGS }} --out ../dist
+      - name: The compat wheel has no CPU level marker
+        run: "! unzip -l dist/*.whl | grep -q '_cpu_level'"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Test
+        run: |
+          ls dist | grep -q '^krishiv_compat-'
+          for v in 3.11 3.14; do
+            uv python install "$v"
+            .github/scripts/wheel-test.sh "$(uv python find "$v")" dist abi3
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compat-wheel-manylinux-x86_64
           path: dist/*.whl
           if-no-files-found: error
 
@@ -105,13 +199,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Record the CPU level the wheel needs (checked by krishiv/_cpu.py)
+        run: echo neoverse-n1 > python/krishiv/_cpu_level
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        env:
+          RUSTFLAGS: ${{ env.ARM_RUSTFLAGS }}
         with:
           working-directory: python
           target: aarch64
           manylinux: 2_28
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
+      - name: The wheel carries the CPU level marker
+        run: |
+          for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/_cpu_level$'; done
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - name: Test
         env:
