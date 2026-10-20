@@ -1594,45 +1594,80 @@ proptest! {
         two in any::<bool>(),
         tight in any::<bool>(),
     ) {
-        let (s, batches) = row_case_batches(&data, keys, batch);
-        let (_m, scope) = spill_dir();
-        let mut sp = spec(&s, (0..nkeys).collect(), row_case_aggs(&s, slots == 1));
-        sp.spill = tight.then_some(scope);
-        let plan = |agg: Arc<HashAggregate>, sp: &AggregateSpec| -> Arc<dyn ExecNode> {
-            if two {
-                let mut first = sp.clone();
-                first.output = AggregateOutput::Partial;
-                first.spill = None;
-                let policy = BypassPolicy { min_rows: 100, ..BypassPolicy::default() };
-                let p = PartialAggregate::new(first, policy, Some(1)).unwrap();
-                AggregateNode::new(PartialNode::new(scan(&s, batches.clone()), p), agg)
-            } else {
-                AggregateNode::new(scan(&s, batches.clone()), agg)
-            }
-        };
-        let final_spec = if two {
+        // Tight, but not below what the row tables need beyond the
+        // default ones (see `row_layout_tight_memory_gap`).
+        row_case(&data, keys, nkeys, batch, slots, mode, limit, two, tight.then_some(1 << 20))?;
+    }
+}
+
+/// One case of [`row_layout_equals_default`]: `tight` is the memory limit
+/// with a spill scope (`None`: unlimited, unspillable).
+#[expect(clippy::too_many_arguments, reason = "the property's parameters")]
+fn row_case(
+    data: &[RowCase],
+    keys: i32,
+    nkeys: usize,
+    batch: usize,
+    slots: usize,
+    mode: u8,
+    limit: usize,
+    two: bool,
+    tight: Option<usize>,
+) -> Result<(), TestCaseError> {
+    let (s, batches) = row_case_batches(data, keys, batch);
+    let (_m, scope) = spill_dir();
+    let mut sp = spec(&s, (0..nkeys).collect(), row_case_aggs(&s, slots == 1));
+    sp.spill = tight.map(|_| scope);
+    let plan = |agg: Arc<HashAggregate>, sp: &AggregateSpec| -> Arc<dyn ExecNode> {
+        if two {
             let mut first = sp.clone();
             first.output = AggregateOutput::Partial;
-            second_phase(&first, sp.spill.clone())
+            first.spill = None;
+            let policy = BypassPolicy {
+                min_rows: 100,
+                ..BypassPolicy::default()
+            };
+            let p = PartialAggregate::new(first, policy, Some(1)).expect("partial spec");
+            AggregateNode::new(PartialNode::new(scan(&s, batches.clone()), p), agg)
         } else {
-            sp.clone()
-        };
-        let o = Opts {
-            slots,
-            // Tight, but not below what the row tables need beyond the
-            // default ones: 20 KiB of sketches per driver table, and a
-            // fixed index of capacity 1 keeps one row per input row.
-            limit: if tight { 1 << 20 } else { 1 << 30 },
-            both_layouts: false,
-            ..Opts::default()
-        };
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let off = plan(HashAggregate::new(final_spec.clone()).unwrap(), &sp);
-        let want = rows(&rt.block_on(exec(off, o)).unwrap().0);
-        let agg = HashAggregate::with_row_mode(final_spec, row_mode(mode, limit)).unwrap();
-        let got = rows(&rt.block_on(exec_with(plan(agg, &sp), o, true)).unwrap().0);
-        prop_assert_eq!(got, want);
-    }
+            AggregateNode::new(scan(&s, batches.clone()), agg)
+        }
+    };
+    let final_spec = if two {
+        let mut first = sp.clone();
+        first.output = AggregateOutput::Partial;
+        second_phase(&first, sp.spill.clone())
+    } else {
+        sp.clone()
+    };
+    let o = Opts {
+        slots,
+        limit: tight.unwrap_or(1 << 30),
+        both_layouts: false,
+        ..Opts::default()
+    };
+    let fail = |e: &dyn std::fmt::Display| TestCaseError::fail(e.to_string());
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| fail(&e))?;
+    let off = plan(
+        HashAggregate::new(final_spec.clone()).map_err(|e| fail(&e))?,
+        &sp,
+    );
+    // Only cases the default tables finish compare.
+    let Ok((want, _)) = rt.block_on(exec(off, o)) else {
+        return Err(TestCaseError::reject("the default tables failed"));
+    };
+    let agg =
+        HashAggregate::with_row_mode(final_spec, row_mode(mode, limit)).map_err(|e| fail(&e))?;
+    let got = rt
+        .block_on(exec_with(plan(agg, &sp), o, true))
+        .map_err(|e| {
+            TestCaseError::fail(format!("row layout failed where the default did not: {e}"))
+        })?;
+    prop_assert_eq!(rows(&got.0), rows(&want));
+    Ok(())
 }
 
 /// One driver whose table spills several times still picks `first`/`last`
@@ -1922,4 +1957,45 @@ async fn row_layout_nullable_batches_under_a_non_nullable_spec() {
             .contains("declared as non-nullable but contains null"),
         "{e}"
     );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 256,
+        rng_seed: proptest::test_runner::RngSeed::Fixed(20_261_020),
+        ..ProptestConfig::default()
+    })]
+    /// The known gap, pinned: at 768 KiB the row tables run out of memory
+    /// in cases the default tables spill and finish. The final phase keeps
+    /// the driver tables and the merged tables together, and a cleared
+    /// index keeps a row per repeated key (STATUS: T159 final-phase memory;
+    /// fixed when each partition's inputs are released once merged and
+    /// finished tasks are not spilled).
+    #[test]
+    #[ignore = "flag-on final phase needs ~2x memory; STATUS: T159 final-phase memory"]
+    fn row_layout_tight_memory_gap(
+        data in proptest::collection::vec(
+            (
+                proptest::option::of(any::<i32>()),
+                proptest::option::of(any::<u8>()),
+                proptest::option::of(any::<bool>()),
+                proptest::option::of(-1_000_000i64..1_000_000),
+                proptest::option::of(-10_000_000i64..10_000_000),
+                proptest::option::of(any::<u16>()),
+            ),
+            0..4000,
+        ),
+        keys in 1i32..3000,
+        nkeys in 1usize..=3,
+        batch in 1usize..900,
+        slots in 1usize..4,
+        mode in 0u8..3,
+        limit in 1usize..64,
+        two in any::<bool>(),
+        // As in `row_layout_equals_default`, so its saved seeds (one of them
+        // is this gap, found at 768 KiB) replay here first.
+        _tight in any::<bool>(),
+    ) {
+        row_case(&data, keys, nkeys, batch, slots, mode, limit, two, Some(768 << 10))?;
+    }
 }
