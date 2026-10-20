@@ -495,6 +495,8 @@ fn restriction_after_join_ordering_reaches_a_fixed_point() {
         optimized.root(),
         again.root()
     );
+    let text = optimized.root().to_string();
+    assert!(text.contains("LeftSemi"), "not restricted:\n{text}");
     for seed in [1, 2, 66_213_344_527_430_992] {
         let db = data::small(seed);
         assert_eq!(
