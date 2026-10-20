@@ -82,6 +82,7 @@ mod operators;
 pub mod physical;
 mod pipeline;
 pub mod planner;
+pub mod profile;
 // The row-layout key-page prototype is not wired into any operator yet. Linking
 // it into the library measurably shifted the grouped-aggregate benchmarks
 // (code placement), so it is built only for its tests and, via the
