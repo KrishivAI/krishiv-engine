@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import stat
 import sys
@@ -264,3 +265,52 @@ def test_summary_geomean_and_ci_use_the_b_over_a_direction():
     assert lo == pytest.approx(4.0)
     assert hi == pytest.approx(4.0)
     assert summary["median_spread_a"] == 0.0
+
+
+_RUN_BRANCH = 'if cmd[0] == "RUN":\n        print("OK 1 0.250000", flush=True)'
+_SPAN_BRANCH = (
+    'if cmd[0] == "RUN":\n'
+    "        t0 = time.monotonic_ns(); time.sleep(0.02)\n"
+    '        open(os.environ["AB_SPAN_LOG"], "a").write(f"{t0} {time.monotonic_ns()} {__file__}\\n")\n'
+    '        print("OK 1 0.250000", flush=True)'
+)
+assert _RUN_BRANCH in FAKE
+SERIAL_RUNNER = FAKE.replace(_RUN_BRANCH, _SPAN_BRANCH).replace("import json, os, sys", "import json, os, sys, time")
+
+
+def test_timed_runs_of_the_two_sides_never_overlap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    log = tmp_path / "spans.log"
+    monkeypatch.setenv("AB_SPAN_LOG", str(log))
+    runners = []
+    for name in ("a-runner", "b-runner"):
+        binary = tmp_path / name
+        binary.write_text(SERIAL_RUNNER)
+        binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+        runners.append(binary)
+    ds = Dataset("tpch", 1, tmp_path, ["t"])
+    a, b = (KrishivEngine(binary=r) for r in runners)
+    try:
+        for e in (a, b):
+            e.timeout_s = 10
+            e.setup(ds)
+        assert ab.one_query(q(), a, b, reps=3)["status"] == "ok"
+    finally:
+        a.teardown()
+        b.teardown()
+    spans = sorted((int(s), int(e), Path(f).name) for s, e, f in (ln.split() for ln in log.read_text().splitlines()))
+    assert [n[0] for _, _, n in spans] == list("abba" * 3)
+    for (_, end, _), (start, _, _) in itertools.pairwise(spans):
+        assert end <= start  # one query on one runner at a time
+
+
+def test_wait_idle_waits_for_the_load_to_decay(monkeypatch: pytest.MonkeyPatch):
+    from krishiv_bench import abba
+
+    loads = iter([9.0, 5.0, 1.0])
+    sleeps: list[float] = []
+    monkeypatch.setattr(abba, "loadavg", lambda: next(loads))
+    monkeypatch.setattr(abba.time, "sleep", sleeps.append)
+    abba.wait_idle()
+    assert len(sleeps) == 2
+    monkeypatch.setattr(abba, "loadavg", lambda: 99.0)
+    abba.wait_idle(max_wait_s=0)  # bounded: gives up instead of hanging
