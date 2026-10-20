@@ -196,7 +196,10 @@ def test_run_abba_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ca
     monkeypatch.setenv("KRISHIV_DATA", str(data))
     monkeypatch.setenv("KRISHIV_BENCH_RUNNER", str(binary))
     monkeypatch.setattr(abba, "load_queries", lambda *_: [Query("q01", "select a, b from t order by a", "tpch")])
+    settles: list[int] = []
+    monkeypatch.setattr(abba, "wait_idle", lambda: settles.append(1))
     out = abba.run_abba(1, reps=2, threads=2, memory_limit="1g", timeout_s=30)
+    assert settles == [1]
     result = json.loads(out.read_text())
     assert result["queries"]["q01"]["status"] == "ok"
     assert len(result["queries"]["q01"]["duckdb_s"]) == 4

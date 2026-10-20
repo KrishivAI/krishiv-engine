@@ -228,6 +228,9 @@ def test_run_ab_writes_both_sides_into_the_result(tmp_path: Path, monkeypatch: p
     pr_runner = make_runner(tmp_path, "pr-runner")
     monkeypatch.setenv("KRISHIV_DATA", str(data))
     monkeypatch.setattr(ab, "load_queries", lambda *_: [q()])
+    settles: list[bool] = []
+    # The settle wait must come before any runner starts (a started fake runner leaves its argv file behind).
+    monkeypatch.setattr(ab, "wait_idle", lambda: settles.append(Path(str(main_runner) + ".argv").exists()))
     out = ab.run_ab(
         1,
         "tpch-duckdb",
@@ -239,6 +242,7 @@ def test_run_ab_writes_both_sides_into_the_result(tmp_path: Path, monkeypatch: p
         a_sha="mainsha",
         b_sha="prsha",
     )
+    assert settles == [False]
     rec = json.loads(out.read_text())
     assert rec["kind"] == "ab"
     side_a, side_b = rec["sides"]["a"], rec["sides"]["b"]
