@@ -193,7 +193,7 @@ impl Runner {
         // identical without saying so, so reject it here.
         let pairs = std::iter::once(("krishiv.memory.limit", config.memory_limit.as_str()))
             .chain(config.conf.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-        let (_, warnings) = Config::from_pairs(pairs)?;
+        let (merged, warnings) = Config::from_pairs(pairs)?;
         if let Some(w) = warnings.first() {
             return Err(RunnerError::Config(format!("--conf not applied: {w}")));
         }
@@ -230,15 +230,10 @@ impl Runner {
                 config.data
             )));
         }
-        let limit = krishiv_common::config::Config::from_pairs([(
-            "krishiv.memory.limit",
-            config.memory_limit.as_str(),
-        )])
-        .ok()
-        .and_then(|(c, _)| {
-            c.get(&krishiv_common::config::MEMORY_LIMIT)
-                .and_then(krishiv_common::config::ConfigValue::as_size)
-        });
+        // As the session sees it: a `--conf` limit wins over `--memory-limit`.
+        let limit = merged
+            .get(&krishiv_common::config::MEMORY_LIMIT)
+            .and_then(krishiv_common::config::ConfigValue::as_size);
         Ok(Self {
             session,
             tables,
