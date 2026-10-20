@@ -97,7 +97,8 @@ pub const RSS_FLOOR_PER_THREAD: u64 = 16 << 20;
 /// and runs the process in a cgroup with `memory.max` at it.
 ///
 /// It holds for a process whose global allocator is configured for it: mimalloc with
-/// `krishiv_alloc` (this runner and the CLI, when a memory limit is configured). Memory an allocator retains is outside the
+/// `krishiv_alloc` (this runner and the CLI, when the limit is known at process start: an argument or
+/// `KRISHIV_MEMORY_LIMIT`). Memory an allocator retains is outside the
 /// pools' control, so an embedding host with another allocator, or without a release hook
 /// (`krishiv_memory::set_release_hook`), can exceed it by what its allocator keeps.
 ///
