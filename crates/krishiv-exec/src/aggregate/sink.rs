@@ -21,7 +21,7 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
 
-use arrow_array::UInt32Array;
+use arrow_array::{RecordBatch, UInt32Array};
 use arrow_select::take::take_record_batch;
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
@@ -30,7 +30,8 @@ use krishiv_memory::{
 };
 use krishiv_types::batch::{Batch, Weights};
 
-use super::table::{AggCore, AggTable};
+use super::rowtable::{Mode, RowTable};
+use super::table::{AggCore, AggTable, Table};
 use super::{AggregateSpec, unsupported};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
@@ -38,6 +39,8 @@ use crate::executor::{Executor, run_blocking};
 use crate::hash::{HashSeed, MAX_LEVEL, PARTITIONS};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::sync::{Mutex, lock};
+
+mod parallel;
 
 /// Groups per state batch when spilling and merging (one finalize step).
 const CHUNK: usize = 1024;
@@ -79,6 +82,9 @@ fn bump(c: &AtomicU64, n: u64) {
 pub struct HashAggregate {
     core: Arc<AggCore>,
     counters: Arc<Counters>,
+    /// Overrides the thread-local row tables' index mode (tests force
+    /// abandons).
+    row_mode: Option<Mode>,
 }
 
 impl HashAggregate {
@@ -90,6 +96,19 @@ impl HashAggregate {
         Ok(Arc::new(Self {
             core: Arc::new(AggCore::new(spec)?),
             counters: Arc::default(),
+            row_mode: None,
+        }))
+    }
+
+    /// [`new`](Self::new) whose row tables (when the row layout is on)
+    /// start their thread-local index in `mode`, deterministic mode or not:
+    /// tests force abandons and append-only tables with it.
+    #[cfg(test)]
+    pub(crate) fn with_row_mode(spec: AggregateSpec, mode: Mode) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self {
+            core: Arc::new(AggCore::new(spec)?),
+            counters: Arc::default(),
+            row_mode: Some(mode),
         }))
     }
 
@@ -104,6 +123,17 @@ impl HashAggregate {
             spill_bytes: l(&c.spill_bytes),
             repartitions: l(&c.repartitions),
         }
+    }
+
+    /// A new table: a thread-local one (`local`), or a merge table.
+    fn new_table(&self, g: &Global, local: bool) -> Result<Table> {
+        Ok(match g.rows {
+            Some(mode) => {
+                let mode = if local { mode } else { Mode::Grow };
+                Table::Rows(RowTable::new(&self.core, &g.seed, mode, local)?)
+            }
+            None => Table::Keys(AggTable::new(&self.core, &g.seed)?),
+        })
     }
 
     fn headroom(&self) -> usize {
@@ -163,18 +193,50 @@ impl Spiller {
 
     /// Writes groups `from..` of `table` as one run of partition files at
     /// `level` (blocking I/O).
-    fn write_run(&self, table: &AggTable, from: usize, level: u32) -> Result<Run> {
+    fn write_run(&self, table: &Table, from: usize, level: u32) -> Result<Run> {
+        let mut parts = table.ids_by_partition(level);
+        for ids in &mut parts {
+            ids.retain(|&i| i as usize >= from);
+        }
+        let chunk = spill_chunk(table.memory_size(), table.len());
+        self.write_parts(parts, chunk, &|ids| table.state_batch(ids))
+    }
+
+    /// Writes the rows of a row table that `keep` selects as one run of
+    /// partition files at `level` (blocking I/O).
+    fn write_run_rows(
+        &self,
+        table: &RowTable,
+        keep: &dyn Fn(u32) -> bool,
+        level: u32,
+    ) -> Result<Run> {
+        let mut parts = table.ids_by_partition(level);
+        for ids in &mut parts {
+            ids.retain(|&r| keep(r));
+        }
+        let chunk = spill_chunk(table.memory_size(), table.len());
+        self.write_parts(parts, chunk, &|ids| table.state_batch(ids))
+    }
+
+    /// Writes the state batches of the groups of each partition (`parts`,
+    /// in chunks of `chunk`) as one run.
+    fn write_parts(
+        &self,
+        parts: Vec<Vec<u32>>,
+        chunk: usize,
+        state: &dyn Fn(&[u32]) -> Result<RecordBatch>,
+    ) -> Result<Run> {
         let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
-        for (p, ids) in table.ids_by_partition(level).into_iter().enumerate() {
-            let ids: Vec<u32> = ids.into_iter().filter(|&i| i as usize >= from).collect();
+        for (p, ids) in parts.into_iter().enumerate() {
             if ids.is_empty() {
                 continue;
             }
             let mut writer = self.run_writer()?;
-            for chunk in ids.chunks(spill_chunk(table)) {
+            for chunk in ids.chunks(chunk) {
                 self.query.check_cancelled()?;
-                let b = Batch::new(table.state_batch(chunk)?);
-                writer.write(&b).map_err(KrishivError::from)?;
+                writer
+                    .write(&Batch::new(state(chunk)?))
+                    .map_err(KrishivError::from)?;
             }
             files[p] = Some(self.finish(writer)?);
         }
@@ -183,9 +245,9 @@ impl Spiller {
     }
 
     /// Writes the final output of `table` to `out` (blocking I/O).
-    fn write_output(&self, table: &AggTable, out: &mut SpillWriter) -> Result<()> {
+    fn write_output(&self, table: &Table, out: &mut SpillWriter) -> Result<()> {
         let n = u32::try_from(table.len()).map_err(|_| internal("too many groups".to_owned()))?;
-        let ids: Vec<u32> = (0..n).collect();
+        let ids = table.ids(0..table.len());
         for chunk in ids.chunks(self.batch_size) {
             self.query.check_cancelled()?;
             let b = Batch::new(table.output_batch(chunk)?);
@@ -198,8 +260,8 @@ impl Spiller {
 
 /// Groups per spilled batch, so that encoding one fits [`HEADROOM`]: a
 /// table's bytes per group bound its state's.
-fn spill_chunk(table: &AggTable) -> usize {
-    let per_group = table.memory_size() / table.len().max(1);
+fn spill_chunk(memory: usize, groups: usize) -> usize {
+    let per_group = memory / groups.max(1);
     ((HEADROOM - (64 << 10)) / 3 / per_group.max(1)).clamp(16, CHUNK)
 }
 
@@ -208,7 +270,7 @@ fn spill_chunk(table: &AggTable) -> usize {
 struct Run(Vec<Option<SpillFile>>);
 
 struct Local {
-    table: AggTable,
+    table: Table,
     reservation: Reservation,
     signal: Arc<SpillSignal>,
     /// This driver's consumer: combined tables are re-charged to the last
@@ -222,7 +284,7 @@ struct Local {
 /// A partition being merged from disk.
 struct Current {
     level: u32,
-    table: AggTable,
+    table: Table,
     reservation: Reservation,
     files: Vec<SpillFile>,
     reader: Option<SpillReader>,
@@ -235,7 +297,7 @@ struct Current {
 #[derive(Default)]
 struct Inner {
     /// Combined driver tables (in-memory phase; `tables[0]` is the target).
-    tables: Vec<(AggTable, Reservation)>,
+    tables: Vec<(Table, Reservation)>,
     /// Groups of `tables[1]` already merged into `tables[0]`.
     merged: usize,
     runs: Vec<Run>,
@@ -257,7 +319,14 @@ struct Inner {
 enum Final {
     /// In memory; the reservation is held as long as the table.
     Table {
-        table: AggTable,
+        table: Table,
+        _held: Vec<Reservation>,
+    },
+    /// Merged row-table partitions in memory, read in `chunks` (table,
+    /// positions); the reservations are held as long as the tables.
+    Parts {
+        tables: Vec<Table>,
+        chunks: Vec<(usize, std::ops::Range<usize>)>,
         _held: Vec<Reservation>,
     },
     /// On disk; the source takes the file when it starts reading.
@@ -266,6 +335,9 @@ enum Final {
 
 struct Global {
     seed: HashSeed,
+    /// Row tables (`krishiv.exec.agg.rowLayout` with fixed-width keys):
+    /// the thread-local tables' index mode.
+    rows: Option<Mode>,
     /// Bytes of the combined tables, before `finalize`.
     combined: AtomicUsize,
     inner: Mutex<Inner>,
@@ -365,7 +437,7 @@ fn tasks_of(runs: Vec<Run>, level: u32, tasks: &mut Vec<(u32, Vec<SpillFile>)>) 
 impl HashAggregate {
     /// A blocking job that frees the in-memory finalize state, if any: spill
     /// the tables (in-memory phase) or split the current partition.
-    fn free_job(&self, inner: &mut Inner, ctx: &TaskContext) -> Result<Option<Job>> {
+    fn free_job(&self, g: &Global, inner: &mut Inner, ctx: &TaskContext) -> Result<Option<Job>> {
         let Some(s) = self.spiller(ctx) else {
             return Ok(None);
         };
@@ -381,8 +453,11 @@ impl HashAggregate {
                 }
                 Ok(Box::new(move |inner: &mut Inner| {
                     inner.disk = true;
-                    runs.extend(std::mem::take(&mut inner.runs));
-                    tasks_of(runs, 0, &mut inner.tasks);
+                    // Runs merge in the order their rows arrived: the
+                    // drivers' earlier spills, then the tables.
+                    let mut all = std::mem::take(&mut inner.runs);
+                    all.extend(runs);
+                    tasks_of(all, 0, &mut inner.tasks);
                     Ok(())
                 }) as Apply)
             })));
@@ -397,7 +472,7 @@ impl HashAggregate {
             return Err(no_memory(cur.reservation.size()));
         }
         inner.busy = true;
-        let fresh = AggTable::new(&self.core, cur.table.seed())?;
+        let fresh = self.new_table(g, false)?;
         let table = std::mem::replace(&mut cur.table, fresh);
         let mut held = std::mem::replace(&mut cur.reservation, s.consumer.reservation());
         let level = cur.level + 1;
@@ -416,8 +491,14 @@ impl HashAggregate {
     }
 
     /// A job to free memory, or the error that none can be freed.
-    fn must_free(&self, inner: &mut Inner, ctx: &TaskContext, want: usize) -> Result<Step> {
-        self.free_job(inner, ctx)?
+    fn must_free(
+        &self,
+        g: &Global,
+        inner: &mut Inner,
+        ctx: &TaskContext,
+        want: usize,
+    ) -> Result<Step> {
+        self.free_job(g, inner, ctx)?
             .map(Step::Job)
             .ok_or_else(|| no_memory(want))
     }
@@ -443,7 +524,7 @@ impl HashAggregate {
 
     fn memory_step(&self, g: &Global, inner: &mut Inner, ctx: &TaskContext) -> Result<Step> {
         if !inner.runs.is_empty() {
-            return self.must_free(inner, ctx, 0);
+            return self.must_free(g, inner, ctx, 0);
         }
         let tables = &mut inner.tables;
         if inner.merged == 0
@@ -454,10 +535,7 @@ impl HashAggregate {
         if tables.len() <= 1 {
             let (table, reservation) = match tables.pop() {
                 Some(t) => t,
-                None => (
-                    AggTable::new(&self.core, &g.seed)?,
-                    ctx.consumer().reservation(),
-                ),
+                None => (self.new_table(g, false)?, ctx.consumer().reservation()),
             };
             bump(&self.counters.groups, table.len() as u64);
             let mut held = std::mem::take(&mut inner.granted);
@@ -473,17 +551,15 @@ impl HashAggregate {
             return Ok(Step::Yield);
         }
         let end = (inner.merged + CHUNK).min(src.len());
-        let ids: Vec<u32> = (inner.merged..end)
-            .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
-            .collect();
+        let ids = src.ids(inner.merged..end);
         let p = dst.0.prepare(&Batch::new(src.state_batch(&ids)?), true)?;
         let granted: usize = inner.granted.iter().map(Reservation::size).sum();
-        let want = dst.0.projected(&p);
+        let want = dst.0.projected(&p)?;
         if let Err(need) = reserve_to(&mut dst.1, want.saturating_sub(granted)) {
             if self.core.spec.spill.is_none() {
                 return Ok(Step::Grow(need));
             }
-            return self.must_free(inner, ctx, want);
+            return self.must_free(g, inner, ctx, want);
         }
         dst.0.apply(&p)?;
         inner.merged = end;
@@ -495,7 +571,7 @@ impl HashAggregate {
             .spiller(ctx)
             .ok_or_else(|| internal("disk phase without spill".to_owned()))?;
         let Some(cur) = inner.current.as_mut() else {
-            let Some((level, files)) = inner.tasks.pop() else {
+            let Some((level, mut files)) = inner.tasks.pop() else {
                 if let Some(w) = inner.out.take() {
                     inner.busy = true;
                     return Ok(Step::Job(Box::new(move || {
@@ -510,9 +586,12 @@ impl HashAggregate {
                 let _ = g.done.set(Final::File(file));
                 return Ok(Step::Done);
             };
+            // Files are taken from the back: reverse them so they merge in
+            // run order (the order their rows arrived; `first`/`last`).
+            files.reverse();
             inner.current = Some(Current {
                 level,
-                table: AggTable::new(&self.core, &g.seed)?,
+                table: self.new_table(g, false)?,
                 reservation: ctx.consumer().reservation(),
                 files,
                 reader: None,
@@ -554,9 +633,7 @@ impl HashAggregate {
             })));
         };
         if let Some((_, writers)) = cur.split.as_mut() {
-            let parts = self
-                .core
-                .partitions_of(batch.data(), &g.seed, cur.level + 1)?;
+            let parts = cur.table.partitions_of(batch.data(), cur.level + 1)?;
             let mut picked = Vec::new();
             for (p, rows) in parts.into_iter().enumerate() {
                 if !rows.is_empty() {
@@ -588,10 +665,10 @@ impl HashAggregate {
             })));
         }
         let p = cur.table.prepare(&batch, true)?;
-        let want = cur.table.projected(&p) + HEADROOM;
+        let want = cur.table.projected(&p)? + HEADROOM;
         if reserve_to(&mut cur.reservation, want).is_err() {
             cur.pending = Some(batch);
-            return self.must_free(inner, ctx, want);
+            return self.must_free(g, inner, ctx, want);
         }
         cur.table.apply(&p)?;
         Ok(Step::Yield)
@@ -655,8 +732,15 @@ impl Sink for HashAggregate {
     }
 
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
+        let config = ctx.query().config();
+        let rows = (config.agg_row_layout && self.core.rows.is_some()).then(|| {
+            let threads = ctx.executor().parallelism();
+            self.row_mode
+                .unwrap_or_else(|| Mode::local(config.seed.is_some(), threads))
+        });
         Ok(Arc::new(Global {
-            seed: HashSeed::new(ctx.query().config().seed),
+            seed: HashSeed::new(config.seed),
+            rows,
             combined: AtomicUsize::new(0),
             inner: Mutex::new(Inner::default()),
             done: OnceLock::new(),
@@ -667,7 +751,7 @@ impl Sink for HashAggregate {
     fn local_state(&self, ctx: &TaskContext, g: &GlobalState) -> Result<LocalState> {
         let memory = ctx.consumer();
         Ok(Box::new(Local {
-            table: AggTable::new(&self.core, &global(g)?.seed)?,
+            table: self.new_table(global(g)?, true)?,
             reservation: memory.reservation(),
             signal: Arc::clone(memory.signal()),
             consumer: Arc::clone(memory.consumer()),
@@ -684,7 +768,7 @@ impl Sink for HashAggregate {
             ));
         }
         let p = l.table.prepare(&input, false)?;
-        let want = l.table.projected(&p) + self.headroom();
+        let want = l.table.projected(&p)? + self.headroom();
         if let Err(bytes) = reserve_to(&mut l.reservation, want) {
             return Ok(SinkStatus::NeedMemory { bytes });
         }
@@ -744,6 +828,11 @@ impl Sink for HashAggregate {
                     r.transfer_to(to).map_err(KrishivError::from)?;
                 }
             }
+            // Row tables hold partial duplicates: they merge partition by
+            // partition, in parallel, unless they spilled.
+            if g.rows.is_some() && self.finalize_rows(g, ctx).await? {
+                return Ok(());
+            }
             loop {
                 ctx.query().check_cancelled()?;
                 match self.step(g, ctx)? {
@@ -781,7 +870,7 @@ impl Sink for HashAggregate {
             let own = if l.table.not_worth_spilling() {
                 None
             } else {
-                let fresh = AggTable::new(&self.core, l.table.seed())?;
+                let fresh = self.new_table(g, true)?;
                 Some(std::mem::replace(&mut l.table, fresh))
             };
             if own.is_none() && combined.is_empty() {
@@ -830,7 +919,7 @@ impl Sink for HashAggregate {
                     return Ok(0);
                 }
                 let before = held(&inner);
-                match self.free_job(&mut inner, ctx)? {
+                match self.free_job(g, &mut inner, ctx)? {
                     Some(job) => (job, before),
                     None => return Ok(0),
                 }
@@ -890,6 +979,7 @@ impl Source for HashAggregate {
     fn max_parallelism(&self, g: &GlobalState) -> usize {
         match global(g).ok().and_then(|g| g.done.get()) {
             Some(Final::Table { table, .. }) => table.len().div_ceil(DEFAULT_CHUNK_ROWS).max(1),
+            Some(Final::Parts { chunks, .. }) => chunks.len().max(1),
             _ => 1,
         }
     }
@@ -919,10 +1009,18 @@ impl Source for HashAggregate {
                         return Ok(None);
                     }
                     let end = (start + l.batch_size).min(t.len());
-                    let ids: Vec<u32> = (start..end)
-                        .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
-                        .collect();
+                    let ids = t.ids(start..end);
                     Ok(Some(Batch::new(t.output_batch(&ids)?)))
+                }
+                Some(Final::Parts { tables, chunks, .. }) => {
+                    let i = g.cursor.fetch_add(1, AtomicOrdering::Relaxed);
+                    let Some((t, range)) = chunks.get(i) else {
+                        return Ok(None);
+                    };
+                    let t = tables
+                        .get(*t)
+                        .ok_or_else(|| internal("aggregate chunk without its table".to_owned()))?;
+                    Ok(Some(Batch::new(t.output_batch(&t.ids(range.clone()))?)))
                 }
                 Some(Final::File(file)) => {
                     let file = if l.reader.is_none() {

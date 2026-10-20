@@ -102,8 +102,23 @@ fn rows(batches: &[Batch]) -> Vec<String> {
     out
 }
 
-/// Runs `plan` on `slots` deterministic drivers under a per-query `limit`.
+/// Runs `plan` on `slots` deterministic drivers under a per-query `limit`,
+/// with the default aggregate tables and again with the row-layout ones
+/// (`krishiv.exec.agg.rowLayout`), which must return the same rows; returns
+/// the default run.
 async fn run(plan: Arc<dyn ExecNode>, slots: usize, limit: usize) -> (Vec<Batch>, QueryMetrics) {
+    let off = run_with(Arc::clone(&plan), slots, limit, false).await;
+    let on = run_with(plan, slots, limit, true).await;
+    assert_eq!(rows(&on.0), rows(&off.0), "the row layout changed the rows");
+    off
+}
+
+async fn run_with(
+    plan: Arc<dyn ExecNode>,
+    slots: usize,
+    limit: usize,
+    agg_row_layout: bool,
+) -> (Vec<Batch>, QueryMetrics) {
     let runner = QueryRunner::new(TokioExecutor::deterministic(slots).unwrap());
     let root = TreePool::with_clock(
         &MemoryConfig {
@@ -117,6 +132,7 @@ async fn run(plan: Arc<dyn ExecNode>, slots: usize, limit: usize) -> (Vec<Batch>
     );
     let config = ExecConfig {
         seed: Some(3),
+        agg_row_layout,
         ..ExecConfig::default()
     };
     let pool = root.child("q", Some(limit));

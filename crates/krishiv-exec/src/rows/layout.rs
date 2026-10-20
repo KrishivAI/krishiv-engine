@@ -3,11 +3,13 @@
 //! columns becomes rows ([`EncodedKeys`]), and how two rows compare.
 
 use std::hash::BuildHasher;
+use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type};
-use arrow_array::{Array, ArrayRef};
-use arrow_buffer::NullBuffer;
+use arrow_array::{Array, ArrayRef, BooleanArray, make_array};
+use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
+use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use krishiv_common::error::KrishivUnsupportedFeature;
 
@@ -203,8 +205,63 @@ impl RowLayout {
     }
 
     /// Offsets of the string/binary views in a row.
+    #[cfg(any(test, feature = "row-table-prototype"))]
     pub(super) fn views(&self) -> &[usize] {
         &self.views
+    }
+
+    /// Whether every key is fixed-width (no string or binary views): such
+    /// rows hold the whole key and [`decode`](Self::decode) restores it.
+    pub fn is_fixed_width(&self) -> bool {
+        self.views.is_empty()
+    }
+
+    /// The key columns of `rows` (rows of this layout, in output order), in
+    /// key order: the inverse of [`encode`](Self::encode). Floats come back
+    /// normalized, as they were stored; NULL keys come back NULL.
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for string or binary keys (their bytes
+    /// may live in a heap); `INTERNAL_ERROR` for a row shorter than the
+    /// layout's stride.
+    pub fn decode(&self, rows: &[&[u8]]) -> Result<Vec<ArrayRef>> {
+        if let Some(r) = rows.iter().find(|r| r.len() < self.stride) {
+            return Err(internal(format!(
+                "a {}-byte key row for a {}-byte layout",
+                r.len(),
+                self.stride
+            )));
+        }
+        self.columns
+            .iter()
+            .map(|c| {
+                let nulls = c.null_bit.map(|bit| {
+                    let (byte, mask) = (KEYS_START + bit / 8, 1u8 << (bit % 8));
+                    NullBuffer::new(rows.iter().map(|r| r[byte] & mask == 0).collect())
+                });
+                let at = c.offset;
+                if c.kind == Kind::Bool {
+                    let values: BooleanBuffer = rows.iter().map(|r| r[at] != 0).collect();
+                    return Ok(Arc::new(BooleanArray::new(values, nulls)) as ArrayRef);
+                }
+                if c.kind == Kind::View {
+                    let feature = format!("decoding a row-format key of type {}", c.data_type);
+                    return Err(KrishivUnsupportedFeature { feature }.into());
+                }
+                let w = c.kind.width();
+                let mut values = MutableBuffer::new(rows.len() * w);
+                for r in rows {
+                    values.extend_from_slice(&r[at..at + w]);
+                }
+                let data = ArrayData::builder(c.data_type.clone())
+                    .len(rows.len())
+                    .add_buffer(values.into())
+                    .nulls(nulls)
+                    .build()
+                    .map_err(|e| internal(e.to_string()))?;
+                Ok(make_array(data))
+            })
+            .collect()
     }
 
     /// Encodes and hashes the key `columns` of one batch (one per key type,

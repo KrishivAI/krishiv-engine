@@ -38,6 +38,12 @@ use AggregateFunction::{Avg, Count, Max, Min, Sum};
 struct Opts {
     slots: usize,
     limit: usize,
+    /// Also run with `krishiv.exec.agg.rowLayout` on and require the same
+    /// rows (or the same error).
+    both_layouts: bool,
+    /// The deterministic seed (morsel order); `None` claims morsels in
+    /// order.
+    seed: Option<u64>,
 }
 
 impl Default for Opts {
@@ -45,6 +51,8 @@ impl Default for Opts {
         Self {
             slots: 3,
             limit: 1 << 30,
+            both_layouts: true,
+            seed: Some(7),
         }
     }
 }
@@ -62,13 +70,44 @@ fn pool(limit: usize) -> Arc<TreePool> {
     )
 }
 
-/// Runs `plan` on a deterministic executor (seed 7); checks the pool is
-/// empty afterwards.
+/// Runs `plan` on a deterministic executor (seed `o.seed`); checks the pool is
+/// empty afterwards. Unless `o.both_layouts` is off, runs it again with the
+/// row-layout aggregate tables and checks the rows (or the error) are the
+/// same; returns the default layout's outcome.
 async fn exec(plan: Arc<dyn ExecNode>, o: Opts) -> crate::Result<(Vec<Batch>, QueryMetrics)> {
+    let off = exec_with(Arc::clone(&plan), o, false).await;
+    if o.both_layouts {
+        let on = exec_with(plan, o, true).await;
+        match (&off, &on) {
+            (Ok(a), Ok(b)) => assert_eq!(rows(&a.0), rows(&b.0), "row layout changed the rows"),
+            // Memory errors quote the bytes asked for, which differ.
+            (Err(a), Err(b)) if a.error_class() == ErrorClass::UnableToAcquireMemory => {
+                assert_eq!(b.error_class(), ErrorClass::UnableToAcquireMemory, "{b}");
+            }
+            (Err(a), Err(b)) => {
+                assert_eq!(a.to_string(), b.to_string(), "row layout changed the error");
+            }
+            (a, b) => panic!(
+                "row layout changed the outcome: {:?} vs {:?}",
+                a.as_ref().err(),
+                b.as_ref().err()
+            ),
+        }
+    }
+    off
+}
+
+/// [`exec`] with `krishiv.exec.agg.rowLayout` set to `rows`.
+async fn exec_with(
+    plan: Arc<dyn ExecNode>,
+    o: Opts,
+    rows: bool,
+) -> crate::Result<(Vec<Batch>, QueryMetrics)> {
     let runner = QueryRunner::new(TokioExecutor::deterministic(o.slots)?);
     let root = pool(o.limit);
     let config = ExecConfig {
-        seed: Some(7),
+        seed: o.seed,
+        agg_row_layout: rows,
         ..ExecConfig::default()
     };
     let q = QueryContext::new(
@@ -706,6 +745,7 @@ async fn spill_repartitions_a_partition_that_does_not_fit() {
     let o = Opts {
         limit: 512 << 10,
         slots: 2,
+        ..Opts::default()
     };
     let (out, m) = exec(node(scan(&s, b), sp), o).await.unwrap();
     assert_eq!(rows(&out), expected);
@@ -730,49 +770,54 @@ async fn unspillable_out_of_memory_fails_cleanly() {
 async fn spill_global_during_finalize() {
     let (s, b) = grouped_input(30_000, 20_000);
     let expected = run_rows(single(&s, &b)).await;
-    let (_m, scope) = spill_dir();
-    let mut sp = spec(&s, vec![0], grouped_aggs(&s));
-    sp.spill = Some(scope);
-    let agg = HashAggregate::new(sp).unwrap();
-    let root = pool(1 << 30);
-    let config = ExecConfig::default();
-    let q = QueryContext::new(
-        QueryId(9),
-        WorkloadClass::Batch,
-        config,
-        root.child("q", None),
-    );
-    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
-    let ctx = |id, name| {
-        let e = Arc::clone(&executor);
-        TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(id), name)
-    };
-    let sink_ctx = ctx(0, "agg");
-    let g = Sink::global_state(&*agg, &sink_ctx).unwrap();
-    for part in b.chunks(10) {
-        let mut l = Sink::local_state(&*agg, &sink_ctx, &g).unwrap();
-        for cols in part {
-            let batch = Batch::new(RecordBatch::try_new(Arc::clone(&s), cols.clone()).unwrap());
-            agg.sink(batch, &mut l, &g).unwrap();
+    for rows_layout in [false, true] {
+        let (_m, scope) = spill_dir();
+        let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+        sp.spill = Some(scope);
+        let agg = HashAggregate::new(sp).unwrap();
+        let root = pool(1 << 30);
+        let config = ExecConfig {
+            agg_row_layout: rows_layout,
+            ..ExecConfig::default()
+        };
+        let q = QueryContext::new(
+            QueryId(9),
+            WorkloadClass::Batch,
+            config,
+            root.child("q", None),
+        );
+        let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+        let ctx = |id, name| {
+            let e = Arc::clone(&executor);
+            TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(id), name)
+        };
+        let sink_ctx = ctx(0, "agg");
+        let g = Sink::global_state(&*agg, &sink_ctx).unwrap();
+        for part in b.chunks(10) {
+            let mut l = Sink::local_state(&*agg, &sink_ctx, &g).unwrap();
+            for cols in part {
+                let batch = Batch::new(RecordBatch::try_new(Arc::clone(&s), cols.clone()).unwrap());
+                agg.sink(batch, &mut l, &g).unwrap();
+            }
+            agg.combine(l, &g).unwrap();
         }
-        agg.combine(l, &g).unwrap();
+        assert!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap() > 0);
+        assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
+        agg.finalize(&g, &sink_ctx).await.unwrap();
+        assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
+        let src = ctx(1, "src").with_dependency(Arc::clone(&g));
+        let sg = Source::global_state(&*agg, &src).unwrap();
+        assert_eq!(agg.max_parallelism(&sg), 1);
+        let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
+        let mut out = Vec::new();
+        while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
+            out.push(b);
+        }
+        assert_eq!(rows(&out), expected);
+        assert!(agg.metrics().spill_runs >= 2);
+        drop((sl, sg, src, g, sink_ctx));
+        assert_eq!(root.reserved(), 0);
     }
-    assert!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap() > 0);
-    assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
-    agg.finalize(&g, &sink_ctx).await.unwrap();
-    assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
-    let src = ctx(1, "src").with_dependency(Arc::clone(&g));
-    let sg = Source::global_state(&*agg, &src).unwrap();
-    assert_eq!(agg.max_parallelism(&sg), 1);
-    let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
-    let mut out = Vec::new();
-    while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
-        out.push(b);
-    }
-    assert_eq!(rows(&out), expected);
-    assert!(agg.metrics().spill_runs >= 2);
-    drop((sl, sg, src, g, sink_ctx));
-    assert_eq!(root.reserved(), 0);
 }
 
 /// Same seed, same output order and metrics (deterministic mode).
@@ -896,7 +941,7 @@ proptest! {
         };
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let limit = if spill { 1 << 20 } else { 1 << 30 };
-        let out = rt.block_on(exec(plan, Opts { slots, limit })).unwrap().0;
+        let out = rt.block_on(exec(plan, Opts { slots, limit, ..Opts::default() })).unwrap().0;
         prop_assert_eq!(rows(&out), oracle(&keys, &xs));
     }
 }
@@ -1021,12 +1066,18 @@ async fn bypass_on_the_last_batch_and_limit_during_finish() {
     };
     let (plan, p) = two_phase(scan(&s, b.clone()), &s, policy, None);
     assert_eq!(rows(&exec(plan, o).await.unwrap().0), expected);
-    assert_eq!(p.bypassed_drivers(), 1);
+    // Once per layout (`exec` runs both).
+    assert_eq!(p.bypassed_drivers(), 2);
     let mut first = spec(&s, vec![0], grouped_aggs(&s));
     first.output = AggregateOutput::Partial;
     let p = PartialAggregate::new(first, BypassPolicy::default(), None).unwrap();
     let limited = Arc::new(Pipe(PartialNode::new(scan(&s, b), p), Limit::new(5)));
     let plan = Arc::new(Break(limited, Count::new(), false));
+    // No hash aggregate, and the limit counts across runs: one run.
+    let o = Opts {
+        both_layouts: false,
+        ..o
+    };
     let out = exec(plan, o).await.unwrap().0;
     assert_eq!(
         out[0].data().column(0).as_primitive::<Int64Type>().value(0),
@@ -1040,34 +1091,37 @@ async fn bypass_on_the_last_batch_and_limit_during_finish() {
 #[tokio::test]
 async fn finalize_edge_cases() {
     let (s, b) = grouped_input(30_000, 30_000);
-    // Three disjoint tables that fit, whose merge does not.
-    let r = finalize_directly(
-        spec(&s, vec![0], grouped_aggs(&s)),
-        &s,
-        &b,
-        3,
-        3 << 20,
-        false,
-    )
-    .await;
-    assert_eq!(
-        r.err().map(|e| e.error_class()),
-        Some(ErrorClass::UnableToAcquireMemory)
-    );
-    let (_m, scope) = spill_dir();
-    let mut global = spec(&s, vec![], grouped_aggs(&s));
-    global.spill = Some(scope.clone());
-    let out = finalize_directly(global, &s, &b, 3, 1 << 30, true)
-        .await
-        .unwrap();
-    assert_eq!(out.len(), 1);
-    assert!(out[0].starts_with("30000|"), "{out:?}");
-    let mut empty = spec(&s, vec![0], grouped_aggs(&s));
-    empty.spill = Some(scope);
-    let out = finalize_directly(empty, &s, &[], 1, 1 << 30, true)
-        .await
-        .unwrap();
-    assert!(out.is_empty());
+    for rows_layout in [false, true] {
+        // Three disjoint tables that fit, whose merge does not.
+        let r = finalize_directly(
+            spec(&s, vec![0], grouped_aggs(&s)),
+            &s,
+            &b,
+            3,
+            3 << 20,
+            false,
+            rows_layout,
+        )
+        .await;
+        assert_eq!(
+            r.err().map(|e| e.error_class()),
+            Some(ErrorClass::UnableToAcquireMemory)
+        );
+        let (_m, scope) = spill_dir();
+        let mut global = spec(&s, vec![], grouped_aggs(&s));
+        global.spill = Some(scope.clone());
+        let out = finalize_directly(global, &s, &b, 3, 1 << 30, true, rows_layout)
+            .await
+            .unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(out[0].starts_with("30000|"), "{out:?}");
+        let mut empty = spec(&s, vec![0], grouped_aggs(&s));
+        empty.spill = Some(scope);
+        let out = finalize_directly(empty, &s, &[], 1, 1 << 30, true, rows_layout)
+            .await
+            .unwrap();
+        assert!(out.is_empty());
+    }
 }
 
 /// A driver whose own table is not worth spilling (a global aggregate's one
@@ -1130,10 +1184,14 @@ async fn finalize_directly(
     drivers: usize,
     limit: usize,
     spill_first: bool,
+    rows_layout: bool,
 ) -> crate::Result<Vec<String>> {
     let agg = HashAggregate::new(sp).unwrap();
     let root = pool(1 << 30);
-    let config = ExecConfig::default();
+    let config = ExecConfig {
+        agg_row_layout: rows_layout,
+        ..ExecConfig::default()
+    };
     let q = QueryContext::new(
         QueryId(9),
         WorkloadClass::Batch,
@@ -1183,17 +1241,22 @@ async fn limit_before_partial_and_spec_errors() {
     let mut first = spec(&s, vec![0], vec![AggregateExpr::count_star("c")]);
     first.output = AggregateOutput::Partial;
     let second = second_phase(&first, None);
-    let p = PartialAggregate::new(first.clone(), BypassPolicy::default(), None).unwrap();
-    let limited = Arc::new(Pipe(scan(&s, b), Limit::new(5)));
-    let plan = node(PartialNode::new(limited, p), second);
+    // The limit counts across runs: a fresh plan per layout.
+    let plan = || {
+        let p = PartialAggregate::new(first.clone(), BypassPolicy::default(), None).unwrap();
+        let limited = Arc::new(Pipe(scan(&s, b.clone()), Limit::new(5)));
+        node(PartialNode::new(limited, p), second.clone())
+    };
     let o = Opts {
         slots: 1,
+        both_layouts: false,
         ..Opts::default()
     };
     // Five rows of one (seeded) batch: three keys, five rows in all.
-    let out = rows(&exec(plan, o).await.unwrap().0);
+    let out = rows(&exec(plan(), o).await.unwrap().0);
     let total: i64 = out.iter().map(|r| r[2..].parse::<i64>().unwrap()).sum();
     assert_eq!((out.len(), total), (3, 5), "{out:?}");
+    assert_eq!(rows(&exec_with(plan(), o, true).await.unwrap().0), out);
 
     let data =
         RecordBatch::try_new(Arc::clone(&s), vec![i64s(&[Some(1)]), i64s(&[Some(1)])]).unwrap();
@@ -1229,44 +1292,49 @@ async fn limit_before_partial_and_spec_errors() {
 #[tokio::test]
 async fn combined_tables_move_to_the_last_driver() {
     let (s, b) = grouped_input(9_000, 9_000);
-    let agg = HashAggregate::new(spec(&s, vec![0], grouped_aggs(&s))).unwrap();
-    let root = pool(1 << 30);
-    let config = ExecConfig::default();
-    let q = QueryContext::new(
-        QueryId(3),
-        WorkloadClass::Batch,
-        config,
-        root.child("q", None),
-    );
-    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
-    let ctx = |id| {
-        let e = Arc::clone(&executor);
-        TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(id), "agg")
-    };
-    let drivers: Vec<TaskContext> = (0..3).map(ctx).collect();
-    let g = Sink::global_state(&*agg, &drivers[0]).unwrap();
-    for (d, part) in drivers.iter().zip(b.chunks(3)) {
-        let mut l = Sink::local_state(&*agg, d, &g).unwrap();
-        for cols in part {
-            let batch = Batch::new(RecordBatch::try_new(Arc::clone(&s), cols.clone()).unwrap());
-            agg.sink(batch, &mut l, &g).unwrap();
+    for rows_layout in [false, true] {
+        let agg = HashAggregate::new(spec(&s, vec![0], grouped_aggs(&s))).unwrap();
+        let root = pool(1 << 30);
+        let config = ExecConfig {
+            agg_row_layout: rows_layout,
+            ..ExecConfig::default()
+        };
+        let q = QueryContext::new(
+            QueryId(3),
+            WorkloadClass::Batch,
+            config,
+            root.child("q", None),
+        );
+        let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+        let ctx = |id| {
+            let e = Arc::clone(&executor);
+            TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(id), "agg")
+        };
+        let drivers: Vec<TaskContext> = (0..3).map(ctx).collect();
+        let g = Sink::global_state(&*agg, &drivers[0]).unwrap();
+        for (d, part) in drivers.iter().zip(b.chunks(3)) {
+            let mut l = Sink::local_state(&*agg, d, &g).unwrap();
+            for cols in part {
+                let batch = Batch::new(RecordBatch::try_new(Arc::clone(&s), cols.clone()).unwrap());
+                agg.sink(batch, &mut l, &g).unwrap();
+            }
+            agg.combine(l, &g).unwrap();
         }
-        agg.combine(l, &g).unwrap();
+        let held = root.reserved();
+        let last = drivers[2].consumer().consumer().peak();
+        assert!(last * 10 >= held * 9, "last driver holds {last} of {held}");
+        // Another driver may finalize: the tables move to its consumer first.
+        let first = drivers[0].consumer().consumer().peak();
+        agg.finalize(&g, &drivers[0]).await.unwrap();
+        let after = drivers[0].consumer().consumer().peak();
+        assert!(first < held / 2, "driver 0 held {first} of {held} before");
+        assert!(
+            after >= held * 9 / 10,
+            "finalizing driver holds {after} of {held}"
+        );
+        drop((g, drivers));
+        assert_eq!(root.reserved(), 0);
     }
-    let held = root.reserved();
-    let last = drivers[2].consumer().consumer().peak();
-    assert!(last * 10 >= held * 9, "last driver holds {last} of {held}");
-    // Another driver may finalize: the tables move to its consumer first.
-    let first = drivers[0].consumer().consumer().peak();
-    agg.finalize(&g, &drivers[0]).await.unwrap();
-    let after = drivers[0].consumer().consumer().peak();
-    assert!(first < held / 2, "driver 0 held {first} of {held} before");
-    assert!(
-        after >= held * 9 / 10,
-        "finalizing driver holds {after} of {held}"
-    );
-    drop((g, drivers));
-    assert_eq!(root.reserved(), 0);
 }
 
 fn picks_input() -> (SchemaRef, Vec<Vec<ArrayRef>>) {
@@ -1395,4 +1463,305 @@ fn first_and_last_types_and_states() {
         unsupported.result_type().unwrap_err().error_class(),
         ErrorClass::KrishivUnsupportedFeature
     );
+}
+
+/// Input of the row-layout property test: keys `(k, f, b)` (an `Int32`
+/// from `0..keys`, a `Float64` from a set with `-0.0` and NaN, a
+/// `Boolean`), values `x` (`Int64`), `d` (`decimal(12,2)`), `s` (strings)
+/// and `g = x / 2` (`Float64`).
+type RowCase = (
+    Option<i32>,
+    Option<u8>,
+    Option<bool>,
+    Option<i64>,
+    Option<i64>,
+    Option<u16>,
+);
+
+fn row_case_batches(data: &[RowCase], keys: i32, batch: usize) -> (SchemaRef, Vec<Vec<ArrayRef>>) {
+    use arrow_array::BooleanArray;
+    let s = schema(vec![
+        ("k", DataType::Int32),
+        ("f", DataType::Float64),
+        ("b", DataType::Boolean),
+        ("x", DataType::Int64),
+        ("d", DataType::Decimal128(12, 2)),
+        ("s", DataType::Utf8View),
+        ("g", DataType::Float64),
+    ]);
+    const FLOATS: [f64; 5] = [0.0, -0.0, f64::NAN, 1.5, -2.25];
+    let batches = data
+        .chunks(batch.max(1))
+        .map(|c| {
+            let k: Int32Array = c.iter().map(|r| r.0.map(|v| v.rem_euclid(keys))).collect();
+            let f: Float64Array = c
+                .iter()
+                .map(|r| r.1.map(|v| FLOATS[usize::from(v) % FLOATS.len()]))
+                .collect();
+            let b: BooleanArray = c.iter().map(|r| r.2).collect();
+            let x: Int64Array = c.iter().map(|r| r.3).collect();
+            let d = Decimal128Array::from_iter(c.iter().map(|r| r.4.map(i128::from)))
+                .with_precision_and_scale(12, 2)
+                .unwrap();
+            let s = StringViewArray::from_iter(c.iter().map(|r| {
+                r.5.map(|v| format!("value-{:05}-with-a-long-tail", v % 977))
+            }));
+            // No -0.0 among the values: `min`/`max` of -0.0 and 0.0 keep
+            // whichever comes first, so they depend on the merge order.
+            #[expect(clippy::cast_precision_loss, reason = "small integers")]
+            let g: Float64Array = c.iter().map(|r| r.3.map(|v| v as f64 * 0.5)).collect();
+            let cols: Vec<ArrayRef> = vec![
+                Arc::new(k),
+                Arc::new(f),
+                Arc::new(b),
+                Arc::new(x),
+                Arc::new(d),
+                Arc::new(s),
+                Arc::new(g),
+            ];
+            cols
+        })
+        .collect();
+    (s, batches)
+}
+
+/// Aggregates of every accumulator kind; `picks` adds `first`/`last`,
+/// which depend on the order of the drivers' partial states.
+fn row_case_aggs(s: &SchemaRef, picks: bool) -> Vec<AggregateExpr> {
+    use AggregateFunction::{First, Last};
+    let mut a = vec![
+        AggregateExpr::count_star("c"),
+        agg(Count, 3, s),
+        agg(Sum, 3, s),
+        agg(Avg, 3, s),
+        agg(Sum, 4, s),
+        agg(Avg, 4, s),
+        agg(Min, 6, s),
+        agg(Max, 6, s),
+        agg(Max, 4, s),
+        agg(Min, 5, s),
+        agg(Max, 5, s),
+    ];
+    if picks {
+        a.extend([
+            agg(
+                First {
+                    ignore_nulls: false,
+                },
+                3,
+                s,
+            ),
+            agg(Last { ignore_nulls: true }, 5, s),
+            agg(First { ignore_nulls: true }, 4, s),
+        ]);
+    }
+    a
+}
+
+fn row_mode(kind: u8, limit: usize) -> rowtable::Mode {
+    match kind {
+        0 => rowtable::Mode::Grow,
+        1 => rowtable::Mode::Fixed { limit },
+        _ => rowtable::Mode::Append,
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
+    /// The row-layout tables return exactly the default tables' rows: one
+    /// to three keys (with NULL, `-0.0`, NaN), every accumulator, partial
+    /// duplicates from cleared indexes and append-only tables, one and
+    /// several drivers, two phases, spilling under a tight memory limit.
+    #[test]
+    fn row_layout_equals_default(
+        data in proptest::collection::vec(
+            (
+                proptest::option::of(any::<i32>()),
+                proptest::option::of(any::<u8>()),
+                proptest::option::of(any::<bool>()),
+                proptest::option::of(-1_000_000i64..1_000_000),
+                proptest::option::of(-10_000_000i64..10_000_000),
+                proptest::option::of(any::<u16>()),
+            ),
+            0..4000,
+        ),
+        keys in 1i32..3000,
+        nkeys in 1usize..=3,
+        batch in 1usize..900,
+        slots in 1usize..4,
+        mode in 0u8..3,
+        limit in 1usize..64,
+        two in any::<bool>(),
+        tight in any::<bool>(),
+    ) {
+        let (s, batches) = row_case_batches(&data, keys, batch);
+        let (_m, scope) = spill_dir();
+        let mut sp = spec(&s, (0..nkeys).collect(), row_case_aggs(&s, slots == 1));
+        sp.spill = tight.then_some(scope);
+        let plan = |agg: Arc<HashAggregate>, sp: &AggregateSpec| -> Arc<dyn ExecNode> {
+            if two {
+                let mut first = sp.clone();
+                first.output = AggregateOutput::Partial;
+                first.spill = None;
+                let policy = BypassPolicy { min_rows: 100, ..BypassPolicy::default() };
+                let p = PartialAggregate::new(first, policy, Some(1)).unwrap();
+                AggregateNode::new(PartialNode::new(scan(&s, batches.clone()), p), agg)
+            } else {
+                AggregateNode::new(scan(&s, batches.clone()), agg)
+            }
+        };
+        let final_spec = if two {
+            let mut first = sp.clone();
+            first.output = AggregateOutput::Partial;
+            second_phase(&first, sp.spill.clone())
+        } else {
+            sp.clone()
+        };
+        let o = Opts {
+            slots,
+            limit: if tight { 768 << 10 } else { 1 << 30 },
+            both_layouts: false,
+            ..Opts::default()
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let off = plan(HashAggregate::new(final_spec.clone()).unwrap(), &sp);
+        let want = rows(&rt.block_on(exec(off, o)).unwrap().0);
+        let agg = HashAggregate::with_row_mode(final_spec, row_mode(mode, limit)).unwrap();
+        let got = rows(&rt.block_on(exec_with(plan(agg, &sp), o, true)).unwrap().0);
+        prop_assert_eq!(got, want);
+    }
+}
+
+/// One driver whose table spills several times still picks `first`/`last`
+/// in input order: spill runs merge in the order their rows arrived, on
+/// both layouts (the row tables also through partial duplicates).
+#[tokio::test]
+async fn first_and_last_keep_input_order_through_spills() {
+    use AggregateFunction::{First, Last};
+    let (n, keys) = (60_000i64, 20_000i64);
+    let (s, b) = grouped_input(n, keys);
+    let (_m, scope) = spill_dir();
+    let aggs = vec![
+        agg(First { ignore_nulls: true }, 1, &s),
+        agg(Last { ignore_nulls: true }, 1, &s),
+        agg(
+            First {
+                ignore_nulls: false,
+            },
+            1,
+            &s,
+        ),
+    ];
+    let mut sp = spec(&s, vec![0], aggs);
+    sp.spill = Some(scope);
+    // No seed: one driver claims the batches in order.
+    let o = Opts {
+        slots: 1,
+        limit: 1 << 20,
+        seed: None,
+        ..Opts::default()
+    };
+    let (out, m) = exec(node(scan(&s, b.clone()), sp.clone()), o)
+        .await
+        .unwrap();
+    assert!(extra(&m, "HashAggregate", "spill_runs") > 1);
+    let expected: Vec<String> = {
+        let mut v: Vec<String> = (0..keys)
+            .map(|k| {
+                let valid: Vec<i64> = (k..n)
+                    .step_by(usize::try_from(keys).unwrap())
+                    .filter(|i| i % 7 != 0)
+                    .collect();
+                let first = if k % 7 == 0 {
+                    "NULL".to_owned()
+                } else {
+                    k.to_string()
+                };
+                format!("{k}|{}|{}|{first}", valid[0], valid[valid.len() - 1])
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(rows(&out), expected);
+    let agg = HashAggregate::with_row_mode(sp, rowtable::Mode::Fixed { limit: 300 }).unwrap();
+    let on = exec_with(AggregateNode::new(scan(&s, b), agg), o, true)
+        .await
+        .unwrap();
+    assert_eq!(rows(&on.0), expected);
+}
+
+/// The row tables' final phase: several partition tasks in parallel over
+/// tables with partial duplicates; when the merge cannot get memory (here
+/// another consumer holds the pool), everything left goes to spill runs
+/// and the disk phase returns the same rows, with nothing leaked.
+#[tokio::test]
+async fn row_final_phase_parallel_and_spill_fallback() {
+    let (s, b) = grouped_input(200_000, 90_000);
+    let expected = run_rows(single(&s, &b)).await;
+    for hog in [false, true] {
+        let (_m, scope) = spill_dir();
+        let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+        sp.spill = Some(scope);
+        let agg = HashAggregate::with_row_mode(sp, rowtable::Mode::Fixed { limit: 5_000 }).unwrap();
+        let root = pool(1 << 30);
+        let config = ExecConfig {
+            agg_row_layout: true,
+            ..ExecConfig::default()
+        };
+        let limit = 256 << 20;
+        let q = QueryContext::new(
+            QueryId(4),
+            WorkloadClass::Batch,
+            config,
+            root.child("q", Some(limit)),
+        );
+        let executor: Arc<dyn Executor> = TokioExecutor::deterministic(4).unwrap();
+        let ctx = |id, name| {
+            let e = Arc::clone(&executor);
+            TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(id), name)
+        };
+        let sink_ctx = ctx(0, "agg");
+        let g = Sink::global_state(&*agg, &sink_ctx).unwrap();
+        for part in b.chunks(70) {
+            let mut l = Sink::local_state(&*agg, &sink_ctx, &g).unwrap();
+            for cols in part {
+                let batch = Batch::new(RecordBatch::try_new(Arc::clone(&s), cols.clone()).unwrap());
+                assert!(matches!(
+                    agg.sink(batch, &mut l, &g).unwrap(),
+                    crate::SinkStatus::NeedMoreInput
+                ));
+            }
+            agg.combine(l, &g).unwrap();
+        }
+        // An unspillable consumer takes all but about 1 MiB: tasks start,
+        // stall partway, and cannot go on.
+        let hog_ctx = ctx(1, "hog");
+        let mut held = hog_ctx.consumer().reservation();
+        if hog {
+            let free = limit - root.reserved();
+            held.try_grow(free - (1 << 20)).unwrap();
+        }
+        agg.finalize(&g, &sink_ctx).await.unwrap();
+        drop(held);
+        let src = ctx(2, "src").with_dependency(Arc::clone(&g));
+        let sg = Source::global_state(&*agg, &src).unwrap();
+        let parallel = agg.max_parallelism(&sg);
+        let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
+        let mut out = Vec::new();
+        while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
+            out.push(b);
+        }
+        assert_eq!(rows(&out), expected, "hog {hog}");
+        if hog {
+            assert!(agg.metrics().spill_runs > 0);
+            assert_eq!(parallel, 1);
+        } else {
+            assert_eq!(agg.metrics().spill_runs, 0);
+            assert!(parallel > 1, "{parallel}");
+        }
+        assert_eq!(agg.metrics().groups, 90_000);
+        drop((sl, sg, src, g, sink_ctx));
+        assert_eq!(root.reserved(), 0);
+    }
 }

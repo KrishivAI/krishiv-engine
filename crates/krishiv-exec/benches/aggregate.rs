@@ -12,6 +12,12 @@
 //!   `decimal(15,2)` column (TPC-H price-like values) over 1 Mi rows: the
 //!   per-batch overflow proof path of the decimal accumulators (P2-T160)
 //!   with one key (accumulator-bound), few and many keys.
+//! - `…_rows`: the same queries on the row-layout tables
+//!   (`krishiv.exec.agg.rowLayout`, P2-T159).
+//!
+//! `AGG_BENCH_THREADS=N` runs them (but the spill one) on `N` worker
+//! threads in the shipped (non-deterministic) mode instead: thread-local
+//! tables that abandon, and the parallel final phase.
 
 #![expect(
     missing_docs,
@@ -34,8 +40,8 @@ use krishiv_exec::aggregate::{
 };
 use krishiv_exec::testing::{Batches, Scan};
 use krishiv_exec::{
-    DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, QueryContext, QueryId, QueryRunner, TokioExecutor,
-    WorkloadClass,
+    DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, ExecutorConfig, QueryContext, QueryId, QueryRunner,
+    TokioExecutor, WorkloadClass,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_types::batch::Batch;
@@ -131,19 +137,31 @@ fn plan(batches: &[Batch], spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
     AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"))
 }
 
+/// How the benchmark runs: the deterministic single-thread executor, or
+/// `AGG_BENCH_THREADS` workers in the shipped mode.
+#[derive(Clone, Copy)]
+struct Mode {
+    /// The row-layout aggregate tables.
+    rows: bool,
+    /// Deterministic (seeded) mode.
+    seeded: bool,
+}
+
 /// Runs `plan` under a per-query `limit`; returns the output rows.
 fn run(
     runner: &QueryRunner,
     caller: &tokio::runtime::Runtime,
     plan: Arc<dyn ExecNode>,
     limit: usize,
+    mode: Mode,
 ) -> usize {
     let root = TreePool::new(&MemoryConfig::default());
     let query = QueryContext::new(
         QueryId(1),
         WorkloadClass::Batch,
         ExecConfig {
-            seed: Some(1),
+            seed: mode.seeded.then_some(1),
+            agg_row_layout: mode.rows,
             ..ExecConfig::default()
         },
         root.child("bench", Some(limit)),
@@ -167,17 +185,34 @@ fn bench(c: &mut Criterion) {
         .enable_all()
         .build()
         .expect("caller runtime");
+    let threads: Option<usize> = std::env::var("AGG_BENCH_THREADS")
+        .ok()
+        .map(|t| t.parse().expect("AGG_BENCH_THREADS: a thread count"))
+        .filter(|&t| t > 0);
     let runner = {
         let _in_runtime = caller.enter();
-        QueryRunner::new(TokioExecutor::deterministic(1).expect("executor"))
+        let executor = match threads {
+            Some(t) => TokioExecutor::new(&ExecutorConfig {
+                compute_threads: t,
+                blocking_threads: t,
+                ..ExecutorConfig::default()
+            }),
+            None => TokioExecutor::deterministic(1),
+        };
+        QueryRunner::new(executor.expect("executor"))
     };
+    let seeded = threads.is_none();
+    let modes =
+        [("", false), ("_rows", true)].map(|(suffix, rows)| (suffix, Mode { rows, seeded }));
     let mut g = c.benchmark_group("aggregate");
     g.throughput(Throughput::Elements(ROWS as u64));
     for keys in [64u64, 1 << 18] {
         let batches = input(keys);
-        g.bench_function(format!("grouped_sum_{keys}_keys"), |b| {
-            b.iter(|| black_box(run(&runner, &caller, plan(&batches, None), 1 << 30)));
-        });
+        for (suffix, mode) in modes {
+            g.bench_function(format!("grouped_sum_{keys}_keys{suffix}"), |b| {
+                b.iter(|| black_box(run(&runner, &caller, plan(&batches, None), 1 << 30, mode)));
+            });
+        }
     }
     for keys in [1u64, 64, 1 << 18] {
         let batches = decimal_input(keys);
@@ -185,9 +220,14 @@ fn bench(c: &mut Criterion) {
             ("sum", AggregateFunction::Sum),
             ("avg", AggregateFunction::Avg),
         ] {
-            g.bench_function(format!("decimal_{name}_{keys}_keys"), |b| {
-                b.iter(|| black_box(run(&runner, &caller, decimal_plan(&batches, f), 1 << 30)));
-            });
+            for (suffix, mode) in modes {
+                g.bench_function(format!("decimal_{name}_{keys}_keys{suffix}"), |b| {
+                    b.iter(|| {
+                        let p = decimal_plan(&batches, f);
+                        black_box(run(&runner, &caller, p, 1 << 30, mode))
+                    });
+                });
+            }
         }
     }
     let batches = input(1 << 18);
@@ -203,12 +243,22 @@ fn bench(c: &mut Criterion) {
         ..SpillConfig::default()
     })
     .expect("spill directory");
-    g.bench_function("grouped_sum_spill", |b| {
-        b.iter(|| {
-            let scope = spill.scope().expect("scope");
-            black_box(run(&runner, &caller, plan(&batches, Some(scope)), 4 << 20))
+    // 4 MiB is too little for many drivers' tables on either layout: the
+    // spill benchmark runs single-threaded only.
+    for (suffix, mode) in modes.into_iter().filter(|_| threads.is_none()) {
+        g.bench_function(format!("grouped_sum_spill{suffix}"), |b| {
+            b.iter(|| {
+                let scope = spill.scope().expect("scope");
+                black_box(run(
+                    &runner,
+                    &caller,
+                    plan(&batches, Some(scope)),
+                    4 << 20,
+                    mode,
+                ))
+            });
         });
-    });
+    }
     g.finish();
 }
 

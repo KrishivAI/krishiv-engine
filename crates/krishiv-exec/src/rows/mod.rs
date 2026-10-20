@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Fixed-stride key rows in pages, indexed by a salted linear-probing slot
-//! table or by `hashbrown` over the same rows (P2-T157 prototype).
+//! Fixed-stride key rows (P2-T157), and prototypes of the pages and indexes
+//! over them.
 //!
-//! **Not wired into any operator.** The hash join and the hash aggregate
-//! still use [`KeyTable`](crate::hash::KeyTable); this module exists so the
-//! two index designs can be measured over one row format before the join
-//! (P2-T158) and the aggregate (P2-T159) switch, each behind its own
-//! setting. Nothing here is a stable interface.
+//! The grouped aggregate stores fixed-width keys as [`RowLayout`] rows when
+//! `krishiv.exec.agg.rowLayout` is on (P2-T159; off by default). The
+//! `RowPages`, `SaltedTable` and `HashbrownTable` prototypes are measured
+//! by the `row-table-prototype` benchmark and example only; the hash join
+//! still uses [`KeyTable`](crate::hash::KeyTable). Nothing here is a stable
+//! interface.
 //!
 //! # Rows
 //! A [`RowLayout`] fixes, for a list of key types, the bytes of one row:
@@ -28,28 +29,35 @@
 //!   row bytes), so `Utf8`, `LargeUtf8` and `Utf8View` carriers of equal
 //!   strings hash equally.
 //!
-//! Rows live in [`RowPages`]: pages of a fixed number of rows, each page
+//! Rows live in `RowPages`: pages of a fixed number of rows, each page
 //! with its own heap, addressed by `u32` row ids (`page << shift | row`).
 //! Offsets are page-relative, so pages can move, be frozen or be spilled
 //! without fixing anything up.
 //!
 //! # Indexes
-//! [`SaltedTable`] is a power-of-two array of `u64` slots, each a 16-bit
+//! `SaltedTable` is a power-of-two array of `u64` slots, each a 16-bit
 //! salt from the top of the hash plus `row id + 1` (`0` is empty), probed
 //! linearly; a probe reads the row only when the salt matches (DuckDB's
-//! `ht_entry_t`). [`HashbrownTable`] is `hashbrown::HashTable<u32>` of row
+//! `ht_entry_t`). `HashbrownTable` is `hashbrown::HashTable<u32>` of row
 //! ids over the same rows. Both look keys up a batch at a time; the salted
 //! table first touches every slot of a chunk and then every candidate row,
 //! so the cache misses of a chunk overlap, before it resolves the chunk in
 //! order.
 
 mod layout;
+// The key-page prototypes are not used by any operator: built only for
+// their tests and, via `row-table-prototype`, their benchmark and example
+// (linking unused code shifted the aggregate benchmarks' code placement).
+#[cfg(any(test, feature = "row-table-prototype"))]
 mod pages;
+#[cfg(any(test, feature = "row-table-prototype"))]
 mod table;
 
 #[cfg(test)]
 mod tests;
 
 pub use layout::{EncodedKeys, RowLayout};
+#[cfg(any(test, feature = "row-table-prototype"))]
 pub use pages::RowPages;
+#[cfg(any(test, feature = "row-table-prototype"))]
 pub use table::{HashbrownTable, NO_ROW, RowIndex, SaltedTable};
