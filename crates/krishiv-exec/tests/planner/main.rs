@@ -12,6 +12,7 @@
 
 mod hints;
 mod listing;
+mod physical;
 mod runtime_filters;
 mod semantics;
 mod tpch;
@@ -33,14 +34,60 @@ use krishiv_plan::analyzer::{
 use krishiv_plan::{AttrId, Expr, ExprNode, LogicalPlan, Plan, PlanNode, ResolvedExpr, SourceId};
 use krishiv_types::batch::Batch;
 
+use krishiv_exec::physical::WorkerContext;
 use krishiv_exec::planner::{
     DefaultPlanner, ExplainNode, MemoryTable, MemoryTables, PhysicalPlan, PhysicalPlanner,
     PlanningContext, ProviderStatistics, TableProvider, TableProviderResolver,
 };
 use krishiv_exec::{
-    ExecConfig, ExecutorConfig, QueryContext, QueryId, QueryRunner, Scheduler as _, TokioExecutor,
-    WorkloadClass,
+    ExecConfig, ExecutorConfig, FileWriteSink, QueryContext, QueryId, QueryRunner, Scheduler as _,
+    TokioExecutor, WorkloadClass,
 };
+
+/// A plan and the worker context it runs with.
+#[derive(Debug)]
+pub(crate) struct Runnable {
+    plan: PhysicalPlan,
+    worker: WorkerContext,
+}
+
+impl Runnable {
+    /// `plan` reading `tables`, without spilling.
+    pub(crate) fn new(plan: PhysicalPlan, tables: Arc<dyn TableProviderResolver>) -> Self {
+        Self {
+            plan,
+            worker: WorkerContext::new(tables),
+        }
+    }
+
+    /// The same plan spilling into `scope`.
+    pub(crate) fn with_spill(mut self, scope: krishiv_memory::SpillScope) -> Self {
+        self.worker = self.worker.with_spill(scope);
+        self
+    }
+
+    /// The plan writing its rows through `sink`.
+    pub(crate) fn into_write(self, sink: Arc<FileWriteSink>) -> Result<Self, KrishivError> {
+        Ok(Self {
+            plan: self.plan.into_write(&sink)?,
+            worker: self.worker.with_write_sink(sink),
+        })
+    }
+}
+
+impl std::ops::Deref for Runnable {
+    type Target = PhysicalPlan;
+
+    fn deref(&self) -> &PhysicalPlan {
+        &self.plan
+    }
+}
+
+impl std::fmt::Display for Runnable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.plan.fmt(f)
+    }
+}
 
 /// `t(a INT, b BIGINT, s STRING)`: rows `(i, 10 * i, "s{i}")` for `i` in
 /// `0..n`, every fourth `a` NULL, in batches of 3.
@@ -111,9 +158,13 @@ impl Env {
         PlanningContext::new(Arc::clone(&self.tables) as _, Arc::new(Config::new()))
     }
 
-    fn plan(&self, sql: &str) -> Result<PhysicalPlan, KrishivError> {
+    fn plan(&self, sql: &str) -> Result<Runnable, KrishivError> {
         let plan = krishiv_optimizer::optimize(&self.analyze(sql)).unwrap();
-        DefaultPlanner.plan(&plan, &self.cx())
+        Ok(self.runnable(DefaultPlanner.plan(&plan, &self.cx())?))
+    }
+
+    fn runnable(&self, plan: PhysicalPlan) -> Runnable {
+        Runnable::new(plan, Arc::clone(&self.tables) as _)
     }
 
     fn rows(&self, sql: &str) -> (SchemaRef, Vec<String>) {
@@ -133,7 +184,7 @@ impl Env {
 }
 
 /// Runs `plan` to completion.
-fn run(plan: &PhysicalPlan) -> Result<Vec<RecordBatch>, KrishivError> {
+fn run(plan: &Runnable) -> Result<Vec<RecordBatch>, KrishivError> {
     let root = TreePool::new(&MemoryConfig::default());
     run_in(plan, &root).0
 }
@@ -141,7 +192,7 @@ fn run(plan: &PhysicalPlan) -> Result<Vec<RecordBatch>, KrishivError> {
 /// Runs `plan` to completion as a query of `root`; also returns the query
 /// (for its metrics).
 fn run_in(
-    plan: &PhysicalPlan,
+    plan: &Runnable,
     root: &TreePool,
 ) -> (Result<Vec<RecordBatch>, KrishivError>, Arc<QueryContext>) {
     let query = QueryContext::new(
@@ -159,7 +210,7 @@ fn run_in(
         .unwrap();
     let out = rt.block_on(async {
         let mut stream = runner
-            .submit(Arc::clone(plan.root()), Arc::clone(&query))
+            .submit(plan.plan.clone(), plan.worker.clone(), Arc::clone(&query))
             .await?;
         let mut out = Vec::new();
         while let Some(b) = stream.next().await {
@@ -272,7 +323,7 @@ fn explain_prints_the_tree() {
         ],
     );
     assert_eq!(tree.to_string(), "Join\n:- A x\n:  +- C\n+- B y\n");
-    let plan = plan.with_warnings(vec!["w".to_owned()]);
+    let plan = plan.plan.with_warnings(vec!["w".to_owned()]);
     assert_eq!(plan.warnings(), ["w"]);
     assert_eq!(plan.explain().name, "TopN");
 }
@@ -305,9 +356,11 @@ fn a_self_join_instance_reads_shifted_ids() {
         input: Arc::new(shift),
         exprs: shifted,
     });
-    let plan = DefaultPlanner
-        .plan(&Plan::try_new(root).unwrap(), &env.cx())
-        .unwrap();
+    let plan = env.runnable(
+        DefaultPlanner
+            .plan(&Plan::try_new(root).unwrap(), &env.cx())
+            .unwrap(),
+    );
     let batches = run(&plan).unwrap();
     assert_eq!(names(plan.schema()), ["b", "a"]);
     let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
@@ -350,7 +403,6 @@ fn unsupported_and_inconsistent_plans_fail_clearly() {
         e.to_string().contains("`spark_catalog`.`default`.`t`"),
         "{e}"
     );
-    assert!(format!("{cx:?}").contains("spill: false"));
 }
 
 #[test]
@@ -435,7 +487,7 @@ fn tables_and_statistics() {
     let e = MemoryTables::new().provider(&files).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
     let dir = tempfile::tempdir().unwrap();
-    let cx = env.cx().with_spill(
+    let worker = WorkerContext::new(Arc::clone(&env.tables) as _).with_spill(
         krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
             dir: dir.path().join("spill"),
             ..krishiv_memory::SpillConfig::default()
@@ -444,7 +496,8 @@ fn tables_and_statistics() {
         .scope()
         .unwrap(),
     );
-    assert!(format!("{cx:?}").contains("spill: true"));
+    assert!(worker.spill().is_some());
+    assert!(format!("{worker:?}").contains("spill: true"));
 }
 
 /// Every scan reads the same in-memory table, files included.
@@ -472,7 +525,7 @@ fn unoptimized_plans_and_file_sources() {
     let env = env();
     // Planned as analyzed: the alias is still there.
     let plan = env.analyze("SELECT v.x FROM (SELECT a AS x FROM t) AS v LIMIT 3");
-    let physical = DefaultPlanner.plan(&plan, &env.cx()).unwrap();
+    let physical = env.runnable(DefaultPlanner.plan(&plan, &env.cx()).unwrap());
     assert_eq!(names(physical.schema()), ["x"]);
     let rows: usize = run(&physical)
         .unwrap()
@@ -482,7 +535,7 @@ fn unoptimized_plans_and_file_sources() {
     assert_eq!(rows, 3);
     // Column aliases of a derived table rename the output.
     let renamed = env.analyze("SELECT * FROM t AS v(x, y, z)");
-    let physical = DefaultPlanner.plan(&renamed, &env.cx()).unwrap();
+    let physical = env.runnable(DefaultPlanner.plan(&renamed, &env.cx()).unwrap());
     assert_eq!(names(physical.schema()), ["x", "y", "z"]);
     assert_eq!(run(&physical).unwrap()[0].schema().field(2).name(), "z");
     // A scan of files reads through whatever the resolver opens.
@@ -506,9 +559,10 @@ fn unoptimized_plans_and_file_sources() {
     let (schema, batches) = table(5);
     let any = AnyTable(Arc::new(Bare(MemoryTable::new(schema, batches))));
     assert!(any.0.statistics().is_none());
-    let cx = PlanningContext::new(Arc::new(any), Arc::new(Config::new()));
+    let any: Arc<dyn TableProviderResolver> = Arc::new(any);
+    let cx = PlanningContext::new(Arc::clone(&any), Arc::new(Config::new()));
     let root = Plan::try_new(LogicalPlan::new(PlanNode::Scan(scan))).unwrap();
-    let physical = DefaultPlanner.plan(&root, &cx).unwrap();
+    let physical = Runnable::new(DefaultPlanner.plan(&root, &cx).unwrap(), any);
     assert!(
         physical.to_string().starts_with("Scan parquet files"),
         "{physical}"

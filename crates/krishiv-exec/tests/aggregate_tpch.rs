@@ -23,7 +23,7 @@ use krishiv_exec::aggregate::{
 };
 use krishiv_exec::testing::{Batches, Scan};
 use krishiv_exec::{
-    ExecConfig, ExecNode, QueryContext, QueryId, QueryMetrics, QueryRunner, Scheduler, TokioClock,
+    ExecConfig, ExecNode, QueryContext, QueryId, QueryMetrics, QueryRunner, TokioClock,
     TokioExecutor, WorkloadClass,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
@@ -121,7 +121,7 @@ async fn run(plan: Arc<dyn ExecNode>, slots: usize, limit: usize) -> (Vec<Batch>
     };
     let pool = root.child("q", Some(limit));
     let q = QueryContext::new(QueryId(1), WorkloadClass::Batch, config, pool);
-    let mut stream = runner.submit(plan, Arc::clone(&q)).await.unwrap();
+    let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
     let mut out = Vec::new();
     while let Some(b) = stream.next().await {
         out.push(b.unwrap());

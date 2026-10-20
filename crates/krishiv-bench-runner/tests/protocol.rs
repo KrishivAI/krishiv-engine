@@ -261,3 +261,71 @@ fn the_binary_serves_stdin_and_reports_startup_errors() {
     assert!(!failed.status.success());
     assert!(String::from_utf8_lossy(&failed.stderr).contains("--data DIR is required"));
 }
+
+fn reply_for(r: &Runner, cmd: &str, sql: &std::path::Path) -> String {
+    r.handle_line(&format!("{cmd} {}", encode_path(sql.to_str().unwrap())))
+        .unwrap()
+}
+
+#[test]
+fn profile_reports_the_phases_and_matches_run() {
+    let dir = data_dir();
+    let sql = dir.path().join("q.sql");
+    std::fs::write(
+        &sql,
+        "SELECT l_returnflag, count(*) FROM lineitem GROUP BY 1",
+    )
+    .unwrap();
+    let r = runner(&dir);
+    let reply = reply_for(&r, "PROFILE", &sql);
+    let mut parts = reply.splitn(4, ' ');
+    assert_eq!(parts.next(), Some("OK"), "{reply}");
+    assert_eq!(parts.next(), Some("3"), "{reply}");
+    let total: f64 = parts.next().unwrap().parse().unwrap();
+    let json = parts.next().unwrap();
+    assert!(!json.contains('\n'));
+    let phases = ["parse_analyze", "plan_execute"].map(|name| {
+        let key = format!("\"name\":\"{name}\",\"seconds\":");
+        let at = json
+            .find(&key)
+            .unwrap_or_else(|| panic!("{name} in {json}"))
+            + key.len();
+        let num: String = json[at..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        num.parse::<f64>().unwrap()
+    });
+    assert!(phases.iter().all(|p| *p >= 0.0), "{json}");
+    assert!(
+        (phases[0] + phases[1] - total).abs() < 1e-4,
+        "phases {phases:?} must add up to {total}"
+    );
+    assert!(reply_for(&r, "RUN", &sql).starts_with("OK 3 "));
+    assert!(
+        r.handle_line("PROFILE")
+            .unwrap()
+            .starts_with("ERR bad command")
+    );
+}
+
+#[test]
+fn each_query_file_is_attributed_its_own_rows() {
+    // Two different queries share neither a result nor a reply: the row count comes from the query that ran,
+    // whatever the order or repetition.
+    let dir = data_dir();
+    let one = dir.path().join("one.sql");
+    std::fs::write(&one, "SELECT 1 AS one").unwrap();
+    let seven = dir.path().join("seven.sql");
+    std::fs::write(&seven, "SELECT l_quantity FROM lineitem LIMIT 7").unwrap();
+    let r = runner(&dir);
+    let rows = |sql: &std::path::Path| -> u64 {
+        let reply = reply_for(&r, "RUN", sql);
+        let p: Vec<&str> = reply.split(' ').collect();
+        assert_eq!(p[0], "OK", "{reply}");
+        assert!(p[2].parse::<f64>().unwrap() >= 0.0, "{reply}");
+        p[1].parse().unwrap()
+    };
+    let order = [&one, &seven, &seven, &one];
+    assert_eq!(order.map(|q| rows(q)), [1, 7, 7, 1]);
+}

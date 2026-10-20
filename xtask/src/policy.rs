@@ -290,6 +290,11 @@ pub fn run_source_guard(root: &Path) -> Result<(), String> {
                 "{rel}:{line}: `{ident}` is for the SQL token redactor only (ADR 0038): use `krishiv_sql::redact_sql`"
             ));
         }
+        for (line, marker) in lint::plan_handles_in(&rel, &text) {
+            hits.push(format!(
+                "{rel}:{line}: `{marker}` in a physical-plan type: plans are data, live resources are resolved at instantiation (design P2-T171, I1)"
+            ));
+        }
         if !lint::unsafe_allowed_in(&rel) {
             for line in lint::unsafe_lines(&text) {
                 hits.push(format!(

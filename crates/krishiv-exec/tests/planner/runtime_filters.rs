@@ -10,12 +10,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use super::Runnable;
 use arrow_array::{
     ArrayRef, Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch,
     StringViewArray,
 };
 use arrow_schema::{DataType, Field, Schema};
-use krishiv_exec::planner::PhysicalPlan;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{FileFormat as _, FormatOptions};
 use krishiv_memory::{MemoryConfig, TreePool};
@@ -63,7 +63,7 @@ fn configured(tpch: &mut Tpch, mode: &[(&str, &str)]) {
 }
 
 /// Rows and the runtime filter counters of one run.
-fn run(plan: &PhysicalPlan) -> (Vec<RecordBatch>, Counters) {
+fn run(plan: &Runnable) -> (Vec<RecordBatch>, Counters) {
     let root = TreePool::new(&limited(1 << 30));
     let (out, query) = super::run_in(plan, &root);
     let out = out.unwrap_or_else(|e| panic!("{e}\n{plan}"));

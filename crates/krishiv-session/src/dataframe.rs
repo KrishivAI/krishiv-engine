@@ -565,6 +565,44 @@ impl DataFrame {
         Ok(out)
     }
 
+    /// Runs the query and returns its rows with the executor's per-operator
+    /// metrics (`EXPLAIN ANALYZE`'s data): rows, batches and time of every
+    /// source, operator and sink, summed over the query's drivers. The
+    /// metrics are plain data owned by the caller; nothing is registered
+    /// globally. Dropping the future cancels the query.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # let batch = arrow_array::RecordBatch::try_new(schema.clone(), vec![std::sync::Arc::new(arrow_array::Int32Array::from(vec![3, 1, 2]))]).unwrap();
+    /// # s.register_batches("t", schema, vec![batch])?;
+    /// let (rows, metrics) = futures::executor::block_on(s.table("t").collect_with_metrics())?;
+    /// assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+    /// assert!(!metrics.operators.is_empty());
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As [`Self::collect`].
+    pub async fn collect_with_metrics(
+        &self,
+    ) -> Result<(Vec<RecordBatch>, krishiv_exec::QueryMetrics), KrishivError> {
+        let df = self.clone();
+        self.session
+            .on_executor(async move {
+                let a = df.analysis().await?;
+                let (_, physical) = df.session.physical(&a.analyzed, &a.env).await?;
+                let (mut stream, query) = df.session.run_with_query(&physical, &a.env).await?;
+                let mut out = Vec::new();
+                while let Some(batch) = stream.next().await {
+                    out.push(batch?);
+                }
+                drop(stream);
+                Ok((out, query.metrics()))
+            })
+            .await
+    }
+
     /// The number of result rows.
     ///
     /// ```
@@ -609,10 +647,7 @@ impl DataFrame {
         self.session
             .on_executor(async move {
                 let a = df.analysis().await?;
-                let (_, physical) = df
-                    .session
-                    .physical_for_inspection(&a.analyzed, &a.env)
-                    .await?;
+                let (_, physical) = df.session.physical(&a.analyzed, &a.env).await?;
                 let mut all = a.analyzed.warnings.clone();
                 all.extend(physical.warnings().iter().cloned());
                 Ok(all)

@@ -6,6 +6,12 @@
 //!
 //! * `RUN <query.sql>`: plans and executes the query, materialising every result batch. Replies
 //!   `OK <rows> <seconds>`; the seconds cover parsing, analysis, planning and execution.
+//! * `PROFILE <query.sql>`: as `RUN`, replying `OK <rows> <seconds> <json>` where `json` is one line,
+//!   `{"phases":[{"name":"parse_analyze","seconds":..},{"name":"plan_execute","seconds":..}]}`: the wall
+//!   time of `Session::sql` (parse and analysis) and of `collect` (planning, execution and materialising).
+//!   It adds `"operators":[{"id","name","rows_in","rows_out","compute_seconds","blocked_io_seconds"}]` from the
+//!   executor's `QueryMetrics` (`DataFrame::collect_with_metrics`), in operator-id order. The seconds are
+//!   summed over the query's drivers, so with several threads they can exceed the wall time.
 //! * `DUMP <query.sql> <out-dir>`: as `RUN`, then writes the result as Parquet to `out-dir`
 //!   (replacing it). The write is not in the reported seconds.
 //! * `QUIT`: exits.
@@ -20,7 +26,7 @@ use std::time::Instant;
 
 use arrow_array::RecordBatch;
 use krishiv_common::error::KrishivError;
-use krishiv_exec::{ExecutorConfig, TokioExecutor};
+use krishiv_exec::{ExecutorConfig, QueryMetrics, TokioExecutor};
 use krishiv_session::{DataFrame, Session};
 
 /// Why a runner call failed.
@@ -178,10 +184,28 @@ impl Runner {
 
     /// Plans and runs `sql`, materialising every batch.
     fn execute(&self, sql: &str) -> Result<(Vec<RecordBatch>, f64, DataFrame), RunnerError> {
+        let (batches, timing, df, _) = self.execute_timed(sql, false)?;
+        Ok((batches, timing.total, df))
+    }
+
+    /// As [`Self::execute`], also timing the two phases.
+    fn execute_timed(&self, sql: &str, profile: bool) -> Result<Executed, RunnerError> {
         let start = Instant::now();
         let df = futures::executor::block_on(self.session.sql(sql))?;
-        let batches = futures::executor::block_on(df.collect())?;
-        Ok((batches, start.elapsed().as_secs_f64(), df))
+        let parse_analyze = start.elapsed().as_secs_f64();
+        let (batches, metrics) = if profile {
+            let (b, m) = futures::executor::block_on(df.collect_with_metrics())?;
+            (b, Some(m))
+        } else {
+            (futures::executor::block_on(df.collect())?, None)
+        };
+        let total = start.elapsed().as_secs_f64();
+        let timing = Timing {
+            total,
+            parse_analyze,
+            plan_execute: total - parse_analyze,
+        };
+        Ok((batches, timing, df, metrics))
     }
 
     /// Writes already-collected `batches` as Parquet to `out`, without running the query again.
@@ -211,6 +235,16 @@ impl Runner {
                 let (batches, secs, _) = self.execute(&read_sql(&decode_path(file)?)?)?;
                 Ok(format!("OK {} {secs:.6}", count_rows(&batches)))
             }
+            (Some("PROFILE"), Some(file), None, _) => {
+                let (batches, t, _, metrics) =
+                    self.execute_timed(&read_sql(&decode_path(file)?)?, true)?;
+                Ok(format!(
+                    "OK {} {:.6} {}",
+                    count_rows(&batches),
+                    t.total,
+                    t.json(metrics.as_ref())
+                ))
+            }
             (Some("DUMP"), Some(file), Some(out), None) => {
                 let (batches, secs, df) = self.execute(&read_sql(&decode_path(file)?)?)?;
                 let rows = count_rows(&batches);
@@ -232,6 +266,43 @@ impl Runner {
             Ok(ok) => ok,
             Err(e) => format!("ERR {}", one_line(&e.to_string())),
         })
+    }
+}
+
+type Executed = (Vec<RecordBatch>, Timing, DataFrame, Option<QueryMetrics>);
+
+/// Wall time of one query, in seconds.
+#[derive(Debug, Clone, Copy)]
+struct Timing {
+    total: f64,
+    parse_analyze: f64,
+    plan_execute: f64,
+}
+
+impl Timing {
+    fn json(&self, metrics: Option<&QueryMetrics>) -> String {
+        let operators = metrics.map_or_else(String::new, |m| {
+            let ops: Vec<String> = m
+                .operators
+                .iter()
+                .map(|(id, e)| {
+                    format!(
+                        "{{\"id\":{},\"name\":\"{}\",\"rows_in\":{},\"rows_out\":{},\"compute_seconds\":{:.6},\"blocked_io_seconds\":{:.6}}}",
+                        id.0,
+                        e.name.escape_default(),
+                        e.metrics.rows_in,
+                        e.metrics.rows_out,
+                        e.metrics.compute_time.as_secs_f64(),
+                        e.metrics.blocked_on_io.as_secs_f64()
+                    )
+                })
+                .collect();
+            format!(",\"operators\":[{}]", ops.join(","))
+        });
+        format!(
+            "{{\"phases\":[{{\"name\":\"parse_analyze\",\"seconds\":{:.6}}},{{\"name\":\"plan_execute\",\"seconds\":{:.6}}}]{operators}}}",
+            self.parse_analyze, self.plan_execute
+        )
     }
 }
 

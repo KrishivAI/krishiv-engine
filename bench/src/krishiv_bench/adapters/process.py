@@ -11,7 +11,8 @@ import sys
 from typing import Any
 
 from .. import worker
-from .base import Dataset, Engine, Query
+from .base import Dataset, Engine, Measure, Query
+from .proc_mem import TreeProc
 
 
 class EngineError(RuntimeError):
@@ -35,6 +36,7 @@ class ProcessEngine(Engine):
         self._proc: subprocess.Popen[bytes] | None = None
         self._dataset: Dataset | None = None
         self.info: dict[str, Any] = {}
+        self._tree: TreeProc | None = None
 
     # -- process management -------------------------------------------------
     def _start(self) -> None:
@@ -112,7 +114,28 @@ class ProcessEngine(Engine):
         return self._request({"op": "run", "query": query})
 
     def timed_run(self, query: Query) -> tuple[int, float]:
-        return self._request({"op": "time", "query": query})
+        """Runs ``query`` in the worker; the worker tree's peak RSS lands in ``last_peak_rss_bytes``."""
+        self.last_peak_rss_bytes = None
+        if self._proc is None:
+            self._start()  # the window must cover the live worker, not a pid that does not exist yet
+        self.begin_measure()
+        try:
+            return self._request({"op": "time", "query": query})
+        finally:
+            self.last_peak_rss_bytes = self.end_measure().peak_rss_bytes
+
+    def profile(self, query: Query) -> dict:
+        return self._request({"op": "profile", "query": query})
+
+    def begin_measure(self) -> None:
+        self.end_measure()
+        if self._proc is not None:
+            self._tree = TreeProc(self._proc.pid)
+            self._tree.start()
+
+    def end_measure(self) -> Measure:
+        tree, self._tree = self._tree, None
+        return Measure(peak_rss_bytes=tree.stop() if tree is not None else None)
 
     def cancel(self) -> None:
         self.kill()

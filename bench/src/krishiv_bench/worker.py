@@ -6,7 +6,8 @@ and is the unit of "a process per query" for the published-method runs. The prot
 on private duplicates of stdin/stdout (fd 1 is redirected to stderr so engine noise cannot corrupt the stream);
 both ends are this module, so pickle is a trusted format here.
 
-Requests: ``{"op": "setup", "dataset": Dataset}``, ``{"op": "run"|"time", "query": Query}``, ``{"op": "quit"}``.
+Requests: ``{"op": "setup", "dataset": Dataset}``, ``{"op": "run"|"time"|"profile", "query": Query}``,
+``{"op": "quit"}``.
 Replies: ``{"ok": ...}`` or ``{"error": "Type: message"}``.
 """
 
@@ -69,6 +70,8 @@ def main(argv: list[str]) -> None:
                 reply = eng.run(req["query"])
             elif op == "time":
                 reply = eng.timed_run(req["query"])
+            elif op == "profile":
+                reply = eng.profile(req["query"])
             else:
                 raise ValueError(f"unknown op {op!r}")
             send(out, {"ok": reply})

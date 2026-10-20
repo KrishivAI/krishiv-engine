@@ -33,8 +33,7 @@ use futures::StreamExt;
 use krishiv_exec::testing::{Batches, Scan};
 use krishiv_exec::{
     DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec,
-    JoinType, QueryContext, QueryId, QueryRunner, Scheduler, TokioClock, TokioExecutor,
-    WorkloadClass,
+    JoinType, QueryContext, QueryId, QueryRunner, TokioClock, TokioExecutor, WorkloadClass,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_types::batch::Batch;
@@ -131,7 +130,10 @@ fn run(
         root.child("bench", None),
     );
     caller.block_on(async {
-        let mut stream = runner.submit(plan, Arc::clone(&query)).await.expect("plan");
+        let mut stream = runner
+            .execute(plan, Arc::clone(&query))
+            .await
+            .expect("plan");
         let mut rows = 0;
         while let Some(b) = stream.next().await {
             rows += b.expect("batch").num_rows();

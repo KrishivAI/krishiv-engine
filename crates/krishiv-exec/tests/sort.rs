@@ -30,7 +30,7 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::testing::{Break, Breaker, Scan};
 use krishiv_exec::{
     ExecConfig, ExecNode, ExecutorConfig, MemoryScan, QueryContext, QueryId, QueryRunner, Result,
-    Scheduler, Sort, SortKey, Source, TokioClock, TokioExecutor, TopN, WorkloadClass,
+    Sort, SortKey, Source, TokioClock, TokioExecutor, TopN, WorkloadClass,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_types::batch::{Batch, Weights};
@@ -102,7 +102,7 @@ async fn run(
     plan: Arc<dyn ExecNode>,
     q: &Arc<QueryContext>,
 ) -> Result<Vec<Batch>> {
-    let mut stream = runner.submit(plan, Arc::clone(q)).await?;
+    let mut stream = runner.execute(plan, Arc::clone(q)).await?;
     let mut out = Vec::new();
     let mut error = None;
     while let Some(b) = stream.next().await {
@@ -676,7 +676,7 @@ async fn cancelling_a_spilling_sort_releases_everything() {
     let sort = Arc::new(sort.with_max_fan_in(2));
     let runner = threaded();
     let mut stream = runner
-        .submit(plan(table(400_000, 40), &sort), Arc::clone(&q))
+        .execute(plan(table(400_000, 40), &sort), Arc::clone(&q))
         .await
         .unwrap();
     while sort.metrics().runs_spilled < 2 {

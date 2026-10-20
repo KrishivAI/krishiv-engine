@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import shutil
 
 import duckdb
 
+from ..paths import data_root
 from .base import Dataset, Engine, Measure, Query
 from .proc_mem import LocalProc
 
@@ -34,10 +36,20 @@ class DuckDBEngine(Engine):
         self._p.check()
         con = self.con = duckdb.connect()
         con.execute(f"SET threads={self.threads}")
-        if self.memory_limit:
-            con.execute(f"SET memory_limit='{self.memory_limit}'")
-        for t in dataset.tables:
-            con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{table_source(dataset.root, t)}')")
+        # An in-memory DuckDB spills to `.tmp` in the working directory (the repo checkout) by
+        # default; keep scratch under $KRISHIV_DATA, off the repo and off the small /tmp tmpfs.
+        scratch = data_root() / "tmp" / f"duckdb-{os.getpid()}"
+        scratch.mkdir(parents=True, exist_ok=True)
+        try:
+            quoted = str(scratch).replace("'", "''")  # KRISHIV_DATA may contain a quote
+            con.execute(f"SET temp_directory='{quoted}'")
+            if self.memory_limit:
+                con.execute(f"SET memory_limit='{self.memory_limit}'")
+            for t in dataset.tables:
+                con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{table_source(dataset.root, t)}')")
+        except BaseException:
+            self.teardown()  # the caller's cleanup scope starts only after setup() returns
+            raise
 
     def run(self, query: Query) -> list[tuple]:
         assert self.con is not None, "setup() not called"
@@ -58,6 +70,7 @@ class DuckDBEngine(Engine):
     def teardown(self) -> None:
         if self.con:
             self.con.close()
+        shutil.rmtree(data_root() / "tmp" / f"duckdb-{os.getpid()}", ignore_errors=True)
 
 
 def table_source(root, table: str) -> str:

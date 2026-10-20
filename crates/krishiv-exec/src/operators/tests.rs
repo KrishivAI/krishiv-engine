@@ -622,7 +622,14 @@ fn scan_pushdown_filters_before_projecting_once_built() {
         selection: Some(Arc::new(All)),
         ..ScanPushdowns::default()
     };
-    assert!(base.with_pushdowns(sel).is_err());
+    // `output_schema` refuses what `build` refuses, with the same error.
+    let refused = |p: &ScanPushdowns| {
+        let a = base.with_pushdowns(p.clone()).unwrap_err();
+        let b = ScanPushdown::output_schema(&base, p).unwrap_err();
+        assert_eq!(a.to_string(), b.to_string());
+        assert_eq!(a.error_class(), ErrorClass::InternalError);
+    };
+    refused(&sel);
     let meta = ScanPushdowns {
         metadata: krishiv_io::MetadataCols {
             file_name: true,
@@ -630,7 +637,10 @@ fn scan_pushdown_filters_before_projecting_once_built() {
         },
         ..ScanPushdowns::default()
     };
-    assert!(base.with_pushdowns(meta).is_err());
+    refused(&meta);
+    // Without a projection, every column.
+    let all = ScanPushdown::output_schema(&base, &ScanPushdowns::default()).unwrap();
+    assert_eq!(all, ScanPushdown::table_schema(&base));
 }
 
 #[test]

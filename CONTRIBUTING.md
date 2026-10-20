@@ -127,6 +127,12 @@ CI fails on commits without a `Signed-off-by` line (`cargo xtask dco`).
 - Source files start with an `SPDX-License-Identifier: Apache-2.0` header (`cargo xtask spdx`).
 - Lint exceptions use `#[expect(lint, reason = "...")]`, never a bare `#[allow]`.
 - Every `unsafe` block needs a `// SAFETY:` comment. Write tests first; update docs in the same PR.
+- Distributed execution readiness: every execution change must also work when the plan runs on several
+  worker processes. Physical plans stay serializable data (no service handles, locks, atomics or closures in
+  plan nodes; resources are resolved when a worker instantiates the plan); operator state is partition-local
+  and combined by explicit merges, never shared in-process state; partitioning uses a named, stable hash,
+  never a per-process seed; a task's output does not depend on its attempt number. Reviewers ask: does this
+  assume one process?
 
 ## Design records
 

@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use krishiv_common::error::ErrorClass;
 use krishiv_exec::FileWriteSink;
+use krishiv_exec::physical::{ExprEnv, PhysNode, PhysicalPlan, WorkerContext, instantiate};
+use krishiv_exec::planner::{ExplainNode, MemoryTables};
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
     DirectoryWrite, FileFormat, FormatOptions, IoConfig, IoScheduler, SaveMode, StoreId,
@@ -109,7 +111,25 @@ fn query_results_are_written_committed_and_read_back() {
     let e = db
         .plan_sql("SELECT * FROM r")
         .unwrap()
-        .into_write(other)
+        .into_write(Arc::clone(&other))
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
+    // So is a worker whose sink writes another schema than the plan's.
+    let plan = PhysicalPlan::new(
+        PhysNode::WriteFiles {
+            input: Box::new(PhysNode::OneRow),
+        },
+        Arc::clone(other.input_schema()),
+        ExplainNode::leaf("WriteFiles", ""),
+        ExprEnv {
+            ansi: true,
+            zone: None,
+            query_start_micros: 0,
+            user: Arc::from("u"),
+        },
+    );
+    let worker = WorkerContext::new(Arc::new(MemoryTables::new())).with_write_sink(other);
+    let e = instantiate(&plan, &worker).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("another schema"), "{e}");
 }
