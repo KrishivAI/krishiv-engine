@@ -81,6 +81,13 @@ each engine's rows are compared with DuckDB's (and Krishiv's); a mismatch, error
 * `theirs`: a fresh process per (engine, query), `--runs` hot runs, best of them, per-run `--their-timeout`. Defaults per source: TPC-H/TPC-DS
   5 runs / 60 s (Polars benchmark), ClickBench 3 runs / 300 s (3 runs per the ClickBench rules; the timeout is ours). The page cache is never dropped.
 Output: `$KRISHIV_DATA/results/<ts>_reproduce_<suite>_sf<N>.json` (versions, thread/memory pins, CPU model, load average, per-query verdicts).
+
+`reproduce` records `peak_rss_bytes` per engine and query (JSON, summary `max_peak_rss_bytes`, and a "peak memory (MiB)" table):
+the highest RSS of the engine's whole worker process tree (runner child, JVM and helpers) during its timed runs, sampled
+every 20 ms and bounded below by the per-process VmHWM (`adapters/proc_mem.py`, `TreeProc`). `ours`: max over the
+interleaved samples (a JVM keeps its heap, so later queries inherit it); `theirs`: max over the runs in the fresh process.
+`--profile` adds `profile` to Krishiv's entry (the runner's `PROFILE` command): wall time of parse+analyse and
+plan+execute. Per-operator rows and times need the session to expose the executor's `QueryMetrics`.
 ClickBench reads `$KRISHIV_DATA/clickbench` (`hits.parquet` or a `hits/` directory of parts).
 
 ## Result JSON (`$KRISHIV_DATA/results/<ts>_<engine>_<suite>_sf<N>.json`)

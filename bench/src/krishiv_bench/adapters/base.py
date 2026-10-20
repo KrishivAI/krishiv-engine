@@ -50,6 +50,8 @@ def table_path(dataset: Dataset, table: str) -> str:
 
 class Engine(ABC):
     name: str = "?"
+    # Peak RSS (bytes) of the engine's process tree during the last ``timed_run``; ``None`` when not measured.
+    last_peak_rss_bytes: int | None = None
 
     @abstractmethod
     def version(self) -> str: ...
@@ -71,6 +73,13 @@ class Engine(ABC):
         t0 = time.perf_counter()
         rows = self.run(query)
         return len(rows), time.perf_counter() - t0
+
+    def profile(self, query: Query) -> dict:
+        """Execute once and return ``{"rows": n, "seconds": s, "phases": [{"name", "seconds"}, ...]}``.
+
+        Engines without a profile raise ``NotImplementedError``.
+        """
+        raise NotImplementedError(f"{self.name} has no profile mode")
 
     def teardown(self) -> None:  # noqa: B027  # optional hook, default no-op  # pragma: no cover
         pass

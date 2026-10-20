@@ -6,6 +6,10 @@
 //!
 //! * `RUN <query.sql>`: plans and executes the query, materialising every result batch. Replies
 //!   `OK <rows> <seconds>`; the seconds cover parsing, analysis, planning and execution.
+//! * `PROFILE <query.sql>`: as `RUN`, replying `OK <rows> <seconds> <json>` where `json` is one line,
+//!   `{"phases":[{"name":"parse_analyze","seconds":..},{"name":"plan_execute","seconds":..}]}`: the wall
+//!   time of `Session::sql` (parse and analysis) and of `collect` (planning, execution and materialising).
+//!   Per-operator rows and times need the executor's `QueryMetrics`, which the session does not expose yet.
 //! * `DUMP <query.sql> <out-dir>`: as `RUN`, then writes the result as Parquet to `out-dir`
 //!   (replacing it). The write is not in the reported seconds.
 //! * `QUIT`: exits.
@@ -154,10 +158,26 @@ impl Runner {
 
     /// Plans and runs `sql`, materialising every batch.
     fn execute(&self, sql: &str) -> Result<(Vec<RecordBatch>, f64, DataFrame), RunnerError> {
+        let (batches, timing, df) = self.execute_timed(sql)?;
+        Ok((batches, timing.total, df))
+    }
+
+    /// As [`Self::execute`], also timing the two phases.
+    fn execute_timed(
+        &self,
+        sql: &str,
+    ) -> Result<(Vec<RecordBatch>, Timing, DataFrame), RunnerError> {
         let start = Instant::now();
         let df = futures::executor::block_on(self.session.sql(sql))?;
+        let parse_analyze = start.elapsed().as_secs_f64();
         let batches = futures::executor::block_on(df.collect())?;
-        Ok((batches, start.elapsed().as_secs_f64(), df))
+        let total = start.elapsed().as_secs_f64();
+        let timing = Timing {
+            total,
+            parse_analyze,
+            plan_execute: total - parse_analyze,
+        };
+        Ok((batches, timing, df))
     }
 
     /// Writes already-collected `batches` as Parquet to `out`, without running the query again.
@@ -187,6 +207,15 @@ impl Runner {
                 let (batches, secs, _) = self.execute(&read_sql(&decode_path(file)?)?)?;
                 Ok(format!("OK {} {secs:.6}", count_rows(&batches)))
             }
+            (Some("PROFILE"), Some(file), None, _) => {
+                let (batches, t, _) = self.execute_timed(&read_sql(&decode_path(file)?)?)?;
+                Ok(format!(
+                    "OK {} {:.6} {}",
+                    count_rows(&batches),
+                    t.total,
+                    t.json()
+                ))
+            }
             (Some("DUMP"), Some(file), Some(out), None) => {
                 let (batches, secs, df) = self.execute(&read_sql(&decode_path(file)?)?)?;
                 let rows = count_rows(&batches);
@@ -208,6 +237,23 @@ impl Runner {
             Ok(ok) => ok,
             Err(e) => format!("ERR {}", one_line(&e.to_string())),
         })
+    }
+}
+
+/// Wall time of one query, in seconds.
+#[derive(Debug, Clone, Copy)]
+struct Timing {
+    total: f64,
+    parse_analyze: f64,
+    plan_execute: f64,
+}
+
+impl Timing {
+    fn json(&self) -> String {
+        format!(
+            "{{\"phases\":[{{\"name\":\"parse_analyze\",\"seconds\":{:.6}}},{{\"name\":\"plan_execute\",\"seconds\":{:.6}}}]}}",
+            self.parse_analyze, self.plan_execute
+        )
     }
 }
 

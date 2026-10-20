@@ -222,3 +222,81 @@ fn the_binary_serves_stdin_and_reports_startup_errors() {
     assert!(!failed.status.success());
     assert!(String::from_utf8_lossy(&failed.stderr).contains("--data DIR is required"));
 }
+
+fn reply_for(r: &Runner, cmd: &str, sql: &std::path::Path) -> String {
+    r.handle_line(&format!("{cmd} {}", encode_path(sql.to_str().unwrap())))
+        .unwrap()
+}
+
+#[test]
+fn profile_reports_the_phases_and_matches_run() {
+    let dir = data_dir();
+    let sql = dir.path().join("q.sql");
+    std::fs::write(
+        &sql,
+        "SELECT l_returnflag, count(*) FROM lineitem GROUP BY 1",
+    )
+    .unwrap();
+    let r = runner(&dir);
+    let reply = reply_for(&r, "PROFILE", &sql);
+    let mut parts = reply.splitn(4, ' ');
+    assert_eq!(parts.next(), Some("OK"), "{reply}");
+    assert_eq!(parts.next(), Some("3"), "{reply}");
+    let total: f64 = parts.next().unwrap().parse().unwrap();
+    let json = parts.next().unwrap();
+    assert!(!json.contains('\n'));
+    let phases = ["parse_analyze", "plan_execute"].map(|name| {
+        let key = format!("\"name\":\"{name}\",\"seconds\":");
+        let at = json
+            .find(&key)
+            .unwrap_or_else(|| panic!("{name} in {json}"))
+            + key.len();
+        let num: String = json[at..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        num.parse::<f64>().unwrap()
+    });
+    assert!(phases.iter().all(|p| *p >= 0.0), "{json}");
+    assert!(
+        (phases[0] + phases[1] - total).abs() < 1e-4,
+        "phases {phases:?} must add up to {total}"
+    );
+    assert!(reply_for(&r, "RUN", &sql).starts_with("OK 3 "));
+    assert!(
+        r.handle_line("PROFILE")
+            .unwrap()
+            .starts_with("ERR bad command")
+    );
+}
+
+#[test]
+fn each_query_file_is_attributed_its_own_rows_and_time() {
+    // Two different queries must neither share a result nor a duration: rows come from the query that ran,
+    // and a heavier query measures more than a trivial one, whatever order they run in.
+    let dir = data_dir();
+    let light = dir.path().join("light.sql");
+    std::fs::write(&light, "SELECT 1 AS one").unwrap();
+    let heavy = dir.path().join("heavy.sql");
+    std::fs::write(
+        &heavy,
+        "SELECT a.l_quantity FROM lineitem a JOIN (SELECT l_returnflag FROM lineitem LIMIT 200) b ON a.l_returnflag = b.l_returnflag",
+    )
+    .unwrap();
+    let r = runner(&dir);
+    let secs = |reply: &str| -> (u64, f64) {
+        let p: Vec<&str> = reply.split(' ').collect();
+        assert_eq!(p[0], "OK", "{reply}");
+        (p[1].parse().unwrap(), p[2].parse().unwrap())
+    };
+    for _ in 0..2 {
+        let (rows_l, t_l) = secs(&reply_for(&r, "RUN", &light));
+        let (rows_h, t_h) = secs(&reply_for(&r, "RUN", &heavy));
+        assert_eq!(rows_l, 1);
+        assert!(
+            rows_h > 1,
+            "the join must not return the light query's result"
+        );
+        assert!(t_h > t_l, "heavy {t_h} s must exceed light {t_l} s");
+    }
+}
