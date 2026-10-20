@@ -7,7 +7,10 @@ baseline is already high; DuckDB's number is the whole harness process (Python +
 
 from __future__ import annotations
 
+import contextlib
+import os
 import subprocess
+import threading
 from pathlib import Path
 
 
@@ -65,3 +68,75 @@ class DockerProc:
         rss, hwm, ticks = out.split("\n")
         u, s = ticks.split()
         return int(rss) * 1024, int(hwm) * 1024, (int(u) + int(s)) / 100.0
+
+
+def descendants(root: int) -> list[int]:
+    """``root`` and every live descendant pid (a JVM's helper processes, a runner child), via /proc ppid links."""
+    children: dict[int, list[int]] = {}
+    for entry in os.scandir("/proc"):
+        if not entry.name.isdigit():
+            continue
+        try:
+            # the comm field may contain spaces and parentheses: split after the last ')'
+            ppid = int(Path(entry.path, "stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            continue  # exited while we were scanning
+        children.setdefault(ppid, []).append(int(entry.name))
+    out, todo = [], [root]
+    while todo:
+        pid = todo.pop()
+        out.append(pid)
+        todo.extend(children.get(pid, []))
+    return out
+
+
+class TreeProc:
+    """Peak RSS of a process and all its descendants over a window (``start`` .. ``stop``).
+
+    Per-process VmHWM is reset with clear_refs=5 (``LocalProc``) at ``start``. Peak = the larger of
+    (a) the highest sum of VmRSS over the whole tree seen by a sampler thread (processes peaking together add up)
+    and (b) the sum of the VmHWM of the tree members alive at ``stop`` (catches spikes between samples; an upper
+    bound when members peak at different moments). A descendant that exits inside the window is seen only by (a).
+    """
+
+    def __init__(self, pid: int, interval_s: float = 0.02):
+        self.pid, self.interval_s = pid, interval_s
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._peak = 0
+
+    def _sample(self) -> int:
+        total = 0
+        for pid in descendants(self.pid):
+            with contextlib.suppress(OSError, RuntimeError, ValueError):
+                total += LocalProc(str(pid)).read()[0]
+        return total
+
+    def _hwm_sum(self) -> int:
+        total = 0
+        for pid in descendants(self.pid):
+            with contextlib.suppress(OSError, RuntimeError, ValueError):
+                total += LocalProc(str(pid)).read()[1]
+        return total
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            self._peak = max(self._peak, self._sample())
+            self._stop.wait(self.interval_s)
+
+    def start(self) -> None:
+        for pid in descendants(self.pid):
+            with contextlib.suppress(OSError):
+                LocalProc(str(pid)).reset()
+        self._peak = self._sample()
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> int:
+        """Ends the window; returns the peak in bytes."""
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
+        return max(self._peak, self._sample(), self._hwm_sum())
