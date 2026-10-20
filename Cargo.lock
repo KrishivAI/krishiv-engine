@@ -1388,11 +1388,14 @@ name = "krishiv-bench-runner"
 version = "0.1.0-dev"
 dependencies = [
  "arrow-array",
+ "arrow-schema",
  "futures",
  "krishiv-common",
  "krishiv-exec",
  "krishiv-session",
  "mimalloc",
+ "parquet",
+ "proptest",
  "tempfile",
  "thiserror",
 ]
