@@ -20,7 +20,7 @@
 //! `join_index_matrix` sweep).
 //!
 //! Both kinds are driven by the same table-local hash `g = fin(h ^ seed)`
-//! of each row's stored seedless hash `h` ([`finalize`]): the salted
+//! of each row's stored hash `h` ([`finalize`]): the salted
 //! directory takes its salt from the top 16 bits of `g` and its slot from
 //! the low bits; `hashbrown` takes its tag from the top 7 bits and its
 //! bucket from the low bits. Neither reads the bits a join's grace
@@ -67,7 +67,7 @@ pub const TOUCH_MIN_BYTES: usize = 16 << 20;
 pub trait RowSource {
     /// Row `id`'s bytes and the heap its long views point into.
     fn row(&self, id: u32) -> (&[u8], &[u8]);
-    /// Row `id`'s stored (seedless) hash `h`.
+    /// Row `id`'s stored hash `h`.
     fn hash(&self, id: u32) -> u64;
 }
 
@@ -266,7 +266,7 @@ impl JoinIndex {
     }
 
     /// For each probe row `which[j]` of `keys` (encoded with the same
-    /// layout, with seedless hashes), the newest row of `src` with an equal
+    /// layout and stored-hash seed), the newest row of `src` with an equal
     /// key, or [`NO_MATCH`], appended to `out`. A salted directory of at
     /// least [`TOUCH_MIN_BYTES`] touches each chunk first.
     pub fn find(

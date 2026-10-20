@@ -44,7 +44,7 @@
 //! fixed-width (integers, dates, timestamps, decimals, floats, booleans)
 //! stores them as fixed-width rows ([`RowLayout`](crate::rows::RowLayout):
 //! Spark-normalized, NULL-safe; string keys keep arrow rows for now) with a
-//! seedless stored hash `h`, and indexes each partition with a
+//! stored hash `h` (seeded per join instance), and indexes each partition with a
 //! [`JoinIndex`](crate::rows::JoinIndex): `hashbrown` while the index is
 //! small, a salted linear-probing directory above that, both keyed by the
 //! seeded `g = fin(h ^ seed)`. Results are the same in both formats.

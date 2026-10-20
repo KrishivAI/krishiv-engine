@@ -5,10 +5,11 @@
 //!   shared hash blocks ([`crate::hash`]), hashed with the seeded hash, which
 //!   also picks the spill partitions;
 //! - **row layout** (`krishiv.exec.join.rowLayout`, P2-T158): fixed-width
-//!   [`RowLayout`] rows with a **seedless** stored hash `h`. Level-0
-//!   partitions are the top bits of `h`; the index and the grace
-//!   sub-partitions use the seeded `g = fin(h ^ seed)` ([`finalize`];
-//!   P2-T157 Appendix C). Keys without a row encoding (nested,
+//!   [`RowLayout`] rows with a stored hash `h`, seeded per join instance.
+//!   Level-0 partitions are the top bits of `h`; the index and the grace
+//!   sub-partitions use `g = fin(h ^ seed)` ([`finalize`]; P2-T157
+//!   Appendix C, with its fallback: until P2-T175 fixes the seedless
+//!   routing hash, tables keep a seeded hash). Keys without a row encoding (nested,
 //!   dictionary) and, until their compare is tuned, string and binary
 //!   keys keep the arrow-row format.
 //!
@@ -18,9 +19,11 @@
 //!
 //! The seed is per join instance: the deterministic-mode seed when set,
 //! else random, so an attacker who controls the key values but not the
-//! seed cannot aim many keys at one bucket or one grace sub-partition (hash
-//! flooding). The seedless `h` only decides level-0 partitions, where
-//! crafted keys amount to partition skew.
+//! seed cannot make keys share `h` (hence `g`) and aim them at one bucket,
+//! slot run or grace sub-partition (hash flooding). The row layout's
+//! column-wise mix is easy to collide when its starting state is known, so
+//! `h` is seeded too: it never leaves the join instance (spill files are
+//! local to it).
 
 use std::hash::BuildHasher;
 use std::sync::Arc;
@@ -36,11 +39,6 @@ use crate::rows::{EncodedKeys, RowLayout, finalize};
 
 pub(crate) use crate::hash::PARTITIONS;
 
-/// The seed of the row layout's stored hash: none (P2-T157 Appendix C).
-/// Until P2-T175 fixes the routing hash, `h` is the layout's own
-/// column-wise fold-mix with seed 0; it never leaves the worker (spill
-/// files are local), so the function may still change.
-const SEEDLESS: u64 = 0;
 /// The top bit (exclusive) of the grace sub-partition field of `g`: level
 /// `d` uses bits `48 - 3d .. 51 - 3d`, below the 16-bit salt and above
 /// the 26-bit directory index (P2-T157 §4.3).
@@ -105,7 +103,7 @@ impl Hashing {
 pub(crate) enum KeyRows {
     /// Arrow-row bytes, with the seeded hash of each row.
     Arrow(Rows, Vec<u64>),
-    /// Row-layout rows, with their seedless hashes.
+    /// Row-layout rows, with their seeded hashes.
     Layout(EncodedKeys),
 }
 
@@ -221,7 +219,7 @@ impl KeyCodec {
                 NullBuffer::union(acc.as_ref(), c.logical_nulls().as_ref())
             });
         let rows = match (&self.layout, hashing.rows) {
-            (Some(layout), true) => KeyRows::Layout(layout.encode(columns, SEEDLESS)?),
+            (Some(layout), true) => KeyRows::Layout(layout.encode(columns, hashing.raw)?),
             (None, true) => return Err(internal("join keys have no row layout".to_owned())),
             (_, false) => {
                 let rows = self.encoder.encode(columns)?;
@@ -286,7 +284,8 @@ mod tests {
             e.hashes()[0],
             "the seed changes the hash"
         );
-        // The row layout's stored hash is seedless.
+        // The row layout's stored hash is seeded too: crafted keys cannot
+        // share it without the seed.
         let a = codec.encode(
             &[Arc::clone(&f), Arc::clone(&i)],
             &Hashing::new(Some(7), true),
@@ -296,7 +295,7 @@ mod tests {
             a.unwrap_or_else(|e| panic!("{e}")),
             b.unwrap_or_else(|e| panic!("{e}")),
         );
-        assert_eq!(a.hashes(), b.hashes());
+        assert_ne!(a.hashes(), b.hashes());
     }
 
     #[test]
@@ -309,8 +308,8 @@ mod tests {
                 assert!(h.partition(u64::MAX, depth) < PARTITIONS);
             }
         }
-        // Level 0 of the row layout is the top bits of the seedless hash;
-        // deeper levels depend on the seed.
+        // Level 0 of the row layout is the top bits of the stored hash;
+        // deeper levels also depend on the seed through `g`.
         let (a, b) = (Hashing::new(Some(1), true), Hashing::new(Some(2), true));
         assert_eq!(a.partition(5 << 61, 0), 5);
         assert_eq!(b.partition(5 << 61, 0), 5);

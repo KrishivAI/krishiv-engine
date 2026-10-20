@@ -161,6 +161,12 @@ impl Runner {
         &self.tables
     }
 
+    /// The session's value of `key` (`--conf` settings included).
+    #[must_use]
+    pub fn conf(&self, key: &str) -> Option<String> {
+        self.session.conf().get(key)
+    }
+
     /// Runs the SQL text to completion; returns the row count and the seconds taken.
     ///
     /// # Errors
