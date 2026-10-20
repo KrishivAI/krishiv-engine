@@ -384,7 +384,7 @@ impl RowTable {
         let distinct = (a.sketch.estimate() * 8.0).max(1.0);
         if distinct / rows > 0.95 {
             Mode::Append
-        } else if pushed >= 2.0 * distinct && limit * 3 / 2 < MAX_SINK_SLOTS {
+        } else if pushed >= 2.0 * distinct && limit * 4 * 3 / 2 <= MAX_SINK_SLOTS {
             Mode::Fixed { limit: limit * 4 }
         } else {
             self.mode
@@ -1111,6 +1111,38 @@ mod tests {
         }
         assert_eq!(unique.mode, Mode::Append);
         assert_eq!(repeat.mode, Mode::Fixed { limit: 4096 });
+        // Growth stops at MAX_SINK_SLOTS (limit = 2/3 of the slots): from
+        // 2^21 slots a 4x step would pass it; from 2^20 it lands on it.
+        let grow_from = |slots: usize| {
+            let mut t = RowTable::new(
+                &core,
+                &seed,
+                Mode::Fixed {
+                    limit: slots * 2 / 3,
+                },
+                true,
+            )
+            .unwrap();
+            let a = t.adapt.as_mut().unwrap();
+            (a.rows, a.pushed) = (ADAPT_ROWS, ADAPT_ROWS);
+            for h in 0..64 {
+                a.sketch.add(mix(h));
+            }
+            t.next_mode()
+        };
+        assert_eq!(
+            grow_from(1 << 21),
+            Mode::Fixed {
+                limit: (1 << 21) * 2 / 3
+            }
+        );
+        assert_eq!(
+            grow_from(1 << 20),
+            Mode::Fixed {
+                limit: (1 << 20) * 2 / 3 * 4
+            }
+        );
+        const { assert!(((1 << 20) * 2 / 3 * 4) * 3 / 2 <= MAX_SINK_SLOTS) };
         // Deterministic and two-thread defaults.
         assert_eq!(Mode::local(true, 12), Mode::Grow);
         assert_eq!(Mode::local(false, 1), Mode::Grow);
