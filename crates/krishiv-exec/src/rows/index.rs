@@ -266,7 +266,7 @@ impl JoinIndex {
     }
 
     /// For each probe row `which[j]` of `keys` (encoded with the same
-    /// layout and stored-hash seed), the newest row of `src` with an equal
+    /// layout, with seedless hashes), the newest row of `src` with an equal
     /// key, or [`NO_MATCH`], appended to `out`. A salted directory of at
     /// least [`TOUCH_MIN_BYTES`] touches each chunk first.
     pub fn find(

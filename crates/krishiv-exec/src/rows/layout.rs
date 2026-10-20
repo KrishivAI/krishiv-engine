@@ -583,10 +583,10 @@ pub struct GatheredRows {
 
 /// The table-local hash `g = fin(h ^ seed)` of a stored row hash `h`
 /// (P2-T157 Appendix C): one folded multiply. Salts, directory and bucket
-/// indexes and grace sub-partitions come from `g`. Keys with equal `h`
-/// have equal `g` under every seed, so `h` itself must not be collidable
-/// by whoever chooses the keys (the join seeds it); `g` never leaves the
-/// operator instance that drew `seed`.
+/// indexes and grace sub-partitions come from `g`, so keys with different
+/// `h` cannot be aimed at one slot run without the seed (keys with equal
+/// `h` share `g` under every seed); `g` never leaves the operator instance
+/// that drew `seed`.
 #[inline]
 pub fn finalize(h: u64, seed: u64) -> u64 {
     fold(h ^ seed, FIN)
@@ -642,41 +642,4 @@ fn normalize64(v: f64) -> f64 {
 
 fn normalize32(v: f32) -> f32 {
     if v.is_nan() { f32::NAN } else { v + 0.0 }
-}
-
-#[cfg(test)]
-mod flooding {
-    use std::sync::Arc;
-
-    use arrow_array::{ArrayRef, Int64Array};
-    use arrow_schema::DataType;
-
-    use super::*;
-
-    /// Two-word keys built to collide under a known starting state (the
-    /// mix's second input cancels the first word) share `h` with that seed
-    /// and spread under another one.
-    #[test]
-    fn colliding_keys_need_the_seed() {
-        let layout = RowLayout::for_join(&[DataType::Int64, DataType::Int64], &[false, false])
-            .unwrap_or_else(|e| panic!("{e}"));
-        let known = 0u64;
-        let (mut a, mut b) = (Vec::new(), Vec::new());
-        for v1 in 0..1000u64 {
-            let s1 = mix(fold(known, MIX), v1);
-            a.push(v1.cast_signed());
-            b.push((s1 ^ 0x1234).cast_signed());
-        }
-        let cols: Vec<ArrayRef> =
-            vec![Arc::new(Int64Array::from(a)), Arc::new(Int64Array::from(b))];
-        let distinct = |seed: u64| {
-            let k = layout.encode(&cols, seed).unwrap_or_else(|e| panic!("{e}"));
-            let mut h = k.hashes().to_vec();
-            h.sort_unstable();
-            h.dedup();
-            h.len()
-        };
-        assert_eq!(distinct(known), 1, "the construction collides");
-        assert_eq!(distinct(0x5EED_1234_ABCD), 1000);
-    }
 }
