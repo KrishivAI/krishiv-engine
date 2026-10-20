@@ -189,7 +189,16 @@ mod tests {
     #[test]
     fn child_reports_options() {
         if std::env::var_os("KRISHIV_ALLOC_CHILD").is_some() {
-            println!("OPTIONS {:?}", read());
+            // Whether huge pages are off for the process: mimalloc calls
+            // `PR_SET_THP_DISABLE` at its own initialisation, so this shows
+            // the constructor ran before it (not only that the option is set).
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            let thp = status
+                .lines()
+                .find_map(|l| l.strip_prefix("THP_enabled:"))
+                .map_or("?", str::trim)
+                .to_owned();
+            println!("OPTIONS {:?} THP {thp}", read());
         }
     }
 
@@ -220,11 +229,14 @@ mod tests {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn a_limit_at_start_applies_the_options() {
-        assert_eq!(child(None, &[]), "(1000, 1, 0)");
-        assert_eq!(child(Some("krishiv.memory.limit=1g"), &[]), "(10, 0, 64)");
+        assert_eq!(child(None, &[]), "(1000, 1, 0) THP 1");
+        assert_eq!(
+            child(Some("krishiv.memory.limit=1g"), &[]),
+            "(10, 0, 64) THP 0"
+        );
         assert_eq!(
             child(None, &[("KRISHIV_MEMORY_LIMIT", "1g")]),
-            "(10, 0, 64)"
+            "(10, 0, 64) THP 0"
         );
         assert_eq!(
             child(
@@ -234,8 +246,11 @@ mod tests {
                     ("MIMALLOC_PURGE_DELAY", "50")
                 ]
             ),
-            "(50, 0, 64)"
+            "(50, 0, 64) THP 0"
         );
-        assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "")]), "(1000, 1, 0)");
+        assert_eq!(
+            child(None, &[("KRISHIV_MEMORY_LIMIT", "")]),
+            "(1000, 1, 0) THP 1"
+        );
     }
 }

@@ -81,7 +81,10 @@ pub use consumer::{ConsumerHandle, SpillStats};
 pub use error::MemoryError;
 pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
 pub use pool::{ArbitrationStats, DEFAULT_SPILL_SCRATCH_RESERVE, MemoryConfig, TreePool};
-pub use release::{EPOCH_INTERVAL, pressure_epoch, release_if_pressured, set_release_hook};
+pub use release::{
+    EPOCH_INTERVAL, pressure_epoch, release_if_pressured, release_if_pressured_here,
+    set_release_hook,
+};
 pub use reservation::Reservation;
 pub use spill::{OwnerId, SpillOwner, SpillService, SpillSignal, SpillTicket, Spillable};
 pub use spillfile::{

@@ -1234,6 +1234,10 @@ fn refusals_start_pressure_epochs_that_drivers_release_once() {
     let before = CALLS.load(Ordering::SeqCst);
     assert!(release_if_pressured(&mut seen));
     assert_eq!(CALLS.load(Ordering::SeqCst), before + 1);
+    // This thread's own record: the epoch is new to it once, then not.
+    let before = CALLS.load(Ordering::SeqCst);
+    let first = release_if_pressured_here();
+    assert_eq!(CALLS.load(Ordering::SeqCst), before + usize::from(first));
     // Once per epoch: the same epoch does not call it again.
     assert!(!release_if_pressured(&mut seen.clone()) || pressure_epoch() != seen);
 }

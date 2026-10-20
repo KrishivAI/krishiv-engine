@@ -85,11 +85,6 @@ impl Clock for TokioClock {
     }
 }
 
-thread_local! {
-    /// The memory pressure epoch this blocking-pool thread last released for.
-    static BLOCKING_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
 /// Runs `f` through [`Executor::spawn_blocking`] and returns its result
 /// (operators use [`TaskContext::run_blocking`](crate::TaskContext::run_blocking)).
 pub(crate) async fn run_blocking<T, F>(executor: &dyn Executor, f: F) -> Result<T>
@@ -103,11 +98,7 @@ where
             drop(tx.send(f()));
             // What the closure freed lives in this pool thread's allocator
             // caches: under memory pressure, return it to the OS too.
-            BLOCKING_EPOCH.with(|seen| {
-                let mut s = seen.get();
-                krishiv_memory::release_if_pressured(&mut s);
-                seen.set(s);
-            });
+            krishiv_memory::release_if_pressured_here();
         }))
         .await?;
     rx.await

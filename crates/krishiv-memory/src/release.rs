@@ -67,6 +67,23 @@ pub(crate) fn note_pressure() {
     }
 }
 
+thread_local! {
+    /// The pressure epoch this thread last released memory for.
+    static SEEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// [`release_if_pressured`] with this thread's own record of the epochs it
+/// released for: the hook frees the *calling thread's* allocator caches, and
+/// a task can move between threads, so the record belongs to the thread.
+pub fn release_if_pressured_here() -> bool {
+    SEEN.with(|seen| {
+        let mut s = seen.get();
+        let called = release_if_pressured(&mut s);
+        seen.set(s);
+        called
+    })
+}
+
 /// Calls the release hook on this thread if a pressure epoch started since
 /// `seen` (then updates `seen`). Returns whether it called the hook. Cheap
 /// otherwise: one atomic load.

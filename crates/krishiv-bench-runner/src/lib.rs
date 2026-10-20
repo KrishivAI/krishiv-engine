@@ -94,7 +94,9 @@ pub const RSS_FLOOR_PER_THREAD: u64 = 16 << 20;
 /// `1.25 x limit + RSS_FLOOR_BASE + threads x RSS_FLOOR_PER_THREAD`. The 25% covers what the memory pool
 /// cannot see exactly (allocator size classes and retention after a purge delay, estimates of decoder
 /// pages); the floor what does not scale with the limit. The memory gate checks peak RSS against it
-/// and runs the process in a cgroup with `memory.max` at it.
+/// and runs the process in a cgroup with `memory.max` at the bound plus room for the spill files'
+/// page cache, which the cgroup charges but which is not resident memory (64 MiB in the memory-bound
+/// test).
 ///
 /// It holds for a process whose global allocator is configured for it: mimalloc with
 /// `krishiv_alloc` (this runner and the CLI, when the limit is known at process start: an argument or

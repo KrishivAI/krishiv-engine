@@ -4,7 +4,9 @@
 //! [`rss_bound`]. Where `systemd-run --user` works (a developer machine), the child also runs in a
 //! cgroup capped at that bound plus room for spill-file page cache, so a breach is an OOM kill, not
 //! only a failed comparison.
+// Peak RSS comes from /proc (Linux only).
 #![cfg(test)]
+#![cfg(target_os = "linux")]
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;

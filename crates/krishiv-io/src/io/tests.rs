@@ -125,8 +125,11 @@ fn gappy_coalesced_ranges_are_copied_out() {
                 .unwrap();
         assert_eq!(s.fault.stats().gets, 2);
         assert_ne!(got[0].as_ptr().wrapping_add(99_000), got[1].as_ptr());
-        assert_eq!(got[1][0], u8::try_from(99_000 % 251).unwrap());
-        assert_eq!(got[0].len() + got[1].len(), 2_000);
+        let expected = |r: std::ops::Range<usize>| -> Vec<u8> {
+            r.map(|i| u8::try_from(i % 251).unwrap()).collect()
+        };
+        assert_eq!(got[0].as_ref(), expected(0..1_000).as_slice());
+        assert_eq!(got[1].as_ref(), expected(99_000..100_000).as_slice());
     });
 }
 

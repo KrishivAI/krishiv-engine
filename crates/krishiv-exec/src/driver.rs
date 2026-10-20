@@ -234,8 +234,6 @@ struct Driver {
     /// The wait in progress, timed even if the driver is aborted in it.
     waiting: Option<(usize, Blocked, Instant)>,
     batches: u64,
-    /// The memory pressure epoch this driver last released memory for.
-    release_epoch: u64,
     yields: u64,
 }
 
@@ -291,7 +289,6 @@ impl Driver {
             waiting: None,
             batches: 0,
             yields: 0,
-            release_epoch: krishiv_memory::pressure_epoch(),
             owner,
             run,
         })
@@ -371,7 +368,7 @@ impl Driver {
         run.query.check_cancelled()?;
         // Under memory pressure, return this thread's freed memory to the
         // OS (the host's release hook; see `krishiv_memory::set_release_hook`).
-        krishiv_memory::release_if_pressured(&mut self.release_epoch);
+        krishiv_memory::release_if_pressured_here();
         if self.owner.pending() {
             let serviced = service(&run, self.slots.get_mut());
             pause(&run, None, serviced).await?.0?;
