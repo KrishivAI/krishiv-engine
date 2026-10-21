@@ -194,6 +194,16 @@ fn strings() -> Vec<Spec> {
         first_type,
     ));
     out.extend(scalar(
+        &["regexp_replace"],
+        &Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::Integer),
+        ]),
+        string,
+    ));
+    out.extend(scalar(
         &["substring", "substr"],
         &Inputs::Expects(vec![
             text_or_bytes,

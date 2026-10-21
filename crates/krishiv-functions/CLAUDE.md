@@ -23,9 +23,13 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
   `Arc<dyn ScalarFunction>` (`return_type`, `invoke(&[Arg], rows)`), IR-free (Arrow types only) so the physical planner
   (krishiv-exec) calls it per batch. Arguments arrive after the analyzer's implicit casts; strings/binary in any Arrow
   carrier (read as `Utf8`/`Binary`), results in plain carriers. One family module per kernel family (`string`,
-  `datetime`, `math`, `arith`, `hash`), each with `NAMES` and a `bind` over the argument shape. `BindOptions` holds ANSI, `KernelCtx` (Spark
+  `datetime`, `math`, `arith`, `hash`, `regex`), each with `NAMES` and a `bind` over the argument shape. `BindOptions` holds ANSI, `KernelCtx` (Spark
   version), session zone, the query start instant (`current_date`, `current_timestamp`, `localtimestamp`), the session user (`current_user`, `user`, `session_user`; family `session`) and `decimalOperations.allowPrecisionLoss`. `round`/`ceil`/`floor` bind
   their scale from a `BindArg::Literal`. Operators, `CAST` and aggregates are not bound here.
+
+- `scalar/regex` (`regexp_replace`): Java patterns are translated to `fancy_regex` by `regex/java.rs` (ASCII `\d\w\s`,
+  Java's `.`/`$`/`^` and line terminators, `\Q..\E`, POSIX `\p{..}`); the replacement is read as `Matcher.appendReplacement`
+  does. Unsupported Java constructs are `INVALID_PARAMETER_VALUE.PATTERN`. Add new regex functions to this family.
 
 ## Invariants
 - Behaviour keyed by Spark version (3.5, 4.0, 4.1, 4.2), never ad-hoc flags.
