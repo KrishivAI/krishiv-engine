@@ -19,6 +19,11 @@ const OTHER_TERMINATORS: &str = r"\x{85}\x{2028}\x{2029}";
 /// or a final line terminator and then the end.
 const DOLLAR: &str = r"(?=(?:\r\n|[\n\r\x{85}\x{2028}\x{2029}])?\z)";
 
+/// The same under `(?d)` (UNIX_LINES), where only `\n` is a line terminator.
+const DOLLAR_UNIX: &str = r"(?=\n?\z)";
+const DOLLAR_MULTILINE_UNIX: &str = r"(?:\z|(?=\n))";
+const CARET_MULTILINE_UNIX: &str = r"(?:\A|(?<=\n)(?!\z))";
+
 /// `$` with the multiline flag: before any line terminator, or at the end.
 const DOLLAR_MULTILINE: &str =
     r"(?:\z|(?=\r\n)|(?=[\x{85}\x{2028}\x{2029}])|(?<!\r)(?=\n)|(?=\r(?!\n)))";
@@ -49,6 +54,8 @@ const POSIX: &[(&str, &str)] = &[
 struct Flags {
     dotall: bool,
     multiline: bool,
+    /// `(?d)`: only `\n` is a line terminator.
+    unix_lines: bool,
 }
 
 /// Translates the Java pattern `src`. With `terminated`, a `$` also
@@ -88,6 +95,17 @@ impl Translator<'_> {
         self.chars.get(self.at + n).copied()
     }
 
+    /// `$` without the multiline flag (and `\Z`).
+    fn dollar(&mut self) {
+        self.has_dollar = true;
+        let unix = self.flags().unix_lines;
+        self.out.push_str(match (self.terminated, unix) {
+            (false, _) => r"\z",
+            (true, false) => DOLLAR,
+            (true, true) => DOLLAR_UNIX,
+        });
+    }
+
     fn flags(&self) -> Flags {
         self.stack.last().copied().unwrap_or_default()
     }
@@ -109,22 +127,32 @@ impl Translator<'_> {
                 '.' => {
                     if self.flags().dotall {
                         self.out.push_str(r"[\s\S]");
+                    } else if self.flags().unix_lines {
+                        self.out.push_str(r"[^\n]");
                     } else {
                         let _ = write!(self.out, r"[^\n\r{OTHER_TERMINATORS}]");
                     }
                 }
                 '$' => {
                     if self.flags().multiline {
-                        self.out.push_str(DOLLAR_MULTILINE);
+                        let unix = self.flags().unix_lines;
+                        self.out.push_str(if unix {
+                            DOLLAR_MULTILINE_UNIX
+                        } else {
+                            DOLLAR_MULTILINE
+                        });
                     } else {
-                        self.has_dollar = true;
-                        self.out
-                            .push_str(if self.terminated { DOLLAR } else { r"\z" });
+                        self.dollar();
                     }
                 }
                 '^' => {
                     if self.flags().multiline {
-                        self.out.push_str(CARET_MULTILINE);
+                        let unix = self.flags().unix_lines;
+                        self.out.push_str(if unix {
+                            CARET_MULTILINE_UNIX
+                        } else {
+                            CARET_MULTILINE
+                        });
                     } else {
                         self.out.push_str(r"\A");
                     }
@@ -151,6 +179,16 @@ impl Translator<'_> {
                     let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
                     if low.is_empty() || !digits(low) || !digits(high) {
                         return Err("illegal repetition".to_owned());
+                    }
+                    // Java reads the bounds as `int`s and needs `low <= high`.
+                    let bound = |s: &str| s.parse::<i32>().map_err(|_| "illegal repetition range");
+                    let high_bound = if high.is_empty() {
+                        i32::MAX
+                    } else {
+                        bound(high)?
+                    };
+                    if bound(low)? > high_bound {
+                        return Err("illegal repetition range".to_owned());
                     }
                     self.out.push('{');
                     self.out.push_str(&body);
@@ -205,6 +243,7 @@ impl Translator<'_> {
                 'u' => {}
                 'm' => flags.multiline = on,
                 's' => flags.dotall = on,
+                'd' => flags.unix_lines = on,
                 ')' | ':' => break,
                 _ => return Err(format!("unsupported flag {c}")),
             }
@@ -275,11 +314,7 @@ impl Translator<'_> {
                 self.out.push('\\');
                 self.out.push(c);
             }
-            'Z' if !in_class => {
-                self.has_dollar = true;
-                self.out
-                    .push_str(if self.terminated { DOLLAR } else { r"\z" });
-            }
+            'Z' if !in_class => self.dollar(),
             't' | 'n' | 'r' | 'f' => {
                 self.out.push('\\');
                 self.out.push(c);

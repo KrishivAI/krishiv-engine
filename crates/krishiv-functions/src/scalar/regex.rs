@@ -7,26 +7,38 @@
 //! Java's meaning where the two differ: `\d`, `\w`, `\s` are ASCII, `.`
 //! stops at every line terminator, `$` also matches before a final line
 //! terminator, `\Q..\E` quotes, and `\<`/`\>` are literals. Constructs with
-//! no translation (possessive quantifiers, `\G`, the `U`/`d` flags, Unicode
+//! no translation (possessive quantifiers, `\G`, the `U` flag, Unicode
 //! blocks) are rejected as an invalid pattern.
 //!
 //! The replacement follows `Matcher.appendReplacement`: `$n` / `${name}` are
 //! groups, `\x` is the literal `x`. Replacement errors are raised on the
 //! first match, as Java does.
+//!
+//! Divergence from Spark: patterns with back-references or look-around are
+//! matched by backtracking, which can take exponential time on a crafted
+//! input (ReDoS). The JVM has no limit and runs until the query is killed;
+//! here one match attempt stops after [`BACKTRACK_LIMIT`] steps with
+//! `KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED`. Patterns without those
+//! constructs run in linear time and never reach the limit.
 
 use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, StringArray};
 use arrow_schema::DataType;
-use fancy_regex::Regex;
+use fancy_regex::{Regex, RegexBuilder, RuntimeError};
 use krishiv_common::error::{
-    DatatypeMismatchValueOutOfRange, InvalidParameterValuePattern, KrishivError,
+    DatatypeMismatchValueOutOfRange, InvalidParameterValuePattern, InvalidRegexpReplace,
+    KrishivError, KrishivRegexpBacktrackLimitExceeded,
 };
 
 use super::args::{Inputs, Prim, Str, internal, is_string};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 mod java;
+
+/// The most backtracking steps one match attempt may take (the
+/// `fancy_regex` default, set explicitly so an upgrade cannot change it).
+pub(crate) const BACKTRACK_LIMIT: usize = 1_000_000;
 
 /// Every name this family binds.
 pub(super) const NAMES: &[&str] = &["regexp_replace"];
@@ -73,7 +85,12 @@ impl Compiled {
             .into()
         };
         let plain = java::translate(pattern, false).map_err(|_| invalid())?;
-        let build = |p: &str| Regex::new(p).map_err(|_| invalid());
+        let build = |p: &str| {
+            RegexBuilder::new(p)
+                .backtrack_limit(BACKTRACK_LIMIT)
+                .build()
+                .map_err(|_| invalid())
+        };
         Ok(Self {
             source: pattern.to_owned(),
             terminated: plain
@@ -101,14 +118,21 @@ enum Part {
     Group(usize),
 }
 
+/// Spark's `INVALID_REGEXP_REPLACE`, raised for any replacement Java's
+/// `appendReplacement` rejects.
+fn invalid_replacement(source: &str, pattern: &str, rep: &str, position: i32) -> KrishivError {
+    InvalidRegexpReplace {
+        source: source.to_owned(),
+        pattern: pattern.to_owned(),
+        replacement: rep.to_owned(),
+        position: position.to_string(),
+    }
+    .into()
+}
+
 /// `appendReplacement`'s reading of `rep` for a pattern with `groups`
-/// groups (group 0 included) named `names`.
-fn parse_replacement(
-    rep: &str,
-    groups: usize,
-    names: &[(String, usize)],
-) -> Result<Vec<Part>, KrishivError> {
-    let err = |m: &str| -> KrishivError { internal(m.to_owned()) };
+/// groups (group 0 included) named `names`; `None` where Java throws.
+fn parse_replacement(rep: &str, groups: usize, names: &[(String, usize)]) -> Option<Vec<Part>> {
     let chars: Vec<char> = rep.chars().collect();
     let mut parts = Vec::new();
     let mut text = String::new();
@@ -117,46 +141,34 @@ fn parse_replacement(
         match chars[i] {
             '\\' => {
                 i += 1;
-                let c = chars
-                    .get(i)
-                    .ok_or_else(|| err("character to be escaped is missing"))?;
+                // A trailing backslash has no character to escape.
+                let c = chars.get(i)?;
                 text.push(*c);
                 i += 1;
             }
             '$' => {
                 i += 1;
-                let first = *chars
-                    .get(i)
-                    .ok_or_else(|| err("Illegal group reference: group index is missing"))?;
+                let first = *chars.get(i)?;
                 if first == '{' {
                     i += 1;
                     let start = i;
                     while chars.get(i).is_some_and(char::is_ascii_alphanumeric) {
                         i += 1;
                     }
-                    if i == start {
-                        return Err(err("named capturing group has 0 length name"));
-                    }
-                    if chars.get(i) != Some(&'}') {
-                        return Err(err("named capturing group is missing trailing '}'"));
+                    // An empty name, a missing `}` or an unknown name.
+                    if i == start || chars.get(i) != Some(&'}') {
+                        return None;
                     }
                     let name: String = chars[start..i].iter().collect();
                     i += 1;
-                    let index = names
-                        .iter()
-                        .find(|(n, _)| *n == name)
-                        .map(|(_, g)| *g)
-                        .ok_or_else(|| internal(format!("No group with name {{{name}}}")))?;
+                    let index = names.iter().find(|(n, _)| *n == name).map(|(_, g)| *g)?;
                     flush(&mut text, &mut parts);
                     parts.push(Part::Group(index));
                 } else {
-                    let digit = first
-                        .to_digit(10)
-                        .ok_or_else(|| err("Illegal group reference"))?
-                        as usize;
+                    let digit = first.to_digit(10)? as usize;
                     i += 1;
                     if digit >= groups {
-                        return Err(internal(format!("No group {digit}")));
+                        return None;
                     }
                     let mut index = digit;
                     while let Some(d) = chars.get(i).and_then(|c| c.to_digit(10)) {
@@ -178,7 +190,7 @@ fn parse_replacement(
         }
     }
     flush(&mut text, &mut parts);
-    Ok(parts)
+    Some(parts)
 }
 
 fn flush(text: &mut String, parts: &mut Vec<Part>) {
@@ -290,7 +302,17 @@ fn replace_row(
     };
     let (head, tail) = source.split_at(start);
     let re = compiled.for_input(tail);
-    let at = |e: fancy_regex::Error| internal(format!("{}: {e}", compiled.source));
+    let at = |e: fancy_regex::Error| match e {
+        fancy_regex::Error::RuntimeError(RuntimeError::BacktrackLimitExceeded) => {
+            KrishivRegexpBacktrackLimitExceeded {
+                pattern: format!("'{}'", compiled.source),
+                function_name: "`regexp_replace`".to_owned(),
+                limit: BACKTRACK_LIMIT.to_string(),
+            }
+            .into()
+        }
+        e => internal(format!("{}: {e}", compiled.source)),
+    };
     let mut out = String::with_capacity(source.len());
     out.push_str(head);
     let (mut last, mut from) = (0, 0);
@@ -309,7 +331,8 @@ fn replace_row(
                         .enumerate()
                         .filter_map(|(i, n)| n.map(|n| (n.to_owned(), i)))
                         .collect();
-                    let parsed = parse_replacement(rep, re.captures_len(), &names)?;
+                    let parsed = parse_replacement(rep, re.captures_len(), &names)
+                        .ok_or_else(|| invalid_replacement(source, pattern, rep, position))?;
                     cache.replacement = Some((rep.to_owned(), parsed));
                 }
                 let p = cache

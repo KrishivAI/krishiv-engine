@@ -72,7 +72,7 @@ fn strings(s: &Session, sql: &str) -> Vec<Option<String>> {
 fn fails(s: &Session, sql: &str) -> KrishivError {
     match block_on(s.sql(sql)) {
         Err(e) => e,
-        Ok(df) => block_on(df.collect()).unwrap_err(),
+        Ok(df) => block_on(df.collect()).expect_err(sql),
     }
 }
 
@@ -178,11 +178,11 @@ fn offset_must_be_a_non_negative_constant_integer() {
         e.error_class(),
         ErrorClass::InvalidLimitLikeExpressionIsNegative
     );
-    // A column is not in scope of the clause.
+    // A column resolves, and is then not a constant (Spark 4.2.0).
     let e = fails(&s, "SELECT id FROM t OFFSET id");
     assert_eq!(
         e.error_class(),
-        ErrorClass::UnresolvedColumnWithoutSuggestion
+        ErrorClass::InvalidLimitLikeExpressionIsUnfoldable
     );
     // Not an INT.
     let e = fails(&s, "SELECT id FROM t OFFSET 'a'");
@@ -233,4 +233,99 @@ fn regexp_replace_in_sql() {
     assert_eq!(e.error_class(), ErrorClass::InvalidParameterValuePattern);
     let e = fails(&s, "SELECT regexp_replace('abc', 'b', 'x', 0)");
     assert_eq!(e.error_class(), ErrorClass::DatatypeMismatchValueOutOfRange);
+}
+
+/// Results and error classes of Spark 4.2.0 (local session, same data) for
+/// the edge cases of `OFFSET`.
+#[test]
+fn offset_edge_cases_match_spark() {
+    let s = session();
+    let rows = [
+        ("ORDER BY id LIMIT 2 OFFSET 1", vec![2, 3]),
+        ("ORDER BY id OFFSET 9", vec![10]),
+        ("ORDER BY id OFFSET 10", vec![]),
+        ("ORDER BY id LIMIT 10 OFFSET 100", vec![]),
+        ("ORDER BY id OFFSET 1 + 1", (3..=10).collect()),
+        ("ORDER BY id OFFSET 2147483647", vec![]),
+        ("ORDER BY id LIMIT ALL OFFSET 8", vec![9, 10]),
+    ];
+    for (tail, want) in rows {
+        assert_eq!(
+            ints(&s, &format!("SELECT id FROM t {tail}")),
+            want,
+            "{tail}"
+        );
+    }
+    let whole = [
+        (
+            "SELECT * FROM (SELECT id FROM t ORDER BY id OFFSET 1) WHERE id > 8 ORDER BY id",
+            vec![9, 10],
+        ),
+        (
+            "SELECT * FROM (SELECT id FROM t ORDER BY id LIMIT 3 OFFSET 1) ORDER BY id DESC LIMIT 1 OFFSET 1",
+            vec![3],
+        ),
+        (
+            "SELECT * FROM (SELECT id FROM t ORDER BY id OFFSET 1) ORDER BY id OFFSET 1",
+            (3..=10).collect(),
+        ),
+        (
+            "SELECT (SELECT id FROM t ORDER BY id LIMIT 1 OFFSET 2)",
+            vec![3],
+        ),
+        (
+            "SELECT id FROM t UNION ALL SELECT id FROM t ORDER BY id OFFSET 18",
+            vec![10, 10],
+        ),
+        (
+            "(SELECT id FROM t ORDER BY id LIMIT 3) UNION ALL (SELECT id FROM t ORDER BY id OFFSET 8) ORDER BY id",
+            vec![1, 2, 3, 9, 10],
+        ),
+        (
+            "SELECT id % 2 AS g FROM t GROUP BY id % 2 ORDER BY g OFFSET 1",
+            vec![1],
+        ),
+        (
+            "SELECT id FROM t WHERE id IN (SELECT id FROM t ORDER BY id LIMIT 3 OFFSET 2) ORDER BY id",
+            vec![3, 4, 5],
+        ),
+    ];
+    for (sql, want) in whole {
+        assert_eq!(ints(&s, sql), want, "{sql}");
+    }
+    let unfoldable = ErrorClass::InvalidLimitLikeExpressionIsUnfoldable;
+    let data_type = ErrorClass::InvalidLimitLikeExpressionDataType;
+    let errors = [
+        (
+            "OFFSET -1",
+            ErrorClass::InvalidLimitLikeExpressionIsNegative,
+        ),
+        (
+            "LIMIT 2 OFFSET -1",
+            ErrorClass::InvalidLimitLikeExpressionIsNegative,
+        ),
+        ("OFFSET id", unfoldable),
+        ("OFFSET (SELECT 1)", unfoldable),
+        ("OFFSET 1.5", data_type),
+        ("OFFSET 'a'", data_type),
+        ("OFFSET CAST(1 AS BIGINT)", data_type),
+        ("OFFSET 2147483648", data_type),
+        ("OFFSET NULL", data_type),
+        (
+            "OFFSET CAST(NULL AS INT)",
+            ErrorClass::InvalidLimitLikeExpressionIsNull,
+        ),
+        (
+            "LIMIT 2147483647 OFFSET 2147483647",
+            ErrorClass::SumOfLimitAndOffsetExceedsMaxInt,
+        ),
+        ("OFFSET 1 LIMIT 2", ErrorClass::ParseSyntaxError),
+        ("LIMIT 3 OFFSET 1 OFFSET 1", ErrorClass::ParseSyntaxError),
+        ("OFFSET 1 ROWS", ErrorClass::ParseSyntaxError),
+        ("FETCH FIRST 2 ROWS ONLY", ErrorClass::ParseSyntaxError),
+    ];
+    for (tail, class) in errors {
+        let e = fails(&s, &format!("SELECT id FROM t ORDER BY id {tail}"));
+        assert_eq!(e.error_class(), class, "{tail}: {}", e.message());
+    }
 }

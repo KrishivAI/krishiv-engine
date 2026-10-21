@@ -117,17 +117,12 @@ fn replacement_syntax() {
 
 #[test]
 fn replacement_errors_are_raised_on_a_match() {
-    for (rep, java) in [
-        ("$", "group index is missing"),
-        ("$x", "Illegal group reference"),
-        (r"\", "character to be escaped is missing"),
-        ("$3", "No group 3"),
-        ("${y}", "No group with name {y}"),
-        ("${x", "missing trailing '}'"),
-    ] {
+    for rep in ["$", "$x", r"\", "$3", "${y}", "${x"] {
         let e = fails("ab", "(?<x>a)", rep);
-        assert!(e.message().contains(java), "{rep}: {}", e.message());
+        assert_eq!(e.error_class(), ErrorClass::InvalidRegexpReplace, "{rep}");
     }
+    // No match, no error.
+    assert_eq!(one("bb", "(?<x>a)", "$"), some("bb"));
 }
 
 /// `Matcher.find`: an empty match may follow a non-empty one.
@@ -208,4 +203,220 @@ fn translations_pin_the_syntax() {
     assert_eq!(t.text, r"a\z");
     assert!(translate("a$", true).unwrap().text.contains("(?="));
     assert!(translate("a*+", false).is_err());
+}
+
+/// `regexp_replace(s, re, rep, pos)` for one row.
+fn at(s: &str, re: &str, rep: &str, pos: i32) -> Option<String> {
+    let cols = [Some(s), Some(re), Some(rep)].map(|v| strs(&[v]));
+    let p = ints(&[Some(pos)]);
+    text(&run("regexp_replace", &[&cols[0], &cols[1], &cols[2], &p])).remove(0)
+}
+
+/// Spark 4.2.0 (local session): `$n`, `\$` and backslash escapes in the
+/// replacement, and the error a bad replacement raises.
+#[test]
+fn oracle_replacement() {
+    let cases = [
+        ("abc123", r"([a-z]+)(\d+)", "$2-$1", "123-abc"),
+        ("abc", "b", r"\$", "a$c"),
+        ("abc", "(b)", "$0", "abc"),
+        ("abc", "(b)", "$1$1", "abbc"),
+        // Through the DataFrame API: Spark's SQL parser substitutes a
+        // literal `${n}` (variable substitution) before the function runs.
+        ("abc", "(?<n>b)", "${n}", "abc"),
+        ("abc", "(?<n>b)", "[${n}]", "a[b]c"),
+        ("abc", "(b)", "$10", "ab0c"),
+        ("abc", "(b)", r"\\", r"a\c"),
+        ("abc", "(b)", r"\n", "anc"),
+    ];
+    for (s, re, rep, want) in cases {
+        assert_eq!(one(s, re, rep), some(want), "{re} {rep}");
+    }
+    for (re, rep) in [
+        ("b", "$"),
+        ("b", "$2"),
+        ("(b)", "$2"),
+        ("(b)", r"\"),
+        ("(b)", "$a"),
+        ("(b)", "${1}"),
+        ("(?<n>b)", "${m}"),
+        ("(?<n>b)", "${n"),
+        ("(?<n>b)", "${}"),
+    ] {
+        let e = fails("abc", re, rep);
+        assert_eq!(e.error_class(), ErrorClass::InvalidRegexpReplace, "{rep}");
+        assert_eq!(e.sql_state(), Some("22023"), "{rep}");
+        assert_eq!(
+            e.message(),
+            format!(
+                "Could not perform regexp_replace for source = \"abc\", \
+                 pattern = \"{re}\", replacement = \"{rep}\" and position = 1."
+            ),
+            "{rep}"
+        );
+    }
+}
+
+/// Spark 4.2.0: backslash escapes of the pattern.
+#[test]
+fn oracle_pattern_escapes() {
+    let cases = [
+        ("a.b", r"\.", "a-b"),
+        (r"a\b", r"\\", "a/b"),
+        ("a1b", r"\d", "a#b"),
+        ("a b", r"\s", "a#b"),
+        ("ab", r"\Qa\E", "#b"),
+        ("abc", r"\x62", "a#c"),
+        ("abc", r"b", "a#c"),
+        ("abc", r"\p{Lower}", "###"),
+        ("abc", r"\p{Alpha}+", "#"),
+        ("abc", r"\h", "abc"),
+        ("a\tb", r"\t", "a#b"),
+    ];
+    for (s, re, want) in cases {
+        let want = want.replace(['-', '/'], "#");
+        let got = one(s, re, "#");
+        assert_eq!(got, some(&want), "{re}");
+    }
+}
+
+/// Spark 4.2.0: NULL in any argument gives NULL.
+#[test]
+fn oracle_null_arguments() {
+    let s = strs(&[Some("a"), None, Some("a"), Some("a"), Some("a")]);
+    let re = strs(&[Some("a"), Some("a"), None, Some("a"), Some("a")]);
+    let rep = strs(&[Some("b"), Some("b"), Some("b"), None, Some("b")]);
+    let pos = ints(&[Some(1), Some(1), Some(1), Some(1), None]);
+    assert_eq!(
+        text(&run("regexp_replace", &[&s, &re, &rep, &pos])),
+        [some("b"), None, None, None, None]
+    );
+}
+
+/// Spark 4.2.0: the error class and message of an invalid pattern.
+#[test]
+fn oracle_invalid_patterns() {
+    for re in ["(", "[a", "*", "(?<n", "\\", "a{2,1}", "(?P<n>a)"] {
+        let e = try_one("abc", re, "x").expect_err(re);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::InvalidParameterValuePattern,
+            "{re}"
+        );
+        assert_eq!(
+            e.message(),
+            format!("The value of parameter(s) `regexp` in `regexp_replace` is invalid: '{re}'."),
+            "{re}"
+        );
+    }
+}
+
+/// Spark 4.2.0: the position counts UTF-16 units; the match region starts
+/// there, anchors and look-behind do not see what precedes it.
+#[test]
+fn oracle_position() {
+    for (pos, want) in [(1, "bbb"), (2, "abb"), (3, "aab"), (4, "aaa"), (5, "aaa")] {
+        assert_eq!(at("aaa", "a", "b", pos), some(want), "{pos}");
+    }
+    assert_eq!(at("abab", "^a", "X", 3), some("abXb"));
+    assert_eq!(at("abab", r"\ba", "X", 3), some("abXb"));
+    assert_eq!(at("abab", "(?<=a)b", "X", 2), some("abaX"));
+    assert_eq!(at("a😀b", "b", "X", 3), some("a😀X"));
+    assert_eq!(at("a😀b", ".", "X", 2), some("aXX"));
+    assert_eq!(at("abc", "", "-", 3), some("ab-c-"));
+    assert_eq!(at("abc", "", "-", 4), some("abc"));
+}
+
+/// Spark 4.2.0: empty matches.
+#[test]
+fn oracle_empty_matches() {
+    let cases = [
+        ("abc", "", "-a-b-c-"),
+        ("", "", "-"),
+        ("abc", "x*", "-a-b-c-"),
+        ("abc", "b*", "-a--c-"),
+        ("abc", "$", "abc-"),
+        ("abc", "^", "-abc"),
+    ];
+    for (s, re, want) in cases {
+        assert_eq!(one(s, re, "-"), some(want), "{re}");
+    }
+}
+
+/// Spark 4.2.0: `.` excludes `\n`, `\r`, U+0085, U+2028 and U+2029 (and only
+/// `\n` under `(?d)`); `(?s)` includes them all.
+#[test]
+fn oracle_dot_and_line_terminators() {
+    for t in ["\n", "\r", "\u{85}", "\u{2028}", "\u{2029}", "\r\n"] {
+        let s = format!("a{t}b");
+        assert_eq!(one(&s, ".", "X"), some(&format!("X{t}X")), "{t:?}");
+        assert_eq!(one(&s, "a.b", "X"), some(&s), "{t:?}");
+        assert_eq!(
+            one(&s, "(?s).", "X"),
+            some(&"X".repeat(2 + t.chars().count()))
+        );
+    }
+    assert_eq!(one("a\nb", "(?d).", "X"), some("X\nX"));
+    assert_eq!(one("a\u{85}b", "(?d).", "X"), some("XXX"));
+    assert_eq!(one("a\nb", "$", "X"), some("a\nbX"));
+    assert_eq!(one("a\nb\n", "$", "X"), some("a\nbX\nX"));
+    assert_eq!(one("a\nb", "(?m)^", "X"), some("Xa\nXb"));
+    assert_eq!(one("a\nb", "(?m)$", "X"), some("aX\nbX"));
+    assert_eq!(one("a\nb", r"\z", "X"), some("a\nbX"));
+    assert_eq!(one("a\nb\n", r"\Z", "X"), some("a\nbX\nX"));
+    // The ClickBench domain pattern: a line terminator stops `.*`.
+    let re = r"^https?://(?:www\.)?([^/]+)/.*$";
+    assert_eq!(
+        one("https://www.example.com/pa\nth", re, "$1"),
+        some("https://www.example.com/pa\nth")
+    );
+    assert_eq!(
+        one("http://example.com", re, "$1"),
+        some("http://example.com")
+    );
+}
+
+/// `(?d)` (UNIX_LINES), checked against Spark 4.2.0: only `\n` is a line
+/// terminator for `.`, `^`, `$` and `\Z`.
+#[test]
+fn unix_lines_flag() {
+    let cases = [
+        ("a\r\nb", "(?d)a.", "X\nb"),
+        ("a\rb", "(?d).", "XXX"),
+        ("a\nb\n", "(?d)$", "a\nbX\nX"),
+        ("a\rb\r", "(?d)$", "a\rb\rX"),
+        ("a\nb", "(?dm)^", "Xa\nXb"),
+        ("a\rb", "(?dm)^", "Xa\rb"),
+        ("a\nb\n", "(?dm)$", "aX\nbX\nX"),
+        ("a\rb", "(?dm)$", "a\rbX"),
+        ("a\nb\n", r"(?d)\Z", "a\nbX\nX"),
+        ("a\rb\r", r"(?d)\Z", "a\rb\rX"),
+        ("a\u{85}b", "(?d)a.b", "X"),
+        ("a\nb", "(?-d).", "X\nX"),
+    ];
+    for (s, re, want) in cases {
+        assert_eq!(one(s, re, "X"), some(want), "{s:?} {re}");
+    }
+}
+
+/// A back-reference sends the pattern to the backtracking engine, where
+/// nested quantifiers are exponential (on the JVM this pattern takes about
+/// 0.6 s at 24 `a`s and doubles with each more). Spark has no limit; Krishiv
+/// stops with a named error instead of hanging the query.
+#[test]
+fn catastrophic_pattern_hits_the_backtrack_limit() {
+    let input = format!("{}!", "a".repeat(40));
+    let e = fails(&input, r"^(a*)*\1c", "x");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivRegexpBacktrackLimitExceeded
+    );
+    assert_eq!(e.sql_state(), Some("54000"));
+    assert!(
+        e.message().contains(&super::BACKTRACK_LIMIT.to_string()),
+        "{}",
+        e.message()
+    );
+    // The same shape on a short input stays under the limit.
+    assert_eq!(one("aaa!", r"^(a*)*\1c", "x"), some("aaa!"));
 }

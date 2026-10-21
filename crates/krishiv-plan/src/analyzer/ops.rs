@@ -11,8 +11,8 @@ use krishiv_common::error::{
     InvalidLimitLikeExpressionDataType, InvalidLimitLikeExpressionIsNegative,
     InvalidLimitLikeExpressionIsNull, InvalidLimitLikeExpressionIsUnfoldable,
     InvalidWhereCondition, JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy,
-    OrderByPosOutOfRange, StarGroupByPos, TableOrViewNotFound, UnresolvedUsingColumnForJoin,
-    UnsupportedFeatureLateralColumnAliasInAggregateFunc,
+    OrderByPosOutOfRange, StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound,
+    UnresolvedUsingColumnForJoin, UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy,
 };
 
@@ -1307,7 +1307,25 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
-        let expr = self.limit_like(count, if offset { "offset" } else { "limit" }, env)?;
+        let name = if offset { "offset" } else { "limit" };
+        let expr = self.limit_like(count, name, &c, env)?;
+        // `LIMIT l OFFSET o` is a limit over an offset; Spark bounds `l + o`.
+        if let (
+            false,
+            PlanNode::Offset { offset: below, .. },
+            ExprNode::Literal(Literal::Integer(l)),
+        ) = (offset, &c.plan.node, &expr.node)
+            && let ExprNode::Literal(Literal::Integer(o)) = &below.node
+            && i64::from(*l) + i64::from(*o) > i64::from(i32::MAX)
+        {
+            return Err(AnalysisError::new(
+                SumOfLimitAndOffsetExceedsMaxInt {
+                    limit: l.to_string(),
+                    offset: o.to_string(),
+                },
+                count.origin,
+            ));
+        }
         let input = Arc::clone(&c.plan);
         let node = if offset {
             PlanNode::Offset {
@@ -1328,11 +1346,15 @@ impl Resolver<'_> {
         &mut self,
         e: &Arc<Expr>,
         name: &str,
+        input: &Rel,
         env: &Arc<Env>,
     ) -> Result<Arc<Expr>, AnalysisError> {
+        // Columns resolve against the input (so `OFFSET id` is "not
+        // constant", as in Spark, not an unresolved column).
+        let rels = [input];
         let cx = Self::cx(
-            &[],
-            &[],
+            &input.out,
+            &rels,
             env,
             if name == "limit" { "Limit" } else { "Offset" },
         );
@@ -1681,14 +1703,16 @@ fn aggregate_sql(e: &Arc<Expr>, scope: &[Attr]) -> String {
 fn not_constant(e: &Expr) -> bool {
     if matches!(
         &e.node,
-        ExprNode::Resolved(
-            ResolvedExpr::Column(_)
-                | ResolvedExpr::OuterColumn(_)
-                | ResolvedExpr::Function(ResolvedFunction {
-                    deterministic: false,
-                    ..
-                })
-        )
+        // A subquery is not foldable, whatever it selects.
+        ExprNode::Subquery { .. }
+            | ExprNode::Resolved(
+                ResolvedExpr::Column(_)
+                    | ResolvedExpr::OuterColumn(_)
+                    | ResolvedExpr::Function(ResolvedFunction {
+                        deterministic: false,
+                        ..
+                    })
+            )
     ) {
         return true;
     }

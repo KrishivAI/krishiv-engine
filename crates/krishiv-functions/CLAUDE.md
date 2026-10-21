@@ -29,7 +29,10 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
 
 - `scalar/regex` (`regexp_replace`): Java patterns are translated to `fancy_regex` by `regex/java.rs` (ASCII `\d\w\s`,
   Java's `.`/`$`/`^` and line terminators, `\Q..\E`, POSIX `\p{..}`); the replacement is read as `Matcher.appendReplacement`
-  does. Unsupported Java constructs are `INVALID_PARAMETER_VALUE.PATTERN`. Add new regex functions to this family.
+  does (errors are `INVALID_REGEXP_REPLACE`). Unsupported Java constructs are `INVALID_PARAMETER_VALUE.PATTERN`.
+  Patterns with back-references or look-around backtrack: one match attempt is capped at `BACKTRACK_LIMIT` steps
+  (`KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED`), a deliberate divergence from the JVM, which has no limit. Add new
+  regex functions to this family.
 
 ## Invariants
 - Behaviour keyed by Spark version (3.5, 4.0, 4.1, 4.2), never ad-hoc flags.
