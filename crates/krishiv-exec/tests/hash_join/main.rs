@@ -499,7 +499,16 @@ async fn grace_spill_with_recursion_equals_the_in_memory_join() {
 /// NULL probe keys (an anti join keeps them), both key formats.
 #[tokio::test(start_paused = true)]
 async fn small_probe_partitions_join_with_roles_reversed() {
-    let build = skewed(24_000, 12_000);
+    // Build values differ from the probe's for equal keys, so the residual
+    // condition holds for some candidate pairs and not for others.
+    let build: Vec<Row> = skewed(24_000, 12_000)
+        .into_iter()
+        .enumerate()
+        .map(|(i, b)| Row {
+            v: i64::try_from(i % 97).unwrap(),
+            ..b
+        })
+        .collect();
     let mut probe = skewed(1_000, 16_000);
     probe.extend((0..50).map(|i| r(None, Some("a"), i)));
     for jt in [JoinType::LeftSemi, JoinType::LeftAnti] {
@@ -522,6 +531,28 @@ async fn small_probe_partitions_join_with_roles_reversed() {
                 metric(&q, "HashJoinProbe", "reversed_partitions")
             );
         }
+    }
+}
+
+/// Duplicate keys on both sides: one build chunk yields more candidate pairs
+/// than one evaluation of the residual condition takes (4096).
+#[tokio::test(start_paused = true)]
+async fn reversed_joins_with_many_candidate_pairs() {
+    let build: Vec<Row> = (0..20_000)
+        .map(|i| r(Some(i % 100), Some("a"), (i * 7) % 97))
+        .collect();
+    let probe: Vec<Row> = (0..1_000)
+        .map(|i| r(Some(i % 100), Some("a"), (i * 3) % 97))
+        .collect();
+    for jt in [JoinType::LeftSemi, JoinType::LeftAnti] {
+        let c = case(jt, 1, false, true);
+        let expect = c.oracle(&probe, &build);
+        let (got, q) = run_case(&c, &probe, &build, 1024, 3, 1 << 20).await;
+        assert!(got == expect, "{jt:?}");
+        assert!(
+            metric(&q, "HashJoinProbe", "reversed_partitions") > 0,
+            "{jt:?}"
+        );
     }
 }
 

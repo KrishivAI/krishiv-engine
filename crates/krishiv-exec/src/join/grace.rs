@@ -1553,6 +1553,89 @@ mod tests {
         assert_eq!(root.reserved(), 0);
     }
 
+    /// A reversal whose probe rows (read back from spill files) do not fit
+    /// the pool's free memory declines, and hands the task back intact.
+    #[tokio::test]
+    async fn a_probe_side_that_does_not_fit_declines_the_reversal() {
+        const LIMIT: usize = 64 << 20;
+        let root = TreePool::new(&MemoryConfig {
+            limit: Some(LIMIT),
+            quantum: 1,
+            spill_scratch_reserve: 0,
+            ..MemoryConfig::default()
+        });
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            root.child("q", None),
+        );
+        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
+        let dir = TempDir::new("grace-decline");
+        let manager = SpillManager::open(&SpillConfig {
+            dir: dir.0.clone(),
+            ..SpillConfig::default()
+        })
+        .unwrap();
+        let scope = manager.scope().unwrap();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("s", DataType::Utf8, false),
+        ]));
+        let join = super::super::HashJoin::try_new(super::super::JoinSpec {
+            join_type: super::super::JoinType::LeftSemi,
+            probe_schema: Arc::clone(&schema),
+            build_schema: Arc::clone(&schema),
+            probe_keys: vec![0],
+            build_keys: vec![0],
+            null_safe: vec![false],
+            filter: None,
+            spill: Some(scope.clone()),
+        })
+        .unwrap();
+        let shared = &join.0;
+        let hashing = shared.hashing(&ExecConfig::default());
+        let k = Int64Array::from_iter_values(0..3000);
+        let v = StringArray::from_iter_values((0..3000).map(|j| format!("row-{j}")));
+        let batch = Batch::new(
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(v)]).unwrap(),
+        );
+        let mut parts = vec![Part::with_memory(ctx.consumer().reservation())];
+        reserve_chunks(&mut parts, &[(0, batch.clone())]).unwrap();
+        parts[0].chunks.push(batch);
+        spill_parts(&mut parts, &[0], &schema, &scope, &ctx, false)
+            .await
+            .unwrap();
+        let files = parts[0].files.len();
+        assert!(files > 0 && parts[0].chunks.is_empty());
+        let task = Task {
+            depth: 0,
+            build: Part::default(),
+            probe: parts.remove(0),
+        };
+        // Frame headroom lent as `reverse` does; nothing else is free.
+        let headroom = task.probe.read_headroom();
+        let mut lent = ctx.consumer().reservation();
+        lent.try_grow(headroom).unwrap();
+        lent.shrink_to_credit(headroom);
+        let other: Arc<dyn MemoryPool> = root.child("other", None);
+        let id = other.register("filler", None);
+        let mut filler = krishiv_memory::Reservation::new(Arc::clone(&other), id);
+        filler.try_grow(LIMIT - root.reserved()).unwrap();
+        let handle = Arc::clone(ctx.consumer().consumer());
+        match reverse_blocking(shared, &hashing, task, &handle).unwrap() {
+            Reversed::Declined(task) => {
+                assert_eq!(task.probe.files.len(), files, "nothing was consumed");
+                assert_eq!(task.probe.rows, 3000);
+            }
+            Reversed::Joined(_) => panic!("the probe rows cannot fit"),
+        }
+        ctx.consumer().consumer().release_credit();
+        drop(filler);
+        assert_eq!(root.reserved(), 0);
+    }
+
     /// A spill whose rows and the pool's free memory cannot fund its
     /// writer's scratch is declined: nothing is written or lost, no credit
     /// is left behind, and the query does not fail.
