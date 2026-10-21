@@ -116,6 +116,18 @@ def load_expected_rows(suite: str, sf: float) -> dict[str, int]:
     return json.loads(f.read_text()) if f.exists() else {}
 
 
+def order_fields(sql: str) -> dict:
+    """What the cross-engine row comparison needs to know about the query's ordering (stored in the result JSON)."""
+    ordered = compare.has_top_level_order_by(sql)
+    limit, offset = compare.derive_limit(sql) if ordered else (None, False)
+    return {
+        "has_order_by": ordered,
+        "sort_keys": compare.derive_sort_keys(sql) if ordered else None,
+        "limit": limit,
+        "has_offset": offset,
+    }
+
+
 def run_suite(
     engine_name: str,
     suite: str,
@@ -204,6 +216,7 @@ def run_suite(
                 continue
             ordered = compare.has_top_level_order_by(q.sql)
             entry.update(
+                order_fields(q.sql),
                 times_s=times,
                 p50_s=statistics.median(times),
                 p99_s=percentile(times, 99),
@@ -212,9 +225,6 @@ def run_suite(
                 mean_s=statistics.fmean(times),
                 throughput_qps=len(times) / sum(times),
                 rows_returned=len(rows),
-                has_order_by=ordered,
-                sort_keys=compare.derive_sort_keys(q.sql) if ordered else None,
-                limit=compare.derive_limit(q.sql)[0] if ordered else None,
                 expected_rows=expected.get(q.id),
                 rows_match_expected=(len(rows) == expected[q.id]) if q.id in expected else None,
                 peak_rss_bytes=_max([m.peak_rss_bytes for m in meas]),

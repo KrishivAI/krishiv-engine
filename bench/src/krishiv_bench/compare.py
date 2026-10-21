@@ -183,15 +183,18 @@ def compare_rows(
     sql: str | None = None,
     sort_keys: Sequence[int] | None = None,
     limit: int | None = None,
+    offset: bool | None = None,
 ) -> Comparison:
     """Compare two result sets.
 
     Unordered: sorted multisets. Ordered with sort keys: the key values must match position by position, and the
     rows within each run of equal keys compare as a multiset. Ordered without sort keys: whole rows, position by
     position (``ordered-fallback``). ``sort_keys`` (column indexes) and ``limit`` default to what
-    ``derive_sort_keys`` / ``derive_limit`` find in ``sql``. If a LIMIT cut the result (``len >= limit``), the last
-    tie group (and the first, with OFFSET) may legally hold different rows in the two results: that is reported as
-    ``tie-at-limit``, not as a mismatch.
+    ``derive_sort_keys`` / ``derive_limit`` find in ``sql``; ``offset`` (the query has an OFFSET) likewise, so a
+    stored ``limit`` keeps its OFFSET. Sort keys derived from ``sql`` that fall outside the rows' width are dropped
+    (whole-row comparison); keys passed by the caller must be valid. If a LIMIT cut the result (``len >= limit``),
+    the last tie group (and the first, with OFFSET) may legally hold different rows in the two results: that is
+    reported as ``tie-at-limit``, not as a mismatch.
     """
     if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
         raise ValueError(f"limit must be a non-negative int or None, got {limit!r}")
@@ -204,12 +207,21 @@ def compare_rows(
         sa, sb = sorted(a, key=_sort_key), sorted(b, key=_sort_key)
         msg = f"value mismatch (unordered, sorted row {i}): {tuple(sa[i])!r} vs {tuple(sb[i])!r}"
         return Comparison(False, "mismatch", "unordered", msg)
-    offset = False
+    derived = False
     if sql is not None:
         if sort_keys is None:
             sort_keys = derive_sort_keys(sql)
+            derived = sort_keys is not None
+        d_limit, d_offset = derive_limit(sql)
         if limit is None:
-            limit, offset = derive_limit(sql)
+            limit = d_limit
+        if offset is None:
+            offset = d_offset
+    if derived and sort_keys:
+        width = min((len(r) for r in (*a, *b)), default=None)
+        if width is not None and max(sort_keys) >= width:  # the parse and the result disagree: compare whole rows
+            sort_keys = None
+    offset = bool(offset)
     if sort_keys is None:
         for i, (x, y) in enumerate(zip(a, b, strict=False)):
             if not row_equal(x, y):
@@ -250,9 +262,10 @@ def rows_match(
     sql: str | None = None,
     sort_keys: Sequence[int] | None = None,
     limit: int | None = None,
+    offset: bool | None = None,
 ) -> tuple[bool, str]:
     """``compare_rows`` as (ok, message). ordered=True requires the same row order, up to ties on the sort keys."""
-    res = compare_rows(a, b, ordered, sql=sql, sort_keys=sort_keys, limit=limit)
+    res = compare_rows(a, b, ordered, sql=sql, sort_keys=sort_keys, limit=limit, offset=offset)
     return res.ok, res.message
 
 

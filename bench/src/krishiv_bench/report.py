@@ -180,6 +180,7 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
                     per[e1].get("has_order_by", False),
                     sort_keys=per[e1].get("sort_keys"),
                     limit=per[e1].get("limit"),
+                    offset=per[e1].get("has_offset", False),
                 )
                 if not res.ok:
                     bad.append(f"- `{q}` **{e1} vs {e2}**: {res.message}")
