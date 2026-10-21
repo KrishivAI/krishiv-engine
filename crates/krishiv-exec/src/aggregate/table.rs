@@ -11,9 +11,11 @@ use arrow_schema::SchemaRef;
 use krishiv_types::batch::{Batch, Weights};
 
 use super::accumulator::Accumulator;
+use super::rowtable::{RowPrepared, RowTable};
 use super::{AggregateOutput, AggregateSpec};
 use crate::error::{Result, internal};
 use crate::hash::{HashSeed, KeyEncoder, KeyTable, ProbeCount, ProbeTotals, spill_partition};
+use crate::rows::RowLayout;
 
 /// What every table of one aggregate shares.
 #[derive(Debug)]
@@ -23,21 +25,33 @@ pub(crate) struct AggCore {
     pub(crate) state_schema: SchemaRef,
     pub(crate) output_schema: SchemaRef,
     /// Each aggregate's columns in the state schema.
-    ranges: Vec<Range<usize>>,
+    pub(crate) ranges: Vec<Range<usize>>,
+    /// The row layout of the keys, when they are all fixed-width (the
+    /// row tables of `krishiv.exec.agg.rowLayout` need it; others keep
+    /// the arrow-row [`KeyTable`]).
+    pub(crate) rows: Option<RowLayout>,
 }
 
 impl AggCore {
     pub(crate) fn new(spec: AggregateSpec) -> Result<Self> {
-        let types: Vec<_> = spec
+        let fields: Vec<_> = spec
             .group_by
             .iter()
             .map(|&k| {
                 let f = spec.input.fields().get(k);
-                let f = f.ok_or_else(|| internal(format!("grouping column {k} out of range")))?;
-                Ok(f.data_type().clone())
+                f.cloned()
+                    .ok_or_else(|| internal(format!("grouping column {k} out of range")))
             })
             .collect::<Result<_>>()?;
+        let types: Vec<_> = fields.iter().map(|f| f.data_type().clone()).collect();
         let encoder = KeyEncoder::new(&types)?;
+        // Every key gets a validity bit: batches may hold NULLs in a field
+        // the spec's schema declares non-nullable (the arrow-row path
+        // accepts them), and the row path must do what it does.
+        let rows = (!types.is_empty())
+            .then(|| RowLayout::new(&types, &vec![true; types.len()]).ok())
+            .flatten()
+            .filter(RowLayout::is_fixed_width);
         let state_schema = spec.state_schema()?;
         let output_schema = spec.output_schema()?;
         let mut ranges = Vec::with_capacity(spec.aggregates.len());
@@ -53,6 +67,7 @@ impl AggCore {
             state_schema,
             output_schema,
             ranges,
+            rows,
         })
     }
 
@@ -169,11 +184,6 @@ impl AggTable {
     /// Buckets of the key index (its capacity).
     pub(crate) fn buckets(&self) -> usize {
         self.keys.buckets()
-    }
-
-    /// The key hash seed.
-    pub(crate) fn seed(&self) -> &HashSeed {
-        &self.seed
     }
 
     /// Whether spilling this table frees nothing worth a file: no groups,
@@ -353,11 +363,133 @@ impl AggTable {
     }
 }
 
-fn batch(schema: &SchemaRef, cols: Vec<ArrayRef>, rows: usize) -> Result<RecordBatch> {
+pub(crate) fn batch(schema: &SchemaRef, cols: Vec<ArrayRef>, rows: usize) -> Result<RecordBatch> {
     RecordBatch::try_new_with_options(
         Arc::clone(schema),
         cols,
         &RecordBatchOptions::new().with_row_count(Some(rows)),
     )
     .map_err(|e| internal(e.to_string()))
+}
+
+/// A table of either layout: the arrow-row [`AggTable`] (default) or a
+/// [`RowTable`] (`krishiv.exec.agg.rowLayout`, fixed-width keys). Group
+/// "ids" are positions for an `AggTable` and row references for a
+/// `RowTable`; [`ids`](Self::ids) maps positions to ids for both.
+#[derive(Debug)]
+pub(crate) enum Table {
+    Keys(AggTable),
+    Rows(RowTable),
+}
+
+/// A batch prepared for [`Table::apply`].
+pub(crate) enum TablePrepared {
+    Keys(Prepared),
+    Rows(RowPrepared),
+}
+
+impl Table {
+    pub(crate) fn not_worth_spilling(&self) -> bool {
+        match self {
+            Self::Keys(t) => t.not_worth_spilling(),
+            Self::Rows(t) => t.len() == 0,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Keys(t) => t.len(),
+            Self::Rows(t) => t.len(),
+        }
+    }
+
+    pub(crate) fn memory_size(&self) -> usize {
+        match self {
+            Self::Keys(t) => t.memory_size(),
+            Self::Rows(t) => t.memory_size(),
+        }
+    }
+
+    /// Buckets of the key index (its capacity).
+    pub(crate) fn buckets(&self) -> usize {
+        match self {
+            Self::Keys(t) => t.buckets(),
+            Self::Rows(t) => t.buckets(),
+        }
+    }
+
+    pub(crate) fn prepare(&self, batch: &Batch, states: bool) -> Result<TablePrepared> {
+        Ok(match self {
+            Self::Keys(t) => TablePrepared::Keys(t.prepare(batch, states)?),
+            Self::Rows(t) => TablePrepared::Rows(t.prepare(batch, states)?),
+        })
+    }
+
+    pub(crate) fn projected(&self, p: &TablePrepared) -> Result<usize> {
+        match (self, p) {
+            (Self::Keys(t), TablePrepared::Keys(p)) => Ok(t.projected(p)),
+            (Self::Rows(t), TablePrepared::Rows(p)) => Ok(t.projected(p)),
+            _ => Err(mixed()),
+        }
+    }
+
+    pub(crate) fn apply(&mut self, p: &TablePrepared) -> Result<()> {
+        match (self, p) {
+            (Self::Keys(t), TablePrepared::Keys(p)) => t.apply(p),
+            (Self::Rows(t), TablePrepared::Rows(p)) => t.apply(p),
+            _ => Err(mixed()),
+        }
+    }
+
+    /// The ids of the groups at positions `range`.
+    pub(crate) fn ids(&self, range: Range<usize>) -> Vec<u32> {
+        match self {
+            Self::Keys(_) => range
+                .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
+                .collect(),
+            Self::Rows(t) => t.ids(range),
+        }
+    }
+
+    pub(crate) fn state_batch(&self, ids: &[u32]) -> Result<RecordBatch> {
+        match self {
+            Self::Keys(t) => t.state_batch(ids),
+            Self::Rows(t) => t.state_batch(ids),
+        }
+    }
+
+    pub(crate) fn output_batch(&self, ids: &[u32]) -> Result<RecordBatch> {
+        match self {
+            Self::Keys(t) => t.output_batch(ids),
+            Self::Rows(t) => t.output_batch(ids),
+        }
+    }
+
+    /// Group ids per spill partition at `level`, of the groups at
+    /// positions `from..` (ids are positions only for an `AggTable`).
+    pub(crate) fn ids_by_partition(&self, level: u32, from: usize) -> Vec<Vec<u32>> {
+        match self {
+            Self::Keys(t) => {
+                let mut parts = t.ids_by_partition(level);
+                for ids in &mut parts {
+                    ids.retain(|&i| i as usize >= from);
+                }
+                parts
+            }
+            Self::Rows(t) => t.ids_by_partition(level, from),
+        }
+    }
+
+    /// Row indices of a state batch per spill partition at `level`, by the
+    /// same function as [`ids_by_partition`](Self::ids_by_partition).
+    pub(crate) fn partitions_of(&self, b: &RecordBatch, level: u32) -> Result<Vec<Vec<u32>>> {
+        match self {
+            Self::Keys(t) => t.core.partitions_of(b, &t.seed, level),
+            Self::Rows(t) => t.partitions_of(b, level),
+        }
+    }
+}
+
+fn mixed() -> krishiv_common::error::KrishivError {
+    internal("a batch prepared for another table layout".to_owned())
 }

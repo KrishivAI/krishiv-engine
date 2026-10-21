@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Fixed-stride key rows, indexed by a salted linear-probing slot table or
-//! by `hashbrown` over the same rows (P2-T157).
+//! Fixed-stride key rows (P2-T157), indexed by a salted linear-probing slot
+//! table or by `hashbrown` over the same rows.
 //!
 //! The hash join uses [`RowLayout`] and [`JoinIndex`] when
-//! `krishiv.exec.join.rowLayout` is on (P2-T158; off by default). The
-//! `RowPages`, `SaltedTable` and `HashbrownTable` prototypes are
-//! measured by the `row-table-prototype` benchmark and example only; the
-//! hash aggregate still uses [`KeyTable`](crate::hash::KeyTable) (P2-T159).
+//! `krishiv.exec.join.rowLayout` is on (P2-T158), and the grouped aggregate
+//! stores fixed-width keys as [`RowLayout`] rows when
+//! `krishiv.exec.agg.rowLayout` is on (P2-T159); both are off by default.
+//! The `RowPages`, `SaltedTable` and `HashbrownTable` prototypes are
+//! measured by the `row-table-prototype` benchmark and example only.
 //! Nothing here is a stable interface.
 //!
 //! # Rows

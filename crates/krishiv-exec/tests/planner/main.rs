@@ -189,16 +189,29 @@ fn run(plan: &Runnable) -> Result<Vec<RecordBatch>, KrishivError> {
     run_in(plan, &root).0
 }
 
+thread_local! {
+    /// Run aggregates on the row-layout tables (`krishiv.exec.agg.rowLayout`),
+    /// as `KRISHIV_AGG_ROW_LAYOUT=1` does for every test
+    /// (`KRISHIV_JOIN_ROW_LAYOUT=1` turns the join's row layout on).
+    static AGG_ROW_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Runs `plan` to completion as a query of `root`; also returns the query
 /// (for its metrics).
 fn run_in(
     plan: &Runnable,
     root: &TreePool,
 ) -> (Result<Vec<RecordBatch>, KrishivError>, Arc<QueryContext>) {
+    let agg_row_layout =
+        AGG_ROW_LAYOUT.get() || std::env::var("KRISHIV_AGG_ROW_LAYOUT").is_ok_and(|v| v == "1");
     let query = QueryContext::new(
         QueryId(1),
         WorkloadClass::Interactive,
-        ExecConfig::default(),
+        ExecConfig {
+            agg_row_layout,
+            join_row_layout: std::env::var("KRISHIV_JOIN_ROW_LAYOUT").is_ok_and(|v| v == "1"),
+            ..ExecConfig::default()
+        },
         root.child("q", None),
     );
     let runner = match TokioExecutor::new(&ExecutorConfig::default()) {

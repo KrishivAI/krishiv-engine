@@ -570,3 +570,149 @@ proptest! {
         }
     }
 }
+
+/// `decode` restores fixed-width keys (normalized floats, NULLs) for every
+/// fixed type; a layout with views and a short row are errors.
+#[test]
+fn decode_restores_fixed_width_keys() {
+    use arrow_array::{
+        Date32Array, Decimal32Array, Decimal64Array, Int8Array, TimestampMicrosecondArray,
+        UInt16Array, UInt64Array,
+    };
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(Int8Array::from(vec![
+            Some(-3),
+            None,
+            Some(i8::MAX),
+            Some(0),
+        ])),
+        Arc::new(Int16Array::from(vec![
+            Some(1),
+            Some(-2),
+            None,
+            Some(i16::MIN),
+        ])),
+        Arc::new(UInt16Array::from(vec![
+            Some(7),
+            Some(u16::MAX),
+            Some(0),
+            None,
+        ])),
+        Arc::new(Int64Array::from(vec![
+            None,
+            Some(i64::MIN),
+            Some(5),
+            Some(-5),
+        ])),
+        Arc::new(UInt64Array::from(vec![
+            Some(u64::MAX),
+            None,
+            Some(1),
+            Some(2),
+        ])),
+        Arc::new(Date32Array::from(vec![
+            Some(19_000),
+            Some(-1),
+            None,
+            Some(0),
+        ])),
+        Arc::new(
+            TimestampMicrosecondArray::from(vec![Some(1), None, Some(-7), Some(9)])
+                .with_timezone("UTC"),
+        ),
+        Arc::new(
+            Decimal32Array::from(vec![Some(12_345), None, Some(-1), Some(0)])
+                .with_precision_and_scale(5, 1)
+                .unwrap(),
+        ),
+        Arc::new(
+            Decimal64Array::from(vec![Some(-99), Some(100), None, Some(1)])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        ),
+        Arc::new(
+            Decimal128Array::from(vec![Some(i128::MAX / 7), None, Some(-3), Some(4)])
+                .with_precision_and_scale(38, 3)
+                .unwrap(),
+        ),
+        Arc::new(Float32Array::from(vec![
+            Some(-0.0),
+            Some(f32::NAN),
+            None,
+            Some(1.5),
+        ])),
+        Arc::new(Float64Array::from(vec![
+            Some(f64::NAN),
+            Some(-0.0),
+            Some(2.5),
+            None,
+        ])),
+        Arc::new(BooleanArray::from(vec![
+            Some(true),
+            None,
+            Some(false),
+            Some(true),
+        ])),
+    ];
+    let types: Vec<DataType> = columns.iter().map(|c| c.data_type().clone()).collect();
+    let mut nullable = vec![true; types.len()];
+    let layout = RowLayout::new(&types, &nullable).unwrap();
+    assert!(layout.is_fixed_width());
+    let keys = layout.encode(&columns, 0).unwrap();
+    // Rows in another order than encoded: decode follows the given rows.
+    let order = [3, 0, 2, 1];
+    let rows: Vec<&[u8]> = order.iter().map(|&i| keys.row(i)).collect();
+    let decoded = layout.decode(&rows).unwrap();
+    let take = arrow_array::UInt32Array::from(order.map(|i| u32::try_from(i).unwrap()).to_vec());
+    for (c, d) in columns.iter().zip(&decoded) {
+        let want = arrow_select::take::take(c, &take, None).unwrap();
+        let want = match want.data_type() {
+            // Stored normalized: -0.0 is 0.0, NaN is the canonical NaN.
+            DataType::Float32 => {
+                let v: Float32Array = want
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.map(|v| if v.is_nan() { f32::NAN } else { v + 0.0 }))
+                    .collect();
+                Arc::new(v) as ArrayRef
+            }
+            DataType::Float64 => {
+                let v: Float64Array = want
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.map(|v| if v.is_nan() { f64::NAN } else { v + 0.0 }))
+                    .collect();
+                Arc::new(v) as ArrayRef
+            }
+            _ => want,
+        };
+        assert_eq!(d.to_data(), want.to_data(), "{}", c.data_type());
+    }
+    // A non-nullable key decodes without a validity buffer.
+    nullable[3] = false;
+    let int64 = vec![Arc::new(Int64Array::from(vec![4, 5])) as ArrayRef];
+    let one = RowLayout::new(&[DataType::Int64], &[false]).unwrap();
+    let k = one.encode(&int64, 3).unwrap();
+    let back = one.decode(&[k.row(1), k.row(0)]).unwrap();
+    let want: ArrayRef = Arc::new(Int64Array::from(vec![5, 4]));
+    assert_eq!(back[0].to_data(), want.to_data());
+    // Strings may live in a heap: not decodable from rows alone.
+    let views = RowLayout::new(&[DataType::Utf8], &[true]).unwrap();
+    assert!(!views.is_fixed_width());
+    let e = views.decode(&[]).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+    );
+    assert!(e.to_string().contains("Utf8"), "{e}");
+    let e = one.decode(&[&[0u8; 8][..]]).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::InternalError
+    );
+    assert!(e.to_string().contains("8-byte key row"), "{e}");
+}

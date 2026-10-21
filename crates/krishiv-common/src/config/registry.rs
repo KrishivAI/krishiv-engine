@@ -15,6 +15,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &STORE_ASSIGNMENT_POLICY,
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
+    &EXEC_AGG_ROW_LAYOUT,
     &EXEC_JOIN_ROW_LAYOUT,
     &SHUFFLE_PARTITIONS_HINT,
     &NETWORK_TIMEOUT,
@@ -77,6 +78,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.ansi.enabled", &ANSI_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
+    ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
@@ -242,6 +244,21 @@ pub static EXEC_BATCH_SIZE: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Int(4096)),
     doc: "Rows per batch passed between operators. Operators do about a millisecond of work \
           per batch, so the scheduler can switch tasks between batches.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Grouped aggregation in the row layout with radix-partitioned tables
+/// (P2-T159).
+pub static EXEC_AGG_ROW_LAYOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.agg.rowLayout",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Internal: grouped aggregations keep their keys as fixed-width rows in \
+          radix-partitioned tables and merge the partitions in parallel. Results are the \
+          same either way; aggregations with string, binary, nested or dictionary keys \
+          keep the default path.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

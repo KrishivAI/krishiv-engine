@@ -7,7 +7,7 @@ use std::fmt;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use krishiv_common::config::{Config, EXEC_BATCH_SIZE, EXEC_JOIN_ROW_LAYOUT};
+use krishiv_common::config::{Config, EXEC_AGG_ROW_LAYOUT, EXEC_BATCH_SIZE, EXEC_JOIN_ROW_LAYOUT};
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
     ConsumerHandle, ConsumerId, MemoryPool, Reservation, SpillOwner, SpillSignal, SpillStats,
@@ -45,6 +45,9 @@ pub struct ExecConfig {
     /// Seeds morsel order (deterministic test mode); `None` claims morsels
     /// in order.
     pub seed: Option<u64>,
+    /// Grouped aggregations with fixed-width keys use row-layout,
+    /// radix-partitioned tables (`krishiv.exec.agg.rowLayout`; P2-T159).
+    pub agg_row_layout: bool,
     /// Collect the costlier metrics of a detailed profile (`EXPLAIN
     /// ANALYZE`): per-lookup hash-table probe lengths. The always-on
     /// counters do not depend on it.
@@ -63,6 +66,7 @@ impl Default for ExecConfig {
             stall_threshold: Duration::from_millis(10),
             fail_on_stall: false,
             seed: None,
+            agg_row_layout: false,
             detailed_metrics: false,
             join_row_layout: false,
         }
@@ -78,12 +82,17 @@ impl ExecConfig {
             .and_then(|n| usize::try_from(n).ok())
             .filter(|n| *n > 0)
             .unwrap_or(DEFAULT_BATCH_SIZE);
+        let agg_row_layout = config
+            .get(&EXEC_AGG_ROW_LAYOUT)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(false);
         let join_row_layout = config
             .get(&EXEC_JOIN_ROW_LAYOUT)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(false);
         Self {
             batch_size,
+            agg_row_layout,
             join_row_layout,
             ..Self::default()
         }

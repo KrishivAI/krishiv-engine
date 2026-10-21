@@ -102,8 +102,37 @@ fn rows(batches: &[Batch]) -> Vec<String> {
     out
 }
 
-/// Runs `plan` on `slots` deterministic drivers under a per-query `limit`.
+/// Runs `plan` on `slots` deterministic drivers under a per-query `limit`,
+/// with the default aggregate tables and again with the row-layout ones
+/// (`krishiv.exec.agg.rowLayout`), which must return the same rows; returns
+/// the default run.
 async fn run(plan: Arc<dyn ExecNode>, slots: usize, limit: usize) -> (Vec<Batch>, QueryMetrics) {
+    let off = run_with(Arc::clone(&plan), slots, limit, false).await;
+    let on = run_with(plan, slots, limit, true).await;
+    assert_eq!(rows(&on.0), rows(&off.0), "the row layout changed the rows");
+    off
+}
+
+/// [`run`] on a fresh plan from `make` per layout (operator counters add up
+/// across runs of one plan); returns the default run's rows and both
+/// metrics, default first.
+async fn run_each(
+    make: impl Fn() -> Arc<dyn ExecNode>,
+    slots: usize,
+    limit: usize,
+) -> (Vec<Batch>, [QueryMetrics; 2]) {
+    let (off, m_off) = run_with(make(), slots, limit, false).await;
+    let (on, m_on) = run_with(make(), slots, limit, true).await;
+    assert_eq!(rows(&on), rows(&off), "the row layout changed the rows");
+    (off, [m_off, m_on])
+}
+
+async fn run_with(
+    plan: Arc<dyn ExecNode>,
+    slots: usize,
+    limit: usize,
+    agg_row_layout: bool,
+) -> (Vec<Batch>, QueryMetrics) {
     let runner = QueryRunner::new(TokioExecutor::deterministic(slots).unwrap());
     let root = TreePool::with_clock(
         &MemoryConfig {
@@ -117,6 +146,7 @@ async fn run(plan: Arc<dyn ExecNode>, slots: usize, limit: usize) -> (Vec<Batch>
     );
     let config = ExecConfig {
         seed: Some(3),
+        agg_row_layout,
         ..ExecConfig::default()
     };
     let pool = root.child("q", Some(limit));
@@ -235,13 +265,16 @@ async fn q1_pricing_summary() {
     );
     assert_eq!(rows(&run(plan, 4, 1 << 30).await.0), want);
 
-    // Q18's inner aggregate (15,000 groups) under a 1 MiB budget spills.
+    // Q18's inner aggregate (15,000 groups, one integer key: the row
+    // tables' case) under a 1 MiB budget spills, on both layouts.
     let (_m, scope) = spill_scope();
     let (s, lineitem) = input("q18_lineitem");
     let mut sp = spec(&s, vec![0], vec![agg(Sum, 1, &s)]);
     sp.spill = Some(scope);
-    let (out, m) = run(node(lineitem, sp), 4, 1 << 20).await;
-    assert!(spilled(&m) > 0);
+    let (out, metrics) = run_each(|| node(Arc::clone(&lineitem), sp.clone()), 4, 1 << 20).await;
+    for m in &metrics {
+        assert!(spilled(m) > 0);
+    }
     let big: Vec<String> = rows(&out)
         .into_iter()
         .filter(|r| r.split('|').nth(1).and_then(|v| v.parse::<f64>().ok()) > Some(300.0))
