@@ -224,11 +224,55 @@ def _q(suite: str, qid: str) -> Query:
 
 def test_known_dialect_difference_is_recorded_with_its_reason():
     qm = {n: _q("tpch", "q08") for n in ("duckdb", "clickhouse")}
-    verdict, _ = reproduce.correctness(qm, {"duckdb": _Rows([(0.0414855,)]), "clickhouse": _Rows([(0.0414,)])})
+    engines = {"duckdb": _Rows([(1996, 0.0414855)]), "clickhouse": _Rows([(1996, 0.0414)])}
+    verdict, _ = reproduce.correctness(qm, engines)
     v = verdict["clickhouse"]
     assert v["status"] == "mismatch-dialect"
     assert "truncates" in v["reason"]
     assert "value mismatch at row 0" in v["reason"]
+
+
+@pytest.mark.parametrize(
+    ("suite", "qid", "rows", "ref"),
+    [
+        # q08: another year, a non-numeric cell, and a numeric gap beyond one unit of the 4th decimal place
+        ("tpch", "q08", [(1997, 0.0414)], [(1996, 0.0414855)]),
+        ("tpch", "q08", [(1996, "x")], [(1996, 0.0414855)]),
+        ("tpch", "q08", [(1996, 0.0412)], [(1996, 0.0414855)]),
+        ("tpch", "q08", [(1996, 0.0414), (1997, 0.1)], [(1996, 0.0414855)]),
+        # q04: not a single number
+        ("clickbench", "q04", [(1.0, 2.0)], [(1.5, 2.0)]),
+        ("clickbench", "q04", [("a",)], [(1.5,)]),
+        # q28/q29: fewer bytes than characters, a differing count, a different key set, a different shape
+        ("clickbench", "q28", [(1, 10.0, 5)], [(1, 12.0, 5)]),
+        ("clickbench", "q28", [(1, 12.0, 6)], [(1, 10.0, 5)]),
+        ("clickbench", "q29", [(2, 12.0, 5)], [(1, 10.0, 5)]),
+        ("clickbench", "q29", [(1, 12.0)], [(1, 10.0, 5)]),
+        ("clickbench", "q29", [(1, 12.0, 5)], []),
+    ],
+)
+def test_unrelated_difference_on_a_listed_query_stays_a_plain_mismatch(suite, qid, rows, ref):
+    assert dialect_reason("clickhouse", suite, qid, rows, ref) is None
+    qm = {n: _q(suite, qid) for n in ("duckdb", "clickhouse")}
+    verdict, _ = reproduce.correctness(qm, {"duckdb": _Rows(ref), "clickhouse": _Rows(rows)})
+    assert verdict["clickhouse"]["status"] == "mismatch"
+
+
+def test_no_dialect_reason_without_rows_to_verify():
+    assert dialect_reason("clickhouse", "clickbench", "q29", [], []) is None
+
+
+@pytest.mark.parametrize(
+    ("suite", "qid", "rows", "ref"),
+    [
+        ("tpch", "q08", [(1997, 0.1), (1996, 0.0414)], [(1996, 0.0414855), (1997, 0.1)]),
+        ("clickbench", "q04", [(-7.5,)], [(1.2e18,)]),
+        ("clickbench", "q28", [(1, 14.0, 5), (2, 9.0, 3)], [(2, 9.0, 3), (1, 12.0, 5)]),
+        ("clickbench", "q29", [("a", 30, 5, "ü")], [("a", 29, 5, "ü")]),
+    ],
+)
+def test_the_documented_difference_is_a_dialect_mismatch(suite, qid, rows, ref):
+    assert dialect_reason("clickhouse", suite, qid, rows, ref) is not None
 
 
 def test_unlisted_difference_stays_a_plain_mismatch():
@@ -243,7 +287,7 @@ def test_listed_query_that_matches_is_ok_and_other_engines_are_not_affected():
     verdict, _ = reproduce.correctness(qm, engines)
     assert verdict["clickhouse"]["status"] == "ok"
     assert verdict["polars"]["status"] == "mismatch"
-    assert dialect_reason("polars", "tpch", "q08") is None
+    assert dialect_reason("polars", "tpch", "q08", [(1996, 0.0414)], [(1996, 0.0414855)]) is None
 
 
 def test_tpcds_is_skipped_with_a_stated_reason():
@@ -275,9 +319,11 @@ def test_engine_override_is_picked_up_by_the_loader():
     assert not shared["q01"].startswith("--")
 
 
-def test_worker_process_runs_clickhouse_and_reports_engine_errors(tiny_decimal):
+def test_worker_process_runs_clickhouse_and_reports_engine_errors(tiny_decimal, tmp_path, monkeypatch):
     pytest.importorskip("chdb", reason="chdb (embedded ClickHouse) is not installed; the worker smoke test needs it")
     from krishiv_bench.adapters.process import EngineError, ProcessEngine
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path / "data"))  # the worker inherits it: no scratch under the real root
 
     eng = ProcessEngine("clickhouse", 2, 1, 120)
     eng.setup(tiny_decimal)

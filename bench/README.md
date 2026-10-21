@@ -168,7 +168,8 @@ The report never prints "all agree" if any check was skipped: skipped checks are
   statement per query); the other 20 are verbatim (Q11 is the SF1 file; its `HAVING` fraction is the same constant the shared query uses).
 * **ClickBench**: ClickHouse runs the upstream `clickhouse/queries.sql`, fetched and adapted as described above (not stored here).
 * **Verdicts**: every ClickHouse result is compared with DuckDB's by the type-aware comparison. A difference that is a verified property of ClickHouse's
-  dialect or types is recorded as `mismatch-dialect` with the reason (`dialect.py`; the query is not timed, like any non-`ok` verdict), anything else stays `mismatch`.
+  dialect or types is recorded as `mismatch-dialect` with the reason (`dialect.py`; the query is not timed, like any non-`ok` verdict), but only when the
+  observed rows differ in the documented way (a per-query check against the DuckDB rows); any other difference, on a listed query too, stays `mismatch`.
   Currently: TPC-H q08 (DECIMAL division truncated to 4 places; DuckDB returns a double), ClickBench q04 (`avg` of an int64 column wraps on overflow),
   q28 and q29 (`length()` counts bytes, DuckDB counts characters). Checked on TPC-H SF1 (all 22: 21 `ok`, q08 `mismatch-dialect`) and a 2M-row slice of
   `hits.parquet` (40 of 43 `ok`, q04/q28/q29 `mismatch-dialect`); the full 100M-row file needs the benchmark server.

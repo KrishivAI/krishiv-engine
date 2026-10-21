@@ -49,10 +49,12 @@ EXPECTED_QUERIES = 43
 # Extra sort keys appended to the final ORDER BY (an ORDER BY is added when the query has none).
 TIE_BREAK: dict[str, list[str]] = {
     "q11": ["MobilePhoneModel"],
+    "q12": ["MobilePhone", "MobilePhoneModel"],
     "q18": ["UserID", "SearchPhrase"],
     "q19": ["UserID", "m", "SearchPhrase"],
     "q22": ["SearchPhrase"],
     "q23": ["SearchPhrase"],
+    "q24": ["WatchID", "ClientIP"],
     "q25": ["SearchPhrase"],
     "q31": ["SearchEngineID", "ClientIP"],
     "q32": ["WatchID", "ClientIP"],

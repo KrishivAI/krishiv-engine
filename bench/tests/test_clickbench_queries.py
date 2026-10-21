@@ -105,13 +105,29 @@ def test_tie_break_extends_or_adds_order_by_before_limit():
         cq.adapt("SELECT k FROM t ORDER BY c;", "q3", rules)
 
 
+def test_production_tie_breaks_cover_q12_and_q24():
+    q12 = (
+        "SELECT MobilePhone, MobilePhoneModel, COUNT(DISTINCT UserID) AS u FROM hits WHERE MobilePhoneModel <> '' "
+        "GROUP BY MobilePhone, MobilePhoneModel ORDER BY u DESC LIMIT 10;"
+    )
+    q24 = "SELECT * FROM hits WHERE URL LIKE '%google%' ORDER BY EventTime LIMIT 10;"
+    assert cq.adapt(q12, "q12").endswith("ORDER BY u DESC, MobilePhone, MobilePhoneModel LIMIT 10;")
+    assert cq.adapt(q24, "q24").endswith("ORDER BY EventTime, WatchID, ClientIP LIMIT 10;")
+
+
 def test_pins_name_both_upstream_files_with_sha256():
     assert set(cq.PINS) == {"duckdb-parquet", "clickhouse"}
-    for path, sha in cq.PINS.values():
-        assert path.endswith("/queries.sql")
-        assert len(sha) == 64
-        int(sha, 16)
-    assert len(cq.COMMIT) == 40
+    assert cq.PINS == {
+        "duckdb-parquet": (
+            "duckdb-parquet/queries.sql",
+            "e84ea26e1ed13a1dc1e46e76ddc9e49ead67a0444cdd5ae92085daad269c5508",
+        ),
+        "clickhouse": (
+            "clickhouse/queries.sql",
+            "a7d6673357348ee9680443216b6f26f30d1dce9f313b419d38502417b2c2a219",
+        ),
+    }
+    assert cq.COMMIT == "0e10b8434eef001b43156b860a4e2e3665a35d51"
 
 
 def test_load_queries_uses_the_fetcher_for_clickbench(monkeypatch):

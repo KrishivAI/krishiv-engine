@@ -118,7 +118,7 @@ def correctness(qm: Mapping[str, Query], engines: Mapping[str, Engine]) -> tuple
         if ok:
             verdict[name] = {"status": "ok"}
         else:
-            reason = dialect_reason(name, qm[name].suite, qm[name].id)
+            reason = dialect_reason(name, qm[name].suite, qm[name].id, r, ref)
             verdict[name] = _fail("mismatch-dialect", f"{reason}: {msg}") if reason else _fail("mismatch", msg)
         if ok and "krishiv" in rows and name != "krishiv":
             kok, kmsg = compare.rows_match(r, rows["krishiv"], ordered)
