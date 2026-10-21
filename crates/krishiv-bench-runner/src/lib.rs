@@ -128,6 +128,9 @@ pub struct RunnerConfig {
     pub data: String,
     /// Compute threads of the executor.
     pub threads: usize,
+    /// I/O runtime threads (`--io-threads`; default: the executor's
+    /// default), for A/B runs of the I/O pool size.
+    pub io_threads: Option<usize>,
     /// `krishiv.memory.limit` (for example `12g`).
     pub memory_limit: String,
     /// Extra session settings (`--conf key=value`, repeatable), applied after the memory limit so a
@@ -144,6 +147,7 @@ impl RunnerConfig {
         let mut data = None;
         let mut threads = std::thread::available_parallelism().map_or(1, usize::from);
         let mut memory_limit = "12g".to_owned();
+        let mut io_threads = None;
         let mut conf = Vec::new();
         let mut args = args.into_iter();
         while let Some(flag) = args.next() {
@@ -159,6 +163,12 @@ impl RunnerConfig {
                         .map_err(|e| RunnerError::Config(format!("--threads: {e}")))?;
                 }
                 "--memory-limit" => memory_limit = value()?,
+                "--io-threads" => {
+                    let n: usize = value()?
+                        .parse()
+                        .map_err(|e| RunnerError::Config(format!("--io-threads: {e}")))?;
+                    io_threads = Some(n.max(1));
+                }
                 "--conf" => {
                     let kv = value()?;
                     let (k, v) = kv
@@ -175,6 +185,7 @@ impl RunnerConfig {
         Ok(Self {
             data: data.ok_or_else(|| RunnerError::Config("--data DIR is required".to_owned()))?,
             threads,
+            io_threads,
             memory_limit,
             conf,
         })
@@ -199,7 +210,9 @@ impl Runner {
         let threads = config.threads.max(1);
         let executor = TokioExecutor::new(&ExecutorConfig {
             compute_threads: threads,
-            io_threads: 2,
+            io_threads: config
+                .io_threads
+                .unwrap_or(krishiv_exec::ExecutorConfig::default().io_threads),
             blocking_threads: threads,
         })?;
         // `SessionBuilder::build` drops configuration warnings; an unknown key would leave the A/B sides

@@ -14,7 +14,7 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::build::BuildGlobal;
 use super::grace::{self, Flush, Part, WRITE_SLICE, choose, reserve_chunks, spill_parts};
-use super::keys::{Hashing, PARTITIONS};
+use super::keys::Hashing;
 use super::table::{JoinTable, NONE, RowArena};
 use super::{Counter, JoinType, Shared, record, take_batch};
 use crate::context::TaskContext;
@@ -72,6 +72,8 @@ pub(crate) struct Cursor {
     state: Vec<u8>,
     pos: usize,
     chain: u32,
+    /// Build rows are in the row layout (payload rows).
+    rows: bool,
 }
 
 impl Cursor {
@@ -94,8 +96,8 @@ impl Cursor {
         let hashes = keys.hashes();
         let mut state = vec![UNMATCHED; n];
         let mut parts = vec![0u8; n];
-        let mut lookup = vec![Vec::new(); PARTITIONS];
-        let mut deferred = vec![Vec::new(); PARTITIONS];
+        let mut lookup = vec![Vec::new(); hashing.fanout0()];
+        let mut deferred = vec![Vec::new(); hashing.fanout0()];
         for i in 0..n {
             let row = u32::try_from(i).map_err(|_| internal("probe batch too large".to_owned()))?;
             if !keys.is_valid(i) {
@@ -141,6 +143,7 @@ impl Cursor {
             state,
             pos: 0,
             chain: NONE,
+            rows: hashing.rows(),
         };
         Ok((cursor, deferred))
     }
@@ -202,10 +205,7 @@ impl Cursor {
         build: &[(usize, u32)],
     ) -> Result<Option<Batch>> {
         let arena = |p: usize| tables.get(p).map(JoinTable::arena);
-        let payload = build
-            .iter()
-            .map(|&(p, r)| arena(p).map_or(&[][..], |a| a.payload(r)));
-        let build_cols = shared.decode(payload)?;
+        let build_cols = shared.build_columns(self.rows, build, arena)?;
         let taken = take_batch(&self.batch, &UInt32Array::from(probe.to_vec()))?;
         let m = probe.len();
         let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
@@ -412,11 +412,12 @@ impl Operator for ProbeOp {
             .downcast::<BuildGlobal>()
             .map_err(|_| internal("wrong build state for the hash join probe".to_owned()))?;
         let memory = ctx.consumer();
+        let fanout = build.hashing.fanout0();
         Ok(Box::new(ProbeLocal {
             build,
             detailed: ctx.query().config().detailed_metrics,
             cursor: None,
-            parts: (0..PARTITIONS)
+            parts: (0..fanout)
                 .map(|_| Part::with_memory(memory.reservation()))
                 .collect(),
             signal: Arc::clone(memory.signal()),
@@ -483,7 +484,7 @@ impl Operator for ProbeOp {
             // reserved, until the grace phase joins them).
             let held: usize = l.parts.iter().map(Part::bytes).sum();
             if let Some(scope) = self.0.spill.as_ref().filter(|_| held >= WRITE_SLICE) {
-                let all: Vec<usize> = (0..PARTITIONS).collect();
+                let all: Vec<usize> = (0..l.build.hashing.fanout0()).collect();
                 let schema = &self.0.probe_schema;
                 let (_, written) =
                     spill_parts(&mut l.parts, &all, schema, scope, ctx, false).await?;

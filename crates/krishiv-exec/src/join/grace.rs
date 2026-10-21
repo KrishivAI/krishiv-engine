@@ -334,10 +334,11 @@ pub(crate) struct Grace {
 }
 
 impl Grace {
-    pub(crate) fn new() -> Self {
+    /// The grace state of a build with `fanout` level-0 partitions.
+    pub(crate) fn new(fanout: usize) -> Self {
         Self {
-            build: (0..PARTITIONS).map(|_| Part::default()).collect(),
-            probe: (0..PARTITIONS).map(|_| Part::default()).collect(),
+            build: (0..fanout).map(|_| Part::default()).collect(),
+            probe: (0..fanout).map(|_| Part::default()).collect(),
             started: false,
             queue: Vec::new(),
             active: 0,
@@ -1064,7 +1065,7 @@ mod loom_tests {
     #[test]
     fn a_waiting_driver_claims_the_split_task() {
         model(|| {
-            let build = BuildGlobal::with_grace(Grace::new());
+            let build = BuildGlobal::with_grace(Grace::new(PARTITIONS));
             let built = build.built.get().unwrap();
             let held = Claim::new(&build, &mut lock(&built.grace), Hold::Task);
             let splitter = {
@@ -1095,7 +1096,7 @@ mod loom_tests {
     #[test]
     fn working_alone_waits_for_partitions_and_blocks_claims() {
         model(|| {
-            let build = BuildGlobal::with_grace(Grace::new());
+            let build = BuildGlobal::with_grace(Grace::new(PARTITIONS));
             let built = build.built.get().unwrap();
             let (slot, alone) = {
                 let mut g = lock(&built.grace);

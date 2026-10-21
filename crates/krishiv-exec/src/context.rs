@@ -7,7 +7,9 @@ use std::fmt;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use krishiv_common::config::{Config, EXEC_AGG_ROW_LAYOUT, EXEC_BATCH_SIZE, EXEC_JOIN_ROW_LAYOUT};
+use krishiv_common::config::{
+    Config, EXEC_AGG_ROW_LAYOUT, EXEC_BATCH_SIZE, EXEC_JOIN_RADIX_BITS, EXEC_JOIN_ROW_LAYOUT,
+};
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
     ConsumerHandle, ConsumerId, MemoryPool, Reservation, SpillOwner, SpillSignal, SpillStats,
@@ -55,6 +57,9 @@ pub struct ExecConfig {
     /// Hash joins use the row layout and its size-adaptive index
     /// (`krishiv.exec.join.rowLayout`; P2-T158).
     pub join_row_layout: bool,
+    /// Level-0 radix bits of a row-layout join build
+    /// (`krishiv.exec.join.radixBits`, 3 to 6).
+    pub join_radix_bits: u32,
 }
 
 impl Default for ExecConfig {
@@ -69,6 +74,7 @@ impl Default for ExecConfig {
             agg_row_layout: false,
             detailed_metrics: false,
             join_row_layout: false,
+            join_radix_bits: 3,
         }
     }
 }
@@ -90,10 +96,16 @@ impl ExecConfig {
             .get(&EXEC_JOIN_ROW_LAYOUT)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(false);
+        let join_radix_bits = config
+            .get(&EXEC_JOIN_RADIX_BITS)
+            .and_then(krishiv_common::config::ConfigValue::as_int)
+            .and_then(|n| u32::try_from(n.clamp(3, 6)).ok())
+            .unwrap_or(3);
         Self {
             batch_size,
             agg_row_layout,
             join_row_layout,
+            join_radix_bits,
             ..Self::default()
         }
     }

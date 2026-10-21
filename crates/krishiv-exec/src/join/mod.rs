@@ -48,7 +48,13 @@
 //! [`JoinIndex`](crate::rows::JoinIndex): `hashbrown` while the index is
 //! small, a salted linear-probing directory above that, both keyed by the
 //! seeded `g = fin(h ^ seed)`. Results are the same in both formats.
-//! Payload columns stay arrow-row bytes in both.
+//! Build columns the join returns travel as payload rows of a second
+//! layout (bit for bit, no hash word) when they are all fixed-width, as
+//! arrow rows otherwise; probe output decodes them column by column. Each
+//! partition's index is sized from a mergeable distinct-key sketch of the
+//! stored hashes (and grows if the estimate was low), and the build keeps
+//! only the memory its indexes hold. Level-0 partitions are the top
+//! `krishiv.exec.join.radixBits` bits of `h` (default 3).
 //!
 //! # Memory and spill
 //! Build rows are radix-partitioned (8 ways) as they arrive, into row-arena
@@ -130,7 +136,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions, UInt32Array};
 use arrow_row::{RowConverter, RowParser, SortField};
-use arrow_schema::{Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_memory::SpillScope;
 use krishiv_types::batch::{Batch, Weights};
@@ -142,6 +148,7 @@ use crate::metrics::Metric;
 use crate::operator::{Operator, Sink};
 use crate::operators::Predicate;
 use crate::pipeline::{ExecNode, PipelineBuilder};
+use crate::rows;
 
 /// The join type. The probe (left) side is preserved by the outer and anti
 /// joins; the build (right) side never is.
@@ -218,15 +225,29 @@ pub(crate) enum Counter {
     /// The kinds of index the build's tables use, a bit each
     /// (`table::IndexKind`).
     IndexKinds,
+    /// Wall time of the build's `finalize` (ns): the phase one driver
+    /// runs after every driver combined.
+    FinalizeNs,
+    /// Time spent concatenating partitions' chunks in `finalize` (ns,
+    /// summed over the parallel partition tasks).
+    ConcatNs,
+    /// Time spent indexing partitions in `finalize` (ns, summed).
+    IndexNs,
+    /// The longest single partition task of `finalize` (ns).
+    MaxPartitionNs,
 }
 
 /// The build sink's counters, by name.
-const BUILD_COUNTERS: [(Counter, &str); 5] = [
+const BUILD_COUNTERS: [(Counter, &str); 9] = [
     (Counter::BuildRows, "build_rows"),
     (Counter::HashEntries, "hash_entries"),
     (Counter::HashBuckets, "hash_buckets"),
     (Counter::SpilledPartitions, "spilled_partitions"),
     (Counter::BuildSpillBytes, "spill_file_bytes"),
+    (Counter::FinalizeNs, "finalize_ns"),
+    (Counter::ConcatNs, "finalize_concat_ns"),
+    (Counter::IndexNs, "finalize_index_ns"),
+    (Counter::MaxPartitionNs, "finalize_max_partition_ns"),
 ];
 /// The probe operator's counters, by name.
 const PROBE_COUNTERS: [(Counter, &str); 8] = [
@@ -248,7 +269,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug, Default)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 17]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 21]);
 
 impl Counters {
     pub(crate) fn add(&self, c: Counter, v: u64) {
@@ -273,7 +294,9 @@ impl Counters {
             .map(|&(c, name)| {
                 let v = self.get(c);
                 let v = match c {
-                    Counter::RecursionDepth | Counter::MaxProbeLength => Metric::Max(v),
+                    Counter::RecursionDepth | Counter::MaxProbeLength | Counter::MaxPartitionNs => {
+                        Metric::Max(v)
+                    }
                     _ => Metric::Count(v),
                 };
                 (std::borrow::Cow::Borrowed(name), v)
@@ -312,6 +335,8 @@ pub(crate) struct Shared {
     keys: keys::KeyCodec,
     /// Encodes whole build rows when the join needs build columns.
     payload: Option<(RowConverter, RowParser)>,
+    /// The layout of build columns carried as payload rows (row layout).
+    row_payload: Option<Arc<rows::RowLayout>>,
     /// Build column types after decoding (dictionaries decode to values).
     build_fields: Vec<Field>,
     filter: Option<Arc<dyn Predicate>>,
@@ -438,18 +463,46 @@ impl Shared {
             JoinType::LeftOuter => joined(true),
             _ => Arc::clone(&probe_schema),
         };
+        // Build columns as payload rows: only when every build column is
+        // fixed-width and decodes to the type the output declares (a
+        // dictionary decodes to its values through arrow rows). A string
+        // payload keeps arrow rows: a row view (16 bytes) plus a per-row
+        // heap entry (its bytes and an 8-byte offset) took ~35% more memory
+        // than arrow rows for 50-byte strings, and spilled sooner.
+        let row_payload = if needs_payload {
+            let types: Vec<DataType> = build_fields.iter().map(|f| f.data_type().clone()).collect();
+            let same = build_schema
+                .fields()
+                .iter()
+                .zip(&types)
+                .all(|(f, t)| f.data_type() == t);
+            same.then(|| rows::RowLayout::for_payload(&types).ok())
+                .flatten()
+                .filter(rows::RowLayout::is_fixed_width)
+                .map(Arc::new)
+        } else {
+            None
+        };
         let row_arena = match keys.layout() {
-            Some(l) => Some(table::arena_schema(payload.is_some(), Some(l))?),
+            Some(l) => Some(table::arena_schema(table::ArenaFormat::Rows {
+                keys: l,
+                payload: row_payload.as_deref(),
+                arrow_payload: payload.is_some(),
+            })?),
             None => None,
+        };
+        let arrow_format = table::ArenaFormat::Arrow {
+            payload: payload.is_some(),
         };
         Ok(Self {
             join_type,
             probe_keys,
             build_keys,
-            arrow_arena: table::arena_schema(payload.is_some(), None)?,
+            arrow_arena: table::arena_schema(arrow_format)?,
             row_arena,
             keys,
             payload,
+            row_payload,
             build_fields,
             filter,
             filter_schema,
@@ -470,10 +523,39 @@ impl Shared {
     }
 
     /// The key format of a join instance under `config`: the row layout
-    /// when `krishiv.exec.join.rowLayout` is on and the keys have one.
+    /// when `krishiv.exec.join.rowLayout` is on, the keys have one and so
+    /// does every build column the join returns.
     fn hashing(&self, config: &crate::ExecConfig) -> keys::Hashing {
-        let rows = config.join_row_layout && self.keys.layout().is_some();
-        keys::Hashing::new(config.seed, rows)
+        let rows = config.join_row_layout && self.row_arena.is_some();
+        keys::Hashing::new(config.seed, rows).with_radix(config.join_radix_bits)
+    }
+
+    /// The layout of the payload rows, when the row layout (`rows`) is in
+    /// use.
+    fn row_payload(&self, rows: bool) -> Option<&rows::RowLayout> {
+        self.row_payload.as_deref().filter(|_| rows)
+    }
+
+    /// The build columns of rows `build` (partition, row): decoded from
+    /// payload rows in the row layout, from arrow rows otherwise.
+    fn build_columns<'a>(
+        &self,
+        rows: bool,
+        build: &[(usize, u32)],
+        arena: impl Fn(usize) -> Option<&'a table::RowArena>,
+    ) -> Result<Vec<ArrayRef>> {
+        if let Some(layout) = self.row_payload(rows) {
+            let picked: Vec<(&[u8], &[u8])> = build
+                .iter()
+                .map(|&(p, r)| arena(p).map_or((&[][..], &[][..]), |a| a.payload_row(r)))
+                .collect();
+            return layout.decode_rows(&picked);
+        }
+        self.decode(
+            build
+                .iter()
+                .map(|&(p, r)| arena(p).map_or(&[][..], |a| a.payload(r))),
+        )
     }
 
     /// Decodes build rows (payload bytes) into build columns.

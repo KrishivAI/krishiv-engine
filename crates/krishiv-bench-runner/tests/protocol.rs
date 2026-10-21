@@ -19,6 +19,7 @@ fn runner(dir: &tempfile::TempDir) -> Runner {
     Runner::new(&RunnerConfig {
         data: dir.path().to_str().unwrap().to_owned(),
         threads: 2,
+        io_threads: None,
         memory_limit: "1g".to_owned(),
         conf: Vec::new(),
     })
@@ -86,6 +87,7 @@ fn a_directory_of_parts_is_one_table_and_an_empty_directory_is_refused() {
     let err = Runner::new(&RunnerConfig {
         data: empty.path().to_str().unwrap().to_owned(),
         threads: 1,
+        io_threads: None,
         memory_limit: "1g".to_owned(),
         conf: Vec::new(),
     })
@@ -94,6 +96,7 @@ fn a_directory_of_parts_is_one_table_and_an_empty_directory_is_refused() {
     let missing = Runner::new(&RunnerConfig {
         data: "/does/not/exist".to_owned(),
         threads: 1,
+        io_threads: None,
         memory_limit: "1g".to_owned(),
         conf: Vec::new(),
     });
@@ -109,6 +112,7 @@ fn conf_settings_reach_the_session() {
         Runner::new(&RunnerConfig {
             data: dir.path().to_str().unwrap().to_owned(),
             threads: 1,
+            io_threads: None,
             memory_limit: "1g".to_owned(),
             conf,
         })
@@ -130,6 +134,21 @@ fn arguments() {
         ("/d", 4, "2g")
     );
     assert!(args("--data /d").unwrap().threads >= 1);
+    assert_eq!(args("--data /d").unwrap().io_threads, None);
+    assert_eq!(
+        args("--data /d --io-threads 6").unwrap().io_threads,
+        Some(6)
+    );
+    assert_eq!(
+        args("--data /d --io-threads 0").unwrap().io_threads,
+        Some(1)
+    );
+    assert!(
+        args("--data /d --io-threads x")
+            .unwrap_err()
+            .to_string()
+            .contains("--io-threads")
+    );
     let c = args("--data /d --conf a.b=1 --conf c=x=y").unwrap();
     assert_eq!(
         c.conf,
@@ -203,6 +222,7 @@ fn dump_runs_the_query_once_and_leaves_no_view() {
     let r = Runner::new(&RunnerConfig {
         data: spaced.to_str().unwrap().to_owned(),
         threads: 1,
+        io_threads: None,
         memory_limit: "1g".to_owned(),
         conf: Vec::new(),
     })
@@ -365,6 +385,7 @@ fn conf_is_applied_after_the_memory_limit_and_unknown_keys_are_rejected() {
         Runner::new(&RunnerConfig {
             data: dir.path().to_str().unwrap().to_owned(),
             threads: 1,
+            io_threads: None,
             memory_limit: "1g".to_owned(),
             conf: conf
                 .into_iter()
