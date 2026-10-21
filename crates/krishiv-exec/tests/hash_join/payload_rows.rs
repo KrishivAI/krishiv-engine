@@ -104,14 +104,16 @@ async fn run_join(
     join_type: JoinType,
     probe: &[Row],
     build: &[Row],
-    row_layout: bool,
+    // `None`: arrow rows; `Some(bits)`: the row layout with `bits` radix bits.
+    row_layout: Option<u32>,
     limit: usize,
 ) -> (Vec<String>, u64) {
     let root = root(limit);
     let (_manager, scope) = spill();
     let config = ExecConfig {
         batch_size: 64,
-        join_row_layout: row_layout,
+        join_row_layout: row_layout.is_some(),
+        join_radix_bits: row_layout.unwrap_or(3),
         ..ExecConfig::default()
     };
     let q = query(&root, 1, config);
@@ -175,9 +177,11 @@ proptest! {
     ) {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let jt = TYPES[t];
-        let (expect, _) = rt.block_on(run_join(jt, &probe, &build, false, 64 * MIB));
-        let (got, _) = rt.block_on(run_join(jt, &probe, &build, true, 64 * MIB));
-        prop_assert_eq!(got, expect);
+        let (expect, _) = rt.block_on(run_join(jt, &probe, &build, None, 64 * MIB));
+        for bits in [3, 6] {
+            let (got, _) = rt.block_on(run_join(jt, &probe, &build, Some(bits), 64 * MIB));
+            prop_assert_eq!(&got, &expect);
+        }
     }
 }
 
@@ -205,10 +209,14 @@ async fn spilled_payload_rows_round_trip() {
         })
         .collect();
     let probe: Vec<Row> = rows.iter().step_by(3).cloned().collect();
-    let (expect, mem) = run_join(JoinType::Inner, &probe, &rows, false, 256 * MIB).await;
+    let (expect, mem) = run_join(JoinType::Inner, &probe, &rows, None, 256 * MIB).await;
     assert_eq!(mem, 0);
-    let (got, spilled) = run_join(JoinType::Inner, &probe, &rows, true, 2 * MIB).await;
-    assert!(spilled > 0, "the build spills");
-    assert_eq!(got.len(), expect.len());
-    assert!(got == expect, "spilled payload rows differ");
+    // 3 radix bits (8 partitions) and 6 (64: every bit of the u64
+    // partition masks in use).
+    for bits in [3, 6] {
+        let (got, spilled) = run_join(JoinType::Inner, &probe, &rows, Some(bits), 2 * MIB).await;
+        assert!(spilled > 0, "the build spills");
+        assert_eq!(got.len(), expect.len());
+        assert!(got == expect, "spilled payload rows differ ({bits} bits)");
+    }
 }

@@ -211,9 +211,10 @@ impl RowLayout {
             .step_by(8)
             .filter(|w| !views.iter().any(|v| *w == v + 8))
             .collect();
-        let compare = match (views.is_empty(), stride - start) {
-            (true, 8) => Compare::One,
-            (true, 16) => Compare::Two,
+        // `One`/`Two` read the words after the hash: key rows only.
+        let compare = match (hashed, views.is_empty(), stride - start) {
+            (true, true, 8) => Compare::One,
+            (true, true, 16) => Compare::Two,
             _ => Compare::Words,
         };
         Ok(Self {
@@ -246,7 +247,7 @@ impl RowLayout {
     /// column nullable, floats stored bit for bit (a payload is returned as
     /// it came, so `-0.0` and NaN payloads are not normalized), strings and
     /// binaries as views. [`decode_rows`](Self::decode_rows) restores the
-    /// columns. The row hash is computed but not used.
+    /// columns. Payload rows are not hashed ([`EncodedKeys::hashes`] is empty).
     ///
     /// # Errors
     /// As [`new`](Self::new).
@@ -399,7 +400,13 @@ impl RowLayout {
             len: n,
             rows: vec![0; n * self.stride],
             heap: Vec::new(),
-            hashes: vec![fold(seed, MIX); n],
+            // A payload layout's rows are never hashed.
+            hashes: if self.hashed {
+                vec![fold(seed, MIX); n]
+            } else {
+                Vec::new()
+            },
+            hashed: self.hashed,
         };
         let strings = foldhash::fast::FixedState::with_seed(seed);
         for (column, array) in self.columns.iter().zip(columns) {
@@ -475,7 +482,9 @@ pub struct EncodedKeys {
     len: usize,
     rows: Vec<u8>,
     heap: Vec<u8>,
+    /// Empty when the layout is not hashed.
     hashes: Vec<u64>,
+    hashed: bool,
 }
 
 impl EncodedKeys {
@@ -585,7 +594,9 @@ impl EncodedKeys {
         let Some(nulls) = nulls else { return };
         for i in nulls.iter().enumerate().filter(|(_, v)| !v).map(|(i, _)| i) {
             self.row_mut(i)[at] |= mask;
-            self.hashes[i] = mix(self.hashes[i], NULL_HASH);
+            if self.hashed {
+                self.hashes[i] = mix(self.hashes[i], NULL_HASH);
+            }
         }
     }
 
@@ -605,7 +616,9 @@ impl EncodedKeys {
                 for i in (0..self.len).filter(|&i| valid(i)) {
                     let v = u8::from(a.value(i));
                     self.row_mut(i)[offset] = v;
-                    self.hashes[i] = mix(self.hashes[i], u64::from(v));
+                    if self.hashed {
+                        self.hashes[i] = mix(self.hashes[i], u64::from(v));
+                    }
                 }
             }
             Kind::F32 => {
@@ -615,7 +628,9 @@ impl EncodedKeys {
                 for i in (0..self.len).filter(|&i| valid(i)) {
                     let bits = normalize32(a.value(i)).to_bits();
                     self.row_mut(i)[offset..offset + 4].copy_from_slice(&bits.to_le_bytes());
-                    self.hashes[i] = mix(self.hashes[i], u64::from(bits));
+                    if self.hashed {
+                        self.hashes[i] = mix(self.hashes[i], u64::from(bits));
+                    }
                 }
             }
             Kind::F64 => {
@@ -625,7 +640,9 @@ impl EncodedKeys {
                 for i in (0..self.len).filter(|&i| valid(i)) {
                     let bits = normalize64(a.value(i)).to_bits();
                     self.row_mut(i)[offset..offset + 8].copy_from_slice(&bits.to_le_bytes());
-                    self.hashes[i] = mix(self.hashes[i], bits);
+                    if self.hashed {
+                        self.hashes[i] = mix(self.hashes[i], bits);
+                    }
                 }
             }
             Kind::Fixed(w) => {
@@ -662,6 +679,16 @@ impl EncodedKeys {
     ) {
         let rows = self.rows.chunks_exact_mut(self.stride);
         let (values, _) = bytes.as_chunks::<W>();
+        if !self.hashed {
+            for (i, (row, v)) in rows.zip(values).enumerate() {
+                if nulls.is_none_or(|n| n.is_valid(i))
+                    && let Some(dst) = row.get_mut(offset..offset + W)
+                {
+                    dst.copy_from_slice(v);
+                }
+            }
+            return;
+        }
         for (i, ((row, h), v)) in rows.zip(self.hashes.iter_mut()).zip(values).enumerate() {
             if nulls.is_some_and(|n| n.is_null(i)) {
                 continue;
@@ -726,7 +753,9 @@ impl EncodedKeys {
             let bytes = value(i);
             let len = u32::try_from(bytes.len())
                 .map_err(|_| internal("a key value longer than 4 GiB".to_owned()))?;
-            self.hashes[i] = mix(self.hashes[i], strings.hash_one(bytes));
+            if self.hashed {
+                self.hashes[i] = mix(self.hashes[i], strings.hash_one(bytes));
+            }
             let at = self.heap.len();
             let stride = self.stride;
             let row = &mut self.rows[i * stride..(i + 1) * stride];

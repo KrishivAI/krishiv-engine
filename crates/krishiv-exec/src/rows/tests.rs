@@ -764,6 +764,13 @@ fn payload_rows_round_trip_exactly() {
     }
     let one = RowLayout::for_payload(&[DataType::Int64]).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(one.stride(), 16);
+    // Payload rows have no hash word: equality compares their values, and
+    // the rows are not hashed.
+    let two: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 1]));
+    let e = one.encode(&[two], 0).unwrap_or_else(|e| panic!("{e}"));
+    assert!(e.hashes().is_empty());
+    assert!(!one.eq(e.row(0), &[], e.row(1), &[]));
+    assert!(one.eq(e.row(0), &[], e.row(2), &[]));
     let none = RowLayout::for_payload(&[DataType::Int32, DataType::Int32])
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(none.stride(), 16);

@@ -352,7 +352,9 @@ fn build_need(part: &Part, row_layout: bool) -> Option<(usize, usize)> {
     if part.chunks.is_empty() {
         return None;
     }
-    let index = JoinTable::index_bytes(part.mem_rows(), key_bytes(&part.chunks), row_layout);
+    // Finalize sizes row-layout indexes from estimates: reserve their growth.
+    let index =
+        JoinTable::index_bytes_estimated(part.mem_rows(), key_bytes(&part.chunks), row_layout);
     let copy = if part.chunks.len() > 1 {
         part.bytes()
     } else {

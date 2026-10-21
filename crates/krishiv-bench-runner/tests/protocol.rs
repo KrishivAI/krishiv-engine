@@ -135,6 +135,16 @@ fn arguments() {
     );
     assert!(args("--data /d").unwrap().threads >= 1);
     assert_eq!(args("--data /d").unwrap().io_threads, None);
+    let sizes = |s: &str| args(s).unwrap().executor_config();
+    assert_eq!(
+        sizes("--data /d --threads 3").io_threads,
+        krishiv_exec::ExecutorConfig::default().io_threads
+    );
+    let six = sizes("--data /d --threads 3 --io-threads 6");
+    assert_eq!(
+        (six.compute_threads, six.io_threads, six.blocking_threads),
+        (3, 6, 3)
+    );
     assert_eq!(
         args("--data /d --io-threads 6").unwrap().io_threads,
         Some(6)
@@ -143,11 +153,11 @@ fn arguments() {
         args("--data /d --io-threads 0").unwrap().io_threads,
         Some(1)
     );
+    // The parser's own error (an unknown flag would say so instead).
+    let e = args("--data /d --io-threads x").unwrap_err().to_string();
     assert!(
-        args("--data /d --io-threads x")
-            .unwrap_err()
-            .to_string()
-            .contains("--io-threads")
+        e.contains("--io-threads: invalid digit found in string") && !e.contains("unknown"),
+        "{e}"
     );
     let c = args("--data /d --conf a.b=1 --conf c=x=y").unwrap();
     assert_eq!(

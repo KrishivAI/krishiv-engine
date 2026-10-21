@@ -355,6 +355,21 @@ impl JoinTable {
         }
     }
 
+    /// [`index_bytes`](Self::index_bytes) of an index sized from a distinct-key
+    /// estimate ([`build_expecting`](Self::build_expecting)): an estimate
+    /// that was low makes the index grow, and while it grows it holds the
+    /// old table beside the new one, at most half the final size again.
+    /// The caller shrinks the reservation to [`index_memory`](Self::index_memory)
+    /// once the table is built.
+    pub(crate) fn index_bytes_estimated(rows: usize, key_bytes: usize, row_layout: bool) -> usize {
+        let base = Self::index_bytes(rows, key_bytes, row_layout);
+        if row_layout {
+            base.saturating_add(IndexChoice::Adaptive.bytes(rows) / 2)
+        } else {
+            base
+        }
+    }
+
     /// Indexes `arena`; row-layout keys are indexed under `layout` with the
     /// table-local seed `g_seed`.
     ///
