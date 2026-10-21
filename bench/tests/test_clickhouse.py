@@ -240,11 +240,16 @@ def test_known_dialect_difference_is_recorded_with_its_reason():
         ("tpch", "q08", [(1996, "x")], [(1996, 0.0414855)]),
         ("tpch", "q08", [(1996, 0.0412)], [(1996, 0.0414855)]),
         ("tpch", "q08", [(1996, 0.0414), (1997, 0.1)], [(1996, 0.0414855)]),
-        # q04: not a single number
+        # q04 is not listed: nothing independent verifies the int64 overflow, so it stays a plain mismatch
+        ("clickbench", "q04", [(-7.5,)], [(1.2e18,)]),
         ("clickbench", "q04", [(1.0, 2.0)], [(1.5, 2.0)]),
-        ("clickbench", "q04", [("a",)], [(1.5,)]),
         # q28/q29: fewer bytes than characters, a differing count, a different key set, a different shape
         ("clickbench", "q28", [(1, 10.0, 5)], [(1, 12.0, 5)]),
+        # ... the same rows in another order or with equal lengths (no byte-length difference observed)
+        ("clickbench", "q28", [(2, 9.0, 3), (1, 12.0, 5)], [(1, 12.0, 5), (2, 9.0, 3)]),
+        # ... more than 4 bytes per character, or a longer mean next to a different non-length cell
+        ("clickbench", "q28", [(1, 49.0, 5)], [(1, 12.0, 5)]),
+        ("clickbench", "q29", [("a", 30, 5, "x")], [("a", 29, 5, "y")]),
         ("clickbench", "q28", [(1, 12.0, 6)], [(1, 10.0, 5)]),
         ("clickbench", "q29", [(2, 12.0, 5)], [(1, 10.0, 5)]),
         ("clickbench", "q29", [(1, 12.0)], [(1, 10.0, 5)]),
@@ -262,11 +267,15 @@ def test_no_dialect_reason_without_rows_to_verify():
     assert dialect_reason("clickhouse", "clickbench", "q29", [], []) is None
 
 
+def test_no_dialect_reason_when_no_length_differs():
+    same = [("a", 29, 5, "u")]
+    assert dialect_reason("clickhouse", "clickbench", "q29", same, same) is None
+
+
 @pytest.mark.parametrize(
     ("suite", "qid", "rows", "ref"),
     [
         ("tpch", "q08", [(1997, 0.1), (1996, 0.0414)], [(1996, 0.0414855), (1997, 0.1)]),
-        ("clickbench", "q04", [(-7.5,)], [(1.2e18,)]),
         ("clickbench", "q28", [(1, 14.0, 5), (2, 9.0, 3)], [(2, 9.0, 3), (1, 12.0, 5)]),
         ("clickbench", "q29", [("a", 30, 5, "ü")], [("a", 29, 5, "ü")]),
     ],

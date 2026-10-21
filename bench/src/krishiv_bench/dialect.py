@@ -23,10 +23,6 @@ KNOWN_DIALECT_MISMATCHES: dict[tuple[str, str, str], str] = {
         "ClickHouse divides DECIMAL by DECIMAL into a DECIMAL(38,4) and truncates (SF1 1996: 0.0414); DuckDB returns "
         "a DOUBLE (0.041485...), so the values differ by more than half a unit of the 4th decimal place"
     ),
-    ("clickhouse", "clickbench", "q04"): (
-        "ClickHouse avg() of a signed 64-bit integer column sums in a 64-bit integer and wraps on overflow "
-        "(UserID values span the whole int64 range); DuckDB accumulates in a wider type"
-    ),
     ("clickhouse", "clickbench", "q28"): (
         "ClickHouse length() counts bytes of a String; DuckDB length() counts characters (UTF-8 text)"
     ),
@@ -60,28 +56,31 @@ def _truncated_decimals(rows: Rows, ref: Rows) -> bool:
     )
 
 
-def _single_number(rows: Rows, ref: Rows) -> bool:
-    """One row of one number on both sides (an aggregate over the whole table)."""
-    return all(len(r) == 1 and len(r[0]) == 1 and _is_number(r[0][0]) for r in (rows, ref))
-
-
 def _byte_lengths(rows: Rows, ref: Rows) -> bool:
-    """Rows keyed by the first column; the second (a mean length) is not smaller in bytes, the rest are equal."""
+    """Rows keyed by the first column; the second (a mean length) is what bytes against characters gives, the rest
+    are equal.
+
+    Per key the byte mean is at least the character mean and at most 4 times it (UTF-8 has 1 to 4 bytes per
+    character), and at least one key has a strictly larger byte mean: equal lengths everywhere mean the rows differ
+    in something else (an order difference, say), which is not this dialect difference.
+    """
     pairs = _by_key(rows, ref)
-    return pairs is not None and all(
-        len(x) > 1
-        and _is_number(x[1])
-        and _is_number(y[1])
-        and float(x[1]) >= float(y[1])
-        and all(values_equal(a, b) for i, (a, b) in enumerate(zip(x, y, strict=True)) if i != 1)
-        for x, y in pairs
+    if pairs is None or not all(len(x) > 1 and _is_number(x[1]) and _is_number(y[1]) for x, y in pairs):
+        return False
+
+    def longer(a, b) -> bool:
+        return float(a) > float(b) and not values_equal(a, b)
+
+    return (
+        all((longer(x[1], y[1]) or values_equal(x[1], y[1])) and float(x[1]) <= 4 * float(y[1]) for x, y in pairs)
+        and any(longer(x[1], y[1]) for x, y in pairs)
+        and all(values_equal(a, b) for x, y in pairs for i, (a, b) in enumerate(zip(x, y, strict=True)) if i != 1)
     )
 
 
 # (engine, suite, query id) -> does the observed difference match the documented one? (rows, DuckDB rows)
 _VERIFIERS: dict[tuple[str, str, str], Callable[[Rows, Rows], bool]] = {
     ("clickhouse", "tpch", "q08"): _truncated_decimals,
-    ("clickhouse", "clickbench", "q04"): _single_number,
     ("clickhouse", "clickbench", "q28"): _byte_lengths,
     ("clickhouse", "clickbench", "q29"): _byte_lengths,
 }
