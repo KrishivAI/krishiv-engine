@@ -321,8 +321,8 @@ impl PipelineMetrics {
 /// The query's memory pool, as `QueryContext::metrics` read it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueryMemory {
-    /// The query pool's own limit (`None`: bounded only by the pools above
-    /// it, e.g. the process limit).
+    /// The most the query can hold: the smallest limit of its pool and the
+    /// pools above it, such as the process limit (`None`: unbounded).
     pub limit: Option<u64>,
     /// The most bytes the query held reserved at once (summed over
     /// workers: an upper bound of the query-wide peak).

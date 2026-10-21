@@ -158,6 +158,23 @@ impl RowArena {
         }
     }
 
+    /// The row's key bytes, comparable byte for byte with another row's of
+    /// the same format (equal keys have equal bytes): arrow-row bytes, or a
+    /// row-layout row. `None` for a layout with string views, whose rows
+    /// point into a heap.
+    pub(crate) fn key_bytes(&self, row: u32) -> Option<&[u8]> {
+        let row = row as usize;
+        match &self.keys {
+            ArenaKeys::Arrow(k) => Some(k.value(row)),
+            ArenaKeys::Rows {
+                fixed,
+                stride,
+                heap: None,
+            } => fixed.get(row * stride..(row + 1) * stride),
+            ArenaKeys::Rows { heap: Some(_), .. } => None,
+        }
+    }
+
     /// The row's payload bytes (empty if the arena has none).
     pub(crate) fn payload(&self, row: u32) -> &[u8] {
         self.payload.as_ref().map_or(&[], |p| p.value(row as usize))

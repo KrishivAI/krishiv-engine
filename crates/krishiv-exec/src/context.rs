@@ -280,7 +280,7 @@ impl QueryContext {
             om.spill_write_bytes = stats.bytes();
         }
         m.memory = QueryMemory {
-            limit: self.pool.limit().map(|l| l as u64),
+            limit: self.pool.effective_limit().map(|l| l as u64),
             peak_reserved: self.pool.peak_reserved() as u64,
         };
         m

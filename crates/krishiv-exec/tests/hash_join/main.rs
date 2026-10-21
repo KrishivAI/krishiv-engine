@@ -492,6 +492,58 @@ async fn grace_spill_with_recursion_equals_the_in_memory_join() {
     }
 }
 
+/// A semi or anti join whose spilled partitions have few probe rows next to
+/// their build rows joins them with roles reversed (the probe rows indexed,
+/// the build rows streamed past them once, nothing repartitioned) and
+/// returns the in-memory answer: with and without the residual condition,
+/// NULL probe keys (an anti join keeps them), both key formats.
+#[tokio::test(start_paused = true)]
+async fn small_probe_partitions_join_with_roles_reversed() {
+    let build = skewed(24_000, 12_000);
+    let mut probe = skewed(1_000, 16_000);
+    probe.extend((0..50).map(|i| r(None, Some("a"), i)));
+    for jt in [JoinType::LeftSemi, JoinType::LeftAnti] {
+        for (filter, row_layout) in [(false, false), (true, false), (false, true), (true, true)] {
+            let keys = if row_layout { 1 } else { 2 };
+            let c = Case {
+                row_layout,
+                ..case(jt, keys, false, filter)
+            };
+            let expect = c.oracle(&probe, &build);
+            let (got, q) = run_case(&c, &probe, &build, 1024, 3, 768 << 10).await;
+            assert!(got == expect, "{jt:?} filter={filter} rows={row_layout}");
+            assert!(
+                metric(&q, "HashJoinProbe", "reversed_partitions") > 0,
+                "{jt:?} filter={filter} rows={row_layout}"
+            );
+            assert_eq!(metric(&q, "HashJoinProbe", "repartitions"), 0);
+            assert_eq!(
+                metric(&q, "HashJoinProbe", "grace_partitions"),
+                metric(&q, "HashJoinProbe", "reversed_partitions")
+            );
+        }
+    }
+}
+
+/// Inner and outer joins, and probe sides as large as their build sides,
+/// keep the build-side table.
+#[tokio::test(start_paused = true)]
+async fn other_joins_and_large_probe_sides_keep_the_build_table() {
+    let build = skewed(30_000, 20_000);
+    let probe = skewed(40_000, 25_000);
+    for jt in [JoinType::Inner, JoinType::LeftSemi] {
+        let c = case(jt, 2, false, false);
+        let (expect, _) = run_case(&c, &probe, &build, 1024, 3, 256 * MIB).await;
+        let (got, q) = run_case(&c, &probe, &build, 1024, 3, 1536 << 10).await;
+        assert!(got == expect, "{jt:?}");
+        assert!(
+            metric(&q, "HashJoinProbe", "grace_partitions") > 0,
+            "{jt:?}"
+        );
+        assert_eq!(metric(&q, "HashJoinProbe", "reversed_partitions"), 0);
+    }
+}
+
 /// A spilled partition that fits once a spillable consumer elsewhere gives
 /// memory back is loaded through the arbitrator (by its driver alone) and
 /// joined, not repartitioned: memory held by spillable consumers never

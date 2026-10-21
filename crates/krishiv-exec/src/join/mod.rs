@@ -218,6 +218,8 @@ pub(crate) enum Counter {
     /// The kinds of index the build's tables use, a bit each
     /// (`table::IndexKind`).
     IndexKinds,
+    /// Spilled partitions joined with roles reversed (`grace::reverse`).
+    ReversedPartitions,
 }
 
 /// The build sink's counters, by name.
@@ -229,7 +231,7 @@ const BUILD_COUNTERS: [(Counter, &str); 5] = [
     (Counter::BuildSpillBytes, "spill_file_bytes"),
 ];
 /// The probe operator's counters, by name.
-const PROBE_COUNTERS: [(Counter, &str); 8] = [
+const PROBE_COUNTERS: [(Counter, &str); 9] = [
     (Counter::ProbeRows, "probe_rows"),
     (Counter::ProbeSpilledRows, "probe_spilled_rows"),
     (Counter::ProbeSpillBytes, "spill_file_bytes"),
@@ -238,6 +240,7 @@ const PROBE_COUNTERS: [(Counter, &str); 8] = [
     (Counter::RecursionDepth, "recursion_depth"),
     (Counter::GraceHashEntries, "grace_hash_entries"),
     (Counter::GraceHashBuckets, "grace_hash_buckets"),
+    (Counter::ReversedPartitions, "reversed_partitions"),
 ];
 /// The probe operator's per-lookup counters (detailed metrics only).
 const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
@@ -248,7 +251,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug, Default)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 17]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 18]);
 
 impl Counters {
     pub(crate) fn add(&self, c: Counter, v: u64) {
@@ -493,7 +496,6 @@ fn record(schema: &SchemaRef, columns: Vec<ArrayRef>, rows: usize) -> Result<Rec
         .map_err(|e| internal(e.to_string()))
 }
 
-/// The rows `idx` of `batch`, with their weights.
 /// `batch` with its top-level string and binary view columns compacted
 /// (`gc`): a view array taken from a scan's batch shares the decoded page
 /// buffers, so a few rows kept in memory would keep (and be charged for)
@@ -528,6 +530,7 @@ pub(crate) fn compact_views(batch: Batch) -> Result<Batch> {
     Batch::with_weights(compacted, batch.weights().clone()).map_err(|e| internal(e.to_string()))
 }
 
+/// The rows `idx` of `batch`, with their weights.
 fn take_batch(batch: &Batch, idx: &UInt32Array) -> Result<Batch> {
     let data = arrow_select::take::take_record_batch(batch.data(), idx)
         .map_err(|e| internal(e.to_string()))?;

@@ -908,6 +908,18 @@ impl MemoryPool for TreePool {
         self.node.limit()
     }
 
+    fn effective_limit(&self) -> Option<usize> {
+        let mut limit: Option<usize> = None;
+        let mut cur = Some(&self.node);
+        while let Some(node) = cur {
+            if let Some(l) = node.limit() {
+                limit = Some(limit.map_or(l, |m| m.min(l)));
+            }
+            cur = node.parent.as_ref();
+        }
+        limit
+    }
+
     fn check_aborted(&self) -> Result<(), MemoryError> {
         self.node.group.as_ref().map_or(Ok(()), |g| g.check())
     }
