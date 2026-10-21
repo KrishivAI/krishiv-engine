@@ -98,6 +98,46 @@ def test_offset_makes_the_first_group_a_boundary_too():
     assert c.compare_rows(a, b, True, sort_keys=[0], limit=3).status == "mismatch"
 
 
+def test_offset_zero_is_not_a_boundary():
+    a = [(1, "a"), (2, "b"), (3, "c")]
+    b = [(1, "z"), (2, "b"), (3, "c")]
+    sql = "select k, v from t order by k limit 3 offset 0"
+    assert c.compare_rows(a, b, True, sql=sql, sort_keys=[0]).status == "mismatch"
+    # the same query with a real offset relaxes the first group
+    assert c.compare_rows(a, b, True, sql=sql.replace("offset 0", "offset 1"), sort_keys=[0]).status == "tie-at-limit"
+
+
+def test_offset_without_limit_cuts_the_first_group_only():
+    sql = "select k, v from t order by k offset 2"
+    a = [(1, "a"), (1, "b"), (2, "c"), (3, "d")]
+    first = [(1, "a"), (1, "x"), (2, "c"), (3, "d")]  # differs only in the group the offset cut
+    res = c.compare_rows(a, first, True, sql=sql, sort_keys=[0])
+    assert (res.ok, res.status) == (True, "tie-at-limit")
+    assert res.message == "tie-at-limit: rows differ only in the tie group cut by OFFSET, rows 0..1 (sort key (1,))"
+    # no LIMIT cut the end, so a difference in the last group is real
+    last = [(1, "a"), (1, "b"), (2, "c"), (3, "z")]
+    assert c.compare_rows(a, last, True, sql=sql, sort_keys=[0]).status == "mismatch"
+    middle = [(1, "a"), (1, "b"), (2, "z"), (3, "d")]
+    assert c.compare_rows(a, middle, True, sql=sql, sort_keys=[0]).status == "mismatch"
+    # the stored form (no sql): the offset flag alone is enough
+    assert c.compare_rows(a, first, True, sort_keys=[0], offset=True).status == "tie-at-limit"
+    assert c.compare_rows(a, first, True, sort_keys=[0]).status == "mismatch"
+
+
+def test_message_names_the_boundary_that_cut_the_group():
+    sql = "select k, v from t order by k limit 2 offset 1"
+    both = c.compare_rows([(1, "a")] * 2, [(1, "a"), (1, "b")], True, sql=sql, sort_keys=[0])
+    assert (
+        both.message
+        == "tie-at-limit: rows differ only in the tie group cut by LIMIT and OFFSET, rows 0..1 (sort key (1,))"
+    )
+    two = c.compare_rows([(1, "a"), (2, "b")], [(1, "x"), (2, "y")], True, sql=sql, sort_keys=[0])
+    assert two.message == (
+        "tie-at-limit: rows differ only in the tie group cut by OFFSET, rows 0..0 (sort key (1,)); "
+        "LIMIT, rows 1..1 (sort key (2,))"
+    )
+
+
 def test_offset_is_kept_when_the_limit_is_stored_or_passed_separately():
     a = [(1, "a"), (2, "b"), (3, "c")]
     b = [(1, "z"), (2, "b"), (3, "c")]
@@ -106,7 +146,7 @@ def test_offset_is_kept_when_the_limit_is_stored_or_passed_separately():
     assert c.compare_rows(a, b, True, sort_keys=[0], limit=3, offset=True).status == "tie-at-limit"
     assert c.rows_match(a, b, True, sort_keys=[0], limit=3, offset=True) == (
         True,
-        "tie-at-limit: rows differ only in the tie group cut by LIMIT, rows 0..0 (sort key (1,))",
+        "tie-at-limit: rows differ only in the tie group cut by OFFSET, rows 0..0 (sort key (1,))",
     )
     # an explicit limit does not drop the OFFSET found in the sql, unless `offset` says otherwise
     assert c.compare_rows(a, b, True, sql=sql, sort_keys=[0], limit=3).status == "tie-at-limit"
@@ -181,6 +221,11 @@ def test_derive_limit():
     assert c.derive_limit(Q65) == (3, False)
     assert c.derive_limit("select a from t order by a limit 10 offset 2") == (10, True)
     assert c.derive_limit("select a from t order by a") == (None, False)
+    # OFFSET 0 skips nothing; OFFSET works without a LIMIT
+    assert c.derive_limit("select a from t order by a limit 10 offset 0") == (10, False)
+    assert c.derive_limit("select a from t order by a offset 2") == (None, True)
+    assert c.derive_limit("select a from t order by a offset 0") == (None, False)
+    assert c.derive_limit("select a from t order by a limit 3 offset (1 + 1)") == (3, True)
     assert c.derive_limit("select a from (select a from t order by a limit 5) x") == (None, False)
 
 
@@ -300,7 +345,7 @@ def test_report_cross_engine_check_keeps_the_stored_offset(tmp_path, monkeypatch
     a = [(1, "a"), (2, "b"), (3, "c")]
     b = [(1, "z"), (2, "b"), (3, "c")]  # differs only in the first tie group
     with_offset = report.render({"duckdb": result("d1", a, True), "krishiv": result("k1", b, True)})
-    assert "tie-at-limit: rows differ only in the tie group cut by LIMIT, rows 0..0" in with_offset
+    assert "tie-at-limit: rows differ only in the tie group cut by OFFSET, rows 0..0" in with_offset
     without = report.render({"duckdb": result("d2", a, False), "krishiv": result("k2", b, False)})
     assert "`q01` **duckdb vs krishiv**: value mismatch in tie group at rows 0..0" in without
 

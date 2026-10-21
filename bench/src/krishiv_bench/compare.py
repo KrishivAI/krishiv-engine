@@ -193,8 +193,9 @@ def compare_rows(
     ``derive_sort_keys`` / ``derive_limit`` find in ``sql``; ``offset`` (the query has an OFFSET) likewise, so a
     stored ``limit`` keeps its OFFSET. Sort keys derived from ``sql`` that fall outside the rows' width are dropped
     (whole-row comparison); keys passed by the caller must be valid. If a LIMIT cut the result (``len >= limit``),
-    the last tie group (and the first, with OFFSET) may legally hold different rows in the two results: that is
-    reported as ``tie-at-limit``, not as a mismatch.
+    the last tie group may legally hold different rows in the two results; so may the first when an OFFSET skipped
+    rows, with or without a LIMIT (the skip cuts that group too). That is reported as ``tie-at-limit`` (the message
+    names LIMIT or OFFSET), not as a mismatch.
     """
     if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
         raise ValueError(f"limit must be a non-negative int or None, got {limit!r}")
@@ -235,8 +236,8 @@ def compare_rows(
     for i, (x, y) in enumerate(zip(a, b, strict=False)):
         if not row_equal(key(x), key(y)):
             return Comparison(False, "mismatch", "tie-groups", _position_failure(a, b, i))
-    cut = limit is not None and len(a) >= limit
-    tie_at_limit = None
+    limit_cut = limit is not None and len(a) >= limit
+    cuts: list[str] = []
     start = 0
     while start < len(a):
         end = start + 1
@@ -244,12 +245,15 @@ def compare_rows(
             end += 1
         if _unordered_diff(a[start:end], b[start:end]) is not None:
             where = f"rows {start}..{end - 1} (sort key {key(a[start])!r})"
-            if not (cut and (end == len(a) or (offset and start == 0))):
+            by = [
+                name for name, hit in (("LIMIT", limit_cut and end == len(a)), ("OFFSET", offset and start == 0)) if hit
+            ]
+            if not by:
                 return Comparison(False, "mismatch", "tie-groups", f"value mismatch in tie group at {where}")
-            tie_at_limit = where
+            cuts.append(f"{' and '.join(by)}, {where}")
         start = end
-    if tie_at_limit:
-        msg = f"tie-at-limit: rows differ only in the tie group cut by LIMIT, {tie_at_limit}"
+    if cuts:
+        msg = f"tie-at-limit: rows differ only in the tie group cut by {'; '.join(cuts)}"
         return Comparison(True, "tie-at-limit", "tie-groups", msg)
     return Comparison(True, "ok", "tie-groups", "ok (tie-groups)")
 
@@ -366,14 +370,20 @@ def derive_sort_keys(sql: str) -> list[int] | None:
 
 
 def derive_limit(sql: str) -> tuple[int | None, bool]:
-    """(LIMIT n, has OFFSET) of the final top-level ORDER BY ... LIMIT clause; (None, False) if there is none."""
+    """(LIMIT n, OFFSET skips rows) of the final top-level ORDER BY clause; (None, False) if there is none.
+
+    The second item is true for ``OFFSET n`` with n > 0 and for an OFFSET that is not a plain number (it may skip
+    rows); ``OFFSET 0`` skips nothing and is false. OFFSET works without a LIMIT.
+    """
     masked = _top_level(sql)
     ob = _final_order_by(masked)
     if ob is None:
         return None, False
     tail = masked[ob.end() :]
     lim = re.search(r"\blimit\s+(\d+)\b", tail, re.I)
-    return (int(lim.group(1)) if lim else None), bool(re.search(r"\boffset\b", tail, re.I))
+    off = re.search(r"\boffset\b\s*(\d+)?", tail, re.I)
+    skips = off is not None and (off.group(1) is None or int(off.group(1)) > 0)
+    return (int(lim.group(1)) if lim else None), skips
 
 
 def has_top_level_order_by(sql: str) -> bool:
