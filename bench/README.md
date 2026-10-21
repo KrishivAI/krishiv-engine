@@ -53,6 +53,12 @@ returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket
 - `polars` (lazy `scan_parquet` + `SQLContext`), `datafusion` (datafusion-python, fair spill pool), `spark-local` (Spark 4.2 `local[N]`, AQE on,
   `shuffle.partitions` = cores) and `sail` (pysail Spark Connect server on loopback, pinned pyspark client): used by `reproduce`, hosted by
   `worker.py` (one process session per engine). Versions are pinned in `pyproject.toml`/`uv.lock`; Java 21 must be on `PATH` for Spark.
+- `clickhouse` (opt-in: `--engines duckdb,clickhouse,...`; a reference engine, not a compatibility target): ClickHouse 26.9 embedded through the pinned
+  `chdb==4.4.0` wheel (same query engine and Parquet reader as `clickhouse-local`), one process session per engine like the others. Tables are views over
+  `file('<parquet>', Parquet)`; `max_threads` = threads, `max_memory_usage` = the memory cap, GROUP BY / ORDER BY spill to
+  `$KRISHIV_DATA/tmp/clickhouse-<pid>` past half of it, `join_use_nulls=1` (SQL outer-join semantics). The result records `chdb <wheel> (ClickHouse <engine version>)`.
+  Install: nothing beyond `uv sync` (the wheel is hash-locked in `uv.lock`). `chdb` was chosen over a downloaded `clickhouse-local` binary because it is installed
+  and version-pinned like every other engine here, so there is no separate download, checksum or PATH step; the engine is the same ClickHouse release. TPC-DS is not run for ClickHouse (`load_queries` stops with the reason).
 - Adding Flink etc.: subclass `Engine`, register in `adapters/__init__.py`.
 Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (none needed so far).
 
@@ -146,3 +152,18 @@ extensions (`tpch_queries()`, `tpcds_queries()`), which embed the standard qgen 
 parameters, and expected row counts from DuckDB's `tpch_answers()`. DuckDB is MIT-licensed; the benchmark specifications and
 query templates are © Transaction Processing Performance Council. Results from this harness are *TPC-derived* and not
 audited TPC results; they must not be published as official TPC-H/TPC-DS numbers.
+
+### ClickHouse queries and dialect differences
+* **TPC-H**: `queries/tpch/clickhouse/qNN.sql` are ClickHouse's own TPC-H queries, `tests/benchmarks/tpc-h/queries/query_NN.sql` in
+  [ClickHouse/ClickHouse](https://github.com/ClickHouse/ClickHouse) at commit `a79b7c063486` (Apache-2.0). Each file's header names its source and any
+  adaptation: Q6 uses the alternative formulation from the upstream README (ClickHouse issue 70136), Q15's `CREATE VIEW` / `DROP VIEW` pair is a `WITH` clause (one
+  statement per query); the other 20 are verbatim (Q11 is the SF1 file; its `HAVING` fraction is the same constant the shared query uses).
+* **ClickBench**: ClickHouse runs the shared `queries/clickbench/qNN.sql`, which are the 43 queries of ClickHouse/ClickBench `clickhouse/queries.sql` (commit
+  `0e10b8434eef`, CC BY-NC-SA 4.0; `clickhouse-parquet/queries.sql` is identical) with the adaptations needed to read the raw `hits.parquet` the same way on every
+  engine: day-number / epoch-second date arithmetic (`EventDate` is a day count, `EventTime` epoch seconds) and tie-break sort keys so `LIMIT`/`OFFSET`
+  results are deterministic (q11, q18, q19, q22, q23, q25, q31-q33, q37-q43).
+* **Verdicts**: every ClickHouse result is compared with DuckDB's by the type-aware comparison. A difference that is a verified property of ClickHouse's
+  dialect or types is recorded as `mismatch-dialect` with the reason (`dialect.py`; the query is not timed, like any non-`ok` verdict), anything else stays `mismatch`.
+  Currently: TPC-H q08 (DECIMAL division truncated to 4 places; DuckDB returns a double), ClickBench q04 (`avg` of an int64 column wraps on overflow),
+  q28 and q29 (`length()` counts bytes, DuckDB counts characters). Checked on TPC-H SF1 (all 22: 21 `ok`, q08 `mismatch-dialect`) and a 2M-row slice of
+  `hits.parquet` (40 of 43 `ok`, q04/q28/q29 `mismatch-dialect`); the full 100M-row file needs the benchmark server.

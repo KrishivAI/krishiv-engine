@@ -1,11 +1,13 @@
 """Reproduce the reference engines' published results on this machine (P2-T156).
 
-Engines: Krishiv, DuckDB (the reference), Polars, DataFusion, Sail, Spark local[*]; all read the same Parquet,
-each in its own worker process (``worker.py``) pinned to the same thread count and memory cap.
+Engines: Krishiv, DuckDB (the reference), Polars, DataFusion, Sail, Spark local[*], and (opt-in) ClickHouse via chdb;
+all read the same Parquet, each in its own worker process (``worker.py``) pinned to the same thread count and
+memory cap.
 
 Correctness first (every engine vs DuckDB, and vs Krishiv when Krishiv matched DuckDB): one untimed run per
-engine and query; an engine whose rows differ, errors or times out is recorded (``mismatch`` / ``error`` /
-``timeout``) for that query and never timed.
+engine and query; an engine whose rows differ, errors or times out is recorded (``mismatch``, ``mismatch-dialect``
+for a documented dialect or type difference listed in ``dialect.py``, ``error`` or ``timeout``) for that query and
+never timed.
 
 Two timing methods, selected with ``methods``:
 
@@ -39,6 +41,7 @@ from . import compare
 from .abba import LOAD_INDICATIVE, bootstrap_ci, discover_tables, geomean, geomean_ci, loadavg, wait_idle
 from .adapters import Dataset, Engine, Query
 from .adapters.process import EngineCrashed, EngineError, EngineTimeout, ProcessEngine
+from .dialect import dialect_reason
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
 from .runner import git_info, load_queries, machine_info
 
@@ -53,7 +56,7 @@ PUBLISHED: dict[str, dict[str, Any]] = {
     "tpcds": {"runs": 5, "timeout_s": 60.0, "source": "Polars TPC-H method applied to TPC-DS: 5 runs, 60 s limit"},
     "clickbench": {"runs": 3, "timeout_s": 300.0, "source": "ClickBench: 3 runs, first cold; 300 s limit is ours"},
 }
-LIBS = ["duckdb", "polars", "datafusion", "pysail", "pyspark", "pyarrow"]
+LIBS = ["duckdb", "polars", "datafusion", "pysail", "pyspark", "pyarrow", "chdb"]
 
 
 def resolve_dataset(suite: str, dataset: str | None, sf: float) -> Dataset:
@@ -112,7 +115,11 @@ def correctness(qm: Mapping[str, Query], engines: Mapping[str, Engine]) -> tuple
             verdict[name] = {"status": "ok"}
             continue
         ok, msg = compare.rows_match(r, ref, ordered)
-        verdict[name] = {"status": "ok"} if ok else _fail("mismatch", msg)
+        if ok:
+            verdict[name] = {"status": "ok"}
+        else:
+            reason = dialect_reason(name, qm[name].suite, qm[name].id)
+            verdict[name] = _fail("mismatch-dialect", f"{reason}: {msg}") if reason else _fail("mismatch", msg)
         if ok and "krishiv" in rows and name != "krishiv":
             kok, kmsg = compare.rows_match(r, rows["krishiv"], ordered)
             if not kok:  # equal to DuckDB but not to Krishiv: Krishiv itself differs (also flagged on its own verdict)

@@ -18,6 +18,7 @@ import psutil
 
 from . import compare
 from .adapters import Dataset, Engine, Query, make_engine
+from .dialect import unsupported_reason
 from .paths import bench_root, data_root, dataset_dir, fmt_sf, queries_dir, results_dir
 
 SUITE_DATASET = {"tpch": "tpch", "tpcds": "tpcds"}  # default dataset per suite
@@ -93,6 +94,9 @@ def dataset_provenance(ds_name: str, sf: float) -> dict:
 
 def load_queries(suite: str, engine: str, only: list[str] | None = None) -> list[Query]:
     """bench/queries/<suite>/qNN.sql; an engine-specific override lives in bench/queries/<suite>/<engine>/qNN.sql."""
+    reason = unsupported_reason(engine, suite)
+    if reason:
+        raise SystemExit(reason)
     d = queries_dir(suite)
     out = []
     for f in sorted(d.glob("q*.sql")):
