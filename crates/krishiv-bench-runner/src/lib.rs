@@ -38,7 +38,7 @@ use std::time::Instant;
 use arrow_array::RecordBatch;
 use krishiv_common::config::Config;
 use krishiv_common::error::KrishivError;
-use krishiv_exec::{ExecutorConfig, QueryMetrics, TokioExecutor};
+use krishiv_exec::{ExecutorConfig, Metric, QueryMetrics, TokioExecutor};
 use krishiv_session::{DataFrame, Session};
 
 /// Why a runner call failed.
@@ -404,7 +404,14 @@ impl Timing {
                     let extra: Vec<String> = e
                         .extra
                         .iter()
-                        .map(|(k, v)| format!("\"{}\":{v}", k.escape_default()))
+                        .map(|(k, v)| match v {
+                            Metric::Count(n) | Metric::Max(n) => {
+                                format!("\"{}\":{n}", k.escape_default())
+                            }
+                            Metric::Text(t) => {
+                                format!("\"{}\":\"{}\"", k.escape_default(), t.escape_default())
+                            }
+                        })
                         .collect();
                     format!(
                         "{{\"id\":{},\"name\":\"{}\",\"rows_in\":{},\"rows_out\":{},\"compute_seconds\":{:.6},\"blocked_io_seconds\":{:.6},\"peak_reserved_bytes\":{},\"spill_requests\":{},\"spill_files\":{},\"spill_bytes\":{},\"blocked_memory_seconds\":{:.6},\"extra\":{{{}}}}}",

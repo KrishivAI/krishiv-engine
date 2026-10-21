@@ -80,7 +80,8 @@ fn run(plan: &Runnable) -> (Vec<RecordBatch>, Counters) {
     let mut c = Counters::default();
     for entry in query.metrics().operators.values() {
         for (name, v) in &entry.extra {
-            match *name {
+            let v = v.value().unwrap_or(0);
+            match name.as_ref() {
                 "runtime_filter_rows_dropped" => c.rows_dropped += v,
                 "runtime_filter_units_pruned" => c.units_pruned += v,
                 "runtime_filter_splits_skipped" => c.splits_skipped += v,
@@ -507,7 +508,8 @@ fn runtime_filter_bench() {
                     bytes = 0;
                     for entry in query.metrics().operators.values() {
                         for (name, v) in &entry.extra {
-                            match *name {
+                            let v = v.value().unwrap_or(0);
+                            match name.as_ref() {
                                 "runtime_filter_rows_dropped" => c.rows_dropped += v,
                                 "runtime_filter_units_pruned" => c.units_pruned += v,
                                 "runtime_filter_splits_skipped" => c.splits_skipped += v,

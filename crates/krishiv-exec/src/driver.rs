@@ -121,6 +121,7 @@ fn since(executor: &dyn Executor, start: Instant) -> Duration {
 
 /// Spawns one driver of `run`.
 pub(crate) fn spawn_driver(run: Arc<PipelineRun>) -> TaskHandle {
+    let pipeline = run.pipeline.index;
     let query = Arc::clone(&run.query);
     let executor = Arc::clone(&run.executor);
     let q = Arc::clone(&query);
@@ -135,6 +136,9 @@ pub(crate) fn spawn_driver(run: Arc<PipelineRun>) -> TaskHandle {
             drivers: 1,
             ..DriverStats::default()
         },
+        pipeline,
+        started: None,
+        threads: Vec::new(),
         query: Arc::clone(&query),
         executor: Arc::clone(&executor),
     };
@@ -150,6 +154,12 @@ async fn drive(run: Arc<PipelineRun>) -> Result<()> {
 struct Timed {
     inner: BoxFuture<'static, ()>,
     stats: DriverStats,
+    /// The pipeline the driver runs.
+    pipeline: u32,
+    /// When it was first polled (an offset from the query's start).
+    started: Option<Duration>,
+    /// The threads that polled it, each once.
+    threads: Vec<u64>,
     query: Arc<QueryContext>,
     executor: Arc<dyn Executor>,
 }
@@ -159,9 +169,16 @@ impl Future for Timed {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let start = self.executor.now();
-        let out = self.inner.as_mut().poll(cx);
-        let slice = since(&*self.executor, start);
         let this = &mut *self;
+        if this.started.is_none() {
+            this.started = Some(this.query.offset(start));
+        }
+        let thread = crate::metrics::thread_ordinal();
+        if !this.threads.contains(&thread) {
+            this.threads.push(thread);
+        }
+        let out = this.inner.as_mut().poll(cx);
+        let slice = since(&*this.executor, start);
         this.stats.max_slice = this.stats.max_slice.max(slice);
         let config = this.query.config();
         if slice > config.stall_threshold {
@@ -181,6 +198,12 @@ impl Drop for Timed {
     fn drop(&mut self) {
         let stats = std::mem::take(&mut self.stats);
         self.query.merge_metrics(|m| m.drivers.merge(&stats));
+        // A driver never polled (cancelled before it started) ran nowhere.
+        if let Some(started) = self.started {
+            let ended = self.query.offset(self.executor.now());
+            self.query
+                .record_driver(self.pipeline, started, ended, &self.threads);
+        }
     }
 }
 
@@ -748,8 +771,9 @@ impl Drop for Driver {
             ..DriverStats::default()
         };
         self.run.query.merge_metrics(|m| {
-            for (id, om) in ids.into_iter().zip(&metrics) {
-                m.operators.entry(id).or_default().metrics.merge(om);
+            for (id, mut om) in ids.into_iter().zip(metrics) {
+                om.as_driver();
+                m.operators.entry(id).or_default().metrics.merge(&om);
             }
             m.drivers.merge(&stats);
         });

@@ -616,6 +616,10 @@ impl Sink for BuildSink {
                     break;
                 };
                 let (p, table, copy) = done?;
+                let (keys, buckets, kind) = table.index_size();
+                self.0.counters.or(Counter::IndexKinds, kind as u64);
+                self.0.counters.add(Counter::HashEntries, keys as u64);
+                self.0.counters.add(Counter::HashBuckets, buckets as u64);
                 tables.push((p, table));
                 if spill {
                     // Keep the largest copy funded; return the rest.
@@ -689,7 +693,7 @@ impl Sink for BuildSink {
         })
     }
 
-    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         self.0.counters.build()
     }
 

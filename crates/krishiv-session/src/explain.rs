@@ -55,7 +55,17 @@ impl Session {
         };
         let plan = krishiv_sql::lower(q, krishiv_plan::SourceId(0)).map_err(|e| e.error)?;
         let explained = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        let text = explained.explain_text(e.mode.into(), true).await?;
+        let text = match e.mode {
+            // Krishiv's extensions (ADR 0023): a query that fails to
+            // analyze, plan or run is an error, not part of the text.
+            krishiv_sql::ast::ExplainMode::Analyze => explained
+                .profiled(false)
+                .await?
+                .1
+                .to_text(krishiv_exec::profile::TextOptions::default()),
+            krishiv_sql::ast::ExplainMode::Verbose => explained.verbose().await?.to_text(),
+            mode => explained.explain_text(mode.into(), true).await?,
+        };
         self.one_row(&text).await
     }
 

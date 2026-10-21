@@ -82,6 +82,7 @@ mod operators;
 pub mod physical;
 mod pipeline;
 pub mod planner;
+pub mod profile;
 // Row layout (P2-T157): the join's key index (P2-T158) and the aggregate's
 // row tables (P2-T159); the key-page prototypes inside stay behind the
 // `row-table-prototype` feature.
@@ -103,7 +104,10 @@ pub use join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType, NestedLoopJoin,
     NestedLoopJoinNode, NestedLoopSpec,
 };
-pub use metrics::{DriverStats, OperatorEntry, OperatorMetrics, QueryMemory, QueryMetrics};
+pub use metrics::{
+    DriverStats, ExtraMetrics, Metric, OperatorEntry, OperatorMetrics, OperatorRole,
+    PipelineMetrics, QueryMemory, QueryMetrics,
+};
 pub use morsel::MorselCursor;
 pub use operator::{
     FlushOutput, GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source,

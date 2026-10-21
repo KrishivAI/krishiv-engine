@@ -50,6 +50,7 @@
 
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::{ArrayRef, RecordBatch};
 use hashbrown::HashTable;
@@ -256,6 +257,8 @@ pub(crate) struct RowTable {
     /// rows in the table, and no row was appended without a lookup.
     unique: bool,
     ids: Vec<u32>,
+    /// Counts clears of a full fixed index (`EXPLAIN ANALYZE`).
+    abandons: Option<Arc<AtomicU64>>,
 }
 
 impl RowTable {
@@ -294,6 +297,7 @@ impl RowTable {
             groups: 0,
             unique: true,
             ids: Vec::new(),
+            abandons: None,
         })
     }
 
@@ -301,6 +305,17 @@ impl RowTable {
     /// whose fixed index was cleared).
     pub(crate) fn len(&self) -> usize {
         self.groups
+    }
+
+    /// Counts the clears of a full fixed index into `counter`.
+    pub(crate) fn with_abandons(mut self, counter: Arc<AtomicU64>) -> Self {
+        self.abandons = Some(counter);
+        self
+    }
+
+    /// Buckets of the index (its capacity).
+    pub(crate) fn buckets(&self) -> usize {
+        buckets(&self.index)
     }
 
     /// Whether every group has one row (no partial duplicates).
@@ -543,6 +558,7 @@ impl RowTable {
             groups,
             index,
             unique,
+            abandons,
             stride,
             key_stride,
             gseed,
@@ -562,6 +578,9 @@ impl RowTable {
                 if index.len() >= limit {
                     index.clear();
                     *unique = false;
+                    if let Some(c) = abandons {
+                        c.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 index.insert_unique(g, r, |&o| fin(word(row_at(parts, stride, o), 0), gseed));
                 r

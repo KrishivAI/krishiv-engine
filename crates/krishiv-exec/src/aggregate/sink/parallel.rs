@@ -141,6 +141,8 @@ impl HashAggregate {
                 .pop()
                 .ok_or_else(|| internal("no driver table".to_owned()))?;
             bump(&self.counters.groups, table.len() as u64);
+            bump(&self.counters.hash_entries, table.len() as u64);
+            bump(&self.counters.hash_buckets, table.buckets() as u64);
             let mut inner = lock(&g.inner);
             inner.busy = false;
             let _ = g.done.set(Final::Table {
@@ -175,6 +177,7 @@ impl HashAggregate {
                 });
             }
         }
+        bump(&self.counters.row_final_tasks, queue.len() as u64);
         let limit = ctx.executor().parallelism().max(1);
         let mut running: Running<'_> = FuturesUnordered::new();
         let mut done = Vec::new();
@@ -241,11 +244,13 @@ impl HashAggregate {
         for (i, task) in done.into_iter().enumerate() {
             let n = task.table.len();
             groups += n;
+            bump(&self.counters.hash_buckets, task.table.buckets() as u64);
             chunks.extend((0..n).step_by(batch).map(|s| (i, s..(s + batch).min(n))));
             tables.push(Table::Rows(task.table));
             reservations.push(task.reservation);
         }
         bump(&self.counters.groups, groups as u64);
+        bump(&self.counters.hash_entries, groups as u64);
         let mut inner = lock(&g.inner);
         inner.busy = false;
         inner.row_merge = false;
@@ -272,6 +277,7 @@ impl HashAggregate {
         let s = self
             .spiller(ctx)
             .ok_or_else(|| internal("spilling an unspillable aggregate".to_owned()))?;
+        bump(&self.counters.row_final_spills, 1);
         let mut held = held;
         let runs = ctx
             .run_blocking(move || {

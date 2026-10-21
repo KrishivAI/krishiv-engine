@@ -1102,11 +1102,16 @@ impl<'s> Parser<'s> {
                 // Spark parses `LOGICAL`, then rejects it after parsing.
                 "LOGICAL" => Some(ExplainMode::Simple),
                 // Spark reads `EXPLAIN ANALYZE` as the start of `ANALYZE
-                // TABLE`, so its syntax error is at the next token.
-                "ANALYZE" => {
+                // TABLE` (unsupported here: its syntax error is at the next
+                // token). Before anything else it is Krishiv's
+                // `EXPLAIN ANALYZE <query>`, a syntax error in Spark.
+                "ANALYZE" if self.kw_at(1, "TABLE") || self.kw_at(1, "TABLES") => {
                     self.bump();
                     return self.fail();
                 }
+                "ANALYZE" => Some(ExplainMode::Analyze),
+                // A syntax error in Spark; Krishiv's `EXPLAIN VERBOSE`.
+                "VERBOSE" => Some(ExplainMode::Verbose),
                 _ => None,
             };
             let logical = word == "LOGICAL";

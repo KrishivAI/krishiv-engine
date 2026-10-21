@@ -565,16 +565,33 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        let (optimized, physical, _) = self.physical_traced(analyzed, env, false).await?;
+        Ok((optimized, physical))
+    }
+
+    /// As [`Self::physical`]; with `trace`, also every optimizer rule
+    /// application that changed the plan (`EXPLAIN VERBOSE`).
+    pub(crate) async fn physical_traced(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+        trace: bool,
+    ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
         // Planning makes no spill directory: a query gets its scope when
         // its plan is instantiated (`Self::worker`), so a plan that is only
         // inspected (EXPLAIN, warnings) makes none.
         env.catalog.open_files(analyzed.plan.root()).await?;
         let tables =
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>;
-        let optimized = krishiv_optimizer::optimize_with(
-            &analyzed.plan,
-            &ProviderStatistics(Arc::clone(&tables)),
-        )?;
+        let stats = ProviderStatistics(Arc::clone(&tables));
+        let (optimized, steps) = if trace {
+            krishiv_optimizer::optimize_traced(&analyzed.plan, &stats)?
+        } else {
+            (
+                krishiv_optimizer::optimize_with(&analyzed.plan, &stats)?,
+                Vec::new(),
+            )
+        };
         let cx = PlanningContext::new(tables, Arc::clone(&env.config))
             .with_user(self.state.principal.name.as_str());
         let physical = self.state.planner.plan(&optimized, &cx)?;
@@ -583,7 +600,7 @@ impl Session {
         for w in analyzed.warnings.iter().chain(physical.warnings()) {
             tracing::warn!(target: "krishiv::session", "{w}");
         }
-        Ok((optimized, physical))
+        Ok((optimized, physical, steps))
     }
 
     /// Runs `physical`; the stream's batches are its result rows.
@@ -602,7 +619,19 @@ impl Session {
         physical: &PhysicalPlan,
         env: &QueryEnv,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
-        self.run_on_query(physical, self.worker(env), env).await
+        self.run_on_query(physical, self.worker(env), env, false)
+            .await
+    }
+
+    /// As [`Self::run_with_query`], collecting the detailed metrics of a
+    /// profile (`EXPLAIN ANALYZE`).
+    pub(crate) async fn run_profiled(
+        &self,
+        physical: &PhysicalPlan,
+        env: &QueryEnv,
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
+        self.run_on_query(physical, self.worker(env), env, true)
+            .await
     }
 
     /// Runs `physical` instantiated with `worker`.
@@ -612,7 +641,7 @@ impl Session {
         worker: WorkerContext,
         env: &QueryEnv,
     ) -> Result<RecordBatchStream, KrishivError> {
-        Ok(self.run_on_query(physical, worker, env).await?.0)
+        Ok(self.run_on_query(physical, worker, env, false).await?.0)
     }
 
     async fn run_on_query(
@@ -620,13 +649,17 @@ impl Session {
         physical: &PhysicalPlan,
         worker: WorkerContext,
         env: &QueryEnv,
+        detailed: bool,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
         let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
         let pool = self.state.memory.child(&format!("query-{}", id.0), None);
         let query = QueryContext::new(
             id,
             WorkloadClass::Interactive,
-            ExecConfig::from_config(&env.config),
+            ExecConfig {
+                detailed_metrics: detailed,
+                ..ExecConfig::from_config(&env.config)
+            },
             pool,
         );
         let stream = self

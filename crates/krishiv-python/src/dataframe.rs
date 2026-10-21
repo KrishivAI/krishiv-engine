@@ -191,6 +191,49 @@ impl PyDataFrame {
         block_on(py, async move { df.count().await })
     }
 
+    /// The text (or, with `json`, the JSON document) of explain `mode`:
+    /// Spark's `simple`, `extended`, `codegen`, `cost`, `formatted`, or
+    /// Krishiv's `analyze` (runs the query) and `verbose`. JSON exists for
+    /// `analyze` and `verbose` only.
+    #[pyo3(signature = (mode, json=false))]
+    fn explain(&self, py: Python<'_>, mode: &str, json: bool) -> PyResult<String> {
+        use krishiv_session::{ExplainMode, TextOptions};
+        let spark = match mode {
+            "simple" => Some(ExplainMode::Simple),
+            "extended" => Some(ExplainMode::Extended),
+            "codegen" => Some(ExplainMode::Codegen),
+            "cost" => Some(ExplainMode::Cost),
+            "formatted" => Some(ExplainMode::Formatted),
+            "analyze" | "verbose" => None,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown explain mode: {other}"
+                )));
+            }
+        };
+        if json && spark.is_some() {
+            return Err(PyValueError::new_err(format!(
+                "explain mode {mode} has no JSON form (analyze and verbose have)"
+            )));
+        }
+        let df = self.inner.clone();
+        match (spark, mode) {
+            (Some(m), _) => block_on(py, async move { df.explain(m).await }),
+            (None, "analyze") => {
+                let p = block_on(py, async move { df.explain_analyze().await })?;
+                Ok(if json {
+                    p.to_json()
+                } else {
+                    p.to_text(TextOptions::default())
+                })
+            }
+            _ => {
+                let v = block_on(py, async move { df.explain_verbose().await })?;
+                Ok(if json { v.to_json() } else { v.to_text() })
+            }
+        }
+    }
+
     /// Registers this DataFrame as the temporary view `name`.
     fn create_or_replace_temp_view(&self, py: Python<'_>, name: &str) -> PyResult<()> {
         let (df, name) = (self.inner.clone(), name.to_owned());

@@ -36,7 +36,7 @@ use super::{AggregateSpec, unsupported};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::executor::{Executor, run_blocking};
-use crate::hash::{HashSeed, MAX_LEVEL, PARTITIONS};
+use crate::hash::{HashSeed, MAX_LEVEL, PARTITIONS, ProbeTotals};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::sync::{Mutex, lock};
 
@@ -67,10 +67,24 @@ pub struct AggregateMetrics {
 #[derive(Debug, Default)]
 struct Counters {
     groups: AtomicU64,
+    /// Distinct keys of the tables the output came from.
+    hash_entries: AtomicU64,
+    /// Their buckets.
+    hash_buckets: AtomicU64,
+    probes: Arc<ProbeTotals>,
     spill_runs: AtomicU64,
     spill_files: AtomicU64,
     spill_bytes: AtomicU64,
     repartitions: AtomicU64,
+    /// Row tables were used (`krishiv.exec.agg.rowLayout`): their counters
+    /// below are reported.
+    row_layout: std::sync::atomic::AtomicBool,
+    /// Times a thread-local row table's fixed index was cleared when full.
+    row_abandons: Arc<AtomicU64>,
+    /// Partition tasks of the row tables' final phase.
+    row_final_tasks: AtomicU64,
+    /// Final phases that moved to disk (out of memory, or a spill request).
+    row_final_spills: AtomicU64,
 }
 
 fn bump(c: &AtomicU64, n: u64) {
@@ -130,9 +144,12 @@ impl HashAggregate {
         Ok(match g.rows {
             Some(mode) => {
                 let mode = if local { mode } else { Mode::Grow };
-                Table::Rows(RowTable::new(&self.core, &g.seed, mode, local)?)
+                Table::Rows(
+                    RowTable::new(&self.core, &g.seed, mode, local)?
+                        .with_abandons(Arc::clone(&self.counters.row_abandons)),
+                )
             }
-            None => Table::Keys(AggTable::new(&self.core, &g.seed)?),
+            None => Table::Keys(AggTable::new(&self.core, &g.seed)?.with_probes(g.probes.clone())),
         })
     }
 
@@ -251,6 +268,8 @@ impl Spiller {
             out.write(&b).map_err(KrishivError::from)?;
         }
         bump(&self.counters.groups, u64::from(n));
+        bump(&self.counters.hash_entries, u64::from(n));
+        bump(&self.counters.hash_buckets, table.buckets() as u64);
         Ok(())
     }
 }
@@ -348,6 +367,8 @@ struct Global {
     /// Row tables (`krishiv.exec.agg.rowLayout` with fixed-width keys):
     /// the thread-local tables' index mode.
     rows: Option<Mode>,
+    /// Where tables count probe lengths (a detailed profile only).
+    probes: Option<Arc<ProbeTotals>>,
     /// Bytes of the combined tables, before `finalize`.
     combined: AtomicUsize,
     inner: Mutex<Inner>,
@@ -548,6 +569,8 @@ impl HashAggregate {
                 None => (self.new_table(g, false)?, ctx.consumer().reservation()),
             };
             bump(&self.counters.groups, table.len() as u64);
+            bump(&self.counters.hash_entries, table.len() as u64);
+            bump(&self.counters.hash_buckets, table.buckets() as u64);
             let mut held = std::mem::take(&mut inner.granted);
             held.push(reservation);
             let _ = g.done.set(Final::Table { table, _held: held });
@@ -748,9 +771,17 @@ impl Sink for HashAggregate {
             self.row_mode
                 .unwrap_or_else(|| Mode::local(config.seed.is_some(), threads))
         });
+        if rows.is_some() {
+            self.counters
+                .row_layout
+                .store(true, AtomicOrdering::Relaxed);
+        }
         Ok(Arc::new(Global {
             seed: HashSeed::new(config.seed),
             rows,
+            probes: config
+                .detailed_metrics
+                .then(|| Arc::clone(&self.counters.probes)),
             combined: AtomicUsize::new(0),
             inner: Mutex::new(Inner::default()),
             done: OnceLock::new(),
@@ -946,15 +977,41 @@ impl Sink for HashAggregate {
         })
     }
 
-    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         let m = self.metrics();
-        vec![
+        let c = &self.counters;
+        let mut out = crate::metrics::counts([
             ("groups", m.groups),
             ("spill_runs", m.spill_runs),
             ("spill_files", m.spill_files),
             ("spill_bytes", m.spill_bytes),
             ("repartitions", m.repartitions),
-        ]
+            ("hash_entries", c.hash_entries.load(AtomicOrdering::Relaxed)),
+            ("hash_buckets", c.hash_buckets.load(AtomicOrdering::Relaxed)),
+        ]);
+        out.push((
+            std::borrow::Cow::Borrowed("hash_index"),
+            crate::metrics::Metric::Text("swiss".to_owned()),
+        ));
+        if c.row_layout.load(AtomicOrdering::Relaxed) {
+            out.extend(crate::metrics::counts([
+                ("row_abandons", c.row_abandons.load(AtomicOrdering::Relaxed)),
+                (
+                    "row_final_tasks",
+                    c.row_final_tasks.load(AtomicOrdering::Relaxed),
+                ),
+                (
+                    "row_final_spills",
+                    c.row_final_spills.load(AtomicOrdering::Relaxed),
+                ),
+            ]));
+            out.push((
+                std::borrow::Cow::Borrowed("table_layout"),
+                crate::metrics::Metric::Text("rows".to_owned()),
+            ));
+        }
+        out.extend(crate::metrics::probe_metrics(&c.probes.get()));
+        out
     }
 }
 

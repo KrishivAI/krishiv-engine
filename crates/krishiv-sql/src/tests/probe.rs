@@ -12,6 +12,10 @@ const SPARK_DEVIATIONS: &[(&str, &str)] = &[
         "the text of a string literal is never echoed in an error",
     ),
     (
+        "EXPLAIN ANALYZE SELECT 1",
+        "`EXPLAIN ANALYZE <query>` is a Krishiv extension (ADR 0023): it runs the query and prints its metrics",
+    ),
+    (
         "EXPLAIN ANALYZE TABLE t COMPUTE STATISTICS",
         "`ANALYZE TABLE` is not a supported statement",
     ),

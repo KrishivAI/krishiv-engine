@@ -26,7 +26,7 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::keys::{Encoded, KeyRows};
 use crate::error::{Result, internal};
-use crate::hash::KeyTable;
+use crate::hash::{KeyTable, ProbeCount};
 use crate::rows::{IndexChoice, JoinIndex, RowLayout, RowSource};
 
 /// End of a chain / no match.
@@ -205,6 +205,34 @@ impl RowSource for RowArena {
     }
 }
 
+/// The kind of a table's index, for `EXPLAIN ANALYZE` (a bit each, so a
+/// join's tables can report every kind they used).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IndexKind {
+    /// [`KeyTable`] over arrow-row keys, duplicates chained.
+    Swiss = 1,
+    /// The row layout's flat [`JoinIndex`], duplicates chained.
+    RowFlat = 2,
+    /// The row layout's salted [`JoinIndex`], duplicates chained.
+    RowSalted = 4,
+}
+
+impl IndexKind {
+    /// The kinds a bit set names, as `EXPLAIN ANALYZE` prints them.
+    pub(crate) fn names(bits: u64) -> String {
+        [
+            (Self::Swiss, "swiss+chain"),
+            (Self::RowFlat, "row-flat+chain"),
+            (Self::RowSalted, "row-salted+chain"),
+        ]
+        .iter()
+        .filter(|(k, _)| bits & (*k as u64) != 0)
+        .map(|(_, n)| *n)
+        .collect::<Vec<_>>()
+        .join("; ")
+    }
+}
+
 /// A table's key index.
 #[derive(Debug)]
 enum Index {
@@ -333,6 +361,49 @@ impl JoinTable {
         match &self.index {
             Index::Arrow { .. } => None,
             Index::Rows { index, .. } => Some(index.is_flat()),
+        }
+    }
+
+    /// As [`find_heads`](Self::find_heads), counting probe lengths (keys
+    /// compared per lookup) into `count`. Only the arrow-row index counts;
+    /// the row-layout index answers uncounted (its lookups are not in
+    /// `count`).
+    pub(crate) fn find_heads_counted(
+        &self,
+        keys: &Encoded,
+        rows: &[u32],
+        heads: &mut Vec<u32>,
+        count: &mut ProbeCount,
+    ) {
+        match (&self.index, &keys.rows) {
+            (
+                Index::Arrow {
+                    keys: table,
+                    heads: h,
+                },
+                KeyRows::Arrow(encoded, hashes),
+            ) => heads.extend(rows.iter().map(|&i| {
+                let key = encoded.row(i as usize);
+                let id = table.find_counted(key.as_ref(), hashes[i as usize], count);
+                id.and_then(|id| h.get(id as usize).copied())
+                    .unwrap_or(NONE)
+            })),
+            _ => self.find_heads(keys, rows, heads),
+        }
+    }
+
+    /// Distinct keys and buckets of the index, and its kind.
+    pub(crate) fn index_size(&self) -> (usize, usize, IndexKind) {
+        match &self.index {
+            Index::Arrow { keys, .. } => (keys.len(), keys.buckets(), IndexKind::Swiss),
+            Index::Rows { index, .. } => {
+                let kind = if index.is_flat() {
+                    IndexKind::RowFlat
+                } else {
+                    IndexKind::RowSalted
+                };
+                (index.len(), index.buckets(), kind)
+            }
         }
     }
 

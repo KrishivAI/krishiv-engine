@@ -496,7 +496,8 @@ pub(crate) async fn step(
         match next_probe(a, ctx).await? {
             Some(b) => {
                 let tables = Tables::Single(&a.table);
-                a.cursor = Some(Cursor::new(shared, hashing, b, &tables)?.0);
+                let detailed = ctx.query().config().detailed_metrics;
+                a.cursor = Some(Cursor::new(shared, hashing, b, &tables, detailed)?.0);
             }
             None => {
                 st.active = None;
@@ -811,6 +812,11 @@ impl Loading {
         self.memory.shrink(concat);
         let layout = shared.keys.layout().filter(|_| hashing.rows());
         let table = JoinTable::build(arena, layout, hashing.g_seed())?;
+        let (keys, buckets, _) = table.index_size();
+        shared.counters.add(Counter::GraceHashEntries, keys as u64);
+        shared
+            .counters
+            .add(Counter::GraceHashBuckets, buckets as u64);
         Ok(Loaded::Table(Box::new(table), headroom))
     }
 

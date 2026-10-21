@@ -789,11 +789,30 @@ fn explain_errors_follow_spark() {
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     let e = fail("EXPLAIN LOGICAL SELECT 1 /* x");
     assert_eq!(e.error.error_class(), ErrorClass::UnclosedBracketedComment);
-    // `EXPLAIN ANALYZE` reads as `ANALYZE TABLE`: the error is after it.
-    let e = fail("EXPLAIN ANALYZE SELECT 1");
+    // `EXPLAIN ANALYZE TABLE` reads as `ANALYZE TABLE`: the error is
+    // after `ANALYZE`, as in Spark.
+    let e = fail("EXPLAIN ANALYZE TABLE t COMPUTE STATISTICS");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    assert_eq!(e.span.range(), 16..22);
+    assert_eq!(e.span.range(), 16..21);
     assert_eq!(fail("EXPLAIN ANALYZE").span.range(), 15..15);
+    assert_eq!(fail("EXPLAIN VERBOSE").span.range(), 15..15);
+    // Krishiv's extensions, syntax errors in Spark (ADR 0023).
+    use ast::{ExplainMode, Statement};
+    for (sql, mode) in [
+        ("EXPLAIN ANALYZE SELECT 1", ExplainMode::Analyze),
+        (
+            "explain analyze WITH x AS (SELECT 1) SELECT * FROM x",
+            ExplainMode::Analyze,
+        ),
+        ("EXPLAIN VERBOSE SELECT 1", ExplainMode::Verbose),
+        ("EXPLAIN VERBOSE FROM t SELECT a", ExplainMode::Verbose),
+    ] {
+        let Ok(Statement::Explain(e)) = parse_statement(sql, &ParserOptions::default()) else {
+            panic!("{sql} does not parse as EXPLAIN");
+        };
+        assert_eq!(e.mode, mode, "{sql}");
+        assert!(matches!(*e.statement, Statement::Query(_)), "{sql}");
+    }
     let e = fail("EXPLAIN EXTENDED EXTENDED SELECT 1");
     assert_eq!(e.span.range(), 17..25);
 }

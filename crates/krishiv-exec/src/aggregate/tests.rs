@@ -272,7 +272,10 @@ fn extra(m: &QueryMetrics, op: &str, name: &str) -> u64 {
         .filter(|e| e.name == op)
         .flat_map(|e| e.extra.iter())
         .filter(|(n, _)| *n == name)
-        .map(|(_, v)| *v)
+        .map(|(_, v)| match v {
+            crate::metrics::Metric::Count(n) | crate::metrics::Metric::Max(n) => *n,
+            crate::metrics::Metric::Text(_) => 0,
+        })
         .sum()
 }
 
@@ -2083,4 +2086,48 @@ async fn row_merge_spills_on_request() {
     assert_eq!(rows(&out), expected);
     drop((sl, sg, src, g, sink_ctx));
     assert_eq!(root.reserved(), 0);
+}
+
+/// `EXPLAIN ANALYZE` counters of the row tables: abandons of full fixed
+/// indexes, final-phase tasks, the groups and the layout; the default
+/// tables report none of the row counters.
+#[tokio::test]
+async fn row_layout_metrics() {
+    let (s, b) = grouped_input(200_000, 90_000);
+    let sp = spec(&s, vec![0], grouped_aggs(&s));
+    let o = Opts {
+        both_layouts: false,
+        ..Opts::default()
+    };
+    let agg =
+        HashAggregate::with_row_mode(sp.clone(), rowtable::Mode::Fixed { limit: 5_000 }).unwrap();
+    let (_, m) = exec_with(AggregateNode::new(scan(&s, b.clone()), agg), o, true)
+        .await
+        .unwrap();
+    assert!(extra(&m, "HashAggregate", "row_abandons") > 0);
+    assert!(extra(&m, "HashAggregate", "row_final_tasks") > 1);
+    assert_eq!(extra(&m, "HashAggregate", "row_final_spills"), 0);
+    assert_eq!(extra(&m, "HashAggregate", "groups"), 90_000);
+    assert_eq!(extra(&m, "HashAggregate", "hash_entries"), 90_000);
+    let layout = m
+        .operators
+        .values()
+        .flat_map(|e| e.extra.iter())
+        .any(|(n, v)| {
+            *n == "table_layout" && *v == crate::metrics::Metric::Text("rows".to_owned())
+        });
+    assert!(layout);
+    let (_, m) = exec_with(node(scan(&s, b), sp), o, false).await.unwrap();
+    let names: Vec<_> = m
+        .operators
+        .values()
+        .flat_map(|e| e.extra.iter())
+        .map(|(n, _)| n.to_string())
+        .collect();
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.starts_with("row_") || n == "table_layout"),
+        "{names:?}"
+    );
 }

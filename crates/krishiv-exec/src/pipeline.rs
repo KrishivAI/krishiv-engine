@@ -33,6 +33,7 @@ use std::sync::Arc;
 
 use crate::context::OperatorId;
 use crate::error::{Result, internal};
+use crate::metrics::OperatorRole;
 use crate::operator::{Operator, Sink, Source};
 
 /// A physical plan node (implemented by the physical plan, P2-T074).
@@ -46,6 +47,9 @@ pub trait ExecNode: Send + Sync {
 
 /// One `Source → Operator* → Sink` chain.
 pub(crate) struct Pipeline {
+    /// Its index in the query (fixed by the plan: the order the builder
+    /// created it in).
+    pub(crate) index: u32,
     pub(crate) source: (OperatorId, Arc<dyn Source>),
     pub(crate) operators: Vec<(OperatorId, Arc<dyn Operator>)>,
     /// Per operator: the breaker sink whose finalized state it reads.
@@ -72,8 +76,18 @@ struct Draft {
     preserve_order: bool,
 }
 
-/// Every operator's name, by id.
-pub(crate) type Names = Vec<(OperatorId, &'static str)>;
+/// An operator as the builder numbered it.
+pub(crate) struct Named {
+    pub(crate) id: OperatorId,
+    pub(crate) name: &'static str,
+    /// The plan node being built when it was added (see
+    /// [`PipelineBuilder::enter_node`]).
+    pub(crate) node: Option<u32>,
+    pub(crate) role: OperatorRole,
+}
+
+/// Every operator, by id.
+pub(crate) type Names = Vec<Named>;
 
 /// Collects the pipelines of a plan; see the module docs.
 pub struct PipelineBuilder {
@@ -81,6 +95,8 @@ pub struct PipelineBuilder {
     current: usize,
     next_id: u32,
     names: Names,
+    /// The plan nodes being built, innermost last.
+    nodes: Vec<u32>,
 }
 
 impl std::fmt::Debug for PipelineBuilder {
@@ -100,8 +116,9 @@ impl PipelineBuilder {
             current: 0,
             next_id: 0,
             names: Vec::new(),
+            nodes: Vec::new(),
         };
-        let id = b.id(result.name());
+        let id = b.id(result.name(), OperatorRole::Sink);
         b.drafts.push(Draft {
             fanned: Vec::new(),
             source: None,
@@ -115,11 +132,28 @@ impl PipelineBuilder {
         b
     }
 
-    fn id(&mut self, name: &'static str) -> OperatorId {
+    fn id(&mut self, name: &'static str, role: OperatorRole) -> OperatorId {
         let id = OperatorId(self.next_id);
         self.next_id += 1;
-        self.names.push((id, name));
+        self.names.push(Named {
+            id,
+            name,
+            node: self.nodes.last().copied(),
+            role,
+        });
         id
+    }
+
+    /// Starts building plan node `node`: the operators added until the
+    /// matching [`exit_node`](Self::exit_node), and not inside a nested
+    /// node, implement it (`EXPLAIN ANALYZE` reports them under it).
+    pub fn enter_node(&mut self, node: u32) {
+        self.nodes.push(node);
+    }
+
+    /// Ends the node [`enter_node`](Self::enter_node) started last.
+    pub fn exit_node(&mut self) {
+        self.nodes.pop();
     }
 
     fn draft(&mut self) -> &mut Draft {
@@ -134,7 +168,7 @@ impl PipelineBuilder {
         if self.draft().source.is_some() {
             return Err(internal("a pipeline has two sources".to_owned()));
         }
-        let id = self.id(source.name());
+        let id = self.id(source.name(), OperatorRole::Source);
         self.draft().source = Some((id, source));
         Ok(id)
     }
@@ -164,7 +198,7 @@ impl PipelineBuilder {
     /// Appends a streaming operator to the current pipeline (after its
     /// source and the operators pushed before it).
     pub fn push_operator(&mut self, op: Arc<dyn Operator>) -> OperatorId {
-        let id = self.id(op.name());
+        let id = self.id(op.name(), OperatorRole::Operator);
         let (last, rest) = (self.current, self.drafts[self.current].fanned.clone());
         for i in rest {
             let draft = &mut self.drafts[i];
@@ -233,7 +267,7 @@ impl PipelineBuilder {
         sink: Arc<dyn Sink>,
         child: Arc<dyn ExecNode>,
     ) -> Result<OperatorId> {
-        let id = self.id(sink.name());
+        let id = self.id(sink.name(), OperatorRole::Sink);
         let index = self.drafts.len();
         self.drafts.push(Draft {
             fanned: Vec::new(),
@@ -303,11 +337,15 @@ impl PipelineBuilder {
         let pipelines = self
             .drafts
             .into_iter()
-            .map(|d| {
+            .enumerate()
+            .map(|(index, d)| {
+                let index = u32::try_from(index)
+                    .map_err(|_| internal("more than 2^32 pipelines".to_owned()))?;
                 let source = d
                     .source
                     .ok_or_else(|| internal("a pipeline has no source".to_owned()))?;
                 Ok(Pipeline {
+                    index,
                     source,
                     operators: d.operators,
                     operator_inputs: d.operator_inputs,

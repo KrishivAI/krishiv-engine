@@ -247,6 +247,15 @@ impl JoinIndex {
         matches!(self.kind, Kind::Flat(_))
     }
 
+    /// Buckets of the flat index or slots of the salted directory (its
+    /// capacity, for the load factor).
+    pub fn buckets(&self) -> usize {
+        match &self.kind {
+            Kind::Flat(t) => t.num_buckets(),
+            Kind::Salted(s) => s.len(),
+        }
+    }
+
     /// Distinct keys indexed.
     pub fn len(&self) -> usize {
         self.keys

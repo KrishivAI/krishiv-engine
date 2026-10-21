@@ -14,7 +14,7 @@ use super::accumulator::Accumulator;
 use super::rowtable::{RowPrepared, RowTable};
 use super::{AggregateOutput, AggregateSpec};
 use crate::error::{Result, internal};
-use crate::hash::{HashSeed, KeyEncoder, KeyTable, spill_partition};
+use crate::hash::{HashSeed, KeyEncoder, KeyTable, ProbeCount, ProbeTotals, spill_partition};
 use crate::rows::RowLayout;
 
 /// What every table of one aggregate shares.
@@ -142,6 +142,8 @@ pub(crate) struct AggTable {
     keys: KeyTable,
     accs: Vec<Accumulator>,
     ids: Vec<u32>,
+    /// Where probe lengths go, for a detailed profile only.
+    probes: Option<Arc<ProbeTotals>>,
 }
 
 impl AggTable {
@@ -158,12 +160,30 @@ impl AggTable {
             keys: KeyTable::new(),
             accs,
             ids: Vec::new(),
+            probes: None,
         };
         if core.keys() == 0 {
             // A global aggregate has its one group even with no input.
             t.accs.iter_mut().for_each(|a| a.resize(1));
         }
         Ok(t)
+    }
+
+    /// Counts probe lengths into `totals` (`ExecConfig::detailed_metrics`;
+    /// `None`: not counted).
+    pub(crate) fn with_probes(mut self, totals: Option<Arc<ProbeTotals>>) -> Self {
+        self.probes = totals;
+        self
+    }
+
+    /// Where this table counts probe lengths, for its successor.
+    pub(crate) fn probes(&self) -> Option<Arc<ProbeTotals>> {
+        self.probes.clone()
+    }
+
+    /// Buckets of the key index (its capacity).
+    pub(crate) fn buckets(&self) -> usize {
+        self.keys.buckets()
     }
 
     /// Whether spilling this table frees nothing worth a file: no groups,
@@ -243,7 +263,17 @@ impl AggTable {
         if let Some(rows) = p.keys.as_ref() {
             self.keys.reserve(n, p.keys.bytes());
             self.accs.iter_mut().for_each(|a| a.reserve(n));
-            self.keys.find_or_insert(rows, &self.seed, &mut ids)?;
+            match &self.probes {
+                Some(totals) => {
+                    let mut count = ProbeCount::default();
+                    self.keys
+                        .find_or_insert_counted(rows, &self.seed, &mut ids, &mut count)?;
+                    totals.add(&count);
+                }
+                None => {
+                    self.keys.find_or_insert(rows, &self.seed, &mut ids)?;
+                }
+            }
             let len = self.keys.len();
             self.accs.iter_mut().for_each(|a| a.resize(len));
         } else {
@@ -377,6 +407,14 @@ impl Table {
         match self {
             Self::Keys(t) => t.memory_size(),
             Self::Rows(t) => t.memory_size(),
+        }
+    }
+
+    /// Buckets of the key index (its capacity).
+    pub(crate) fn buckets(&self) -> usize {
+        match self {
+            Self::Keys(t) => t.buckets(),
+            Self::Rows(t) => t.buckets(),
         }
     }
 

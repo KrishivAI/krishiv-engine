@@ -29,6 +29,9 @@ krishiv-memory = { path = "../krishiv-memory" }
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }
+thiserror.workspace = true
+# The query profile's JSON document (`profile`).
+serde_json = { workspace = true, features = ["std"] }
 # Store paths of reads by path (`files`).
 object_store.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
