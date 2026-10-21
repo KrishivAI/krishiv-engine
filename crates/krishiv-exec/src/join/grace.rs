@@ -529,21 +529,32 @@ fn reverse_blocking(
 ) -> Result<Reversed> {
     // The probe rows, held for the whole join; files stay on disk until the
     // join is done, so a decline loses nothing.
+    // Each probe row also takes about `INDEX_ROW_BYTES` in the index.
+    const INDEX_ROW_BYTES: usize = 32;
     let mut held = handle.reservation();
+    let in_memory: usize = task.probe.chunks.iter().map(Batch::num_rows).sum();
+    if held
+        .try_grow(in_memory.saturating_mul(INDEX_ROW_BYTES))
+        .is_err()
+    {
+        return Ok(Reversed::Declined(task));
+    }
     let mut batches = task.probe.chunks.clone();
     for file in &task.probe.files {
         for b in file.reader(handle.reservation().releasing_to_credit())? {
             let b = b?;
-            if held.try_grow(b.data().get_array_memory_size()).is_err() {
+            let bytes = b
+                .data()
+                .get_array_memory_size()
+                .saturating_add(b.num_rows().saturating_mul(INDEX_ROW_BYTES));
+            if held.try_grow(bytes).is_err() {
                 return Ok(Reversed::Declined(task));
             }
             batches.push(b);
         }
     }
-    let Some(first) = batches.first() else {
-        return Ok(Reversed::Joined(None));
-    };
-    let probe = Batch::concat(&first.schema(), &batches).map_err(|e| internal(e.to_string()))?;
+    let probe =
+        Batch::concat(&shared.probe_schema, &batches).map_err(|e| internal(e.to_string()))?;
     drop(batches);
     let n = probe.num_rows();
     let cols: Vec<ArrayRef> = shared
@@ -557,10 +568,7 @@ fn reverse_blocking(
     let probe_keys = keys.arena_columns(layout.map(AsRef::as_ref), &all)?;
     let probe_key = KeyColumn::new(probe_keys.first())?;
     // Index: hash -> the probe rows with it (rows with a NULL key never
-    // match). About 32 bytes a row.
-    if held.try_grow(n.saturating_mul(32)).is_err() {
-        return Ok(Reversed::Declined(task));
-    }
+    // match).
     let hashes = keys.hashes();
     let mut index: std::collections::HashMap<u64, Vec<u32>> =
         std::collections::HashMap::with_capacity(n);
@@ -1624,16 +1632,21 @@ mod tests {
         let mut filler = krishiv_memory::Reservation::new(Arc::clone(&other), id);
         filler.try_grow(LIMIT - root.reserved()).unwrap();
         let handle = Arc::clone(ctx.consumer().consumer());
-        match reverse_blocking(shared, &hashing, task, &handle).unwrap() {
-            Reversed::Declined(task) => {
-                assert_eq!(task.probe.files.len(), files, "nothing was consumed");
-                assert_eq!(task.probe.rows, 3000);
-            }
-            Reversed::Joined(_) => panic!("the probe rows cannot fit"),
-        }
-        ctx.consumer().consumer().release_credit();
+        let Ok(Reversed::Declined(task)) = reverse_blocking(shared, &hashing, task, &handle) else {
+            panic!("the probe rows cannot fit");
+        };
+        assert_eq!(task.probe.files.len(), files, "nothing was consumed");
+        assert_eq!(task.probe.rows, 3000);
+        // With room, the same task joins: a semi join with no build rows
+        // emits nothing, and the probe files are gone with the task.
         drop(filler);
+        let Ok(Reversed::Joined(out)) = reverse_blocking(shared, &hashing, task, &handle) else {
+            panic!("the probe rows fit now");
+        };
+        assert!(out.is_none());
+        ctx.consumer().consumer().release_credit();
         assert_eq!(root.reserved(), 0);
+        assert_eq!(manager.used_bytes(), 0);
     }
 
     /// A spill whose rows and the pool's free memory cannot fund its

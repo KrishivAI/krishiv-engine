@@ -539,10 +539,10 @@ async fn small_probe_partitions_join_with_roles_reversed() {
 #[tokio::test(start_paused = true)]
 async fn reversed_joins_with_many_candidate_pairs() {
     let build: Vec<Row> = (0..20_000)
-        .map(|i| r(Some(i % 100), Some("a"), (i * 7) % 97))
+        .map(|i| r(Some(i % 10), Some("a"), (i * 7) % 97))
         .collect();
     let probe: Vec<Row> = (0..1_000)
-        .map(|i| r(Some(i % 100), Some("a"), (i * 3) % 97))
+        .map(|i| r(Some(i % 10), Some("a"), (i * 3) % 97))
         .collect();
     for jt in [JoinType::LeftSemi, JoinType::LeftAnti] {
         let c = case(jt, 1, false, true);
