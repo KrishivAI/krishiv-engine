@@ -262,6 +262,9 @@ impl Printer<'_> {
             }
             let text = match v {
                 Metric::Count(n) | Metric::Max(n) if name.ends_with("_bytes") => self.bytes(*n),
+                Metric::Count(n) | Metric::Max(n) if name.ends_with("_ns") => {
+                    self.time(Duration::from_nanos(*n))
+                }
                 Metric::Count(n) | Metric::Max(n) => n.to_string(),
                 Metric::Text(t) => t.clone(),
             };
