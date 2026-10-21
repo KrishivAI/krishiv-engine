@@ -128,6 +128,9 @@ pub struct RunnerConfig {
     pub data: String,
     /// Compute threads of the executor.
     pub threads: usize,
+    /// I/O runtime threads (`--io-threads`; default: the executor's
+    /// default), for A/B runs of the I/O pool size.
+    pub io_threads: Option<usize>,
     /// `krishiv.memory.limit` (for example `12g`).
     pub memory_limit: String,
     /// Extra session settings (`--conf key=value`, repeatable), applied after the memory limit so a
@@ -136,6 +139,19 @@ pub struct RunnerConfig {
 }
 
 impl RunnerConfig {
+    /// The executor sizes: `threads` compute and blocking threads, and
+    /// `io_threads` I/O threads (the executor's default when unset).
+    pub fn executor_config(&self) -> ExecutorConfig {
+        let threads = self.threads.max(1);
+        ExecutorConfig {
+            compute_threads: threads,
+            io_threads: self
+                .io_threads
+                .unwrap_or(ExecutorConfig::default().io_threads),
+            blocking_threads: threads,
+        }
+    }
+
     /// The configuration from `args` (without the program name).
     ///
     /// # Errors
@@ -144,6 +160,7 @@ impl RunnerConfig {
         let mut data = None;
         let mut threads = std::thread::available_parallelism().map_or(1, usize::from);
         let mut memory_limit = "12g".to_owned();
+        let mut io_threads = None;
         let mut conf = Vec::new();
         let mut args = args.into_iter();
         while let Some(flag) = args.next() {
@@ -159,6 +176,12 @@ impl RunnerConfig {
                         .map_err(|e| RunnerError::Config(format!("--threads: {e}")))?;
                 }
                 "--memory-limit" => memory_limit = value()?,
+                "--io-threads" => {
+                    let n: usize = value()?
+                        .parse()
+                        .map_err(|e| RunnerError::Config(format!("--io-threads: {e}")))?;
+                    io_threads = Some(n.max(1));
+                }
                 "--conf" => {
                     let kv = value()?;
                     let (k, v) = kv
@@ -175,6 +198,7 @@ impl RunnerConfig {
         Ok(Self {
             data: data.ok_or_else(|| RunnerError::Config("--data DIR is required".to_owned()))?,
             threads,
+            io_threads,
             memory_limit,
             conf,
         })
@@ -196,12 +220,7 @@ impl Runner {
     /// # Errors
     /// The data directory is unreadable or holds no Parquet tables, or the session cannot start.
     pub fn new(config: &RunnerConfig) -> Result<Self, RunnerError> {
-        let threads = config.threads.max(1);
-        let executor = TokioExecutor::new(&ExecutorConfig {
-            compute_threads: threads,
-            io_threads: 2,
-            blocking_threads: threads,
-        })?;
+        let executor = TokioExecutor::new(&config.executor_config())?;
         // `SessionBuilder::build` drops configuration warnings; an unknown key would leave the A/B sides
         // identical without saying so, so reject it here.
         let pairs = std::iter::once(("krishiv.memory.limit", config.memory_limit.as_str()))

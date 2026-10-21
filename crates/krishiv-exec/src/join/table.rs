@@ -33,23 +33,59 @@ use crate::rows::{IndexChoice, JoinIndex, RowLayout, RowSource};
 pub(crate) const NONE: u32 = u32::MAX;
 const _: () = assert!(NONE == crate::rows::NO_MATCH);
 
-/// The schema of the row arena's batches: arrow-row keys, or the rows of
-/// `layout`.
-pub(crate) fn arena_schema(payload: bool, layout: Option<&RowLayout>) -> Result<SchemaRef> {
+/// How an arena stores its keys and payload.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ArenaFormat<'a> {
+    /// Arrow-row keys, and arrow-row payload when `payload`.
+    Arrow { payload: bool },
+    /// Rows of `keys`, and the build columns as rows of `payload` or, when
+    /// `payload` is `None` and `arrow_payload`, as arrow rows.
+    Rows {
+        keys: &'a RowLayout,
+        payload: Option<&'a RowLayout>,
+        arrow_payload: bool,
+    },
+}
+
+/// The fields holding rows of `layout` as `name` (and `name_heap`).
+fn row_fields(name: &str, layout: &RowLayout, fields: &mut Vec<Field>) -> Result<()> {
+    let width =
+        i32::try_from(layout.stride()).map_err(|_| internal("join row too wide".to_owned()))?;
+    fields.push(Field::new(name, DataType::FixedSizeBinary(width), false));
+    if layout.has_views() {
+        fields.push(Field::new(
+            format!("{name}_heap"),
+            DataType::LargeBinary,
+            false,
+        ));
+    }
+    Ok(())
+}
+
+/// The schema of the row arena's batches in `format`.
+pub(crate) fn arena_schema(format: ArenaFormat<'_>) -> Result<SchemaRef> {
     let mut fields = vec![Field::new("hash", DataType::UInt64, false)];
-    match layout {
-        None => fields.push(Field::new("key", DataType::LargeBinary, false)),
-        Some(l) => {
-            let width = i32::try_from(l.stride())
-                .map_err(|_| internal("join key row too wide".to_owned()))?;
-            fields.push(Field::new("key", DataType::FixedSizeBinary(width), false));
-            if l.has_views() {
-                fields.push(Field::new("key_heap", DataType::LargeBinary, false));
+    match format {
+        ArenaFormat::Arrow { payload } => {
+            fields.push(Field::new("key", DataType::LargeBinary, false));
+            if payload {
+                fields.push(Field::new("payload", DataType::LargeBinary, false));
             }
         }
-    }
-    if payload {
-        fields.push(Field::new("payload", DataType::LargeBinary, false));
+        ArenaFormat::Rows {
+            keys,
+            payload,
+            arrow_payload,
+        } => {
+            row_fields("key", keys, &mut fields)?;
+            match payload {
+                Some(p) => row_fields("payload", p, &mut fields)?,
+                None if arrow_payload => {
+                    fields.push(Field::new("payload", DataType::LargeBinary, false));
+                }
+                None => {}
+            }
+        }
     }
     Ok(Arc::new(Schema::new(fields)))
 }
@@ -68,18 +104,88 @@ pub(crate) fn key_bytes(chunks: &[Batch]) -> usize {
     chunks.iter().map(one).sum()
 }
 
-/// An arena's keys.
+/// Row-layout rows of `stride` bytes back to back, and each row's long
+/// values when the layout has views.
 #[derive(Debug)]
-enum ArenaKeys {
-    /// Arrow-row key bytes.
+struct RowCols {
+    fixed: Buffer,
+    stride: usize,
+    heap: Option<LargeBinaryArray>,
+}
+
+impl RowCols {
+    /// The rows of column `name` (and `name_heap`) of `batch`, if that
+    /// column holds rows.
+    fn of(batch: &Batch, name: &str) -> Result<Option<Self>> {
+        let bad = || internal("malformed join row arena".to_owned());
+        let Some(col) = batch.data().column_by_name(name) else {
+            return Ok(None);
+        };
+        let Some(fixed) = col.as_fixed_size_binary_opt() else {
+            return Ok(None);
+        };
+        let stride = usize::try_from(fixed.value_length()).map_err(|_| bad())?;
+        let data = fixed.to_data();
+        let values = data.buffers().first().cloned().ok_or_else(bad)?;
+        let start = data.offset().saturating_mul(stride);
+        let len = fixed.len().saturating_mul(stride);
+        if stride == 0 || start.saturating_add(len) > values.len() {
+            return Err(bad());
+        }
+        let heap = match batch.data().column_by_name(&format!("{name}_heap")) {
+            Some(h) => Some(h.as_binary_opt::<i64>().cloned().ok_or_else(bad)?),
+            None => None,
+        };
+        if heap.as_ref().is_some_and(|h| h.len() != fixed.len()) {
+            return Err(bad());
+        }
+        Ok(Some(Self {
+            fixed: values.slice_with_length(start, len),
+            stride,
+            heap,
+        }))
+    }
+
+    /// Row `id` and its heap (empty if out of range).
+    #[inline]
+    fn row(&self, id: u32) -> (&[u8], &[u8]) {
+        let at = (id as usize).saturating_mul(self.stride);
+        let row = self
+            .fixed
+            .get(at..at.saturating_add(self.stride))
+            .unwrap_or_default();
+        let heap = self
+            .heap
+            .as_ref()
+            .filter(|h| (id as usize) < h.len())
+            .map_or(&[][..], |h| h.value(id as usize));
+        (row, heap)
+    }
+}
+
+/// An arena's keys or payload.
+#[derive(Debug)]
+enum Cols {
+    /// Arrow-row bytes.
     Arrow(LargeBinaryArray),
-    /// Row-layout rows of `stride` bytes back to back, and each row's long
-    /// values when the layout has views.
-    Rows {
-        fixed: Buffer,
-        stride: usize,
-        heap: Option<LargeBinaryArray>,
-    },
+    /// Row-layout rows.
+    Rows(RowCols),
+}
+
+impl Cols {
+    fn of(batch: &Batch, name: &str) -> Result<Option<Self>> {
+        if let Some(rows) = RowCols::of(batch, name)? {
+            return Ok(Some(Self::Rows(rows)));
+        }
+        match batch.data().column_by_name(name) {
+            Some(c) => c
+                .as_binary_opt::<i64>()
+                .cloned()
+                .map(|b| Some(Self::Arrow(b)))
+                .ok_or_else(|| internal("malformed join row arena".to_owned())),
+            None => Ok(None),
+        }
+    }
 }
 
 /// One partition's build rows, coalesced into a single batch.
@@ -87,8 +193,8 @@ enum ArenaKeys {
 pub(crate) struct RowArena {
     batch: Batch,
     hashes: UInt64Array,
-    keys: ArenaKeys,
-    payload: Option<LargeBinaryArray>,
+    keys: Cols,
+    payload: Option<Cols>,
 }
 
 impl RowArena {
@@ -98,39 +204,14 @@ impl RowArena {
             [one] => one.clone(),
             _ => Batch::concat(schema, chunks).map_err(|e| internal(e.to_string()))?,
         };
-        let named = |name: &str| batch.data().column_by_name(name).cloned();
         let bad = || internal("malformed join row arena".to_owned());
-        let binary = |a: Option<arrow_array::ArrayRef>| match a {
-            Some(a) => a.as_binary_opt::<i64>().cloned().ok_or_else(bad).map(Some),
-            None => Ok(None),
-        };
-        let hashes = named("hash").ok_or_else(bad)?;
+        let hashes = batch.data().column_by_name("hash").ok_or_else(bad)?;
         let hashes = hashes
             .as_primitive_opt::<UInt64Type>()
             .ok_or_else(bad)?
             .clone();
-        let key = named("key").ok_or_else(bad)?;
-        let keys = match key.data_type() {
-            DataType::LargeBinary => ArenaKeys::Arrow(binary(Some(key))?.ok_or_else(bad)?),
-            DataType::FixedSizeBinary(_) => {
-                let fixed = key.as_fixed_size_binary_opt().ok_or_else(bad)?;
-                let stride = usize::try_from(fixed.value_length()).map_err(|_| bad())?;
-                // `value_data` starts at the array's first value.
-                let values = fixed.to_data().buffers().first().cloned().ok_or_else(bad)?;
-                let start = fixed.to_data().offset().saturating_mul(stride);
-                let len = fixed.len().saturating_mul(stride);
-                if stride == 0 || start.saturating_add(len) > values.len() {
-                    return Err(bad());
-                }
-                ArenaKeys::Rows {
-                    fixed: values.slice_with_length(start, len),
-                    stride,
-                    heap: binary(named("key_heap"))?,
-                }
-            }
-            _ => return Err(bad()),
-        };
-        let payload = binary(named("payload"))?;
+        let keys = Cols::of(&batch, "key")?.ok_or_else(bad)?;
+        let payload = Cols::of(&batch, "payload")?;
         if u32::try_from(batch.num_rows()).is_err() {
             return Err(internal("a join partition has over 2^32 rows".to_owned()));
         }
@@ -153,8 +234,8 @@ impl RowArena {
     /// The arrow-row key bytes, if the keys are in that format.
     fn arrow_keys(&self) -> Option<&LargeBinaryArray> {
         match &self.keys {
-            ArenaKeys::Arrow(k) => Some(k),
-            ArenaKeys::Rows { .. } => None,
+            Cols::Arrow(k) => Some(k),
+            Cols::Rows(_) => None,
         }
     }
 
@@ -165,19 +246,32 @@ impl RowArena {
     pub(crate) fn key_bytes(&self, row: u32) -> Option<&[u8]> {
         let row = row as usize;
         match &self.keys {
-            ArenaKeys::Arrow(k) => Some(k.value(row)),
-            ArenaKeys::Rows {
+            Cols::Arrow(k) => Some(k.value(row)),
+            Cols::Rows(RowCols {
                 fixed,
                 stride,
                 heap: None,
-            } => fixed.get(row * stride..(row + 1) * stride),
-            ArenaKeys::Rows { heap: Some(_), .. } => None,
+            }) => fixed.get(row * stride..(row + 1) * stride),
+            Cols::Rows(RowCols { heap: Some(_), .. }) => None,
         }
     }
 
-    /// The row's payload bytes (empty if the arena has none).
+    /// The row's arrow-row payload bytes (empty if the arena has none or
+    /// holds payload rows).
     pub(crate) fn payload(&self, row: u32) -> &[u8] {
-        self.payload.as_ref().map_or(&[], |p| p.value(row as usize))
+        match &self.payload {
+            Some(Cols::Arrow(p)) if (row as usize) < p.len() => p.value(row as usize),
+            _ => &[],
+        }
+    }
+
+    /// The row's payload row and its heap (empty if the arena has none or
+    /// holds arrow-row payload).
+    pub(crate) fn payload_row(&self, row: u32) -> (&[u8], &[u8]) {
+        match &self.payload {
+            Some(Cols::Rows(p)) => p.row(row),
+            _ => (&[], &[]),
+        }
     }
 
     /// The row's weight.
@@ -197,23 +291,10 @@ impl RowArena {
 impl RowSource for RowArena {
     #[inline]
     fn row(&self, id: u32) -> (&[u8], &[u8]) {
-        let ArenaKeys::Rows {
-            fixed,
-            stride,
-            heap,
-        } = &self.keys
-        else {
-            return (&[], &[]);
-        };
-        let at = (id as usize).saturating_mul(*stride);
-        let row = fixed
-            .get(at..at.saturating_add(*stride))
-            .unwrap_or_default();
-        let heap = heap
-            .as_ref()
-            .filter(|h| (id as usize) < h.len())
-            .map_or(&[][..], |h| h.value(id as usize));
-        (row, heap)
+        match &self.keys {
+            Cols::Rows(k) => k.row(id),
+            Cols::Arrow(_) => (&[], &[]),
+        }
     }
 
     #[inline]
@@ -291,6 +372,21 @@ impl JoinTable {
         }
     }
 
+    /// [`index_bytes`](Self::index_bytes) of an index sized from a distinct-key
+    /// estimate ([`build_expecting`](Self::build_expecting)): an estimate
+    /// that was low makes the index grow, and while it grows it holds the
+    /// old table beside the new one, at most half the final size again.
+    /// The caller shrinks the reservation to [`index_memory`](Self::index_memory)
+    /// once the table is built.
+    pub(crate) fn index_bytes_estimated(rows: usize, key_bytes: usize, row_layout: bool) -> usize {
+        let base = Self::index_bytes(rows, key_bytes, row_layout);
+        if row_layout {
+            base.saturating_add(IndexChoice::Adaptive.bytes(rows) / 2)
+        } else {
+            base
+        }
+    }
+
     /// Indexes `arena`; row-layout keys are indexed under `layout` with the
     /// table-local seed `g_seed`.
     ///
@@ -302,7 +398,31 @@ impl JoinTable {
         layout: Option<&Arc<RowLayout>>,
         g_seed: u64,
     ) -> Result<Self> {
-        Self::build_with(arena, layout, g_seed, IndexChoice::Adaptive)
+        Self::build_with(arena, layout, g_seed, IndexChoice::Adaptive, None)
+    }
+
+    /// [`build`](Self::build) of a row-layout arena sized for about `keys`
+    /// distinct keys (a cardinality estimate): see
+    /// [`JoinIndex::build_expecting`].
+    pub(crate) fn build_expecting(
+        arena: RowArena,
+        layout: Option<&Arc<RowLayout>>,
+        g_seed: u64,
+        keys: Option<usize>,
+    ) -> Result<Self> {
+        Self::build_with(arena, layout, g_seed, IndexChoice::Adaptive, keys)
+    }
+
+    /// Bytes the index and the chains hold (the arena not included): what a
+    /// build's [`index_bytes`](Self::index_bytes) reservation shrinks to.
+    pub(crate) fn index_memory(&self) -> usize {
+        let index = match &self.index {
+            Index::Arrow { keys, heads } => {
+                keys.memory_size() + heads.capacity() * size_of::<u32>()
+            }
+            Index::Rows { index, .. } => index.memory_size(),
+        };
+        index + self.next.capacity() * size_of::<u32>()
     }
 
     /// [`build`](Self::build) with the row-layout index forced (tests).
@@ -311,6 +431,7 @@ impl JoinTable {
         layout: Option<&Arc<RowLayout>>,
         g_seed: u64,
         choice: IndexChoice,
+        keys: Option<usize>,
     ) -> Result<Self> {
         let n = arena.len();
         let mut next: Vec<u32> = Vec::new();
@@ -337,7 +458,15 @@ impl JoinTable {
                 Index::Arrow { keys, heads }
             }
             (None, Some(layout)) => Index::Rows {
-                index: JoinIndex::build(layout, &arena, n, g_seed, choice, &mut next)?,
+                index: JoinIndex::build_expecting(
+                    layout,
+                    &arena,
+                    n,
+                    keys.unwrap_or(n),
+                    g_seed,
+                    choice,
+                    &mut next,
+                )?,
                 layout: Arc::clone(layout),
             },
             (None, None) => return Err(internal("join key rows without a layout".to_owned())),
@@ -441,7 +570,8 @@ mod tests {
     use arrow_array::RecordBatch;
 
     fn arena(hashes: Vec<u64>, keys: Vec<&[u8]>) -> RowArena {
-        let schema = arena_schema(false, None).unwrap_or_else(|e| panic!("{e}"));
+        let schema =
+            arena_schema(ArenaFormat::Arrow { payload: false }).unwrap_or_else(|e| panic!("{e}"));
         let data = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
@@ -495,8 +625,15 @@ mod tests {
         let layout = codec.layout().cloned();
         let tables = |rows: bool, choice: IndexChoice| {
             let hashing = Hashing::new(Some(3), rows);
-            let schema = arena_schema(false, layout.as_deref().filter(|_| rows))
-                .unwrap_or_else(|e| panic!("{e}"));
+            let format = match layout.as_deref().filter(|_| rows) {
+                Some(keys) => ArenaFormat::Rows {
+                    keys,
+                    payload: None,
+                    arrow_payload: false,
+                },
+                None => ArenaFormat::Arrow { payload: false },
+            };
+            let schema = arena_schema(format).unwrap_or_else(|e| panic!("{e}"));
             let keys = codec
                 .encode(&cols, &hashing)
                 .unwrap_or_else(|e| panic!("{e}"));
@@ -515,7 +652,7 @@ mod tests {
             let arena =
                 RowArena::concat(&schema, &[chunk(a), chunk(b)]).unwrap_or_else(|e| panic!("{e}"));
             let l = layout.as_ref().filter(|_| rows);
-            let t = JoinTable::build_with(arena, l, hashing.g_seed(), choice)
+            let t = JoinTable::build_with(arena, l, hashing.g_seed(), choice, None)
                 .unwrap_or_else(|e| panic!("{e}"));
             let probe: Vec<u32> = (0..u32::try_from(n).unwrap_or(0))
                 .filter(|&i| keys.is_valid(i as usize))

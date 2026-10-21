@@ -43,6 +43,12 @@ pub(crate) use crate::hash::PARTITIONS;
 /// The seed of the row layout's stored hash `h`: none (see the module docs).
 const SEEDLESS: u64 = 0;
 
+/// The most level-0 radix bits of the row layout (`krishiv.exec.join.radixBits`):
+/// the top bits of `h`. Finalize builds one table per partition on the
+/// blocking pool, so the fan-out bounds its parallelism.
+pub(crate) const MAX_RADIX_BITS: u32 = 6;
+const _: () = assert!(MAX_RADIX_BITS <= 6, "partition masks are u64");
+
 /// The top bit (exclusive) of the grace sub-partition field of `g`: level
 /// `d` uses bits `48 - 3d .. 51 - 3d`, below the 16-bit salt and above
 /// the 26-bit directory index (P2-T157 §4.3).
@@ -61,6 +67,8 @@ pub(crate) struct Hashing {
     /// Seeds `g` in the row layout.
     raw: u64,
     rows: bool,
+    /// Level-0 radix bits (row layout).
+    radix: u32,
 }
 
 impl Hashing {
@@ -73,12 +81,31 @@ impl Hashing {
             seed: HashSeed::new(Some(raw)),
             raw,
             rows,
+            radix: PARTITION_BITS,
         }
+    }
+
+    /// The same with `bits` level-0 radix bits in the row layout (clamped
+    /// to `3..=6`).
+    pub(crate) fn with_radix(mut self, bits: u32) -> Self {
+        self.radix = bits.clamp(PARTITION_BITS, MAX_RADIX_BITS);
+        self
     }
 
     /// Whether keys are in the row layout.
     pub(crate) fn rows(&self) -> bool {
         self.rows
+    }
+
+    /// Level-0 partitions of a join instance: `2^radix` in the row layout
+    /// (the top bits of `h`, P2-T171 §5.1), the shared 8 of the arrow-row
+    /// format.
+    pub(crate) fn fanout0(&self) -> usize {
+        if self.rows {
+            1 << self.radix
+        } else {
+            PARTITIONS
+        }
     }
 
     /// The seed of the table-local hash `g` (row layout).
@@ -92,12 +119,11 @@ impl Hashing {
         if !self.rows {
             return spill_partition(hash, depth);
         }
-        let bits = if depth == 0 {
-            hash >> (64 - PARTITION_BITS)
-        } else {
-            let shift = GRACE_TOP.saturating_sub(PARTITION_BITS * depth.min(MAX_DEPTH));
-            finalize(hash, self.raw) >> shift
-        };
+        if depth == 0 {
+            return usize::try_from(hash >> (64 - self.radix)).unwrap_or(0);
+        }
+        let shift = GRACE_TOP.saturating_sub(PARTITION_BITS * depth.min(MAX_DEPTH));
+        let bits = finalize(hash, self.raw) >> shift;
         usize::try_from(bits & (PARTITIONS as u64 - 1)).unwrap_or(0)
     }
 }
@@ -145,26 +171,35 @@ impl Encoded {
             (KeyRows::Arrow(rows, _), _) => Ok(vec![Arc::new(LargeBinaryArray::from_iter_values(
                 idx.iter().map(|&i| rows.row(i)),
             ))]),
-            (KeyRows::Layout(keys), Some(layout)) => {
-                let g = keys.gather(layout, idx)?;
-                let width = i32::try_from(layout.stride())
-                    .map_err(|_| internal("join key row too wide".to_owned()))?;
-                let fixed = FixedSizeBinaryArray::try_new(width, Buffer::from_vec(g.fixed), None)
-                    .map_err(|e| internal(e.to_string()))?;
-                let mut out: Vec<ArrayRef> = vec![Arc::new(fixed)];
-                if let Some((offsets, bytes)) = g.heap {
-                    let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
-                    let heap = LargeBinaryArray::try_new(offsets, Buffer::from_vec(bytes), None)
-                        .map_err(|e| internal(e.to_string()))?;
-                    out.push(Arc::new(heap));
-                }
-                Ok(out)
-            }
+            (KeyRows::Layout(keys), Some(layout)) => row_columns(layout, keys, idx),
             (KeyRows::Layout(_), None) => {
                 Err(internal("join key rows without a layout".to_owned()))
             }
         }
     }
+}
+
+/// Rows `idx` of `rows` (encoded with `layout`) as arena columns: the rows
+/// as `FixedSizeBinary(stride)` and, when the layout has string views,
+/// each row's long values as `LargeBinary`.
+pub(crate) fn row_columns(
+    layout: &RowLayout,
+    rows: &EncodedKeys,
+    idx: &[usize],
+) -> Result<Vec<ArrayRef>> {
+    let g = rows.gather(layout, idx)?;
+    let width =
+        i32::try_from(layout.stride()).map_err(|_| internal("join row too wide".to_owned()))?;
+    let fixed = FixedSizeBinaryArray::try_new(width, Buffer::from_vec(g.fixed), None)
+        .map_err(|e| internal(e.to_string()))?;
+    let mut out: Vec<ArrayRef> = vec![Arc::new(fixed)];
+    if let Some((offsets, bytes)) = g.heap {
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
+        let heap = LargeBinaryArray::try_new(offsets, Buffer::from_vec(bytes), None)
+            .map_err(|e| internal(e.to_string()))?;
+        out.push(Arc::new(heap));
+    }
+    Ok(out)
 }
 
 /// Encodes the key columns of either side (same types on both).
@@ -313,12 +348,16 @@ mod tests {
     fn partitions_and_seeds() {
         const { assert!(MAX_DEPTH <= MAX_LEVEL) };
         const { assert!(GRACE_TOP >= PARTITION_BITS * MAX_DEPTH + 26) };
-        for rows in [false, true] {
-            let h = Hashing::new(Some(1), rows);
-            for depth in 0..=MAX_DEPTH + 1 {
+        for (rows, radix) in [(false, 3), (true, 3), (true, 5), (true, 9)] {
+            let h = Hashing::new(Some(1), rows).with_radix(radix);
+            assert!(h.partition(u64::MAX, 0) < h.fanout0());
+            for depth in 1..=MAX_DEPTH + 1 {
                 assert!(h.partition(u64::MAX, depth) < PARTITIONS);
             }
         }
+        let wide = Hashing::new(Some(1), true).with_radix(5);
+        assert_eq!((wide.fanout0(), wide.partition(5 << 59, 0)), (32, 5));
+        assert_eq!(Hashing::new(Some(1), false).with_radix(5).fanout0(), 8);
         // Level 0 of the row layout is the top bits of the stored hash;
         // deeper levels also depend on the seed through `g`.
         let (a, b) = (Hashing::new(Some(1), true), Hashing::new(Some(2), true));
