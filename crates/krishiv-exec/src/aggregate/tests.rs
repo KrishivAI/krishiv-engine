@@ -1671,9 +1671,16 @@ fn row_case(
         HashAggregate::new(final_spec.clone()).map_err(|e| fail(&e))?,
         &sp,
     );
-    // Only cases the default tables finish compare.
-    let Ok((want, _)) = rt.block_on(exec(off, o)) else {
-        return Err(TestCaseError::reject("the default tables failed"));
+    // Only cases the default tables finish compare; running out of memory
+    // is the one expected default failure.
+    let want = match rt.block_on(exec(off, o)) {
+        Ok((want, _)) => want,
+        Err(e) if e.error_class() == ErrorClass::UnableToAcquireMemory => {
+            return Err(TestCaseError::reject(
+                "the default tables ran out of memory",
+            ));
+        }
+        Err(e) => return Err(fail(&e)),
     };
     let agg =
         HashAggregate::with_row_mode(final_spec, row_mode(mode, limit)).map_err(|e| fail(&e))?;
