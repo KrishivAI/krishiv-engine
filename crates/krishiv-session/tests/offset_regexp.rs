@@ -235,6 +235,50 @@ fn regexp_replace_in_sql() {
     assert_eq!(e.error_class(), ErrorClass::DatatypeMismatchValueOutOfRange);
 }
 
+/// Spark 4.2.0 checks `position` while typing the call: it must be foldable
+/// and positive whatever the rows hold (NULL is allowed).
+#[test]
+fn regexp_replace_position_is_checked_before_any_row() {
+    let s = session();
+    let out_of_range = ErrorClass::DatatypeMismatchValueOutOfRange;
+    for sql in [
+        "SELECT regexp_replace(CAST(NULL AS STRING), 'a', 'b', 0)",
+        "SELECT regexp_replace('', 'a', 'b', 0)",
+        "SELECT regexp_replace('a', 'a', 'b', -1)",
+    ] {
+        assert_eq!(fails(&s, sql).error_class(), out_of_range, "{sql}");
+    }
+    for sql in [
+        "SELECT regexp_replace('a', 'a', 'b', id) FROM t",
+        "SELECT regexp_replace('a', 'a', 'b', id + 1) FROM t",
+    ] {
+        assert_eq!(
+            fails(&s, sql).error_class(),
+            ErrorClass::DatatypeMismatchNonFoldableInput,
+            "{sql}"
+        );
+    }
+    let one = |sql: &str| strings(&s, sql).remove(0);
+    assert_eq!(
+        one("SELECT regexp_replace('a', 'a', 'b', CAST(NULL AS INT))"),
+        None
+    );
+    assert_eq!(
+        one("SELECT regexp_replace(CAST(NULL AS STRING), 'a', 'b', CAST(NULL AS INT))"),
+        None
+    );
+    // Known divergence: Spark folds `1 + 1`; the analyzer only folds
+    // literals and casts of them (as for the scale of `round`).
+    assert_eq!(
+        fails(&s, "SELECT regexp_replace('a', 'a', 'b', 1 + 1)").error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    assert_eq!(
+        one("SELECT regexp_replace('abc', 'b', 'x', CAST(2 AS BIGINT))").as_deref(),
+        Some("axc")
+    );
+}
+
 /// Results and error classes of Spark 4.2.0 (local session, same data) for
 /// the edge cases of `OFFSET`.
 #[test]

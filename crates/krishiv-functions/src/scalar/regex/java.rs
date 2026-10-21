@@ -56,6 +56,24 @@ struct Flags {
     multiline: bool,
     /// `(?d)`: only `\n` is a line terminator.
     unix_lines: bool,
+    /// `(?x)`: whitespace and `#` comments in the pattern are ignored.
+    comments: bool,
+    /// `(?i)`: case-insensitive; ASCII only unless `unicode_case`.
+    ignore_case: bool,
+    /// `(?u)`: case folding beyond ASCII.
+    unicode_case: bool,
+}
+
+impl Flags {
+    /// Whether `fancy_regex` folds case itself (Unicode folding); ASCII-only
+    /// folding is spelled out by the translator.
+    fn native_case(self) -> bool {
+        self.ignore_case && self.unicode_case
+    }
+
+    fn ascii_case(self) -> bool {
+        self.ignore_case && !self.unicode_case
+    }
 }
 
 /// Translates the Java pattern `src`. With `terminated`, a `$` also
@@ -71,6 +89,7 @@ pub(super) fn translate(src: &str, terminated: bool) -> Result<Translated, Strin
         has_dollar: false,
         stack: vec![Flags::default()],
         quantified: false,
+        groups: 0,
     };
     t.run()?;
     Ok(Translated {
@@ -88,6 +107,9 @@ struct Translator<'a> {
     stack: Vec<Flags>,
     /// The previous token was a quantifier (a following `+` is possessive).
     quantified: bool,
+    /// Capturing groups opened so far (Java reads back-reference digits
+    /// against this count).
+    groups: usize,
 }
 
 impl Translator<'_> {
@@ -110,8 +132,40 @@ impl Translator<'_> {
         self.stack.last().copied().unwrap_or_default()
     }
 
-    fn run(&mut self) -> Result<(), String> {
+    /// Under `(?x)`: skips whitespace and `#` comments, which Java's parser
+    /// never shows to the pattern. The comment runs to a line terminator;
+    /// like Java, `\u0085`, `\u2028` and `\u2029` end it but are then read
+    /// as pattern characters.
+    fn skip_ignorable(&mut self) {
+        if !self.flags().comments {
+            return;
+        }
         while let Some(c) = self.peek(0) {
+            if matches!(c, ' ' | '\t' | '\n' | '\x0B' | '\x0C' | '\r') {
+                self.at += 1;
+            } else if c == '#' {
+                let unix = self.flags().unix_lines;
+                while let Some(d) = self.peek(0) {
+                    let ends = if unix {
+                        d == '\n'
+                    } else {
+                        matches!(d, '\n' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}')
+                    };
+                    if ends {
+                        break;
+                    }
+                    self.at += 1;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn run(&mut self) -> Result<(), String> {
+        loop {
+            self.skip_ignorable();
+            let Some(c) = self.peek(0) else { break };
             let was_quantified = std::mem::take(&mut self.quantified);
             self.at += 1;
             match c {
@@ -207,6 +261,7 @@ impl Translator<'_> {
     fn group(&mut self) -> Result<(), String> {
         let mut flags = self.flags();
         if self.peek(0) != Some('?') {
+            self.groups += 1;
             self.stack.push(flags);
             self.out.push('(');
             return Ok(());
@@ -214,8 +269,23 @@ impl Translator<'_> {
         let rest: String = self.chars[self.at..].iter().take(3).collect();
         if rest.starts_with("?<") && !rest.starts_with("?<=") && !rest.starts_with("?<!") {
             // `(?<name>`: the name is letters and digits in Java.
+            self.groups += 1;
             self.stack.push(flags);
+            // The name is copied as written (case folding must not touch
+            // it). Java allows ASCII letters and digits, starting with a letter.
+            let mut end = self.at + 2;
+            while self.chars.get(end).is_some_and(char::is_ascii_alphanumeric) {
+                end += 1;
+            }
+            let named = self.chars[self.at + 2..end]
+                .first()
+                .is_some_and(char::is_ascii_alphabetic);
+            if !named || self.chars.get(end) != Some(&'>') {
+                return Err("illegal group name".to_owned());
+            }
             self.out.push('(');
+            self.out.extend(&self.chars[self.at..=end]);
+            self.at = end + 1;
             return Ok(());
         }
         if rest.starts_with("?:")
@@ -230,17 +300,15 @@ impl Translator<'_> {
             return Ok(());
         }
         // `(?flags)` or `(?flags:`.
+        let before = flags;
         let mut j = self.at + 1;
         let mut on = true;
-        let (mut enabled, mut disabled) = (String::new(), String::new());
         while let Some(&c) = self.chars.get(j) {
             match c {
                 '-' => on = false,
-                'i' | 'x' => {
-                    if on { &mut enabled } else { &mut disabled }.push(c);
-                }
-                // Java's `u` only affects case folding beyond ASCII.
-                'u' => {}
+                'i' => flags.ignore_case = on,
+                'u' => flags.unicode_case = on,
+                'x' => flags.comments = on,
                 'm' => flags.multiline = on,
                 's' => flags.dotall = on,
                 'd' => flags.unix_lines = on,
@@ -251,11 +319,12 @@ impl Translator<'_> {
         }
         let close = *self.chars.get(j).ok_or("unclosed group")?;
         self.at = j + 1;
-        // Rust has the `i` and `x` flags; `m` and `s` are expanded here.
-        let spec = if disabled.is_empty() {
-            enabled
-        } else {
-            format!("{enabled}-{disabled}")
+        // Only Unicode case folding is left to `fancy_regex`; the other
+        // flags (`m`, `s`, `d`, `x`, ASCII `i`) are expanded here.
+        let spec = match (before.native_case(), flags.native_case()) {
+            (false, true) => "i",
+            (true, false) => "-i",
+            _ => "",
         };
         if close == ':' {
             self.stack.push(flags);
@@ -274,7 +343,41 @@ impl Translator<'_> {
 
     /// A literal character outside a class.
     fn literal(&mut self, c: char) {
-        push_literal(&mut self.out, c, false);
+        self.fold_literal(c, false);
+    }
+
+    /// `c` as a literal; an ASCII letter under `(?i)` (without `u`) matches
+    /// both cases and nothing else (Rust's `(?i)` would also match `\u212A`
+    /// for `k`).
+    fn fold_literal(&mut self, c: char, in_class: bool) {
+        if c.is_ascii_alphabetic() && self.flags().ascii_case() {
+            let (lower, upper) = (c.to_ascii_lowercase(), c.to_ascii_uppercase());
+            let _ = if in_class {
+                write!(self.out, "{lower}{upper}")
+            } else {
+                write!(self.out, "[{lower}{upper}]")
+            };
+        } else {
+            push_literal(&mut self.out, c, in_class);
+        }
+    }
+
+    /// The other-case counterparts of the ASCII letters in `lo..=hi`, for a
+    /// class range under ASCII `(?i)`.
+    fn fold_range(&mut self, lo: char, hi: char) {
+        for (first, last, to_upper) in [('a', 'z', true), ('A', 'Z', false)] {
+            let (l, h) = (lo.max(first), hi.min(last));
+            if l <= h {
+                let fold = |c: char| {
+                    if to_upper {
+                        c.to_ascii_uppercase()
+                    } else {
+                        c.to_ascii_lowercase()
+                    }
+                };
+                let _ = write!(self.out, "{}-{}", fold(l), fold(h));
+            }
+        }
     }
 
     /// A backslash escape (the backslash is consumed). In a class the
@@ -291,7 +394,7 @@ impl Translator<'_> {
                         self.at += 1;
                         break;
                     }
-                    push_literal(&mut self.out, q, in_class);
+                    self.fold_literal(q, in_class);
                 }
             }
             'E' => {}
@@ -309,11 +412,12 @@ impl Translator<'_> {
             'R' if !in_class => {
                 let _ = write!(self.out, r"(?:\r\n|[\n\x0B\f\r{OTHER_TERMINATORS}])");
             }
-            // Anchors, word boundaries and back-references keep their spelling.
-            'A' | 'z' | 'b' | 'B' | '1'..='9' if !in_class => {
+            // Anchors and word boundaries keep their spelling.
+            'A' | 'z' | 'b' | 'B' if !in_class => {
                 self.out.push('\\');
                 self.out.push(c);
             }
+            '1'..='9' if !in_class => self.back_reference(c),
             'Z' if !in_class => self.dollar(),
             't' | 'n' | 'r' | 'f' => {
                 self.out.push('\\');
@@ -321,7 +425,7 @@ impl Translator<'_> {
             }
             'a' => self.out.push_str(r"\x07"),
             'e' => self.out.push_str(r"\x1B"),
-            'x' | 'u' => self.hex(c)?,
+            'x' | 'u' => self.hex(c, in_class)?,
             '0' => {
                 // `\0n`, `\0nn`, `\0mnn`: an octal value.
                 let mut value = 0_u32;
@@ -343,11 +447,16 @@ impl Translator<'_> {
                 let _ = write!(self.out, r"\x{{{value:X}}}");
             }
             'k' if !in_class => {
-                // `\k<name>`: a named back-reference.
-                self.out.push_str(r"\k");
+                // `\k<name>`: a named back-reference (compared
+                // case-insensitively under `(?i)`, see `back_reference`).
                 if self.peek(0) != Some('<') {
                     return Err("illegal named back-reference".to_owned());
                 }
+                self.out.push_str(if self.flags().ignore_case {
+                    r"(?i:\k"
+                } else {
+                    r"(?:\k"
+                });
                 while let Some(d) = self.peek(0) {
                     self.at += 1;
                     self.out.push(d);
@@ -355,6 +464,7 @@ impl Translator<'_> {
                         break;
                     }
                 }
+                self.out.push(')');
             }
             'p' | 'P' => self.property(c)?,
             c if c.is_ascii_alphanumeric() => {
@@ -365,8 +475,32 @@ impl Translator<'_> {
         Ok(())
     }
 
+    /// `\n`: Java takes further digits only while they name a group opened
+    /// so far, and a reference to a group that is not open (or does not
+    /// exist) compiles but never matches.
+    fn back_reference(&mut self, first: char) {
+        let mut n = first.to_digit(10).map_or(0, |d| d as usize);
+        while let Some(d) = self.peek(0).and_then(|d| d.to_digit(10)) {
+            let wider = n * 10 + d as usize;
+            if wider > self.groups {
+                break;
+            }
+            n = wider;
+            self.at += 1;
+        }
+        if n > self.groups {
+            self.out.push_str("(?!)");
+        } else if self.flags().ignore_case {
+            // Java compares case-insensitively here (ASCII, or Unicode with
+            // `u`); the engine folds Unicode.
+            let _ = write!(self.out, r"(?i:\{n})");
+        } else {
+            let _ = write!(self.out, r"(?:\{n})");
+        }
+    }
+
     /// `\xhh`, `\x{h..h}` or `\uhhhh`.
-    fn hex(&mut self, kind: char) -> Result<(), String> {
+    fn hex(&mut self, kind: char, in_class: bool) -> Result<(), String> {
         let digits: String = if self.peek(0) == Some('{') && kind == 'x' {
             self.at += 1;
             let mut s = String::new();
@@ -389,8 +523,12 @@ impl Translator<'_> {
             s
         };
         let value = u32::from_str_radix(&digits, 16).map_err(|e| e.to_string())?;
-        char::from_u32(value).ok_or("illegal code point")?;
-        let _ = write!(self.out, r"\x{{{value:X}}}");
+        let c = char::from_u32(value).ok_or("illegal code point")?;
+        if c.is_ascii_alphabetic() && self.flags().ascii_case() {
+            self.fold_literal(c, in_class);
+        } else {
+            let _ = write!(self.out, r"\x{{{value:X}}}");
+        }
         Ok(())
     }
 
@@ -438,6 +576,7 @@ impl Translator<'_> {
         }
         let mut first = true;
         loop {
+            self.skip_ignorable();
             let c = self.peek(0).ok_or("unclosed character class")?;
             self.at += 1;
             match c {
@@ -456,7 +595,22 @@ impl Translator<'_> {
                     self.out.push(c);
                 }
                 '-' => self.out.push('-'),
-                c => push_literal(&mut self.out, c, true),
+                c => {
+                    let range_end = match (self.peek(0), self.peek(1)) {
+                        (Some('-'), Some(h)) if !"]\\[&".contains(h) => Some(h),
+                        _ => None,
+                    };
+                    if let (Some(hi), true) = (range_end, self.flags().ascii_case()) {
+                        // `a-z` under ASCII `(?i)` also takes `A-Z`.
+                        self.at += 2;
+                        push_literal(&mut self.out, c, true);
+                        self.out.push('-');
+                        push_literal(&mut self.out, hi, true);
+                        self.fold_range(c, hi);
+                    } else {
+                        self.fold_literal(c, true);
+                    }
+                }
             }
             first = false;
         }

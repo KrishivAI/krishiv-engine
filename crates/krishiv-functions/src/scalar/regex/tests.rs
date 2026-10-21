@@ -195,14 +195,147 @@ fn clickbench_domain() {
 fn translations_pin_the_syntax() {
     assert_eq!(translate(r"\d+", false).unwrap().text, "[0-9]+");
     assert_eq!(
-        translate(r"a.b", false).unwrap().text.matches("[^").count(),
-        1
+        translate("a.b", false).unwrap().text,
+        r"a[^\n\r\x{85}\x{2028}\x{2029}]b"
     );
+    assert_eq!(translate("(?s)a.b", false).unwrap().text, r"a[\s\S]b");
+    assert_eq!(translate("(?d)a.b", false).unwrap().text, r"a[^\n]b");
     let t = translate("a$", false).unwrap();
     assert!(t.has_dollar);
     assert_eq!(t.text, r"a\z");
-    assert!(translate("a$", true).unwrap().text.contains("(?="));
+    assert_eq!(
+        translate("a$", true).unwrap().text,
+        r"a(?=(?:\r\n|[\n\r\x{85}\x{2028}\x{2029}])?\z)"
+    );
+    assert_eq!(translate("(?d)a$", true).unwrap().text, r"a(?=\n?\z)");
     assert!(translate("a*+", false).is_err());
+    // `(?x)`: whitespace and comments never reach the engine.
+    assert_eq!(translate("(?x)a b # note\n c", false).unwrap().text, "abc");
+    assert_eq!(translate("(?x)a\\ b", false).unwrap().text, r"a\x{20}b");
+    assert_eq!(translate("(?x)[a b]", false).unwrap().text, "[ab]");
+    assert_eq!(translate("(?x)a(?-x) b", false).unwrap().text, r"a\x{20}b");
+    // `(?i)` spells out ASCII folding; `(?iu)` leaves Unicode folding to the engine.
+    assert_eq!(translate("(?i)ab1", false).unwrap().text, "[aA][bB]1");
+    assert_eq!(translate("(?i)[a-c_]", false).unwrap().text, "[a-cA-C_]");
+    assert_eq!(translate("(?iu)ab", false).unwrap().text, "(?i)ab");
+    assert_eq!(translate("(?i:a)b", false).unwrap().text, "(?:[aA])b");
+    // Back-references: digits only while they name an open group; a
+    // reference to a group that is not open never matches.
+    assert_eq!(translate(r"(a)\1", false).unwrap().text, r"(a)(?:\1)");
+    assert_eq!(translate(r"(a)\12", false).unwrap().text, r"(a)(?:\1)2");
+    assert_eq!(translate(r"a\1", false).unwrap().text, "a(?!)");
+    assert_eq!(
+        translate(r"(?i)(a)\1", false).unwrap().text,
+        r"([aA])(?i:\1)"
+    );
+    assert_eq!(
+        translate(r"(?<n>a)\k<n>", false).unwrap().text,
+        r"(?<n>a)(?:\k<n>)"
+    );
+    assert_eq!(
+        translate(r"(?i)(?<n>a)\k<n>", false).unwrap().text,
+        r"(?<n>[aA])(?i:\k<n>)"
+    );
+    assert!(translate("(?<n_>a)", false).is_err());
+    assert!(translate("(?<1>a)", false).is_err());
+}
+
+/// Spark 4.2.0: `(?x)` ignores whitespace and `#` comments (inside classes
+/// too); a comment ends at a line terminator, and `\u0085`, `\u2028` and
+/// `\u2029` are then pattern characters.
+#[test]
+fn oracle_comments_flag() {
+    let cases = [
+        ("ab", "(?x)a b", "X"),
+        ("a#", "(?x)a # note", "X#"),
+        ("ab", "(?x)a # (\nb", "X"),
+        ("a b", r"(?x)a\ b", "X"),
+        ("a b", "(?x)[a b]+", "X X"),
+        ("ab", "(?x)a#b\nb", "X"),
+        ("a b", r"(?x)\Qa b\E", "X"),
+        ("ab", "(?x: a b )", "X"),
+        ("ab", "a(?x) b", "X"),
+        ("a\tb", r"(?x)a\tb", "X"),
+        ("aa", "(?x)a +", "X"),
+        ("aa", "(?x)a+ ?", "XX"),
+        ("ab", "(?x)(?-x) a", "ab"),
+        ("a b", "(?x)(?-x:a b)", "X"),
+        ("a b", "(?x)a (?-x) b", "X"),
+        ("a#b", "(?x)[a #c\nb]+", "X#X"),
+        ("a\u{85}", "(?x)a#c\u{85}", "X"),
+        ("a\u{2028}", "(?x)a#c\u{2028}", "X"),
+        ("a", "(?x)a#c\u{2028}", "a"),
+    ];
+    for (s, re, want) in cases {
+        assert_eq!(one(s, re, "X"), some(want), "{s:?} {re:?}");
+    }
+    // Whitespace in a class is dropped, which leaves it empty here.
+    for re in ["(?x)a[ ]b", "(?x)[a#]"] {
+        assert_eq!(
+            try_one("a#", re, "X").unwrap_err().error_class(),
+            ErrorClass::InvalidParameterValuePattern,
+            "{re}"
+        );
+    }
+}
+
+/// Spark 4.2.0: `(?i)` folds ASCII only unless `(?u)` is set.
+#[test]
+fn oracle_ascii_case_folding() {
+    let cases = [
+        ("É é", "(?i)é", "É X"),
+        ("K\u{212a} k", "(?i)k", "X\u{212a} X"),
+        ("s \u{17f}", "(?i)s", "X \u{17f}"),
+        ("K\u{212a} k", "(?iu)k", "XX X"),
+        ("É é", "(?iu)É", "X X"),
+        ("ÉéKk", "(?i)[a-zé]", "ÉXXX"),
+        ("K\u{212a}", "(?i)[a-z]", "X\u{212a}"),
+        ("aA", "(?i)[A-Z]+", "X"),
+        ("aA", "(?i)[^a]", "aA"),
+        ("É", "(?i)[^é]", "X"),
+        ("xA", "(?i:a)", "xX"),
+        ("xA", r"(?i)\x41", "xX"),
+        ("aB", "(?i)a(?-i)b", "aB"),
+        ("AB", "(?i:a)b", "AB"),
+        ("ab", "(?i)A(?-i:B)", "ab"),
+        ("é", "(?i)É", "é"),
+        ("É", "(?iu)(?-u)é", "É"),
+        ("k", "(?i)[\u{212a}]", "k"),
+        ("a-", "(?i)[a-]+", "X"),
+        ("m", "(?i)[^b-y]", "m"),
+        ("M", "(?i)[b-y]", "X"),
+        ("AZ", "(?i)[^b-y]+", "X"),
+        ("aA", r"(?i)\Qa\E+", "X"),
+        ("É é", r"(?i)\Qé\E", "É X"),
+        ("Ǆǅǆ", "(?i)ǆ", "ǄǅX"),
+        ("Ǆǅǆ", "(?iu)ǆ", "XXX"),
+    ];
+    for (s, re, want) in cases {
+        assert_eq!(one(s, re, "X"), some(want), "{s:?} {re:?}");
+    }
+}
+
+/// Spark 4.2.0: back-reference digits and references to missing groups.
+#[test]
+fn oracle_back_references() {
+    let cases = [
+        ("a2", r"(a)\12", "a2"),
+        ("a", r"a\1", "a"),
+        ("a1", r"a\1", "a1"),
+        ("aa", r"(a)\1", "X"),
+        ("aa", r"\1(a)", "aa"),
+        ("abcdefghijj", r"(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\10", "X"),
+        ("a0", r"(a)\10", "a0"),
+        ("aa", r"(a)\2", "aa"),
+        ("a", r"(a)\01", "a"),
+        ("aA", r"(?i)(a)\1", "X"),
+        ("aA", r"(?i)(?<n>a)\k<n>", "X"),
+        ("aA", r"(a)(?i)\1", "X"),
+        ("aA", r"(?i)(a)(?-i)\1", "aA"),
+    ];
+    for (s, re, want) in cases {
+        assert_eq!(one(s, re, "X"), some(want), "{s:?} {re:?}");
+    }
 }
 
 /// `regexp_replace(s, re, rep, pos)` for one row.
