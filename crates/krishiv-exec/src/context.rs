@@ -2,10 +2,10 @@
 //! Per-query and per-task context: configuration, cancellation, the first
 //! error, the query's memory pool and its per-operator consumers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use krishiv_common::config::{Config, EXEC_BATCH_SIZE, EXEC_JOIN_ROW_LAYOUT};
 use krishiv_common::error::KrishivError;
@@ -16,7 +16,7 @@ use krishiv_memory::{
 use crate::cancel::CancellationToken;
 use crate::error::{Result, cancelled};
 use crate::executor::{Executor, WorkloadClass, run_blocking};
-use crate::metrics::{QueryMemory, QueryMetrics};
+use crate::metrics::{PipelineMetrics, QueryMemory, QueryMetrics};
 use crate::operator::GlobalState;
 use crate::sync::{AtomicBool, AtomicUsize, Event, Mutex, Ordering, lock};
 
@@ -45,6 +45,10 @@ pub struct ExecConfig {
     /// Seeds morsel order (deterministic test mode); `None` claims morsels
     /// in order.
     pub seed: Option<u64>,
+    /// Collect the costlier metrics of a detailed profile (`EXPLAIN
+    /// ANALYZE`): per-lookup hash-table probe lengths. The always-on
+    /// counters do not depend on it.
+    pub detailed_metrics: bool,
     /// Hash joins use the row layout and its size-adaptive index
     /// (`krishiv.exec.join.rowLayout`; P2-T158).
     pub join_row_layout: bool,
@@ -59,6 +63,7 @@ impl Default for ExecConfig {
             stall_threshold: Duration::from_millis(10),
             fail_on_stall: false,
             seed: None,
+            detailed_metrics: false,
             join_row_layout: false,
         }
     }
@@ -99,6 +104,12 @@ pub struct QueryContext {
     /// The first error; later ones (mostly "cancelled") are dropped.
     error: Mutex<Option<KrishivError>>,
     metrics: Mutex<QueryMetrics>,
+    /// When execution started (the runner sets it): pipeline times are
+    /// offsets from it.
+    epoch: OnceLock<Instant>,
+    /// Per pipeline, the threads that polled its drivers (worker-local, to
+    /// count them; [`QueryMetrics`] keeps only the count).
+    threads: Mutex<BTreeMap<u32, BTreeSet<u64>>>,
     /// Spill files written per operator, shared by its consumers in every
     /// driver (read into the metrics by [`QueryContext::metrics`]).
     spills: Mutex<BTreeMap<OperatorId, Arc<SpillStats>>>,
@@ -136,6 +147,8 @@ impl QueryContext {
             cancel: CancellationToken::new(),
             error: Mutex::new(None),
             metrics: Mutex::new(QueryMetrics::default()),
+            epoch: OnceLock::new(),
+            threads: Mutex::new(BTreeMap::new()),
             spills: Mutex::new(BTreeMap::new()),
             finished: AtomicBool::new(false),
             finished_event: Event::default(),
@@ -271,6 +284,47 @@ impl QueryContext {
 
     pub(crate) fn merge_metrics(&self, f: impl FnOnce(&mut QueryMetrics)) {
         f(&mut lock(&self.metrics));
+    }
+
+    /// Marks the start of execution at `now` (once; later calls keep it).
+    pub(crate) fn start_clock(&self, now: Instant) {
+        let _ = self.epoch.set(now);
+    }
+
+    /// `now` as an offset from the start of execution.
+    pub(crate) fn offset(&self, now: Instant) -> Duration {
+        self.epoch
+            .get()
+            .map_or(Duration::ZERO, |e| now.saturating_duration_since(*e))
+    }
+
+    /// Records one driver of pipeline `pipeline`: it ran from `started`
+    /// to `ended` (offsets) on `threads`.
+    pub(crate) fn record_driver(
+        &self,
+        pipeline: u32,
+        started: Duration,
+        ended: Duration,
+        threads: &[u64],
+    ) {
+        let count = {
+            let mut all = lock(&self.threads);
+            let set = all.entry(pipeline).or_default();
+            set.extend(threads.iter().copied());
+            set.len() as u64
+        };
+        self.merge_metrics(|m| {
+            let p = m.pipelines.entry(pipeline).or_default();
+            p.merge(&PipelineMetrics {
+                drivers: 1,
+                threads: 0,
+                started,
+                ended,
+            });
+            // The set only grows, but a driver that read it earlier may
+            // merge later: keep the larger count.
+            p.threads = p.threads.max(count);
+        });
     }
 }
 

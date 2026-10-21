@@ -19,6 +19,7 @@ use super::table::{JoinTable, NONE, RowArena};
 use super::{Counter, JoinType, Shared, record, take_batch};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
+use crate::hash::ProbeCount;
 use crate::operator::{FlushOutput, LocalState, Operator, OperatorOutput};
 use crate::sync::lock;
 
@@ -81,6 +82,7 @@ impl Cursor {
         hashing: &Hashing,
         batch: Batch,
         tables: &Tables<'_>,
+        detailed: bool,
     ) -> Result<(Self, Vec<Vec<u32>>)> {
         let n = batch.num_rows();
         let cols: Vec<ArrayRef> = shared
@@ -113,14 +115,24 @@ impl Cursor {
         }
         let mut heads = vec![NONE; n];
         let mut found = Vec::new();
+        let mut count = ProbeCount::default();
         for (p, rows) in lookup.iter().enumerate().filter(|(_, r)| !r.is_empty()) {
             if let Some(t) = tables.get(p) {
                 found.clear();
-                t.find_heads(&keys, rows, &mut found);
+                if detailed {
+                    t.find_heads_counted(&keys, rows, &mut found, &mut count);
+                } else {
+                    t.find_heads(&keys, rows, &mut found);
+                }
                 for (&r, &h) in rows.iter().zip(&found) {
                     heads[r as usize] = h;
                 }
             }
+        }
+        if count.lookups > 0 {
+            shared.counters.add(Counter::Lookups, count.lookups);
+            shared.counters.add(Counter::KeyCompares, count.compares);
+            shared.counters.max(Counter::MaxProbeLength, count.max);
         }
         let cursor = Self {
             batch,
@@ -298,6 +310,8 @@ fn overflow() -> KrishivError {
 
 struct ProbeLocal {
     build: Arc<BuildGlobal>,
+    /// Count probe lengths (`ExecConfig::detailed_metrics`).
+    detailed: bool,
     cursor: Option<Cursor>,
     /// Rows of spilled partitions.
     parts: Vec<Part>,
@@ -338,7 +352,8 @@ impl ProbeOp {
             if input.num_rows() == 0 {
                 return Ok(OperatorOutput::NeedMoreInput(None));
             }
-            let (cursor, deferred) = Cursor::new(s, &g.hashing, input.clone(), &tables)?;
+            let (cursor, deferred) =
+                Cursor::new(s, &g.hashing, input.clone(), &tables, l.detailed)?;
             let mut chunks = Vec::new();
             for (p, rows) in deferred
                 .into_iter()
@@ -399,6 +414,7 @@ impl Operator for ProbeOp {
         let memory = ctx.consumer();
         Ok(Box::new(ProbeLocal {
             build,
+            detailed: ctx.query().config().detailed_metrics,
             cursor: None,
             parts: (0..PARTITIONS)
                 .map(|_| Part::with_memory(memory.reservation()))
@@ -446,7 +462,7 @@ impl Operator for ProbeOp {
         })
     }
 
-    fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         self.0.counters.probe()
     }
 

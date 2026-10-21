@@ -134,6 +134,7 @@ pub fn instantiate(plan: &PhysicalPlan, worker: &WorkerContext) -> Result<Arc<dy
             spill,
             env: EvalEnv::from_plan(plan.env()),
             filters: HashMap::new(),
+            ids: node_ids(plan.root()),
         };
         cx.declare_filters(plan.root())?;
         let built = cx.node(plan.root())?;
@@ -158,6 +159,38 @@ struct Instantiation<'a> {
     env: EvalEnv,
     /// One cell per runtime filter of the plan.
     filters: HashMap<FilterId, Arc<RuntimeFilter>>,
+    /// Each node's pre-order index, by address (the plan is borrowed for
+    /// the whole instantiation, so addresses are stable).
+    ids: HashMap<usize, u32>,
+}
+
+/// The pre-order index of every node under `root` (children in
+/// [`PhysNode::children`] order), by address: `EXPLAIN ANALYZE`'s node ids.
+pub(crate) fn node_ids(root: &PhysNode) -> HashMap<usize, u32> {
+    let mut ids = HashMap::new();
+    let mut stack = vec![root];
+    let mut next = 0_u32;
+    while let Some(n) = stack.pop() {
+        ids.insert(std::ptr::from_ref(n).addr(), next);
+        next = next.saturating_add(1);
+        stack.extend(n.children().into_iter().rev());
+    }
+    ids
+}
+
+/// A plan node whose operators report under its id.
+struct Tagged {
+    id: u32,
+    inner: Arc<dyn ExecNode>,
+}
+
+impl ExecNode for Tagged {
+    fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+        b.enter_node(self.id);
+        let built = Arc::clone(&self.inner).build_pipelines(b);
+        b.exit_node();
+        built
+    }
 }
 
 struct Built {
@@ -194,7 +227,23 @@ impl Instantiation<'_> {
             .ok_or_else(|| internal(format!("runtime filter {id} has no scan")))
     }
 
+    /// Builds `n`, tagged with its pre-order index so the operators it
+    /// adds report under it.
     fn node(&mut self, n: &PhysNode) -> Result<Built> {
+        let built = self.untagged(n)?;
+        Ok(match self.ids.get(&std::ptr::from_ref(n).addr()) {
+            Some(&id) => Built {
+                schema: built.schema,
+                node: Arc::new(Tagged {
+                    id,
+                    inner: built.node,
+                }),
+            },
+            None => built,
+        })
+    }
+
+    fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
         match n {
             PhysNode::Scan(s) => self.scan(s),
             PhysNode::OneRow => {

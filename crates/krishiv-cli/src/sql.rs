@@ -29,6 +29,7 @@ pub(crate) enum Format {
 
 /// Arguments of `krishiv sql`.
 #[derive(Args, Debug)]
+#[command(group(clap::ArgGroup::new("explain").args(["explain_analyze", "explain_verbose"])))]
 pub(crate) struct SqlArgs {
     /// SQL to run (one or more `;`-separated statements).
     #[arg(
@@ -53,6 +54,18 @@ pub(crate) struct SqlArgs {
     /// Print each statement's elapsed time on stderr.
     #[arg(long)]
     timing: bool,
+    /// Run each query and print its profile (`EXPLAIN ANALYZE`) instead of its rows.
+    #[arg(long = "explain-analyze", conflicts_with = "explain_verbose")]
+    explain_analyze: bool,
+    /// Print each query's plan after every optimizer rule that changed it
+    /// (`EXPLAIN VERBOSE`) instead of running it.
+    #[arg(long = "explain-verbose")]
+    explain_verbose: bool,
+    /// With --explain-analyze or --explain-verbose: print the versioned JSON
+    /// document (one line per statement) instead of text (experimental: may
+    /// change before 1.0).
+    #[arg(long, requires = "explain")]
+    json: bool,
 }
 
 fn key_value(s: &str) -> Result<(String, String), String> {
@@ -108,12 +121,34 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
         let start = Instant::now();
         let df = futures::executor::block_on(session.sql(&stmt))
             .map_err(|e| format!("{e}{}", caret(&stmt, line_offset, &e)))?;
-        print_result(&df, args.format, tz)?;
+        if args.explain_analyze || args.explain_verbose {
+            print_explain(&df, args)?;
+        } else {
+            print_result(&df, args.format, tz)?;
+        }
         if args.timing {
             let _ = writeln!(io::stderr(), "Time: {:.3}s", start.elapsed().as_secs_f64());
         }
     }
     Ok(())
+}
+
+/// Prints the profile (`--explain-analyze`) or the optimizer's stages
+/// (`--explain-verbose`) of the query `df`, as text or JSON.
+fn print_explain(df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
+    let text = if args.explain_analyze {
+        let p = futures::executor::block_on(df.explain_analyze()).map_err(|e| e.to_string())?;
+        if args.json {
+            p.to_json()
+        } else {
+            p.to_text(krishiv::TextOptions::default())
+        }
+    } else {
+        let v = futures::executor::block_on(df.explain_verbose()).map_err(|e| e.to_string())?;
+        if args.json { v.to_json() } else { v.to_text() }
+    };
+    let mut out = io::stdout().lock();
+    writeln!(out, "{}", text.trim_end()).map_err(|e| format!("cannot write output: {e}"))
 }
 
 /// Spark-style position and caret for a parse error in `stmt`; empty for any

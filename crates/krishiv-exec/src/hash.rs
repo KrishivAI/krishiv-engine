@@ -269,6 +269,33 @@ impl KeyTable {
         seed: &HashSeed,
         ids: &mut Vec<u32>,
     ) -> Result<usize> {
+        self.find_or_insert_with::<false>(keys, seed, ids, &mut ProbeCount::default())
+    }
+
+    /// As [`find_or_insert`](Self::find_or_insert), counting probe lengths
+    /// into `count` (a detailed profile).
+    ///
+    /// # Errors
+    /// As [`find_or_insert`](Self::find_or_insert).
+    pub fn find_or_insert_counted(
+        &mut self,
+        keys: &Rows,
+        seed: &HashSeed,
+        ids: &mut Vec<u32>,
+        count: &mut ProbeCount,
+    ) -> Result<usize> {
+        self.find_or_insert_with::<true>(keys, seed, ids, count)
+    }
+
+    /// The loop of both: `COUNT` is a constant, so the uncounted loop
+    /// carries no counting code.
+    fn find_or_insert_with<const COUNT: bool>(
+        &mut self,
+        keys: &Rows,
+        seed: &HashSeed,
+        ids: &mut Vec<u32>,
+        count: &mut ProbeCount,
+    ) -> Result<usize> {
         ids.clear();
         let before = self.len();
         if self.offsets.is_empty() {
@@ -283,9 +310,13 @@ impl KeyTable {
         for key in keys {
             let bytes = key.data();
             let h = seed.hash(bytes);
+            let mut compares = 0_u64;
             let entry = index.entry(
                 h,
                 |&id| {
+                    if COUNT {
+                        compares += 1;
+                    }
                     let id = id as usize;
                     hashes[id] == h
                         && data
@@ -306,6 +337,9 @@ impl KeyTable {
                     id
                 }
             };
+            if COUNT {
+                count.add(compares);
+            }
             ids.push(id);
         }
         Ok(self.len() - before)
@@ -349,6 +383,72 @@ impl KeyTable {
     pub fn find(&self, bytes: &[u8], hash: u64) -> Option<u32> {
         let eq = |&id: &u32| key_eq(&self.data, &self.offsets, &self.hashes, id, bytes, hash);
         self.index.find(hash, eq).copied()
+    }
+
+    /// As [`find`](Self::find), counting the keys compared into `count`
+    /// (the probe length: entries whose tag matched; a detailed profile).
+    pub fn find_counted(&self, bytes: &[u8], hash: u64, count: &mut ProbeCount) -> Option<u32> {
+        let mut compares = 0_u64;
+        let eq = |&id: &u32| {
+            compares += 1;
+            key_eq(&self.data, &self.offsets, &self.hashes, id, bytes, hash)
+        };
+        let found = self.index.find(hash, eq).copied();
+        count.add(compares);
+        found
+    }
+
+    /// Buckets of the index (its capacity, for the load factor).
+    pub fn buckets(&self) -> usize {
+        self.index.num_buckets()
+    }
+}
+
+/// Probe lengths of a run of lookups (a detailed profile).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ProbeCount {
+    /// Lookups.
+    pub lookups: u64,
+    /// Keys compared, over all lookups.
+    pub compares: u64,
+    /// The most keys one lookup compared.
+    pub max: u64,
+}
+
+/// [`ProbeCount`]s of several tables and drivers, added once per batch.
+#[derive(Debug, Default)]
+pub struct ProbeTotals {
+    lookups: std::sync::atomic::AtomicU64,
+    compares: std::sync::atomic::AtomicU64,
+    max: std::sync::atomic::AtomicU64,
+}
+
+impl ProbeTotals {
+    /// Adds `c`.
+    pub fn add(&self, c: &ProbeCount) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.lookups.fetch_add(c.lookups, Relaxed);
+        self.compares.fetch_add(c.compares, Relaxed);
+        self.max.fetch_max(c.max, Relaxed);
+    }
+
+    /// The totals so far.
+    pub fn get(&self) -> ProbeCount {
+        use std::sync::atomic::Ordering::Relaxed;
+        ProbeCount {
+            lookups: self.lookups.load(Relaxed),
+            compares: self.compares.load(Relaxed),
+            max: self.max.load(Relaxed),
+        }
+    }
+}
+
+impl ProbeCount {
+    /// One lookup that compared `compares` keys.
+    pub fn add(&mut self, compares: u64) {
+        self.lookups += 1;
+        self.compares += compares;
+        self.max = self.max.max(compares);
     }
 }
 

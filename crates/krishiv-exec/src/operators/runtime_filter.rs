@@ -119,7 +119,7 @@ impl RuntimeFilters {
     /// The `EXPLAIN ANALYZE` counters, summed over the filters (nothing
     /// without filters).
     #[must_use]
-    pub fn extra_metrics(&self) -> Vec<(&'static str, u64)> {
+    pub fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         let filters = self.filters();
         if filters.is_empty() {
             return Vec::new();
@@ -133,14 +133,47 @@ impl RuntimeFilters {
             t.bytes_pruned += c.bytes_pruned;
             t.splits_skipped += c.splits_skipped;
         }
-        vec![
+        let mut out = crate::metrics::counts([
             ("runtime_filter_rows_tested", t.rows_tested),
             ("runtime_filter_rows_dropped", t.rows_dropped),
             ("runtime_filter_units_pruned", t.units_pruned),
             ("runtime_filter_bytes_pruned", t.bytes_pruned),
             ("runtime_filter_splits_skipped", t.splits_skipped),
-        ]
+        ]);
+        let forms: Vec<String> = filters.iter().map(|f| describe(f)).collect();
+        out.push((
+            std::borrow::Cow::Borrowed("runtime_filters"),
+            crate::metrics::Metric::Text(forms.join(", ")),
+        ));
+        out
     }
+}
+
+/// One filter for `EXPLAIN ANALYZE`: its id, column, the form its
+/// producer chose and its row counters, e.g.
+/// `#3 [l_partkey]: bloom 4096 B, tested 100, dropped 90`.
+fn describe(f: &RuntimeFilter) -> String {
+    use krishiv_io::{FilterForm, FilterSnapshot};
+    let form = match &f.published().snapshot {
+        FilterSnapshot::Pending => "pending".to_owned(),
+        FilterSnapshot::Disabled(_) => "disabled".to_owned(),
+        FilterSnapshot::Final(k) => match k.form() {
+            FilterForm::Range => "range".to_owned(),
+            FilterForm::SmallSet(n) => format!("small set of {n}"),
+            FilterForm::HashSet(n) => format!("hash set of {n}"),
+            FilterForm::Bloom(b) => format!("bloom {b} B"),
+            _ => "other".to_owned(),
+        },
+        _ => "other".to_owned(),
+    };
+    let c = f.stats().counts();
+    format!(
+        "{} {}: {form}, tested {}, dropped {}",
+        f.id(),
+        f.target(),
+        c.rows_tested,
+        c.rows_dropped
+    )
 }
 
 /// What one row a runtime filter drops saves downstream, in nanoseconds:
@@ -367,7 +400,10 @@ mod tests {
             DataType::Int64,
         ));
         let slot = RuntimeFilters::new(vec![Arc::clone(&loose)]);
-        assert!(slot.extra_metrics().iter().all(|(_, v)| *v == 0));
+        assert!(slot.extra_metrics().iter().all(|(_, v)| matches!(
+            v,
+            crate::metrics::Metric::Count(0) | crate::metrics::Metric::Text(_)
+        )));
         let settings = RowStageSettings {
             min_rows: 4,
             max_pass_rate: 0.5,
@@ -392,9 +428,22 @@ mod tests {
         assert_eq!(rows(&mut stage, &[5, 6]), 0, "a selective filter stays on");
         assert_eq!(rows(&mut stage, &[]), 0);
         let m = slot.extra_metrics();
-        let get = |n: &str| m.iter().find(|(k, _)| *k == n).map(|(_, v)| *v);
-        assert_eq!(get("runtime_filter_rows_tested"), Some(4 + 4 + 2 + 4));
-        assert_eq!(get("runtime_filter_rows_dropped"), Some(1 + 3 + 2 + 1));
+        let get = |n: &str| m.iter().find(|(k, _)| *k == n).map(|(_, v)| v.clone());
+        use crate::metrics::Metric;
+        assert_eq!(
+            get("runtime_filter_rows_tested"),
+            Some(Metric::Count(4 + 4 + 2 + 4))
+        );
+        assert_eq!(
+            get("runtime_filter_rows_dropped"),
+            Some(Metric::Count(1 + 3 + 2 + 1))
+        );
+        assert_eq!(
+            get("runtime_filters"),
+            Some(Metric::Text(
+                "#1 [a]: range, tested 8, dropped 2, #2 [a]: range, tested 6, dropped 5".to_owned()
+            ))
+        );
         assert!(RuntimeFilters::default().extra_metrics().is_empty());
     }
 
