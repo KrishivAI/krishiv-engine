@@ -26,11 +26,13 @@ fn env() -> ExprEnv {
 /// `Limit(Union(OneRow, Limit(OneRow)))`, printed with `explain`.
 fn plan(explain: ExplainNode) -> PhysicalPlan {
     let root = PhysNode::Limit {
+        offset: 0,
         input: Box::new(PhysNode::Union {
             inputs: vec![
                 PhysNode::OneRow,
                 PhysNode::Limit {
                     input: Box::new(PhysNode::OneRow),
+                    offset: 0,
                     limit: 1,
                 },
             ],
@@ -197,6 +199,7 @@ fn a_deep_plan_round_trips() {
     for _ in 0..600 {
         root = PhysNode::Limit {
             input: Box::new(root),
+            offset: 0,
             limit: 1,
         };
         explain = ExplainNode::new("Limit", "1", vec![explain]);

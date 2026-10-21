@@ -307,29 +307,15 @@ impl<'a> Planner<'a> {
             }
             PlanNode::Limit { input, limit } => {
                 let n = limit_value(limit)?;
-                if let PlanNode::Sort {
-                    input,
-                    order,
-                    global: true,
-                } = &input.node
-                    && usize::try_from(n).is_ok_and(|n| n <= TopN::MAX_ROWS)
-                {
-                    let input = self.plan(input)?;
-                    return self.top_n(input, order, n);
+                // `LIMIT n OFFSET m` is the limit over the offset: skip, then keep.
+                match &input.node {
+                    PlanNode::Offset { input, offset } => {
+                        self.limit(input, limit_value(offset)?, n)
+                    }
+                    _ => self.limit(input, 0, n),
                 }
-                let input = self.plan(input)?;
-                let schema = Limit::new(Arc::clone(&input.schema), n).schema();
-                let layout = input.layout.clone();
-                let mut planned = input.wrap(
-                    |input| PhysNode::Limit { input, limit: n },
-                    schema,
-                    layout,
-                    ("Limit", n.to_string()),
-                );
-                // A filter below a limit would change which rows it keeps.
-                planned.sites.clear();
-                Ok(planned)
             }
+            PlanNode::Offset { input, offset } => self.limit(input, limit_value(offset)?, u64::MAX),
             PlanNode::Sort { input, order, .. } => {
                 let input = self.plan(input)?;
                 self.sort(input, order)
@@ -357,6 +343,53 @@ impl<'a> Planner<'a> {
                 )))
             }
         }
+    }
+
+    /// `input` without its first `skip` rows, then its first `n`
+    /// (`u64::MAX` for all the rest). Over a total sort the rows come from
+    /// one top-N of `skip + n`.
+    fn limit(&mut self, input: &Arc<LogicalPlan>, skip: u64, n: u64) -> Result<Planned> {
+        if let PlanNode::Sort {
+            input: sorted,
+            order,
+            global: true,
+        } = &input.node
+            && let Some(total) = n.checked_add(skip)
+            && usize::try_from(total).is_ok_and(|t| t <= TopN::MAX_ROWS)
+        {
+            let sorted = self.plan(sorted)?;
+            let top = self.top_n(sorted, order, total)?;
+            if skip == 0 {
+                return Ok(top);
+            }
+            return Ok(Self::skip_rows(top, skip, n));
+        }
+        let input = self.plan(input)?;
+        Ok(Self::skip_rows(input, skip, n))
+    }
+
+    /// The `Limit` operator over `input`.
+    fn skip_rows(input: Planned, offset: u64, limit: u64) -> Planned {
+        let schema = Limit::with_offset(Arc::clone(&input.schema), offset, limit).schema();
+        let layout = input.layout.clone();
+        let detail = match (offset, limit) {
+            (0, n) => n.to_string(),
+            (m, u64::MAX) => format!("offset {m}"),
+            (m, n) => format!("{n} offset {m}"),
+        };
+        let mut planned = input.wrap(
+            |input| PhysNode::Limit {
+                input,
+                offset,
+                limit,
+            },
+            schema,
+            layout,
+            ("Limit", detail),
+        );
+        // A filter below a limit would change which rows it keeps.
+        planned.sites.clear();
+        planned
     }
 
     /// `UNION ALL`: each input projected to the union's columns (the first
@@ -1029,12 +1062,11 @@ pub(crate) fn concat_schemas(l: &SchemaRef, r: &SchemaRef) -> SchemaRef {
     Arc::new(Schema::new(fields))
 }
 
-/// A `LIMIT`'s literal row count.
+/// A `LIMIT` or `OFFSET`'s literal row count.
 fn limit_value(e: &Expr) -> Result<u64> {
     match &e.node {
-        ExprNode::Literal(Literal::Integer(v)) => {
-            u64::try_from(*v).map_err(|_| internal("a negative LIMIT reached the planner"))
-        }
+        ExprNode::Literal(Literal::Integer(v)) => u64::try_from(*v)
+            .map_err(|_| internal("a negative LIMIT or OFFSET reached the planner")),
         _ => Err(eval::unsupported_expr(e)),
     }
 }

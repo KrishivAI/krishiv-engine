@@ -31,7 +31,7 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
   with zeros before it drops the message (`Scrub`, `scrub.pb.rs`); a proto built in Rust and passed to `translate_*`
   stays the caller's to wipe.
 - SQL expression strings (`selectExpr`, `where("...")`, `expr()`) are unsupported until the analyzer lowers the SQL
-  parser's syntax tree into the IR (P2-T071a); `ToDF`, `OneRowRelation` (a `Project` without input), `Offset`, set
+  parser's syntax tree into the IR (P2-T071a); `ToDF`, `OneRowRelation` (a `Project` without input), set
   operations, pivots, user schemas and nested-type literals wait for IR nodes that do not exist yet.
 - Anything outside the supported subset fails with `KRISHIV_UNSUPPORTED_FEATURE` naming the proto message and field,
   or with Spark's own `CONNECT_INVALID_PLAN.*` class for an invalid plan; never a silent approximation.
