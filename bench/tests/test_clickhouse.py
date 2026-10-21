@@ -273,9 +273,6 @@ def test_engine_override_is_picked_up_by_the_loader():
     assert ch.keys() == shared.keys()
     assert ch["q01"].startswith("-- Source: ClickHouse/ClickHouse")
     assert not shared["q01"].startswith("--")
-    assert {q.id for q in load_queries("clickbench", "clickhouse")} == {
-        q.id for q in load_queries("clickbench", "duckdb")
-    }
 
 
 def test_worker_process_runs_clickhouse_and_reports_engine_errors(tiny_decimal):

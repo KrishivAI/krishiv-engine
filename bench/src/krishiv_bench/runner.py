@@ -16,7 +16,7 @@ from pathlib import Path
 
 import psutil
 
-from . import compare
+from . import clickbench_queries, compare
 from .adapters import Dataset, Engine, Query, make_engine
 from .dialect import unsupported_reason
 from .paths import bench_root, data_root, dataset_dir, fmt_sf, queries_dir, results_dir
@@ -93,10 +93,16 @@ def dataset_provenance(ds_name: str, sf: float) -> dict:
 
 
 def load_queries(suite: str, engine: str, only: list[str] | None = None) -> list[Query]:
-    """bench/queries/<suite>/qNN.sql; an engine-specific override lives in bench/queries/<suite>/<engine>/qNN.sql."""
+    """bench/queries/<suite>/qNN.sql; an engine-specific override lives in bench/queries/<suite>/<engine>/qNN.sql.
+
+    ClickBench (CC BY-NC-SA) is not stored here: its queries are fetched from a pinned upstream commit.
+    """
     reason = unsupported_reason(engine, suite)
     if reason:
         raise SystemExit(reason)
+    if suite == "clickbench":  # licensed CC BY-NC-SA: fetched from a pinned upstream commit, never stored here
+        texts = clickbench_queries.load(engine)
+        return [Query(q, sql, suite) for q, sql in texts.items() if not only or q in only]
     d = queries_dir(suite)
     out = []
     for f in sorted(d.glob("q*.sql")):
