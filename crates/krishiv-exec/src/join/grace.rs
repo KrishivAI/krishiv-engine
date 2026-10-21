@@ -514,43 +514,80 @@ async fn reverse(
     let shared = Arc::clone(shared);
     let hashing = hashing.clone();
     let handle = Arc::clone(ctx.consumer().consumer());
+    let query = Arc::clone(ctx.query());
     let out = ctx
-        .run_blocking(move || reverse_blocking(&shared, &hashing, task, &handle))
+        .run_blocking(move || reverse_blocking(&shared, &hashing, task, &handle, &query))
         .await;
     ctx.consumer().consumer().release_credit();
     out
 }
+
+/// Candidate pairs whose residual condition is evaluated at once.
+const PAIR_BATCH: usize = 1024;
+/// What each probe row takes beyond its columns while it is indexed: its
+/// encoded key and arena key bytes, its hash, its index entry and match
+/// flag (an upper estimate for keys up to about 24 bytes).
+const INDEX_ROW_BYTES: usize = 64;
 
 fn reverse_blocking(
     shared: &Shared,
     hashing: &Hashing,
     task: Task,
     handle: &Arc<ConsumerHandle>,
+    query: &QueryContext,
 ) -> Result<Reversed> {
-    // The probe rows, held for the whole join; files stay on disk until the
-    // join is done, so a decline loses nothing.
-    // Each probe row also takes about `INDEX_ROW_BYTES` in the index.
-    const INDEX_ROW_BYTES: usize = 32;
+    // Everything the join holds is reserved before it is allocated, and the
+    // reversal declines while it still can (before the build stream starts):
+    // the probe batches, their concatenated copy, the index, and the
+    // residual evaluation of `PAIR_BATCH` candidate pairs. Spill files stay
+    // on disk until the join is done, so a decline loses nothing.
     let mut held = handle.reservation();
-    let in_memory: usize = task.probe.chunks.iter().map(Batch::num_rows).sum();
+    let build_bytes = task
+        .build
+        .files
+        .iter()
+        .map(|f| usize::try_from(f.bytes()).unwrap_or(usize::MAX))
+        .fold(task.build.bytes(), usize::saturating_add);
+    let build_row = build_bytes / usize::try_from(task.build.rows.max(1)).unwrap_or(usize::MAX);
+    let in_memory_rows: usize = task.probe.chunks.iter().map(Batch::num_rows).sum();
+    let in_memory_bytes: usize = task
+        .probe
+        .chunks
+        .iter()
+        .map(|c| c.data().get_array_memory_size())
+        .sum();
+    // The in-memory chunks are reserved already: their copy and index.
     if held
-        .try_grow(in_memory.saturating_mul(INDEX_ROW_BYTES))
+        .try_grow(in_memory_bytes.saturating_add(in_memory_rows.saturating_mul(INDEX_ROW_BYTES)))
         .is_err()
     {
         return Ok(Reversed::Declined(task));
     }
     let mut batches = task.probe.chunks.clone();
+    let mut probe_bytes = in_memory_bytes;
     for file in &task.probe.files {
         for b in file.reader(handle.reservation().releasing_to_credit())? {
             let b = b?;
-            let bytes = b
-                .data()
-                .get_array_memory_size()
+            let size = b.data().get_array_memory_size();
+            // The batch, its concatenated copy and its index.
+            let bytes = size
+                .saturating_mul(2)
                 .saturating_add(b.num_rows().saturating_mul(INDEX_ROW_BYTES));
             if held.try_grow(bytes).is_err() {
                 return Ok(Reversed::Declined(task));
             }
+            probe_bytes = probe_bytes.saturating_add(size);
             batches.push(b);
+        }
+    }
+    let probe_row = probe_bytes / batches.iter().map(Batch::num_rows).sum::<usize>().max(1);
+    if shared.filter.is_some() {
+        // Taken probe rows and decoded build rows of one evaluation, about
+        // twice their stored size each.
+        let pairs =
+            PAIR_BATCH.saturating_mul(probe_row.saturating_add(build_row).saturating_mul(2));
+        if held.try_grow(pairs).is_err() {
+            return Ok(Reversed::Declined(task));
         }
     }
     let probe =
@@ -566,6 +603,7 @@ fn reverse_blocking(
     let layout = shared.keys.layout().filter(|_| hashing.rows());
     let all: Vec<usize> = (0..n).collect();
     let probe_keys = keys.arena_columns(layout.map(AsRef::as_ref), &all)?;
+    drop(all);
     let probe_key = KeyColumn::new(probe_keys.first())?;
     // Index: hash -> the probe rows with it (rows with a NULL key never
     // match).
@@ -582,11 +620,15 @@ fn reverse_blocking(
     let mut matched = vec![false; n];
     let schema = shared.arena_schema(hashing);
     let Task { build, .. } = task;
-    let mut pairs: Vec<(u32, Vec<u8>)> = Vec::new();
     let mut visit = |chunk: Batch| -> Result<()> {
+        // The stream runs in one blocking call: a cancelled query stops it
+        // at the next chunk.
+        query.check_cancelled()?;
         let arena = RowArena::concat(schema, std::slice::from_ref(&chunk))?;
         let rows =
             u32::try_from(arena.len()).map_err(|_| internal("build chunk too large".to_owned()))?;
+        // Payloads borrowed from this chunk, evaluated before it is dropped.
+        let mut pairs: Vec<(u32, &[u8])> = Vec::new();
         for r in 0..rows {
             let Some(candidates) = index.get(&arena.hash(r)) else {
                 continue;
@@ -599,12 +641,12 @@ fn reverse_blocking(
                     continue;
                 }
                 if shared.filter.is_some() {
-                    pairs.push((p, arena.payload(r).to_vec()));
+                    pairs.push((p, arena.payload(r)));
                 } else {
                     matched[p as usize] = true;
                 }
             }
-            if pairs.len() >= 4096 {
+            if pairs.len() >= PAIR_BATCH {
                 mark_pairs(shared, &probe, &mut pairs, &mut matched)?;
             }
         }
@@ -639,7 +681,7 @@ fn reverse_blocking(
 fn mark_pairs(
     shared: &Shared,
     probe: &Batch,
-    pairs: &mut Vec<(u32, Vec<u8>)>,
+    pairs: &mut Vec<(u32, &[u8])>,
     matched: &mut [bool],
 ) -> Result<()> {
     let Some(filter) = &shared.filter else {
@@ -653,7 +695,7 @@ fn mark_pairs(
     }
     let idx: Vec<u32> = pairs.iter().map(|(p, _)| *p).collect();
     let taken = take_batch(probe, &UInt32Array::from(idx.clone()))?;
-    let build_cols = shared.decode(pairs.iter().map(|(_, b)| b.as_slice()))?;
+    let build_cols = shared.decode(pairs.iter().map(|(_, b)| *b))?;
     let m = idx.len();
     let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
     columns.extend(build_cols);
@@ -1580,7 +1622,7 @@ mod tests {
         );
         let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
         let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
-        let dir = TempDir::new("grace-decline");
+        let dir = TempDir::new("grace-reverse-decline");
         let manager = SpillManager::open(&SpillConfig {
             dir: dir.0.clone(),
             ..SpillConfig::default()
@@ -1632,7 +1674,9 @@ mod tests {
         let mut filler = krishiv_memory::Reservation::new(Arc::clone(&other), id);
         filler.try_grow(LIMIT - root.reserved()).unwrap();
         let handle = Arc::clone(ctx.consumer().consumer());
-        let Ok(Reversed::Declined(task)) = reverse_blocking(shared, &hashing, task, &handle) else {
+        let Ok(Reversed::Declined(task)) =
+            reverse_blocking(shared, &hashing, task, &handle, ctx.query())
+        else {
             panic!("the probe rows cannot fit");
         };
         assert_eq!(task.probe.files.len(), files, "nothing was consumed");
@@ -1640,7 +1684,9 @@ mod tests {
         // With room, the same task joins: a semi join with no build rows
         // emits nothing, and the probe files are gone with the task.
         drop(filler);
-        let Ok(Reversed::Joined(out)) = reverse_blocking(shared, &hashing, task, &handle) else {
+        let Ok(Reversed::Joined(out)) =
+            reverse_blocking(shared, &hashing, task, &handle, ctx.query())
+        else {
             panic!("the probe rows fit now");
         };
         assert!(out.is_none());
