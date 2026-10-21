@@ -69,6 +69,7 @@ mod error;
 mod event;
 mod limit;
 mod pool;
+mod release;
 mod reservation;
 mod rounds;
 mod spill;
@@ -76,10 +77,14 @@ mod spillfile;
 mod sync;
 
 pub use clock::{Clock, SystemClock};
-pub use consumer::ConsumerHandle;
+pub use consumer::{ConsumerHandle, SpillStats};
 pub use error::MemoryError;
 pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
 pub use pool::{ArbitrationStats, DEFAULT_SPILL_SCRATCH_RESERVE, MemoryConfig, TreePool};
+pub use release::{
+    EPOCH_INTERVAL, pressure_epoch, release_if_pressured, release_if_pressured_here,
+    set_release_hook,
+};
 pub use reservation::Reservation;
 pub use spill::{OwnerId, SpillOwner, SpillService, SpillSignal, SpillTicket, Spillable};
 pub use spillfile::{
@@ -168,6 +173,12 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     fn transfer(&self, from: ConsumerId, to: ConsumerId, bytes: usize) -> Result<(), MemoryError>;
     /// Bytes held by this pool's subtree, including quantisation slack.
     fn reserved(&self) -> usize;
+    /// The most bytes this pool's subtree has held at once (the high-water
+    /// mark of [`reserved`](Self::reserved) after accepted grants), for
+    /// `EXPLAIN ANALYZE` and memory gates. Defaults to the current value.
+    fn peak_reserved(&self) -> usize {
+        self.reserved()
+    }
     /// This pool's own limit.
     fn limit(&self) -> Option<usize>;
     /// `Err` once the arbitrator has aborted this pool's query: drivers call

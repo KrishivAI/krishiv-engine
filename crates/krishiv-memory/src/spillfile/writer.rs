@@ -194,6 +194,9 @@ impl SpillWriter {
         // The file now belongs to the `SpillFile`; our `Drop` must not undo it.
         self.committed = true;
         let bytes = std::mem::take(&mut self.charged);
+        if let Some(h) = self.reservation.handle() {
+            h.spill_stats().record(bytes);
+        }
         Ok(SpillFile::new(
             Arc::clone(&self.scope),
             self.dest.clone(),

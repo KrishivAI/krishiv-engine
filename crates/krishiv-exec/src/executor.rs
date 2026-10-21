@@ -94,7 +94,12 @@ where
 {
     let (tx, rx) = oneshot::channel();
     executor
-        .spawn_blocking(Box::new(move || drop(tx.send(f()))))
+        .spawn_blocking(Box::new(move || {
+            drop(tx.send(f()));
+            // What the closure freed lives in this pool thread's allocator
+            // caches: under memory pressure, return it to the OS too.
+            krishiv_memory::release_if_pressured_here();
+        }))
         .await?;
     rx.await
         .map_err(|_| internal("a blocking task ended without a result".to_owned()))?

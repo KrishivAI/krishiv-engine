@@ -18,8 +18,36 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::sync::{AtomicUsize, Ordering};
+use crate::sync::{AtomicU64, AtomicUsize, Ordering};
 use crate::{ConsumerId, MemoryPool, Reservation, Spillable};
+
+/// Spill files and bytes written by spill writers of one or more consumers
+/// (one operator's consumers in every driver share one), for metrics.
+/// Counted when a [`crate::SpillWriter`] made with a reservation from a
+/// [`ConsumerHandle`] finishes its file.
+#[derive(Debug, Default)]
+pub struct SpillStats {
+    files: AtomicU64,
+    bytes: AtomicU64,
+}
+
+impl SpillStats {
+    /// Spill files written.
+    pub fn files(&self) -> u64 {
+        self.files.load(Ordering::Relaxed)
+    }
+
+    /// Bytes written to spill files (as stored: compressed, with framing).
+    pub fn bytes(&self) -> u64 {
+        self.bytes.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn record(&self, bytes: u64) {
+        // Statistics only: no other memory is published through these.
+        self.files.fetch_add(1, Ordering::Relaxed);
+        self.bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+}
 
 /// A registered consumer that unregisters (returning everything it holds)
 /// once the handle and every [`Reservation`] made from it are dropped, so a
@@ -33,6 +61,8 @@ pub struct ConsumerHandle {
     /// Bytes held by reservations made from this handle, and their peak.
     held: AtomicUsize,
     peak: AtomicUsize,
+    /// Where this consumer's spill writers count their files.
+    spill_stats: Arc<SpillStats>,
 }
 
 impl ConsumerHandle {
@@ -42,6 +72,17 @@ impl ConsumerHandle {
         name: &str,
         spill: Option<Arc<dyn Spillable>>,
     ) -> Arc<Self> {
+        Self::register_counted(pool, name, spill, Arc::default())
+    }
+
+    /// [`register`](Self::register), counting spill files in `spill_stats`
+    /// (shared by the consumers whose spills are reported together).
+    pub fn register_counted(
+        pool: Arc<dyn MemoryPool>,
+        name: &str,
+        spill: Option<Arc<dyn Spillable>>,
+        spill_stats: Arc<SpillStats>,
+    ) -> Arc<Self> {
         let id = pool.register(name, spill);
         Arc::new(Self {
             pool,
@@ -49,7 +90,13 @@ impl ConsumerHandle {
             credit: AtomicUsize::new(0),
             held: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
+            spill_stats,
         })
+    }
+
+    /// Where this consumer's spill files are counted.
+    pub fn spill_stats(&self) -> &Arc<SpillStats> {
+        &self.spill_stats
     }
 
     /// The consumer id.

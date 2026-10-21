@@ -49,6 +49,13 @@ def loadavg() -> float:
         return math.nan
 
 
+def wait_idle(limit: float = 2.0, max_wait_s: float = 900.0) -> None:
+    """Lets the 1-minute load average decay (e.g. after the previous benchmark run) before recording anything."""
+    deadline = time.monotonic() + max_wait_s
+    while loadavg() > limit and time.monotonic() < deadline:
+        time.sleep(15)
+
+
 def bootstrap_ci(
     a: list[float], b: list[float], iters: int = BOOTSTRAP_ITERS, seed: int = 20261019
 ) -> tuple[float, float]:
@@ -150,6 +157,7 @@ def run_abba(
     queries = load_queries(suite, "krishiv", only)
     ds = Dataset(dataset, sf, root, tables)
     with bench_lock() as waited:
+        wait_idle()
         return _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, waited, suite, runner)
 
 
@@ -316,4 +324,13 @@ def report_from_file(path: Path) -> str:
     return markdown(json.loads(path.read_text()))
 
 
-__all__ = ["bench_lock", "bootstrap_ci", "geomean", "markdown", "report_from_file", "run_abba", "summarize"]
+__all__ = [
+    "bench_lock",
+    "bootstrap_ci",
+    "geomean",
+    "markdown",
+    "report_from_file",
+    "run_abba",
+    "summarize",
+    "wait_idle",
+]

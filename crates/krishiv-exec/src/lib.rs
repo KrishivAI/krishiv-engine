@@ -103,7 +103,7 @@ pub use join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType, NestedLoopJoin,
     NestedLoopJoinNode, NestedLoopSpec,
 };
-pub use metrics::{DriverStats, OperatorEntry, OperatorMetrics, QueryMetrics};
+pub use metrics::{DriverStats, OperatorEntry, OperatorMetrics, QueryMemory, QueryMetrics};
 pub use morsel::MorselCursor;
 pub use operator::{
     FlushOutput, GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source,
