@@ -3,6 +3,21 @@
 //! input ended, sharing them out through [`Grace`]. A partition whose build
 //! rows do not fit is repartitioned on the next hash bits (build and probe
 //! alike) up to [`MAX_DEPTH`] levels deep.
+//!
+//! **Role reversal.** A semi or anti join's spilled partition whose probe
+//! rows are few next to its build rows ([`REVERSE_RATIO`]) is joined the
+//! other way round ([`reverse`]): its probe rows are read into memory and
+//! indexed by key, and its build rows stream past them once, marking the
+//! probe rows they match (the residual condition applied to each candidate
+//! pair). This never loads or repartitions a large build partition: a small
+//! probe side against a build far larger than memory (TPC-H Q21's
+//! `EXISTS` / `NOT EXISTS` on `lineitem`) costs one sequential read of the
+//! build partition instead of a repartition pass and a table per
+//! sub-partition. Role reversal for hash joins whose inputs' sizes turn out
+//! the other way round at run time is classic (Graefe, "Query Evaluation
+//! Techniques for Large Databases", ACM Computing Surveys 1993, §5.3; the
+//! hybrid hash join's role reversal in DeWitt et al., SIGMOD 1984). Inner
+//! and outer joins keep the build-side table.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -457,6 +472,276 @@ impl Drop for Claim {
     }
 }
 
+/// How many build rows a spilled partition must have per probe row to be
+/// joined with roles reversed (module docs).
+const REVERSE_RATIO: u64 = 8;
+
+/// Whether `task` is joined with roles reversed (module docs).
+fn reversible(shared: &Shared, hashing: &Hashing, task: &Task) -> bool {
+    let comparable = shared
+        .keys
+        .layout()
+        .filter(|_| hashing.rows())
+        .is_none_or(|l| !l.has_views());
+    matches!(
+        shared.join_type,
+        super::JoinType::LeftSemi | super::JoinType::LeftAnti
+    ) && comparable
+        && task.probe.rows > 0
+        && task.probe.rows.saturating_mul(REVERSE_RATIO) <= task.build.rows
+}
+
+/// What [`reverse`] did with a task.
+enum Reversed {
+    /// Joined: the probe rows the join emits, if any.
+    Joined(Option<Batch>),
+    /// The probe rows did not fit in memory: join it the usual way.
+    Declined(Task),
+}
+
+/// Joins `task` with roles reversed (module docs): reads its probe rows
+/// into memory (declining if they do not fit the pool's free memory),
+/// indexes them by key and streams its build rows past them.
+async fn reverse(
+    shared: &Arc<Shared>,
+    hashing: &Hashing,
+    task: Task,
+    ctx: &TaskContext,
+) -> Result<Reversed> {
+    // Reading one spill frame at a time is reserved up front.
+    let headroom = task.build.read_headroom().max(task.probe.read_headroom());
+    lend_scratch(ctx, headroom).await?;
+    let shared = Arc::clone(shared);
+    let hashing = hashing.clone();
+    let handle = Arc::clone(ctx.consumer().consumer());
+    let query = Arc::clone(ctx.query());
+    let out = ctx
+        .run_blocking(move || reverse_blocking(&shared, &hashing, task, &handle, &query))
+        .await;
+    ctx.consumer().consumer().release_credit();
+    out
+}
+
+/// Candidate pairs whose residual condition is evaluated at once.
+const PAIR_BATCH: usize = 1024;
+/// What each probe row takes beyond its columns while it is indexed: its
+/// encoded key and arena key bytes, its hash, its index entry and match
+/// flag (an upper estimate for keys up to about 24 bytes).
+const INDEX_ROW_BYTES: usize = 64;
+
+fn reverse_blocking(
+    shared: &Shared,
+    hashing: &Hashing,
+    task: Task,
+    handle: &Arc<ConsumerHandle>,
+    query: &QueryContext,
+) -> Result<Reversed> {
+    // Everything the join holds is reserved before it is allocated, and the
+    // reversal declines while it still can (before the build stream starts):
+    // the probe batches, their concatenated copy, the index, and the
+    // residual evaluation of `PAIR_BATCH` candidate pairs. Spill files stay
+    // on disk until the join is done, so a decline loses nothing.
+    let mut held = handle.reservation();
+    let build_bytes = task
+        .build
+        .files
+        .iter()
+        .map(|f| usize::try_from(f.bytes()).unwrap_or(usize::MAX))
+        .fold(task.build.bytes(), usize::saturating_add);
+    let build_row = build_bytes / usize::try_from(task.build.rows.max(1)).unwrap_or(usize::MAX);
+    let in_memory_rows: usize = task.probe.chunks.iter().map(Batch::num_rows).sum();
+    let in_memory_bytes: usize = task
+        .probe
+        .chunks
+        .iter()
+        .map(|c| c.data().get_array_memory_size())
+        .sum();
+    // The in-memory chunks are reserved already: their copy and index.
+    if held
+        .try_grow(in_memory_bytes.saturating_add(in_memory_rows.saturating_mul(INDEX_ROW_BYTES)))
+        .is_err()
+    {
+        return Ok(Reversed::Declined(task));
+    }
+    let mut batches = task.probe.chunks.clone();
+    let mut probe_bytes = in_memory_bytes;
+    for file in &task.probe.files {
+        for b in file.reader(handle.reservation().releasing_to_credit())? {
+            let b = b?;
+            let size = b.data().get_array_memory_size();
+            // The batch, its concatenated copy and its index.
+            let bytes = size
+                .saturating_mul(2)
+                .saturating_add(b.num_rows().saturating_mul(INDEX_ROW_BYTES));
+            if held.try_grow(bytes).is_err() {
+                return Ok(Reversed::Declined(task));
+            }
+            probe_bytes = probe_bytes.saturating_add(size);
+            batches.push(b);
+        }
+    }
+    let probe_row = probe_bytes / batches.iter().map(Batch::num_rows).sum::<usize>().max(1);
+    if shared.filter.is_some() {
+        // Taken probe rows and decoded build rows of one evaluation, about
+        // twice their stored size each.
+        let pairs =
+            PAIR_BATCH.saturating_mul(probe_row.saturating_add(build_row).saturating_mul(2));
+        if held.try_grow(pairs).is_err() {
+            return Ok(Reversed::Declined(task));
+        }
+    }
+    let probe =
+        Batch::concat(&shared.probe_schema, &batches).map_err(|e| internal(e.to_string()))?;
+    drop(batches);
+    let n = probe.num_rows();
+    let cols: Vec<ArrayRef> = shared
+        .probe_keys
+        .iter()
+        .map(|&k| Arc::clone(probe.data().column(k)))
+        .collect();
+    let keys = shared.keys.encode(&cols, hashing)?;
+    let layout = shared.keys.layout().filter(|_| hashing.rows());
+    let all: Vec<usize> = (0..n).collect();
+    let probe_keys = keys.arena_columns(layout.map(AsRef::as_ref), &all)?;
+    drop(all);
+    let probe_key = KeyColumn::new(probe_keys.first())?;
+    // Index: hash -> the probe rows with it (rows with a NULL key never
+    // match).
+    let hashes = keys.hashes();
+    let mut index: std::collections::HashMap<u64, Vec<u32>> =
+        std::collections::HashMap::with_capacity(n);
+    for (i, &h) in hashes.iter().enumerate().take(n) {
+        if keys.is_valid(i) {
+            let row =
+                u32::try_from(i).map_err(|_| internal("probe partition too large".to_owned()))?;
+            index.entry(h).or_default().push(row);
+        }
+    }
+    let mut matched = vec![false; n];
+    let schema = shared.arena_schema(hashing);
+    let Task { build, .. } = task;
+    let mut visit = |chunk: Batch| -> Result<()> {
+        // The stream runs in one blocking call: a cancelled query stops it
+        // at the next chunk.
+        query.check_cancelled()?;
+        let arena = RowArena::concat(schema, std::slice::from_ref(&chunk))?;
+        let rows =
+            u32::try_from(arena.len()).map_err(|_| internal("build chunk too large".to_owned()))?;
+        // Payloads borrowed from this chunk, evaluated before it is dropped.
+        let mut pairs: Vec<(u32, &[u8])> = Vec::new();
+        for r in 0..rows {
+            let Some(candidates) = index.get(&arena.hash(r)) else {
+                continue;
+            };
+            let key = arena
+                .key_bytes(r)
+                .ok_or_else(|| internal("reversed join over view keys".to_owned()))?;
+            for &p in candidates {
+                if matched[p as usize] || probe_key.value(p as usize) != key {
+                    continue;
+                }
+                if shared.filter.is_some() {
+                    pairs.push((p, arena.payload(r)));
+                } else {
+                    matched[p as usize] = true;
+                }
+            }
+            if pairs.len() >= PAIR_BATCH {
+                mark_pairs(shared, &probe, &mut pairs, &mut matched)?;
+            }
+        }
+        mark_pairs(shared, &probe, &mut pairs, &mut matched)
+    };
+    for_each(
+        build,
+        || handle.reservation().releasing_to_credit(),
+        &mut visit,
+    )?;
+    let want = shared.join_type == super::JoinType::LeftSemi;
+    let rows: Vec<u32> = (0..n)
+        .filter(|&i| matched[i] == want)
+        .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
+        .collect();
+    // The probe partition's files are deleted with it, here.
+    drop(task.probe);
+    drop(held);
+    if rows.is_empty() {
+        return Ok(Reversed::Joined(None));
+    }
+    let out = if rows.len() == n {
+        probe
+    } else {
+        take_batch(&probe, &UInt32Array::from(rows))?
+    };
+    Ok(Reversed::Joined(Some(out)))
+}
+
+/// Applies the residual condition to candidate pairs (probe row, build
+/// payload) and marks the probe rows of those that hold.
+fn mark_pairs(
+    shared: &Shared,
+    probe: &Batch,
+    pairs: &mut Vec<(u32, &[u8])>,
+    matched: &mut [bool],
+) -> Result<()> {
+    let Some(filter) = &shared.filter else {
+        pairs.clear();
+        return Ok(());
+    };
+    // A probe row matched earlier in this batch of pairs needs no check.
+    pairs.retain(|(p, _)| !matched[*p as usize]);
+    if pairs.is_empty() {
+        return Ok(());
+    }
+    let idx: Vec<u32> = pairs.iter().map(|(p, _)| *p).collect();
+    let taken = take_batch(probe, &UInt32Array::from(idx.clone()))?;
+    let build_cols = shared.decode(pairs.iter().map(|(_, b)| *b))?;
+    let m = idx.len();
+    let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
+    columns.extend(build_cols);
+    let candidates = super::record(&shared.filter_schema, columns, m)?;
+    let mask = filter.evaluate(&candidates)?;
+    if mask.len() != m {
+        return Err(internal(
+            "a join filter returned the wrong row count".to_owned(),
+        ));
+    }
+    for (j, &p) in idx.iter().enumerate() {
+        // NULL is not a match.
+        if arrow_array::Array::is_valid(&mask, j) && mask.value(j) {
+            matched[p as usize] = true;
+        }
+    }
+    pairs.clear();
+    Ok(())
+}
+
+/// The arena-format key bytes of each probe row (module docs).
+enum KeyColumn {
+    Arrow(arrow_array::LargeBinaryArray),
+    Rows(arrow_array::FixedSizeBinaryArray),
+}
+
+impl KeyColumn {
+    fn new(column: Option<&ArrayRef>) -> Result<Self> {
+        let bad = || internal("unexpected join key column".to_owned());
+        let c = column.ok_or_else(bad)?;
+        if let Some(a) = c.as_binary_opt::<i64>() {
+            return Ok(Self::Arrow(a.clone()));
+        }
+        c.as_fixed_size_binary_opt()
+            .map(|a| Self::Rows(a.clone()))
+            .ok_or_else(bad)
+    }
+
+    fn value(&self, i: usize) -> &[u8] {
+        match self {
+            Self::Arrow(a) => a.value(i),
+            Self::Rows(a) => a.value(i),
+        }
+    }
+}
+
 /// One driver's flush state.
 #[derive(Debug, Default)]
 pub(crate) struct Flush {
@@ -513,6 +798,7 @@ pub(crate) async fn step(
         // one once no other driver holds a partition. Otherwise wait for a
         // claim to end; listen first, so a change in between is not missed.
         let changed = built.grace_changed.listen();
+        let mut reversal = None;
         {
             let mut g = lock(&built.grace);
             if st.task.is_some() {
@@ -521,6 +807,11 @@ pub(crate) async fn step(
                 }
             } else {
                 match g.next() {
+                    Next::Task(task) if reversible(shared, hashing, &task) => {
+                        let slot = Claim::new(build, &mut g, Hold::Memory);
+                        let held = Claim::new(build, &mut g, Hold::Task);
+                        reversal = Some((task, slot, held));
+                    }
                     Next::Task(task) => {
                         st.slot = Some(Claim::new(build, &mut g, Hold::Memory));
                         let held = Claim::new(build, &mut g, Hold::Task);
@@ -530,6 +821,21 @@ pub(crate) async fn step(
                     Next::Wait => {}
                 }
             }
+        }
+        if let Some((task, slot, held)) = reversal {
+            return match reverse(shared, hashing, task, ctx).await? {
+                Reversed::Joined(out) => {
+                    shared.counters.add(Counter::GracePartitions, 1);
+                    shared.counters.add(Counter::ReversedPartitions, 1);
+                    drop((slot, held));
+                    Ok(out.map_or(FlushOutput::Continue, FlushOutput::Batch))
+                }
+                Reversed::Declined(task) => {
+                    st.slot = Some(slot);
+                    st.task = Some((Loading::new(task, false, ctx), held));
+                    Ok(FlushOutput::Continue)
+                }
+            };
         }
         if st.slot.is_none() {
             changed.await;
@@ -1295,6 +1601,98 @@ mod tests {
         ctx.consumer().consumer().release_credit();
         drop((filler, parts));
         assert_eq!(root.reserved(), 0);
+    }
+
+    /// A reversal whose probe rows (read back from spill files) do not fit
+    /// the pool's free memory declines, and hands the task back intact.
+    #[tokio::test]
+    async fn a_probe_side_that_does_not_fit_declines_the_reversal() {
+        const LIMIT: usize = 64 << 20;
+        let root = TreePool::new(&MemoryConfig {
+            limit: Some(LIMIT),
+            quantum: 1,
+            spill_scratch_reserve: 0,
+            ..MemoryConfig::default()
+        });
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            root.child("q", None),
+        );
+        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
+        let dir = TempDir::new("grace-reverse-decline");
+        let manager = SpillManager::open(&SpillConfig {
+            dir: dir.0.clone(),
+            ..SpillConfig::default()
+        })
+        .unwrap();
+        let scope = manager.scope().unwrap();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("s", DataType::Utf8, false),
+        ]));
+        let join = super::super::HashJoin::try_new(super::super::JoinSpec {
+            join_type: super::super::JoinType::LeftSemi,
+            probe_schema: Arc::clone(&schema),
+            build_schema: Arc::clone(&schema),
+            probe_keys: vec![0],
+            build_keys: vec![0],
+            null_safe: vec![false],
+            filter: None,
+            spill: Some(scope.clone()),
+        })
+        .unwrap();
+        let shared = &join.0;
+        let hashing = shared.hashing(&ExecConfig::default());
+        let k = Int64Array::from_iter_values(0..3000);
+        let v = StringArray::from_iter_values((0..3000).map(|j| format!("row-{j}")));
+        let batch = Batch::new(
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(v)]).unwrap(),
+        );
+        let mut parts = vec![Part::with_memory(ctx.consumer().reservation())];
+        reserve_chunks(&mut parts, &[(0, batch.clone())]).unwrap();
+        parts[0].chunks.push(batch);
+        spill_parts(&mut parts, &[0], &schema, &scope, &ctx, false)
+            .await
+            .unwrap();
+        let files = parts[0].files.len();
+        assert!(files > 0 && parts[0].chunks.is_empty());
+        let task = Task {
+            depth: 0,
+            build: Part::default(),
+            probe: parts.remove(0),
+        };
+        // Frame headroom lent as `reverse` does; nothing else is free.
+        let headroom = task.probe.read_headroom();
+        let mut lent = ctx.consumer().reservation();
+        lent.try_grow(headroom).unwrap();
+        lent.shrink_to_credit(headroom);
+        let other: Arc<dyn MemoryPool> = root.child("other", None);
+        let id = other.register("filler", None);
+        let mut filler = krishiv_memory::Reservation::new(Arc::clone(&other), id);
+        filler.try_grow(LIMIT - root.reserved()).unwrap();
+        let handle = Arc::clone(ctx.consumer().consumer());
+        let Ok(Reversed::Declined(task)) =
+            reverse_blocking(shared, &hashing, task, &handle, ctx.query())
+        else {
+            panic!("the probe rows cannot fit");
+        };
+        assert_eq!(task.probe.files.len(), files, "nothing was consumed");
+        assert_eq!(task.probe.rows, 3000);
+        // With room, the same task joins: a semi join with no build rows
+        // emits nothing, and the probe files are gone with the task.
+        drop(filler);
+        let Ok(Reversed::Joined(out)) =
+            reverse_blocking(shared, &hashing, task, &handle, ctx.query())
+        else {
+            panic!("the probe rows fit now");
+        };
+        assert!(out.is_none());
+        ctx.consumer().consumer().release_credit();
+        assert_eq!(root.reserved(), 0);
+        assert_eq!(manager.used_bytes(), 0);
     }
 
     /// A spill whose rows and the pool's free memory cannot fund its
