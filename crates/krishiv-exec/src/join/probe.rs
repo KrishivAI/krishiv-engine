@@ -360,7 +360,8 @@ impl ProbeOp {
                 .enumerate()
                 .filter(|(_, r)| !r.is_empty())
             {
-                chunks.push((p, take_batch(input, &UInt32Array::from(rows))?));
+                let chunk = take_batch(input, &UInt32Array::from(rows))?;
+                chunks.push((p, super::compact_views(chunk)?));
             }
             if let Err(bytes) = reserve_chunks(&mut l.parts, &chunks) {
                 return Ok(OperatorOutput::NeedMemory { bytes });

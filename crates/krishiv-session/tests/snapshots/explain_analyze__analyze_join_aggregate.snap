@@ -4,6 +4,7 @@ expression: "profile.to_text(TextOptions::masked())"
 ---
 == Physical Plan (analyzed) ==
 wall <t>, 4 pipelines, <n> drivers, <n> threads (most in one pipeline), 1 worker
+memory: peak reserved <mem>, limit none
 Sort [name#3 ASC NULLS FIRST]
 :  · sink   #1 Sort p1: in 4 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>
 :  · source #10 Sort p0: out 4 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)

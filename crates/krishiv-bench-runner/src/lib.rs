@@ -10,8 +10,17 @@
 //!   `{"phases":[{"name":"parse_analyze","seconds":..},{"name":"plan_execute","seconds":..}]}`: the wall
 //!   time of `Session::sql` (parse and analysis) and of `collect` (planning, execution and materialising).
 //!   It adds `"operators":[{"id","name","rows_in","rows_out","compute_seconds","blocked_io_seconds"}]` from the
-//!   executor's `QueryMetrics` (`DataFrame::collect_with_metrics`), in operator-id order. The seconds are
-//!   summed over the query's drivers, so with several threads they can exceed the wall time.
+//!   executor's `QueryMetrics` (`DataFrame::collect_with_metrics`), in operator-id order, each also with
+//!   `"peak_reserved_bytes"` (summed over drivers), `"spill_requests"` (arbitrator requests serviced),
+//!   `"spill_files"`, `"spill_bytes"` (written, as stored), `"blocked_memory_seconds"` and `"extra"`, the
+//!   operator's own counters (`OperatorEntry::extra`, e.g. a grace join's depth). The seconds are
+//!   summed over the query's drivers, so with several threads they can exceed the wall time. A
+//!   `"memory"` object gives `"limit_bytes"`, the query's `"peak_reserved_bytes"` (what the memory pool
+//!   granted at once), `"spill_files"`/`"spill_bytes"` (all operators) and, on Linux, `"rss_before_bytes"`
+//!   and `"peak_rss_bytes"`: the process's resident set before the query and its peak during it (the
+//!   kernel's high-water mark, reset before the query through `/proc/self/clear_refs`), `null` where
+//!   unavailable. The peak covers everything the process holds (allocator retention, untracked buffers),
+//!   which is what a memory cap enforces; it starts from what the process already held.
 //! * `DUMP <query.sql> <out-dir>`: as `RUN`, then writes the result as Parquet to `out-dir`
 //!   (replacing it). The write is not in the reported seconds.
 //! * `QUIT`: exits.
@@ -29,7 +38,7 @@ use std::time::Instant;
 use arrow_array::RecordBatch;
 use krishiv_common::config::Config;
 use krishiv_common::error::KrishivError;
-use krishiv_exec::{ExecutorConfig, QueryMetrics, TokioExecutor};
+use krishiv_exec::{ExecutorConfig, Metric, QueryMetrics, TokioExecutor};
 use krishiv_session::{DataFrame, Session};
 
 /// Why a runner call failed.
@@ -56,6 +65,61 @@ pub const BUILD_INFO: &str = concat!(
 
 /// Name of the temporary view a `DUMP` writes from.
 const DUMP_VIEW: &str = "__krishiv_bench_dump";
+
+/// The process's resident set and its high-water mark, in bytes (`VmRSS`, `VmHWM` of
+/// `/proc/self/status`); `None` off Linux or if unreadable.
+#[must_use]
+pub fn rss() -> Option<(u64, u64)> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let kib = |key: &str| -> Option<u64> {
+        let line = status.lines().find(|l| l.starts_with(key))?;
+        let n: u64 = line[key.len()..]
+            .trim()
+            .strip_suffix("kB")?
+            .trim()
+            .parse()
+            .ok()?;
+        n.checked_mul(1024)
+    };
+    Some((kib("VmRSS:")?, kib("VmHWM:")?))
+}
+
+/// Fixed part of the resident-set bound: the program, its runtimes and caches.
+pub const RSS_FLOOR_BASE: u64 = 48 << 20;
+/// Per compute thread: thread stacks and allocator caches, the batches in flight in each pipeline, and
+/// one decoder working set a scan takes without a reservation when the pool is full.
+pub const RSS_FLOOR_PER_THREAD: u64 = 16 << 20;
+
+/// The most resident memory a runner with memory limit `limit` and `threads` compute threads may use:
+/// `1.25 x limit + RSS_FLOOR_BASE + threads x RSS_FLOOR_PER_THREAD`. The 25% covers what the memory pool
+/// cannot see exactly (allocator size classes and retention after a purge delay, estimates of decoder
+/// pages); the floor what does not scale with the limit. The memory gate checks peak RSS against it
+/// and runs the process in a cgroup with `memory.max` at the bound plus room for the spill files'
+/// page cache, which the cgroup charges but which is not resident memory (64 MiB in the memory-bound
+/// test).
+///
+/// It holds for a process whose global allocator is configured for it: mimalloc with
+/// `krishiv_alloc` (this runner and the CLI, when the limit is known at process start: an argument or
+/// `KRISHIV_MEMORY_LIMIT`). Memory an allocator retains is outside the
+/// pools' control, so an embedding host with another allocator, or without a release hook
+/// (`krishiv_memory::set_release_hook`), can exceed it by what its allocator keeps.
+///
+/// Known limitation: the row group a Parquet scan driver decodes is not reserved; the per-thread
+/// floor covers row groups of a few MiB (TPC-H as generated), not files written with 128 MiB row
+/// groups, which can exceed the bound by about one row group per driver.
+#[must_use]
+pub fn rss_bound(limit: u64, threads: u64) -> u64 {
+    limit
+        .saturating_add(limit / 4)
+        .saturating_add(RSS_FLOOR_BASE)
+        .saturating_add(threads.saturating_mul(RSS_FLOOR_PER_THREAD))
+}
+
+/// Resets the resident-set high-water mark to the current resident set (Linux 4.0+:
+/// `/proc/self/clear_refs` value 5). Returns whether it was reset.
+fn reset_peak_rss() -> bool {
+    std::fs::write("/proc/self/clear_refs", "5").is_ok()
+}
 
 /// Settings of a runner.
 #[derive(Debug, Clone)]
@@ -122,6 +186,8 @@ impl RunnerConfig {
 pub struct Runner {
     session: Session,
     tables: Vec<String>,
+    /// `krishiv.memory.limit` in bytes.
+    limit: Option<u64>,
 }
 
 impl Runner {
@@ -140,7 +206,7 @@ impl Runner {
         // identical without saying so, so reject it here.
         let pairs = std::iter::once(("krishiv.memory.limit", config.memory_limit.as_str()))
             .chain(config.conf.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-        let (_, warnings) = Config::from_pairs(pairs)?;
+        let (merged, warnings) = Config::from_pairs(pairs)?;
         if let Some(w) = warnings.first() {
             return Err(RunnerError::Config(format!("--conf not applied: {w}")));
         }
@@ -177,7 +243,15 @@ impl Runner {
                 config.data
             )));
         }
-        Ok(Self { session, tables })
+        // As the session sees it: a `--conf` limit wins over `--memory-limit`.
+        let limit = merged
+            .get(&krishiv_common::config::MEMORY_LIMIT)
+            .and_then(krishiv_common::config::ConfigValue::as_size);
+        Ok(Self {
+            session,
+            tables,
+            limit,
+        })
     }
 
     /// The registered table names, sorted.
@@ -255,13 +329,21 @@ impl Runner {
                 Ok(format!("OK {} {secs:.6}", count_rows(&batches)))
             }
             (Some("PROFILE"), Some(file), None, _) => {
-                let (batches, t, _, metrics) =
-                    self.execute_timed(&read_sql(&decode_path(file)?)?, true)?;
+                let sql = read_sql(&decode_path(file)?)?;
+                let before = rss().map(|(now, _)| now);
+                let reset = reset_peak_rss();
+                let (batches, t, _, metrics) = self.execute_timed(&sql, true)?;
+                let peak = rss().filter(|_| reset).map(|(_, hwm)| hwm);
+                let memory = Memory {
+                    limit: self.limit,
+                    rss_before: before,
+                    peak_rss: peak,
+                };
                 Ok(format!(
                     "OK {} {:.6} {}",
                     count_rows(&batches),
                     t.total,
-                    t.json(metrics.as_ref())
+                    t.json(metrics.as_ref(), &memory)
                 ))
             }
             (Some("DUMP"), Some(file), Some(out), None) => {
@@ -290,6 +372,19 @@ impl Runner {
 
 type Executed = (Vec<RecordBatch>, Timing, DataFrame, Option<QueryMetrics>);
 
+/// What `PROFILE` reports about memory besides the metrics.
+#[derive(Debug, Clone, Copy)]
+struct Memory {
+    limit: Option<u64>,
+    rss_before: Option<u64>,
+    peak_rss: Option<u64>,
+}
+
+/// `v` as JSON (`null` for `None`).
+fn json_opt(v: Option<u64>) -> String {
+    v.map_or_else(|| "null".to_owned(), |n| n.to_string())
+}
+
 /// Wall time of one query, in seconds.
 #[derive(Debug, Clone, Copy)]
 struct Timing {
@@ -299,27 +394,58 @@ struct Timing {
 }
 
 impl Timing {
-    fn json(&self, metrics: Option<&QueryMetrics>) -> String {
+    fn json(&self, metrics: Option<&QueryMetrics>, memory: &Memory) -> String {
         let operators = metrics.map_or_else(String::new, |m| {
             let ops: Vec<String> = m
                 .operators
                 .iter()
                 .map(|(id, e)| {
+                    let m = &e.metrics;
+                    let extra: Vec<String> = e
+                        .extra
+                        .iter()
+                        .map(|(k, v)| match v {
+                            Metric::Count(n) | Metric::Max(n) => {
+                                format!("\"{}\":{n}", k.escape_default())
+                            }
+                            Metric::Text(t) => {
+                                format!("\"{}\":\"{}\"", k.escape_default(), t.escape_default())
+                            }
+                        })
+                        .collect();
                     format!(
-                        "{{\"id\":{},\"name\":\"{}\",\"rows_in\":{},\"rows_out\":{},\"compute_seconds\":{:.6},\"blocked_io_seconds\":{:.6}}}",
+                        "{{\"id\":{},\"name\":\"{}\",\"rows_in\":{},\"rows_out\":{},\"compute_seconds\":{:.6},\"blocked_io_seconds\":{:.6},\"peak_reserved_bytes\":{},\"spill_requests\":{},\"spill_files\":{},\"spill_bytes\":{},\"blocked_memory_seconds\":{:.6},\"extra\":{{{}}}}}",
                         id.0,
                         e.name.escape_default(),
-                        e.metrics.rows_in,
-                        e.metrics.rows_out,
-                        e.metrics.compute_time.as_secs_f64(),
-                        e.metrics.blocked_on_io.as_secs_f64()
+                        m.rows_in,
+                        m.rows_out,
+                        m.compute_time.as_secs_f64(),
+                        m.blocked_on_io.as_secs_f64(),
+                        m.peak_reserved,
+                        m.spills,
+                        m.spill_files,
+                        m.spill_write_bytes,
+                        m.blocked_on_memory.as_secs_f64(),
+                        extra.join(",")
                     )
                 })
                 .collect();
             format!(",\"operators\":[{}]", ops.join(","))
         });
+        let ops = metrics.map(|m| m.operators.values().map(|e| &e.metrics));
+        let spill_files = ops.clone().map(|o| o.map(|m| m.spill_files).sum::<u64>());
+        let spill_bytes = ops.map(|o| o.map(|m| m.spill_write_bytes).sum::<u64>());
+        let mem = format!(
+            ",\"memory\":{{\"limit_bytes\":{},\"peak_reserved_bytes\":{},\"spill_files\":{},\"spill_bytes\":{},\"rss_before_bytes\":{},\"peak_rss_bytes\":{}}}",
+            json_opt(memory.limit),
+            json_opt(metrics.map(|m| m.memory.peak_reserved)),
+            json_opt(spill_files),
+            json_opt(spill_bytes),
+            json_opt(memory.rss_before),
+            json_opt(memory.peak_rss),
+        );
         format!(
-            "{{\"phases\":[{{\"name\":\"parse_analyze\",\"seconds\":{:.6}}},{{\"name\":\"plan_execute\",\"seconds\":{:.6}}}]{operators}}}",
+            "{{\"phases\":[{{\"name\":\"parse_analyze\",\"seconds\":{:.6}}},{{\"name\":\"plan_execute\",\"seconds\":{:.6}}}]{operators}{mem}}}",
             self.parse_analyze, self.plan_execute
         )
     }

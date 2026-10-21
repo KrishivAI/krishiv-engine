@@ -1,0 +1,15 @@
+[package]
+name = "krishiv-alloc"
+description = "mimalloc settings and memory release for Krishiv binaries (never linked by libraries)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+libmimalloc-sys = { workspace = true, features = ["extended"] }

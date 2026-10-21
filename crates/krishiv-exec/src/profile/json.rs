@@ -16,7 +16,7 @@ use super::{PROFILE_FORMAT, PROFILE_VERSION, ProfileError, ProfileNode, QueryPro
 use crate::context::OperatorId;
 use crate::metrics::{
     DriverStats, Metric, OperatorEntry, OperatorMetrics, OperatorRole, PipelineMetrics,
-    QueryMetrics,
+    QueryMemory, QueryMetrics,
 };
 
 type R<T> = Result<T, ProfileError>;
@@ -43,6 +43,10 @@ impl QueryProfile {
                 "yields": d.yields,
                 "max_slice_ns": ns(d.max_slice),
                 "stalls": d.stalls,
+                "memory": {
+                    "limit_bytes": m.memory.limit,
+                    "peak_reserved_bytes": m.memory.peak_reserved,
+                },
             },
             "pipelines": m.pipelines.iter().map(|(id, p)| json!({
                 "id": id,
@@ -94,6 +98,7 @@ impl QueryProfile {
                 max_slice: dur_of(q, "max_slice_ns")?,
                 stalls: u64_of(q, "stalls")?,
             },
+            memory: memory_of(q)?,
             ..QueryMetrics::default()
         };
         for p in arr(o, "pipelines")? {
@@ -178,6 +183,8 @@ fn operator_json(id: OperatorId, e: &OperatorEntry) -> Value {
             "peak_reserved_bytes": m.peak_reserved,
             "spills": m.spills,
             "spilled_bytes": m.spilled_bytes,
+            "spill_files": m.spill_files,
+            "spill_write_bytes": m.spill_write_bytes,
         },
         "extra": e.extra.iter().map(|(name, v)| match v {
             Metric::Count(n) => json!({"name": name, "kind": "count", "value": n}),
@@ -294,6 +301,9 @@ fn operator_of(v: &Value) -> R<(OperatorId, OperatorEntry)> {
         peak_reserved: u64_of(m, "peak_reserved_bytes")?,
         spills: u64_of(m, "spills")?,
         spilled_bytes: u64_of(m, "spilled_bytes")?,
+        // Added within v1: absent in documents written before them.
+        spill_files: opt_u64(m, "spill_files")?.unwrap_or(0),
+        spill_write_bytes: opt_u64(m, "spill_write_bytes")?.unwrap_or(0),
     };
     let mut extra = Vec::new();
     for x in arr(o, "extra")? {
@@ -323,6 +333,29 @@ fn operator_of(v: &Value) -> R<(OperatorId, OperatorEntry)> {
             extra,
         },
     ))
+}
+
+/// The query's memory (added within v1: absent in earlier documents).
+fn memory_of(q: &Map<String, Value>) -> R<QueryMemory> {
+    let Some(v) = q.get("memory") else {
+        return Ok(QueryMemory::default());
+    };
+    let m = obj(v, "memory")?;
+    Ok(QueryMemory {
+        limit: opt_u64(m, "limit_bytes")?,
+        peak_reserved: u64_of(m, "peak_reserved_bytes")?,
+    })
+}
+
+/// An optional unsigned member: absent or `null` is `None`.
+fn opt_u64(o: &Map<String, Value>, key: &str) -> R<Option<u64>> {
+    match o.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| ProfileError::new(format!("{key} is not an unsigned integer"))),
+    }
 }
 
 fn obj<'a>(v: &'a Value, what: &str) -> R<&'a Map<String, Value>> {

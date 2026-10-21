@@ -389,6 +389,9 @@ impl Driver {
         let run = Arc::clone(&self.run);
         run.query.pool().check_aborted()?;
         run.query.check_cancelled()?;
+        // Under memory pressure, return this thread's freed memory to the
+        // OS (the host's release hook; see `krishiv_memory::set_release_hook`).
+        krishiv_memory::release_if_pressured_here();
         if self.owner.pending() {
             let serviced = service(&run, self.slots.get_mut());
             pause(&run, None, serviced).await?.0?;

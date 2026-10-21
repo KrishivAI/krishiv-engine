@@ -105,7 +105,7 @@ pub use join::{
 };
 pub use metrics::{
     DriverStats, ExtraMetrics, Metric, OperatorEntry, OperatorMetrics, OperatorRole,
-    PipelineMetrics, QueryMetrics,
+    PipelineMetrics, QueryMemory, QueryMetrics,
 };
 pub use morsel::MorselCursor;
 pub use operator::{

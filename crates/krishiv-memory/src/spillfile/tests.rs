@@ -224,6 +224,49 @@ fn max_read_reservation_is_what_reading_back_needs() {
 /// not strand it), unless the reservation opted in with
 /// `releasing_to_credit`: then it stays the consumer's credit.
 #[test]
+fn finished_files_count_in_the_handles_spill_stats() {
+    let (_dir, _manager, scope, pool) = env(SpillCodec::None);
+    let stats = Arc::new(crate::SpillStats::default());
+    let a = crate::ConsumerHandle::register_counted(
+        Arc::clone(&pool.query),
+        "a",
+        None,
+        Arc::clone(&stats),
+    );
+    let b = crate::ConsumerHandle::register_counted(
+        Arc::clone(&pool.query),
+        "b",
+        None,
+        Arc::clone(&stats),
+    );
+    let mut sizes = 0;
+    for h in [&a, &b, &a] {
+        let mut w = scope.writer(schema_i64(), h.reservation()).unwrap();
+        w.write(&int_batch(0, 100, Weights::Const(1))).unwrap();
+        let file = w.finish().unwrap();
+        sizes += file.bytes();
+    }
+    assert_eq!((stats.files(), stats.bytes()), (3, sizes));
+    assert!(Arc::ptr_eq(a.spill_stats(), &stats));
+    // An abandoned writer, and one without a handle, count nothing.
+    let mut w = scope.writer(schema_i64(), a.reservation()).unwrap();
+    w.write(&int_batch(0, 100, Weights::Const(1))).unwrap();
+    drop(w);
+    write_file(&scope, &pool, &[int_batch(0, 10, Weights::Const(1))]);
+    assert_eq!((stats.files(), stats.bytes()), (3, sizes));
+    // A plain registration counts in its own stats.
+    let c = crate::ConsumerHandle::register(Arc::clone(&pool.query), "c", None);
+    let mut w = scope.writer(schema_i64(), c.reservation()).unwrap();
+    w.write(&int_batch(0, 10, Weights::Const(1))).unwrap();
+    let file = w.finish().unwrap();
+    assert_eq!(
+        (c.spill_stats().files(), c.spill_stats().bytes()),
+        (1, file.bytes())
+    );
+    assert_eq!(stats.files(), 3);
+}
+
+#[test]
 fn writer_scratch_returns_to_credit_only_when_opted_in() {
     let (_dir, _manager, scope, pool) = env(SpillCodec::None);
     for opt_in in [false, true] {

@@ -494,6 +494,40 @@ fn record(schema: &SchemaRef, columns: Vec<ArrayRef>, rows: usize) -> Result<Rec
 }
 
 /// The rows `idx` of `batch`, with their weights.
+/// `batch` with its top-level string and binary view columns compacted
+/// (`gc`): a view array taken from a scan's batch shares the decoded page
+/// buffers, so a few rows kept in memory would keep (and be charged for)
+/// whole pages. For rows held until they spill.
+pub(crate) fn compact_views(batch: Batch) -> Result<Batch> {
+    use arrow_array::cast::AsArray;
+    let data = batch.data();
+    let views = |c: &ArrayRef| {
+        matches!(
+            c.data_type(),
+            arrow_schema::DataType::Utf8View | arrow_schema::DataType::BinaryView
+        )
+    };
+    if !data.columns().iter().any(views) {
+        return Ok(batch);
+    }
+    let columns: Vec<ArrayRef> = data
+        .columns()
+        .iter()
+        .map(|c| match c.data_type() {
+            arrow_schema::DataType::Utf8View => Arc::new(c.as_string_view().gc()) as ArrayRef,
+            arrow_schema::DataType::BinaryView => Arc::new(c.as_binary_view().gc()) as ArrayRef,
+            _ => Arc::clone(c),
+        })
+        .collect();
+    let compacted = RecordBatch::try_new_with_options(
+        data.schema(),
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(data.num_rows())),
+    )
+    .map_err(|e| internal(e.to_string()))?;
+    Batch::with_weights(compacted, batch.weights().clone()).map_err(|e| internal(e.to_string()))
+}
+
 fn take_batch(batch: &Batch, idx: &UInt32Array) -> Result<Batch> {
     let data = arrow_select::take::take_record_batch(batch.data(), idx)
         .map_err(|e| internal(e.to_string()))?;
@@ -666,6 +700,56 @@ mod tests {
             HashJoin::try_new(spec(JoinType::LeftSemi, 1, false)).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(j.schema().fields().len(), 2);
         assert!(format!("{j:?}").contains("LeftSemi"));
+    }
+
+    /// Rows taken from a batch of view columns keep only their own bytes
+    /// once compacted; other columns and the weights are untouched.
+    #[test]
+    fn compacted_views_hold_only_the_taken_rows() {
+        use arrow_array::{Array, BinaryViewArray, Int64Array, StringViewArray};
+        let long = |i: usize| format!("{i:0>64}");
+        let strings: Vec<String> = (0..10_000).map(long).collect();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", arrow_schema::DataType::Utf8View, false),
+            Field::new("b", arrow_schema::DataType::BinaryView, false),
+            Field::new("n", arrow_schema::DataType::Int64, false),
+        ]));
+        let data = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringViewArray::from_iter_values(&strings)),
+                Arc::new(BinaryViewArray::from_iter_values(
+                    strings.iter().map(String::as_bytes),
+                )),
+                Arc::new(Int64Array::from_iter_values(0..10_000)),
+            ],
+        )
+        .unwrap();
+        let weights = Weights::Column(arrow_array::Int64Array::from_iter_values(
+            (0..10_000).map(|i| i % 3 - 1),
+        ));
+        let batch = Batch::with_weights(data, weights).unwrap();
+        let taken = take_batch(&batch, &UInt32Array::from(vec![7, 9_000])).unwrap();
+        let before = taken.data().get_array_memory_size();
+        let compacted = compact_views(taken.clone()).unwrap();
+        assert!(compacted.data().get_array_memory_size() * 20 < before);
+        assert_eq!(compacted.data(), taken.data());
+        assert_eq!(compacted.weights(), taken.weights());
+        let s = compacted.data().column(0);
+        assert_eq!(s.len(), 2);
+        // No view columns: the batch comes back as it was.
+        let ints = Batch::new(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new(
+                    "n",
+                    arrow_schema::DataType::Int64,
+                    false,
+                )])),
+                vec![Arc::new(Int64Array::from(vec![1, 2]))],
+            )
+            .unwrap(),
+        );
+        assert_eq!(compact_views(ints.clone()).unwrap().data(), ints.data());
     }
 
     /// The row layout is used only when asked for and when every key type

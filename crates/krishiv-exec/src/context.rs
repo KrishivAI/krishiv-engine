@@ -10,13 +10,13 @@ use std::time::{Duration, Instant};
 use krishiv_common::config::{Config, EXEC_BATCH_SIZE, EXEC_JOIN_ROW_LAYOUT};
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
-    ConsumerHandle, ConsumerId, MemoryPool, Reservation, SpillOwner, SpillSignal,
+    ConsumerHandle, ConsumerId, MemoryPool, Reservation, SpillOwner, SpillSignal, SpillStats,
 };
 
 use crate::cancel::CancellationToken;
 use crate::error::{Result, cancelled};
 use crate::executor::{Executor, WorkloadClass, run_blocking};
-use crate::metrics::{PipelineMetrics, QueryMetrics};
+use crate::metrics::{PipelineMetrics, QueryMemory, QueryMetrics};
 use crate::operator::GlobalState;
 use crate::sync::{AtomicBool, AtomicUsize, Event, Mutex, Ordering, lock};
 
@@ -110,6 +110,9 @@ pub struct QueryContext {
     /// Per pipeline, the threads that polled its drivers (worker-local, to
     /// count them; [`QueryMetrics`] keeps only the count).
     threads: Mutex<BTreeMap<u32, BTreeSet<u64>>>,
+    /// Spill files written per operator, shared by its consumers in every
+    /// driver (read into the metrics by [`QueryContext::metrics`]).
+    spills: Mutex<BTreeMap<OperatorId, Arc<SpillStats>>>,
     finished: AtomicBool,
     finished_event: Event,
     /// Blocking closures in flight; the query ends only once they have.
@@ -146,6 +149,7 @@ impl QueryContext {
             metrics: Mutex::new(QueryMetrics::default()),
             epoch: OnceLock::new(),
             threads: Mutex::new(BTreeMap::new()),
+            spills: Mutex::new(BTreeMap::new()),
             finished: AtomicBool::new(false),
             finished_event: Event::default(),
             blocking: AtomicUsize::new(0),
@@ -260,7 +264,22 @@ impl QueryContext {
     /// Per-operator metrics for `EXPLAIN ANALYZE`, complete once the query
     /// finished (each driver merges its counters once, when it ends).
     pub fn metrics(&self) -> QueryMetrics {
-        lock(&self.metrics).clone()
+        let mut m = lock(&self.metrics).clone();
+        for (id, stats) in lock(&self.spills).iter() {
+            let om = &mut m.operators.entry(*id).or_default().metrics;
+            om.spill_files = stats.files();
+            om.spill_write_bytes = stats.bytes();
+        }
+        m.memory = QueryMemory {
+            limit: self.pool.limit().map(|l| l as u64),
+            peak_reserved: self.pool.peak_reserved() as u64,
+        };
+        m
+    }
+
+    /// Where `op`'s consumers count their spill files.
+    fn spill_stats(&self, op: OperatorId) -> Arc<SpillStats> {
+        Arc::clone(lock(&self.spills).entry(op).or_default())
     }
 
     pub(crate) fn merge_metrics(&self, f: impl FnOnce(&mut QueryMetrics)) {
@@ -412,10 +431,11 @@ impl TaskContext {
     pub fn consumer(&self) -> &MemoryHandle {
         self.memory.get_or_init(|| {
             let signal = self.owner.signal();
-            let consumer = ConsumerHandle::register(
+            let consumer = ConsumerHandle::register_counted(
                 Arc::clone(self.query.pool()),
                 self.name,
                 Some(Arc::clone(&signal) as Arc<dyn krishiv_memory::Spillable>),
+                self.query.spill_stats(self.op),
             );
             MemoryHandle { consumer, signal }
         })

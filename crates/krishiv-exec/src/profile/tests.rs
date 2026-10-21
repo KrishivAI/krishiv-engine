@@ -429,21 +429,39 @@ fn schema_matches_the_writer() {
         k.sort();
         k
     };
+    // Every member the writer emits is a schema property; every required
+    // property is emitted (members added within v1 are optional).
+    let properties = |s: &Value| -> Vec<String> {
+        let mut k: Vec<String> = s["properties"]
+            .as_object()
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default();
+        k.sort();
+        k
+    };
+    let check = |s: &Value, d: &Value| {
+        assert_eq!(properties(s), keys(d), "properties vs writer");
+        let k = keys(d);
+        for r in required(s) {
+            assert!(k.contains(&r), "{r} is required but not written");
+        }
+    };
     let props = &schema["properties"];
-    assert_eq!(required(&schema), keys(&doc));
+    check(&schema, &doc);
     assert_eq!(props["format"]["const"], PROFILE_FORMAT);
     assert_eq!(props["version"]["const"], PROFILE_VERSION);
-    assert_eq!(required(&props["query"]), keys(&doc["query"]));
-    assert_eq!(
-        required(&props["pipelines"]["items"]),
-        keys(&doc["pipelines"][0])
+    check(&props["query"], &doc["query"]);
+    check(
+        &props["query"]["properties"]["memory"],
+        &doc["query"]["memory"],
     );
-    assert_eq!(required(&props["plan"]["items"]), keys(&doc["plan"][0]));
+    check(&props["pipelines"]["items"], &doc["pipelines"][0]);
+    check(&props["plan"]["items"], &doc["plan"][0]);
     let op = &props["operators"]["items"];
-    assert_eq!(required(op), keys(&doc["operators"][0]));
-    assert_eq!(
-        required(&op["properties"]["metrics"]),
-        keys(&doc["operators"][0]["metrics"])
+    check(op, &doc["operators"][0]);
+    check(
+        &op["properties"]["metrics"],
+        &doc["operators"][0]["metrics"],
     );
     for variant in op["properties"]["extra"]["items"]["oneOf"]
         .as_array()
@@ -452,6 +470,19 @@ fn schema_matches_the_writer() {
     {
         assert_eq!(required(variant), keys(&doc["operators"][2]["extra"][0]));
     }
+    // A document written before the members added within v1 still reads.
+    let mut old = doc;
+    if let Some(q) = old["query"].as_object_mut() {
+        q.remove("memory");
+    }
+    for o in old["operators"].as_array_mut().into_iter().flatten() {
+        if let Some(m) = o["metrics"].as_object_mut() {
+            m.remove("spill_files");
+            m.remove("spill_write_bytes");
+        }
+    }
+    let back = QueryProfile::from_json(&old.to_string()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(back.metrics.memory, crate::metrics::QueryMemory::default());
 }
 
 /// Merging documents with extreme counters saturates instead of

@@ -75,6 +75,11 @@ impl Reservation {
         self
     }
 
+    /// The handle this reservation was made from, if any.
+    pub(crate) fn handle(&self) -> Option<&Arc<ConsumerHandle>> {
+        self.handle.as_ref()
+    }
+
     /// Takes grant credit for up to `bytes`; returns the bytes still needed
     /// from the pool and the credit taken.
     fn draw_credit(&self, bytes: usize) -> (usize, usize) {

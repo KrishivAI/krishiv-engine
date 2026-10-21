@@ -67,6 +67,15 @@ impl QueryProfile {
             m.workers,
             plural(m.workers),
         );
+        let mem = &m.memory;
+        if mem.peak_reserved > 0 || mem.limit.is_some() {
+            let _ = writeln!(
+                out,
+                "memory: peak reserved {}, limit {}",
+                p.bytes(mem.peak_reserved),
+                mem.limit.map_or_else(|| "none".to_owned(), |l| p.bytes(l))
+            );
+        }
         if !self.detailed {
             out.push_str("(probe lengths not collected)\n");
         }
@@ -222,6 +231,13 @@ impl Printer<'_> {
                 "spilled {}x {}",
                 m.spills,
                 self.bytes(m.spilled_bytes)
+            ));
+        }
+        if m.spill_files > 0 {
+            parts.push(format!(
+                "spill files {} ({} written)",
+                m.spill_files,
+                self.bytes(m.spill_write_bytes)
             ));
         }
         if !e.extra.is_empty() {

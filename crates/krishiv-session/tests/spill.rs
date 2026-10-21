@@ -183,3 +183,29 @@ fn a_missing_spill_root_fails_the_cleanup_check() {
     let dir = tempfile::tempdir().unwrap();
     let _ = leftovers(&root(&dir));
 }
+
+/// `EXPLAIN ANALYZE` of a spilling query shows the spill files each
+/// operator wrote and the query's memory limit and peak.
+#[test]
+fn explain_analyze_shows_spill_files_and_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(&root(&dir), Some("6m"));
+    let df = block_on(s.sql(QUERY)).unwrap();
+    let (got, profile) = block_on(df.collect_with_profile()).unwrap();
+    assert_eq!(rows(&got), expected());
+    let m = &profile.metrics;
+    let files: u64 = m.operators.values().map(|e| e.metrics.spill_files).sum();
+    let written: u64 = m
+        .operators
+        .values()
+        .map(|e| e.metrics.spill_write_bytes)
+        .sum();
+    assert!(files > 0 && written > 0, "{files} files, {written} bytes");
+    assert!(m.memory.peak_reserved > 0);
+    let text = profile.to_text(krishiv_session::TextOptions::default());
+    assert!(text.contains("spill files "), "{text}");
+    assert!(text.contains("memory: peak reserved "), "{text}");
+    let back = krishiv_session::QueryProfile::from_json(&profile.to_json()).unwrap();
+    assert_eq!(back, profile);
+    wait_until_clean(&root(&dir));
+}

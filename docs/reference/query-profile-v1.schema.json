@@ -24,7 +24,17 @@
         "batches": { "$ref": "#/$defs/u64", "description": "Source batches pushed." },
         "yields": { "$ref": "#/$defs/u64" },
         "max_slice_ns": { "$ref": "#/$defs/u64", "description": "Longest single poll of a driver." },
-        "stalls": { "$ref": "#/$defs/u64", "description": "Polls longer than the stall threshold." }
+        "stalls": { "$ref": "#/$defs/u64", "description": "Polls longer than the stall threshold." },
+        "memory": {
+          "type": "object",
+          "description": "Added within v1 (absent in earlier documents): the query's memory pool.",
+          "required": ["limit_bytes", "peak_reserved_bytes"],
+          "additionalProperties": false,
+          "properties": {
+            "limit_bytes": { "oneOf": [{ "$ref": "#/$defs/u64" }, { "type": "null" }], "description": "The pool's own limit, summed over workers; null when unlimited." },
+            "peak_reserved_bytes": { "$ref": "#/$defs/u64", "description": "The most bytes held reserved at once, summed over workers." }
+          }
+        }
       }
     },
     "pipelines": {
@@ -102,7 +112,9 @@
               "morsels": { "$ref": "#/$defs/u64" },
               "peak_reserved_bytes": { "$ref": "#/$defs/u64", "description": "Summed over drivers: an upper bound of the true peak." },
               "spills": { "$ref": "#/$defs/u64" },
-              "spilled_bytes": { "$ref": "#/$defs/u64", "description": "Bytes freed by spills." }
+              "spilled_bytes": { "$ref": "#/$defs/u64", "description": "Bytes freed by spills." },
+              "spill_files": { "$ref": "#/$defs/u64", "description": "Added within v1 (absent means 0): spill files the operator wrote, requested or on its own." },
+              "spill_write_bytes": { "$ref": "#/$defs/u64", "description": "Added within v1 (absent means 0): bytes written to them, as stored." }
             }
           },
           "extra": {
