@@ -17,6 +17,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
     &EXEC_JOIN_ROW_LAYOUT,
+    &EXEC_JOIN_RADIX_BITS,
     &SHUFFLE_PARTITIONS_HINT,
     &NETWORK_TIMEOUT,
     &MEMORY_LIMIT,
@@ -82,6 +83,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
+    ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
@@ -273,6 +275,19 @@ pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
           table that switches by size between a flat and a salted directory. Results are \
           the same either way; joins whose key types have no row encoding keep the \
           default path.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Level-0 radix partitions of a row-layout hash join build (P2-T158).
+pub static EXEC_JOIN_RADIX_BITS: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.radixBits",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(3)),
+    doc: "Internal: a row-layout hash join build splits its rows into 2^bits partitions by \
+          the top bits of the key hash (3 to 6) and indexes them in parallel. Results are \
+          the same for every value.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

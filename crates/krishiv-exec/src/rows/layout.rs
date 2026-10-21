@@ -121,6 +121,10 @@ pub struct RowLayout {
     /// instead of refused: the caller drops such rows (a join key compared
     /// with `=` never matches when NULL).
     lenient: bool,
+    /// Where the validity bytes start.
+    validity_at: usize,
+    /// The row starts with its hash (a key row); a payload row does not.
+    hashed: bool,
 }
 
 impl RowLayout {
@@ -132,6 +136,12 @@ impl RowLayout {
     /// (nested and dictionary types: they keep the arrow-row path), and
     /// `INTERNAL_ERROR` if `nullable` does not match `types`.
     pub fn new(types: &[DataType], nullable: &[bool]) -> Result<Self> {
+        Self::with_shape(types, nullable, true)
+    }
+
+    /// [`new`](Self::new) for key rows (`hashed`: hash word, validity, values)
+    /// or payload rows (values, then validity).
+    fn with_shape(types: &[DataType], nullable: &[bool], hashed: bool) -> Result<Self> {
         if types.len() != nullable.len() {
             return Err(internal(format!(
                 "{} key types but {} nullability flags",
@@ -161,7 +171,11 @@ impl RowLayout {
         let validity_bytes = next_bit.div_ceil(8);
         // Views first (8-aligned), then fixed values widest first, so every
         // value sits at a multiple of its width.
-        let mut at = round8(KEYS_START + validity_bytes);
+        let mut at = if hashed {
+            round8(KEYS_START + validity_bytes)
+        } else {
+            0
+        };
         let mut offsets = vec![0; kinds.len()];
         let mut order: Vec<usize> = (0..kinds.len()).collect();
         order.sort_by_key(|&i| std::cmp::Reverse(kinds[i].width()));
@@ -169,7 +183,13 @@ impl RowLayout {
             offsets[i] = at;
             at += kinds[i].width();
         }
-        let stride = round8(at).max(KEYS_START + 8);
+        let validity_at = if hashed { KEYS_START } else { at };
+        let stride = if hashed {
+            round8(at).max(KEYS_START + 8)
+        } else {
+            round8(at + validity_bytes).max(8)
+        };
+        let start = if hashed { KEYS_START } else { 0 };
         let columns: Vec<Column> = kinds
             .iter()
             .zip(types)
@@ -187,13 +207,14 @@ impl RowLayout {
             .filter(|c| c.kind == Kind::View)
             .map(|c| c.offset)
             .collect();
-        let words: Vec<usize> = (KEYS_START..stride)
+        let words: Vec<usize> = (start..stride)
             .step_by(8)
             .filter(|w| !views.iter().any(|v| *w == v + 8))
             .collect();
-        let compare = match (views.is_empty(), stride - KEYS_START) {
-            (true, 8) => Compare::One,
-            (true, 16) => Compare::Two,
+        // `One`/`Two` read the words after the hash: key rows only.
+        let compare = match (hashed, views.is_empty(), stride - start) {
+            (true, true, 8) => Compare::One,
+            (true, true, 16) => Compare::Two,
             _ => Compare::Words,
         };
         Ok(Self {
@@ -203,6 +224,8 @@ impl RowLayout {
             views,
             compare,
             lenient: false,
+            validity_at,
+            hashed,
         })
     }
 
@@ -217,6 +240,26 @@ impl RowLayout {
     pub fn for_join(types: &[DataType], null_safe: &[bool]) -> Result<Self> {
         let mut layout = Self::new(types, null_safe)?;
         layout.lenient = true;
+        Ok(layout)
+    }
+
+    /// The layout of a hash join's build columns carried as a payload: every
+    /// column nullable, floats stored bit for bit (a payload is returned as
+    /// it came, so `-0.0` and NaN payloads are not normalized), strings and
+    /// binaries as views. [`decode_rows`](Self::decode_rows) restores the
+    /// columns. Payload rows are not hashed ([`EncodedKeys::hashes`] is empty).
+    ///
+    /// # Errors
+    /// As [`new`](Self::new).
+    pub fn for_payload(types: &[DataType]) -> Result<Self> {
+        let mut layout = Self::with_shape(types, &vec![true; types.len()], false)?;
+        for c in &mut layout.columns {
+            c.kind = match c.kind {
+                Kind::F32 => Kind::Fixed(4),
+                Kind::F64 => Kind::Fixed(8),
+                k => k,
+            };
+        }
         Ok(layout)
     }
 
@@ -252,36 +295,89 @@ impl RowLayout {
                 self.stride
             )));
         }
+        (0..self.columns.len())
+            .map(|i| self.decode_column(i, rows))
+            .collect()
+    }
+
+    /// The columns of `rows`, each a row of this layout with the heap its
+    /// long views point into (in output order), in column order: the
+    /// inverse of [`encode`](Self::encode) for every column type, strings
+    /// and binaries included. NULLs come back NULL; floats come back as
+    /// stored (normalized in a key layout, bit for bit in a
+    /// [`for_payload`](Self::for_payload) layout).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a row shorter than the stride, a view outside
+    /// its heap or a string that is not UTF-8 (a corrupt row).
+    pub fn decode_rows(&self, rows: &[(&[u8], &[u8])]) -> Result<Vec<ArrayRef>> {
+        if let Some((r, _)) = rows.iter().find(|(r, _)| r.len() < self.stride) {
+            return Err(internal(format!(
+                "a {}-byte row for a {}-byte layout",
+                r.len(),
+                self.stride
+            )));
+        }
+        let fixed: Vec<&[u8]> = rows.iter().map(|&(r, _)| r).collect();
         self.columns
             .iter()
-            .map(|c| {
-                let nulls = c.null_bit.map(|bit| {
-                    let (byte, mask) = (KEYS_START + bit / 8, 1u8 << (bit % 8));
-                    NullBuffer::new(rows.iter().map(|r| r[byte] & mask == 0).collect())
+            .enumerate()
+            .map(|(i, c)| {
+                if c.kind != Kind::View {
+                    return self.decode_column(i, &fixed);
+                }
+                let valid = |r: &[u8]| {
+                    c.null_bit
+                        .is_none_or(|bit| r[self.validity_at + bit / 8] & (1 << (bit % 8)) == 0)
+                };
+                let values = rows.iter().map(|&(r, heap)| {
+                    if !valid(r) {
+                        return Ok(None);
+                    }
+                    let len = view_len(r, c.offset);
+                    if len <= INLINE_MAX {
+                        Ok(Some(&r[c.offset + 4..c.offset + 4 + len]))
+                    } else {
+                        let start = usize::try_from(word(r, c.offset + 8)).unwrap_or(usize::MAX);
+                        heap.get(start..start.saturating_add(len))
+                            .map(Some)
+                            .ok_or_else(|| internal("a row view outside its heap".to_owned()))
+                    }
                 });
-                let at = c.offset;
-                if c.kind == Kind::Bool {
-                    let values: BooleanBuffer = rows.iter().map(|r| r[at] != 0).collect();
-                    return Ok(Arc::new(BooleanArray::new(values, nulls)) as ArrayRef);
-                }
-                if c.kind == Kind::View {
-                    let feature = format!("decoding a row-format key of type {}", c.data_type);
-                    return Err(KrishivUnsupportedFeature { feature }.into());
-                }
-                let w = c.kind.width();
-                let mut values = MutableBuffer::new(rows.len() * w);
-                for r in rows {
-                    values.extend_from_slice(&r[at..at + w]);
-                }
-                let data = ArrayData::builder(c.data_type.clone())
-                    .len(rows.len())
-                    .add_buffer(values.into())
-                    .nulls(nulls)
-                    .build()
-                    .map_err(|e| internal(e.to_string()))?;
-                Ok(make_array(data))
+                let values = values.collect::<Result<Vec<Option<&[u8]>>>>()?;
+                strings_array(&c.data_type, &values)
             })
             .collect()
+    }
+
+    /// Fixed-width column `i` of `rows` (see [`decode`](Self::decode)).
+    fn decode_column(&self, i: usize, rows: &[&[u8]]) -> Result<ArrayRef> {
+        let c = &self.columns[i];
+        let nulls = c.null_bit.map(|bit| {
+            let (byte, mask) = (self.validity_at + bit / 8, 1u8 << (bit % 8));
+            NullBuffer::new(rows.iter().map(|r| r[byte] & mask == 0).collect())
+        });
+        let at = c.offset;
+        if c.kind == Kind::Bool {
+            let values: BooleanBuffer = rows.iter().map(|r| r[at] != 0).collect();
+            return Ok(Arc::new(BooleanArray::new(values, nulls)) as ArrayRef);
+        }
+        if c.kind == Kind::View {
+            let feature = format!("decoding a row-format key of type {}", c.data_type);
+            return Err(KrishivUnsupportedFeature { feature }.into());
+        }
+        let w = c.kind.width();
+        let mut values = MutableBuffer::new(rows.len() * w);
+        for r in rows {
+            values.extend_from_slice(&r[at..at + w]);
+        }
+        let data = ArrayData::builder(c.data_type.clone())
+            .len(rows.len())
+            .add_buffer(values.into())
+            .nulls(nulls)
+            .build()
+            .map_err(|e| internal(e.to_string()))?;
+        Ok(make_array(data))
     }
 
     /// Encodes and hashes the key `columns` of one batch (one per key type,
@@ -304,7 +400,13 @@ impl RowLayout {
             len: n,
             rows: vec![0; n * self.stride],
             heap: Vec::new(),
-            hashes: vec![fold(seed, MIX); n],
+            // A payload layout's rows are never hashed.
+            hashes: if self.hashed {
+                vec![fold(seed, MIX); n]
+            } else {
+                Vec::new()
+            },
+            hashed: self.hashed,
         };
         let strings = foldhash::fast::FixedState::with_seed(seed);
         for (column, array) in self.columns.iter().zip(columns) {
@@ -313,7 +415,7 @@ impl RowLayout {
             }
             let nulls = array.logical_nulls();
             if let Some(bit) = column.null_bit {
-                keys.write_nulls(bit, nulls.as_ref());
+                keys.write_nulls(self.validity_at + bit / 8, 1 << (bit % 8), nulls.as_ref());
             } else if !self.lenient && nulls.as_ref().is_some_and(|v| v.null_count() > 0) {
                 return Err(internal("NULL in a key declared non-nullable".to_owned()));
             }
@@ -337,7 +439,9 @@ impl RowLayout {
         }
         for (i, h) in keys.hashes.iter_mut().enumerate() {
             *h = fold(*h, FINISH);
-            keys.rows[i * self.stride..i * self.stride + 8].copy_from_slice(&h.to_le_bytes());
+            if self.hashed {
+                keys.rows[i * self.stride..i * self.stride + 8].copy_from_slice(&h.to_le_bytes());
+            }
         }
         Ok(keys)
     }
@@ -378,7 +482,9 @@ pub struct EncodedKeys {
     len: usize,
     rows: Vec<u8>,
     heap: Vec<u8>,
+    /// Empty when the layout is not hashed.
     hashes: Vec<u64>,
+    hashed: bool,
 }
 
 impl EncodedKeys {
@@ -426,7 +532,26 @@ impl EncodedKeys {
         fixed
             .try_reserve_exact(idx.len().saturating_mul(stride))
             .map_err(|e| internal(e.to_string()))?;
-        let mut heap = layout.has_views().then(|| (vec![0i64], Vec::new()));
+        // Exact capacities: the arena accounts these buffers by capacity.
+        let mut heap = None;
+        if layout.has_views() {
+            let long: usize = idx
+                .iter()
+                .filter_map(|&i| self.rows.get(i * stride..(i + 1) * stride))
+                .flat_map(|row| layout.views().iter().map(move |&v| view_len(row, v)))
+                .filter(|&len| len > INLINE_MAX)
+                .fold(0usize, usize::saturating_add);
+            let mut offsets = Vec::new();
+            let mut bytes = Vec::new();
+            offsets
+                .try_reserve_exact(idx.len() + 1)
+                .map_err(|e| internal(e.to_string()))?;
+            bytes
+                .try_reserve_exact(long)
+                .map_err(|e| internal(e.to_string()))?;
+            offsets.push(0i64);
+            heap = Some((offsets, bytes));
+        }
         for &i in idx {
             let row = self
                 .rows
@@ -464,11 +589,14 @@ impl EncodedKeys {
         &mut self.rows[i * s..(i + 1) * s]
     }
 
-    fn write_nulls(&mut self, bit: usize, nulls: Option<&NullBuffer>) {
+    /// Sets bit `mask` of byte `at` in each row whose value is NULL.
+    fn write_nulls(&mut self, at: usize, mask: u8, nulls: Option<&NullBuffer>) {
         let Some(nulls) = nulls else { return };
         for i in nulls.iter().enumerate().filter(|(_, v)| !v).map(|(i, _)| i) {
-            self.row_mut(i)[KEYS_START + bit / 8] |= 1 << (bit % 8);
-            self.hashes[i] = mix(self.hashes[i], NULL_HASH);
+            self.row_mut(i)[at] |= mask;
+            if self.hashed {
+                self.hashes[i] = mix(self.hashes[i], NULL_HASH);
+            }
         }
     }
 
@@ -488,7 +616,9 @@ impl EncodedKeys {
                 for i in (0..self.len).filter(|&i| valid(i)) {
                     let v = u8::from(a.value(i));
                     self.row_mut(i)[offset] = v;
-                    self.hashes[i] = mix(self.hashes[i], u64::from(v));
+                    if self.hashed {
+                        self.hashes[i] = mix(self.hashes[i], u64::from(v));
+                    }
                 }
             }
             Kind::F32 => {
@@ -498,7 +628,9 @@ impl EncodedKeys {
                 for i in (0..self.len).filter(|&i| valid(i)) {
                     let bits = normalize32(a.value(i)).to_bits();
                     self.row_mut(i)[offset..offset + 4].copy_from_slice(&bits.to_le_bytes());
-                    self.hashes[i] = mix(self.hashes[i], u64::from(bits));
+                    if self.hashed {
+                        self.hashes[i] = mix(self.hashes[i], u64::from(bits));
+                    }
                 }
             }
             Kind::F64 => {
@@ -508,7 +640,9 @@ impl EncodedKeys {
                 for i in (0..self.len).filter(|&i| valid(i)) {
                     let bits = normalize64(a.value(i)).to_bits();
                     self.row_mut(i)[offset..offset + 8].copy_from_slice(&bits.to_le_bytes());
-                    self.hashes[i] = mix(self.hashes[i], bits);
+                    if self.hashed {
+                        self.hashes[i] = mix(self.hashes[i], bits);
+                    }
                 }
             }
             Kind::Fixed(w) => {
@@ -545,6 +679,16 @@ impl EncodedKeys {
     ) {
         let rows = self.rows.chunks_exact_mut(self.stride);
         let (values, _) = bytes.as_chunks::<W>();
+        if !self.hashed {
+            for (i, (row, v)) in rows.zip(values).enumerate() {
+                if nulls.is_none_or(|n| n.is_valid(i))
+                    && let Some(dst) = row.get_mut(offset..offset + W)
+                {
+                    dst.copy_from_slice(v);
+                }
+            }
+            return;
+        }
         for (i, ((row, h), v)) in rows.zip(self.hashes.iter_mut()).zip(values).enumerate() {
             if nulls.is_some_and(|n| n.is_null(i)) {
                 continue;
@@ -609,7 +753,9 @@ impl EncodedKeys {
             let bytes = value(i);
             let len = u32::try_from(bytes.len())
                 .map_err(|_| internal("a key value longer than 4 GiB".to_owned()))?;
-            self.hashes[i] = mix(self.hashes[i], strings.hash_one(bytes));
+            if self.hashed {
+                self.hashes[i] = mix(self.hashes[i], strings.hash_one(bytes));
+            }
             let at = self.heap.len();
             let stride = self.stride;
             let row = &mut self.rows[i * stride..(i + 1) * stride];
@@ -625,6 +771,30 @@ impl EncodedKeys {
         }
         Ok(())
     }
+}
+
+/// An array of string or binary `data_type` holding `values`.
+fn strings_array(data_type: &DataType, values: &[Option<&[u8]>]) -> Result<ArrayRef> {
+    use arrow_array::{
+        BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringArray,
+        StringViewArray,
+    };
+    let text = || {
+        values
+            .iter()
+            .map(|v| v.map(std::str::from_utf8).transpose())
+            .collect::<std::result::Result<Vec<Option<&str>>, _>>()
+            .map_err(|e| internal(format!("a row string is not UTF-8: {e}")))
+    };
+    Ok(match data_type {
+        DataType::Utf8 => Arc::new(StringArray::from(text()?)),
+        DataType::LargeUtf8 => Arc::new(LargeStringArray::from(text()?)),
+        DataType::Utf8View => Arc::new(StringViewArray::from(text()?)),
+        DataType::Binary => Arc::new(BinaryArray::from(values.to_vec())),
+        DataType::LargeBinary => Arc::new(LargeBinaryArray::from(values.to_vec())),
+        DataType::BinaryView => Arc::new(BinaryViewArray::from(values.to_vec())),
+        t => return Err(internal(format!("no row view decoding for {t}"))),
+    })
 }
 
 /// Rows taken out of [`EncodedKeys`] by [`EncodedKeys::gather`].
