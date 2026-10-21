@@ -18,6 +18,7 @@ import psutil
 
 from . import compare
 from .adapters import Dataset, Engine, Query, make_engine
+from .errors import error_fields
 from .paths import bench_root, data_root, dataset_dir, fmt_sf, queries_dir, results_dir
 
 SUITE_DATASET = {"tpch": "tpch", "tpcds": "tpcds"}  # default dataset per suite
@@ -197,7 +198,7 @@ def run_suite(
                         times.append(dtm)
                         meas.append(m)
             except Exception as e:  # record, keep going
-                entry["error"] = f"{type(e).__name__}: {str(e)[:500]}"
+                entry.update(error_fields(e))
                 record["queries"][q.id] = entry
                 print(f"  {q.id}: ERROR {entry['error'][:120]}")
                 continue
@@ -212,6 +213,8 @@ def run_suite(
                 throughput_qps=len(times) / sum(times),
                 rows_returned=len(rows),
                 has_order_by=ordered,
+                sort_keys=compare.derive_sort_keys(q.sql) if ordered else None,
+                limit=compare.derive_limit(q.sql)[0] if ordered else None,
                 expected_rows=expected.get(q.id),
                 rows_match_expected=(len(rows) == expected[q.id]) if q.id in expected else None,
                 peak_rss_bytes=_max([m.peak_rss_bytes for m in meas]),

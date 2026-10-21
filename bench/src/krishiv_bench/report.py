@@ -159,7 +159,7 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
         per = {e: results[e]["queries"].get(q, {}) for e in engines}
         for e, d in per.items():
             if "error" in d:
-                bad.append(f"- `{q}` **{e}**: error `{d['error'][:200]}`")
+                bad.append(f"- `{q}` **{e}**: error `{d['error']}`")
             elif d.get("answer_check", {}).get("status") == "fail":
                 bad.append(f"- `{q}` **{e}**: official-answer check failed: {d['answer_check']['detail']}")
             elif d.get("answer_check", {}).get("status") != "pass":
@@ -174,9 +174,17 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
                     skipped.append(f"- `{q}` **{e1} vs {e2}**: cross-engine comparison skipped (rows not stored)")
                     continue
                 n_checked += 1
-                good, msg = compare.rows_match(r1, r2, per[e1].get("has_order_by", False))
-                if not good:
-                    bad.append(f"- `{q}` **{e1} vs {e2}**: {msg}")
+                res = compare.compare_rows(
+                    r1,
+                    r2,
+                    per[e1].get("has_order_by", False),
+                    sort_keys=per[e1].get("sort_keys"),
+                    limit=per[e1].get("limit"),
+                )
+                if not res.ok:
+                    bad.append(f"- `{q}` **{e1} vs {e2}**: {res.message}")
+                elif res.status != "ok":
+                    skipped.append(f"- `{q}` **{e1} vs {e2}**: {res.message}")
     if bad:
         L += ["**Mismatches / failures:**", "", *bad, ""]
     if skipped:

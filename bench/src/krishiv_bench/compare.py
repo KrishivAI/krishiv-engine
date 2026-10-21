@@ -13,7 +13,9 @@ Rules (values are the Python objects the engines return):
     value; the float-vs-float relative tolerance covers the rest, as for any double.
   * float vs float: relative tolerance 1e-6 (abs 1e-12 near zero).
   * int vs Decimal: exact numeric equality.
-Rows are compared *in order* when the query has a top-level ORDER BY, else as sorted multisets.
+Rows are compared as sorted multisets, unless the query has a top-level ORDER BY: then the sort-key values must match
+position by position and the rows within each run of equal keys compare as a multiset (ties may legally come in any
+order). Without known or derivable sort keys, whole rows are compared in order.
 Official TPC-H answers (DuckDB `tpch_answers()`) are text; `match_answer` parses each cell by the engine value's type.
 """
 
@@ -24,6 +26,8 @@ import gzip
 import json
 import math
 import re
+from collections.abc import Sequence
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
@@ -134,29 +138,231 @@ def _sort_key(row):
     return tuple(out)
 
 
-def rows_match(a: list, b: list, ordered: bool) -> tuple[bool, str]:
-    """Compare two result sets. Returns (ok, message). ordered=True requires identical row order."""
-    if len(a) != len(b):
-        return False, f"row count {len(a)} != {len(b)}"
-    for i, (x, y) in enumerate(zip(a, b, strict=False)):
-        if not row_equal(x, y):
-            if ordered:
-                # distinguish a pure ordering difference from a value difference
-                sa, sb = sorted(a, key=_sort_key), sorted(b, key=_sort_key)
-                if all(row_equal(p, q) for p, q in zip(sa, sb, strict=False)):
-                    return False, f"ORDER differs at row {i} (same rows as a set)"
-                return False, f"value mismatch at row {i}: {tuple(x)!r} vs {tuple(y)!r}"
-            break
-    else:
-        return True, "ok"
+@dataclass(frozen=True)
+class Comparison:
+    """Outcome of comparing two result sets.
+
+    ``status``: ``ok``, ``tie-at-limit`` (rows differ only inside the tie group cut by LIMIT; ``ok`` is True) or
+    ``mismatch``. ``mode``: ``unordered``, ``tie-groups`` (sort keys known) or ``ordered-fallback`` (whole rows
+    compared position by position because the sort keys are unknown).
+    """
+
+    ok: bool
+    status: str
+    mode: str
+    message: str
+
+
+def _check_sort_keys(sort_keys: Sequence[int], a: list, b: list) -> None:
+    if not sort_keys:
+        raise ValueError("sort_keys must be non-empty (use None when unknown)")
+    width = min((len(r) for r in (*a, *b)), default=None)
+    for k in sort_keys:
+        if isinstance(k, bool) or not isinstance(k, int) or k < 0 or (width is not None and k >= width):
+            raise ValueError(f"sort key index {k!r} is not a column of the result (row width {width})")
+
+
+def _unordered_diff(a: list, b: list) -> int | None:
+    """Index (in sorted order) of the first difference between two row multisets, None if they are equal."""
     sa, sb = sorted(a, key=_sort_key), sorted(b, key=_sort_key)
-    for i, (x, y) in enumerate(zip(sa, sb, strict=False)):
-        if not row_equal(x, y):
-            return False, f"value mismatch (unordered, sorted row {i}): {tuple(x)!r} vs {tuple(y)!r}"
-    return True, "ok"
+    return next((i for i, (x, y) in enumerate(zip(sa, sb, strict=False)) if not row_equal(x, y)), None)
+
+
+def _position_failure(a: list, b: list, i: int) -> str:
+    # distinguish a pure ordering difference from a value difference
+    if _unordered_diff(a, b) is None:
+        return f"ORDER differs at row {i} (same rows as a set)"
+    return f"value mismatch at row {i}: {tuple(a[i])!r} vs {tuple(b[i])!r}"
+
+
+def compare_rows(
+    a: list,
+    b: list,
+    ordered: bool,
+    *,
+    sql: str | None = None,
+    sort_keys: Sequence[int] | None = None,
+    limit: int | None = None,
+) -> Comparison:
+    """Compare two result sets.
+
+    Unordered: sorted multisets. Ordered with sort keys: the key values must match position by position, and the
+    rows within each run of equal keys compare as a multiset. Ordered without sort keys: whole rows, position by
+    position (``ordered-fallback``). ``sort_keys`` (column indexes) and ``limit`` default to what
+    ``derive_sort_keys`` / ``derive_limit`` find in ``sql``. If a LIMIT cut the result (``len >= limit``), the last
+    tie group (and the first, with OFFSET) may legally hold different rows in the two results: that is reported as
+    ``tie-at-limit``, not as a mismatch.
+    """
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
+        raise ValueError(f"limit must be a non-negative int or None, got {limit!r}")
+    if len(a) != len(b):
+        return Comparison(False, "mismatch", "unordered", f"row count {len(a)} != {len(b)}")
+    if not ordered:
+        i = _unordered_diff(a, b)
+        if i is None:
+            return Comparison(True, "ok", "unordered", "ok")
+        sa, sb = sorted(a, key=_sort_key), sorted(b, key=_sort_key)
+        msg = f"value mismatch (unordered, sorted row {i}): {tuple(sa[i])!r} vs {tuple(sb[i])!r}"
+        return Comparison(False, "mismatch", "unordered", msg)
+    offset = False
+    if sql is not None:
+        if sort_keys is None:
+            sort_keys = derive_sort_keys(sql)
+        if limit is None:
+            limit, offset = derive_limit(sql)
+    if sort_keys is None:
+        for i, (x, y) in enumerate(zip(a, b, strict=False)):
+            if not row_equal(x, y):
+                return Comparison(False, "mismatch", "ordered-fallback", _position_failure(a, b, i))
+        return Comparison(True, "ok", "ordered-fallback", "ok (ordered-fallback: sort keys unknown)")
+    _check_sort_keys(sort_keys, a, b)
+
+    def key(r):
+        return tuple(r[k] for k in sort_keys)
+
+    for i, (x, y) in enumerate(zip(a, b, strict=False)):
+        if not row_equal(key(x), key(y)):
+            return Comparison(False, "mismatch", "tie-groups", _position_failure(a, b, i))
+    cut = limit is not None and len(a) >= limit
+    tie_at_limit = None
+    start = 0
+    while start < len(a):
+        end = start + 1
+        while end < len(a) and row_equal(key(a[end]), key(a[start])):
+            end += 1
+        if _unordered_diff(a[start:end], b[start:end]) is not None:
+            where = f"rows {start}..{end - 1} (sort key {key(a[start])!r})"
+            if not (cut and (end == len(a) or (offset and start == 0))):
+                return Comparison(False, "mismatch", "tie-groups", f"value mismatch in tie group at {where}")
+            tie_at_limit = where
+        start = end
+    if tie_at_limit:
+        msg = f"tie-at-limit: rows differ only in the tie group cut by LIMIT, {tie_at_limit}"
+        return Comparison(True, "tie-at-limit", "tie-groups", msg)
+    return Comparison(True, "ok", "tie-groups", "ok (tie-groups)")
+
+
+def rows_match(
+    a: list,
+    b: list,
+    ordered: bool,
+    *,
+    sql: str | None = None,
+    sort_keys: Sequence[int] | None = None,
+    limit: int | None = None,
+) -> tuple[bool, str]:
+    """``compare_rows`` as (ok, message). ordered=True requires the same row order, up to ties on the sort keys."""
+    res = compare_rows(a, b, ordered, sql=sql, sort_keys=sort_keys, limit=limit)
+    return res.ok, res.message
 
 
 # ------------------------------------------------------------ ORDER BY detection
+_NOISE = re.compile(r"'(?:[^']|'')*'|--[^\n]*|/\*.*?\*/", re.S)
+
+
+def _top_level(sql: str) -> str:
+    """The SQL with literals and comments blanked and everything inside parentheses replaced by spaces."""
+    s = _NOISE.sub(lambda m: " " * len(m.group()), sql)
+    out, depth = [], 0
+    for ch in s:
+        if ch == "(":
+            depth += 1
+            out.append(" ")
+        elif ch == ")":
+            depth = max(0, depth - 1)
+            out.append(" ")
+        else:
+            out.append(ch if depth == 0 else " ")
+    return "".join(out)
+
+
+def _split_commas(text: str, masked: str) -> list[str]:
+    """Split ``text`` at the commas that are outside parentheses (``masked`` is ``text`` through ``_top_level``)."""
+    parts, last = [], 0
+    for m in re.finditer(",", masked):
+        parts.append(text[last : m.start()])
+        last = m.end()
+    parts.append(text[last:])
+    return [p.strip() for p in parts]
+
+
+def _norm(expr: str) -> str:
+    return re.sub(r"\s+", "", expr).lower().replace('"', "")
+
+
+def _select_names(sql: str, masked: str) -> list[tuple[str | None, str]] | None:
+    """(output name, normalised expression) per column of the first top-level SELECT; None if not derivable."""
+    m = re.search(r"\bselect\b(?:\s+(?:distinct|all)\b)?", masked, re.I)
+    if not m:
+        return None
+    end = re.search(r"\bfrom\b", masked[m.end() :], re.I)
+    stop = m.end() + end.start() if end else len(masked)
+    items = _split_commas(sql[m.end() : stop], masked[m.end() : stop])
+    out: list[tuple[str | None, str]] = []
+    for item in items:
+        if not item or item.endswith("*"):
+            return None
+        alias = re.search(r"\bas\s+(\"[^\"]+\"|[A-Za-z_]\w*)\s*$", item, re.I)
+        if alias:
+            out.append((_norm(alias.group(1)), _norm(item[: alias.start()])))
+            continue
+        col = re.fullmatch(r"(?:\w+\.)*(\w+)", item)
+        out.append((col.group(1).lower() if col else None, _norm(item)))
+    return out
+
+
+def _final_order_by(masked: str) -> re.Match | None:
+    ms = list(re.finditer(r"\border\s+by\b", masked, re.I))
+    return ms[-1] if ms else None
+
+
+def derive_sort_keys(sql: str) -> list[int] | None:
+    """Output-column indexes of the final top-level ORDER BY, or None when they cannot be derived.
+
+    A simple parse: each ORDER BY item must be a column ordinal, an output name/alias, or the text of a select-list
+    expression. ``SELECT *``, keys outside the select list and the like give None (callers fall back to an ordered
+    comparison and say so).
+    """
+    masked = _top_level(sql)
+    ob = _final_order_by(masked)
+    if ob is None:
+        return None
+    names = _select_names(sql, masked)
+    if names is None:
+        return None
+    tail_end = re.search(r"\b(?:limit|offset|fetch)\b", masked[ob.end() :], re.I)
+    stop = ob.end() + tail_end.start() if tail_end else len(masked)
+    keys: list[int] = []
+    for item in _split_commas(sql[ob.end() : stop], masked[ob.end() : stop]):
+        item = re.sub(r"(?:\s+(?:asc|desc))?(?:\s+nulls\s+(?:first|last))?\s*$", "", item, flags=re.I).strip()
+        if not item:
+            return None
+        if item.isdigit():
+            idx = int(item) - 1
+            if not 0 <= idx < len(names):
+                return None
+            keys.append(idx)
+            continue
+        n = _norm(item)
+        last = n.rsplit(".", 1)[-1]
+        idx = next((i for i, (name, expr) in enumerate(names) if n in (name, expr) or last == name), None)
+        if idx is None:
+            return None
+        keys.append(idx)
+    return keys
+
+
+def derive_limit(sql: str) -> tuple[int | None, bool]:
+    """(LIMIT n, has OFFSET) of the final top-level ORDER BY ... LIMIT clause; (None, False) if there is none."""
+    masked = _top_level(sql)
+    ob = _final_order_by(masked)
+    if ob is None:
+        return None, False
+    tail = masked[ob.end() :]
+    lim = re.search(r"\blimit\s+(\d+)\b", tail, re.I)
+    return (int(lim.group(1)) if lim else None), bool(re.search(r"\boffset\b", tail, re.I))
+
+
 def has_top_level_order_by(sql: str) -> bool:
     s = re.sub(r"'(?:[^']|'')*'", "''", sql)
     s = re.sub(r"--[^\n]*", "", s)

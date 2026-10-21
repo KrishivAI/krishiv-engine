@@ -34,6 +34,7 @@ from . import compare
 from .adapters import Dataset, Engine
 from .adapters.duckdb_engine import DuckDBEngine
 from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
+from .errors import describe_error
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
 from .runner import git_info, load_queries, machine_info
 
@@ -215,15 +216,15 @@ def _one_query(q, krishiv: KrishivEngine, duck: Engine, reps: int, timeout_s: fl
         with _Interrupt(duck, timeout_s):
             drows = duck.run(q)
     except Exception as e:
-        return {"status": "failed", "reason": f"duckdb {type(e).__name__}: {str(e)[:300]}"}
+        return {"status": "failed", "reason": f"duckdb {describe_error(e)}"}
     try:
         krows = krishiv.run(q)
     except RunnerError as e:
-        return {"status": "failed", "reason": f"krishiv error: {str(e)[:300]}"}
+        return {"status": "failed", "reason": f"krishiv error: {describe_error(e)}"}
     except RunnerCrashed as e:
         return {"status": "failed", "reason": f"krishiv crashed/timed out: {e}"}
     ordered = compare.has_top_level_order_by(q.sql)
-    ok, msg = compare.rows_match(krows, drows, ordered)
+    ok, msg = compare.rows_match(krows, drows, ordered, sql=q.sql)
     entry["rows"] = len(drows)
     if not ok:
         return {**entry, "status": "failed", "reason": f"wrong result: {msg[:300]}"}
@@ -236,7 +237,7 @@ def _one_query(q, krishiv: KrishivEngine, duck: Engine, reps: int, timeout_s: fl
                     if rows != len(drows):
                         raise RunnerError(f"timed run returned {rows} rows, expected {len(drows)}")
                 except (RunnerError, RunnerCrashed) as e:
-                    return {**entry, "status": "failed", "reason": f"krishiv timed run: {str(e)[:300]}"}
+                    return {**entry, "status": "failed", "reason": f"krishiv timed run: {describe_error(e)}"}
             else:
                 try:  # a DuckDB failure (interrupt, out of memory) fails this query, not the whole run
                     secs = _duck_timed(duck, q, timeout_s)
@@ -244,7 +245,7 @@ def _one_query(q, krishiv: KrishivEngine, duck: Engine, reps: int, timeout_s: fl
                     return {
                         **entry,
                         "status": "failed",
-                        "reason": f"duckdb timed run {type(e).__name__}: {str(e)[:300]}",
+                        "reason": f"duckdb timed run {describe_error(e)}",
                     }
             times[who].append(secs)
     k, d = times["krishiv"], times["duckdb"]
