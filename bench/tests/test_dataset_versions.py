@@ -33,3 +33,160 @@ def test_versioned_name_gets_its_own_directory_and_manifest(root: Path):
 def test_fractional_sf_is_formatted_as_before(root: Path):
     assert paths.dataset_leaf(0.5) == "sf0.5"
     assert paths.dataset_leaf(0.5, "2.0.0") == "sf0.5-dbgen-2.0.0"
+
+
+def test_provenance_records_dataset_generator_version(root: Path, monkeypatch: pytest.MonkeyPatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    import duckdb
+
+    from krishiv_bench import runner
+
+    ver = duckdb.__version__
+    assert ver != "1.5.6"  # the legacy dataset must differ from the installed version for this test
+
+    prov = runner.dataset_provenance("tpch-dbgen", 1)
+    assert prov["generator"] == "duckdb 1.5.6 tpch extension (dbgen)"
+    assert prov["manifest_path"].endswith("tpch-dbgen-sf1.sha256")
+    assert prov["manifest_sha256"] is None
+
+    prov = runner.dataset_provenance("tpch-dbgen@1.5.6", 1)
+    assert prov["generator"] == "duckdb 1.5.6 tpch extension (dbgen)"
+
+    prov = runner.dataset_provenance("tpch-dbgen@9.9.9", 1)
+    assert prov["generator"] == "duckdb 9.9.9 tpch extension (dbgen)"
+    assert prov["manifest_path"].endswith("tpch-dbgen-sf1-dbgen-9.9.9.sha256")
+
+    prov = runner.dataset_provenance(f"tpch-dbgen@{ver}", 1)
+    assert prov["generator"] == f"duckdb {ver} tpch extension (dbgen)"
+
+    man = root / "manifests" / f"tpch-dbgen-sf1-dbgen-{ver}.sha256"
+    man.parent.mkdir(parents=True, exist_ok=True)
+    man.write_bytes(b"data")
+    import hashlib
+
+    prov = runner.dataset_provenance(f"tpch-dbgen@{ver}", 1)
+    assert prov["manifest_sha256"] == hashlib.sha256(b"data").hexdigest()
+
+    prov = runner.dataset_provenance("tpcds", 1)
+    assert prov["generator"] == f"duckdb {ver} tpcds extension (dsdgen)"
+
+    prov = runner.dataset_provenance("tpcds@9.9.9", 1)
+    assert prov["generator"] == "duckdb 9.9.9 tpcds extension (dsdgen)"
+
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="tpchgen-cli 1.2.3\n", stderr="", returncode=0)
+    )
+    prov = runner.dataset_provenance("tpch", 1)
+    assert prov["generator"] == "tpchgen-cli 1.2.3"
+
+
+def test_gen_tpch_dbgen_writes_versioned_directory(root: Path, monkeypatch: pytest.MonkeyPatch):
+    import duckdb
+
+    from krishiv_bench import datasets
+
+    ver = duckdb.__version__
+    expected = dataset_dir(f"tpch-dbgen@{ver}", 1)
+    expected.mkdir(parents=True, exist_ok=True)
+    (expected / "customer.parquet").write_bytes(b"")
+
+    def _fail(*a, **k):
+        raise AssertionError("must not connect when the versioned directory already exists")
+
+    monkeypatch.setattr(duckdb, "connect", _fail)
+    out = datasets.gen_tpch_dbgen(1)
+    assert out == expected
+    assert out != dataset_dir("tpch-dbgen", 1)
+
+
+def test_main_writes_versioned_manifest(root: Path, monkeypatch: pytest.MonkeyPatch):
+    import duckdb
+
+    from krishiv_bench import datasets
+
+    ver = duckdb.__version__
+    fake_dir = root / "tpch-dbgen" / f"sf1-dbgen-{ver}"
+    fake_dir.mkdir(parents=True, exist_ok=True)
+    (fake_dir / "customer.parquet").write_bytes(b"")
+    seen: dict = {}
+
+    def _fake_gen(sf: float, force: bool = False):
+        assert sf == 1
+        return fake_dir
+
+    def _fake_write(d, stem: str):
+        seen["gen"] = (d, stem)
+        return root / "manifests" / f"{stem}.sha256"
+
+    monkeypatch.setattr(datasets, "gen_tpch_dbgen", _fake_gen)
+    monkeypatch.setattr(datasets, "write_manifest", _fake_write)
+    datasets.main(["tpch-dbgen", "--sf", "1"])
+    assert seen["gen"] == (fake_dir, f"tpch-dbgen-sf1-dbgen-{ver}")
+
+    seen.clear()
+
+    def _fake_write_manifest(d, stem: str):
+        seen["manifest"] = (d, stem)
+        return root / "manifests" / f"{stem}.sha256"
+
+    monkeypatch.setattr(datasets, "write_manifest", _fake_write_manifest)
+    datasets.main(["manifest", "tpch-dbgen", "--sf", "1"])
+    assert seen["manifest"][1] == "tpch-dbgen-sf1"
+    assert seen["manifest"][0] == dataset_dir("tpch-dbgen", 1)
+
+
+def test_run_suite_checks_answers_only_for_matching_generator(root: Path, monkeypatch: pytest.MonkeyPatch):
+    import json
+
+    import duckdb
+
+    from krishiv_bench import compare, runner
+    from krishiv_bench.adapters.base import Engine
+
+    ver = duckdb.__version__
+
+    class _FakeEngine(Engine):
+        def version(self) -> str:
+            return "fake"
+
+        def setup(self, dataset) -> None:
+            pass
+
+        def run(self, query):
+            return []
+
+    def _make_ds(ds_name: str):
+        d = dataset_dir(ds_name, 1)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "t.parquet").write_bytes(b"")
+        return d
+
+    monkeypatch.setattr(runner, "make_engine", lambda *a, **k: _FakeEngine())
+    monkeypatch.setattr(runner, "load_queries", lambda *a, **k: [])
+
+    _make_ds("tpch-dbgen")
+    calls: list = []
+    monkeypatch.setattr(compare, "load_tpch_answers", lambda sf: calls.append(sf) or {"q01": []})
+    out = runner.run_suite("fake", "tpch", 1, iterations=1, warmup=0, dataset="tpch-dbgen")
+    assert calls == []
+    rec = json.loads(out.read_text())
+    assert rec["answers_available"] is False
+    assert rec["dataset"]["generator"] == "duckdb 1.5.6 tpch extension (dbgen)"
+
+    _make_ds(f"tpch-dbgen@{ver}")
+    calls.clear()
+    out = runner.run_suite("fake", "tpch", 1, iterations=1, warmup=0, dataset=f"tpch-dbgen@{ver}")
+    assert calls == [1]
+    rec = json.loads(out.read_text())
+    assert rec["answers_available"] is True
+    assert rec["dataset"]["generator"] == f"duckdb {ver} tpch extension (dbgen)"
+
+    def _boom(sf: float):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(compare, "load_tpch_answers", _boom)
+    out = runner.run_suite("fake", "tpch", 1, iterations=1, warmup=0, dataset=f"tpch-dbgen@{ver}")
+    rec = json.loads(out.read_text())
+    assert rec["answers_available"] is False

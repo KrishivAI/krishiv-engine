@@ -81,14 +81,18 @@ def dataset_provenance(ds_name: str, sf: float) -> dict:
         "manifest_path": str(man),
         "manifest_sha256": hashlib.sha256(man.read_bytes()).hexdigest() if man.exists() else None,
     }
-    base = split_dataset(ds_name)[0]
+    base, version = split_dataset(ds_name)
     if base == "tpch":
         r = subprocess.run(["tpchgen-cli", "--version"], capture_output=True, text=True)
         prov["generator"] = r.stdout.strip() or "tpchgen-cli (unknown version)"
     else:
         import duckdb
 
-        prov["generator"] = f"duckdb {duckdb.__version__} " + (
+        if base in LEGACY_ANSWER_VERSION:
+            gen_version = version or LEGACY_ANSWER_VERSION[base]
+        else:
+            gen_version = version or duckdb.__version__
+        prov["generator"] = f"duckdb {gen_version} " + (
             "tpch extension (dbgen)" if base == "tpch-dbgen" else "tpcds extension (dsdgen)"
         )
     return prov
