@@ -19,6 +19,8 @@ import struct
 import sys
 from typing import IO, Any
 
+from .errors import describe_error
+
 _HEADER = struct.Struct("<Q")
 
 
@@ -76,7 +78,7 @@ def main(argv: list[str]) -> None:
                 raise ValueError(f"unknown op {op!r}")
             send(out, {"ok": reply})
         except Exception as e:
-            send(out, {"error": f"{type(e).__name__}: {str(e)[:500]}"})
+            send(out, {"error": describe_error(e)})
     try:
         eng.teardown()
     finally:
