@@ -257,6 +257,22 @@ fn large_file_guard_rejects_new_large_files() {
     assert!(read(".githooks/pre-commit").contains("check-large-files.sh"));
 }
 
+#[test]
+fn ai_attribution_guard_passes_its_tests_and_is_wired() {
+    let script = root().join(".github/scripts/test-check-ai-attribution.sh");
+    let out = Command::new("bash").arg(&script).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let policy = read(".github/workflows/pr-policy.yml");
+    assert!(policy.contains(".github/scripts/check-ai-attribution.sh"));
+    assert!(policy.contains("PR_BODY: ${{ github.event.pull_request.body }}"));
+    assert!(read(".githooks/commit-msg").contains("check-ai-attribution.sh"));
+}
+
 /// Every job that runs steps starts with Harden-Runner (audit mode), and
 /// every checkout drops its credentials (zizmor `artipacked`). Jobs that
 /// call a reusable workflow have no steps of their own.
