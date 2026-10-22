@@ -92,6 +92,35 @@ pub fn to_json(run: &RunResult, tag: &str, manifest: &ExclusionManifest) -> Valu
     })
 }
 
+/// Every counted statement that did not pass, per file: index, the numbers it failed and why.
+#[must_use]
+pub fn cases_json(run: &RunResult) -> Value {
+    let mut files = serde_json::Map::new();
+    for f in &run.files {
+        let failed: Vec<Value> = f
+            .cases
+            .iter()
+            .filter(|c| !c.passed())
+            .map(|c| {
+                let failed: Vec<&str> = [
+                    ("parse", c.parse),
+                    ("negative", c.negative),
+                    ("result", c.result),
+                ]
+                .into_iter()
+                .filter(|(_, v)| *v == Some(false))
+                .map(|(k, _)| k)
+                .collect();
+                json!({"index": c.index, "failed": failed, "detail": c.detail})
+            })
+            .collect();
+        if !failed.is_empty() {
+            files.insert(f.name.clone(), Value::Array(failed));
+        }
+    }
+    Value::Object(files)
+}
+
 /// The report as pretty-printed JSON with a trailing newline.
 pub fn to_json_string(report: &Value) -> Result<String, serde_json::Error> {
     let mut s = serde_json::to_string_pretty(report)?;
@@ -152,6 +181,7 @@ mod tests {
                 },
                 unclassified_errors: 1,
                 runs: 2,
+                cases: Vec::new(),
             }],
             excluded: vec![SkippedFile {
                 name: "udf/x".into(),
@@ -168,5 +198,42 @@ mod tests {
         };
         insta::assert_snapshot!(to_json_string(&to_json(&run, "v4.2.0", &manifest))?);
         Ok(())
+    }
+
+    #[test]
+    fn cases_json_lists_only_the_failures() {
+        use crate::golden::run::Case;
+        let run = RunResult {
+            files: vec![
+                FileResult {
+                    name: "a".into(),
+                    cases: vec![
+                        Case {
+                            index: 0,
+                            parse: Some(true),
+                            result: Some(true),
+                            ..Case::default()
+                        },
+                        Case {
+                            index: 3,
+                            parse: Some(false),
+                            negative: Some(false),
+                            detail: "parse failed; no error".into(),
+                            ..Case::default()
+                        },
+                    ],
+                    ..FileResult::default()
+                },
+                FileResult {
+                    name: "b".into(),
+                    ..FileResult::default()
+                },
+            ],
+            ..RunResult::default()
+        };
+        assert_eq!(
+            cases_json(&run),
+            serde_json::json!({"a": [{"index": 3, "failed": ["parse", "negative"], "detail": "parse failed; no error"}]})
+        );
     }
 }
