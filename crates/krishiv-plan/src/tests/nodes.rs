@@ -57,6 +57,37 @@ fn builders_nest_children_in_arcs() {
 }
 
 #[test]
+fn offset_nests_under_limit_and_encodes_apart_from_it() {
+    let n = || Expr::from(Literal::Integer(3));
+    let plan = LogicalPlan::table(["t"]).offset(n()).limit(n());
+    let PlanNode::Limit { input, .. } = &plan.node else {
+        panic!("{plan:?}")
+    };
+    let PlanNode::Offset { offset, .. } = &input.node else {
+        panic!("{input:?}")
+    };
+    assert_eq!(**offset, n());
+    assert_eq!(input.to_string(), "Offset 3\n+- Read t\n");
+    // The count is an expression of the node: visited, and part of the key.
+    let mut seen = 0;
+    input.for_each_expr(&mut |_| seen += 1);
+    assert_eq!(seen, 1);
+    let key = |p: &LogicalPlan| {
+        crate::Plan::try_new(p.clone())
+            .unwrap()
+            .canonical_encoding()
+    };
+    assert_ne!(
+        key(&LogicalPlan::table(["t"]).offset(n())),
+        key(&LogicalPlan::table(["t"]).limit(n()))
+    );
+    assert_ne!(
+        key(&LogicalPlan::table(["t"]).offset(n())),
+        key(&LogicalPlan::table(["t"]).offset(Expr::from(Literal::Integer(4))))
+    );
+}
+
+#[test]
 fn traversal_visits_children_and_expressions_in_order() {
     let join = LogicalPlan::table(["l"]).join(
         LogicalPlan::table(["r"]),
