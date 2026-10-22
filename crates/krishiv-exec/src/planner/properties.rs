@@ -14,9 +14,10 @@
 //! |---|---|---|
 //! | scan, union | — | [`Placement::Unknown`] |
 //! | one row | — | [`Placement::Single`] |
-//! | filter, project, replicate | — | its input's |
+//! | filter, replicate | — | its input's |
+//! | project | — | its input's, under each name a plain column is projected as |
 //! | grouped aggregate | [`Distribution::Clustered`] on the keys | its input's |
-//! | global aggregate, limit, top-N | [`Distribution::Single`] | single |
+//! | global aggregate, limit, top-N | [`Distribution::Single`] (a limit or top-N first cuts each partition to `n` rows) | single |
 //! | global sort | [`Distribution::Ordered`] on the keys | ranges of the keys |
 //! | broadcast hash join, nested loop | build: [`Distribution::Broadcast`] | the probe's |
 //! | partitioned hash join | both: hash on corresponding keys | the probe's; an inner join's build keys too |
@@ -110,6 +111,68 @@ impl Placement {
     /// `layout` (a node that drops a key column loses its placement).
     pub(crate) fn restrict(self, layout: &[AttrId]) -> Self {
         self.map_attrs(|a| layout.contains(&a).then_some(a))
+    }
+
+    /// The placement over the outputs of a projection. `pairs` lists
+    /// `(source, output)` for each output that is a plain column (or an
+    /// alias of one) of the input: a source projected under several names
+    /// (`SELECT a, a AS k`) is placed by each of them. A hash key list
+    /// becomes every list that takes one output per source key (never
+    /// several outputs in one list, which would change the composite hash
+    /// key) and is dropped if a key is not projected; a range follows the
+    /// first output of each key. Widening casts are not plain columns, so
+    /// they never map: their values can hash differently.
+    pub(crate) fn project(self, pairs: &[(AttrId, AttrId)]) -> Self {
+        /// Enough alternatives for any real plan; keeps a wide fan-out of
+        /// aliases from growing combinatorially.
+        const MAX_ALTERNATIVES: usize = 32;
+        let outputs = |src: AttrId| {
+            pairs
+                .iter()
+                .filter(move |(s, _)| *s == src)
+                .map(|(_, o)| *o)
+        };
+        match self {
+            Self::Hash(alts) => {
+                let mut out: Vec<Vec<AttrId>> = Vec::new();
+                'alts: for alt in alts {
+                    let mut lists: Vec<Vec<AttrId>> = vec![Vec::new()];
+                    for key in alt {
+                        let choices: Vec<AttrId> = outputs(key).collect();
+                        if choices.is_empty() {
+                            continue 'alts;
+                        }
+                        lists = lists
+                            .iter()
+                            .flat_map(|l| {
+                                choices.iter().map(move |c| {
+                                    let mut l = l.clone();
+                                    l.push(*c);
+                                    l
+                                })
+                            })
+                            .take(MAX_ALTERNATIVES)
+                            .collect();
+                    }
+                    for l in lists {
+                        if out.len() < MAX_ALTERNATIVES && !out.contains(&l) {
+                            out.push(l);
+                        }
+                    }
+                }
+                if out.is_empty() {
+                    Self::Unknown
+                } else {
+                    Self::Hash(out)
+                }
+            }
+            Self::Range(keys) => keys
+                .into_iter()
+                .map(|k| outputs(k.attr).next().map(|attr| RangeKey { attr, ..k }))
+                .collect::<Option<Vec<_>>>()
+                .map_or(Self::Unknown, Self::Range),
+            other => other,
+        }
     }
 
     /// The placement with each attribute renamed by `f`; an attribute `f`
@@ -438,6 +501,54 @@ mod tests {
         assert_eq!(r.restrict(&a(&[1])), Placement::Unknown);
         assert_eq!(Placement::Single.restrict(&[]), Placement::Single);
         assert_eq!(Placement::Replicated.restrict(&[]), Placement::Replicated);
+    }
+
+    #[test]
+    fn a_projection_places_rows_by_every_name_of_a_key() {
+        let at = |pairs: &[(u64, u64)]| -> Vec<(AttrId, AttrId)> {
+            pairs.iter().map(|&(s, o)| (AttrId(s), AttrId(o))).collect()
+        };
+        let p = Placement::Hash(vec![a(&[1]), a(&[2, 3])]);
+        // `a AS k1, a AS k2, a`: one list per name, never `[k1, k2]`.
+        assert_eq!(
+            p.clone().project(&at(&[(1, 11), (1, 12), (1, 1)])),
+            Placement::Hash(vec![a(&[11]), a(&[12]), a(&[1])])
+        );
+        // A composite key: one output per key position, every combination.
+        assert_eq!(
+            p.clone().project(&at(&[(2, 20), (2, 21), (3, 30)])),
+            Placement::Hash(vec![a(&[20, 30]), a(&[21, 30])])
+        );
+        // A key that is not projected as a plain column drops its list.
+        assert_eq!(p.clone().project(&at(&[(2, 20)])), Placement::Unknown);
+        assert_eq!(
+            p.project(&at(&[(1, 11), (2, 20)])),
+            Placement::Hash(vec![a(&[11])])
+        );
+        // The same list from two sources is kept once.
+        assert_eq!(
+            Placement::Hash(vec![a(&[1]), a(&[2])]).project(&at(&[(1, 7), (2, 7)])),
+            Placement::Hash(vec![a(&[7])])
+        );
+        // A range follows the first name of each key.
+        let r = Placement::Range(vec![asc(1), asc(2)]);
+        assert_eq!(
+            r.clone().project(&at(&[(1, 5), (2, 6), (2, 7)])),
+            Placement::Range(vec![asc(5), asc(6)])
+        );
+        assert_eq!(r.project(&at(&[(1, 5)])), Placement::Unknown);
+        assert_eq!(Placement::Single.project(&[]), Placement::Single);
+        // Too many names stay bounded.
+        let many: Vec<(AttrId, AttrId)> = (0..8)
+            .flat_map(|k| (0..8).map(move |n| (AttrId(k), AttrId(100 + 10 * k + n))))
+            .collect();
+        let Placement::Hash(alts) =
+            Placement::Hash(vec![a(&[0, 1, 2, 3, 4, 5, 6, 7])]).project(&many)
+        else {
+            panic!("a hash placement")
+        };
+        assert_eq!(alts.len(), 32);
+        assert!(alts.iter().all(|l| l.len() == 8));
     }
 
     #[test]

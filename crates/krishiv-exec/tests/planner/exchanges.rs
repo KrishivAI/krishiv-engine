@@ -243,6 +243,41 @@ fn global_operators_gather_into_one_partition() {
     );
 }
 
+/// A subquery sees all its rows in one partition: a scalar one must fail
+/// on a second row and `EXISTS` must not be false for a partition that
+/// holds no match.
+#[test]
+fn a_subquery_is_gathered_to_one_partition() {
+    let env = env();
+    for sql in [
+        "SELECT a FROM t WHERE EXISTS (SELECT 1 FROM big WHERE a > 5)",
+        "SELECT a FROM t WHERE b > (SELECT b FROM big WHERE a = 1)",
+    ] {
+        assert_eq!(
+            exchanges_of(&env, sql),
+            ["Exchange SinglePartition"],
+            "{sql}"
+        );
+    }
+}
+
+/// A projection that renames a hash key keeps the placement: a grouping on
+/// the alias needs no further exchange.
+#[test]
+fn an_alias_of_a_hash_key_keeps_the_placement() {
+    let env = env();
+    let join = "SELECT x.a AS k FROM big x JOIN big y ON x.a = y.a";
+    let joined = exchanges_of(&env, join);
+    assert_eq!(joined.len(), 2, "{joined:?}");
+    assert_eq!(
+        exchanges_of(
+            &env,
+            &format!("SELECT k, count(*) FROM ({join}) GROUP BY k")
+        ),
+        joined
+    );
+}
+
 #[test]
 fn a_nested_loop_join_broadcasts_its_build() {
     let env = env();
@@ -266,6 +301,13 @@ fn exchanges_keep_the_rows() {
         rows
     };
     let broadcast = rows("BROADCAST");
-    assert_eq!(broadcast.len(), 8);
+    // `a` is NULL for every fourth row (3 and 7), which an inner join drops;
+    // each remaining key matches itself once.
+    assert_eq!(
+        broadcast,
+        [
+            "0|s0|1", "1|s1|1", "2|s2|1", "4|s4|1", "5|s5|1", "6|s6|1", "8|s8|1", "9|s9|1"
+        ]
+    );
     assert_eq!(rows("SHUFFLE_HASH"), broadcast);
 }

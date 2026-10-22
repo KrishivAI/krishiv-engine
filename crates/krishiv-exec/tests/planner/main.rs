@@ -308,9 +308,10 @@ fn a_top_n_too_large_for_top_n_is_a_sort_and_a_limit() {
     insta::assert_snapshot!(plan.to_string(), @"
     Limit 65537
     +- Exchange SinglePartition
-       +- Sort [a#0 ASC NULLS FIRST]
-          +- Exchange rangepartitioning(a#0 ASC NULLS FIRST)
-             +- Scan spark_catalog.default.t [a#0]
+       +- LocalLimit 65537
+          +- Sort [a#0 ASC NULLS FIRST]
+             +- Exchange rangepartitioning(a#0 ASC NULLS FIRST)
+                +- Scan spark_catalog.default.t [a#0]
     ");
     let (_, rows) = env.rows(&sql);
     assert_eq!(rows.len(), 10);
@@ -326,8 +327,9 @@ fn explain_prints_the_tree() {
     insta::assert_snapshot!(plan.to_string(), @"
     TopN 5, [y#3 ASC NULLS FIRST]
     +- Exchange SinglePartition
-       +- Project [b#1 AS y#3, a#0]
-          +- Scan spark_catalog.default.t [a#0, b#1]
+       +- LocalTopN 5, [y#3 ASC NULLS FIRST]
+          +- Project [b#1 AS y#3, a#0]
+             +- Scan spark_catalog.default.t [a#0, b#1]
     ");
     assert!(plan.warnings().is_empty());
     assert!(format!("{plan:?}").contains("TopN 5"));

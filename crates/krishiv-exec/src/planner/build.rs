@@ -343,6 +343,12 @@ impl<'a> Planner<'a> {
                     return self.top_n(input, order, n);
                 }
                 let input = self.plan(input)?;
+                // Each partition keeps at most `n` rows before the gather.
+                let input = if input.placement.satisfies(Distribution::Single) {
+                    input
+                } else {
+                    Self::local_limit(input, n)
+                };
                 let input = self.require(input, Distribution::Single)?;
                 let schema = Limit::new(Arc::clone(&input.schema), n).schema();
                 let layout = input.layout.clone();
@@ -503,7 +509,11 @@ impl<'a> Planner<'a> {
                 }
                 _ => return Err(internal("a scalar subquery of several columns")),
             };
+            // One partition holds the whole result: a scalar subquery must
+            // see every row to fail on a second one, and `EXISTS` must see
+            // every row to be false.
             let planned = self.plan(&plan)?;
+            let planned = self.require(planned, Distribution::Single)?;
             let scalar = kind == SubqueryValueKind::Scalar;
             let planned = select(planned, &out[..usize::from(scalar)], "Project")?;
             let id = SubqueryId(self.next_subquery);
@@ -774,6 +784,14 @@ impl<'a> Planner<'a> {
         // widening cast of it.
         let types = |id: AttrId| column_type(&input, id);
         let mut sites = Vec::new();
+        // The input's placement follows each plain column to every name the
+        // projection gives it.
+        let placed = input.placement.clone();
+        let renames: Vec<(AttrId, AttrId)> = exprs
+            .iter()
+            .zip(&layout)
+            .filter_map(|(e, out)| column_of(e).map(|src| (src, *out)))
+            .collect();
         for (e, out) in exprs.iter().zip(&layout) {
             if let Some(src) = key_source(e, &types) {
                 sites.extend(input.sites.iter().filter(|s| s.attr == src).map(|s| Site {
@@ -797,6 +815,7 @@ impl<'a> Planner<'a> {
             },
         );
         planned.sites = sites;
+        planned.placement = placed.project(&renames);
         Ok(planned)
     }
 
@@ -914,8 +933,42 @@ impl<'a> Planner<'a> {
         Ok(planned)
     }
 
+    /// `input` cut to `n` rows in each partition.
+    fn local_limit(input: Planned, n: u64) -> Planned {
+        let schema = Arc::clone(&input.schema);
+        let layout = input.layout.clone();
+        let mut local = input.wrap(
+            |input| PhysNode::Limit { input, limit: n },
+            schema,
+            layout,
+            ("LocalLimit", n.to_string()),
+        );
+        local.sites.clear();
+        local
+    }
+
     fn top_n(&mut self, input: Planned, order: &[SortOrder], n: u64) -> Result<Planned> {
         let (input, keys) = self.sort_keys(input, order)?;
+        // Each partition keeps its best `n` rows before the gather.
+        let input = if input.placement.satisfies(Distribution::Single) {
+            input
+        } else {
+            let schema = top_n_op(&input.schema, &keys, n)?.schema();
+            let layout = input.layout.clone();
+            let local = keys.clone();
+            let mut local = input.wrap(
+                |input| PhysNode::TopN {
+                    input,
+                    keys: local,
+                    limit: n,
+                },
+                schema,
+                layout,
+                ("LocalTopN", format!("{n}, {}", orders(order))),
+            );
+            local.sites.clear();
+            local
+        };
         let input = self.require(input, Distribution::Single)?;
         let schema = top_n_op(&input.schema, &keys, n)?.schema();
         let layout = input.layout.clone();
