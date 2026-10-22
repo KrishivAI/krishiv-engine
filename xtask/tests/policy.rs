@@ -138,7 +138,11 @@ fn ci_policy_wiring() {
         "    if: needs.changes.outputs.rust == 'true'\n",
         "        run: cargo \"+$NIGHTLY\" fuzz build\n",
     ] {
-        assert!(fuzz_build.contains(needle), "fuzz-build lacks {needle:?}");
+        // Whole lines: a deeper-indented step-level `if:` or `run:` must not match.
+        assert!(
+            fuzz_build.lines().any(|line| line == needle.trim_end()),
+            "fuzz-build lacks {needle:?}"
+        );
     }
     // Label-dependent policy lives in its own workflow so label changes never
     // restart (and cancel) the full CI run; the job name is a required check.
