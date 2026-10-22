@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Inputs the `connect_decode` fuzz target reported as out-of-memory
 //! (first byte: 0 plan, 1 relation, 2 expression; the rest is the message).
-//! Each is a few dozen bytes and must end in a typed error without
-//! reserving memory for counts or lengths read from the input.
+//! Each is a few dozen bytes. These tests assert the decode ends in a typed
+//! error, not a panic; they do not measure allocation. The memory bound is
+//! checked where the finding came from: `fuzz.yml` replays
+//! `fuzz/regressions/connect_decode` under the fuzz target's memory limit.
 
 use krishiv_connect::translate::{
     TranslateConf, plan_from_bytes, relation_from_bytes, translate_expression,

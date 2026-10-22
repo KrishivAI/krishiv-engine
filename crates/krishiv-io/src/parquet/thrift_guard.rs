@@ -132,6 +132,11 @@ impl Walk<'_> {
         let mut value = 0_u64;
         for shift in (0..70).step_by(7) {
             let byte = self.byte()?;
+            // The tenth byte holds the top bit of a u64: more would be
+            // shifted out silently and read as a smaller value.
+            if shift == 63 && byte & 0x7f > 1 {
+                return Err("varint overflows 64 bits");
+            }
             value |= u64::from(byte & 0x7f) << shift;
             if byte & 0x80 == 0 {
                 return Ok(value);
@@ -240,6 +245,20 @@ mod tests {
             Err("varint longer than 10 bytes")
         );
         assert_eq!(check(&[0x17]), Err("truncated"));
+        // A tenth byte above 1 overflows u64 (2 << 63 would read as 0, an
+        // empty list); 1 is the largest u64 and a continuation is too long.
+        let overflow = |last: u8| {
+            let mut list = vec![0x19, 0xf1];
+            list.extend([0x80; 9]);
+            list.extend([last, 0x00]);
+            list
+        };
+        assert_eq!(check(&overflow(0x02)), Err("varint overflows 64 bits"));
+        assert_eq!(check(&overflow(0x7f)), Err("varint overflows 64 bits"));
+        assert_eq!(
+            check(&overflow(0x01)),
+            Err("an element count larger than the bytes left")
+        );
         assert_eq!(check(&[0x1b, 0x00, 0x00]), Ok(()));
     }
 

@@ -616,35 +616,43 @@ fn corrupt_footers_are_errors() {
     }
 }
 
-/// Files the `parquet_read` fuzz target flagged: footers whose Thrift
-/// lists declare billions of elements in a few bytes. Each is a footer
-/// error, found without a loop over the declared count or an allocation
-/// sized by it.
+/// Files the `parquet_read` fuzz target flagged: footers whose Thrift lists
+/// declare billions of elements in a few bytes, or whose bytes the decoder
+/// misreads. The footer guard must reject each for the reason in the
+/// fixture's third column, before arrow-rs decodes it (no loop over the
+/// declared count, no allocation sized by it), and the read reports a footer
+/// error.
 #[test]
-fn fuzz_artifacts_are_prompt_footer_errors() {
+fn fuzz_artifacts_are_footer_errors_from_the_guard() {
     let env = Env::new();
     let o = env.options(&[]);
     let mut seen = 0;
     for line in include_str!("../../tests/fixtures/fuzz/parquet_read.hex").lines() {
-        let Some((name, hex)) = line.split_once(' ').filter(|_| !line.starts_with('#')) else {
+        let mut columns = line.splitn(3, ' ');
+        let (Some(name), Some(hex), Some(reason)) = (
+            columns.next().filter(|_| !line.starts_with('#')),
+            columns.next(),
+            columns.next(),
+        ) else {
             continue;
         };
         let bytes: Vec<u8> = (0..hex.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
             .collect();
+        let n = bytes.len();
+        let footer_len = u32::from_le_bytes(bytes[n - 8..n - 4].try_into().unwrap()) as usize;
+        assert_eq!(
+            super::thrift_guard::check(&bytes[n - 8 - footer_len..n - 8]),
+            Err(reason),
+            "{name}"
+        );
         let f = env.put(name, bytes);
-        let start = std::time::Instant::now();
         let r =
             env.rt.block_on(
                 env.io
                     .read_metadata(&ParquetFormat, &f, MetadataNeeds::default(), &o),
             );
-        assert!(
-            start.elapsed() < std::time::Duration::from_secs(2),
-            "{name} took {:?}",
-            start.elapsed()
-        );
         let e = r.map(|_| ()).unwrap_err();
         assert_eq!(
             e.error_class(),
