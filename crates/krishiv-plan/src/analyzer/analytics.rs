@@ -47,6 +47,10 @@ use crate::{
 /// `BIGINT` with one bit each.
 const MAX_GROUPING: usize = 63;
 
+/// The most expressions of a `CUBE`: 2^16 grouping sets (the SQL front end
+/// bounds `CUBE (..)` items the same way).
+const MAX_CUBE_EXPRS: usize = 16;
+
 /// `grouping` or `grouping_id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GroupingFn {
@@ -104,6 +108,8 @@ pub(super) struct Analytics {
     gid: Option<Attr>,
     /// The expansion; `None` for a grand total.
     pub(super) expand: Option<ExpandPlan>,
+    /// Whether the expansion numbers its sets (some two are equal).
+    numbered: bool,
 }
 
 impl Analytics {
@@ -117,6 +123,17 @@ impl Analytics {
             .collect()
     }
 
+    /// `HAVING` and `ORDER BY` over numbered sets: Spark reads the last
+    /// grouping key as the grouping id there, and that key is the set's
+    /// number, so a `grouping` or `grouping_id` call is
+    /// `UNSUPPORTED_GROUPING_EXPRESSION`.
+    pub(super) fn check_late_call(&self, e: &Arc<Expr>) -> Result<(), AnalysisError> {
+        if !self.numbered {
+            return Ok(());
+        }
+        reject_grouping_calls(std::slice::from_ref(e))
+    }
+
     /// The position of `e` among the grouping expressions: a copy of one, or
     /// an expression equal to one.
     fn position(&self, e: &Expr, memo: &mut HashMap<usize, u128>) -> Option<usize> {
@@ -127,6 +144,38 @@ impl Analytics {
         }
         let key = semantic_key(e, memo);
         self.exprs.iter().position(|g| g.key == key)
+    }
+}
+
+/// `UNSUPPORTED_GROUPING_EXPRESSION` if any of `exprs` calls `grouping` or
+/// `grouping_id`. Spark has no source position for it.
+pub(super) fn reject_grouping_calls(exprs: &[Arc<Expr>]) -> Result<(), AnalysisError> {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack: Vec<Arc<Expr>> = exprs.to_vec();
+    while let Some(x) = stack.pop() {
+        if !seen.insert(Arc::as_ptr(&x) as usize) {
+            continue;
+        }
+        if matches!(&x.node, ExprNode::Function(f) if GroupingFn::from_name(&f.name).is_some()) {
+            return Err(AnalysisError::new(
+                UnsupportedGroupingExpression {},
+                Origin::UNKNOWN,
+            ));
+        }
+        x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    Ok(())
+}
+
+/// A resolved call `e`, stated not nullable.
+fn not_null(e: &Arc<Expr>) -> Arc<Expr> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            let mut f = f.clone();
+            f.nullable = false;
+            Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))).with_origin(e.origin))
+        }
+        _ => Arc::clone(e),
     }
 }
 
@@ -313,17 +362,25 @@ impl Resolver<'_> {
         aggregates: &[Arc<Expr>],
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
+        // A cube has a set per subset of its expressions: bound it before
+        // building them (`WITH CUBE` and `DataFrame.cube` arrive here).
+        if let Grouping::Cube(v) = grouping
+            && v.len() > MAX_CUBE_EXPRS
+        {
+            return Err(AnalysisError::new(
+                GroupingSizeLimitExceeded {
+                    max_size: (1_u64 << MAX_CUBE_EXPRS).to_string(),
+                },
+                p.origin,
+            ));
+        }
         let c = self.child(input, env)?;
         let (flat, sets) = shape(grouping);
         self.check_star_ordinals(&flat, aggregates)?;
         // A single empty set over nothing is a grand total.
         let grand = flat.is_empty() && sets.len() == 1;
-        let gid_col = (!grand).then(|| {
-            self.attr(
-                "spark_grouping_id",
-                &arg_type(DataType::Long, false),
-            )
-        });
+        let gid_col =
+            (!grand).then(|| self.attr("spark_grouping_id", &arg_type(DataType::Long, false)));
         let gid = gid_col.as_ref().map(|col| Attr {
             col: BoundColumn {
                 name: "grouping__id".to_owned(),
@@ -375,9 +432,17 @@ impl Resolver<'_> {
                 exprs: Vec::new(),
                 gid: None,
                 expand: None,
+                numbered: false,
             };
             let items = self.rewrite_items(items, &an, env)?;
-            return self.build_aggregate(p.origin, &c, Vec::new(), &items, true, Some(Arc::new(an)));
+            return self.build_aggregate(
+                p.origin,
+                &c,
+                Vec::new(),
+                &items,
+                true,
+                Some(Arc::new(an)),
+            );
         }
         let Some(gid_col) = gid_col else {
             return Err(unsupported("grouping sets without an id", p.origin));
@@ -385,7 +450,11 @@ impl Resolver<'_> {
         let numbered = (0..sets.len()).any(|i| sets[..i].contains(&sets[i]));
         // The expansion's input: the child's columns, and the grouping
         // expressions that are not one of them.
-        let mut passed: Vec<Arc<Expr>> = c.out.iter().map(|a| col_expr(&a.col, Origin::UNKNOWN)).collect();
+        let mut passed: Vec<Arc<Expr>> = c
+            .out
+            .iter()
+            .map(|a| col_expr(&a.col, Origin::UNKNOWN))
+            .collect();
         let mut passed_out: Vec<Attr> = c.out.to_vec();
         let mut value: Vec<BoundColumn> = Vec::with_capacity(n);
         let mut copies: Vec<GroupExpr> = Vec::with_capacity(n);
@@ -406,10 +475,12 @@ impl Resolver<'_> {
                 Some(a) => a.col.clone(),
                 None => {
                     let v = self.attr(&name, &b.ty);
-                    passed.push(Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
-                        expr: Arc::clone(&b.expr),
-                        output: v.clone(),
-                    }))));
+                    passed.push(Arc::new(Expr::new(ExprNode::Resolved(
+                        ResolvedExpr::Alias {
+                            expr: Arc::clone(&b.expr),
+                            output: v.clone(),
+                        },
+                    ))));
                     passed_out.push(Attr {
                         col: v.clone(),
                         qual: Arc::from(Vec::new()),
@@ -425,7 +496,9 @@ impl Resolver<'_> {
                 key: keys_of[j],
                 attr: Attr {
                     col: copy,
-                    qual: column.as_ref().map_or_else(|| Arc::from(Vec::new()), |a| Arc::clone(&a.qual)),
+                    qual: column
+                        .as_ref()
+                        .map_or_else(|| Arc::from(Vec::new()), |a| Arc::clone(&a.qual)),
                     source: column.and_then(|a| a.source),
                 },
             });
@@ -437,7 +510,8 @@ impl Resolver<'_> {
         } else {
             c.clone()
         };
-        let pos_col = numbered.then(|| self.attr("_gen_grouping_pos", &arg_type(DataType::Integer, false)));
+        let pos_col =
+            numbered.then(|| self.attr("_gen_grouping_pos", &arg_type(DataType::Integer, false)));
         let mut output: Vec<BoundColumn> = passed_out.iter().map(|a| a.col.clone()).collect();
         output.extend(copies.iter().map(|g| g.attr.col.clone()));
         output.push(gid_col.clone());
@@ -459,9 +533,9 @@ impl Resolver<'_> {
             }
             row.push(literal(Literal::Long(mask)));
             if pos_col.is_some() {
-                row.push(literal(Literal::Integer(
-                    i32::try_from(si).map_err(|_| unsupported("that many grouping sets", p.origin))?,
-                )));
+                row.push(literal(Literal::Integer(i32::try_from(si).map_err(
+                    |_| unsupported("that many grouping sets", p.origin),
+                )?)));
             }
             projections.push(row);
         }
@@ -492,6 +566,7 @@ impl Resolver<'_> {
         let an = Analytics {
             exprs: copies,
             gid,
+            numbered,
             expand: Some(ExpandPlan {
                 plan: Arc::clone(&expand.plan),
                 ids: expand.ids,
@@ -619,8 +694,7 @@ impl Resolver<'_> {
             Some(g) => col_expr(&g.col, Origin::UNKNOWN),
             None => literal(Literal::Long(0)),
         };
-        let positions: Vec<Option<usize>> =
-            f.args.iter().map(|a| an.position(a, memo)).collect();
+        let positions: Vec<Option<usize>> = f.args.iter().map(|a| an.position(a, memo)).collect();
         match GroupingFn::from_name(&f.name) {
             Some(GroupingFn::GroupingId) => {
                 let exact = positions.len() == n
@@ -647,7 +721,7 @@ impl Resolver<'_> {
                 Ok(id)
             }
             _ => {
-                let (Some(arg), Some(Some(j))) = (f.args.first(), positions.first()) else {
+                let (Some(_), Some(Some(j))) = (f.args.first(), positions.first()) else {
                     return Err(AnalysisError::new(
                         GroupingColumnMismatch {
                             grouping: f.args.first().map(|a| with_id(a)).unwrap_or_default(),
@@ -661,18 +735,20 @@ impl Resolver<'_> {
                         Origin::UNKNOWN,
                     ));
                 };
-                let _ = arg;
                 // Bit `n - 1 - j` of the id, as a `TINYINT`.
                 let shift = n - 1 - j;
+                // The divisors are literals that are not 0, so the id's
+                // bit is never null: `grouping` is not nullable (Spark).
                 let high = if shift == 0 {
                     id
                 } else {
-                    self.call(
+                    let high = self.call(
                         "div",
                         vec![id, literal(Literal::Long(1_i64 << shift))],
                         env,
                         Origin::UNKNOWN,
-                    )?
+                    )?;
+                    not_null(&high)
                 };
                 let bit = self.call(
                     "%",
@@ -680,12 +756,15 @@ impl Resolver<'_> {
                     env,
                     Origin::UNKNOWN,
                 )?;
+                let bit = not_null(&bit);
                 let cast = Arc::new(Expr::new(ExprNode::Cast {
                     expr: bit,
                     to: DataType::Byte,
                     mode: CastMode::Default,
                 }));
-                Ok(self.bind(&cast, &Self::cx(&[], &[], env, "Aggregate"))?.expr)
+                Ok(self
+                    .bind(&cast, &Self::cx(&[], &[], env, "Aggregate"))?
+                    .expr)
             }
         }
     }

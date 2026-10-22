@@ -12,8 +12,8 @@ use krishiv_types::DataType;
 use super::dsl::{c, int};
 use super::tpch::QUERIES;
 use crate::{
-    Builtin, ColumnRef, Expr, ExprNode, Grouping, JoinCondition, JoinKind, LogicalPlan, PlanId, PlanNode,
-    ReadSource, ResolvedExpr, SortOrder, SqlArgs, Star,
+    Builtin, ColumnRef, Expr, ExprNode, Grouping, JoinCondition, JoinKind, LogicalPlan, PlanId,
+    PlanNode, ReadSource, ResolvedExpr, SortOrder, SqlArgs, Star,
 };
 
 /// The node kinds a plan uses, named as in the inventory. No wildcard arm:
@@ -170,7 +170,10 @@ fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
         ("filter", df(1).filter(c("a"))),
         ("where", df(1).filter(c("a"))),
         ("groupBy.agg", df(1).aggregate(vec![c("a")], vec![c("a")])),
-        ("rollup.agg", grouped(Grouping::Rollup(vec![Arc::new(c("a"))]))),
+        (
+            "rollup.agg",
+            grouped(Grouping::Rollup(vec![Arc::new(c("a"))])),
+        ),
         ("cube.agg", grouped(Grouping::Cube(vec![Arc::new(c("a"))]))),
         (
             "join",

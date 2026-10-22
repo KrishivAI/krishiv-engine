@@ -30,8 +30,8 @@ use crate::join::{
 };
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
-    Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, NullOf, Predicate, Project, ProjectItem,
-    PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdowns, Sort, SortKey, TopN,
+    Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, NullOf, Predicate, Project,
+    ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdowns, Sort, SortKey, TopN,
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;

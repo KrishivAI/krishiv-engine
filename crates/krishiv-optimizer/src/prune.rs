@@ -226,7 +226,10 @@ impl Rewrite<'_> {
                     let node = PlanNode::Expand {
                         input: Arc::clone(input),
                         projections: projections.iter().map(pick).collect(),
-                        output: kept.iter().filter_map(|&j| output.get(j).cloned()).collect(),
+                        output: kept
+                            .iter()
+                            .filter_map(|&j| output.get(j).cloned())
+                            .collect(),
                     };
                     replace(&rebuilt, node)
                 }

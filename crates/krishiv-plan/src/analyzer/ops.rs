@@ -684,6 +684,7 @@ impl Resolver<'_> {
         }
         if let Some(an) = &info.analytics {
             for b in &mut bounds {
+                an.check_late_call(&b.expr)?;
                 b.expr = self.resolve_grouping(&b.expr, an, env)?;
             }
         }
@@ -960,7 +961,11 @@ impl Resolver<'_> {
         let (keys, scope): (Vec<Attr>, Vec<Attr>) = match &analytics {
             Some(a) => (
                 a.keys(),
-                c.out.iter().chain(a.exprs.iter().map(|g| &g.attr)).cloned().collect(),
+                c.out
+                    .iter()
+                    .chain(a.exprs.iter().map(|g| &g.attr))
+                    .cloned()
+                    .collect(),
             ),
             None => (
                 group
@@ -1400,6 +1405,11 @@ impl Resolver<'_> {
                 .map(|(o, expr)| SortOrder { expr, ..o.clone() })
                 .collect()
         };
+        // Over no grouping sets, `ORDER BY grouping(..)` is rejected before
+        // its argument resolves (`HAVING` reports the argument first).
+        if c.agg.as_ref().is_none_or(|a| a.analytics.is_none()) {
+            super::analytics::reject_grouping_calls(&exprs)?;
+        }
         let (bounds, below, extended) = if c.agg.is_some() {
             self.over_agg(&c, &exprs, env, "Sort")?
         } else {

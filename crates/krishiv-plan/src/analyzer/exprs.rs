@@ -272,6 +272,8 @@ impl Resolver<'_> {
                         stack.push(Step::Enter(rewritten, in_agg));
                         continue;
                     }
+                    // In `ORDER BY` Spark rejects the call before it resolves
+                    // its argument (`HAVING` reports the argument first).
                     let inner = in_agg || self.is_aggregate(&x);
                     stack.push(Step::Exit(Arc::clone(&x), in_agg));
                     let mut kids = Vec::new();
@@ -1525,6 +1527,29 @@ fn pretty_literal(v: &Literal) -> String {
     }
 }
 
+/// A binary operator whose operands commute (Spark's `Add`, `Multiply`,
+/// `And`, `Or`, `EqualTo` and `EqualNullSafe`).
+fn is_commutative(node: &ExprNode) -> bool {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = node else {
+        return false;
+    };
+    let op = match &f.id {
+        FunctionId::Builtin(b) => Some(*b),
+        FunctionId::Registry { name, .. } => Builtin::from_name(name),
+    };
+    matches!(
+        op,
+        Some(
+            Builtin::Add
+                | Builtin::Multiply
+                | Builtin::And
+                | Builtin::Or
+                | Builtin::Eq
+                | Builtin::EqNullSafe
+        )
+    )
+}
+
 /// A semantic key: equal for expressions that compute the same value,
 /// whatever their origins, column spellings or (top-level) alias.
 pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
@@ -1557,8 +1582,17 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
             other => format!("u{other:?}"),
         }
         .into_bytes();
-        for c in kids {
-            b.extend_from_slice(&memo.get(&addr(c)).copied().unwrap_or(0).to_le_bytes());
+        let mut hashes: Vec<u128> = kids
+            .iter()
+            .map(|c| memo.get(&addr(*c)).copied().unwrap_or(0))
+            .collect();
+        // Spark canonicalizes the operands of a commutative operator into
+        // one order, so `a + b` and `b + a` are the same expression.
+        if hashes.len() == 2 && is_commutative(&x.node) {
+            hashes.sort_unstable();
+        }
+        for h in hashes {
+            b.extend_from_slice(&h.to_le_bytes());
         }
         memo.insert(addr(x), XxHash3_128::oneshot(&b));
     }

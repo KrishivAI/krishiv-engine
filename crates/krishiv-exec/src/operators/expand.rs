@@ -39,14 +39,11 @@ impl Expand {
         for p in &projects {
             let (a, b) = (p.schema(), &schema);
             let same = a.fields().len() == b.fields().len()
-                && a.fields()
-                    .iter()
-                    .zip(b.fields())
-                    .all(|(x, y)| {
-                        x.name() == y.name()
-                            && x.data_type() == y.data_type()
-                            && x.is_nullable() == y.is_nullable()
-                    });
+                && a.fields().iter().zip(b.fields()).all(|(x, y)| {
+                    x.name() == y.name()
+                        && x.data_type() == y.data_type()
+                        && x.is_nullable() == y.is_nullable()
+                });
             if !same {
                 return Err(internal(format!(
                     "the projections of an expansion differ: {:?} and {:?}",

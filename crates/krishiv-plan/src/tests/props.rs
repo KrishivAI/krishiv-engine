@@ -426,7 +426,7 @@ impl Gen<'_> {
             },
             21 => PlanNode::Expand {
                 input: self.input(d),
-                projections: self.many(1, 2, |g| g.exprs()),
+                projections: self.many(1, 2, Gen::exprs),
                 output: self.many(0, 2, Gen::bound),
             },
             _ => PlanNode::WithCte {
@@ -824,12 +824,15 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             output,
         } => {
             site!(w, projections.push(Vec::new()));
-            site!(w, output.push(output.first().cloned().unwrap_or(BoundColumn {
-                id: AttrId(0),
-                name: "x".to_owned(),
-                data_type: DataType::Integer,
-                nullable: false,
-            })));
+            site!(
+                w,
+                output.push(output.first().cloned().unwrap_or(BoundColumn {
+                    id: AttrId(0),
+                    name: "x".to_owned(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                }))
+            );
             projections.iter_mut().any(|p| m_exprs(p, w))
                 || output.iter_mut().any(|c| m_bound(c, w))
                 || m_plan(input, w)

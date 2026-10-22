@@ -50,8 +50,8 @@ pub use data::{PlanData, assert_plan_data};
 pub(crate) use instantiate::node_ids;
 pub use instantiate::{SpillScopes, WorkerContext, instantiate};
 pub(crate) use instantiate::{
-    Unbuilt, Values, aggregate_node, aggregate_spec, filter_op, hash_join, nested_loop_join,
-    expand_op, project_op, replicate_op, scan_filter, sort_op, top_n_op,
+    Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, hash_join,
+    nested_loop_join, project_op, replicate_op, scan_filter, sort_op, top_n_op,
 };
 
 use crate::aggregate::{AggregateExpr, AggregateOutput};

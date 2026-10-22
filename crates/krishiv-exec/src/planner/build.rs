@@ -775,7 +775,10 @@ impl<'a> Planner<'a> {
             prepared,
             op.schema(),
             layout,
-            ("Expand", format!("{} projections [{text}]", projections.len())),
+            (
+                "Expand",
+                format!("{} projections [{text}]", projections.len()),
+            ),
             |input, layout, subqueries| PhysNode::Expand {
                 input,
                 layout,

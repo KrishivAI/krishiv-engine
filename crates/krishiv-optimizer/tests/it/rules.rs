@@ -398,6 +398,23 @@ const CASES: &[(&str, &str)] = &[
         "prune_exists",
         "SELECT a FROM t WHERE EXISTS (SELECT * FROM u WHERE u.a = t.a)",
     ),
+    // Grouping sets: the expansion keeps what the aggregate reads.
+    (
+        "expand_rollup",
+        "SELECT a, sum(c) FROM t GROUP BY ROLLUP(a, b)",
+    ),
+    (
+        "expand_cube_pruned",
+        "SELECT count(*) FROM t GROUP BY CUBE(a, b)",
+    ),
+    (
+        "expand_grouping_sets",
+        "SELECT a, grouping(a), grouping_id(a, b), sum(c) FROM t WHERE c > 1 GROUP BY GROUPING SETS ((a), (b), ())",
+    ),
+    (
+        "expand_duplicate_sets",
+        "SELECT a, sum(c) FROM t GROUP BY GROUPING SETS ((a), (a))",
+    ),
 ];
 
 #[test]
@@ -441,6 +458,28 @@ fn rules() {
             }
         }
     }
+}
+
+#[test]
+fn an_expansion_has_a_copy_of_its_rows_per_projection() {
+    let ctx = support::ctx();
+    let rows = |sql: &str| {
+        let plan = support::resolve(sql, &ctx);
+        let optimized = optimize(&plan).unwrap();
+        let mut node = Arc::clone(optimized.root());
+        while !matches!(node.node, PlanNode::Expand { .. }) {
+            let mut next = None;
+            node.for_each_child(&mut |c| next = Some(Arc::clone(c)));
+            node = next.expect("an expansion below");
+        }
+        krishiv_optimizer::estimated_rows(&node, &krishiv_optimizer::NoStatistics)
+    };
+    let one_set = rows("SELECT a FROM t GROUP BY GROUPING SETS ((a), (a))");
+    let four_sets = rows("SELECT count(*) FROM t GROUP BY CUBE(a, b)");
+    assert!(
+        (four_sets / one_set - 2.0).abs() < 1e-9,
+        "{four_sets} vs {one_set}"
+    );
 }
 
 #[test]

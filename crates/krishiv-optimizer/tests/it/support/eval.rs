@@ -177,6 +177,28 @@ impl Interp<'_> {
                     rows,
                 }
             }
+            PlanNode::Expand {
+                input,
+                projections,
+                output,
+            } => {
+                let rel = self.plan(input, outer);
+                let ix = index(&rel.cols);
+                let rows = rel
+                    .rows
+                    .iter()
+                    .flat_map(|r| {
+                        projections
+                            .iter()
+                            .map(|row| row.iter().map(|e| self.eval(e, &ix, r, outer)).collect())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                Rel {
+                    cols: output.iter().map(|c| c.id).collect(),
+                    rows,
+                }
+            }
             PlanNode::Filter { input, predicate } => {
                 let mut preds = Vec::new();
                 conjuncts(predicate, &mut preds);
@@ -746,6 +768,8 @@ fn apply(name: &str, a: &[V]) -> V {
         "*" => num(|x, y| Some(x * y / SCALE)),
         "/" => num(|x, y| (y != 0).then(|| x * SCALE / y)),
         "%" => num(|x, y| (y != 0).then(|| x % y)),
+        // Integral division: the quotient truncated to a whole number.
+        "div" => num(|x, y| (y != 0).then(|| x / y * SCALE)),
         "negative" => match &a[0] {
             V::Num(x) => V::Num(-x),
             _ => V::Null,

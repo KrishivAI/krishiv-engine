@@ -26,8 +26,8 @@ use crate::analyzer::{
 };
 use crate::walk::{Node, visit_distinct};
 use crate::{
-    ColumnRef, Cte, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan,
-    MAX_DEPTH, Origin, Plan, PlanId, PlanNode, ReadSource, SourceId, SqlArgs, Star, TableVersion,
+    ColumnRef, Cte, Expr, ExprNode, JoinCondition, JoinKind, Literal, LogicalPlan, MAX_DEPTH,
+    Origin, Plan, PlanId, PlanNode, ReadSource, SourceId, SqlArgs, Star, TableVersion,
 };
 
 fn goldens() -> Value {

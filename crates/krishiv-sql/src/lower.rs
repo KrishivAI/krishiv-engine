@@ -28,9 +28,9 @@ use krishiv_types::DecimalType;
 
 use crate::ast::{
     Alias, BinaryOp, Expr, ExprKind, FromClause, GroupBy, GroupItem, GroupItemKind, GroupWith,
-    GroupingSet, JoinConstraint, JoinKind, Literal,
-    NullTreatment, NumKind, Query, Relation, RelationExt, Select, SetExpr, SetExprKind,
-    SetOperator, SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth, UnaryOp,
+    GroupingSet, JoinConstraint, JoinKind, Literal, NullTreatment, NumKind, Query, Relation,
+    RelationExt, Select, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem, Span,
+    TableFactor, TableFactorKind, Truth, UnaryOp,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_query};
@@ -452,10 +452,7 @@ impl Lowerer {
             (Some(GroupWith::Rollup), true) => return Ok(Grouping::Rollup(plain)),
             (Some(GroupWith::Cube), true) => return Ok(Grouping::Cube(plain)),
             (Some(GroupWith::GroupingSets(sets)), true) => {
-                let sets = sets
-                    .iter()
-                    .map(|s| self.set(s))
-                    .collect::<R<Vec<_>>>()?;
+                let sets = sets.iter().map(|s| self.set(s)).collect::<R<Vec<_>>>()?;
                 return Ok(Grouping::GroupingSets { exprs: plain, sets });
             }
             (Some(_), false) => {
@@ -479,9 +476,8 @@ impl Lowerer {
             product = product
                 .iter()
                 .flat_map(|head| {
-                    sets.iter().map(move |tail| {
-                        head.iter().chain(tail).cloned().collect::<Vec<_>>()
-                    })
+                    sets.iter()
+                        .map(move |tail| head.iter().chain(tail).cloned().collect::<Vec<_>>())
                 })
                 .collect();
         }
@@ -545,7 +541,11 @@ impl Lowerer {
                 };
                 chosen
                     .into_iter()
-                    .map(|c| c.into_iter().flat_map(|i| parts[i].iter().cloned()).collect())
+                    .map(|c| {
+                        c.into_iter()
+                            .flat_map(|i| parts[i].iter().cloned())
+                            .collect()
+                    })
                     .collect()
             }
         })

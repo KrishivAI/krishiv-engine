@@ -1,0 +1,7 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a, sum(c) FROM t GROUP BY ROLLUP(a, b)"
+---
+Aggregate [a#5, b#6, spark_grouping_id#3], [a#5, sum(c#2) AS sum(c)#4]
++- Expand [[c#2, a#0, b#1, 0L], [c#2, a#0, CAST(NULL AS STRING), 1L], [c#2, CAST(NULL AS INT), CAST(NULL AS STRING), 3L]], [c#2, a#5, b#6, spark_grouping_id#3]
+   +- Scan spark_catalog.default.t [a#0, b#1, c#2]
