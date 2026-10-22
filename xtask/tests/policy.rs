@@ -108,7 +108,12 @@ fn deny_toml_guards_object_store_coupling() {
 #[test]
 fn ci_policy_wiring() {
     let ci = read(".github/workflows/ci.yml");
-    for needle in ["cargo xtask changes", "cargo hack check --each-feature"] {
+    for needle in [
+        "cargo xtask changes",
+        "cargo hack check --each-feature",
+        "  fuzz-build:\n",
+        "cargo \"+$NIGHTLY\" fuzz build",
+    ] {
         assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
     }
     // Label-dependent policy lives in its own workflow so label changes never
