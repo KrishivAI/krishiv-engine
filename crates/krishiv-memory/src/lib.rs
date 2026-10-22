@@ -181,6 +181,12 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     }
     /// This pool's own limit.
     fn limit(&self) -> Option<usize>;
+    /// The most this pool's subtree can hold: the smallest limit of this
+    /// pool and the pools above it (`None`: no pool on the path has one).
+    /// Defaults to [`limit`](Self::limit).
+    fn effective_limit(&self) -> Option<usize> {
+        self.limit()
+    }
     /// `Err` once the arbitrator has aborted this pool's query: drivers call
     /// it at every batch boundary (one atomic load while not aborted). From
     /// the abort on, no reservation of the query succeeds and its held

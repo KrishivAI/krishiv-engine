@@ -45,6 +45,7 @@
 //! so the cache misses of a chunk overlap, before it resolves the chunk in
 //! order.
 
+mod hll;
 mod index;
 mod layout;
 // The key-page prototypes are not used by any operator: built only for
@@ -58,6 +59,7 @@ mod table;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use hll::Hll;
 pub use index::{
     FLAT_MAX_BYTES, IndexChoice, JoinIndex, NO_MATCH, RowSource, TOUCH_MIN_BYTES, flat_bytes,
     salted_bytes,

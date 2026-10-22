@@ -144,3 +144,34 @@ fn a_gone_receiver_finishes_the_result_sink() {
     signal.complete(0);
     assert_eq!(ticket.now_or_never(), Some(0));
 }
+
+/// A query without a limit of its own reports the process limit it runs
+/// under (the profile's `limit_bytes`), and a tighter query limit wins.
+#[test]
+fn metrics_report_the_limit_the_query_runs_under() {
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(64 << 20),
+        ..MemoryConfig::default()
+    });
+    let query = |limit| {
+        QueryContext::new(
+            QueryId(4),
+            WorkloadClass::Agent,
+            ExecConfig::default(),
+            root.child("q", limit),
+        )
+    };
+    assert_eq!(query(None).metrics().memory.limit, Some(64 << 20));
+    assert_eq!(query(Some(8 << 20)).metrics().memory.limit, Some(8 << 20));
+    let unbounded = TreePool::new(&MemoryConfig {
+        limit: None,
+        ..MemoryConfig::default()
+    });
+    let q = QueryContext::new(
+        QueryId(5),
+        WorkloadClass::Agent,
+        ExecConfig::default(),
+        unbounded.child("q", None),
+    );
+    assert_eq!(q.metrics().memory.limit, None);
+}

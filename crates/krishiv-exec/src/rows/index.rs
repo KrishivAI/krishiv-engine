@@ -166,10 +166,10 @@ fn slot_id(slot: u64) -> u32 {
 }
 
 impl JoinIndex {
-    /// Indexes rows `0..rows` of `src`, sized once for `rows` keys (no
-    /// resize). For each row whose key is already indexed, `next[row]` is
-    /// set to the previous newest row with that key and the index points to
-    /// `row` (newest first); other entries of `next` are left unchanged.
+    /// Indexes rows `0..rows` of `src`, sized for `rows` keys (no resize).
+    /// For each row whose key is already indexed, `next[row]` is set to the
+    /// previous newest row with that key and the index points to `row`
+    /// (newest first); other entries of `next` are left unchanged.
     ///
     /// # Errors
     /// `INTERNAL_ERROR` if `next` is shorter than `rows`, `rows` exceeds the
@@ -182,6 +182,26 @@ impl JoinIndex {
         choice: IndexChoice,
         next: &mut [u32],
     ) -> Result<Self> {
+        Self::build_expecting(layout, src, rows, rows, seed, choice, next)
+    }
+
+    /// [`build`](Self::build), sized for about `keys` distinct keys (a
+    /// cardinality estimate, at most `rows`) instead of one per row: the
+    /// kind is chosen for `keys`, and the index grows (re-inserting from the
+    /// stored hashes, never reading keys) if the estimate was low.
+    ///
+    /// # Errors
+    /// As [`build`](Self::build).
+    pub fn build_expecting(
+        layout: &RowLayout,
+        src: &impl RowSource,
+        rows: usize,
+        keys: usize,
+        seed: u64,
+        choice: IndexChoice,
+        next: &mut [u32],
+    ) -> Result<Self> {
+        let expect = keys.clamp(1, rows.max(1));
         let n = u32::try_from(rows)
             .ok()
             .filter(|&n| n < NO_MATCH && rows <= next.len())
@@ -194,9 +214,9 @@ impl JoinIndex {
             layout.eq(ar, ah, br, bh)
         };
         let mut keys = 0;
-        let kind = if choice.flat(rows) {
+        let kind = if choice.flat(expect) {
             let mut t: HashTable<u32> = HashTable::new();
-            t.try_reserve(rows, |&id| g_of(id))
+            t.try_reserve(expect, |&id| g_of(id))
                 .map_err(|e| internal(format!("{e:?}")))?;
             for id in 0..n {
                 match t.entry(g_of(id), |&o| eq(id, o), |&o| g_of(o)) {
@@ -212,12 +232,16 @@ impl JoinIndex {
             }
             Kind::Flat(t)
         } else {
-            let len = salted_slots(rows);
+            let len = salted_slots(expect);
             let mut slots: Vec<u64> = Vec::new();
             slots.try_reserve_exact(len).map_err(oom)?;
             slots.resize(len, 0);
-            let mask = len - 1;
+            let mut mask = len - 1;
             for id in 0..n {
+                if (keys + 1) * 2 > slots.len() {
+                    slots = grow_salted(&slots, g_of)?;
+                    mask = slots.len() - 1;
+                }
                 let g = g_of(id);
                 let salt = g & SALT_MASK;
                 let slot = salt | (u64::from(id) + 1);
@@ -352,6 +376,26 @@ impl JoinIndex {
             }
         }
     }
+}
+
+/// A directory of twice the slots holding the slots of `old`, re-inserted
+/// from the table-local hashes `g` of their rows (no key reads).
+fn grow_salted(old: &[u64], g: impl Fn(u32) -> u64) -> Result<Vec<u64>> {
+    let len = old.len().saturating_mul(2).max(MIN_SLOTS);
+    let mut slots: Vec<u64> = Vec::new();
+    slots
+        .try_reserve_exact(len)
+        .map_err(|e| internal(e.to_string()))?;
+    slots.resize(len, 0);
+    let mask = len - 1;
+    for &s in old.iter().filter(|&&s| s != 0) {
+        let mut i = low(g(slot_id(s)), mask);
+        while slots[i] != 0 {
+            i = (i + 1) & mask;
+        }
+        slots[i] = s;
+    }
+    Ok(slots)
 }
 
 /// Loads every slot of a chunk, then the first salt-matching row of each,

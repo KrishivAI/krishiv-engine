@@ -14,12 +14,13 @@ use krishiv_memory::{Reservation, SpillSignal};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::grace::{Grace, Part, choose, reserve_chunks, spill_parts};
-use super::keys::{Encoded, Hashing, PARTITIONS, any_invalid};
+use super::keys::{Encoded, Hashing, any_invalid};
 use super::table::{JoinTable, RowArena, key_bytes};
 use super::{Counter, JoinType, Shared, record, unsupported};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
+use crate::rows::Hll;
 use crate::sync::{Event, Mutex, lock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -68,6 +69,11 @@ struct Collect {
     parts: Vec<Part>,
     stored: u64,
     file_bytes: u64,
+    /// Per partition: the distinct-key sketch of the rows sunk, row layout
+    /// only (`None` once any driver had no memory for its sketches).
+    sketches: Option<Vec<Hll>>,
+    /// The sketches' memory.
+    sketch_memory: Vec<Reservation>,
 }
 
 /// The finalized build.
@@ -94,7 +100,14 @@ struct BuildLocal {
     file_bytes: u64,
     /// This driver's runtime filter partials and their reservation.
     runtime: Partials,
+    /// Per partition: a sketch of this driver's stored hashes (row layout,
+    /// when their memory was granted), and that memory.
+    sketches: Option<(Vec<Hll>, Reservation)>,
 }
+
+/// Register bits of a partition's distinct-key sketch: 1 KiB, 3.3% standard
+/// error, enough to presize an index.
+const SKETCH_BITS: u32 = 10;
 
 /// Builds each filter from its merged partial and publishes it, reserving
 /// it in `held` (a filter that does not fit keeps only its min/max range);
@@ -211,11 +224,17 @@ fn local_mut(local: &mut LocalState) -> Result<&mut BuildLocal> {
 }
 
 /// The row-arena chunk of `rows` (indices into the encoded batch).
+/// A build batch's payload: arrow rows, or payload rows of the row layout.
+pub(crate) enum Payload {
+    Arrow(Rows),
+    Rows(crate::rows::EncodedKeys),
+}
+
 pub(crate) fn arena_chunk(
     shared: &Shared,
     hashing: &Hashing,
     keys: &Encoded,
-    payload: Option<&Rows>,
+    payload: Option<&Payload>,
     weights: &Weights,
     rows: &[usize],
 ) -> Result<Batch> {
@@ -225,10 +244,19 @@ pub(crate) fn arena_chunk(
     ))];
     let layout = shared.keys.layout().filter(|_| hashing.rows());
     columns.extend(keys.arena_columns(layout.map(AsRef::as_ref), rows)?);
-    if let Some(p) = payload {
-        columns.push(Arc::new(LargeBinaryArray::from_iter_values(
-            rows.iter().map(|&i| p.row(i)),
-        )));
+    match (payload, shared.row_payload(hashing.rows())) {
+        (Some(Payload::Arrow(p)), _) => {
+            columns.push(Arc::new(LargeBinaryArray::from_iter_values(
+                rows.iter().map(|&i| p.row(i)),
+            )));
+        }
+        (Some(Payload::Rows(p)), Some(layout)) => {
+            columns.extend(super::keys::row_columns(layout, p, rows)?);
+        }
+        (Some(Payload::Rows(_)), None) => {
+            return Err(internal("payload rows without a layout".to_owned()));
+        }
+        (None, _) => {}
     }
     let weights = match weights {
         Weights::Const(w) => Weights::Const(*w),
@@ -288,7 +316,7 @@ impl BuildSink {
             for &p in &chosen {
                 g.spilled.fetch_or(1 << p, Ordering::AcqRel);
             }
-            let mut taken: Vec<Part> = (0..PARTITIONS).map(|_| Part::default()).collect();
+            let mut taken: Vec<Part> = (0..g.hashing.fanout0()).map(|_| Part::default()).collect();
             for &p in &chosen {
                 if let (Some(t), Some(part)) = (taken.get_mut(p), c.parts.get_mut(p)) {
                     t.chunks = std::mem::take(&mut part.chunks);
@@ -324,13 +352,60 @@ fn build_need(part: &Part, row_layout: bool) -> Option<(usize, usize)> {
     if part.chunks.is_empty() {
         return None;
     }
-    let index = JoinTable::index_bytes(part.mem_rows(), key_bytes(&part.chunks), row_layout);
+    // Finalize sizes row-layout indexes from estimates: reserve their growth.
+    let index =
+        JoinTable::index_bytes_estimated(part.mem_rows(), key_bytes(&part.chunks), row_layout);
     let copy = if part.chunks.len() > 1 {
         part.bytes()
     } else {
         0
     };
     Some((index, copy))
+}
+
+/// A duration in whole nanoseconds, saturating.
+fn nanos(d: std::time::Duration) -> u64 {
+    u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// One partition's finalize work.
+struct Job {
+    part: usize,
+    /// Bytes of its rows in memory.
+    bytes: usize,
+    chunks: Vec<Batch>,
+    /// What indexing it reserves (see [`build_need`]).
+    need: (usize, usize),
+    /// Its estimated distinct keys (row layout, when sketched).
+    keys: Option<usize>,
+}
+
+/// An estimate of a sketch's distinct count that is rarely low: the
+/// estimate plus three standard errors (3 x 3.3%).
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a non-negative estimate, saturating"
+)]
+fn upper_estimate(sketch: &Hll) -> usize {
+    (sketch.estimate() * 1.1).ceil() as usize
+}
+
+/// One sketch per level-0 partition, reserved in `memory` (row layout
+/// only; `None` without the memory: the indexes are then sized by rows).
+fn sketches(
+    hashing: &Hashing,
+    memory: &crate::context::MemoryHandle,
+) -> Option<(Vec<Hll>, Reservation)> {
+    if !hashing.rows() {
+        return None;
+    }
+    let sketches: Vec<Hll> = (0..hashing.fanout0())
+        .map(|_| Hll::new(SKETCH_BITS))
+        .collect();
+    let mut held = memory.reservation();
+    held.try_grow(sketches.iter().map(Hll::bytes).sum()).ok()?;
+    Some((sketches, held))
 }
 
 fn mem_bytes(parts: &[Part]) -> usize {
@@ -368,13 +443,17 @@ impl Sink for BuildSink {
     }
 
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
+        let hashing = self.0.hashing(ctx.query().config());
+        let fanout = hashing.fanout0();
+        let rows = hashing.rows();
         Ok(Arc::new(BuildGlobal {
-            hashing: self.0.hashing(ctx.query().config()),
+            hashing,
             spilled: Arc::new(AtomicU64::new(0)),
             rows: AtomicU64::new(0),
             null_key: AtomicBool::new(false),
             collect: Mutex::new(Collect {
-                parts: (0..PARTITIONS).map(|_| Part::default()).collect(),
+                parts: (0..fanout).map(|_| Part::default()).collect(),
+                sketches: rows.then(|| (0..fanout).map(|_| Hll::new(SKETCH_BITS)).collect()),
                 ..Collect::default()
             }),
             built: OnceLock::new(),
@@ -395,7 +474,7 @@ impl Sink for BuildSink {
         let memory = ctx.consumer();
         Ok(Box::new(BuildLocal {
             hashing: state(global)?.hashing.clone(),
-            parts: (0..PARTITIONS)
+            parts: (0..state(global)?.hashing.fanout0())
                 .map(|_| Part::with_memory(memory.reservation()))
                 .collect(),
             spilled: Arc::clone(&state(global)?.spilled),
@@ -406,6 +485,7 @@ impl Sink for BuildSink {
                 builders: partials(&self.0),
                 memory: vec![memory.reservation()],
             },
+            sketches: sketches(&state(global)?.hashing, memory),
         }))
     }
 
@@ -435,14 +515,15 @@ impl Sink for BuildSink {
         if s.join_type == JoinType::NullAwareAnti && any_invalid(keys.valid.as_ref()) {
             g.null_key.store(true, Ordering::Release);
         }
-        let payload = match &s.payload {
-            Some((conv, _)) => Some(
+        let payload = match (s.row_payload(g.hashing.rows()), &s.payload) {
+            (Some(layout), _) => Some(Payload::Rows(layout.encode(columns, 0)?)),
+            (None, Some((conv, _))) => Some(Payload::Arrow(
                 conv.convert_columns(columns)
                     .map_err(|e| internal(e.to_string()))?,
-            ),
-            None => None,
+            )),
+            (None, None) => None,
         };
-        let mut by_part = vec![Vec::new(); PARTITIONS];
+        let mut by_part = vec![Vec::new(); g.hashing.fanout0()];
         let hashes = keys.hashes();
         for i in (0..n).filter(|&i| keys.is_valid(i)) {
             by_part[g.hashing.partition(hashes[i], 0)].push(i);
@@ -475,6 +556,13 @@ impl Sink for BuildSink {
             l.parts[p].chunks.push(c);
             l.parts[p].coalesce(s.arena_schema(&g.hashing))?;
         }
+        if let Some((sketches, _)) = &mut l.sketches {
+            for (sketch, rows) in sketches.iter_mut().zip(&by_part) {
+                for &i in rows {
+                    sketch.add(hashes[i]);
+                }
+            }
+        }
         g.rows.fetch_add(n as u64, Ordering::Relaxed);
         l.stored += stored;
         if s.spill.is_some() {
@@ -494,6 +582,17 @@ impl Sink for BuildSink {
         }
         c.stored += l.stored;
         c.file_bytes += l.file_bytes;
+        match (c.sketches.as_mut(), l.sketches) {
+            (Some(all), Some((mine, memory))) => {
+                for (a, m) in all.iter_mut().zip(&mine) {
+                    a.merge(m);
+                }
+                c.sketch_memory.push(memory);
+            }
+            // A driver without sketches: no estimate for anyone.
+            (Some(_), None) => c.sketches = None,
+            (None, _) => {}
+        }
         lock(&g.runtime).merge(l.runtime);
         // The finalizing driver's signal offers the combined state.
         l.signal.set_spillable_bytes(if self.0.spill.is_some() {
@@ -510,6 +609,7 @@ impl Sink for BuildSink {
         ctx: &'a TaskContext,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            let started = std::time::Instant::now();
             let g = state(global)?;
             let s = &self.0;
             let filter_memory = self.publish_filters(g, ctx);
@@ -526,12 +626,12 @@ impl Sink for BuildSink {
                     // never tables that fill the budget and cannot spill.
                     if g.spilled.load(Ordering::Acquire) != 0 {
                         g.spilled
-                            .store(u64::MAX >> (64 - PARTITIONS), Ordering::Release);
+                            .store(u64::MAX >> (64 - g.hashing.fanout0()), Ordering::Release);
                     }
                     let spilled = g.spilled.load(Ordering::Acquire);
                     let remnants = {
                         let c = lock(&g.collect);
-                        (0..PARTITIONS)
+                        (0..g.hashing.fanout0())
                             .any(|p| spilled & (1 << p) != 0 && !c.parts[p].chunks.is_empty())
                     };
                     if remnants {
@@ -553,15 +653,31 @@ impl Sink for BuildSink {
                     self.spill_collected(g, 1, ctx, true).await?;
                 };
             }
-            let jobs: Vec<(usize, Vec<Batch>, (usize, usize))> = {
+            let mut jobs: Vec<Job> = {
                 let mut c = lock(&g.collect);
+                let estimates: Vec<Option<usize>> = match &c.sketches {
+                    Some(s) => s.iter().map(|h| Some(upper_estimate(h))).collect(),
+                    None => vec![None; c.parts.len()],
+                };
                 c.parts
                     .iter_mut()
+                    .zip(estimates)
                     .enumerate()
-                    .filter_map(|(i, p)| Some((i, build_need(p, g.hashing.rows())?, p)))
-                    .map(|(i, need, p)| (i, std::mem::take(&mut p.chunks), need))
+                    .filter_map(|(i, (p, keys))| {
+                        Some((i, build_need(p, g.hashing.rows())?, p, keys))
+                    })
+                    .map(|(i, need, p, keys)| Job {
+                        part: i,
+                        bytes: p.bytes(),
+                        chunks: std::mem::take(&mut p.chunks),
+                        need,
+                        keys,
+                    })
                     .collect()
             };
+            // Largest first: the last partitions to start are the small ones,
+            // so the pool's threads finish close together.
+            jobs.sort_by_key(|j| std::cmp::Reverse(j.bytes));
             // Nothing in memory is spillable any more.
             ctx.consumer().signal().set_spillable_bytes(0);
             // One blocking task per partition (the executor's blocking pool
@@ -576,7 +692,11 @@ impl Sink for BuildSink {
             let mut running = futures::stream::FuturesUnordered::new();
             let mut tables = Vec::with_capacity(jobs.len());
             loop {
-                if let Some(&(_, _, (index_bytes, copy))) = jobs.front() {
+                if let Some(&Job {
+                    need: (index_bytes, copy),
+                    ..
+                }) = jobs.front()
+                {
                     // A spilling build reserved every index already.
                     let grow = if spill {
                         copy
@@ -594,20 +714,39 @@ impl Sink for BuildSink {
                     } else {
                         false
                     };
-                    if let Some((p, chunks, (_, copy))) = jobs.pop_front_if(|_| funded) {
+                    if let Some(Job {
+                        part: p,
+                        chunks,
+                        need: (index_bytes, copy),
+                        keys,
+                        ..
+                    }) = jobs.pop_front_if(|_| funded)
+                    {
                         let shared = Arc::clone(&self.0);
                         let hashing = g.hashing.clone();
                         running.push(async move {
                             let table = ctx
                                 .run_blocking(move || {
+                                    let t0 = std::time::Instant::now();
                                     let schema = shared.arena_schema(&hashing);
                                     let arena = RowArena::concat(schema, &chunks)?;
                                     drop(chunks);
+                                    let t1 = std::time::Instant::now();
                                     let layout = shared.keys.layout().filter(|_| hashing.rows());
-                                    JoinTable::build(arena, layout, hashing.g_seed())
+                                    let table = JoinTable::build_expecting(
+                                        arena,
+                                        layout,
+                                        hashing.g_seed(),
+                                        keys,
+                                    );
+                                    let n = &shared.counters;
+                                    n.add(Counter::ConcatNs, nanos(t1 - t0));
+                                    n.add(Counter::IndexNs, nanos(t1.elapsed()));
+                                    n.max(Counter::MaxPartitionNs, nanos(t0.elapsed()));
+                                    table
                                 })
                                 .await?;
-                            Ok::<_, KrishivError>((p, table, copy))
+                            Ok::<_, KrishivError>((p, table, copy, index_bytes))
                         });
                         continue;
                     }
@@ -615,7 +754,14 @@ impl Sink for BuildSink {
                 let Some(done) = futures::StreamExt::next(&mut running).await else {
                     break;
                 };
-                let (p, table, copy) = done?;
+                let (p, table, copy, index_bytes) = done?;
+                // The index was reserved for one key per row: keep what it
+                // holds.
+                index.shrink(
+                    index_bytes
+                        .saturating_sub(table.index_memory())
+                        .min(index.size()),
+                );
                 let (keys, buckets, kind) = table.index_size();
                 self.0.counters.or(Counter::IndexKinds, kind as u64);
                 self.0.counters.add(Counter::HashEntries, keys as u64);
@@ -637,15 +783,18 @@ impl Sink for BuildSink {
             // Spilled partitions that hold rows: the probe defers only these
             // (an empty partition matches nothing, spilled or not).
             let marked = g.spilled.load(Ordering::Acquire);
-            let spilled = (0..PARTITIONS)
+            let spilled = (0..g.hashing.fanout0())
                 .filter(|&p| marked & (1 << p) != 0 && c.parts[p].rows > 0)
                 .fold(0u64, |m, p| m | (1 << p));
-            let mut all: Vec<Option<JoinTable>> = (0..PARTITIONS).map(|_| None).collect();
+            let mut all: Vec<Option<JoinTable>> = (0..g.hashing.fanout0()).map(|_| None).collect();
             for (p, t) in tables {
                 all[p] = Some(t);
             }
+            // The sketches sized the indexes; their memory goes back.
+            c.sketches = None;
+            c.sketch_memory.clear();
             let mut memory = vec![index, filter_memory];
-            let mut grace = Grace::new();
+            let mut grace = Grace::new(g.hashing.fanout0());
             for (p, part) in c.parts.iter_mut().enumerate() {
                 memory.append(&mut part.memory);
                 if spilled & (1 << p) != 0 {
@@ -657,6 +806,7 @@ impl Sink for BuildSink {
             n.add(Counter::BuildRows, c.stored);
             n.add(Counter::SpilledPartitions, u64::from(spilled.count_ones()));
             n.add(Counter::BuildSpillBytes, c.file_bytes);
+            n.add(Counter::FinalizeNs, nanos(started.elapsed()));
             g.built
                 .set(Built {
                     tables: all,
