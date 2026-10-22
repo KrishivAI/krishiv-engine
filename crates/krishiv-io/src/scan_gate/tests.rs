@@ -308,6 +308,11 @@ fn the_arbitrator_revokes_shares_instead_of_aborting_the_query() {
         }
         assert_eq!(rows, 10_000);
         assert_eq!((gate.active(), gate.bytes()), (0, 0));
+        assert_eq!(
+            s.overcommitted(),
+            shares[0] as u64,
+            "the revoked share counts as over-committed once, when its unit ends"
+        );
         drop(join);
         drop(s);
         assert_eq!(pool.reserved(), 0, "everything returned");

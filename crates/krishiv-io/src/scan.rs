@@ -357,10 +357,9 @@ impl ScanStream {
             .saturating_add(usize::try_from(incoming).unwrap_or(usize::MAX));
         let held = gate.share(id);
         if target > held {
-            let over = gate.acquire(id, target - held).await?;
-            self.overcommitted = self
-                .overcommitted
-                .saturating_add(u64::try_from(over).unwrap_or(u64::MAX));
+            // Over-committed bytes are counted when the share drops them
+            // (`settle_share`, `end_unit`), which also covers revoked ones.
+            gate.acquire(id, target - held).await?;
         }
         Ok(())
     }
@@ -378,14 +377,20 @@ impl ScanStream {
         if let Some((gate, id)) = &self.gate {
             let target = self.share_target();
             if gate.share(*id) > target {
-                gate.shrink(*id, target);
+                let over = gate.shrink(*id, target);
+                self.overcommitted = self
+                    .overcommitted
+                    .saturating_add(u64::try_from(over).unwrap_or(u64::MAX));
             }
         }
     }
 
     fn end_unit(&mut self) {
         if let Some((gate, id)) = &self.gate {
-            gate.shrink(*id, 0);
+            let over = gate.shrink(*id, 0);
+            self.overcommitted = self
+                .overcommitted
+                .saturating_add(u64::try_from(over).unwrap_or(u64::MAX));
         }
         self.unit_open = false;
         self.reading = false;

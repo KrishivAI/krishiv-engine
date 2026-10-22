@@ -331,8 +331,10 @@ impl ScanGate {
     }
 
     /// Shrinks stream `id`'s share to `bytes`, over-committed bytes first,
-    /// and returns the reserved rest to the pool.
-    pub(crate) fn shrink(&self, id: u64, bytes: usize) {
+    /// returns the reserved rest to the pool, and returns how many
+    /// over-committed bytes it dropped (granted without a reservation, or
+    /// revoked), so a byte is counted once whichever way it got there.
+    pub(crate) fn shrink(&self, id: u64, bytes: usize) -> usize {
         let inner = &self.inner;
         let mut st = inner.state();
         let mut share = st.get(id);
@@ -344,6 +346,7 @@ impl ScanGate {
         inner.set(&mut st, id, share);
         drop(st);
         inner.release(excess);
+        over
     }
 
     /// Stream `id`'s share in bytes (reserved and over-committed).
