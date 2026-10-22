@@ -1,6 +1,10 @@
 name: OSV-Scanner
 
 # Known-vulnerability scan of the lock files (Cargo and uv) with OSV-Scanner.
+# The lock files are found by walking the tree (the web UI's pnpm lock file is
+# excluded), not listed: a pull request scans its base with the same
+# arguments, so a listed lock file that a pull request adds does not exist
+# there and fails the base scan ("failed to resolve path"), whatever it holds.
 # Pull requests fail only on vulnerabilities they introduce (base vs head);
 # main and the weekly schedule scan everything and upload SARIF to code
 # scanning. The scan runs in Google's reusable workflows, so its jobs cannot
@@ -34,14 +38,9 @@ jobs:
       # Fork pull requests get a read-only token: report in the job only.
       upload-sarif: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
       scan-args: |-
-        --lockfile=Cargo.lock
-        --lockfile=fuzz/Cargo.lock
-        --lockfile=crates/krishiv-kernels/fuzz/Cargo.lock
-        --lockfile=tools/connect-protogen/Cargo.lock
-        --lockfile=tools/plan-protogen/Cargo.lock
-        --lockfile=python/uv.lock
-        --lockfile=bench/uv.lock
-        --lockfile=tests/scripts/uv.lock
+        --recursive
+        --experimental-exclude=ui
+        ./
 
   scan:
     if: github.event_name != 'pull_request'
@@ -54,11 +53,6 @@ jobs:
       security-events: write
     with:
       scan-args: |-
-        --lockfile=Cargo.lock
-        --lockfile=fuzz/Cargo.lock
-        --lockfile=crates/krishiv-kernels/fuzz/Cargo.lock
-        --lockfile=tools/connect-protogen/Cargo.lock
-        --lockfile=tools/plan-protogen/Cargo.lock
-        --lockfile=python/uv.lock
-        --lockfile=bench/uv.lock
-        --lockfile=tests/scripts/uv.lock
+        --recursive
+        --experimental-exclude=ui
+        ./
