@@ -277,3 +277,65 @@ def test_one_cached_array_capsule_is_imported_once_across_threads() -> None:
     for t in threads:
         t.join()
     assert sorted(results) == ["consumed"] * 7 + ["ok"]
+
+
+def typed_table() -> Any:
+    """One column per Arrow layout the bridge checks: every buffer count and
+    child rule in the import's header check, plus the Null type (no buffers)."""
+    return pa.table(
+        {
+            "null": pa.nulls(3),
+            "bool": pa.array([True, None, False]),
+            "f32": pa.array([1.5, None, 2.5], pa.float32()),
+            "dec": pa.array([1, None, 3], pa.decimal128(10, 2)),
+            "ts": pa.array([1, 2, None], pa.timestamp("us", tz="UTC")),
+            "date": pa.array([1, None, 3], pa.date32()),
+            "bin": pa.array([b"a", None, b"bc"], pa.binary()),
+            "fsb": pa.array([b"ab", None, b"cd"], pa.binary(2)),
+            "large": pa.array(["x", None, "yz"], pa.large_string()),
+            "view": pa.array(["x", None, "a long string that does not fit inline"], pa.string_view()),
+            "list": pa.array([[1, 2], None, []], pa.list_(pa.int64())),
+            "large_list": pa.array([[1], None, [2, 3]], pa.large_list(pa.int32())),
+            "fixed_list": pa.array([[1, 2], None, [3, 4]], pa.list_(pa.int16(), 2)),
+            "struct": pa.array([{"a": 1, "b": "x"}, None, {"a": 3, "b": None}]),
+            "map": pa.array([[("k", 1)], None, []], pa.map_(pa.string(), pa.int64())),
+            "dict": pa.array(["a", "b", "a"]).dictionary_encode(),
+        }
+    )
+
+
+def test_every_layout_round_trips_zero_copy() -> None:
+    source = typed_table()
+    got = pa.table(ArrowStream.from_arrow(source))
+    assert got.equals(source)
+    assert addresses(got) == addresses(source)
+    batch = source.to_batches()[0]
+    got = pa.table(ArrowStream.from_arrow(batch))
+    assert got.equals(source)
+
+
+def test_exported_stream_is_taken_once_across_threads() -> None:
+    # Eight threads exporting one stream (parallel on the free-threaded
+    # build): exactly one gets the capsule, the others the consumed error.
+    import threading
+
+    stream = ArrowStream.from_arrow(table())
+    results: list[str] = []
+    barrier = threading.Barrier(8)
+
+    def take() -> None:
+        barrier.wait()
+        try:
+            capsule = stream.__arrow_c_stream__()
+            got = pa.RecordBatchReader._import_from_c_capsule(capsule).read_all()
+            results.append("ok" if got.equals(table()) else "wrong data")
+        except ValueError as e:
+            results.append("consumed" if "already consumed" in str(e) else str(e))
+
+    threads = [threading.Thread(target=take) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == ["consumed"] * 7 + ["ok"]
+    assert stream.consumed
