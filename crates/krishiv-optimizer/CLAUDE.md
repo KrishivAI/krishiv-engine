@@ -12,6 +12,10 @@ Query optimizer: rule- and cost-based rewrites, including the IVM rewrite pass.
   rewrites a shared subtree once (`dag::Rewriter`), subquery plans included; never copy a shared subtree.
 - Only deterministic predicates move; folding never changes what a query returns or raises (no overflow,
   no division, no time-zone-dependent cast; a raising call stays in the plan).
+- `SUM(x + c)` of a narrow integral column becomes `SUM(x) + c * COUNT(x)` (`sum_rewrite.rs`, one pass after the
+  rewrite batch) only where the type range proves no per-row overflow and `|x|, |c| <= 2^16`; floating point and
+  decimals are never rewritten. Conditions and the one residual assumption (fewer than 2^46 rows per aggregate)
+  are in the module docs; the executor differential test is `krishiv-exec` `tests/planner/sum_rewrite.rs`.
 - Join ordering re-plans each inner-join tree (through deterministic filters and column selections) from
   `Statistics`; it never adds a cross product, places each conjunct at the lowest join that has its inputs
   (subquery conjuncts as filters), and restores column order only for positional consumers. Inputs are

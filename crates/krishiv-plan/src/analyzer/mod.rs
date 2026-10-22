@@ -68,6 +68,7 @@ mod catalog;
 mod coerce;
 mod exprs;
 mod fold;
+mod fold_ops;
 mod hints;
 mod ops;
 mod resolve;

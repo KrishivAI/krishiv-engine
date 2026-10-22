@@ -82,7 +82,7 @@ const LOPSIDED: f64 = 2.0;
 const DESCEND: f64 = 2.0;
 
 /// The largest attribute id a plan may hold (as the analyzer allows).
-const MAX_ID: u64 = 1 << 62;
+pub(crate) const MAX_ID: u64 = 1 << 62;
 
 /// Restricts the aggregates below joins in `root` (see the module docs).
 pub(crate) fn restrict(
@@ -603,7 +603,7 @@ fn shift(e: &Arc<Expr>, offset: u64) -> Arc<Expr> {
 
 /// The largest attribute id `p` holds: outputs, references and subquery
 /// plans, each shift at its offset.
-fn max_id(p: &Arc<LogicalPlan>, memo: &mut HashMap<*const LogicalPlan, u64>) -> u64 {
+pub(crate) fn max_id(p: &Arc<LogicalPlan>, memo: &mut HashMap<*const LogicalPlan, u64>) -> u64 {
     if let Some(m) = memo.get(&Arc::as_ptr(p)) {
         return *m;
     }

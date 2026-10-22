@@ -26,6 +26,29 @@ use crate::{
     Scan, SortOrder,
 };
 
+/// What [`Resolver::group_substitute`] reads and grows: the aggregate, the
+/// attributes it shows, and the output it adds for grouping expressions the
+/// select list does not name.
+struct Grouped<'a> {
+    info: &'a AggInfo,
+    env: &'a Arc<Env>,
+    op: &'static str,
+    visible: &'a HashSet<AttrId>,
+    memo: &'a mut HashMap<usize, u128>,
+    known: &'a mut Vec<(u128, Attr)>,
+    grown: &'a mut AggInfo,
+    pass: &'a mut Vec<Attr>,
+}
+
+/// Whether `r`, a projection of `exprs`, is a [`Resolver::restore`]: bare
+/// columns, with no origin (a written projection has one).
+fn is_restore(r: &Rel, exprs: &[Arc<Expr>]) -> bool {
+    r.plan.origin == Origin::UNKNOWN
+        && exprs
+            .iter()
+            .all(|e| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_))))
+}
+
 /// The two attributes of a `USING` column.
 type Keys = (Attr, Attr);
 
@@ -537,6 +560,48 @@ impl Resolver<'_> {
         Ok((bounds, self.widened(c, &missing)))
     }
 
+    /// The aggregate under `c`'s filters, sorts and limits (`HAVING`), and
+    /// those layers, top first; `None` when `c` is not such a stack.
+    fn through_to_agg(c: &Rel) -> Option<(Vec<Rel>, Rel)> {
+        let mut layers = Vec::new();
+        let mut cur = c.clone();
+        loop {
+            if cur.agg.is_some() {
+                return Some((layers, cur));
+            }
+            let child = match cur.widen.as_deref() {
+                Some(Widen::Through { child }) => child.clone(),
+                // What `restore` put over a grown aggregate.
+                Some(Widen::Project { input, exprs }) if is_restore(&cur, exprs) => input.clone(),
+                _ => return None,
+            };
+            layers.push(cur);
+            cur = child;
+        }
+    }
+
+    /// `layers` (from [`Self::through_to_agg`]) rebuilt over `inner`, a
+    /// grown version of the aggregate they were over.
+    fn rewrapped(&self, layers: &[Rel], inner: Rel) -> Rel {
+        let mut built = inner;
+        for rel in layers.iter().rev() {
+            let child = built;
+            // A restore only drops what the sort adds: the sort's own
+            // restore does it, over everything.
+            if matches!(rel.widen.as_deref(), Some(Widen::Project { .. })) {
+                built = child;
+                continue;
+            }
+            let plan = Arc::clone(&rel.plan)
+                .map_children(|_| Ok::<_, Infallible>(Arc::clone(&child.plan)))
+                .unwrap_or_else(|never| match never {});
+            let mut wide = self.wrap(plan, rel.plan.origin.plan_id, child.out.to_vec(), &[&child]);
+            wide.widen = Some(Arc::new(Widen::Through { child }));
+            built = wide;
+        }
+        built
+    }
+
     /// Binds each of `exprs` in `cx`.
     fn bind_all(&mut self, exprs: &[Arc<Expr>], cx: &Cx<'_>) -> Result<Vec<Bound>, AnalysisError> {
         exprs.iter().map(|e| self.bind(e, cx)).collect()
@@ -660,10 +725,6 @@ impl Resolver<'_> {
         let mut cx = Self::cx(&agg.out, &rels, env, op);
         cx.extra = Some(&info.keys);
         cx.agg_scope = Some(&info.input.out);
-        let mut bounds = Vec::new();
-        for e in exprs {
-            bounds.push(self.bind(e, &cx)?);
-        }
         let mut memo = HashMap::new();
         let mut known: Vec<(u128, Attr)> = info
             .aggregates
@@ -675,6 +736,39 @@ impl Resolver<'_> {
         let mut grown = (*info).clone();
         // What the aggregate adds to the output it shows.
         let mut pass: Vec<Attr> = Vec::new();
+        let mut bounds = Vec::new();
+        for e in exprs {
+            match self.bind(e, &cx) {
+                Ok(b) => bounds.push(b),
+                // A grouping expression written out in full (`GROUP BY x + 1
+                // ORDER BY x + 1`) is the aggregate's output, wherever it
+                // appears in the expression; names it does not cover stay
+                // unresolved, as in Spark.
+                Err(err)
+                    if err
+                        .error
+                        .error_class()
+                        .name()
+                        .starts_with("UNRESOLVED_COLUMN") =>
+                {
+                    let mut st = Grouped {
+                        info: &info,
+                        env,
+                        op,
+                        visible: &visible,
+                        memo: &mut memo,
+                        known: &mut known,
+                        grown: &mut grown,
+                        pass: &mut pass,
+                    };
+                    let Some(sub) = self.group_substitute(e, &mut st) else {
+                        return Err(err);
+                    };
+                    bounds.push(self.bind(&sub, &cx).map_err(|_| err)?);
+                }
+                Err(err) => return Err(err),
+            }
+        }
         for b in &mut bounds {
             b.expr = Arc::clone(&b.expr).transform_down(&mut |x: Arc<Expr>| match &x.node {
                 ExprNode::Resolved(ResolvedExpr::Function(f))
@@ -748,6 +842,88 @@ impl Resolver<'_> {
         }
         let r = self.aggregate_rel(agg.plan.origin, grown, &pass);
         Ok((bounds, r, true))
+    }
+
+    /// `e` with every subexpression that is one of the aggregate's grouping
+    /// expressions or output expressions (equal after canonicalisation, as Spark's
+    /// `semanticEquals`) replaced by the attribute the aggregate computes
+    /// it as, added to the aggregate when it does not output it. `None`
+    /// when nothing matches, or `e` holds a subquery.
+    fn group_substitute(&mut self, e: &Arc<Expr>, st: &mut Grouped<'_>) -> Option<Arc<Expr>> {
+        let info = st.info;
+        let rels = [&info.input];
+        let probe = Self::cx(&info.input.out, &rels, st.env, st.op);
+        let grouping: HashSet<u128> = info
+            .grouping
+            .iter()
+            .map(|g| semantic_key(g, st.memo))
+            .collect();
+        let mut subquery = false;
+        let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+            if let crate::walk::Node::Expr(x) = n
+                && matches!(x.node, ExprNode::Subquery { .. })
+            {
+                subquery = true;
+            }
+            std::ops::ControlFlow::Continue(())
+        });
+        if subquery {
+            return None;
+        }
+        let mut changed = false;
+        let out = Arc::clone(e)
+            .transform_down(&mut |x: Arc<Expr>| -> Result<Arc<Expr>, Infallible> {
+                // Leaves resolve by name; aggregate calls and the rest of
+                // the output are bound by the caller.
+                if matches!(
+                    x.node,
+                    ExprNode::Column(_) | ExprNode::Literal(_) | ExprNode::Star(_)
+                ) {
+                    return Ok(x);
+                }
+                let Ok(b) = self.expr(&x, &probe) else {
+                    return Ok(x);
+                };
+                if b.agg.is_some() || b.outer.is_some() || !b.lateral.is_empty() {
+                    return Ok(x);
+                }
+                // The probe's expressions are dropped on return: their
+                // addresses must not outlive them in a memo.
+                let key = semantic_key(&b.expr, &mut HashMap::new());
+                if !grouping.contains(&key) && !st.known.iter().any(|(k, _)| *k == key) {
+                    return Ok(x);
+                }
+                let a = match st.known.iter().find(|(k, _)| *k == key) {
+                    Some((_, a)) => a.clone(),
+                    None => {
+                        let output = self.attr(&pretty(&b.expr), &b.ty);
+                        st.grown
+                            .aggregates
+                            .push(Arc::new(Expr::new(ExprNode::Resolved(
+                                ResolvedExpr::Alias {
+                                    expr: Arc::clone(&b.expr),
+                                    output: output.clone(),
+                                },
+                            ))));
+                        let a = Attr {
+                            col: output,
+                            qual: no_qual(),
+                            source: None,
+                        };
+                        st.grown.out.push(a.clone());
+                        st.known.push((key, a.clone()));
+                        a
+                    }
+                };
+                if !st.visible.contains(&a.col.id) && !st.pass.iter().any(|p| p.col.id == a.col.id)
+                {
+                    st.pass.push(a.clone());
+                }
+                changed = true;
+                Ok(col_expr(&a.col, x.origin))
+            })
+            .unwrap_or_else(|never| match never {});
+        changed.then_some(out)
     }
 
     /// The aggregate of `info`, under the projections of its lateral
@@ -1336,9 +1512,35 @@ impl Resolver<'_> {
         } else {
             // A name the select list outputs twice is looked up below it,
             // as Spark does.
-            let (bounds, wide) = self.bind_missing(&c, &exprs, env, "Sort", true)?;
-            let extended = wide.out.len() > c.out.len();
-            (bounds, wide, extended)
+            match self.bind_missing(&c, &exprs, env, "Sort", true) {
+                Ok((bounds, wide)) => {
+                    let extended = wide.out.len() > c.out.len();
+                    (bounds, wide, extended)
+                }
+                // `HAVING ... ORDER BY`: the sort reads the aggregate below
+                // the filter, which grows what the sort needs.
+                Err(e)
+                    if e.error
+                        .error_class()
+                        .name()
+                        .starts_with("UNRESOLVED_COLUMN") =>
+                {
+                    let Some((layers, inner)) = Self::through_to_agg(&c) else {
+                        return Err(e);
+                    };
+                    let Ok((bounds, grown, extended)) = self.over_agg(&inner, &exprs, env, "Sort")
+                    else {
+                        return Err(e);
+                    };
+                    let top = if extended {
+                        self.rewrapped(&layers, grown)
+                    } else {
+                        c.clone()
+                    };
+                    (bounds, top, extended)
+                }
+                Err(e) => return Err(e),
+            }
         };
         let node = PlanNode::Sort {
             input: Arc::clone(&below.plan),

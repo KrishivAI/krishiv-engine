@@ -80,19 +80,14 @@ fn date(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Date, c)
 }
 
-/// Whether Spark's legacy string-to-`int` cast reads `s` (surrounding
-/// whitespace, a sign, digits and a fraction it truncates).
+/// Whether `date_add`/`date_sub` without ANSI read `s` as a day count: an
+/// `int` with an optional sign, surrounded by whitespace or control
+/// characters (`UTF8String.toIntExact`). A fraction is not read (`'1.5'`,
+/// `'1.'`), nor an exponent, a hex number or one past `int` (checked
+/// against a Spark 4.2 run of each).
 fn legacy_int(s: &str) -> bool {
-    let t = s.trim();
-    let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
-    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
-    !whole.is_empty()
-        && whole.bytes().all(|b| b.is_ascii_digit())
-        && fraction.bytes().all(|b| b.is_ascii_digit())
-        && t.split('.')
-            .next()
-            .and_then(|w| w.parse::<i32>().ok())
-            .is_some()
+    let t = s.trim_matches(|c: char| c.is_whitespace() || c.is_control());
+    t.parse::<i32>().is_ok()
 }
 
 /// `date_add`/`date_sub` with ANSI off: a string literal day count that is
@@ -350,9 +345,11 @@ fn min_max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// `first(x [, ignoreNulls])`: the type of `x`; the flag must be a boolean
-/// literal.
+/// literal (Spark matches `Literal(b, BooleanType)`, so `1 = 1` is rejected).
 fn pick(c: &CallTypes<'_>, function: &str) -> Result<ArgType, KrishivError> {
-    if c.args().len() > 1 && !matches!(c.constant(1), Some(Constant::Boolean(_))) {
+    if c.args().len() > 1
+        && !(c.is_literal(1) && matches!(c.constant(1), Some(Constant::Boolean(_))))
+    {
         return Err(LegacyErrorTemp1210 {
             func_name: function.to_owned(),
         }

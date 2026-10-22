@@ -15,6 +15,7 @@ mod listing;
 mod physical;
 mod runtime_filters;
 mod semantics;
+mod sum_rewrite;
 mod tpch;
 mod write;
 

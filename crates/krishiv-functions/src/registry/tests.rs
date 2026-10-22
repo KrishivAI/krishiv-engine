@@ -317,7 +317,7 @@ fn legacy_day_counts_and_binary_predicates() {
         let consts = [None, s(v)[0].clone()];
         (def(name).result)(&CallTypes::new(&args, &consts).with_ansi(false))
     };
-    for ok in ["1", " -2 ", "+3", "1.9", "7."] {
+    for ok in ["1", " -2 ", "+3", "-0", "2147483647"] {
         assert!(legacy("date_add", ok).is_ok(), "{ok}");
     }
     for (name, shown) in [
@@ -335,7 +335,22 @@ fn legacy_day_counts_and_binary_predicates() {
             "{err}"
         );
     }
-    for bad in ["", ".5", "1e3", "99999999999", "1-"] {
+    // A fraction is not an integer to `date_add` (Spark 3.5 to 4.2 raise on
+    // `'1.9'`, checked on each), nor are an exponent, a hex number or a
+    // value past `int`.
+    for bad in [
+        "",
+        ".5",
+        "1e3",
+        "99999999999",
+        "1-",
+        "1.9",
+        "7.",
+        "1.0",
+        "0x1",
+        "2147483648",
+        "1 2",
+    ] {
         assert!(legacy("date_sub", bad).is_err(), "{bad}");
     }
     // ANSI on: the cast fails at run time instead.

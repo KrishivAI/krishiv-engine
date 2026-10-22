@@ -31,7 +31,11 @@ fn root() -> &'static Path {
 }
 
 fn goldens() -> Value {
-    let path = root().join("tests/fixtures/spark-4.2.0/analyzer-goldens.json");
+    fixture("analyzer-goldens.json")
+}
+
+fn fixture(name: &str) -> Value {
+    let path = root().join("tests/fixtures/spark-4.2.0").join(name);
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
@@ -377,6 +381,43 @@ fn resolution_corpus_matches_spark() {
         "JOIN_CONDITION_IS_NOT_BOOLEAN_TYPE",
         // Subqueries.
         "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
+    ] {
+        assert!(raised.contains(class), "{class} not raised");
+    }
+}
+
+/// Constant folding of the arguments that need a constant (`round`'s and
+/// `ceil`'s scale, `date_part`'s field, `LIMIT`), ORDER BY and HAVING over
+/// grouping expressions: Spark's outcome for each statement
+/// (`analyzer-folding-goldens.json`, generated with
+/// `gen_analyzer_goldens.py --section folding`).
+#[test]
+fn folding_and_grouped_ordering_match_spark() {
+    let g = fixture("analyzer-folding-goldens.json");
+    let mut failures = Vec::new();
+    let mut raised = BTreeSet::new();
+    for case in g["corpus"].as_array().unwrap() {
+        let sql = case["sql"].as_str().unwrap();
+        let got = analyze(&g, sql, conf(&case["conf"]));
+        if let Some(diff) = compare(sql, &got, case) {
+            failures.push(format!("{sql} {}: {diff}", case["conf"]));
+        }
+        if let Err(e) = &got {
+            raised.insert(e.error.error_class().name());
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    for class in [
+        "ARITHMETIC_OVERFLOW",
+        "DIVIDE_BY_ZERO",
+        "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+        "NON_FOLDABLE_ARGUMENT",
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION",
     ] {
         assert!(raised.contains(class), "{class} not raised");
     }

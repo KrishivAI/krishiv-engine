@@ -426,6 +426,76 @@ impl Resolver<'_> {
         }
     }
 
+    /// Spark's checks of a `LIMIT` value, after its type: it must fold
+    /// (`IS_UNFOLDABLE`), to a value that is not NULL
+    /// and not negative (cited at the expression); what folding raises
+    /// (`2147483647 + 1` under ANSI) is raised as is.
+    fn check_limit(
+        &self,
+        b: &super::exprs::Bound,
+        at: Origin,
+        operator: Origin,
+    ) -> Result<(), AnalysisError> {
+        use krishiv_common::error::{
+            InvalidLimitLikeExpressionIsNegative, InvalidLimitLikeExpressionIsNull,
+            InvalidLimitLikeExpressionIsUnfoldable,
+        };
+        let conf = super::fold::Conf {
+            ansi: self.ctx.conf.ansi,
+            decimal_loss: self.ctx.conf.decimal_precision_loss,
+        };
+        // A nondeterministic expression is pulled out of the operator into
+        // an attribute of this name before Spark checks it.
+        let nondeterministic = {
+            let mut found = false;
+            let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(&b.expr), |n| {
+                if let crate::walk::Node::Expr(x) = n
+                    && let ExprNode::Resolved(crate::ResolvedExpr::Function(f)) = &x.node
+                    && !f.deterministic
+                {
+                    found = true;
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+            found
+        };
+        let text = if nondeterministic {
+            "\"_nondeterministic\"".to_owned()
+        } else {
+            format!("\"{}\"", super::exprs::pretty(&b.shown()))
+        };
+        let name = "limit".to_owned();
+        match super::fold::constant(&b.expr, conf) {
+            // An attribute carries no position of its own: Spark cites the
+            // input there, the expression otherwise.
+            None => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsUnfoldable { expr: text, name },
+                if matches!(
+                    b.expr.node,
+                    ExprNode::Resolved(crate::ResolvedExpr::Column(_))
+                ) {
+                    operator
+                } else {
+                    b.expr.origin
+                },
+            )),
+            Some(super::Constant::Error(e)) => Err(AnalysisError::new(e, b.expr.origin)),
+            Some(super::Constant::Null) => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsNull { expr: text, name },
+                at,
+            )),
+            Some(super::Constant::Integral(v)) if v < 0 => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsNegative {
+                    expr: text,
+                    name,
+                    v: v.to_string(),
+                },
+                at,
+            )),
+            Some(_) => Ok(()),
+        }
+    }
+
     /// Binds a top-level expression of the current operator.
     pub(super) fn bind(&mut self, e: &Arc<Expr>, cx: &Cx<'_>) -> Result<Bound, AnalysisError> {
         let b = self.expr(e, cx)?;
@@ -578,7 +648,10 @@ impl Resolver<'_> {
             } => self.sort(p, input, order, *global, env),
             PlanNode::Limit { input, limit } => {
                 let c = self.child(input, env)?;
-                let cx = Self::cx(&[], &[], env, "Limit");
+                // A name resolves against the input (and is then not a
+                // constant: `IS_UNFOLDABLE`).
+                let rels = [&c];
+                let cx = Self::cx(&c.out, &rels, env, "Limit");
                 let b = self.bind(limit, &cx)?;
                 if b.ty.data_type != Some(krishiv_types::DataType::Integer) {
                     return Err(AnalysisError::new(
@@ -590,6 +663,7 @@ impl Resolver<'_> {
                         limit.origin,
                     ));
                 }
+                self.check_limit(&b, limit.origin, c.plan.origin)?;
                 let node = PlanNode::Limit {
                     input: Arc::clone(&c.plan),
                     limit: b.expr,
