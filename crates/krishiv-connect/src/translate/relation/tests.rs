@@ -282,6 +282,11 @@ fn project_filter_limit_and_alias() {
         limit: 10,
     })));
     assert_eq!(show(&limit), "Limit 10\n+- Read t\n");
+    let offset = relation(RelType::Offset(Box::new(pb::Offset {
+        input: input(),
+        offset: 3,
+    })));
+    assert_eq!(show(&offset), "Offset 3\n+- Read t\n");
     let alias = relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
         input: input(),
         alias: "x".into(),
@@ -648,7 +653,6 @@ fn unsupported_relations_are_named() {
         ),
         (RelType::Deduplicate(Box::default()), "Deduplicate"),
         (RelType::Range(Default::default()), "Range"),
-        (RelType::Offset(Box::default()), "Offset"),
         (RelType::LocalRelation(Default::default()), "LocalRelation"),
         (RelType::Drop(Box::default()), "Drop"),
         (RelType::WithRelations(Box::default()), "WithRelations"),

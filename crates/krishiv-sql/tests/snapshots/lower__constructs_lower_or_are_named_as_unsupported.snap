@@ -35,9 +35,9 @@ SELECT a FROM t CLUSTER BY a
 SELECT a FROM t DISTRIBUTE BY a
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature DISTRIBUTE BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..31
 SELECT a FROM t LIMIT 1 OFFSET 2
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature OFFSET is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..32
+  => Limit 1 | +- Offset 2 |    +- Project [a] |       +- Read t | 
 FROM t SELECT a LIMIT 1 OFFSET 2
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature OFFSET is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..32
+  => Limit 1 | +- Offset 2 |    +- Project [a] |       +- Read t | 
 FROM t SELECT a CLUSTER BY a
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature CLUSTER BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..28
 FROM t SELECT a DISTRIBUTE BY a

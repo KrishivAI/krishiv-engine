@@ -383,6 +383,22 @@ impl DataFrame {
         })
     }
 
+    /// This DataFrame without its first `n` rows (PySpark's `offset`);
+    /// `df.offset(m).limit(n)` is `LIMIT n OFFSET m`.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.table("t").offset(10).limit(5);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn offset(&self, n: i32) -> Self {
+        self.derive(PlanNode::Offset {
+            input: Arc::clone(&self.plan),
+            offset: Arc::new(Expr::literal(Literal::Integer(n))),
+        })
+    }
+
     /// This DataFrame under the name `alias`, for qualified column names
     /// (PySpark's `alias`).
     ///
