@@ -360,7 +360,7 @@ fn oracle_replacement() {
         ("abc", "(?<n>b)", "[${n}]", "a[b]c"),
         ("abc", "(b)", "$10", "ab0c"),
         ("abc", "(b)", r"\\", r"a\c"),
-        ("abc", "(b)", r"\n", "anc"),
+        ("abc", "(c)", r"\n", "abn"),
     ];
     for (s, re, rep, want) in cases {
         assert_eq!(one(s, re, rep), some(want), "{re} {rep}");
