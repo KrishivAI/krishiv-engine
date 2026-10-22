@@ -20,8 +20,11 @@ work=$(mktemp -d)
 py="$work/venv/bin/python"
 "$py" -m pip install --quiet --upgrade pip
 "$py" -m pip install --quiet "$dist"/*.whl pytest
-for dep in "pyarrow>=16" "polars>=1.0" "duckdb>=1.1"; do
-  if ! "$py" -m pip install --quiet --only-binary :all: "$dep"; then
+# Versions come from python/ci-interop-constraints.txt, the same pins ci.yml
+# and nightly.yml use, so every wheel leg tests against one known set.
+for dep in pyarrow polars duckdb; do
+  if ! "$py" -m pip install --quiet --only-binary :all: \
+      --constraint "$repo/python/ci-interop-constraints.txt" "$dep"; then
     echo "::notice::$dep has no wheel for this target ($flavour, $("$py" -c 'import sysconfig; print(sysconfig.get_platform())')); its tests are skipped"
   fi
 done
