@@ -409,3 +409,145 @@ fn security_workflows_are_wired() {
     assert!(osv.contains("osv-scanner-reusable.yml@"));
     assert!(osv.contains("schedule:"));
 }
+
+/// Commands and actions that publish or release something.
+const PUBLISH_MARKERS: [&str; 10] = [
+    "gh-action-pypi-publish",
+    "twine",
+    "maturin publish",
+    "maturin upload",
+    "uv publish",
+    "release-plz release",
+    "action-gh-release",
+    "gh release",
+    "npm publish",
+    "pnpm publish",
+];
+
+/// Nothing publishes on merge or on a tag (P2-T147, RELEASING.md): the only
+/// publishing path is the TestPyPI workflow, which runs on manual dispatch
+/// alone and waits for an approved environment; the release switches stay off
+/// and every crate stays unpublishable.
+#[test]
+fn release_publishing_is_manual_and_gated() {
+    let dir = root().join(".github");
+    let mut files = Vec::new();
+    for sub in ["workflows", "scripts"] {
+        for entry in std::fs::read_dir(dir.join(sub)).unwrap() {
+            files.push(entry.unwrap().path());
+        }
+    }
+    let mut publishers = Vec::new();
+    for path in &files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let text = std::fs::read_to_string(path).unwrap();
+        // Comments may talk about publishing; code may not.
+        let code: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect();
+        for line in &code {
+            // A dry run packages and verifies and never uploads.
+            if line.contains("cargo publish") {
+                assert!(
+                    line.contains("--dry-run") && name == "publish-dry-run.sh",
+                    "{name}: `cargo publish` outside the dry-run script or without --dry-run: {line}"
+                );
+            }
+            if PUBLISH_MARKERS.iter().any(|m| line.contains(m)) {
+                publishers.push(name.clone());
+            }
+        }
+    }
+    publishers.sort();
+    publishers.dedup();
+    assert_eq!(
+        publishers,
+        ["publish-testpypi.yml"],
+        "only the gated TestPyPI workflow may publish"
+    );
+
+    let wf = read(".github/workflows/publish-testpypi.yml");
+    let triggers: Vec<&str> = wf
+        .lines()
+        .skip_while(|l| *l != "on:")
+        .skip(1)
+        .take_while(|l| l.starts_with(' '))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        triggers,
+        ["workflow_dispatch:"],
+        "the TestPyPI workflow must run on manual dispatch only"
+    );
+    // The upload job names an environment (whose required reviewers the owner
+    // configures) before the upload step, and only main or a `v*` tag may reach it.
+    let env = wf.find("environment:\n      name: testpypi").unwrap();
+    let upload = wf.find("uses: pypa/gh-action-pypi-publish@").unwrap();
+    assert!(
+        env < upload,
+        "the upload job must sit behind the testpypi environment"
+    );
+    assert!(wf.contains("github.ref == 'refs/heads/main'") && wf.contains("refs/tags/v"));
+    assert!(wf.contains("repository-url: https://test.pypi.org/legacy/"));
+    assert!(!wf.contains("pypi.org/legacy") || wf.contains("test.pypi.org/legacy"));
+    assert!(
+        !wf.contains("secrets."),
+        "upload is by trusted publishing, no token"
+    );
+
+    // release-plz stays a dry run until the owner changes it.
+    let plz = read("release-plz.toml");
+    let code: Vec<&str> = plz
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect();
+    for off in [
+        "release = false",
+        "publish = false",
+        "git_release_enable = false",
+        "git_tag_enable = false",
+    ] {
+        assert!(
+            code.iter()
+                .any(|l| l.split('#').next().unwrap().trim() == off),
+            "release-plz.toml must keep `{off}`"
+        );
+    }
+    for on in [
+        "release = true",
+        "publish = true",
+        "git_release_enable = true",
+        "git_tag_enable = true",
+        "release_always = true",
+    ] {
+        assert!(
+            !code.iter().any(|l| l.trim().starts_with(on)),
+            "release-plz.toml turns on `{on}`"
+        );
+    }
+
+    // No crate can be published from this repository.
+    let mut manifests = vec![root().join("xtask/Cargo.toml")];
+    for entry in std::fs::read_dir(root().join("crates")).unwrap() {
+        manifests.push(entry.unwrap().path().join("Cargo.toml"));
+    }
+    for m in manifests.iter().filter(|m| m.exists()) {
+        let text = std::fs::read_to_string(m).unwrap();
+        assert!(
+            text.lines().any(|l| l.trim() == "publish = false"),
+            "{} must keep `publish = false`",
+            m.display()
+        );
+    }
+
+    // The dry run and the quickstart are wired into CI.
+    let ci = read(".github/workflows/ci.yml");
+    for needle in [
+        "publish-dry-run.sh",
+        "quickstart-test.sh",
+        "  release-dry-run:\n",
+    ] {
+        assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
+    }
+}
