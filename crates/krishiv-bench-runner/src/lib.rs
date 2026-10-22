@@ -100,7 +100,9 @@ pub const RSS_FLOOR_PER_THREAD: u64 = 16 << 20;
 ///
 /// It holds for a process whose global allocator is configured for it: mimalloc with
 /// `krishiv_alloc` (this runner and the CLI, when the limit is known at process start: an argument or
-/// `KRISHIV_MEMORY_LIMIT`). Memory an allocator retains is outside the
+/// `KRISHIV_MEMORY_LIMIT`), for a limit below `krishiv_alloc::GENEROUS_MIN` (4 GiB). A generous
+/// limit keeps mimalloc's faster defaults instead, and a process that fills it can hold up to about
+/// twice the limit (`krishiv_alloc::is_generous`). Memory an allocator retains is outside the
 /// pools' control, so an embedding host with another allocator, or without a release hook
 /// (`krishiv_memory::set_release_hook`), can exceed it by what its allocator keeps.
 ///

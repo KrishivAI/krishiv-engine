@@ -141,6 +141,14 @@ pub enum PlanNode {
         /// Row count.
         limit: Arc<Expr>,
     },
+    /// `OFFSET n`, skipping the first `n` rows; `n` is a foldable expression or a
+    /// parameter. `LIMIT l OFFSET n` is a [`PlanNode::Limit`] over this node.
+    Offset {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// Number of rows to skip.
+        offset: Arc<Expr>,
+    },
     /// `input AS alias (columns)`, a derived table or `df.alias(...)`.
     SubqueryAlias {
         /// Input.
@@ -524,6 +532,15 @@ impl LogicalPlan {
         })
     }
 
+    /// `self OFFSET offset`.
+    #[must_use]
+    pub fn offset(self, offset: impl Into<Arc<Expr>>) -> Self {
+        Self::new(PlanNode::Offset {
+            input: Arc::new(self),
+            offset: offset.into(),
+        })
+    }
+
     /// `(self) AS alias`.
     #[must_use]
     pub fn alias(self, alias: impl Into<String>) -> Self {
@@ -549,6 +566,7 @@ impl LogicalPlan {
             | PlanNode::Aggregate { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
+            | PlanNode::Offset { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
@@ -580,6 +598,7 @@ impl LogicalPlan {
             | PlanNode::Aggregate { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
+            | PlanNode::Offset { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
@@ -623,6 +642,7 @@ impl LogicalPlan {
             PlanNode::WithColumns { columns, .. } => columns.iter().for_each(|(_, e)| f(e)),
             PlanNode::Filter { predicate: e, .. }
             | PlanNode::Limit { limit: e, .. }
+            | PlanNode::Offset { offset: e, .. }
             | PlanNode::ReplicateRows { count: e, .. } => f(e),
             PlanNode::Aggregate {
                 grouping,
@@ -672,6 +692,7 @@ impl LogicalPlan {
             }
             PlanNode::Filter { predicate: e, .. }
             | PlanNode::Limit { limit: e, .. }
+            | PlanNode::Offset { offset: e, .. }
             | PlanNode::ReplicateRows { count: e, .. } => f(e),
             PlanNode::Aggregate {
                 grouping,
@@ -713,6 +734,7 @@ impl LogicalPlan {
                 PlanNode::Filter { input, .. }
                 | PlanNode::Sort { input, .. }
                 | PlanNode::Limit { input, .. }
+                | PlanNode::Offset { input, .. }
                 | PlanNode::WithCte { input, .. }
                 | PlanNode::JoinHint { input, .. }
                 | PlanNode::ReplicateRows { input, .. } => p = input,

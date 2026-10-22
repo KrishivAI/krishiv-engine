@@ -60,7 +60,8 @@ fn main() {
     krishiv_common::cpu::check_or_exit();
     // Allocator policy is this binary's (it owns the global allocator):
     // under memory pressure, threads return freed memory to the OS. With a
-    // configured limit mimalloc also purges promptly (set before `main`).
+    // configured limit that is not generous, mimalloc also purges promptly
+    // (set before `main`, see `krishiv_alloc`).
     #[cfg(feature = "mimalloc")]
     krishiv_memory::set_release_hook(krishiv_alloc::install());
     run();

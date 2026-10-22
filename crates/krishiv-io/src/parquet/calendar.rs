@@ -170,6 +170,11 @@ impl Guard {
         Self { columns }
     }
 
+    /// Whether no column is checked.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.columns.is_empty()
+    }
+
     /// Fails if `batch` holds a value its column's rule refuses.
     pub(crate) fn check(&self, batch: &RecordBatch) -> FormatResult<()> {
         for &(i, act) in &self.columns {

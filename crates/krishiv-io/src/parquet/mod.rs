@@ -40,6 +40,7 @@
 mod calendar;
 mod decode;
 mod meta;
+mod row_filter;
 mod thrift_guard;
 mod write;
 
@@ -96,6 +97,15 @@ static OPTIONS: OptionSchema = OptionSchema {
             conf_fallback: Some("spark.sql.parquet.int96RebaseModeInRead"),
             metadata_key: false,
             doc: "Calendar of INT96 timestamps (only CORRECTED rebases nothing).",
+        },
+        OptionSpec {
+            name: "lateMaterialization",
+            kind: OptionKind::Enum(&["auto", "on", "off"]),
+            default: OptionDefault::Str("auto"),
+            conf_fallback: Some("krishiv.io.lateMaterialization"),
+            metadata_key: false,
+            doc: "Read: evaluate the pushed filter before decoding the other columns \
+                  (`auto` decides per row group).",
         },
         OptionSpec {
             name: "compression",
@@ -357,5 +367,7 @@ impl FileFormat for ParquetFormat {
     }
 }
 
+#[cfg(test)]
+mod late_tests;
 #[cfg(test)]
 mod tests;

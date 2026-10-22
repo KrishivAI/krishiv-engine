@@ -11,5 +11,6 @@ pub mod docs;
 pub mod layering;
 pub mod lint;
 pub mod policy;
+pub mod precheck;
 pub mod registry_coverage;
 pub mod wheels;

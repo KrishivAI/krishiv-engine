@@ -152,6 +152,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Aggregate { .. }
                 | PlanNode::Sort { .. }
                 | PlanNode::Limit { .. }
+                | PlanNode::Offset { .. }
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
                 | PlanNode::JoinHint { .. }
@@ -253,6 +254,7 @@ impl Teardown {
                 predicate: e,
             }
             | PlanNode::Limit { input, limit: e }
+            | PlanNode::Offset { input, offset: e }
             | PlanNode::ReplicateRows { input, count: e } => {
                 self.plans.push(input);
                 self.exprs.push(e);
