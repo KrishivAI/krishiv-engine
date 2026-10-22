@@ -99,29 +99,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq qemu-user
-          uv python install 3.11
-          uv venv --python 3.11 "$RUNNER_TEMP/oldcpu"
-          uv pip install --python "$RUNNER_TEMP/oldcpu/bin/python" dist/*.whl
-          py=$(uv python find 3.11)
-          # qemu-user shows the host's /proc/cpuinfo, so the check is pointed at a
-          # Nehalem-class one; what is proved is that the ImportError comes before the
-          # native module is loaded (which would die with SIGILL under -cpu Nehalem).
-          printf 'flags\t\t: fpu sse sse2 pni ssse3 cx16 sse4_1 sse4_2 popcnt\n' > "$RUNNER_TEMP/nehalem-cpuinfo"
-          export KRISHIV_CPUINFO="$RUNNER_TEMP/nehalem-cpuinfo"
-          set +e
-          PYTHONPATH=$("$RUNNER_TEMP/oldcpu/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])') \
-            qemu-x86_64 -L / -cpu Nehalem "$py" -c 'import krishiv' >"$RUNNER_TEMP/old.out" 2>&1
-          code=$?
-          set -e
-          cat "$RUNNER_TEMP/old.out"
-          test "$code" -eq 1
-          grep -q 'ImportError' "$RUNNER_TEMP/old.out"
-          if grep -qi 'illegal instruction' "$RUNNER_TEMP/old.out"; then
-            echo "::error::import hit SIGILL under QEMU Nehalem"
-            exit 1
-          fi
-          grep -q 'avx2' "$RUNNER_TEMP/old.out"
-          grep -q 'krishiv-compat' "$RUNNER_TEMP/old.out"
+          .github/scripts/oldcpu-import.sh "$(command -v qemu-x86_64)" dist/*abi3*.whl \
+            quay.io/pypa/manylinux_2_28_x86_64:2026.10.03-1@sha256:39df0042d5cc900b085aa25a0659368b42a0006c54c474299b785b44c1b4ff82
       - name: Test (musllinux, in the PyPA musllinux image)
         if: matrix.libc == 'musllinux'
         env:
