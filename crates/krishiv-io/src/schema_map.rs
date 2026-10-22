@@ -651,6 +651,24 @@ impl Resolver {
                     }
                 })
             }
+            P::Contains {
+                column,
+                needle,
+                collation,
+            } => {
+                let Some((fc, ft, _)) = self.resolve_path(column)? else {
+                    return Some(P::Constant(false));
+                };
+                matches!(
+                    ft,
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                )
+                .then(|| P::Contains {
+                    column: fc,
+                    needle: needle.clone(),
+                    collation: collation.clone(),
+                })
+            }
             P::StartsWith {
                 column,
                 prefix,

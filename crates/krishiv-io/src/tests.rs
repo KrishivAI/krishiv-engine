@@ -497,6 +497,14 @@ fn pruning_answers_all_none_or_unknown() {
         ScalarValue::Utf8("by".into()),
     );
     assert_eq!(prune(&sw("b", Collation::Utf8Binary), &same), T);
+    // Statistics cannot rule a substring in or out.
+    let has = PushdownExpr::Contains {
+        column: col("c"),
+        needle: "zz".into(),
+        collation: Collation::Utf8Binary,
+    };
+    assert_eq!(prune(&has, &st), U);
+    assert_eq!(prune(&PushdownExpr::Not(Box::new(has)).to_nnf(), &st), U);
     assert_eq!(prune(&sw("b", Collation::Utf8Binary), &all_null), F);
     assert_eq!(prune(&sw("b", Collation::Utf8Binary), &s), U);
     // Every comparable type.
@@ -1423,6 +1431,19 @@ fn predicates_are_retyped_to_the_file() {
     assert_eq!(map(sw("s")), Some(sw("s")));
     assert_eq!(map(sw("i")), None);
     assert_eq!(map(sw("z")), Some(PushdownExpr::Constant(false)));
+    let has = |n: &str| PushdownExpr::Contains {
+        column: col(n),
+        needle: "p".into(),
+        collation: Collation::Utf8Binary,
+    };
+    assert_eq!(map(has("s")), Some(has("s")));
+    assert_eq!(map(has("i")), None);
+    assert_eq!(map(has("z")), Some(PushdownExpr::Constant(false)));
+    // A negated substring stays a `Not` leaf.
+    assert_eq!(
+        map(PushdownExpr::Not(Box::new(has("s")))),
+        Some(PushdownExpr::Not(Box::new(has("s"))))
+    );
     // Zoned timestamps of another unit are not re-typed; of the same unit they are.
     let ts = |u, tz: &str| f("t", DataType::Timestamp(u, Some(tz.into())));
     let lit = c("t", CmpOp::Eq, ScalarValue::TimestampMicros(5));
