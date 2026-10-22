@@ -712,7 +712,9 @@ impl DataFrame {
     /// ```
     ///
     /// # Errors
-    /// Analysis errors.
+    /// Analysis errors, and `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name`
+    /// starts with the reserved snapshot prefix `` `__krishiv_snapshot_` ``
+    /// (in any letter case), which [`Session::sql`] cannot spell either.
     pub async fn create_or_replace_temp_view(&self, name: &str) -> Result<(), KrishivError> {
         let (df, name) = (self.clone(), name.to_owned());
         self.session
@@ -721,6 +723,9 @@ impl DataFrame {
     }
 
     async fn temp_view_here(&self, name: &str) -> Result<(), KrishivError> {
+        if crate::catalog::is_hidden_name(name) {
+            return Err(crate::catalog::reserved_temp_view_name(name));
+        }
         // Spark analyzes the view's plan first: its errors come first.
         let analysis = self.analysis().await?;
         let columns: Vec<TableColumn> = analysis
@@ -750,7 +755,7 @@ impl DataFrame {
         // a view built from itself reads the old definition, as in Spark.
         // (SQL `CREATE VIEW` keeps the unresolved query instead, so it
         // follows the tables it reads.)
-        let expanded = crate::catalog::pin_temp_tables(
+        let (expanded, pins) = crate::catalog::pin_temp_tables(
             &self.session.state.catalog,
             analysis.analyzed.plan.root(),
             analysis.env.analysis.conf.case_sensitive,
@@ -760,6 +765,7 @@ impl DataFrame {
             TempTable::View {
                 plan: expanded,
                 columns,
+                pins,
             },
         );
         Ok(())

@@ -43,6 +43,7 @@ use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
+use crate::catalog::{is_hidden_name, reserved_temp_view_name};
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
 
@@ -404,13 +405,19 @@ impl Session {
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a column type Spark has no
-    /// equivalent of; `INTERNAL_ERROR` when a batch does not have `schema`.
+    /// equivalent of; `INTERNAL_ERROR` when a batch does not have `schema`;
+    /// `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name` starts with the
+    /// reserved snapshot prefix `` `__krishiv_snapshot_` `` (in any letter
+    /// case), which queries cannot spell either.
     pub fn register_batches(
         &self,
         name: &str,
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
     ) -> Result<(), KrishivError> {
+        if is_hidden_name(name) {
+            return Err(reserved_temp_view_name(name));
+        }
         let columns = schema
             .fields()
             .iter()
@@ -453,7 +460,9 @@ impl Session {
     }
 
     /// Drops the temporary table or view `name`; whether it existed
-    /// (Spark's `spark.catalog.dropTempView`).
+    /// (Spark's `spark.catalog.dropTempView`). Dropping a view also
+    /// removes the snapshot pins it owned that no other live view still
+    /// owns. Hidden snapshot names never exist for this call.
     ///
     /// ```
     /// # let session = krishiv_session::Session::new()?;

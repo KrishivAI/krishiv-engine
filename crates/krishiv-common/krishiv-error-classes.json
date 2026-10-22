@@ -71,6 +71,12 @@
     ],
     "sqlState" : "53200"
   },
+  "KRISHIV_RESERVED_TEMP_VIEW_NAME" : {
+    "message" : [
+      "The temporary view name <relationName> is reserved: names starting with <prefix> (in any letter case) are reserved for internal snapshots. Choose a different name."
+    ],
+    "sqlState" : "42602"
+  },
   "KRISHIV_SPILL_CAP_EXCEEDED" : {
     "message" : [
       "Spilling <requestedBytes> more bytes would exceed the spill limit of <capBytes> bytes (<usedBytes> bytes are in use). Increase \"krishiv.spill.maxBytes\" or run fewer spilling queries at once."

@@ -19,6 +19,7 @@ use krishiv_sql::ast::{CreateView, DropView, Reset, Set, SetKind, TimeZone};
 use krishiv_types::DataType;
 
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
+use crate::catalog::{is_hidden_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::dataframe::DataFrame;
 use crate::functions::{col, lit, lit_null};
@@ -170,7 +171,15 @@ impl Session {
     /// lowers with a source id of its own, so errors raised while a later
     /// query expands the view point into the view's text, not the outer
     /// statement's. Returns an empty frame as in Spark.
+    ///
+    /// # Errors
+    /// `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name` starts with the
+    /// reserved snapshot prefix `` `__krishiv_snapshot_` `` (in any letter
+    /// case), which queries cannot spell either.
     pub(crate) async fn exec_create_view(&self, v: &CreateView) -> Result<DataFrame, KrishivError> {
+        if is_hidden_name(&v.name.value) {
+            return Err(reserved_temp_view_name(&v.name.value));
+        }
         if v.or_replace && v.if_not_exists {
             return Err(CreateViewWithIfNotExistsAndReplace {
                 view_name: quote(&v.name.value),
@@ -244,6 +253,7 @@ impl Session {
             TempTable::View {
                 plan: Arc::clone(&df.plan),
                 columns,
+                pins: Vec::new(),
             },
         );
         self.empty_frame().await

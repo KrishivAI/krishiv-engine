@@ -14,7 +14,7 @@
 //! planned, and scans them as a [`FileTable`] whose footers give the
 //! optimizer its statistics.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -22,7 +22,8 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::config::Config;
 use krishiv_common::error::{
-    InternalError, KrishivError, KrishivUnsupportedFeature, RecursiveView,
+    InternalError, KrishivError, KrishivReservedTempViewName, KrishivUnsupportedFeature,
+    RecursiveView, TableOrViewNotFound,
 };
 use krishiv_exec::files::FileReads;
 use krishiv_exec::planner::{FileTable, MemoryTable, TableProvider, TableProviderResolver};
@@ -56,15 +57,32 @@ pub(crate) enum TempTable {
     /// had when it was created (renamed when the view declares aliases).
     /// Queries inline the plan as a subquery, so a view replaced while a
     /// query runs does not change what it reads, as for tables.
+    ///
+    /// A DataFrame view also owns the hidden names its snapshot pinned
+    /// ([`pin_temp_tables`]): replacing or dropping the view removes the
+    /// pins no other live view still owns. SQL views keep the unresolved
+    /// query, follow the tables they read, and own no pins.
     View {
         plan: Arc<LogicalPlan>,
         columns: Vec<TableColumn>,
+        /// The hidden names this view pinned, owned by this view.
+        pins: Vec<String>,
     },
 }
 
-/// The prefix of the hidden names snapshots pin tables under: no SQL
-/// text spells them, and [`SessionCatalog::names`] hides them.
-const HIDDEN_PREFIX: &str = "__krishiv_snapshot_";
+/// The prefix of the hidden names snapshots pin tables under. No user
+/// input spells them: [`expand_temp_views`] reports a read of one as a
+/// missing table, and creating a temporary table or view with such a
+/// name fails with `KRISHIV_RESERVED_TEMP_VIEW_NAME`, which names this
+/// prefix. [`SessionCatalog::names`] hides them.
+pub(crate) const HIDDEN_PREFIX: &str = "__krishiv_snapshot_";
+
+/// Whether `name` is a hidden snapshot pin: it starts with
+/// [`HIDDEN_PREFIX`], in any letter case.
+pub(crate) fn is_hidden_name(name: &str) -> bool {
+    name.get(..HIDDEN_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(HIDDEN_PREFIX))
+}
 
 /// The temporary tables and views of a session, by lower-case name.
 #[derive(Debug, Default)]
@@ -76,13 +94,25 @@ pub(crate) struct SessionCatalog {
 }
 
 impl SessionCatalog {
-    /// Adds or replaces `name`.
+    /// Adds or replaces `name`, removing the snapshot pins the old entry
+    /// owned that no other live view still owns.
     pub(crate) fn put(&self, name: &str, table: TempTable) {
-        self.tables
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(name.to_lowercase(), (name.to_owned(), Arc::new(table)));
+        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
+        tables.insert(name.to_lowercase(), (name.to_owned(), Arc::new(table)));
+        Self::collect_garbage(&mut tables);
         self.epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Removes every hidden entry no live view pins anymore. The caller
+    /// holds the write lock and bumps the epoch itself.
+    fn collect_garbage(tables: &mut BTreeMap<String, (String, Arc<TempTable>)>) {
+        let mut live = BTreeSet::new();
+        for (_, table) in tables.values() {
+            if let TempTable::View { pins, .. } = &**table {
+                live.extend(pins.iter().cloned());
+            }
+        }
+        tables.retain(|key, _| !is_hidden_name(key) || live.contains(key));
     }
 
     /// Pins `table` (an entry of this catalog) under a hidden name that no
@@ -101,15 +131,17 @@ impl SessionCatalog {
         name
     }
 
-    /// Removes `name`; whether it existed.
+    /// Removes `name` (and the snapshot pins it owned that no other live
+    /// view still owns); whether it existed. Hidden names are never
+    /// removed this way: dropping one behaves as if it did not exist.
     pub(crate) fn drop_table(&self, name: &str) -> bool {
-        let removed = self
-            .tables
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&name.to_lowercase())
-            .is_some();
+        if is_hidden_name(name) {
+            return false;
+        }
+        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
+        let removed = tables.remove(&name.to_lowercase()).is_some();
         if removed {
+            Self::collect_garbage(&mut tables);
             self.epoch.fetch_add(1, Ordering::AcqRel);
         }
         removed
@@ -131,7 +163,11 @@ impl SessionCatalog {
     }
 
     /// The entry `name`: case-insensitively unless `case_sensitive`, when
-    /// the name must be as registered.
+    /// the name must be as registered. Unlike [`exists`](Self::exists),
+    /// hidden names resolve here: snapshot views read their pins through
+    /// this. User input never reaches a pin: [`expand_temp_views`]
+    /// reports a read of one as a missing table before analysis loads
+    /// anything, and creating or dropping one behaves as missing too.
     pub(crate) fn get(&self, name: &str, case_sensitive: bool) -> Option<Arc<TempTable>> {
         let tables = self.tables.read().unwrap_or_else(PoisonError::into_inner);
         let (registered, table) = tables.get(&name.to_lowercase())?;
@@ -139,13 +175,27 @@ impl SessionCatalog {
     }
 
     /// Whether an entry `name` exists: case-insensitively unless
-    /// `case_sensitive`, when the name must be as registered.
+    /// `case_sensitive`, when the name must be as registered. Hidden
+    /// names never exist for user input, however they are spelled.
     pub(crate) fn exists(&self, name: &str, case_sensitive: bool) -> bool {
+        if is_hidden_name(name) {
+            return false;
+        }
         let tables = self.tables.read().unwrap_or_else(PoisonError::into_inner);
         match tables.get(&name.to_lowercase()) {
             Some((registered, _)) => !case_sensitive || registered == name,
             None => false,
         }
+    }
+
+    /// The number of catalog entries, snapshot pins included: tests only.
+    /// [`names`](Self::names) stays the user-visible count.
+    #[cfg(test)]
+    pub(crate) fn entry_count(&self) -> usize {
+        self.tables
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
     }
 }
 
@@ -571,33 +621,46 @@ impl Expander<'_> {
             && !scope
                 .iter()
                 .any(|c| same_name(c, view, self.case_sensitive))
-            && let Some(entry) = self.catalog.get(view, self.case_sensitive)
-            && let TempTable::View {
-                plan: definition,
-                columns,
-            } = &*entry
         {
-            let key = view.to_lowercase();
-            if self.path.contains(&key) {
-                return Err(InternalError {
-                    message: format!("temporary view `{key}` reads itself"),
+            // Snapshot pins are unreachable from user input: a read of
+            // one behaves exactly as a missing table. (The pins snapshot
+            // views read are scans, which pass through untouched below.)
+            if is_hidden_name(view) {
+                return Err(TableOrViewNotFound {
+                    relation_name: quote(view),
+                    search_path: search_path(),
                 }
                 .into());
             }
-            self.path.push(key);
-            // A view's definitions are its own: outer `WITH` names do not
-            // reach into it.
-            let input = self.go(Arc::clone(definition), &mut Vec::new());
-            self.path.pop();
-            let columns = columns.iter().map(|c| c.name.clone()).collect();
-            return Ok(Arc::new(
-                LogicalPlan::new(PlanNode::SubqueryAlias {
-                    input: input?,
-                    alias: view.clone(),
+            if let Some(entry) = self.catalog.get(view, self.case_sensitive)
+                && let TempTable::View {
+                    plan: definition,
                     columns,
-                })
-                .with_origin(plan.origin),
-            ));
+                    ..
+                } = &*entry
+            {
+                let key = view.to_lowercase();
+                if self.path.contains(&key) {
+                    return Err(InternalError {
+                        message: format!("temporary view `{key}` reads itself"),
+                    }
+                    .into());
+                }
+                self.path.push(key);
+                // A view's definitions are its own: outer `WITH` names do not
+                // reach into it.
+                let input = self.go(Arc::clone(definition), &mut Vec::new());
+                self.path.pop();
+                let columns = columns.iter().map(|c| c.name.clone()).collect();
+                return Ok(Arc::new(
+                    LogicalPlan::new(PlanNode::SubqueryAlias {
+                        input: input?,
+                        alias: view.clone(),
+                        columns,
+                    })
+                    .with_origin(plan.origin),
+                ));
+            }
         }
         if let PlanNode::WithCte { input, ctes } = &plan.node {
             let (input, ctes) = (Arc::clone(input), ctes.clone());
@@ -797,27 +860,35 @@ fn recursive_view(target: &str, stack: &[String]) -> KrishivError {
 /// change afterwards (a view built from itself reads the old definition).
 /// Reads of files are self-contained and need no pinning.
 ///
+/// A scan that already reads a pin (inlined from another view) reuses it,
+/// so views over views share the pin instead of stacking a new one per
+/// view. Returns the pinned plan and the hidden names it reads: the new
+/// view owns them (see [`TempTable::View`]).
+///
 /// # Errors
 /// `INTERNAL_ERROR` for a scan of a temporary view that was not inlined.
 pub(crate) fn pin_temp_tables(
     catalog: &SessionCatalog,
     plan: &Arc<LogicalPlan>,
     case_sensitive: bool,
-) -> Result<Arc<LogicalPlan>, KrishivError> {
-    Pinner {
+) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
+    let mut pinner = Pinner {
         catalog,
         case_sensitive,
         pins: HashMap::new(),
-    }
-    .run(plan)
+        owned: BTreeSet::new(),
+    };
+    let plan = pinner.run(plan)?;
+    Ok((plan, pinner.owned.into_iter().collect()))
 }
 
 /// [`pin_temp_tables`]: the pins handed out so far, by lower-case table
-/// name.
+/// name, and every hidden name the pinned plan reads.
 struct Pinner<'a> {
     catalog: &'a SessionCatalog,
     case_sensitive: bool,
     pins: HashMap<String, String>,
+    owned: BTreeSet<String>,
 }
 
 impl Pinner<'_> {
@@ -826,11 +897,17 @@ impl Pinner<'_> {
             && let ReadSource::Table { name, .. } = &scan.source
             && let Some(last) = name.last()
         {
+            if is_hidden_name(last) {
+                self.owned.insert(last.to_lowercase());
+                return Ok(Arc::clone(plan));
+            }
             let key = last.to_lowercase();
             if !self.pins.contains_key(&key) {
                 let pin = match self.catalog.get(last, self.case_sensitive) {
                     Some(table) if matches!(&*table, TempTable::Memory { .. }) => {
-                        self.catalog.pin(&table)
+                        let hidden = self.catalog.pin(&table);
+                        self.owned.insert(hidden.clone());
+                        hidden
                     }
                     _ => String::new(),
                 };
@@ -881,11 +958,34 @@ fn quote(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }
 
+/// Spark's search path, as analysis reports it for a missing table.
+fn search_path() -> String {
+    format!("[`system`.`builtin`, `system`.`session`, `{CATALOG}`.`{NAMESPACE}`]")
+}
+
+/// `name` rejected as a temporary table or view name: it starts with the
+/// reserved snapshot prefix ([`HIDDEN_PREFIX`]), in any letter case. The
+/// `KRISHIV_RESERVED_TEMP_VIEW_NAME` error names the reserved prefix in
+/// its `prefix` parameter.
+pub(crate) fn reserved_temp_view_name(name: &str) -> KrishivError {
+    KrishivReservedTempViewName {
+        relation_name: quote(name),
+        prefix: format!("`{HIDDEN_PREFIX}`"),
+    }
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::Array as _;
+    use arrow_array::{Int32Array, RecordBatch};
+    use arrow_schema::Field;
+    use futures::executor::block_on;
     use krishiv_common::error::ErrorClass;
     use krishiv_types::DataType;
+
+    use crate::session::Session;
 
     #[test]
     fn work_runs_on_the_given_runtime_and_a_drop_aborts_it() {
@@ -949,6 +1049,7 @@ mod tests {
         let view = |name: &str| TempTable::View {
             plan: Arc::new(LogicalPlan::table([name])),
             columns: Vec::new(),
+            pins: Vec::new(),
         };
         session.put("a", view("b"));
         session.put("b", view("a"));
@@ -980,5 +1081,152 @@ mod tests {
             ..form
         };
         assert!(resolve(&loaded, &session, "PEOPLE", cs).is_none());
+    }
+
+    /// A session with the memory table `t(id)` holding `values`.
+    fn int_session(values: Vec<i32>) -> Session {
+        let session = Session::new().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(values))],
+        )
+        .unwrap();
+        session.register_batches("t", schema, vec![batch]).unwrap();
+        session
+    }
+
+    /// The `id` column of `sql`, ordered.
+    fn select_ids(session: &Session, sql: &str) -> Vec<i32> {
+        let df = block_on(session.sql(sql)).unwrap();
+        let batches = block_on(df.collect()).unwrap();
+        let mut out = Vec::new();
+        for batch in &batches {
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            out.extend((0..batch.num_rows()).map(|i| ids.value(i)));
+        }
+        out.sort_unstable();
+        out
+    }
+
+    #[test]
+    fn reregistering_a_snapshot_view_does_not_grow_the_catalog() {
+        let s = int_session(vec![1]);
+        block_on(s.table("t").create_or_replace_temp_view("v")).unwrap();
+        // The table, its pin and the view: replacing the view must not add
+        // to that.
+        assert_eq!(s.state.catalog.entry_count(), 3);
+        for _ in 0..100 {
+            block_on(s.table("t").create_or_replace_temp_view("v")).unwrap();
+        }
+        assert_eq!(s.state.catalog.entry_count(), 3);
+        assert_eq!(select_ids(&s, "SELECT id FROM v"), vec![1]);
+    }
+
+    #[test]
+    fn dropping_a_view_removes_the_pins_it_owned() {
+        let s = int_session(vec![1]);
+        block_on(s.table("t").create_or_replace_temp_view("v")).unwrap();
+        assert_eq!(s.state.catalog.entry_count(), 3);
+        block_on(s.sql("DROP VIEW v")).unwrap();
+        assert_eq!(s.state.catalog.entry_count(), 1);
+    }
+
+    #[test]
+    fn a_pin_shared_by_two_views_survives_dropping_one() {
+        let s = int_session(vec![1]);
+        block_on(s.table("t").create_or_replace_temp_view("v1")).unwrap();
+        // A view over a view reuses the pin instead of stacking a new one.
+        block_on(s.table("v1").create_or_replace_temp_view("v2")).unwrap();
+        assert_eq!(s.state.catalog.entry_count(), 4);
+        assert!(s.drop_temp_view("v1"));
+        assert_eq!(s.state.catalog.entry_count(), 3);
+        // The surviving view still reads the snapshot, however `t` changes.
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![99]))],
+        )
+        .unwrap();
+        s.register_batches("t", schema, vec![batch]).unwrap();
+        assert_eq!(select_ids(&s, "SELECT id FROM v2"), vec![1]);
+    }
+
+    #[test]
+    fn hidden_names_resolve_as_missing_tables() {
+        let s = int_session(vec![1]);
+        block_on(s.table("t").create_or_replace_temp_view("v")).unwrap();
+        // Exactly as a missing table: same class, state and message shape.
+        let missing = block_on(s.sql("SELECT * FROM nope")).unwrap_err();
+        assert_eq!(missing.error_class(), ErrorClass::TableOrViewNotFound);
+        let e = block_on(s.sql("SELECT * FROM `__krishiv_snapshot_0`")).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+        assert_eq!(e.sql_state(), missing.sql_state());
+        assert_eq!(
+            e.message().replace("`__krishiv_snapshot_0`", "`nope`"),
+            missing.message()
+        );
+        // Any letter case, quoted or not.
+        let e = block_on(s.sql("SELECT * FROM __KRISHIV_SNAPSHOT_0")).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+    }
+
+    #[test]
+    fn view_built_from_itself_reads_the_old_definition() {
+        let s = int_session(vec![1]);
+        block_on(s.table("t").create_or_replace_temp_view("t")).unwrap();
+        assert_eq!(select_ids(&s, "SELECT id FROM t"), vec![1]);
+        // Rebuilding the self-view reuses the pin instead of orphaning one.
+        block_on(s.table("t").create_or_replace_temp_view("t")).unwrap();
+        assert_eq!(select_ids(&s, "SELECT id FROM t"), vec![1]);
+        assert_eq!(s.state.catalog.entry_count(), 2);
+    }
+
+    #[test]
+    fn hidden_names_are_rejected_for_new_views_and_tables() {
+        let s = int_session(vec![1]);
+        let e = block_on(
+            s.table("t")
+                .create_or_replace_temp_view("__krishiv_snapshot_7"),
+        )
+        .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivReservedTempViewName);
+        assert_eq!(e.error_class().name(), "KRISHIV_RESERVED_TEMP_VIEW_NAME");
+        assert_eq!(e.sql_state(), Some("42602"));
+        assert!(e.message().contains("`__krishiv_snapshot_`"), "{e}");
+        let e = block_on(s.sql("CREATE TEMP VIEW `__krishiv_snapshot_7` AS SELECT id FROM t"))
+            .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivReservedTempViewName);
+        let e =
+            block_on(s.sql("CREATE OR REPLACE TEMP VIEW V__KRISHIV_SNAPSHOT_ AS SELECT id FROM t"));
+        // A name that merely contains the prefix is fine.
+        assert!(e.is_ok(), "{e:?}");
+        block_on(s.sql("DROP VIEW V__KRISHIV_SNAPSHOT_")).unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+        let e = s
+            .register_batches("__KRISHIV_SNAPSHOT_7", schema, vec![batch])
+            .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivReservedTempViewName);
     }
 }
