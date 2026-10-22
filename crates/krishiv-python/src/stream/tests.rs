@@ -126,6 +126,10 @@ fn consumed_stream_is_rejected() {
 
 static RELEASED: AtomicUsize = AtomicUsize::new(0);
 
+/// Serializes the two tests that observe `RELEASED`, so a parallel test
+/// cannot change the counter between a snapshot and its assertions.
+static RELEASED_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 unsafe extern "C" fn count_release(stream: *mut FFI_ArrowArrayStream) {
     RELEASED.fetch_add(1, Ordering::SeqCst);
     // SAFETY: called by `Drop` with the live stream.
@@ -136,6 +140,7 @@ unsafe extern "C" fn count_release(stream: *mut FFI_ArrowArrayStream) {
 
 #[test]
 fn stream_without_callbacks_is_released_and_rejected() {
+    let _guard = RELEASED_LOCK.lock().unwrap();
     let mut stream = FFI_ArrowArrayStream::empty();
     // SAFETY: `count_release` releases this stream (it has no private data).
     unsafe {
@@ -1055,6 +1060,7 @@ impl<T> Misaligned<T> {
 /// anything is moved or released; the data is left untouched.
 #[test]
 fn misaligned_pointers_are_rejected() {
+    let _guard = RELEASED_LOCK.lock().unwrap();
     let mut stream = FFI_ArrowArrayStream::empty();
     // SAFETY: `count_release` releases this stream (it has no private data).
     unsafe {

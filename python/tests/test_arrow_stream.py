@@ -25,11 +25,45 @@ def table() -> Any:
     )
 
 
+def _dictionary_storage_addresses(array: Any) -> list[int]:
+    """Addresses of dictionary values reachable from `array`.
+
+    `Array.buffers()` reports only the indices for a dictionary-encoded
+    array, so a bridge copying the values would go unnoticed. Recurses into
+    struct/list/map children so a nested dictionary is covered as well.
+    """
+    out: list[int] = []
+    if isinstance(array, pa.DictionaryArray):
+        dictionary = array.dictionary
+        out.extend(b.address for b in dictionary.buffers() if b is not None)
+        out.extend(_dictionary_storage_addresses(dictionary))
+    elif isinstance(array, pa.StructArray):
+        for child in array.flatten():
+            out.extend(_dictionary_storage_addresses(child))
+    elif isinstance(array, (pa.ListArray, pa.LargeListArray, pa.FixedSizeListArray)):
+        out.extend(_dictionary_storage_addresses(array.values))
+    elif isinstance(array, pa.MapArray):
+        out.extend(_dictionary_storage_addresses(array.keys))
+        out.extend(_dictionary_storage_addresses(array.items))
+    return out
+
+
 def addresses(data: Any) -> list[int]:
-    """Buffer addresses of every column of a pyarrow table or batch."""
+    """Buffer addresses of every column of a pyarrow table or batch,
+    including dictionary storage (see `_dictionary_storage_addresses`)."""
     columns = data.columns
     chunks = [c for col in columns for c in (col.chunks if hasattr(col, "chunks") else [col])]
-    return [b.address for chunk in chunks for b in chunk.buffers() if b is not None]
+    addrs = [b.address for chunk in chunks for b in chunk.buffers() if b is not None]
+    for chunk in chunks:
+        addrs.extend(_dictionary_storage_addresses(chunk))
+    return addrs
+
+
+def dictionary_addresses(data: Any) -> list[int]:
+    """Only the dictionary-storage addresses of a table or batch."""
+    columns = data.columns
+    chunks = [c for col in columns for c in (col.chunks if hasattr(col, "chunks") else [col])]
+    return [a for chunk in chunks for a in _dictionary_storage_addresses(chunk)]
 
 
 def test_pyarrow_round_trip_is_zero_copy() -> None:
@@ -309,9 +343,13 @@ def test_every_layout_round_trips_zero_copy() -> None:
     got = pa.table(ArrowStream.from_arrow(source))
     assert got.equals(source)
     assert addresses(got) == addresses(source)
+    assert dictionary_addresses(got) == dictionary_addresses(source)
+    assert dictionary_addresses(source), "typed_table must hold dictionary storage"
     batch = source.to_batches()[0]
     got = pa.table(ArrowStream.from_arrow(batch))
     assert got.equals(source)
+    assert addresses(got) == addresses(batch)
+    assert dictionary_addresses(got) == dictionary_addresses(batch)
 
 
 def test_exported_stream_is_taken_once_across_threads() -> None:
