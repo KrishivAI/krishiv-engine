@@ -214,12 +214,6 @@ impl Resolver<'_> {
         predicate: &Arc<Expr>,
         env: &Arc<super::resolve::Env>,
     ) -> Result<Rel, AnalysisError> {
-        if info.having.is_some() {
-            return Err(unsupported(
-                "a second filter over an aggregate with windows",
-                p.origin,
-            ));
-        }
         let top = info.top.clone().unwrap_or_else(|| Arc::from(Vec::new()));
         if let Some(b) = top.iter().find(|b| !b.lateral.is_empty()) {
             let lca = b

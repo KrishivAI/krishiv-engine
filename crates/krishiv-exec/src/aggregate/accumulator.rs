@@ -806,6 +806,11 @@ impl Accumulator {
         })
     }
 
+    /// Bytes one group's state takes (heap bytes of string values aside).
+    pub(crate) fn group_bytes(&self) -> usize {
+        self.vecs().iter().map(|&(_, _, e)| e).sum()
+    }
+
     /// Visits every per-group vector as (length, capacity, element size).
     fn vecs(&self) -> Vec<(usize, usize, usize)> {
         fn v<T>(x: &Vec<T>) -> (usize, usize, usize) {

@@ -45,8 +45,11 @@ impl Planner<'_> {
         let mut wanted: Vec<Arc<Expr>> = partition_by.to_vec();
         wanted.extend(order_by.iter().map(|o| Arc::clone(&o.expr)));
         // Without keys, a constant one: the sort then gathers every row on
-        // one driver (a single-partition exchange once the exchange pass,
-        // P2-T174, provides one).
+        // one driver.
+        // TODO(P2-T174 part 2, PR #146's property pass): require
+        // `WindowPlan::required_distribution` of the input below the sort
+        // (`Distribution::Single`, or `Clustered` on the partition
+        // attributes) and drop this constant key.
         let gather = partition_by.is_empty() && order_by.is_empty();
         if gather {
             wanted.push(Arc::new(Expr::literal(krishiv_plan::Literal::Integer(0))));

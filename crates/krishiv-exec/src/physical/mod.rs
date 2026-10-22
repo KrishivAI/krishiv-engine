@@ -163,10 +163,8 @@ pub enum PhysNode {
     },
     /// Window functions over `input`, which is sorted by the plan's
     /// partitioning, then its ordering: the input's columns, then one per
-    /// function. Its state is one partition at a time, so it needs its
-    /// input distributed by the partitioning columns (the exchange pass,
-    /// P2-T174, places `Exchange(Hash(partition columns))` below the sort;
-    /// single-partition when there are none).
+    /// function. Its state is one partition at a time: it requires
+    /// [`WindowPlan::required_distribution`] of its input.
     Window {
         /// The sorted input.
         input: Box<PhysNode>,

@@ -394,3 +394,37 @@ fn window_functions_match_spark() {
     assert!(cases.len() > 100, "the fixture lost cases");
     assert!(report.is_empty(), "mismatches against Spark:\n{report}");
 }
+
+/// A filter over a query whose `HAVING` filtered the aggregate below its
+/// windows filters the windows' output, as Spark's outer filter does: the
+/// same rows as an outer `WHERE`.
+#[test]
+fn a_second_filter_filters_the_windows_output() {
+    use krishiv_session::functions::{col, lit};
+    let s = session(&fixture());
+    let rows = |df: krishiv_session::DataFrame| {
+        let batches = block_on(df.collect()).unwrap();
+        let mut out: Vec<String> = batches
+            .iter()
+            .flat_map(|b| {
+                (0..b.num_rows()).map(|i| {
+                    b.columns()
+                        .iter()
+                        .map(|c| text(c, i).to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+            })
+            .collect();
+        out.sort();
+        out
+    };
+    let inner = "SELECT p, sum(v) AS s, rank() OVER (ORDER BY sum(v)) AS r FROM t GROUP BY p \
+                 HAVING s > 3";
+    let filtered = block_on(s.sql(inner)).unwrap().filter(col("r").eq(lit(1)));
+    let outer = block_on(s.sql(&format!("SELECT * FROM ({inner}) WHERE r = 1"))).unwrap();
+    let got = rows(filtered);
+    assert_eq!(got, rows(outer));
+    // Spark 4.2: (2, 7, 1) and (1, 35, 2) before the filter.
+    assert_eq!(got, ["\"2\",\"7\",\"1\""]);
+}

@@ -423,12 +423,15 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
+        // The first filter over an aggregate with windows filters below
+        // them; a further one (a DataFrame filter) filters their output.
         if let Some(info) = c.agg.clone()
             && info.has_windows()
+            && info.having.is_none()
         {
             return self.having_below_windows(p, &info, predicate, env);
         }
-        if c.agg.is_some() {
+        if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
             let (bounds, agg, extended) =
                 self.over_agg(&c, std::slice::from_ref(predicate), env, "Filter")?;
             boolean_filter(&bounds[0], p.origin)?;

@@ -42,8 +42,12 @@
 //! functions are planned with a later part of P2-T055.
 //!
 //! # Memory
-//! Buffered input, its boundary flags and the output columns of the rows
-//! waiting are reserved before a batch is taken (`NeedMemory` otherwise).
+//! Before a batch is taken (`NeedMemory` otherwise) the operator reserves
+//! what it holds for it: its columns, its boundary flags, and what
+//! evaluating its rows holds (row maps, states, outputs; exact for its
+//! rows, partitions and peer groups). String and binary results are views
+//! of the input's buffers, never copies. A batch's reservation is released
+//! when its last output slice is emitted.
 //! The operator does not spill: a partition must fit in memory (the sort
 //! below spills; spilling a partition that does not fit is a later part of
 //! P2-T055).
@@ -199,6 +203,29 @@ crate::physical::data::plan_data!(
 crate::physical::data::plan_data!(struct WindowFrame { units, lower, upper });
 crate::physical::data::plan_data!(struct WindowFunctionPlan { function, frame, filter, name });
 crate::physical::data::plan_data!(struct WindowPlan { partition_by, order_by, functions });
+
+/// The distribution a window requires of its input: its state is one
+/// partition at a time, so every row of a partition must reach one driver
+/// (plan data, for the exchange pass of P2-T174).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RequiredDistribution {
+    /// No partitioning: all rows in one partition.
+    Single,
+    /// Rows with equal values of these input columns in one partition.
+    Clustered(Vec<usize>),
+}
+
+impl WindowPlan {
+    /// What the window requires of its input's distribution.
+    #[must_use]
+    pub fn required_distribution(&self) -> RequiredDistribution {
+        if self.partition_by.is_empty() {
+            RequiredDistribution::Single
+        } else {
+            RequiredDistribution::Clustered(self.partition_by.clone())
+        }
+    }
+}
 
 /// How an aggregate's frame is evaluated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -372,71 +399,32 @@ impl Window {
         })
     }
 
-    /// Bytes reserved per buffered row besides its input columns: boundary
-    /// flags, the evaluation's row maps, and each function's output and
-    /// state (a snapshot per row for running aggregates).
-    fn row_cost(&self) -> usize {
-        let per_function: usize = self
-            .plan
-            .functions
-            .iter()
-            .map(|f| match &f.function {
-                WindowFunction::Aggregate(_) => 64,
-                _ => 16,
-            })
-            .sum();
-        2 + 16 + per_function
-    }
-
-    /// Bytes a batch of `batch` costs while buffered: its columns, the
-    /// per-row cost, and string values an aggregate output may copy.
-    fn batch_cost(&self, batch: &RecordBatch) -> usize {
-        let copied: usize = self
-            .plan
-            .functions
-            .iter()
-            .filter_map(|f| match &f.function {
-                WindowFunction::Aggregate(a) => a.args.first(),
-                _ => None,
-            })
-            .filter_map(|&c| batch.columns().get(c))
-            .filter(|c| {
-                matches!(
-                    c.data_type(),
-                    DataType::Utf8 | DataType::Utf8View | DataType::Binary | DataType::BinaryView
-                )
-            })
-            .map(|c| Array::get_array_memory_size(c.as_ref()))
-            .sum();
-        batch
-            .get_array_memory_size()
-            .saturating_add(batch.num_rows().saturating_mul(self.row_cost()))
-            .saturating_add(copied)
-    }
-
-    /// Takes `batch`: its boundary flags against the rows before it.
-    fn append(&self, l: &mut Local, batch: RecordBatch, reserved: usize) -> Result<()> {
+    /// Takes `batch` if the bytes it holds while buffered can be reserved
+    /// (`Err(bytes)` otherwise, nothing changed): its columns, its boundary
+    /// flags against the rows before it, and what evaluating its rows
+    /// holds ([`eval::cost`], exact for its rows, partitions and peer
+    /// groups).
+    fn append(&self, l: &mut Local, batch: RecordBatch) -> Result<Result<(), usize>> {
         let n = batch.num_rows();
-        let flags =
-            |enc: &Option<Arc<KeyEncoder>>, prev: &mut Option<OwnedRow>| -> Result<Vec<bool>> {
-                let Some(enc) = enc else {
-                    return Ok(vec![false; n]);
-                };
-                let rows = enc.encode(&batch)?;
-                let mut out = Vec::with_capacity(n);
-                for i in 0..n {
-                    out.push(match i {
-                        0 => prev.as_ref().is_none_or(|p| p.row() != rows.row(0)),
-                        _ => rows.row(i) != rows.row(i - 1),
-                    });
-                }
-                if n > 0 {
-                    *prev = Some(rows.row(n - 1).owned());
-                }
-                Ok(out)
+        let flags = |enc: &Option<Arc<KeyEncoder>>,
+                     prev: &Option<OwnedRow>|
+         -> Result<(Vec<bool>, Option<OwnedRow>)> {
+            let Some(enc) = enc else {
+                return Ok((vec![false; n], None));
             };
-        let mut part_start = flags(&self.partition_keys, &mut l.prev_partition)?;
-        let order_start = flags(&self.order_keys, &mut l.prev_order)?;
+            let rows = enc.encode(&batch)?;
+            let mut out = Vec::with_capacity(n);
+            for i in 0..n {
+                out.push(match i {
+                    0 => prev.as_ref().is_none_or(|p| p.row() != rows.row(0)),
+                    _ => rows.row(i) != rows.row(i - 1),
+                });
+            }
+            let last = (n > 0).then(|| rows.row(n - 1).owned());
+            Ok((out, last))
+        };
+        let (mut part_start, prev_partition) = flags(&self.partition_keys, &l.prev_partition)?;
+        let (order_start, prev_order) = flags(&self.order_keys, &l.prev_order)?;
         if l.pending.is_empty()
             && l.last_start.is_none()
             && let Some(first) = part_start.first_mut()
@@ -449,12 +437,24 @@ impl Window {
             .zip(&order_start)
             .map(|(p, o)| *p || *o)
             .collect();
+        let parts = part_start.iter().filter(|&&s| s).count();
+        let peers = peer_start.iter().filter(|&&s| s).count();
+        let cost = batch
+            .get_array_memory_size()
+            .saturating_add(2 * n)
+            .saturating_add(eval::cost(&self.plan, n, parts, peers)?);
+        if l.reservation.try_grow(cost).is_err() {
+            return Ok(Err(cost));
+        }
+        if prev_partition.is_some() {
+            l.prev_partition = prev_partition;
+        }
+        if prev_order.is_some() {
+            l.prev_order = prev_order;
+        }
         if let Some(i) = part_start.iter().rposition(|&s| s) {
             l.last_start = Some((l.pending.len(), i));
-            self.partitions.fetch_add(
-                part_start.iter().filter(|&&s| s).count() as u64,
-                Ordering::Relaxed,
-            );
+            self.partitions.fetch_add(parts as u64, Ordering::Relaxed);
         }
         self.rows.fetch_add(n as u64, Ordering::Relaxed);
         l.pending.push_back(Pending {
@@ -462,9 +462,9 @@ impl Window {
             offset: 0,
             part_start,
             peer_start,
-            reserved,
+            reserved: cost,
         });
-        Ok(())
+        Ok(Ok(()))
     }
 
     /// The pending rows that are complete partitions: everything when the
@@ -612,11 +612,9 @@ impl Operator for Window {
         if input.data().schema().fields().len() != self.input.fields().len() {
             return Err(internal("window input of the wrong width".to_owned()));
         }
-        let cost = self.batch_cost(input.data());
-        if l.reservation.try_grow(cost).is_err() {
-            return Ok(OperatorOutput::NeedMemory { bytes: cost });
+        if let Err(bytes) = self.append(l, input.data().clone())? {
+            return Ok(OperatorOutput::NeedMemory { bytes });
         }
-        self.append(l, input.data().clone(), cost)?;
         if Self::complete_rows(l) >= l.batch_rows {
             self.flush_complete(l)?;
         }

@@ -48,6 +48,25 @@ struct Unit<'a> {
     first_peer: Vec<u32>,
 }
 
+/// A vector collected from fallible items with the exact capacity of the
+/// iterator's length (a plain `collect` of `Result`s grows by doubling, so
+/// it would hold more than the memory reserved for it).
+struct Exact<T>(Result<Vec<T>>);
+
+impl<T> FromIterator<Result<T>> for Exact<T> {
+    fn from_iter<I: IntoIterator<Item = Result<T>>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let mut out = Vec::with_capacity(iter.size_hint().0);
+        for x in iter {
+            match x {
+                Ok(v) => out.push(v),
+                Err(e) => return Self(Err(e)),
+            }
+        }
+        Self(Ok(out))
+    }
+}
+
 fn id(i: usize) -> Result<u32> {
     u32::try_from(i).map_err(|_| too_large())
 }
@@ -62,14 +81,24 @@ fn too_large() -> krishiv_common::error::KrishivError {
 impl<'a> Unit<'a> {
     fn new(slices: &'a [Slice<'a>]) -> Result<Self> {
         let rows: usize = slices.iter().map(|s| s.len).sum();
+        // Sized exactly (what `cost` reserves); the first row starts both.
+        let starts = |peer: bool| {
+            1 + slices
+                .iter()
+                .flat_map(|s| if peer { s.peer_start } else { s.part_start }.iter())
+                .filter(|&&b| b)
+                .count()
+        };
+        let parts = starts(false);
+        let peers = starts(true);
         let mut u = Self {
             slices,
             rows,
             part_of: Vec::with_capacity(rows),
-            parts: Vec::new(),
+            parts: Vec::with_capacity(parts),
             peer_of: Vec::with_capacity(rows),
-            peers: Vec::new(),
-            first_peer: Vec::new(),
+            peers: Vec::with_capacity(peers),
+            first_peer: Vec::with_capacity(parts),
         };
         let mut i = 0;
         for s in slices {
@@ -133,7 +162,8 @@ fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef
                         .map_err(|_| too_large())
                         .and_then(int)
                 })
-                .collect::<Result<_>>()?;
+                .collect::<Exact<_>>()
+                .0?;
             Arc::new(Int32Array::from(v))
         }
         WindowFunction::Rank => Arc::new(Int32Array::from(ranks(u, int)?)),
@@ -143,7 +173,8 @@ fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef
                     let first = u.first_peer[u.part_of[i] as usize];
                     int(i64::from(u.peer_of[i] - first) + 1)
                 })
-                .collect::<Result<_>>()?;
+                .collect::<Exact<_>>()
+                .0?;
             Arc::new(Int32Array::from(v))
         }
         WindowFunction::PercentRank => {
@@ -176,7 +207,8 @@ fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef
                     let (start, rows) = u.part(i);
                     ntile(i - start, rows, *k).ok_or_else(too_large)
                 })
-                .collect::<Result<_>>()?;
+                .collect::<Exact<_>>()
+                .0?;
             Arc::new(Int32Array::from(v))
         }
         WindowFunction::Aggregate(a) => aggregate(a, f, u, ansi)?,
@@ -202,7 +234,8 @@ fn ranks(u: &Unit<'_>, int: impl Fn(i64) -> Result<i32>) -> Result<Vec<i32>> {
                 .map_err(|_| too_large())
                 .and_then(&int)
         })
-        .collect()
+        .collect::<Exact<_>>()
+        .0
 }
 
 /// Spark's `NTile` bucket of the 0-based row `r` of a partition of `rows`
@@ -267,6 +300,9 @@ fn aggregate(
     if decimal && matches!(a.function, AggregateFunction::Sum | AggregateFunction::Avg) {
         return decimal_aggregate(a, f, shape, u, ansi);
     }
+    if picks_bytes(a) {
+        return byte_values(a, f, shape, u);
+    }
     // The argument columns are passed as they are, in order.
     let local = AggregateExpr {
         args: (0..a.args.len()).collect(),
@@ -296,7 +332,7 @@ fn aggregate(
                 acc.update(&groups, &arguments(a, s)?, &one)?;
                 at += s.len;
             }
-            let ids: Vec<u32> = (0..parts).map(id).collect::<Result<_>>()?;
+            let ids: Vec<u32> = (0..parts).map(id).collect::<Exact<_>>().0?;
             let values = acc.evaluate(&ids)?;
             take(&values, &u.part_of)
         }
@@ -340,13 +376,15 @@ fn aggregate(
             }
             let ids: Vec<u32> = (0..segments)
                 .map(|k| id(parts + 1 + k))
-                .collect::<Result<_>>()?;
+                .collect::<Exact<_>>()
+                .0?;
             let values = acc.evaluate(&ids)?;
-            let of: Vec<u32> = match shape {
-                Shape::RunningRows => (0..u.rows).map(id).collect::<Result<_>>()?,
-                _ => u.peer_of.clone(),
-            };
-            take(&values, &of)
+            match shape {
+                // One segment per row, in row order: the values are the
+                // output.
+                Shape::RunningRows => Ok(values),
+                _ => take(&values, &u.peer_of),
+            }
         }
     }
 }
@@ -458,4 +496,230 @@ fn decimal_aggregate(
         _ => Arc::new(PrimitiveArray::<Decimal128Type>::from(out).with_data_type(result)),
     };
     take(&values, &seg_of)
+}
+
+/// Whether `t` is a string or binary type.
+fn is_bytes(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Utf8
+            | DataType::Utf8View
+            | DataType::LargeUtf8
+            | DataType::Binary
+            | DataType::BinaryView
+            | DataType::LargeBinary
+    )
+}
+
+/// Whether `a` picks one row's string or binary value (`min`, `max`,
+/// `first`, `last`): evaluated by [`byte_values`], without copying values.
+fn picks_bytes(a: &AggregateExpr) -> bool {
+    use AggregateFunction as F;
+    is_bytes(&a.arg_type)
+        && matches!(
+            a.function,
+            F::Min | F::Max | F::First { .. } | F::Last { .. }
+        )
+}
+
+/// The view type a string or binary argument is read as.
+fn view_type(t: &DataType) -> DataType {
+    match t {
+        DataType::Binary | DataType::BinaryView | DataType::LargeBinary => DataType::BinaryView,
+        _ => DataType::Utf8View,
+    }
+}
+
+/// A string or binary column as views of its own buffers (arrow-array
+/// builds them without copying values when the offsets fit `u32`).
+fn to_view(col: &ArrayRef) -> Result<ArrayRef> {
+    use arrow_array::{BinaryViewArray, StringViewArray};
+    Ok(match col.data_type() {
+        DataType::Utf8View | DataType::BinaryView => Arc::clone(col),
+        DataType::Utf8 => Arc::new(StringViewArray::from(col.as_string::<i32>())),
+        DataType::LargeUtf8 => Arc::new(StringViewArray::from(col.as_string::<i64>())),
+        DataType::Binary => Arc::new(BinaryViewArray::from(col.as_binary::<i32>())),
+        DataType::LargeBinary => Arc::new(BinaryViewArray::from(col.as_binary::<i64>())),
+        t => return Err(internal(format!("window value of {t} read as bytes"))),
+    })
+}
+
+/// The last row of the segment of `row` (exclusive end) and its index.
+fn segment(shape: Shape, u: &Unit<'_>, row: usize) -> (usize, usize) {
+    match shape {
+        Shape::Whole => {
+            let p = u.part_of[row] as usize;
+            (u.parts[p].1, p)
+        }
+        Shape::RunningRows => (row + 1, row),
+        Shape::RunningPeers => {
+            let p = u.peer_of[row] as usize;
+            (u.peers[p].1, p)
+        }
+    }
+}
+
+/// `min`/`max`/`first`/`last` of string or binary values over a frame:
+/// the row each frame picks, then the picked values gathered as views of
+/// the input's buffers (no value is copied; Spark compares by bytes).
+fn byte_values(
+    a: &AggregateExpr,
+    f: &WindowFunctionPlan,
+    shape: Shape,
+    u: &Unit<'_>,
+) -> Result<ArrayRef> {
+    use AggregateFunction as F;
+    let view = view_type(&a.arg_type);
+    let mut sources: Vec<ArrayRef> = Vec::with_capacity(u.slices.len() + 1);
+    for sl in u.slices {
+        let col = arguments(a, sl)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| internal("a window aggregate without argument".to_owned()))?;
+        sources.push(to_view(&col)?);
+    }
+    let null_source = sources.len();
+    sources.push(arrow_array::new_null_array(&view, 1));
+    let value = |k: usize, i: usize| -> &[u8] {
+        let c = &sources[k];
+        match c.data_type() {
+            DataType::Utf8View => c.as_string_view().value(i).as_bytes(),
+            _ => c.as_binary_view().value(i),
+        }
+    };
+    let mut chosen: Vec<(usize, usize)> = Vec::new();
+    let mut state: Option<(usize, usize)> = None;
+    let mut at = 0;
+    for (k, sl) in u.slices.iter().enumerate() {
+        let mask = filter_mask(f, sl)?;
+        for i in 0..sl.len {
+            let row = at + i;
+            if u.parts[u.part_of[row] as usize].0 == row {
+                state = None;
+            }
+            if passes(mask.as_ref(), i) {
+                let valid = sources[k].is_valid(i);
+                state = match a.function {
+                    F::Min | F::Max if !valid => state,
+                    F::Min | F::Max => match state {
+                        Some((sk, si)) => {
+                            let order = value(k, i).cmp(value(sk, si));
+                            let better = if a.function == F::Max {
+                                order.is_gt()
+                            } else {
+                                order.is_lt()
+                            };
+                            if better { Some((k, i)) } else { state }
+                        }
+                        None => Some((k, i)),
+                    },
+                    F::First { ignore_nulls } => {
+                        if state.is_some() || (ignore_nulls && !valid) {
+                            state
+                        } else {
+                            Some((k, i))
+                        }
+                    }
+                    F::Last { ignore_nulls } => {
+                        if ignore_nulls && !valid {
+                            state
+                        } else {
+                            Some((k, i))
+                        }
+                    }
+                    other => {
+                        return Err(internal(format!("{other:?} of strings by row")));
+                    }
+                };
+            }
+            if row + 1 == segment(shape, u, row).0 {
+                chosen.push(state.unwrap_or((null_source, 0)));
+            }
+        }
+        at += sl.len;
+    }
+    let indices: Vec<(usize, usize)> = (0..u.rows)
+        .map(|row| chosen[segment(shape, u, row).1])
+        .collect();
+    let refs: Vec<&dyn Array> = sources.iter().map(AsRef::as_ref).collect();
+    arrow_select::interleave::interleave(&refs, &indices).map_err(|e| internal(e.to_string()))
+}
+
+/// Bytes an array of `rows` values of `t` takes (validity included).
+fn width(t: &DataType, rows: usize) -> usize {
+    let value = t.primitive_width().unwrap_or(16);
+    rows * value + rows.div_ceil(8)
+}
+
+/// The bytes the evaluation of `plan` over complete partitions holds for
+/// `rows` rows in `parts` partitions and `peers` peer groups: the row
+/// maps, each function's states and output, and the index vectors that
+/// gather outputs. Linear in its arguments, so the cost of a unit is the
+/// sum of its batches' costs.
+pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -> Result<usize> {
+    // `part_of`, `peer_of`; `parts` and `first_peer`; `peers`.
+    let mut total = rows * 8 + parts * 20 + peers * 16;
+    for f in &plan.functions {
+        let (out, _) = f.output()?;
+        total += match &f.function {
+            WindowFunction::RowNumber
+            | WindowFunction::Rank
+            | WindowFunction::DenseRank
+            | WindowFunction::Ntile(_)
+            | WindowFunction::CumeDist => width(&out, rows),
+            // The ranks, then the result.
+            WindowFunction::PercentRank => rows * 4 + width(&out, rows),
+            WindowFunction::Aggregate(a) => {
+                let shape = f.shape()?;
+                let segments = match shape {
+                    Shape::Whole => parts,
+                    Shape::RunningRows => rows,
+                    Shape::RunningPeers => peers,
+                };
+                let decimal = matches!(
+                    a.arg_type,
+                    DataType::Decimal64(..) | DataType::Decimal128(..)
+                );
+                // The gathered output and its indices.
+                let gathered = width(&out, rows) + rows * 4;
+                if decimal && matches!(a.function, AggregateFunction::Sum | AggregateFunction::Avg)
+                {
+                    // States, the segment of each row, the values.
+                    segments * size_of::<(i256, i64)>()
+                        + rows * 4
+                        + segments * size_of::<Option<i128>>()
+                        + width(&out, segments)
+                        + gathered
+                } else if picks_bytes(a) {
+                    // Views of the input, picked rows, gather indices.
+                    width(&out, rows)
+                        + segments * size_of::<(usize, usize)>()
+                        + rows * size_of::<(usize, usize)>()
+                        + width(&out, rows)
+                } else {
+                    let local = AggregateExpr {
+                        args: (0..a.args.len()).collect(),
+                        input: AggInput::Raw,
+                        ..a.clone()
+                    };
+                    let state = Accumulator::new(&local, true)?.group_bytes();
+                    let groups = match shape {
+                        Shape::Whole => parts,
+                        _ => parts + segments,
+                    };
+                    // Group ids, states, evaluated values, and (but for
+                    // one segment per row) the gathered output.
+                    rows * 4
+                        + groups * state
+                        + width(&out, segments)
+                        + if shape == Shape::RunningRows {
+                            0
+                        } else {
+                            gathered
+                        }
+                }
+            }
+        };
+    }
+    Ok(total)
 }

@@ -41,24 +41,113 @@ fn pool(limit: usize) -> Arc<TreePool> {
     )
 }
 
-/// `(p, o, id, v)`: partition key, order key, unique tie-break, value.
+/// `(p, o, id, v)`: partition key, order key (small codes, see
+/// [`Keys`]), unique tie-break, value. Column 4 is a string derived from
+/// `v` ([`text`]).
 type Row = (Option<i64>, Option<i64>, i64, Option<i64>);
 
+/// The type the partition and order key codes are written as.
+#[derive(Clone, Copy, Debug)]
+enum Keys {
+    Int,
+    /// `-0.0`, `0.0`, NaN, `1.5`, `-inf`: Spark's equal `-0.0 = 0.0` and
+    /// NaN largest.
+    Float,
+    Decimal,
+    /// Byte order differs from the codes' order.
+    Text,
+}
+
+const FLOATS: [f64; 5] = [-0.0, 0.0, f64::NAN, 1.5, f64::NEG_INFINITY];
+const TEXTS: [&str; 5] = ["b", "a", "\u{e9}", "A", "aa"];
+
+impl Keys {
+    fn data_type(self) -> DataType {
+        match self {
+            Self::Int => DataType::Int64,
+            Self::Float => DataType::Float64,
+            Self::Decimal => DataType::Decimal128(10, 2),
+            Self::Text => DataType::Utf8,
+        }
+    }
+
+    fn column(self, codes: impl Iterator<Item = Option<i64>>) -> ArrayRef {
+        let at = |k: i64| usize::try_from(k).unwrap() % 5;
+        match self {
+            Self::Int => Arc::new(Int64Array::from_iter(codes)),
+            Self::Float => Arc::new(arrow_array::Float64Array::from_iter(
+                codes.map(|k| k.map(|k| FLOATS[at(k)])),
+            )),
+            Self::Decimal => Arc::new(
+                Decimal128Array::from_iter(codes.map(|k| k.map(|k| i128::from(k) * 137 - 200)))
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ),
+            Self::Text => Arc::new(arrow_array::StringArray::from_iter(
+                codes.map(|k| k.map(|k| TEXTS[at(k)])),
+            )),
+        }
+    }
+
+    /// The code's position in Spark's order: NULL first, then by value
+    /// (floats: `-0.0 = 0.0`, NaN largest; strings by bytes).
+    fn key(self, v: Option<i64>) -> (bool, Vec<u8>) {
+        let Some(k) = v else {
+            return (false, Vec::new());
+        };
+        let at = usize::try_from(k).unwrap() % 5;
+        let bytes = match self {
+            Self::Int => (k ^ i64::MIN).to_be_bytes().to_vec(),
+            Self::Decimal => ((i128::from(k) * 137 - 200) ^ i128::MIN)
+                .to_be_bytes()
+                .to_vec(),
+            Self::Float => {
+                let f = FLOATS[at];
+                let f = if f.is_nan() { f64::NAN.abs() } else { f + 0.0 };
+                let b = f.to_bits();
+                let b = if b >> 63 == 1 { !b } else { b | (1 << 63) };
+                b.to_be_bytes().to_vec()
+            }
+            Self::Text => TEXTS[at].as_bytes().to_vec(),
+        };
+        (true, bytes)
+    }
+}
+
+/// The string column's value of a row's `v`.
+fn text(v: Option<i64>) -> Option<String> {
+    v.map(|x| format!("s{:02}", (x * 37) % 100))
+}
+
 fn schema() -> SchemaRef {
+    schema_of(Keys::Int)
+}
+
+fn schema_of(keys: Keys) -> SchemaRef {
     Arc::new(Schema::new(vec![
-        Field::new("p", DataType::Int64, true),
-        Field::new("o", DataType::Int64, true),
+        Field::new("p", keys.data_type(), true),
+        Field::new("o", keys.data_type(), true),
         Field::new("id", DataType::Int64, false),
         Field::new("v", DataType::Int64, true),
+        Field::new("s", DataType::Utf8, true),
     ]))
 }
 
 fn batch(rows: &[Row]) -> Batch {
-    let col = |f: fn(&Row) -> Option<i64>| -> ArrayRef {
-        Arc::new(Int64Array::from_iter(rows.iter().map(f)))
-    };
-    let columns = vec![col(|r| r.0), col(|r| r.1), col(|r| Some(r.2)), col(|r| r.3)];
-    Batch::new(RecordBatch::try_new(schema(), columns).unwrap())
+    batch_of(Keys::Int, rows)
+}
+
+fn batch_of(keys: Keys, rows: &[Row]) -> Batch {
+    let columns: Vec<ArrayRef> = vec![
+        keys.column(rows.iter().map(|r| r.0)),
+        keys.column(rows.iter().map(|r| r.1)),
+        Arc::new(Int64Array::from_iter(rows.iter().map(|r| Some(r.2)))),
+        Arc::new(Int64Array::from_iter(rows.iter().map(|r| r.3))),
+        Arc::new(arrow_array::StringArray::from_iter(
+            rows.iter().map(|r| text(r.3)),
+        )),
+    ];
+    Batch::new(RecordBatch::try_new(schema_of(keys), columns).unwrap())
 }
 
 fn agg(function: AggregateFunction, arg: Option<usize>) -> WindowFunction {
@@ -66,10 +155,10 @@ fn agg(function: AggregateFunction, arg: Option<usize>) -> WindowFunction {
         function,
         args: arg.into_iter().collect(),
         input: AggInput::Raw,
-        arg_type: if arg.is_some() {
-            DataType::Int64
-        } else {
-            DataType::Null
+        arg_type: match arg {
+            Some(4) => DataType::Utf8View,
+            Some(_) => DataType::Int64,
+            None => DataType::Null,
         },
         name: "a".to_owned(),
     })
@@ -101,8 +190,21 @@ async fn run(
     window: &WindowPlan,
     limit: usize,
 ) -> crate::Result<Vec<Batch>> {
-    let s = schema();
-    let batches: Vec<Batch> = rows.chunks(split.max(1)).map(batch).collect();
+    run_keys(Keys::Int, rows, split, window, limit).await
+}
+
+async fn run_keys(
+    keys_as: Keys,
+    rows: &[Row],
+    split: usize,
+    window: &WindowPlan,
+    limit: usize,
+) -> crate::Result<Vec<Batch>> {
+    let s = schema_of(keys_as);
+    let batches: Vec<Batch> = rows
+        .chunks(split.max(1))
+        .map(|c| batch_of(keys_as, c))
+        .collect();
     let mut keys: Vec<SortKey> = window
         .partition_by
         .iter()
@@ -156,6 +258,7 @@ fn cell(a: &ArrayRef, i: usize) -> String {
         DataType::Int32 => a.as_primitive::<Int32Type>().value(i).to_string(),
         DataType::Int64 => a.as_primitive::<Int64Type>().value(i).to_string(),
         DataType::Float64 => format!("{:?}", a.as_primitive::<Float64Type>().value(i)),
+        DataType::Utf8View => a.as_string_view().value(i).to_owned(),
         DataType::Decimal128(_, s) => {
             crate::aggregate::plain(a.as_primitive::<Decimal128Type>().value(i), *s)
         }
@@ -200,22 +303,19 @@ fn ntile_spark(rows: usize, buckets: i64) -> Vec<i64> {
     out
 }
 
-/// Spark's order of the keys: NULL first, then by value.
-fn key(v: Option<i64>) -> (bool, i64) {
-    (v.is_some(), v.unwrap_or(0))
-}
-
 /// The naive value of `f` (over `frame`) for each row of `rows`, which are
-/// sorted by partition, order key and id; one partition when not
-/// `partitioned`.
+/// sorted by partition key, order key and id (keys written as `kt`); one
+/// partition when not `partitioned`.
 fn reference(
+    kt: Keys,
     rows: &[Row],
     f: &WindowFunction,
     frame: WindowFrame,
     partitioned: bool,
 ) -> Vec<String> {
     let mut out = Vec::new();
-    let same_part = |a: &Row, b: &Row| !partitioned || a.0 == b.0;
+    let key = |v: Option<i64>| kt.key(v);
+    let same_part = |a: &Row, b: &Row| !partitioned || key(a.0) == key(b.0);
     let to_f = |x: usize| f64::from(u32::try_from(x).unwrap());
     for r in rows {
         let part: Vec<&Row> = rows.iter().filter(|x| same_part(x, r)).collect();
@@ -227,7 +327,7 @@ fn reference(
             WindowFunction::RowNumber => (pos + 1).to_string(),
             WindowFunction::Rank => rank.to_string(),
             WindowFunction::DenseRank => {
-                let mut keys: Vec<(bool, i64)> = part
+                let mut keys: Vec<(bool, Vec<u8>)> = part
                     .iter()
                     .map(|x| key(x.1))
                     .filter(|k| *k < key(r.1))
@@ -251,21 +351,45 @@ fn reference(
                     (FrameUnits::Rows, _) => pos + 1,
                     (FrameUnits::Range, _) => peers_end,
                 };
-                let vals: Vec<i64> = part[..end].iter().filter_map(|x| x.3).collect();
-                match a.function {
-                    AggregateFunction::Count if a.args.is_empty() => end.to_string(),
-                    AggregateFunction::Count => vals.len().to_string(),
-                    _ if vals.is_empty() => "null".to_owned(),
-                    AggregateFunction::Sum => vals.iter().sum::<i64>().to_string(),
-                    AggregateFunction::Min => vals.iter().min().unwrap().to_string(),
-                    AggregateFunction::Max => vals.iter().max().unwrap().to_string(),
-                    AggregateFunction::Avg => {
-                        // Spark sums integers as doubles, in order.
-                        #[expect(clippy::cast_precision_loss, reason = "Spark's double average")]
-                        let s = vals.iter().fold(0.0, |s, v| s + *v as f64);
-                        format!("{:?}", s / to_f(vals.len()))
+                let frame_rows = &part[..end];
+                if a.args == [4] {
+                    // The string column: by bytes; first/last by row.
+                    let texts: Vec<Option<String>> = frame_rows.iter().map(|x| text(x.3)).collect();
+                    let set: Vec<&String> = texts.iter().flatten().collect();
+                    let v = match a.function {
+                        AggregateFunction::Min => set.iter().min().map(|s| (*s).clone()),
+                        AggregateFunction::Max => set.iter().max().map(|s| (*s).clone()),
+                        AggregateFunction::First { ignore_nulls: true } => {
+                            set.first().map(|s| (*s).clone())
+                        }
+                        AggregateFunction::Last { ignore_nulls: true } => {
+                            set.last().map(|s| (*s).clone())
+                        }
+                        AggregateFunction::First { .. } => texts.first().cloned().flatten(),
+                        AggregateFunction::Last { .. } => texts.last().cloned().flatten(),
+                        other => Some(format!("<{other:?}>")),
+                    };
+                    v.unwrap_or_else(|| "null".to_owned())
+                } else {
+                    let vals: Vec<i64> = frame_rows.iter().filter_map(|x| x.3).collect();
+                    match a.function {
+                        AggregateFunction::Count if a.args.is_empty() => end.to_string(),
+                        AggregateFunction::Count => vals.len().to_string(),
+                        _ if vals.is_empty() => "null".to_owned(),
+                        AggregateFunction::Sum => vals.iter().sum::<i64>().to_string(),
+                        AggregateFunction::Min => vals.iter().min().unwrap().to_string(),
+                        AggregateFunction::Max => vals.iter().max().unwrap().to_string(),
+                        AggregateFunction::Avg => {
+                            // Spark sums integers as doubles, in order.
+                            #[expect(
+                                clippy::cast_precision_loss,
+                                reason = "Spark's double average"
+                            )]
+                            let s = vals.iter().fold(0.0, |s, v| s + *v as f64);
+                            format!("{:?}", s / to_f(vals.len()))
+                        }
+                        other => format!("<{other:?}>"),
                     }
-                    other => format!("<{other:?}>"),
                 }
             }
         });
@@ -274,7 +398,7 @@ fn reference(
 }
 
 fn functions() -> Vec<(WindowFunction, WindowFrame)> {
-    use AggregateFunction::{Avg, Count, Max, Min, Sum};
+    use AggregateFunction::{Avg, Count, First, Last, Max, Min, Sum};
     let rows = WindowFrame::running(FrameUnits::Rows);
     let range = WindowFrame::running(FrameUnits::Range);
     let whole = WindowFrame::whole(FrameUnits::Rows);
@@ -294,6 +418,28 @@ fn functions() -> Vec<(WindowFunction, WindowFrame)> {
         (agg(Max, Some(3)), rows),
         (agg(Avg, Some(3)), range),
         (agg(Avg, Some(3)), WindowFrame::whole(FrameUnits::Range)),
+        (agg(Max, Some(4)), rows),
+        (agg(Min, Some(4)), range),
+        (agg(First { ignore_nulls: true }, Some(4)), rows),
+        (
+            agg(
+                Last {
+                    ignore_nulls: false,
+                },
+                Some(4),
+            ),
+            range,
+        ),
+        (agg(Last { ignore_nulls: true }, Some(4)), whole),
+        (
+            agg(
+                First {
+                    ignore_nulls: false,
+                },
+                Some(4),
+            ),
+            whole,
+        ),
     ]
 }
 
@@ -317,17 +463,21 @@ proptest! {
         rows in rows_strategy(),
         split in 1_usize..9,
         partitioned in any::<bool>(),
+        kt in prop_oneof![Just(Keys::Int), Just(Keys::Float), Just(Keys::Decimal), Just(Keys::Text)],
     ) {
         let functions = functions();
         let window = plan(functions.clone(), partitioned);
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let out = rt.block_on(run(&rows, split, &window, 1 << 30)).unwrap();
+        let out = rt.block_on(run_keys(kt, &rows, split, &window, 1 << 30)).unwrap();
         let got = outputs(&out, functions.len());
         let mut sorted = rows;
-        sorted.sort_by_key(|r| (if partitioned { key(r.0) } else { (false, 0) }, key(r.1), r.2));
+        sorted.sort_by_key(|r| {
+            let p = if partitioned { kt.key(r.0) } else { (false, Vec::new()) };
+            (p, kt.key(r.1), r.2)
+        });
         let columns: Vec<Vec<String>> = functions
             .iter()
-            .map(|(f, frame)| reference(&sorted, f, *frame, partitioned))
+            .map(|(f, frame)| reference(kt, &sorted, f, *frame, partitioned))
             .collect();
         let want: Vec<String> = sorted
             .iter()
@@ -632,7 +782,7 @@ async fn empty_input_gives_no_rows() {
     let (_root, ctx) = task(1 << 30);
     let out = drive(&op, &ctx, &[batch(&[])]).unwrap();
     assert!(out.is_empty());
-    assert_eq!(op.schema().fields().len(), 4 + functions().len());
+    assert_eq!(op.schema().fields().len(), 5 + functions().len());
 }
 
 #[test]
@@ -684,4 +834,156 @@ fn invalid_plans_are_rejected() {
     );
     let op = Window::new(schema(), plan(functions(), true), true).unwrap();
     assert!(format!("{op:?}").contains("Window"));
+}
+
+/// Sorted rows in `parts` partitions with ties in the order key, and
+/// their boundary flags.
+fn sorted_unit(rows: i64, parts: i64) -> (Batch, Vec<bool>, Vec<bool>) {
+    let data: Vec<Row> = (0..rows)
+        .map(|i| (Some(i * parts / rows), Some(i / 3), i, Some(i % 11)))
+        .collect();
+    let b = batch(&data);
+    let part: Vec<bool> = (0..data.len())
+        .map(|i| i == 0 || data[i].0 != data[i - 1].0)
+        .collect();
+    let peer: Vec<bool> = (0..data.len())
+        .map(|i| part[i] || data[i].1 != data[i - 1].1)
+        .collect();
+    (b, part, peer)
+}
+
+/// What a unit's evaluation reserves matches what it holds: at least its
+/// outputs and row maps, and at most twice that (the rest is what it
+/// holds while it runs: states, group ids, gather indices).
+#[test]
+fn reserved_cost_matches_what_evaluation_holds() {
+    let numeric: Vec<(WindowFunction, WindowFrame)> = functions()
+        .into_iter()
+        .filter(|(f, _)| !matches!(f, WindowFunction::Aggregate(a) if a.args == [4]))
+        .collect();
+    for (rows, parts) in [(10_000, 100), (10_000, 1), (4_096, 4_096)] {
+        for f in &numeric {
+            let window = plan(vec![f.clone()], true);
+            let (b, part, peer) = sorted_unit(rows, parts);
+            let n = b.num_rows();
+            let slice = super::eval::Slice {
+                batch: b.data(),
+                offset: 0,
+                len: n,
+                part_start: &part,
+                peer_start: &peer,
+            };
+            let out = super::eval::evaluate(&window, &[slice], true).unwrap();
+            let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
+            // Outputs, row maps (`part_of`, `peer_of`) and the partition and
+            // peer-group vectors.
+            let held: usize = out
+                .iter()
+                .map(|c| Array::get_array_memory_size(c.as_ref()))
+                .sum::<usize>()
+                + 8 * n
+                + 20 * count(&part)
+                + 16 * count(&peer);
+            let cost = super::eval::cost(&window, n, count(&part), count(&peer)).unwrap();
+            assert!(cost >= held, "{f:?}: reserved {cost} < held {held}");
+            assert!(cost <= 2 * held, "{f:?}: reserved {cost} for {held} held");
+        }
+    }
+}
+
+/// A partitioned window runs within a limit that holds a few batches and
+/// their exact evaluation cost (the earlier flat per-row estimate needed
+/// several times more and failed here).
+#[tokio::test]
+async fn partitioned_windows_run_at_a_tight_limit() {
+    let window = plan(
+        vec![
+            (WindowFunction::Rank, WindowFrame::running(FrameUnits::Rows)),
+            (
+                agg(AggregateFunction::Sum, Some(3)),
+                WindowFrame::running(FrameUnits::Range),
+            ),
+        ],
+        true,
+    );
+    let rows: Vec<Row> = (0..40_000)
+        .map(|i| (Some(i / 100), Some(i / 3), i, Some(i % 11)))
+        .collect();
+    let per_batch = 4_000;
+    let batches: Vec<Batch> = rows.chunks(per_batch).map(batch).collect();
+    // A batch: 40 partitions, 1334 peer groups.
+    let exact = batches[0].data().get_array_memory_size()
+        + 2 * per_batch
+        + super::eval::cost(&window, per_batch, 40, 1_334).unwrap();
+    let limit = 4 * exact;
+    // The flat estimate this replaces reserved 2 + 16 + 64 + 16 bytes per
+    // row besides the input.
+    assert!(batches.len() * per_batch * 98 > limit);
+    let op = Window::new(schema(), window, true).unwrap();
+    let (root, ctx) = task(limit);
+    let out = drive(&op, &ctx, &batches).unwrap();
+    assert_eq!(out.iter().map(Batch::num_rows).sum::<usize>(), 40_000);
+    drop((out, ctx));
+    assert_eq!(root.reserved(), 0);
+}
+
+/// String results are views of the input's buffers: a running `max` over
+/// one partition of 1 KB strings reserves and holds about the input, not
+/// a copy of the maximum per row.
+#[tokio::test]
+async fn string_results_share_the_input_buffers() {
+    let rows = 10_000;
+    let s = Arc::new(Schema::new(vec![
+        Field::new("o", DataType::Int64, false),
+        Field::new("s", DataType::Utf8, false),
+    ]));
+    let values: Vec<String> = (0..rows).map(|i| format!("{i:0>1024}")).collect();
+    let input = arrow_array::StringArray::from_iter_values(&values);
+    let data_ptr = input.values().as_ptr();
+    let b = RecordBatch::try_new(
+        Arc::clone(&s),
+        vec![
+            Arc::new(Int64Array::from_iter_values(0..rows)),
+            Arc::new(input),
+        ],
+    )
+    .unwrap();
+    let input_bytes = b.get_array_memory_size();
+    let plan = WindowPlan {
+        partition_by: Vec::new(),
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![WindowFunctionPlan {
+            function: WindowFunction::Aggregate(AggregateExpr {
+                function: AggregateFunction::Max,
+                args: vec![1],
+                input: AggInput::Raw,
+                arg_type: DataType::Utf8View,
+                name: "m".to_owned(),
+            }),
+            frame: WindowFrame::running(FrameUnits::Rows),
+            filter: None,
+            name: "m".to_owned(),
+        }],
+    };
+    let op = Window::new(Arc::clone(&s), plan, true).unwrap();
+    // A copy per row would need 10 MB more than the input.
+    let (root, ctx) = task(input_bytes + input_bytes / 2);
+    let out = drive(&op, &ctx, &[Batch::new(b)]).unwrap();
+    let m = out[0].data().column(2).as_string_view();
+    assert_eq!(m.value(9_999), values[9_999]);
+    assert!(m.data_buffers().iter().any(|d| d.as_ptr() == data_ptr));
+    drop((out, ctx));
+    assert_eq!(root.reserved(), 0);
+}
+
+#[test]
+fn windows_require_their_partitioning() {
+    assert_eq!(
+        plan(functions(), true).required_distribution(),
+        RequiredDistribution::Clustered(vec![0])
+    );
+    assert_eq!(
+        plan(functions(), false).required_distribution(),
+        RequiredDistribution::Single
+    );
 }
