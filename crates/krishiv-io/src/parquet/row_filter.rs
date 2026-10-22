@@ -688,9 +688,9 @@ impl LateMaterialization {
 #[cfg(test)]
 mod tests {
     use arrow_array::{
-        ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float64Array, Int8Array,
-        Int16Array, Int32Array, Int64Array, StringArray, StringViewArray,
-        TimestampMicrosecondArray,
+        ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Decimal128Array,
+        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray,
+        LargeStringArray, StringArray, StringViewArray, TimestampMicrosecondArray,
     };
     use arrow_schema::{Field, Schema};
 
@@ -879,6 +879,15 @@ mod tests {
                 "bin",
                 Arc::new(BinaryArray::from(vec![b"ab".as_ref(), b"b".as_ref()])),
             ),
+            ("ls", Arc::new(LargeStringArray::from(vec!["ab", "b"]))),
+            (
+                "bv",
+                Arc::new(BinaryViewArray::from(vec![b"ab".as_ref(), b"b".as_ref()])),
+            ),
+            (
+                "lb",
+                Arc::new(LargeBinaryArray::from(vec![b"ab".as_ref(), b"b".as_ref()])),
+            ),
         ]);
         let ge = |n: &str, v| kept(&cmp(n, CmpOp::GtEq, v), &b);
         assert_eq!(ge("i8", ScalarValue::Int8(2)), [false, true]);
@@ -895,7 +904,7 @@ mod tests {
         // Another scale is another value: not compared here.
         assert_eq!(ge("dec", dec(3)), [true, true]);
         assert_eq!(ge("b", ScalarValue::Boolean(true)), [false, true]);
-        for s in ["s", "v"] {
+        for s in ["s", "v", "ls"] {
             assert_eq!(ge(s, ScalarValue::Utf8("b".to_owned())), [false, true]);
             // Byte order: "ab" < "b".
             assert_eq!(
@@ -903,7 +912,19 @@ mod tests {
                 [true, false]
             );
         }
-        assert_eq!(ge("bin", ScalarValue::Binary(b"b".to_vec())), [false, true]);
+        for bin in ["bin", "bv", "lb"] {
+            assert_eq!(ge(bin, ScalarValue::Binary(b"b".to_vec())), [false, true]);
+        }
+        // No nulls: IS NULL keeps nothing; a missing column is unknown.
+        assert_eq!(kept(&PushdownExpr::IsNull(c("i8")), &b), [false, false]);
+        assert_eq!(kept(&PushdownExpr::IsNull(c("zz")), &b), [true, true]);
+        // A prefix of a non-string column is unknown.
+        let prefix = PushdownExpr::StartsWith {
+            column: c("i8"),
+            prefix: "1".to_owned(),
+            collation: Collation::Utf8Binary,
+        };
+        assert_eq!(kept(&prefix, &b), [true, true]);
         // A string literal against binary (and back) is not compared.
         assert_eq!(ge("bin", ScalarValue::Utf8("b".to_owned())), [true, true]);
         assert_eq!(ge("s", ScalarValue::Binary(b"b".to_vec())), [true, true]);
@@ -978,8 +999,19 @@ mod tests {
                 ),
             ]),
             PushdownExpr::Constant(true),
+            PushdownExpr::IsNotNull(c("d")),
+            PushdownExpr::StartsWith {
+                column: c("e"),
+                prefix: "x".to_owned(),
+                collation: Collation::Utf8Binary,
+            },
+            PushdownExpr::Contains {
+                column: c("f"),
+                needle: "x".to_owned(),
+                collation: Collation::Utf8Binary,
+            },
         ]);
-        assert_eq!(columns(&e), [c("a"), c("b")]);
+        assert_eq!(columns(&e), [c("a"), c("b"), c("d"), c("e"), c("f")]);
     }
 
     #[test]
@@ -1099,6 +1131,18 @@ mod tests {
         stats.columns.push(flat);
         let f = cmp("f", CmpOp::Lt, ScalarValue::Int64(9));
         assert_eq!(estimate(&f, &stats), None);
+        let mut small = ColumnStatistics::new(c("s"));
+        small.min = Precision::Exact(ScalarValue::Int8(0));
+        small.max = Precision::Exact(ScalarValue::Int8(10));
+        let mut short = ColumnStatistics::new(c("t"));
+        short.min = Precision::Exact(ScalarValue::Int16(0));
+        short.max = Precision::Exact(ScalarValue::Int16(10));
+        stats.columns.extend([small, short]);
+        let s = cmp("s", CmpOp::Gt, ScalarValue::Int8(8));
+        let t = cmp("t", CmpOp::LtEq, ScalarValue::Int16(1));
+        let close = |x: Option<f64>, want: f64| x.is_some_and(|x| (x - want).abs() < 1e-9);
+        assert!(close(estimate(&s, &stats), 0.2));
+        assert!(close(estimate(&t, &stats), 0.1));
         // An estimate above 1% starts without the filter (and measures).
         let e = lt(50);
         let auto = crate::request::RowFilterPolicy::Auto;
@@ -1109,6 +1153,59 @@ mod tests {
         assert!(LateMaterialization::new(auto, Some(&e), None, true, Some(0.005)).is_on());
         let on = crate::request::RowFilterPolicy::On;
         assert!(LateMaterialization::new(on, Some(&e), None, true, Some(0.5)).is_on());
+    }
+
+    #[test]
+    fn runtime_filters_join_the_static_predicate() {
+        let mut b = KeyFilterBuilder::new(DataType::Int32, KeyFilterOptions::default())
+            .unwrap_or_else(|| panic!("Int32 keys"));
+        b.add(&Int32Array::from(vec![5]), None).unwrap();
+        let member = PushdownExpr::Membership {
+            column: c("a"),
+            filter: crate::MembershipFilter {
+                id: crate::FilterId(1),
+                generation: 1,
+                keys: Arc::new(b.finish()),
+            },
+        };
+        let e = cmp("a", CmpOp::Gt, ScalarValue::Int32(2));
+        let auto = crate::request::RowFilterPolicy::Auto;
+        let mut late = LateMaterialization::new(auto, Some(&e), None, true, None);
+        let all = |cols: &[ColumnPath]| {
+            assert_eq!(cols, [c("a")]);
+            (ProjectionMask::all(), Worth::Yes)
+        };
+        assert_eq!(n(&late.filter(true, std::slice::from_ref(&member), all)), 1);
+        // Off: a sample evaluates both (a > 2 AND a in {5}).
+        late.on = false;
+        late.start_row_group();
+        late.observe(&ints(), &[member]);
+        assert_eq!(late.counters.take(), (4, 1));
+    }
+
+    #[test]
+    fn a_column_that_cannot_be_widened_keeps_every_row() {
+        let rows = || {
+            batch(vec![(
+                "a",
+                Arc::new(Int32Array::from_iter_values(0..1000)) as ArrayRef,
+            )])
+        };
+        let predicate = |widen: Option<Widen>| {
+            ScanPredicate::new(
+                Arc::new(cmp("a", CmpOp::Eq, ScalarValue::Int32(3))),
+                ProjectionMask::all(),
+                widen,
+                Arc::new(Counters::default()),
+            )
+        };
+        let mut failing = predicate(Some(|_: &ArrayRef| None));
+        let kept = ArrowPredicate::evaluate(&mut failing, rows()).unwrap();
+        assert_eq!(kept.true_count(), 1000);
+        let mut plain = predicate(None);
+        let kept = ArrowPredicate::evaluate(&mut plain, rows()).unwrap();
+        assert_eq!(kept.true_count(), 1);
+        assert_eq!(plain.counters.take(), (1000, 1));
     }
 
     #[test]

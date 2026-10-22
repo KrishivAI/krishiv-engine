@@ -1437,6 +1437,7 @@ fn predicates_are_retyped_to_the_file() {
         collation: Collation::Utf8Binary,
     };
     assert_eq!(map(has("s")), Some(has("s")));
+    assert_eq!(has("s").columns(), [&col("s")]);
     assert_eq!(map(has("i")), None);
     assert_eq!(map(has("z")), Some(PushdownExpr::Constant(false)));
     // A negated substring stays a `Not` leaf.
