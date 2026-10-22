@@ -48,8 +48,11 @@ jobs:
   # manylinux_2_28 and musllinux_1_2 on x86_64. The wheels are built in the
   # PyPA images by maturin-action; the musllinux ones are tested inside the
   # PyPA musllinux image, the manylinux ones on the runner.
+  # The runner image is pinned on purpose: the old-CPU step installs
+  # qemu-user-static, which ubuntu-latest (26.04) no longer packages. Runner
+  # images are upgraded deliberately, in their own PR, never by drift.
   linux-x86_64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
