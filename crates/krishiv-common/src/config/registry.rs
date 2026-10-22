@@ -41,6 +41,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_COALESCE_BYTES,
     &IO_MAX_REQUEST_BYTES,
     &IO_PREFETCH_BYTES,
+    &IO_LATE_MATERIALIZATION,
     &IO_FOOTER_READ_BYTES,
     &IO_METADATA_CACHE_BYTES,
     &IO_MULTIPART_PART_BYTES,
@@ -90,6 +91,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
+    ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
     (
         "krishiv.memory.spillWaitTimeout",
         &MEMORY_SPILL_WAIT_TIMEOUT,
@@ -574,6 +576,20 @@ pub static IO_PREFETCH_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(64 * MIB)),
     doc: "Bytes a file scan may fetch ahead of decoding, per scan driver. Prefetched bytes are \
           reserved from the query's memory pool and dropped first under memory pressure.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.lateMaterialization`.
+pub static IO_LATE_MATERIALIZATION: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.lateMaterialization",
+    value_type: ValueType::Enum(&["auto", "on", "off"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("auto"))),
+    doc: "Whether a Parquet scan evaluates its pushed filter on the filter's columns before \
+          decoding the others for the rows that pass: `auto` decides per row group from the \
+          fraction of rows the filter kept before, `on` and `off` force it. Results are the \
+          same either way.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

@@ -27,16 +27,16 @@ use crate::{
     MetadataNeeds, ScanOptions, ScanRequest, ScanStream, StoreId,
 };
 
-struct Env {
-    rt: tokio::runtime::Runtime,
-    io: IoContext,
+pub(super) struct Env {
+    pub(super) rt: tokio::runtime::Runtime,
+    pub(super) io: IoContext,
     store: Arc<InMemory>,
 }
 
 const STORE: &str = "memory://pq";
 
 impl Env {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::with_config(IoConfig::default())
     }
 
@@ -59,7 +59,7 @@ impl Env {
         }
     }
 
-    fn put(&self, name: &str, bytes: Vec<u8>) -> FileRef {
+    pub(super) fn put(&self, name: &str, bytes: Vec<u8>) -> FileRef {
         self.rt.block_on(async {
             let path = Path::from(name);
             object_store::ObjectStoreExt::put(self.store.as_ref(), &path, bytes.into())
@@ -72,7 +72,7 @@ impl Env {
         })
     }
 
-    fn options(&self, kv: &[(&str, &str)]) -> FormatOptions {
+    pub(super) fn options(&self, kv: &[(&str, &str)]) -> FormatOptions {
         let user = kv
             .iter()
             .map(|(k, v)| {
@@ -89,7 +89,7 @@ impl Env {
             .0
     }
 
-    fn scan(
+    pub(super) fn scan(
         &self,
         file: &FileRef,
         req: &ScanRequest,
@@ -119,7 +119,7 @@ impl Env {
     }
 }
 
-fn write(batches: &[RecordBatch], props: WriterProperties) -> Vec<u8> {
+pub(super) fn write(batches: &[RecordBatch], props: WriterProperties) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = ArrowWriter::try_new(&mut buf, batches[0].schema(), Some(props)).unwrap();
     for b in batches {
@@ -129,7 +129,7 @@ fn write(batches: &[RecordBatch], props: WriterProperties) -> Vec<u8> {
     buf
 }
 
-fn rows(batches: &[RecordBatch]) -> usize {
+pub(super) fn rows(batches: &[RecordBatch]) -> usize {
     batches.iter().map(RecordBatch::num_rows).sum()
 }
 
