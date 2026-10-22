@@ -10,6 +10,20 @@ Resolve stages; `BuiltinFunctions` is the production `FunctionRegistry` over `kr
 `analyzer::testing::context`); later physical plans. Front ends (SQL AST, Spark Connect
 decoder in `krishiv-connect`, native DataFrame APIs) lower into the IR.
 
+## Key files
+Paths are relative to this crate.
+- `src/plan.rs` relation nodes (`LogicalPlan`); `src/expr.rs` expression nodes
+- `src/origin.rs` origins (excluded from the encoding); `src/literal.rs` literal values; `src/function.rs` function references
+- `src/encode.rs` canonical encoding and `StructuralHash`; `src/dag.rs` DAG-aware equality and transforms
+- `src/walk.rs` child mapping and tree rewrites; `src/display.rs` pretty-printer (insta snapshots)
+- `src/analyzer/mod.rs` analyzer entry; `src/analyzer/bind.rs` Bind stage (async, catalog and access policy)
+- `src/analyzer/resolve.rs` Resolve stage (sync); `src/analyzer/builtins.rs` `BuiltinFunctions`; `src/analyzer/coerce.rs` implicit coercion
+- `src/tests/inventory.rs` node inventory checked by the tests
+
+## Extension points
+- New IR node: add it to `src/plan.rs` or `src/expr.rs`, bump `ENCODING_VERSION` if the layout changes, and update the inventory table, the printers and the mutation sites.
+- New analyzer rule: in `src/analyzer/resolve.rs` (or `bind.rs` if it needs metadata), with a golden from the Spark run.
+
 ## Invariants
 - `Arc` children for relations and expressions; rewrites go through `map_children` / `transform_up` / `transform_down`.
 - The canonical encoding (origins excluded, versioned) is the structural equality; `StructuralHash` is its
@@ -38,5 +52,5 @@ decoder in `krishiv-connect`, native DataFrame APIs) lower into the IR.
 ## ADRs (in `../krishiv-internal/adr/`)
 0003, 0005, 0006, 0008, 0011, 0036, 0037, 0038
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-plan --no-tests=pass` · `cargo clippy -p krishiv-plan --all-targets -- -D warnings`

@@ -8,6 +8,20 @@ The session every API surface shares: configuration, the session catalog (tempor
 and the query pipeline (parse → analyze → optimize → physical plan → run). The Rust facade (`krishiv`, L7)
 re-exports it; the Python facade and the Connect and Flight SQL servers (L6) wrap the same type.
 
+## Key files
+Paths are relative to this crate.
+- `src/lib.rs` public entry and re-exports; `public-api.txt` the reviewed public surface
+- `src/session.rs` `Session` and the query pipeline entry
+- `src/conf.rs` configuration snapshot taken per query
+- `src/catalog.rs` session catalog (temporary tables and views)
+- `src/dataframe.rs` DataFrame transformations (IR only) and async actions; `src/column.rs` and `src/functions.rs` user API
+- `src/explain.rs` EXPLAIN; `src/profile.rs` profile for EXPLAIN ANALYZE
+- `tests/session.rs`, `tests/explain_analyze.rs`, `tests/spill.rs`, `tests/tpch_q1.rs` end-to-end tests
+
+## Extension points
+- New DataFrame action: an async method in `src/dataframe.rs` running on the session executor; transformations only build IR.
+- New config key: add it to the typed registry in `krishiv-common` (see that crate's map).
+
 ## Invariants
 - One pipeline: no API surface plans or runs queries any other way.
 - Each query reads a snapshot of the configuration; a concurrent `conf().set` never changes a running query.
@@ -20,5 +34,5 @@ re-exports it; the Python facade and the Connect and Flight SQL servers (L6) wra
 ## ADRs (in `../krishiv-internal/adr/`)
 0003, 0005, 0026, 0027, 0037, 0038
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-session --all-features` · `cargo clippy -p krishiv-session --all-targets --all-features -- -D warnings`
