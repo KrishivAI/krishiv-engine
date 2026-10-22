@@ -47,11 +47,11 @@ class ClickHouseEngine(Engine):
     name = "clickhouse"
 
     def __init__(self, threads: int | None = None, memory_limit: str | int | None = "12g"):
-        self.threads = threads or os.cpu_count() or 1
+        self.threads = os.cpu_count() or 1 if threads is None else threads
         if self.threads < 1:
             raise ValueError(f"invalid thread count {threads!r}: must be at least 1")
         self.memory_limit = memory_limit
-        self.memory_bytes = parse_memory_limit(memory_limit) if memory_limit else None
+        self.memory_bytes = parse_memory_limit(memory_limit) if memory_limit is not None else None
         self._session: Any = None
         self._p = LocalProc("self")
 

@@ -47,6 +47,18 @@ def test_fetch_verifies_hash_and_caches(data_dir):
     assert len(calls) == 1  # second call served from the cache
 
 
+def test_failed_cache_write_leaves_no_temp_file(data_dir, monkeypatch):
+    data, pins = _file(["SELECT 1;"])
+
+    def boom(self, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cq.Path, "replace", boom)
+    with pytest.raises(OSError, match="disk full"):
+        cq.fetch_file("clickhouse", lambda url: data, pins, COMMIT)
+    assert list((data_dir / "clickbench" / "queries" / COMMIT[:12]).iterdir()) == []
+
+
 def test_fetch_rejects_content_that_does_not_match_the_pin(data_dir):
     _, pins = _file(["SELECT 1;"])
     with pytest.raises(ValueError, match="does not match the pinned"):

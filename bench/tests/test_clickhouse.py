@@ -40,6 +40,10 @@ def test_sql_string_escapes_quote_and_backslash():
 def test_rejects_non_positive_threads_and_bad_memory():
     with pytest.raises(ValueError, match="invalid thread count"):
         ClickHouseEngine(threads=-2)
+    with pytest.raises(ValueError, match="invalid thread count"):
+        ClickHouseEngine(threads=0)
+    with pytest.raises(ValueError, match="invalid memory limit"):
+        ClickHouseEngine(threads=1, memory_limit=0)
     with pytest.raises(ValueError, match="invalid memory limit"):
         ClickHouseEngine(threads=1, memory_limit="lots")
 
@@ -268,8 +272,12 @@ def test_no_dialect_reason_without_rows_to_verify():
 
 
 def test_no_dialect_reason_when_no_length_differs():
-    same = [("a", 29, 5, "u")]
-    assert dialect_reason("clickhouse", "clickbench", "q29", same, same) is None
+    rows = [("b", 29, 5, "v"), ("a", 29, 5, "u")]
+    ref = [("a", 29, 5, "u"), ("b", 29, 5, "v")]
+    assert dialect_reason("clickhouse", "clickbench", "q29", rows, ref) is None
+    qm = {n: _q("clickbench", "q29") for n in ("duckdb", "clickhouse")}
+    verdict, _ = reproduce.correctness(qm, {"duckdb": _Rows(ref), "clickhouse": _Rows(rows)})
+    assert verdict["clickhouse"]["status"] == "mismatch"
 
 
 @pytest.mark.parametrize(

@@ -111,8 +111,12 @@ def fetch_file(
     data = _verified(fetch(RAW_URL.format(commit=commit, path=path)), sha, f"ClickBench {path} at {commit[:12]}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f"{dest.name}.{os.getpid()}.tmp")
-    tmp.write_bytes(data)
-    tmp.replace(dest)
+    try:
+        tmp.write_bytes(data)
+        tmp.replace(dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return data.decode()
 
 

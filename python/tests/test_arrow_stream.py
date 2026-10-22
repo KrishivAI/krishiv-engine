@@ -97,8 +97,8 @@ def test_duckdb_reads_buffers_in_place() -> None:
     # proves it read every row of the original buffers.
     con = duckdb.connect()  # kept alive while the relation is read
     relation = con.from_arrow(ArrowStream.from_arrow(source))
-    total = relation.aggregate("sum(id)").fetchone()
-    assert total == (sum(range(100_000)),)
+    total = relation.aggregate("sum(id)").fetchall()
+    assert total == [(sum(range(100_000)),)]
 
 
 def test_stream_is_single_use() -> None:
