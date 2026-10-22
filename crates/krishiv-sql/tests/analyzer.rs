@@ -20,8 +20,8 @@ use krishiv_plan::analyzer::{
     ResolutionConf, TableColumn,
 };
 use krishiv_plan::{
-    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, LogicalPlan, PlanNode,
-    ResolvedExpr, SourceId,
+    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, LogicalPlan,
+    NullOrdering, PlanNode, ResolvedExpr, SortDirection, SourceId,
 };
 use krishiv_sql::{ParserOptions, parse_and_lower, redact_sql};
 use serde_json::Value;
@@ -411,6 +411,96 @@ fn dangling(plan: &Arc<LogicalPlan>, out: &mut Vec<String>) {
     plan.for_each_child(&mut |c| dangling(c, out));
 }
 
+/// Every `Sort` of `plan`, in walk order: its keys' direction and null
+/// ordering, and whether it is global (`ORDER BY`) or not (`SORT BY`).
+fn sorts_of(plan: &Arc<LogicalPlan>, out: &mut Vec<(Vec<(SortDirection, NullOrdering)>, bool)>) {
+    fn exprs(e: &Arc<Expr>, out: &mut Vec<(Vec<(SortDirection, NullOrdering)>, bool)>) {
+        if let ExprNode::Subquery { plan, .. } = &e.node {
+            sorts_of(plan, out);
+        }
+        e.for_each_child(&mut |k| exprs(k, out));
+    }
+    if let PlanNode::Sort { order, global, .. } = &plan.node {
+        out.push((
+            order.iter().map(|o| (o.direction, o.nulls)).collect(),
+            *global,
+        ));
+    }
+    plan.for_each_child(&mut |c| sorts_of(c, out));
+    plan.for_each_expr(&mut |e| exprs(e, out));
+}
+
+/// Sort keys of `plan` that are not bound: unresolved, reading an outer
+/// query, or naming no attribute of the sort's input.
+fn unbound_sorts(plan: &Arc<LogicalPlan>, out: &mut Vec<String>) {
+    if let PlanNode::Sort { order, input, .. } = &plan.node {
+        let have: BTreeSet<AttrId> = input
+            .resolved_output()
+            .unwrap()
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        for o in order {
+            if !o.expr.is_resolved() {
+                out.push(format!("unresolved sort key in\n{plan}"));
+            }
+            let mut stack = vec![&o.expr];
+            while let Some(e) = stack.pop() {
+                match &e.node {
+                    ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                        if !have.contains(&c.id) {
+                            out.push(format!("unbound sort key {c:?} in\n{plan}"));
+                        }
+                    }
+                    ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => {
+                        out.push(format!("outer sort key {c:?} in\n{plan}"));
+                    }
+                    ExprNode::Column(_)
+                    | ExprNode::Star(_)
+                    | ExprNode::Function(_)
+                    | ExprNode::Alias { .. } => {
+                        out.push(format!("unresolved sort key in\n{plan}"));
+                    }
+                    _ => {}
+                }
+                e.for_each_child(&mut |k| stack.push(k));
+            }
+        }
+    }
+    plan.for_each_child(&mut |c| unbound_sorts(c, out));
+    plan.for_each_expr(&mut |e| {
+        if let ExprNode::Subquery { plan, .. } = &e.node {
+            unbound_sorts(plan, out);
+        }
+    });
+}
+
+/// The sort keys of the single `Sort` of a resolved plan: the column each
+/// key reads when it is one, else its display.
+fn top_sort_keys(plan: &Arc<LogicalPlan>) -> Vec<(String, SortDirection, NullOrdering)> {
+    let mut stack = vec![Arc::clone(plan)];
+    let mut found = None;
+    while let Some(p) = stack.pop() {
+        if let PlanNode::Sort { order, .. } = &p.node {
+            found = Some(order.clone());
+            break;
+        }
+        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    let order = found.unwrap();
+    order
+        .iter()
+        .map(|o| (key_name(&o.expr), o.direction, o.nulls))
+        .collect()
+}
+
+fn key_name(e: &Arc<Expr>) -> String {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => c.name.clone(),
+        _ => format!("{e}"),
+    }
+}
+
 /// Constant folding of the arguments that need a constant (`round`'s and
 /// `ceil`'s scale, `date_part`'s field, `LIMIT`), ORDER BY and HAVING over
 /// grouping expressions: Spark's outcome for each statement
@@ -432,11 +522,88 @@ fn folding_and_grouped_ordering_match_spark() {
                 let mut bad = Vec::new();
                 dangling(a.plan.root(), &mut bad);
                 failures.extend(bad.into_iter().map(|b| format!("{sql}: dangling {b}")));
+                // Grouped ordering keeps the lowered sorts: the same sorts,
+                // keys, directions and null ordering, all bound.
+                let lowered = parse_and_lower(sql, &ParserOptions::default(), SourceId(0))
+                    .expect("a passing case lowers");
+                let mut low = Vec::new();
+                sorts_of(lowered.root(), &mut low);
+                let mut high = Vec::new();
+                sorts_of(a.plan.root(), &mut high);
+                if low.len() != high.len() {
+                    failures.push(format!(
+                        "{sql}: {} lowered sorts, {} resolved",
+                        low.len(),
+                        high.len()
+                    ));
+                } else {
+                    for (i, (l, h)) in low.iter().zip(&high).enumerate() {
+                        if l.0.len() != h.0.len() {
+                            failures.push(format!(
+                                "{sql}: sort {i} has {} keys lowered, {} resolved",
+                                l.0.len(),
+                                h.0.len()
+                            ));
+                        }
+                        if l.0 != h.0 {
+                            failures.push(format!(
+                                "{sql}: sort {i} directions/nulls {l:?} lowered, {h:?} resolved"
+                            ));
+                        }
+                        if l.1 != h.1 {
+                            failures.push(format!(
+                                "{sql}: sort {i} global {} lowered, {} resolved",
+                                l.1, h.1
+                            ));
+                        }
+                    }
+                }
+                let mut unbound = Vec::new();
+                unbound_sorts(a.plan.root(), &mut unbound);
+                failures.extend(unbound.into_iter().map(|b| format!("{sql}: {b}")));
             }
             Err(e) => {
                 raised.insert(e.error.error_class().name());
             }
         }
+    }
+    // Representative grouped orderings resolve to their grouping or
+    // aggregate attributes, with direction and nulls kept.
+    for (sql, want) in [
+        (
+            "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1",
+            vec![(
+                "m".to_owned(),
+                SortDirection::Ascending,
+                NullOrdering::NullsFirst,
+            )],
+        ),
+        (
+            "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1 DESC, c",
+            vec![
+                (
+                    "m".to_owned(),
+                    SortDirection::Descending,
+                    NullOrdering::NullsLast,
+                ),
+                (
+                    "c".to_owned(),
+                    SortDirection::Ascending,
+                    NullOrdering::NullsFirst,
+                ),
+            ],
+        ),
+        (
+            "SELECT x m, count(*) c FROM g GROUP BY x HAVING count(*) > 3 ORDER BY sum(l)",
+            vec![(
+                "sum(l)".to_owned(),
+                SortDirection::Ascending,
+                NullOrdering::NullsFirst,
+            )],
+        ),
+    ] {
+        let got = analyze(&g, sql, ResolutionConf::default()).expect("representative resolves");
+        assert_eq!(top_sort_keys(got.plan.root()), want, "{sql}");
     }
     assert!(
         failures.is_empty(),

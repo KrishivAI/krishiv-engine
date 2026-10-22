@@ -30,6 +30,7 @@ use arrow_array::{
 };
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::{ErrorClass, KrishivError};
+use krishiv_common::stack::{STEP, on_big_stack};
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, bind_scalar, is_argument_pure};
 use krishiv_functions::signature::FunctionKind;
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
@@ -86,7 +87,10 @@ type Key = (usize, bool, bool, SparkVersion);
 /// its arguments again. Each entry keeps its node alive, so an address is
 /// never reused for another node while the memo lives.
 #[derive(Debug, Default)]
-pub(super) struct Memo(HashMap<Key, (Arc<Expr>, Folded)>);
+pub(super) struct Memo {
+    map: HashMap<Key, (Arc<Expr>, Folded)>,
+    depth: usize,
+}
 
 /// Whether `e` is a plain literal (what `first(x, true)` requires of its
 /// flag, where Spark matches `Literal` and does not fold).
@@ -161,8 +165,20 @@ fn unsupported() -> KrishivError {
     .into()
 }
 
-/// `e` as a one-row array: `None` when it is not foldable here.
+/// `e` as a one-row array: `None` when it is not foldable here. Every
+/// `STEP` levels run on a fresh stack (see `Resolver::rel`).
 fn fold(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Folded {
+    memo.depth += 1;
+    let r = if memo.depth.is_multiple_of(STEP) {
+        on_big_stack(|| fold_on_stack(e, conf, memo)).unwrap_or(None)
+    } else {
+        fold_on_stack(e, conf, memo)
+    };
+    memo.depth -= 1;
+    r
+}
+
+fn fold_on_stack(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Folded {
     if let ExprNode::Literal(l) = &e.node {
         return literal(l).map(Ok);
     }
@@ -172,7 +188,7 @@ fn fold(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Folded {
         conf.decimal_loss,
         conf.kernel.spark_version(),
     );
-    if let Some((_, hit)) = memo.0.get(&key) {
+    if let Some((_, hit)) = memo.map.get(&key) {
         return hit.clone();
     }
     let folded = match &e.node {
@@ -180,7 +196,7 @@ fn fold(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Folded {
         ExprNode::Resolved(ResolvedExpr::Function(f)) => call(f, conf, memo),
         _ => None,
     };
-    memo.0.insert(key, (Arc::clone(e), folded.clone()));
+    memo.map.insert(key, (Arc::clone(e), folded.clone()));
     folded
 }
 
@@ -705,13 +721,13 @@ mod tests {
         // 2 * 2^200 wraps to 0 in legacy mode: the value is the kernels'.
         let first = super::constant(&e, conf, &mut memo);
         assert!(first.is_some());
-        assert_eq!(memo.0.len(), depth + 1, "one entry per distinct node");
+        assert_eq!(memo.map.len(), depth + 1, "one entry per distinct node");
         assert_eq!(super::constant(&e, conf, &mut memo), first);
-        assert_eq!(memo.0.len(), depth + 1);
+        assert_eq!(memo.map.len(), depth + 1);
         // Another setting folds under its own entries.
         let ansi = Conf::new(true, true, SparkProfile::V4_2);
         let _ = super::constant(&e, ansi, &mut memo);
-        assert_eq!(memo.0.len(), 2 * (depth + 1));
+        assert_eq!(memo.map.len(), 2 * (depth + 1));
     }
 
     /// The kernels raise the session's Spark line's error: `%` by zero is
@@ -1018,5 +1034,30 @@ mod tests {
             ),
             Some(Constant::Boolean(true))
         );
+    }
+
+    /// A foldable expression near [`crate::MAX_DEPTH`] folds on a 2 MiB
+    /// thread: every `STEP` levels hop to a fresh stack, so without the hop
+    /// this overflows the thread's stack.
+    #[test]
+    fn deep_foldable_expression_survives_small_stack() {
+        let mut e = int(0);
+        for _ in 0..crate::MAX_DEPTH - 1 {
+            e = op(Builtin::Add, vec![e, int(1)], DataType::Integer);
+        }
+        let e = Arc::new(e);
+        std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || {
+                let conf = Conf::new(false, true, SparkProfile::V4_2);
+                let mut memo = Memo::default();
+                assert_eq!(
+                    super::constant(&e, conf, &mut memo),
+                    Some(Constant::Integral(crate::MAX_DEPTH as i64 - 1))
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }
