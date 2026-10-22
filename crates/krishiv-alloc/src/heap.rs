@@ -77,6 +77,48 @@ pub fn peak() -> usize {
 }
 
 /// Starts a new high-water mark at the current live bytes.
+///
+/// A compare-exchange loop rather than a plain store: if a concurrent `grew`
+/// raises the peak between the read and the write, the exchange fails and
+/// the retry re-reads live bytes (which already include that growth), so a
+/// newer peak is never overwritten with a stale value.
 pub fn reset_peak() {
-    PEAK.store(live(), Ordering::Relaxed);
+    reset_peak_racing(|| {});
+}
+
+/// [`reset_peak`] with `raced` run after the live bytes are read and before
+/// the exchange, the window in which a concurrent `grew` can interleave.
+fn reset_peak_racing(mut raced: impl FnMut()) {
+    let mut seen = PEAK.load(Ordering::Relaxed);
+    loop {
+        let target = live();
+        raced();
+        match PEAK.compare_exchange_weak(seen, target, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(now) => seen = now,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_keeps_a_peak_recorded_during_the_reset() {
+        // This unit-test binary does not install `Counting`, so the counters
+        // are set directly; no other test in it touches them.
+        LIVE.store(10, Ordering::Relaxed);
+        PEAK.store(100, Ordering::Relaxed);
+        let mut raced = false;
+        reset_peak_racing(|| {
+            if !raced {
+                raced = true;
+                // A concurrent allocation of 200 bytes that sets a new peak.
+                grew(200);
+            }
+        });
+        assert_eq!(live(), 210);
+        assert_eq!(peak(), 210);
+    }
 }
