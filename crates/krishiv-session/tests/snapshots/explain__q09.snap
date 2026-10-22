@@ -63,22 +63,29 @@ Sort [nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST], true
 
 == Physical Plan ==
 Sort [nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST]
-+- Project [nation#50, o_year#51, sum(amount#52)#4611686018427387911 AS sum_profit#53]
-   +- HashAggregate keys=[nation#50, o_year#51], functions=[sum(amount#52)]
-      +- Project [n_name#47 AS nation#50, extract('year', o_orderdate#41) AS o_year#51, ((l_extendedprice#21 * (1 - l_discount#22)) - (ps_supplycost#35 * l_quantity#20)) AS amount#52]
-         +- HashJoin Inner, [l_suppkey#18, l_partkey#17] = [ps_suppkey#33, ps_partkey#32], RuntimeFilter #5: l_suppkey#18 -> spark_catalog.default.lineitem.l_suppkey, RuntimeFilter #6: l_partkey#17 -> spark_catalog.default.lineitem.l_partkey
-            :- Project [l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22, n_name#47, o_orderdate#41]
-            :  +- HashJoin Inner, [l_orderkey#16] = [o_orderkey#37], RuntimeFilter #4: l_orderkey#16 -> spark_catalog.default.lineitem.l_orderkey
-            :     :- Project [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22, n_name#47]
-            :     :  +- HashJoin Inner, [s_nationkey#12] = [n_nationkey#46], RuntimeFilter #3: s_nationkey#12 -> spark_catalog.default.supplier.s_nationkey
-            :     :     :- Project [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22, s_nationkey#12]
-            :     :     :  +- HashJoin Inner, [l_suppkey#18] = [s_suppkey#9], RuntimeFilter #2: l_suppkey#18 -> spark_catalog.default.lineitem.l_suppkey
-            :     :     :     :- Project [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22]
-            :     :     :     :  +- HashJoin Inner, [p_partkey#0] = [l_partkey#17], RuntimeFilter #1: p_partkey#0 -> spark_catalog.default.part.p_partkey
-            :     :     :     :     :- Project [p_partkey#0]
-            :     :     :     :     :  +- Scan spark_catalog.default.part [p_partkey#0, p_name#1], PushedFilters: [(p_name#1 like '%green%')]
-            :     :     :     :     +- Scan spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22]
-            :     :     :     +- Scan spark_catalog.default.supplier [s_suppkey#9, s_nationkey#12]
-            :     :     +- Scan spark_catalog.default.nation [n_nationkey#46, n_name#47]
-            :     +- Scan spark_catalog.default.orders [o_orderkey#37, o_orderdate#41]
-            +- Scan spark_catalog.default.partsupp [ps_partkey#32, ps_suppkey#33, ps_supplycost#35]
++- Exchange rangepartitioning(nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST)
+   +- Project [nation#50, o_year#51, sum(amount#52)#4611686018427387911 AS sum_profit#53]
+      +- HashAggregate keys=[nation#50, o_year#51], functions=[sum(amount#52)]
+         +- Exchange hashpartitioning(nation#50, o_year#51)
+            +- Project [n_name#47 AS nation#50, extract('year', o_orderdate#41) AS o_year#51, ((l_extendedprice#21 * (1 - l_discount#22)) - (ps_supplycost#35 * l_quantity#20)) AS amount#52]
+               +- HashJoin Inner, [l_suppkey#18, l_partkey#17] = [ps_suppkey#33, ps_partkey#32], RuntimeFilter #5: l_suppkey#18 -> spark_catalog.default.lineitem.l_suppkey, RuntimeFilter #6: l_partkey#17 -> spark_catalog.default.lineitem.l_partkey
+                  :- Project [l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22, n_name#47, o_orderdate#41]
+                  :  +- HashJoin Inner, [l_orderkey#16] = [o_orderkey#37], RuntimeFilter #4: l_orderkey#16 -> spark_catalog.default.lineitem.l_orderkey
+                  :     :- Project [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22, n_name#47]
+                  :     :  +- HashJoin Inner, [s_nationkey#12] = [n_nationkey#46], RuntimeFilter #3: s_nationkey#12 -> spark_catalog.default.supplier.s_nationkey
+                  :     :     :- Project [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22, s_nationkey#12]
+                  :     :     :  +- HashJoin Inner, [l_suppkey#18] = [s_suppkey#9], RuntimeFilter #2: l_suppkey#18 -> spark_catalog.default.lineitem.l_suppkey
+                  :     :     :     :- Project [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22]
+                  :     :     :     :  +- HashJoin Inner, [p_partkey#0] = [l_partkey#17], RuntimeFilter #1: p_partkey#0 -> spark_catalog.default.part.p_partkey
+                  :     :     :     :     :- Project [p_partkey#0]
+                  :     :     :     :     :  +- Scan spark_catalog.default.part [p_partkey#0, p_name#1], PushedFilters: [(p_name#1 like '%green%')]
+                  :     :     :     :     +- BroadcastExchange
+                  :     :     :     :        +- Scan spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22]
+                  :     :     :     +- BroadcastExchange
+                  :     :     :        +- Scan spark_catalog.default.supplier [s_suppkey#9, s_nationkey#12]
+                  :     :     +- BroadcastExchange
+                  :     :        +- Scan spark_catalog.default.nation [n_nationkey#46, n_name#47]
+                  :     +- BroadcastExchange
+                  :        +- Scan spark_catalog.default.orders [o_orderkey#37, o_orderdate#41]
+                  +- BroadcastExchange
+                     +- Scan spark_catalog.default.partsupp [ps_partkey#32, ps_suppkey#33, ps_supplycost#35]
