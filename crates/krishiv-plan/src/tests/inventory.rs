@@ -12,7 +12,7 @@ use krishiv_types::DataType;
 use super::dsl::{c, int};
 use super::tpch::QUERIES;
 use crate::{
-    Builtin, ColumnRef, Expr, ExprNode, JoinCondition, JoinKind, LogicalPlan, PlanId, PlanNode,
+    Builtin, ColumnRef, Expr, ExprNode, Grouping, JoinCondition, JoinKind, LogicalPlan, PlanId, PlanNode,
     ReadSource, ResolvedExpr, SortOrder, SqlArgs, Star,
 };
 
@@ -41,6 +41,7 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Distinct { .. } => "PlanNode::Distinct",
         PlanNode::SetOp { .. } => "PlanNode::SetOp",
         PlanNode::ReplicateRows { .. } => "PlanNode::ReplicateRows",
+        PlanNode::Expand { .. } => "PlanNode::Expand",
     });
     plan.for_each_expr(&mut |e| expr_kinds(e, out));
     plan.for_each_child(&mut |c| kinds(c, out));
@@ -153,6 +154,13 @@ fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
         columns: vec![("b".to_owned(), Arc::new(c("a")))],
     });
     let sum = Expr::builtin(Builtin::Add, vec![c("a"), int(1)]);
+    let grouped = |grouping| {
+        LogicalPlan::new(PlanNode::Aggregate {
+            input: Arc::new(df(1)),
+            grouping,
+            aggregates: vec![Arc::new(c("a"))],
+        })
+    };
     vec![
         ("read.table", df(1)),
         ("read.parquet", parquet),
@@ -162,6 +170,8 @@ fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
         ("filter", df(1).filter(c("a"))),
         ("where", df(1).filter(c("a"))),
         ("groupBy.agg", df(1).aggregate(vec![c("a")], vec![c("a")])),
+        ("rollup.agg", grouped(Grouping::Rollup(vec![Arc::new(c("a"))]))),
+        ("cube.agg", grouped(Grouping::Cube(vec![Arc::new(c("a"))]))),
         (
             "join",
             df(1).join(df(2), JoinKind::Inner, JoinCondition::None),

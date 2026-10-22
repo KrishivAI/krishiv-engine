@@ -51,7 +51,7 @@ pub(crate) use instantiate::node_ids;
 pub use instantiate::{SpillScopes, WorkerContext, instantiate};
 pub(crate) use instantiate::{
     Unbuilt, Values, aggregate_node, aggregate_spec, filter_op, hash_join, nested_loop_join,
-    project_op, replicate_op, scan_filter, sort_op, top_n_op,
+    expand_op, project_op, replicate_op, scan_filter, sort_op, top_n_op,
 };
 
 use crate::aggregate::{AggregateExpr, AggregateOutput};
@@ -142,6 +142,20 @@ pub enum PhysNode {
         /// The replication count.
         count: Arc<Expr>,
         /// The subqueries `count` reads.
+        subqueries: Vec<SubqueryPlan>,
+    },
+    /// Each row of `input` once per projection (`ROLLUP`, `CUBE`,
+    /// `GROUPING SETS`).
+    Expand {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The attribute of each input column.
+        layout: Vec<AttrId>,
+        /// The projections: the same output columns, each computed one way.
+        projections: Vec<Vec<ProjectItemPlan>>,
+        /// Whether each output column is nullable.
+        nullable: Vec<bool>,
+        /// The subqueries the projections read.
         subqueries: Vec<SubqueryPlan>,
     },
     /// `input` sorted by `keys` (columns of `input`).
@@ -252,6 +266,14 @@ pub enum ProjectItemPlan {
         /// The value.
         expr: Arc<Expr>,
     },
+    /// A column of nulls in the Arrow type of an input column (the cell an
+    /// expansion nulls).
+    NullOf {
+        /// The input column whose type it takes.
+        index: usize,
+        /// The output name.
+        name: String,
+    },
 }
 
 /// Scalar or `EXISTS`.
@@ -346,6 +368,7 @@ plan_data!(enum PhysNode {
     Project { input, layout, items, nullable, subqueries },
     Limit { input, limit },
     ReplicateRows { input, layout, count, subqueries },
+    Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },
     TopN { input, keys, limit },
     Aggregate { input, aggregate },
@@ -358,7 +381,7 @@ plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_
 plan_data!(struct ScanFilter { layout, predicate, exact });
 plan_data!(struct ScanRuntimeFilter { id, column, key_type });
 plan_data!(struct JoinFilterPlan { id, key, options });
-plan_data!(enum ProjectItemPlan { Column { index, name }, Expr { name, expr } });
+plan_data!(enum ProjectItemPlan { Column { index, name }, Expr { name, expr }, NullOf { index, name } });
 plan_data!(
     enum SubqueryValueKind {
         Scalar,
@@ -386,6 +409,9 @@ impl PhysNode {
             | Self::Project {
                 input, subqueries, ..
             }
+            | Self::Expand {
+                input, subqueries, ..
+            }
             | Self::ReplicateRows {
                 input, subqueries, ..
             } => std::iter::once(input.as_ref())
@@ -410,6 +436,9 @@ impl PhysNode {
                 input, subqueries, ..
             }
             | Self::Project {
+                input, subqueries, ..
+            }
+            | Self::Expand {
                 input, subqueries, ..
             }
             | Self::ReplicateRows {

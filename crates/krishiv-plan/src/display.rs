@@ -288,6 +288,26 @@ impl Display for NodeLine<'_> {
             PlanNode::ReplicateRows { count, .. } => {
                 write!(f, "Generate replicaterows({})", Text(count))
             }
+            // Spark's `Expand [[a, null, 1], [a, b, 0]], [a, b, spark_grouping_id]`.
+            PlanNode::Expand {
+                projections,
+                output,
+                ..
+            } => {
+                f.write_str("Expand [")?;
+                for (i, p) in projections.iter().enumerate() {
+                    write!(f, "{}[", sep(i))?;
+                    for (j, e) in p.iter().enumerate() {
+                        write!(f, "{}{}", sep(j), Text(e))?;
+                    }
+                    f.write_str("]")?;
+                }
+                f.write_str("], [")?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
+            }
             PlanNode::WithCte { ctes, .. } => {
                 f.write_str("WithCte [")?;
                 for (i, c) in ctes.iter().enumerate() {

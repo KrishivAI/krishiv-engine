@@ -113,8 +113,8 @@ pub use operator::{
     FlushOutput, GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source,
 };
 pub use operators::{
-    DEFAULT_MAX_MERGE_FAN_IN, FileScan, FileScanMetrics, FileScanSource, FileSelections, FileWrite,
-    FileWriteSink, Filter, FilterPushdown, FnPredicate, Limit, METADATA_COLUMN, MemoryScan,
+    DEFAULT_MAX_MERGE_FAN_IN, Expand, NullOf, FileScan, FileScanMetrics, FileScanSource, FileSelections,
+    FileWrite, FileWriteSink, Filter, FilterPushdown, FnPredicate, Limit, METADATA_COLUMN, MemoryScan,
     Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RowStageSettings, RuntimeFilters,
     ScalarExpr, ScanPushdown, ScanPushdowns, Sort, SortKey, SortMetrics, TopN, UnionAlign,
 };

@@ -387,7 +387,7 @@ impl Resolver<'_> {
             exprs.push(alias(sum, name));
         }
         let items = self.select_items(&u, &exprs, env, "Aggregate")?;
-        let agg = self.build_aggregate(Origin::UNKNOWN, &u, group, &items, false)?;
+        let agg = self.build_aggregate(Origin::UNKNOWN, &u, group, &items, false, None)?;
         let col = |i: usize| col_expr(&agg.out[i].col, Origin::UNKNOWN);
         let (lc, rc) = (col(n), col(n + 1));
         let (predicate, count) = match op {

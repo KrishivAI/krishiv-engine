@@ -155,6 +155,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
                 | PlanNode::JoinHint { .. }
+                | PlanNode::Expand { .. }
                 | PlanNode::ReplicateRows { .. } => true,
             },
             Node::Expr(e) => match &e.node {
@@ -256,6 +257,12 @@ impl Teardown {
             | PlanNode::ReplicateRows { input, count: e } => {
                 self.plans.push(input);
                 self.exprs.push(e);
+            }
+            PlanNode::Expand {
+                input, projections, ..
+            } => {
+                self.plans.push(input);
+                self.exprs.extend(projections.into_iter().flatten());
             }
             PlanNode::Aggregate {
                 input,

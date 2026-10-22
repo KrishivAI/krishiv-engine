@@ -39,6 +39,9 @@ pub(super) struct AggInfo {
     /// above the aggregate: every select item, over the aggregate's output
     /// (`None` when no item does).
     pub(super) top: Option<Arc<[Bound]>>,
+    /// The grouping sets, for an aggregate over `ROLLUP`, `CUBE` or
+    /// `GROUPING SETS`: its input is then their expansion.
+    pub(super) analytics: Option<Arc<super::analytics::Analytics>>,
 }
 
 /// How a relation gets back columns it dropped: Spark adds the attributes
@@ -193,7 +196,7 @@ fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
     Ok(next)
 }
 
-fn hull(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> Option<(u64, u64)> {
+pub(super) fn hull(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> Option<(u64, u64)> {
     match (a, b) {
         (Some(x), Some(y)) => Some((x.0.min(y.0), x.1.max(y.1))),
         (x, None) | (None, x) => x,
@@ -446,6 +449,7 @@ impl Resolver<'_> {
             aliases: &[],
             extra: None,
             agg_scope: None,
+            grouping: false,
             lenient: false,
             outer: true,
             env,
@@ -624,6 +628,11 @@ impl Resolver<'_> {
                 };
                 Ok(self.make(o, node, c.out.to_vec(), &[&c]))
             }
+            PlanNode::Expand {
+                input,
+                projections,
+                output,
+            } => self.expand_node(o, input, projections, output, env),
             PlanNode::Distinct { input } => self.distinct(p, input, env),
             PlanNode::Hint {
                 input,

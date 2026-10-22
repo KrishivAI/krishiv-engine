@@ -62,6 +62,7 @@
 //! provider's text. Catalog functions are not policy-checked yet (no
 //! catalog functions exist before P3).
 
+mod analytics;
 mod bind;
 mod builtins;
 mod catalog;

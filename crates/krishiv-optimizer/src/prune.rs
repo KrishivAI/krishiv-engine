@@ -76,6 +76,20 @@ impl Graph {
                 grouping_refs(p, &mut need);
                 child(input, Some(need));
             }
+            PlanNode::Expand {
+                input,
+                projections,
+                output,
+            } => {
+                let mut need = Attrs::new();
+                for j in expand_keep(output, req) {
+                    projections
+                        .iter()
+                        .filter_map(|row| row.get(j))
+                        .for_each(|e| references_into(e, &mut need));
+                }
+                child(input, Some(need));
+            }
             PlanNode::SubqueryAlias { input, columns, .. } => {
                 // A renaming alias keeps its input whole.
                 child(input, columns.is_empty().then(|| req.clone()));
@@ -197,6 +211,26 @@ impl Rewrite<'_> {
                     replace(&rebuilt, PlanNode::Project { input, exprs: kept })
                 }
             }
+            PlanNode::Expand {
+                input,
+                projections,
+                output,
+            } => {
+                let kept = expand_keep(output, req);
+                if kept.len() == output.len() {
+                    rebuilt
+                } else {
+                    let pick = |row: &Vec<Arc<Expr>>| -> Vec<Arc<Expr>> {
+                        kept.iter().filter_map(|&j| row.get(j).cloned()).collect()
+                    };
+                    let node = PlanNode::Expand {
+                        input: Arc::clone(input),
+                        projections: projections.iter().map(pick).collect(),
+                        output: kept.iter().filter_map(|&j| output.get(j).cloned()).collect(),
+                    };
+                    replace(&rebuilt, node)
+                }
+            }
             PlanNode::Aggregate {
                 input,
                 grouping,
@@ -300,6 +334,18 @@ fn keep(exprs: &[Arc<Expr>], req: &Attrs) -> Vec<Arc<Expr>> {
         .collect();
     if kept.is_empty() {
         kept.extend(exprs.first().cloned());
+    }
+    kept
+}
+
+/// The output columns of an expansion that are read (by position), keeping
+/// at least one so the row count survives.
+fn expand_keep(output: &[BoundColumn], req: &Attrs) -> Vec<usize> {
+    let mut kept: Vec<usize> = (0..output.len())
+        .filter(|&j| req.contains(&output[j].id))
+        .collect();
+    if kept.is_empty() && !output.is_empty() {
+        kept.push(0);
     }
     kept
 }

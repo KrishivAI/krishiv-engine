@@ -27,7 +27,8 @@ use krishiv_plan::{
 use krishiv_types::DecimalType;
 
 use crate::ast::{
-    Alias, BinaryOp, Expr, ExprKind, FromClause, GroupItemKind, JoinConstraint, JoinKind, Literal,
+    Alias, BinaryOp, Expr, ExprKind, FromClause, GroupBy, GroupItem, GroupItemKind, GroupWith,
+    GroupingSet, JoinConstraint, JoinKind, Literal,
     NullTreatment, NumKind, Query, Relation, RelationExt, Select, SetExpr, SetExprKind,
     SetOperator, SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth, UnaryOp,
 };
@@ -35,6 +36,9 @@ use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_query};
 
 type R<T> = Result<T, ParseError>;
+
+/// The most grouping sets one `GROUP BY` expands to.
+const MAX_GROUPING_SETS: usize = 1 << 16;
 
 /// Parses and lowers one query; spans index `source`.
 ///
@@ -389,22 +393,14 @@ impl Lowerer {
                 s.span,
             ));
         }
-        let mut keys = Vec::new();
-        if let Some(g) = &s.group_by {
-            if g.with.is_some() {
-                return Err(unsupported("ROLLUP, CUBE and GROUPING SETS", g.span));
-            }
-            for item in &g.items {
-                match &item.kind {
-                    GroupItemKind::Expr(e) => keys.push(arc(self.expr(e)?)),
-                    _ => return Err(unsupported("ROLLUP, CUBE and GROUPING SETS", item.span)),
-                }
-            }
-        }
+        let grouping = match &s.group_by {
+            Some(g) => self.grouping(g)?,
+            None => Grouping::GroupBy(Vec::new()),
+        };
         plan = self.node(
             PlanNode::Aggregate {
                 input: arc(plan),
-                grouping: Grouping::GroupBy(keys),
+                grouping,
                 aggregates: items,
             },
             s.span,
@@ -435,6 +431,129 @@ impl Lowerer {
             );
         }
         Ok(plan)
+    }
+
+    /// `GROUP BY`, as Spark's `AstBuilder` shapes it: plain keys, `WITH
+    /// ROLLUP` / `WITH CUBE` over them, `GROUPING SETS (..)` after them (the
+    /// keys only fix the grouping expressions), or items that are
+    /// `ROLLUP`, `CUBE` and `GROUPING SETS` among keys, whose grouping sets
+    /// are the cross product of the items' (a key is a set of itself).
+    #[inline(never)]
+    fn grouping(&mut self, g: &GroupBy) -> R<Grouping> {
+        let mut plain = Vec::with_capacity(g.items.len());
+        for item in &g.items {
+            if let GroupItemKind::Expr(e) = &item.kind {
+                plain.push(arc(self.expr(e)?));
+            }
+        }
+        let all_plain = plain.len() == g.items.len();
+        match (&g.with, all_plain) {
+            (None, true) => return Ok(Grouping::GroupBy(plain)),
+            (Some(GroupWith::Rollup), true) => return Ok(Grouping::Rollup(plain)),
+            (Some(GroupWith::Cube), true) => return Ok(Grouping::Cube(plain)),
+            (Some(GroupWith::GroupingSets(sets)), true) => {
+                let sets = sets
+                    .iter()
+                    .map(|s| self.set(s))
+                    .collect::<R<Vec<_>>>()?;
+                return Ok(Grouping::GroupingSets { exprs: plain, sets });
+            }
+            (Some(_), false) => {
+                return Err(unsupported(
+                    "ROLLUP, CUBE and GROUPING SETS items with WITH ROLLUP, WITH CUBE or GROUPING SETS",
+                    g.span,
+                ));
+            }
+            (None, false) => {}
+        }
+        let mut exprs = Vec::new();
+        let mut product: Vec<Vec<Arc<IrExpr>>> = vec![Vec::new()];
+        for item in &g.items {
+            let sets = self.item_sets(item, &mut exprs)?;
+            if product.len().saturating_mul(sets.len()) > MAX_GROUPING_SETS {
+                return Err(unsupported(
+                    &format!("more than {MAX_GROUPING_SETS} grouping sets"),
+                    g.span,
+                ));
+            }
+            product = product
+                .iter()
+                .flat_map(|head| {
+                    sets.iter().map(move |tail| {
+                        head.iter().chain(tail).cloned().collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+        }
+        Ok(Grouping::GroupingSets {
+            exprs,
+            sets: product,
+        })
+    }
+
+    /// The grouping sets one `GROUP BY` item stands for; the expressions it
+    /// names are appended to `written` in order.
+    fn item_sets(
+        &mut self,
+        item: &GroupItem,
+        written: &mut Vec<Arc<IrExpr>>,
+    ) -> R<Vec<Vec<Arc<IrExpr>>>> {
+        Ok(match &item.kind {
+            GroupItemKind::Expr(e) => {
+                let e = arc(self.expr(e)?);
+                written.push(Arc::clone(&e));
+                vec![vec![e]]
+            }
+            GroupItemKind::Set(s) => {
+                let set = self.set(s)?;
+                written.extend(set.iter().cloned());
+                vec![set]
+            }
+            GroupItemKind::GroupingSets(items) => {
+                let mut sets = Vec::new();
+                for item in items {
+                    sets.extend(self.item_sets(item, written)?);
+                }
+                sets
+            }
+            GroupItemKind::Rollup(elements) | GroupItemKind::Cube(elements) => {
+                let rollup = matches!(item.kind, GroupItemKind::Rollup(_));
+                let mut parts = Vec::with_capacity(elements.len());
+                for element in elements {
+                    let part = self.set(element)?;
+                    written.extend(part.iter().cloned());
+                    parts.push(part);
+                }
+                // `ROLLUP (a, b)`: (a, b), (a), (); `CUBE (a, b)`: every
+                // subset of the elements.
+                let n = parts.len();
+                if !rollup && n >= usize::BITS as usize - 1
+                    || !rollup && (1_usize << n) > MAX_GROUPING_SETS
+                {
+                    return Err(unsupported(
+                        &format!("more than {MAX_GROUPING_SETS} grouping sets"),
+                        item.span,
+                    ));
+                }
+                let chosen: Vec<Vec<usize>> = if rollup {
+                    (0..=n).rev().map(|k| (0..k).collect()).collect()
+                } else {
+                    (0..1_usize << n)
+                        .rev()
+                        .map(|m| (0..n).filter(|i| m >> (n - 1 - i) & 1 == 1).collect())
+                        .collect()
+                };
+                chosen
+                    .into_iter()
+                    .map(|c| c.into_iter().flat_map(|i| parts[i].iter().cloned()).collect())
+                    .collect()
+            }
+        })
+    }
+
+    /// The expressions of one grouping set.
+    fn set(&mut self, s: &GroupingSet) -> R<Vec<Arc<IrExpr>>> {
+        s.exprs.iter().map(|e| Ok(arc(self.expr(e)?))).collect()
     }
 
     fn from(&mut self, f: &FromClause) -> R<LogicalPlan> {

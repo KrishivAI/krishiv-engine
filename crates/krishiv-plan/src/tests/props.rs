@@ -288,7 +288,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 21 };
+        let kinds = if depth == 0 { 4 } else { 22 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -423,6 +423,11 @@ impl Gen<'_> {
             20 => PlanNode::ReplicateRows {
                 input: self.input(d),
                 count: Arc::new(self.expr(1)),
+            },
+            21 => PlanNode::Expand {
+                input: self.input(d),
+                projections: self.many(1, 2, |g| g.exprs()),
+                output: self.many(0, 2, Gen::bound),
             },
             _ => PlanNode::WithCte {
                 input: self.input(d),
@@ -813,6 +818,22 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
         }
         | PlanNode::Limit { input, limit: e }
         | PlanNode::ReplicateRows { input, count: e } => m_expr(e, w) || m_plan(input, w),
+        PlanNode::Expand {
+            input,
+            projections,
+            output,
+        } => {
+            site!(w, projections.push(Vec::new()));
+            site!(w, output.push(output.first().cloned().unwrap_or(BoundColumn {
+                id: AttrId(0),
+                name: "x".to_owned(),
+                data_type: DataType::Integer,
+                nullable: false,
+            })));
+            projections.iter_mut().any(|p| m_exprs(p, w))
+                || output.iter_mut().any(|c| m_bound(c, w))
+                || m_plan(input, w)
+        }
         PlanNode::SetOp {
             left,
             right,

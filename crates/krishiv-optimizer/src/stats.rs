@@ -239,6 +239,14 @@ impl<'a> Estimator<'a> {
             // Each distinct row of an `INTERSECT ALL` / `EXCEPT ALL` count:
             // no count is known, the input's rows bound it from below.
             | PlanNode::ReplicateRows { input, .. } => Est::clone(&self.plan(input)),
+            // Every input row once per projection.
+            PlanNode::Expand {
+                input, projections, ..
+            } => {
+                let est = Est::clone(&self.plan(input));
+                let rows = est.rows * to_f64(u64::try_from(projections.len()).unwrap_or(u64::MAX));
+                est.with_rows(rows)
+            }
             PlanNode::Union { inputs, .. } => {
                 let rows = inputs.iter().map(|i| self.plan(i).rows).sum();
                 Est::unknown(rows, ids())

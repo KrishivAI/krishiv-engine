@@ -791,6 +791,17 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(21);
                 self.expr(count);
             }
+            PlanNode::Expand {
+                projections,
+                output,
+                ..
+            } => {
+                self.u8(22);
+                self.len(projections.len());
+                projections.iter().for_each(|p| self.exprs(p));
+                self.len(output.len());
+                output.iter().for_each(|c| self.bound(c));
+            }
         }
     }
 

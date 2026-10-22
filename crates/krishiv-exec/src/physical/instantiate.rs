@@ -30,7 +30,7 @@ use crate::join::{
 };
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
-    FileWrite, FileWriteSink, Filter, FilterPushdown, Predicate, Project, ProjectItem,
+    Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, NullOf, Predicate, Project, ProjectItem,
     PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdowns, Sort, SortKey, TopN,
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
@@ -277,6 +277,15 @@ impl Instantiation<'_> {
                 subqueries,
             } => self.with_subqueries(input, subqueries, |input, v| {
                 replicate_op(input, layout, count, v)
+            }),
+            PhysNode::Expand {
+                input,
+                layout,
+                projections,
+                nullable,
+                subqueries,
+            } => self.with_subqueries(input, subqueries, |input, v| {
+                expand_op(input, layout, projections, nullable, v)
             }),
             PhysNode::Limit { input, limit } => {
                 let input = self.node(input)?;
@@ -547,6 +556,9 @@ pub(crate) fn project_op(
                     name.clone(),
                     Arc::new(Compiled(compile_one(expr, layout, schema, v)?)),
                 ),
+                ProjectItemPlan::NullOf { index, name } => {
+                    ProjectItem::expr(name.clone(), Arc::new(NullOf::new(schema, *index)?))
+                }
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -554,6 +566,20 @@ pub(crate) fn project_op(
         Some(nullable) => Project::try_new_nullable(schema, items, nullable),
         None => Project::try_new(schema, items),
     }
+}
+
+pub(crate) fn expand_op(
+    schema: &SchemaRef,
+    layout: &[AttrId],
+    projections: &[Vec<ProjectItemPlan>],
+    nullable: &[bool],
+    v: &Values<'_>,
+) -> Result<Arc<dyn Operator>> {
+    let projects = projections
+        .iter()
+        .map(|items| project_op(schema, layout, items, Some(nullable), v))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Expand::try_new(projects)?)
 }
 
 pub(crate) fn replicate_op(

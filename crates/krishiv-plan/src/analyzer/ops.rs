@@ -14,6 +14,7 @@ use krishiv_common::error::{
     UnsupportedFeatureLateralColumnAliasInGroupBy,
 };
 
+use super::analytics::Analytics;
 use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
@@ -244,7 +245,7 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let items = self.select_items(c, exprs, env, "Aggregate")?;
         if items.iter().any(|b| b.agg.is_some()) {
-            return self.build_aggregate(p.origin, c, Vec::new(), &items, true);
+            return self.build_aggregate(p.origin, c, Vec::new(), &items, true, None);
         }
         Ok(self.lateral_project(p.origin, c, &items, &[]))
     }
@@ -258,6 +259,20 @@ impl Resolver<'_> {
         exprs: &[Arc<Expr>],
         env: &Arc<Env>,
         op: &'static str,
+    ) -> Result<Vec<Bound>, AnalysisError> {
+        self.select_items_in(c, exprs, env, op, None)
+    }
+
+    /// [`Self::select_items`] of an aggregate over grouping sets, which
+    /// may call `grouping` and `grouping_id` and name `grouping__id`
+    /// (`extra`, searched after the input).
+    pub(super) fn select_items_in(
+        &mut self,
+        c: &Rel,
+        exprs: &[Arc<Expr>],
+        env: &Arc<Env>,
+        op: &'static str,
+        extra: Option<&[Attr]>,
     ) -> Result<Vec<Bound>, AnalysisError> {
         let rels = [c];
         let mut items = Vec::new();
@@ -274,6 +289,8 @@ impl Resolver<'_> {
             let b = {
                 let mut cx = Self::cx(&c.out, &rels, env, op);
                 cx.lateral = lca.then_some(&lateral[..]);
+                cx.extra = extra;
+                cx.grouping = extra.is_some();
                 self.bind(e, &cx)?
             };
             let b = self.named(b)?;
@@ -660,9 +677,15 @@ impl Resolver<'_> {
         let mut cx = Self::cx(&agg.out, &rels, env, op);
         cx.extra = Some(&info.keys);
         cx.agg_scope = Some(&info.input.out);
+        cx.grouping = info.analytics.is_some();
         let mut bounds = Vec::new();
         for e in exprs {
             bounds.push(self.bind(e, &cx)?);
+        }
+        if let Some(an) = &info.analytics {
+            for b in &mut bounds {
+                b.expr = self.resolve_grouping(&b.expr, an, env)?;
+            }
         }
         let mut memo = HashMap::new();
         let mut known: Vec<(u128, Attr)> = info
@@ -754,8 +777,14 @@ impl Resolver<'_> {
     /// aliases if it has any; `pass` (attributes of the aggregate) are
     /// output after the select items.
     fn aggregate_rel(&self, origin: Origin, info: AggInfo, pass: &[Attr]) -> Rel {
+        // Over grouping sets, the aggregate reads their expansion; the
+        // attributes it defines are part of the aggregate's id span.
+        let (input, defined) = match info.analytics.as_deref().and_then(|a| a.expand.as_ref()) {
+            Some(e) => (Arc::clone(&e.plan), e.ids),
+            None => (Arc::clone(&info.input.plan), None),
+        };
         let node = PlanNode::Aggregate {
-            input: Arc::clone(&info.input.plan),
+            input,
             grouping: Grouping::GroupBy(info.grouping.clone()),
             aggregates: info.aggregates.clone(),
         };
@@ -766,6 +795,7 @@ impl Resolver<'_> {
                 self.lateral_project(origin, &a, top, pass)
             }
         };
+        r.ids = super::resolve::hull(r.ids, defined);
         let info = Arc::new(info);
         r.widen = Some(Arc::new(Widen::Aggregate(Arc::clone(&info))));
         r.agg = Some(info);
@@ -781,38 +811,66 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let Grouping::GroupBy(keys) = grouping else {
-            return Err(unsupported("ROLLUP, CUBE and GROUPING SETS", p.origin));
+            return self.grouping_sets(p, input, grouping, aggregates, env);
         };
         let c = self.child(input, env)?;
-        let conf = self.ctx.conf;
-        let ordinal = |k: &Expr| match &k.node {
-            ExprNode::Literal(Literal::Integer(n)) if conf.group_by_ordinal => Some(*n),
-            _ => None,
-        };
-        let star = aggregates
-            .iter()
-            .any(|e| matches!(e.node, ExprNode::Star(_)));
-        if star && keys.iter().any(|k| ordinal(k).is_some()) {
-            return Err(AnalysisError::new(StarGroupByPos {}, Origin::UNKNOWN));
-        }
+        self.check_star_ordinals(keys, aggregates)?;
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
+        let group = self.group_keys(&c, keys, aggregates, &items, env)?;
+        self.build_aggregate(p.origin, &c, group, &items, false, None)
+    }
+
+    /// `SELECT *` with `GROUP BY n` is an error (Spark's
+    /// `STAR_GROUP_BY_POS`).
+    pub(super) fn check_star_ordinals(
+        &self,
+        keys: &[Arc<Expr>],
+        aggregates: &[Arc<Expr>],
+    ) -> Result<(), AnalysisError> {
+        let star = aggregates
+            .iter()
+            .any(|e| matches!(e.node, ExprNode::Star(_)));
+        if star && keys.iter().any(|k| self.ordinal(k).is_some()) {
+            return Err(AnalysisError::new(StarGroupByPos {}, Origin::UNKNOWN));
+        }
+        Ok(())
+    }
+
+    /// `GROUP BY n` with ordinals on: `n`.
+    fn ordinal(&self, k: &Expr) -> Option<i32> {
+        match &k.node {
+            ExprNode::Literal(Literal::Integer(n)) if self.ctx.conf.group_by_ordinal => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// The grouping expressions `keys` over `c`: an ordinal names a select
+    /// item, other names may be select-list aliases.
+    pub(super) fn group_keys(
+        &mut self,
+        c: &Rel,
+        keys: &[Arc<Expr>],
+        aggregates: &[Arc<Expr>],
+        items: &[Bound],
+        env: &Arc<Env>,
+    ) -> Result<Vec<Bound>, AnalysisError> {
         let mut group: Vec<Option<Bound>> = vec![None; keys.len()];
         for (slot, k) in group.iter_mut().zip(keys) {
-            if let Some(n) = ordinal(k) {
-                *slot = Some(self.group_ordinal(n, k.origin, &items, &c)?);
+            if let Some(n) = self.ordinal(k) {
+                *slot = Some(self.group_ordinal(n, k.origin, items, c)?);
             }
         }
         let aliases: Vec<(String, Arc<Expr>)> = aggregates
             .iter()
-            .filter(|_| conf.group_by_aliases)
+            .filter(|_| self.ctx.conf.group_by_aliases)
             .filter_map(|e| match &e.node {
                 ExprNode::Alias { expr, name } => Some((name.clone(), Arc::clone(expr))),
                 _ => None,
             })
             .collect();
-        let rels = [&c];
+        let rels = [c];
         for (slot, k) in group.iter_mut().zip(keys) {
             if slot.is_none() {
                 let mut cx = Self::cx(&c.out, &rels, env, "Aggregate");
@@ -820,8 +878,7 @@ impl Resolver<'_> {
                 *slot = Some(self.bind(k, &cx)?);
             }
         }
-        let group = group.into_iter().flatten().collect();
-        self.build_aggregate(p.origin, &c, group, &items, false)
+        Ok(group.into_iter().flatten().collect())
     }
 
     /// `GROUP BY n`: the `n`-th select item, unaliased.
@@ -885,6 +942,7 @@ impl Resolver<'_> {
         group: Vec<Bound>,
         items: &[Bound],
         global: bool,
+        analytics: Option<Arc<Analytics>>,
     ) -> Result<Rel, AnalysisError> {
         let mut memo = HashMap::new();
         let gkeys: Vec<(u128, ArgType)> = group
@@ -898,22 +956,33 @@ impl Resolver<'_> {
             .cloned()
             .collect();
         self.check_aggregation(&base, &key_set, &mut memo, origin, global)?;
-        let keys: Vec<Attr> = group
-            .iter()
-            .filter_map(|b| match &b.expr.node {
-                ExprNode::Resolved(ResolvedExpr::Column(col)) => {
-                    c.out.iter().find(|a| a.col.id == col.id).cloned()
-                }
-                _ => None,
-            })
-            .collect();
+        // Over grouping sets, the grouping attributes are the expansion's.
+        let (keys, scope): (Vec<Attr>, Vec<Attr>) = match &analytics {
+            Some(a) => (
+                a.keys(),
+                c.out.iter().chain(a.exprs.iter().map(|g| &g.attr)).cloned().collect(),
+            ),
+            None => (
+                group
+                    .iter()
+                    .filter_map(|b| match &b.expr.node {
+                        ExprNode::Resolved(ResolvedExpr::Column(col)) => {
+                            c.out.iter().find(|a| a.col.id == col.id).cloned()
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                c.out.to_vec(),
+            ),
+        };
         let mut info = AggInfo {
             input: c.clone(),
             grouping: group.into_iter().map(|b| b.expr).collect(),
             aggregates: base.iter().map(|b| Arc::clone(&b.expr)).collect(),
-            out: base.iter().map(|b| out_attr(b, &c.out)).collect(),
+            out: base.iter().map(|b| out_attr(b, &scope)).collect(),
             keys,
             top: None,
+            analytics,
         };
         if base.len() == items.len() {
             return Ok(self.aggregate_rel(origin, info, &[]));
@@ -925,7 +994,7 @@ impl Resolver<'_> {
         let mut top = Vec::new();
         for b in items {
             if b.lateral.is_empty() {
-                let a = out_attr(b, &c.out);
+                let a = out_attr(b, &scope);
                 top.push(Bound {
                     expr: col_expr(&a.col, b.expr.origin),
                     ..b.clone()
