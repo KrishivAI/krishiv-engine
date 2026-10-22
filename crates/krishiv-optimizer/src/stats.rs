@@ -294,7 +294,7 @@ impl<'a> Estimator<'a> {
                         }
                     }
                     let nulls = (null_rows / rows).clamp(0.0, 1.0);
-                    let distinct_lits = to_f64(u64::try_from(literals.len()).unwrap_or(u64::MAX));
+                    let distinct_literals = to_f64(u64::try_from(literals.len()).unwrap_or(u64::MAX));
                     let ndv = if other {
                         rows
                     } else if let Some(id) = col_id {
@@ -314,18 +314,18 @@ impl<'a> Estimator<'a> {
                                     sum += est.cols.get(&c.id).map(|c| c.ndv).unwrap_or(per);
                                 }
                             }
-                            sum + distinct_lits
+                            sum + distinct_literals
                         } else if literals.is_empty() {
                             est.cols.get(&id).map(|c| c.ndv).unwrap_or(per)
                         } else {
-                            est.cols.get(&id).map(|c| c.ndv).unwrap_or(per) + distinct_lits
+                            est.cols.get(&id).map(|c| c.ndv).unwrap_or(per) + distinct_literals
                         };
                         base.clamp(1.0, rows)
                     } else if literals.is_empty() {
                         // Every projection is NULL.
                         1.0
                     } else {
-                        distinct_lits.clamp(1.0, rows)
+                        distinct_literals.clamp(1.0, rows)
                     };
                     let range = if !mixed && !other && literals.is_empty() {
                         col_id.and_then(|id| est.cols.get(&id).and_then(|c| c.range))
