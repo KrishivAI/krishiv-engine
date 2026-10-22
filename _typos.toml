@@ -23,6 +23,10 @@ extend-ignore-re = [
     'spark\.implicits\._', # Spark's implicit-conversions import
 ]
 
+[default.extend-identifiers]
+# The ClickBench `hits` column name as the dataset spells it; the queries refer to it.
+TraficSourceID = "TraficSourceID"
+
 [default.extend-words]
 # Spark / Arrow / project vocabulary that looks like a typo.
 nd = "nd"                   # "nondeterministic" shorthand in the function-matrix generator

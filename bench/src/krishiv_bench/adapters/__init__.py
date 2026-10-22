@@ -34,8 +34,12 @@ def make_engine(name: str, **kw) -> Engine:
         from .spark_local import SailEngine
 
         return SailEngine(**kw)
+    if name == "clickhouse":
+        from .clickhouse import ClickHouseEngine
+
+        return ClickHouseEngine(**kw)
     raise ValueError(f"unknown engine {name!r}; available: {', '.join(ENGINES)}")
 
 
-ENGINES = ["duckdb", "spark-connect", "krishiv", "polars", "datafusion", "spark-local", "sail"]
+ENGINES = ["duckdb", "spark-connect", "krishiv", "polars", "datafusion", "spark-local", "sail", "clickhouse"]
 __all__ = ["ENGINES", "Dataset", "Engine", "Measure", "Query", "make_engine"]
