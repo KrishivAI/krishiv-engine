@@ -16,20 +16,25 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use krishiv_common::error::{FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature, MissingWindowSpecification,
+};
 use krishiv_common::secret::OptionValue;
 use krishiv_common::stack::{STEP, on_big_stack};
 use krishiv_plan::{
-    Builtin, CastMode, ColumnRef, Cte, Expr as IrExpr, ExprNode, FunctionCall, Grouping,
-    JoinCondition, JoinKind as IrJoin, Literal as IrLiteral, LogicalPlan, Origin, Plan, PlanNode,
-    ReadSource, SortOrder, SourceId, Star, SubqueryKind,
+    Builtin, CastMode, ColumnRef, Cte, Expr as IrExpr, ExprNode, FrameBound as IrFrameBound,
+    FrameUnits as IrFrameUnits, FunctionCall, Grouping, JoinCondition, JoinKind as IrJoin,
+    Literal as IrLiteral, LogicalPlan, Origin, Plan, PlanNode, ReadSource, SortOrder, SourceId,
+    Star, SubqueryKind, WindowExpr, WindowFrame as IrWindowFrame, WindowSpec as IrWindowSpec,
+    WindowSpecRef,
 };
 use krishiv_types::DecimalType;
 
 use crate::ast::{
-    Alias, BinaryOp, Expr, ExprKind, FromClause, GroupItemKind, JoinConstraint, JoinKind, Literal,
-    NullTreatment, NumKind, Query, Relation, RelationExt, Select, SetExpr, SetExprKind,
-    SetOperator, SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth, UnaryOp,
+    Alias, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, FromClause,
+    GroupItemKind, Ident, JoinConstraint, JoinKind, Literal, NamedWindow, NullTreatment, NumKind,
+    Query, Relation, RelationExt, Select, SetExpr, SetExprKind, SetOperator, SetQuantifier,
+    SortItem, Span, TableFactor, TableFactorKind, Truth, UnaryOp, WindowRef, WindowSpec,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_query};
@@ -56,6 +61,7 @@ pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
         source,
         depth: 0,
         root: query.span,
+        windows: Vec::new(),
     };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
@@ -73,7 +79,6 @@ fn reject_organization(q: &Query) -> R<()> {
     for (present, what) in [
         (!q.cluster_by.is_empty(), "CLUSTER BY"),
         (!q.distribute_by.is_empty(), "DISTRIBUTE BY"),
-        (!q.windows.is_empty(), "WINDOW clauses"),
         (q.offset.is_some(), "OFFSET"),
     ] {
         if present {
@@ -97,12 +102,41 @@ struct Lowerer {
     depth: usize,
     /// The whole statement: `FAILED_TO_PARSE_TOO_COMPLEX` refers to it.
     root: Span,
+    /// The `WINDOW` clauses around the expression being lowered, innermost
+    /// last; `None` stands for a subquery expression's boundary (Spark's
+    /// `WindowsSubstitution` does not enter subquery plans).
+    windows: Vec<Option<Arc<WindowDefs>>>,
 }
+
+/// A `WINDOW` clause: each name's specification, references to other
+/// names followed (`validate` checked them).
+type WindowDefs = Vec<(String, WindowSpec)>;
 
 fn arc<T>(v: T) -> Arc<T> {
     Arc::new(v)
 }
 
+/// The definitions of a `WINDOW` clause, as Spark's `AstBuilder` resolves
+/// them: a name defined as another name takes that one's specification.
+fn window_defs(windows: &[NamedWindow]) -> WindowDefs {
+    let spec = |r: &WindowRef| match r {
+        WindowRef::Spec(spec) => Some((**spec).clone()),
+        WindowRef::Named(_) => None,
+    };
+    windows
+        .iter()
+        .filter_map(|w| {
+            let s = match &w.window {
+                WindowRef::Spec(s) => Some((**s).clone()),
+                WindowRef::Named(other) => windows
+                    .iter()
+                    .find(|d| d.name.value == other.value)
+                    .and_then(|d| spec(&d.window)),
+            };
+            s.map(|s| (w.name.value.clone(), s))
+        })
+        .collect()
+}
 impl Lowerer {
     fn origin(&self, span: Span) -> Origin {
         let at = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
@@ -161,10 +195,107 @@ impl Lowerer {
         self.deeper(|l| l.query_inner(q))
     }
 
+    /// A subquery expression's query: the `WINDOW` clauses around it do
+    /// not reach into it.
+    fn subquery(&mut self, q: &Query) -> R<LogicalPlan> {
+        self.windows.push(None);
+        let r = self.query(q);
+        self.windows.pop();
+        r
+    }
+
+    /// Runs `f` with the definitions of `windows` in scope.
+    fn with_windows<T>(
+        &mut self,
+        windows: &[NamedWindow],
+        f: impl FnOnce(&mut Self) -> R<T>,
+    ) -> R<T> {
+        if windows.is_empty() {
+            return f(self);
+        }
+        self.windows.push(Some(Arc::new(window_defs(windows))));
+        let r = f(self);
+        self.windows.pop();
+        r
+    }
+
+    /// `OVER name`, as Spark's `WindowsSubstitution` resolves it: the
+    /// innermost `WINDOW` clause around decides (a name it lacks is
+    /// `MISSING_WINDOW_SPECIFICATION`); with none around, the name stays
+    /// for the analyzer, which reports it once the operator's input
+    /// resolved.
+    fn named_window(&mut self, name: &Ident, span: Span) -> R<WindowSpecRef> {
+        let scope = self.windows.last().cloned().flatten();
+        match scope {
+            None => Ok(WindowSpecRef::Named(name.value.clone())),
+            Some(defs) => match defs.iter().find(|(n, _)| *n == name.value) {
+                Some((_, spec)) => Ok(WindowSpecRef::Spec(self.window_spec(spec)?)),
+                None => Err(err(
+                    MissingWindowSpecification {
+                        window_name: name.value.clone(),
+                        docroot: "https://spark.apache.org/docs/latest".to_owned(),
+                    },
+                    span,
+                )),
+            },
+        }
+    }
+
+    /// `(PARTITION BY ... ORDER BY ... frame)`; `DISTRIBUTE BY` and
+    /// `CLUSTER BY` partition, `SORT BY` orders, as in Spark.
+    fn window_spec(&mut self, w: &WindowSpec) -> R<IrWindowSpec> {
+        let partition_by = w
+            .partition_by
+            .iter()
+            .map(|e| self.arg(e))
+            .collect::<R<Vec<_>>>()?;
+        let order_by = w
+            .order_by
+            .iter()
+            .map(|s| self.sort_item(s))
+            .collect::<R<Vec<_>>>()?;
+        let frame = match &w.frame {
+            None => None,
+            Some(f) => Some(IrWindowFrame {
+                units: match f.units {
+                    FrameUnits::Rows => IrFrameUnits::Rows,
+                    FrameUnits::Range => IrFrameUnits::Range,
+                },
+                lower: self.frame_bound(&f.start)?,
+                upper: match &f.end {
+                    Some(b) => self.frame_bound(b)?,
+                    None => IrFrameBound::CurrentRow,
+                },
+            }),
+        };
+        Ok(IrWindowSpec {
+            partition_by,
+            order_by,
+            frame,
+        })
+    }
+
+    /// A frame bound; `n PRECEDING` is `-(n)`, as Spark's `AstBuilder`
+    /// writes it.
+    fn frame_bound(&mut self, b: &FrameBound) -> R<IrFrameBound> {
+        Ok(match &b.kind {
+            FrameBoundKind::UnboundedPreceding => IrFrameBound::UnboundedPreceding,
+            FrameBoundKind::UnboundedFollowing => IrFrameBound::UnboundedFollowing,
+            FrameBoundKind::CurrentRow => IrFrameBound::CurrentRow,
+            FrameBoundKind::Preceding(e) => {
+                let value = self.expr(e)?;
+                IrFrameBound::Offset(arc(self.op(Builtin::Negative, vec![value], b.span)))
+            }
+            FrameBoundKind::Following(e) => IrFrameBound::Offset(self.arg(e)?),
+        })
+    }
+
     fn query_inner(&mut self, q: &Query) -> R<LogicalPlan> {
         reject_organization(q)?;
-        let mut plan = self.body(&q.body)?;
-        plan = self.organize(plan, q)?;
+        let mut plan = self.with_windows(&q.windows, |l| {
+            let plan = l.body(&q.body)?;
+            l.organize(plan, q)
+        })?;
         if let Some(with) = &q.with {
             if with.recursive {
                 return Err(unsupported("recursive CTEs", with.span));
@@ -217,8 +348,10 @@ impl Lowerer {
                 [body] => match &body.body.kind {
                     SetExprKind::Select(s) => {
                         reject_organization(body)?;
-                        let inner = self.select(s, Some(&f.from))?;
-                        self.organize(inner, body)?
+                        self.with_windows(&body.windows, |l| {
+                            let inner = l.select(s, Some(&f.from))?;
+                            l.organize(inner, body)
+                        })?
                     }
                     _ => return Err(unsupported("FROM ... SELECT with a set body", f.span)),
                 },
@@ -319,7 +452,7 @@ impl Lowerer {
     /// A `SELECT` with its `DISTINCT` and hints: as Spark's AstBuilder,
     /// the hints wrap the rest, the first one outermost.
     fn select(&mut self, s: &Select, from: Option<&FromClause>) -> R<LogicalPlan> {
-        let mut plan = self.select_list(s, from)?;
+        let mut plan = self.with_windows(&s.windows, |l| l.select_list(s, from))?;
         if s.quantifier == Some(SetQuantifier::Distinct) {
             plan = self.node(PlanNode::Distinct { input: arc(plan) }, s.span);
         }
@@ -344,7 +477,6 @@ impl Lowerer {
     fn select_list(&mut self, s: &Select, from: Option<&FromClause>) -> R<LogicalPlan> {
         for (present, what) in [
             (!s.lateral_views.is_empty(), "LATERAL VIEW"),
-            (!s.windows.is_empty(), "WINDOW clauses"),
             (s.qualify.is_some(), "QUALIFY"),
         ] {
             if present {
@@ -758,7 +890,7 @@ impl Lowerer {
                     }
                     _ => vec![self.arg(expr)?],
                 };
-                let plan = arc(self.query(query)?);
+                let plan = arc(self.subquery(query)?);
                 let s = self.ex(
                     ExprNode::Subquery {
                         kind: SubqueryKind::In(values),
@@ -799,7 +931,7 @@ impl Lowerer {
                 self.not(like, *negated, sp)
             }
             ExprKind::Exists(q) => {
-                let plan = arc(self.query(q)?);
+                let plan = arc(self.subquery(q)?);
                 self.ex(
                     ExprNode::Subquery {
                         kind: SubqueryKind::Exists,
@@ -809,7 +941,7 @@ impl Lowerer {
                 )
             }
             ExprKind::Subquery(q) => {
-                let plan = arc(self.query(q)?);
+                let plan = arc(self.subquery(q)?);
                 self.ex(
                     ExprNode::Subquery {
                         kind: SubqueryKind::Scalar,
@@ -861,7 +993,6 @@ impl Lowerer {
                     return Err(unsupported("qualified function names", f.name.span));
                 };
                 for (present, what) in [
-                    (f.over.is_some(), "window functions"),
                     (!f.within_group.is_empty(), "WITHIN GROUP"),
                     (
                         f.null_treatment.is_some() && !takes_null_treatment(&name.value),
@@ -901,7 +1032,7 @@ impl Lowerer {
                     }
                 }
                 let filter = f.filter.as_ref().map(|x| self.arg(x)).transpose()?;
-                self.ex(
+                let call = self.ex(
                     ExprNode::Function(FunctionCall {
                         name: name.value.clone(),
                         args,
@@ -909,7 +1040,23 @@ impl Lowerer {
                         filter,
                     }),
                     sp,
-                )
+                );
+                match &f.over {
+                    None => call,
+                    Some(over) => {
+                        let window = match over {
+                            WindowRef::Spec(spec) => WindowSpecRef::Spec(self.window_spec(spec)?),
+                            WindowRef::Named(name) => self.named_window(name, sp)?,
+                        };
+                        self.ex(
+                            ExprNode::Window(WindowExpr {
+                                function: arc(call),
+                                window,
+                            }),
+                            sp,
+                        )
+                    }
+                }
             }
             ExprKind::Nested(inner) => self.expr(inner)?,
             ExprKind::Parameter(_) => return Err(unsupported("parameter markers", sp)),

@@ -21,9 +21,10 @@ use krishiv_common::secret::SecretUrl;
 
 use crate::walk::{self, Node};
 use crate::{
-    Builtin, CastMode, DayTimeField, Expr, ExprNode, FunctionCall, FunctionId, Grouping,
-    JoinCondition, Literal, LogicalPlan, NullOrdering, Plan, PlanNode, ReadSource, ResolvedExpr,
-    ResolvedFunction, SortDirection, SortOrder, SqlArgs, SubqueryKind, YearMonthField,
+    Builtin, CastMode, DayTimeField, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall,
+    FunctionId, Grouping, JoinCondition, Literal, LogicalPlan, NullOrdering, Plan, PlanNode,
+    ReadSource, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, SqlArgs, SubqueryKind,
+    WindowSpec, WindowSpecRef, YearMonthField,
 };
 
 /// Printed instead of a node deeper than [`crate::MAX_DEPTH`].
@@ -236,6 +237,18 @@ impl Display for NodeLine<'_> {
                     write!(f, "{}{o}", sep(i))?;
                 }
                 write!(f, "], {global}")
+            }
+            PlanNode::Window {
+                exprs,
+                partition_by,
+                order_by,
+                ..
+            } => {
+                write!(f, "Window [{}], [{}], [", List(exprs), List(partition_by))?;
+                for (i, o) in order_by.iter().enumerate() {
+                    write!(f, "{}{o}", sep(i))?;
+                }
+                f.write_str("]")
             }
             PlanNode::Limit { limit, .. } => write!(f, "Limit {}", Text(limit)),
             PlanNode::SubqueryAlias { alias, columns, .. } => {
@@ -548,6 +561,80 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(" AS {}#{}", output.name, output.id.0)));
         }
+        ExprNode::Window(w) => {
+            out.push(Piece::Expr(&w.function));
+            match &w.window {
+                WindowSpecRef::Named(name) => out.push(Piece::Owned(format!(
+                    " OVER {}",
+                    Name(std::slice::from_ref(name))
+                ))),
+                WindowSpecRef::Spec(spec) => window_pieces(spec, out),
+            }
+        }
+    }
+}
+
+/// ` OVER (...)` as Spark's `WindowSpecDefinition.sql` writes it: the
+/// partitioning, the ordering and the frame, separated by spaces (an
+/// unspecified frame writes nothing).
+fn window_pieces<'a>(spec: &'a WindowSpec, out: &mut Vec<Piece<'a>>) {
+    out.push(Piece::Str(" OVER ("));
+    let mut first = true;
+    let mut gap = |out: &mut Vec<Piece<'a>>| {
+        if !std::mem::take(&mut first) {
+            out.push(Piece::Str(" "));
+        }
+    };
+    if !spec.partition_by.is_empty() {
+        gap(out);
+        out.push(Piece::Str("PARTITION BY "));
+        list(&spec.partition_by, out);
+    }
+    if !spec.order_by.is_empty() {
+        gap(out);
+        out.push(Piece::Str("ORDER BY "));
+        for (i, o) in spec.order_by.iter().enumerate() {
+            if i > 0 {
+                out.push(Piece::Str(", "));
+            }
+            out.push(Piece::Expr(&o.expr));
+            out.push(Piece::Str(order_suffix(o)));
+        }
+    }
+    if let Some(frame) = &spec.frame {
+        gap(out);
+        out.push(Piece::Str(match frame.units {
+            FrameUnits::Rows => "ROWS BETWEEN ",
+            FrameUnits::Range => "RANGE BETWEEN ",
+        }));
+        bound_pieces(&frame.lower, out);
+        out.push(Piece::Str(" AND "));
+        bound_pieces(&frame.upper, out);
+    }
+    out.push(Piece::Str(")"));
+}
+
+/// A frame bound as Spark writes it: a negated value is `n PRECEDING`, any
+/// other value `n FOLLOWING`.
+fn bound_pieces<'a>(b: &'a FrameBound, out: &mut Vec<Piece<'a>>) {
+    match b {
+        FrameBound::UnboundedPreceding => out.push(Piece::Str("UNBOUNDED PRECEDING")),
+        FrameBound::CurrentRow => out.push(Piece::Str("CURRENT ROW")),
+        FrameBound::UnboundedFollowing => out.push(Piece::Str("UNBOUNDED FOLLOWING")),
+        FrameBound::Offset(e) => match crate::expr::negated(e) {
+            Some(n) => out.extend([Piece::Expr(n), Piece::Str(" PRECEDING")]),
+            None => out.extend([Piece::Expr(e), Piece::Str(" FOLLOWING")]),
+        },
+    }
+}
+
+/// ` ASC NULLS FIRST` and the like.
+const fn order_suffix(o: &SortOrder) -> &'static str {
+    match (o.direction, o.nulls) {
+        (SortDirection::Ascending, NullOrdering::NullsFirst) => " ASC NULLS FIRST",
+        (SortDirection::Ascending, NullOrdering::NullsLast) => " ASC NULLS LAST",
+        (SortDirection::Descending, NullOrdering::NullsFirst) => " DESC NULLS FIRST",
+        (SortDirection::Descending, NullOrdering::NullsLast) => " DESC NULLS LAST",
     }
 }
 

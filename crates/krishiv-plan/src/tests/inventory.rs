@@ -41,6 +41,7 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Distinct { .. } => "PlanNode::Distinct",
         PlanNode::SetOp { .. } => "PlanNode::SetOp",
         PlanNode::ReplicateRows { .. } => "PlanNode::ReplicateRows",
+        PlanNode::Window { .. } => "PlanNode::Window",
     });
     plan.for_each_expr(&mut |e| expr_kinds(e, out));
     plan.for_each_child(&mut |c| kinds(c, out));
@@ -55,6 +56,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::Cast { .. } => "ExprNode::Cast",
         ExprNode::Alias { .. } => "ExprNode::Alias",
         ExprNode::Subquery { .. } => "ExprNode::Subquery",
+        ExprNode::Window(_) => "ExprNode::Window",
         ExprNode::Resolved(ResolvedExpr::Column(_)) => "ResolvedExpr::Column",
         ExprNode::Resolved(ResolvedExpr::OuterColumn(_)) => "ResolvedExpr::OuterColumn",
         ExprNode::Resolved(ResolvedExpr::Function(_)) => "ResolvedExpr::Function",

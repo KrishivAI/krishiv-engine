@@ -155,6 +155,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
                 | PlanNode::JoinHint { .. }
+                | PlanNode::Window { .. }
                 | PlanNode::ReplicateRows { .. } => true,
             },
             Node::Expr(e) => match &e.node {
@@ -166,6 +167,12 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                     CastMode::Default => false,
                     CastMode::Legacy | CastMode::Ansi | CastMode::Try => true,
                 },
+                // A window is resolved once its frame is set (children are
+                // visited on their own).
+                ExprNode::Window(w) => matches!(
+                    &w.window,
+                    crate::WindowSpecRef::Spec(crate::WindowSpec { frame: Some(_), .. })
+                ),
                 ExprNode::Literal(_) | ExprNode::Subquery { .. } | ExprNode::Resolved(_) => true,
             },
         };
@@ -291,6 +298,18 @@ impl Teardown {
                 self.exprs
                     .extend(order.into_iter().map(|SortOrder { expr, .. }| expr));
             }
+            PlanNode::Window {
+                input,
+                exprs,
+                partition_by,
+                order_by,
+            } => {
+                self.plans.push(input);
+                self.exprs.extend(exprs);
+                self.exprs.extend(partition_by);
+                self.exprs
+                    .extend(order_by.into_iter().map(|SortOrder { expr, .. }| expr));
+            }
             PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::JoinHint { input, .. }
@@ -332,6 +351,21 @@ impl Teardown {
                 match kind {
                     SubqueryKind::In(values) => self.exprs.extend(values),
                     SubqueryKind::Scalar | SubqueryKind::Exists => {}
+                }
+            }
+            ExprNode::Window(crate::WindowExpr { function, window }) => {
+                self.exprs.push(function);
+                if let crate::WindowSpecRef::Spec(spec) = window {
+                    self.exprs.extend(spec.partition_by);
+                    self.exprs
+                        .extend(spec.order_by.into_iter().map(|SortOrder { expr, .. }| expr));
+                    if let Some(frame) = spec.frame {
+                        for b in [frame.lower, frame.upper] {
+                            if let crate::FrameBound::Offset(e) = b {
+                                self.exprs.push(e);
+                            }
+                        }
+                    }
                 }
             }
         }

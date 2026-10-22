@@ -17,10 +17,11 @@ use proptest::sample::Index;
 
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Cte, CteRef, DayTimeField, Expr, ExprNode,
-    FunctionCall, FunctionId, FunctionKind, Grouping, JoinCondition, JoinKind, JoinStrategy,
-    Literal, LogicalPlan, NullOrdering, Origin, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr,
-    ResolvedFunction, Scan, SetOperation, SortDirection, SortOrder, SourceId, Span, SqlArgs, Star,
-    SubqueryKind, TableVersion, YearMonthField,
+    FrameBound, FrameUnits, FunctionCall, FunctionId, FunctionKind, Grouping, JoinCondition,
+    JoinKind, JoinStrategy, Literal, LogicalPlan, NullOrdering, Origin, Plan, PlanId, PlanNode,
+    ReadSource, ResolvedExpr, ResolvedFunction, Scan, SetOperation, SortDirection, SortOrder,
+    SourceId, Span, SqlArgs, Star, SubqueryKind, TableVersion, WindowExpr, WindowFrame, WindowSpec,
+    WindowSpecRef, YearMonthField,
 };
 
 // ---- generator ------------------------------------------------------------
@@ -168,7 +169,7 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 11 };
+        let kinds = if depth == 0 { 5 } else { 12 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
@@ -237,6 +238,26 @@ impl Gen<'_> {
                 expr: Arc::new(self.expr(d)),
                 output: self.bound(),
             }),
+            11 => ExprNode::Window(WindowExpr {
+                function: Arc::new(self.expr(d)),
+                window: if self.flag() {
+                    WindowSpecRef::Named(self.name())
+                } else {
+                    WindowSpecRef::Spec(WindowSpec {
+                        partition_by: self.many(0, 2, |g| Arc::new(g.expr(d))),
+                        order_by: self.orders(d),
+                        frame: self.flag().then(|| WindowFrame {
+                            units: if self.flag() {
+                                FrameUnits::Rows
+                            } else {
+                                FrameUnits::Range
+                            },
+                            lower: self.frame_bound(d),
+                            upper: self.frame_bound(d),
+                        }),
+                    })
+                },
+            }),
             _ => ExprNode::Subquery {
                 kind: match self.pick(3) {
                     0 => SubqueryKind::Scalar,
@@ -247,6 +268,31 @@ impl Gen<'_> {
             },
         };
         Expr { node, origin }
+    }
+
+    fn orders(&mut self, depth: u8) -> Vec<SortOrder> {
+        self.many(0, 2, |g| SortOrder {
+            expr: Arc::new(g.expr(depth)),
+            direction: if g.flag() {
+                SortDirection::Ascending
+            } else {
+                SortDirection::Descending
+            },
+            nulls: if g.flag() {
+                NullOrdering::NullsFirst
+            } else {
+                NullOrdering::NullsLast
+            },
+        })
+    }
+
+    fn frame_bound(&mut self, depth: u8) -> FrameBound {
+        match self.pick(4) {
+            0 => FrameBound::UnboundedPreceding,
+            1 => FrameBound::CurrentRow,
+            2 => FrameBound::UnboundedFollowing,
+            _ => FrameBound::Offset(Arc::new(self.expr(depth))),
+        }
     }
 
     fn exprs(&mut self) -> Vec<Arc<Expr>> {
@@ -288,7 +334,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 21 };
+        let kinds = if depth == 0 { 4 } else { 22 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -364,19 +410,7 @@ impl Gen<'_> {
             },
             8 => PlanNode::Sort {
                 input: self.input(d),
-                order: self.many(0, 2, |g| SortOrder {
-                    expr: Arc::new(g.expr(2)),
-                    direction: if g.flag() {
-                        SortDirection::Ascending
-                    } else {
-                        SortDirection::Descending
-                    },
-                    nulls: if g.flag() {
-                        NullOrdering::NullsFirst
-                    } else {
-                        NullOrdering::NullsLast
-                    },
-                }),
+                order: self.orders(2),
                 global: self.flag(),
             },
             9 => PlanNode::Limit {
@@ -423,6 +457,12 @@ impl Gen<'_> {
             20 => PlanNode::ReplicateRows {
                 input: self.input(d),
                 count: Arc::new(self.expr(1)),
+            },
+            21 => PlanNode::Window {
+                input: self.input(d),
+                exprs: self.exprs(),
+                partition_by: self.exprs(),
+                order_by: self.orders(2),
             },
             _ => PlanNode::WithCte {
                 input: self.input(d),
@@ -657,6 +697,22 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             };
             values || m_plan(plan, w)
         }
+        ExprNode::Window(WindowExpr { function, window }) => {
+            let other = match window {
+                WindowSpecRef::Named(_) => WindowSpecRef::Spec(WindowSpec {
+                    partition_by: Vec::new(),
+                    order_by: Vec::new(),
+                    frame: None,
+                }),
+                WindowSpecRef::Spec(_) => WindowSpecRef::Named("x".to_owned()),
+            };
+            site!(w, *window = other);
+            let inside = match window {
+                WindowSpecRef::Named(name) => m_string(name, w),
+                WindowSpecRef::Spec(spec) => m_window_spec(spec, w),
+            };
+            inside || m_expr(function, w)
+        }
         ExprNode::Resolved(r) => match r {
             ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) => m_bound(c, w),
             ResolvedExpr::Function(ResolvedFunction {
@@ -686,6 +742,45 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             ResolvedExpr::Alias { expr, output } => m_bound(output, w) || m_expr(expr, w),
         },
     }
+}
+
+fn m_orders(order: &mut Vec<SortOrder>, w: &mut Walk) -> bool {
+    site!(
+        w,
+        order.push(SortOrder::asc(Expr::from(Literal::Integer(0))))
+    );
+    order.iter_mut().any(|o| {
+        use NullOrdering::{NullsFirst, NullsLast};
+        use SortDirection::{Ascending, Descending};
+        site!(w, flip(&mut o.direction, Ascending, Descending));
+        site!(w, flip(&mut o.nulls, NullsFirst, NullsLast));
+        m_expr(&mut o.expr, w)
+    })
+}
+
+fn m_bound_kind(b: &mut FrameBound, w: &mut Walk) -> bool {
+    let other = match b {
+        FrameBound::CurrentRow => FrameBound::UnboundedPreceding,
+        _ => FrameBound::CurrentRow,
+    };
+    site!(w, *b = other);
+    match b {
+        FrameBound::Offset(e) => m_expr(e, w),
+        _ => false,
+    }
+}
+
+fn m_window_spec(spec: &mut WindowSpec, w: &mut Walk) -> bool {
+    let frame = match spec.frame {
+        Some(_) => None,
+        None => Some(WindowFrame::running(FrameUnits::Rows)),
+    };
+    site!(w, spec.frame = frame);
+    let in_frame = spec.frame.as_mut().is_some_and(|f| {
+        site!(w, flip(&mut f.units, FrameUnits::Rows, FrameUnits::Range));
+        m_bound_kind(&mut f.lower, w) || m_bound_kind(&mut f.upper, w)
+    });
+    in_frame || m_exprs(&mut spec.partition_by, w) || m_orders(&mut spec.order_by, w)
 }
 
 fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
@@ -853,18 +948,18 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             global,
         } => {
             site!(w, *global = !*global);
-            site!(
-                w,
-                order.push(SortOrder::asc(Expr::from(Literal::Integer(0))))
-            );
-            let any = order.iter_mut().any(|o| {
-                use NullOrdering::{NullsFirst, NullsLast};
-                use SortDirection::{Ascending, Descending};
-                site!(w, flip(&mut o.direction, Ascending, Descending));
-                site!(w, flip(&mut o.nulls, NullsFirst, NullsLast));
-                m_expr(&mut o.expr, w)
-            });
-            any || m_plan(input, w)
+            m_orders(order, w) || m_plan(input, w)
+        }
+        PlanNode::Window {
+            input,
+            exprs,
+            partition_by,
+            order_by,
+        } => {
+            m_exprs(exprs, w)
+                || m_exprs(partition_by, w)
+                || m_orders(order_by, w)
+                || m_plan(input, w)
         }
         PlanNode::SubqueryAlias {
             input,
