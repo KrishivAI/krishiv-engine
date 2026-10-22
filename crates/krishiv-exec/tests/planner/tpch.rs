@@ -385,6 +385,20 @@ pub(crate) fn check(dir: &Path, answers_path: &Path) {
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
+/// `n` without its exchange nodes.
+fn without_exchanges(n: &krishiv_exec::planner::ExplainNode) -> krishiv_exec::planner::ExplainNode {
+    if n.name.contains("Exchange")
+        && let [input] = n.children.as_slice()
+    {
+        return without_exchanges(input);
+    }
+    krishiv_exec::planner::ExplainNode::new(
+        n.name.clone(),
+        n.detail.clone(),
+        n.children.iter().map(without_exchanges).collect(),
+    )
+}
+
 /// The optimizer differential (P2-T072a): each query planned with the
 /// tables' statistics and with default estimates, which order the joins
 /// differently; both plans return Spark's answer. Returns how many queries
@@ -402,7 +416,11 @@ fn join_orders_agree(dir: &Path, answers_path: &Path, skip: &[usize]) -> usize {
         let want = expected_rows(&answers, &format!("q{q:02}"));
         let with = tpch.plan_sql_with(&sql(q), Order::Statistics).unwrap();
         let without = tpch.plan_sql_with(&sql(q), Order::Defaults).unwrap();
-        if with.to_string() == without.to_string() {
+        // Join order only: estimates also pick broadcast or partitioned
+        // joins, which run alike on one worker.
+        if without_exchanges(with.explain()).to_string()
+            == without_exchanges(without.explain()).to_string()
+        {
             continue;
         }
         differ += 1;

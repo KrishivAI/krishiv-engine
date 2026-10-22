@@ -3,23 +3,28 @@ source: crates/krishiv-exec/tests/planner/tpch.rs
 expression: tpch.plan(q).to_string()
 ---
 Sort [s_suppkey#18 ASC NULLS FIRST]
-+- Project [s_suppkey#18, s_name#19, s_address#20, s_phone#22, total_revenue#26]
-   +- HashJoin Inner, [s_suppkey#18] = [supplier_no#25], RuntimeFilter #1: s_suppkey#18 -> spark_catalog.default.supplier.s_suppkey
-      :- Scan spark_catalog.default.supplier [s_suppkey#18, s_name#19, s_address#20, s_phone#22]
-      +- Filter (total_revenue#26 == scalar-subquery)
-         :- Project revenue [supplier_no#25, total_revenue#26]
-         :  +- HashAggregate keys=[l_suppkey#2], functions=[sum((l_extendedprice#5 * (1 - l_discount#6)))]
-         :     +- Project [l_suppkey#2, (l_extendedprice#5 * (1 - l_discount#6))]
-         :        +- Project [l_suppkey#2, l_extendedprice#5, l_discount#6]
-         :           +- Filter ((l_shipdate#10 >= DATE '1996-01-01') and (l_shipdate#10 < DATE '1996-04-01'))
-         :              +- Scan spark_catalog.default.lineitem [l_suppkey#2, l_extendedprice#5, l_discount#6, l_shipdate#10], PushedFilters: [((l_shipdate#10 >= DATE '1996-01-01') and (l_shipdate#10 < DATE '1996-04-01'))]
-         +- Subquery scalar
-            +- Project [max(total_revenue#28)#4611686018427387932 AS max(total_revenue)#29]
-               +- HashAggregate keys=[], functions=[max(total_revenue#28)]
-                  +- Project [total_revenue#28]
-                     +- Project revenue [supplier_no#25, total_revenue#26] (ids +2)
-                        +- HashAggregate keys=[l_suppkey#2], functions=[sum((l_extendedprice#5 * (1 - l_discount#6)))]
-                           +- Project [l_suppkey#2, (l_extendedprice#5 * (1 - l_discount#6))]
-                              +- Project [l_suppkey#2, l_extendedprice#5, l_discount#6]
-                                 +- Filter ((l_shipdate#10 >= DATE '1996-01-01') and (l_shipdate#10 < DATE '1996-04-01'))
-                                    +- Scan spark_catalog.default.lineitem [l_suppkey#2, l_extendedprice#5, l_discount#6, l_shipdate#10], PushedFilters: [((l_shipdate#10 >= DATE '1996-01-01') and (l_shipdate#10 < DATE '1996-04-01'))]
++- Exchange rangepartitioning(s_suppkey#18 ASC NULLS FIRST)
+   +- Project [s_suppkey#18, s_name#19, s_address#20, s_phone#22, total_revenue#26]
+      +- HashJoin Inner, [s_suppkey#18] = [supplier_no#25], RuntimeFilter #1: s_suppkey#18 -> spark_catalog.default.supplier.s_suppkey
+         :- Scan spark_catalog.default.supplier [s_suppkey#18, s_name#19, s_address#20, s_phone#22]
+         +- BroadcastExchange
+            +- Filter (total_revenue#26 == scalar-subquery)
+               :- Project revenue [supplier_no#25, total_revenue#26]
+               :  +- HashAggregate keys=[l_suppkey#2], functions=[sum((l_extendedprice#5 * (1 - l_discount#6)))]
+               :     +- Exchange hashpartitioning(l_suppkey#2)
+               :        +- Project [l_suppkey#2, (l_extendedprice#5 * (1 - l_discount#6))]
+               :           +- Project [l_suppkey#2, l_extendedprice#5, l_discount#6]
+               :              +- Filter ((l_shipdate#10 >= DATE '1996-01-01') and (l_shipdate#10 < DATE '1996-04-01'))
+               :                 +- Scan spark_catalog.default.lineitem [l_suppkey#2, l_extendedprice#5, l_discount#6, l_shipdate#10], PushedFilters: [((l_shipdate#10 >= DATE '1996-01-01') and (l_shipdate#10 < DATE '1996-04-01'))]
+               +- Subquery scalar
+                  +- Project [max(total_revenue#28)#4611686018427387932 AS max(total_revenue)#29]
+                     +- HashAggregate keys=[], functions=[max(total_revenue#28)]
+                        +- Exchange SinglePartition
+                           +- Project [total_revenue#28]
+                              +- Project revenue [supplier_no#25, total_revenue#26] (ids +2)
+                                 +- HashAggregate keys=[l_suppkey#2], functions=[sum((l_extendedprice#5 * (1 - l_discount#6)))]
+                                    +- Exchange hashpartitioning(l_suppkey#2)
+                                       +- Project [l_suppkey#2, (l_extendedprice#5 * (1 - l_discount#6))]
+                                          +- Project [l_suppkey#2, l_extendedprice#5, l_discount#6]
+                                             +- Filter ((l_shipdate#10 >= DATE '1996-01-01') and (l_shipdate#10 < DATE '1996-04-01'))
+                                                +- Scan spark_catalog.default.lineitem [l_suppkey#2, l_extendedprice#5, l_discount#6, l_shipdate#10], PushedFilters: [((l_shipdate#10 >= DATE '1996-01-01') and (l_shipdate#10 < DATE '1996-04-01'))]

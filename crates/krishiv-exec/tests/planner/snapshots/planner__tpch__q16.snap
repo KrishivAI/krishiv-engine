@@ -3,14 +3,18 @@ source: crates/krishiv-exec/tests/planner/tpch.rs
 expression: tpch.plan(q).to_string()
 ---
 Sort [supplier_cnt#21 DESC NULLS LAST, p_brand#8 ASC NULLS FIRST, p_type#9 ASC NULLS FIRST, p_size#10 ASC NULLS FIRST]
-+- Project [p_brand#8, p_type#9, p_size#10, count(DISTINCT ps_suppkey#1)#4611686018427387914 AS supplier_cnt#21]
-   +- HashAggregate keys=[p_brand#8, p_type#9, p_size#10], functions=[count(DISTINCT ps_suppkey#1)]
-      +- HashJoin NullAwareAnti, [ps_suppkey#1] = [s_suppkey#14]
-         :- Project [ps_suppkey#1, p_brand#8, p_type#9, p_size#10]
-         :  +- HashJoin Inner, [ps_partkey#0] = [p_partkey#5], RuntimeFilter #1: ps_partkey#0 -> spark_catalog.default.partsupp.ps_partkey
-         :     :- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1]
-         :     +- Filter (((NOT (p_brand#8 == 'Brand#45')) and (NOT (p_type#9 like 'MEDIUM POLISHED%'))) and (p_size#10 IN (49, 14, 23, 45, 19, 3, 36, 9)))
-         :        +- Scan spark_catalog.default.part [p_partkey#5, p_brand#8, p_type#9, p_size#10], PushedFilters: [(((NOT (p_brand#8 == 'Brand#45')) and (NOT (p_type#9 like 'MEDIUM POLISHED%'))) and (p_size#10 IN (49, 14, 23, 45, 19, 3, 36, 9)))]
-         +- Project [s_suppkey#14]
-            +- Filter (s_comment#20 like '%Customer%Complaints%')
-               +- Scan spark_catalog.default.supplier [s_suppkey#14, s_comment#20], PushedFilters: [(s_comment#20 like '%Customer%Complaints%')]
++- Exchange rangepartitioning(supplier_cnt#21 DESC NULLS LAST, p_brand#8 ASC NULLS FIRST, p_type#9 ASC NULLS FIRST, p_size#10 ASC NULLS FIRST)
+   +- Project [p_brand#8, p_type#9, p_size#10, count(DISTINCT ps_suppkey#1)#4611686018427387914 AS supplier_cnt#21]
+      +- HashAggregate keys=[p_brand#8, p_type#9, p_size#10], functions=[count(DISTINCT ps_suppkey#1)]
+         +- Exchange hashpartitioning(p_brand#8, p_type#9, p_size#10)
+            +- HashJoin NullAwareAnti, [ps_suppkey#1] = [s_suppkey#14]
+               :- Project [ps_suppkey#1, p_brand#8, p_type#9, p_size#10]
+               :  +- HashJoin Inner, [ps_partkey#0] = [p_partkey#5], RuntimeFilter #1: ps_partkey#0 -> spark_catalog.default.partsupp.ps_partkey
+               :     :- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1]
+               :     +- BroadcastExchange
+               :        +- Filter (((NOT (p_brand#8 == 'Brand#45')) and (NOT (p_type#9 like 'MEDIUM POLISHED%'))) and (p_size#10 IN (49, 14, 23, 45, 19, 3, 36, 9)))
+               :           +- Scan spark_catalog.default.part [p_partkey#5, p_brand#8, p_type#9, p_size#10], PushedFilters: [(((NOT (p_brand#8 == 'Brand#45')) and (NOT (p_type#9 like 'MEDIUM POLISHED%'))) and (p_size#10 IN (49, 14, 23, 45, 19, 3, 36, 9)))]
+               +- BroadcastExchange
+                  +- Project [s_suppkey#14]
+                     +- Filter (s_comment#20 like '%Customer%Complaints%')
+                        +- Scan spark_catalog.default.supplier [s_suppkey#14, s_comment#20], PushedFilters: [(s_comment#20 like '%Customer%Complaints%')]

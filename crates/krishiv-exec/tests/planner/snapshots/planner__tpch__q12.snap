@@ -3,12 +3,15 @@ source: crates/krishiv-exec/tests/planner/tpch.rs
 expression: tpch.plan(q).to_string()
 ---
 Sort [l_shipmode#23 ASC NULLS FIRST]
-+- Project [l_shipmode#23, sum(CASE WHEN ((o_orderpriority#5 == '1-URGENT') or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END)#4611686018427387915 AS high_line_count#25, sum(CASE WHEN ((NOT (o_orderpriority#5 == '1-URGENT')) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END)#4611686018427387916 AS low_line_count#26]
-   +- HashAggregate keys=[l_shipmode#23], functions=[sum(CASE WHEN ((o_orderpriority#5 == '1-URGENT') or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END), sum(CASE WHEN ((NOT (o_orderpriority#5 == '1-URGENT')) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END)]
-      +- Project [l_shipmode#23, CASE WHEN ((o_orderpriority#5 == '1-URGENT') or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END, CASE WHEN ((NOT (o_orderpriority#5 == '1-URGENT')) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END]
-         +- Project [o_orderpriority#5, l_shipmode#23]
-            +- HashJoin Inner, [o_orderkey#0] = [l_orderkey#9], RuntimeFilter #1: o_orderkey#0 -> spark_catalog.default.orders.o_orderkey
-               :- Scan spark_catalog.default.orders [o_orderkey#0, o_orderpriority#5]
-               +- Project [l_orderkey#9, l_shipmode#23]
-                  +- Filter (((((l_shipmode#23 IN ('MAIL', 'SHIP')) and (l_commitdate#20 < l_receiptdate#21)) and (l_shipdate#19 < l_commitdate#20)) and (l_receiptdate#21 >= DATE '1994-01-01')) and (l_receiptdate#21 < DATE '1995-01-01'))
-                     +- Scan spark_catalog.default.lineitem [l_orderkey#9, l_shipdate#19, l_commitdate#20, l_receiptdate#21, l_shipmode#23], PushedFilters: [(((((l_shipmode#23 IN ('MAIL', 'SHIP')) and (l_commitdate#20 < l_receiptdate#21)) and (l_shipdate#19 < l_commitdate#20)) and (l_receiptdate#21 >= DATE '1994-01-01')) and (l_receiptdate#21 < DATE '1995-01-01'))]
++- Exchange rangepartitioning(l_shipmode#23 ASC NULLS FIRST)
+   +- Project [l_shipmode#23, sum(CASE WHEN ((o_orderpriority#5 == '1-URGENT') or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END)#4611686018427387915 AS high_line_count#25, sum(CASE WHEN ((NOT (o_orderpriority#5 == '1-URGENT')) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END)#4611686018427387916 AS low_line_count#26]
+      +- HashAggregate keys=[l_shipmode#23], functions=[sum(CASE WHEN ((o_orderpriority#5 == '1-URGENT') or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END), sum(CASE WHEN ((NOT (o_orderpriority#5 == '1-URGENT')) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END)]
+         +- Exchange hashpartitioning(l_shipmode#23)
+            +- Project [l_shipmode#23, CASE WHEN ((o_orderpriority#5 == '1-URGENT') or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END, CASE WHEN ((NOT (o_orderpriority#5 == '1-URGENT')) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END]
+               +- Project [o_orderpriority#5, l_shipmode#23]
+                  +- HashJoin Inner, [o_orderkey#0] = [l_orderkey#9], RuntimeFilter #1: o_orderkey#0 -> spark_catalog.default.orders.o_orderkey
+                     :- Scan spark_catalog.default.orders [o_orderkey#0, o_orderpriority#5]
+                     +- BroadcastExchange
+                        +- Project [l_orderkey#9, l_shipmode#23]
+                           +- Filter (((((l_shipmode#23 IN ('MAIL', 'SHIP')) and (l_commitdate#20 < l_receiptdate#21)) and (l_shipdate#19 < l_commitdate#20)) and (l_receiptdate#21 >= DATE '1994-01-01')) and (l_receiptdate#21 < DATE '1995-01-01'))
+                              +- Scan spark_catalog.default.lineitem [l_orderkey#9, l_shipdate#19, l_commitdate#20, l_receiptdate#21, l_shipmode#23], PushedFilters: [(((((l_shipmode#23 IN ('MAIL', 'SHIP')) and (l_commitdate#20 < l_receiptdate#21)) and (l_shipdate#19 < l_commitdate#20)) and (l_receiptdate#21 >= DATE '1994-01-01')) and (l_receiptdate#21 < DATE '1995-01-01'))]
