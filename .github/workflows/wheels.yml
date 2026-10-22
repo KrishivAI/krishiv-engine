@@ -98,8 +98,8 @@ jobs:
         if: matrix.libc == 'manylinux' && matrix.flavour == 'abi3'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-user
-          .github/scripts/oldcpu-import.sh "$(command -v qemu-x86_64)" dist/*abi3*.whl \
+          sudo apt-get install -y -qq qemu-user-static
+          .github/scripts/oldcpu-import.sh "$(command -v qemu-x86_64-static)" dist/*abi3*.whl \
             quay.io/pypa/manylinux_2_28_x86_64:2026.10.03-1@sha256:39df0042d5cc900b085aa25a0659368b42a0006c54c474299b785b44c1b4ff82
       - name: Test (musllinux, in the PyPA musllinux image)
         if: matrix.libc == 'musllinux'
