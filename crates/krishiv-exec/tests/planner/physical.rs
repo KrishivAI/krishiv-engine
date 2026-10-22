@@ -9,8 +9,8 @@ use arrow_schema::{DataType as ArrowType, Field, Schema};
 use krishiv_common::config::Config;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::physical::{
-    ExprEnv, HashJoinPlan, JoinFilterPlan, PhysNode, PhysicalPlan, ScanId, ScanNode,
-    ScanRuntimeFilter, WorkerContext, assert_plan_data, instantiate,
+    ExprEnv, HashJoinPlan, JoinDistribution, JoinFilterPlan, PhysNode, PhysicalPlan, ScanId,
+    ScanNode, ScanRuntimeFilter, WorkerContext, assert_plan_data, instantiate,
 };
 use krishiv_exec::planner::{
     DefaultPlanner, ExplainNode, MemoryTable, PhysicalPlanner as _, PlanningContext, TableProvider,
@@ -227,6 +227,7 @@ fn inconsistent_plans_are_internal_errors() {
                 key: 0,
                 options: KeyFilterOptions::default(),
             }],
+            distribution: JoinDistribution::Broadcast,
         })
     };
     let declared = ScanRuntimeFilter {

@@ -3,30 +3,38 @@ source: crates/krishiv-exec/tests/planner/tpch.rs
 expression: tpch.plan(q).to_string()
 ---
 Sort [s_name#1 ASC NULLS FIRST]
-+- Project [s_name#1, s_address#2]
-   +- HashJoin LeftSemi, [s_suppkey#0] = [ps_suppkey#12], RuntimeFilter #8: s_suppkey#0 -> spark_catalog.default.supplier.s_suppkey
-      :- Project [s_suppkey#0, s_name#1, s_address#2]
-      :  +- HashJoin Inner, [s_nationkey#3] = [n_nationkey#7], RuntimeFilter #1: s_nationkey#3 -> spark_catalog.default.supplier.s_nationkey
-      :     :- Scan spark_catalog.default.supplier [s_suppkey#0, s_name#1, s_address#2, s_nationkey#3]
-      :     +- Project [n_nationkey#7]
-      :        +- Filter (n_name#8 == 'CANADA')
-      :           +- Scan spark_catalog.default.nation [n_nationkey#7, n_name#8], PushedFilters: [(n_name#8 == 'CANADA')]
-      +- Project [ps_suppkey#12]
-         +- HashJoin Inner, [ps_partkey#11, ps_suppkey#12] = [l_partkey#26, l_suppkey#27], residual: (CAST(ps_availqty#13 AS DECIMAL(27,3)) > (0.5 * sum(l_quantity))#41), RuntimeFilter #6: ps_partkey#11 -> spark_catalog.default.partsupp.ps_partkey, RuntimeFilter #7: ps_suppkey#12 -> spark_catalog.default.partsupp.ps_suppkey
-            :- HashJoin LeftSemi, [ps_partkey#11] = [p_partkey#16], RuntimeFilter #2: ps_partkey#11 -> spark_catalog.default.partsupp.ps_partkey
-            :  :- Scan spark_catalog.default.partsupp [ps_partkey#11, ps_suppkey#12, ps_availqty#13]
-            :  +- Project [p_partkey#16]
-            :     +- Filter (p_name#17 like 'forest%')
-            :        +- Scan spark_catalog.default.part [p_partkey#16, p_name#17], PushedFilters: [(p_name#17 like 'forest%')]
-            +- Project [(0.5 * sum(l_quantity#29)#4611686018427387932) AS (0.5 * sum(l_quantity))#41, l_partkey#26, l_suppkey#27]
-               +- HashAggregate keys=[l_partkey#26, l_suppkey#27], functions=[sum(l_quantity#29)]
-                  +- HashJoin LeftSemi, [l_partkey#26, l_suppkey#27] = [ps_partkey#53, ps_suppkey#54], RuntimeFilter #4: l_partkey#26 -> spark_catalog.default.lineitem.l_partkey, RuntimeFilter #5: l_suppkey#27 -> spark_catalog.default.lineitem.l_suppkey
-                     :- Project [l_partkey#26, l_suppkey#27, l_quantity#29]
-                     :  +- Filter ((l_shipdate#35 >= DATE '1994-01-01') and (l_shipdate#35 < DATE '1995-01-01'))
-                     :     +- Scan spark_catalog.default.lineitem [l_partkey#26, l_suppkey#27, l_quantity#29, l_shipdate#35], PushedFilters: [((l_shipdate#35 >= DATE '1994-01-01') and (l_shipdate#35 < DATE '1995-01-01'))]
-                     +- Project [ps_partkey#11, ps_suppkey#12] (ids +42)
-                        +- HashJoin LeftSemi, [ps_partkey#11] = [p_partkey#16], RuntimeFilter #3: ps_partkey#11 -> spark_catalog.default.partsupp.ps_partkey
-                           :- Scan spark_catalog.default.partsupp [ps_partkey#11, ps_suppkey#12, ps_availqty#13]
-                           +- Project [p_partkey#16]
-                              +- Filter (p_name#17 like 'forest%')
-                                 +- Scan spark_catalog.default.part [p_partkey#16, p_name#17], PushedFilters: [(p_name#17 like 'forest%')]
++- Exchange rangepartitioning(s_name#1 ASC NULLS FIRST)
+   +- Project [s_name#1, s_address#2]
+      +- HashJoin LeftSemi, [s_suppkey#0] = [ps_suppkey#12], RuntimeFilter #8: s_suppkey#0 -> spark_catalog.default.supplier.s_suppkey
+         :- Project [s_suppkey#0, s_name#1, s_address#2]
+         :  +- HashJoin Inner, [s_nationkey#3] = [n_nationkey#7], RuntimeFilter #1: s_nationkey#3 -> spark_catalog.default.supplier.s_nationkey
+         :     :- Scan spark_catalog.default.supplier [s_suppkey#0, s_name#1, s_address#2, s_nationkey#3]
+         :     +- BroadcastExchange
+         :        +- Project [n_nationkey#7]
+         :           +- Filter (n_name#8 == 'CANADA')
+         :              +- Scan spark_catalog.default.nation [n_nationkey#7, n_name#8], PushedFilters: [(n_name#8 == 'CANADA')]
+         +- BroadcastExchange
+            +- Project [ps_suppkey#12]
+               +- HashJoin Inner, [ps_partkey#11, ps_suppkey#12] = [l_partkey#26, l_suppkey#27], residual: (CAST(ps_availqty#13 AS DECIMAL(27,3)) > (0.5 * sum(l_quantity))#41), RuntimeFilter #6: ps_partkey#11 -> spark_catalog.default.partsupp.ps_partkey, RuntimeFilter #7: ps_suppkey#12 -> spark_catalog.default.partsupp.ps_suppkey
+                  :- HashJoin LeftSemi, [ps_partkey#11] = [p_partkey#16], RuntimeFilter #2: ps_partkey#11 -> spark_catalog.default.partsupp.ps_partkey
+                  :  :- Scan spark_catalog.default.partsupp [ps_partkey#11, ps_suppkey#12, ps_availqty#13]
+                  :  +- BroadcastExchange
+                  :     +- Project [p_partkey#16]
+                  :        +- Filter (p_name#17 like 'forest%')
+                  :           +- Scan spark_catalog.default.part [p_partkey#16, p_name#17], PushedFilters: [(p_name#17 like 'forest%')]
+                  +- BroadcastExchange
+                     +- Project [(0.5 * sum(l_quantity#29)#4611686018427387932) AS (0.5 * sum(l_quantity))#41, l_partkey#26, l_suppkey#27]
+                        +- HashAggregate keys=[l_partkey#26, l_suppkey#27], functions=[sum(l_quantity#29)]
+                           +- Exchange hashpartitioning(l_partkey#26, l_suppkey#27)
+                              +- HashJoin LeftSemi, [l_partkey#26, l_suppkey#27] = [ps_partkey#53, ps_suppkey#54], RuntimeFilter #4: l_partkey#26 -> spark_catalog.default.lineitem.l_partkey, RuntimeFilter #5: l_suppkey#27 -> spark_catalog.default.lineitem.l_suppkey
+                                 :- Project [l_partkey#26, l_suppkey#27, l_quantity#29]
+                                 :  +- Filter ((l_shipdate#35 >= DATE '1994-01-01') and (l_shipdate#35 < DATE '1995-01-01'))
+                                 :     +- Scan spark_catalog.default.lineitem [l_partkey#26, l_suppkey#27, l_quantity#29, l_shipdate#35], PushedFilters: [((l_shipdate#35 >= DATE '1994-01-01') and (l_shipdate#35 < DATE '1995-01-01'))]
+                                 +- BroadcastExchange
+                                    +- Project [ps_partkey#11, ps_suppkey#12] (ids +42)
+                                       +- HashJoin LeftSemi, [ps_partkey#11] = [p_partkey#16], RuntimeFilter #3: ps_partkey#11 -> spark_catalog.default.partsupp.ps_partkey
+                                          :- Scan spark_catalog.default.partsupp [ps_partkey#11, ps_suppkey#12, ps_availqty#13]
+                                          +- BroadcastExchange
+                                             +- Project [p_partkey#16]
+                                                +- Filter (p_name#17 like 'forest%')
+                                                   +- Scan spark_catalog.default.part [p_partkey#16, p_name#17], PushedFilters: [(p_name#17 like 'forest%')]
