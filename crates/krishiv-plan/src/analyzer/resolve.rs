@@ -426,10 +426,47 @@ impl Resolver<'_> {
         }
     }
 
+    /// `LIMIT limit` over `c`. Out of line, like the other leaves of the
+    /// per-level recursion: deep plans resolve on a small stack, and a
+    /// debug build gives every local of `node` its own slot.
+    #[inline(never)]
+    fn limit_of(
+        &mut self,
+        o: Origin,
+        c: Rel,
+        limit: &Arc<Expr>,
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        // A name resolves against the input (and is then not a constant:
+        // `IS_UNFOLDABLE`).
+        let rels = [&c];
+        let cx = Self::cx(&c.out, &rels, env, "Limit");
+        let b = self.bind(limit, &cx)?;
+        if b.ty.data_type != Some(krishiv_types::DataType::Integer) {
+            return Err(AnalysisError::new(
+                krishiv_common::error::InvalidLimitLikeExpressionDataType {
+                    expr: format!("\"{}\"", super::exprs::pretty(&b.shown())),
+                    name: "limit".to_owned(),
+                    data_type: super::coerce::quoted_type(b.ty.data_type.as_ref()),
+                },
+                limit.origin,
+            ));
+        }
+        self.check_limit(&b, limit.origin, c.plan.origin)?;
+        let node = PlanNode::Limit {
+            input: Arc::clone(&c.plan),
+            limit: b.expr,
+        };
+        let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
+        r.widen = Some(Arc::new(Widen::Through { child: c }));
+        Ok(r)
+    }
+
     /// Spark's checks of a `LIMIT` value, after its type: it must fold
     /// (`IS_UNFOLDABLE`), to a value that is not NULL
     /// and not negative (cited at the expression); what folding raises
     /// (`2147483647 + 1` under ANSI) is raised as is.
+    #[inline(never)]
     fn check_limit(
         &self,
         b: &super::exprs::Bound,
@@ -648,29 +685,7 @@ impl Resolver<'_> {
             } => self.sort(p, input, order, *global, env),
             PlanNode::Limit { input, limit } => {
                 let c = self.child(input, env)?;
-                // A name resolves against the input (and is then not a
-                // constant: `IS_UNFOLDABLE`).
-                let rels = [&c];
-                let cx = Self::cx(&c.out, &rels, env, "Limit");
-                let b = self.bind(limit, &cx)?;
-                if b.ty.data_type != Some(krishiv_types::DataType::Integer) {
-                    return Err(AnalysisError::new(
-                        krishiv_common::error::InvalidLimitLikeExpressionDataType {
-                            expr: format!("\"{}\"", super::exprs::pretty(&b.shown())),
-                            name: "limit".to_owned(),
-                            data_type: super::coerce::quoted_type(b.ty.data_type.as_ref()),
-                        },
-                        limit.origin,
-                    ));
-                }
-                self.check_limit(&b, limit.origin, c.plan.origin)?;
-                let node = PlanNode::Limit {
-                    input: Arc::clone(&c.plan),
-                    limit: b.expr,
-                };
-                let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
-                r.widen = Some(Arc::new(Widen::Through { child: c }));
-                Ok(r)
+                self.limit_of(o, c, limit, env)
             }
             PlanNode::SubqueryAlias {
                 input,

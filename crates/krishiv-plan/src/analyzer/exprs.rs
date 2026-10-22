@@ -485,14 +485,14 @@ impl Resolver<'_> {
                     deterministic: entry.deterministic,
                 };
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
-                let folded = self.legacy_day_count(&f.name, &kids[..n]);
+                let shown = self.call_shown(&f.name, &expr, kids, &call_kids);
                 Bound {
                     agg: if entry.kind == FunctionKind::Aggregate {
                         Some(e.origin)
                     } else {
                         agg
                     },
-                    shown: shown_call(&expr, folded.as_deref().unwrap_or(kids), &call_kids),
+                    shown,
                     expr,
                     ..keep(ty)
                 }
@@ -665,9 +665,22 @@ impl Resolver<'_> {
         Ok((call_kids, ty))
     }
 
-    /// `date_add(d, ' 12 ')` and `date_add(d, '1' || '2')` without ANSI show
-    /// the day count as an integer (`date_add(d, 12)`): Spark folds the
-    /// string it casts to `INT`. `None` when `kids` show as they are.
+    /// The shown form of the call `expr` (see [`shown_call`]); `date_add(d,
+    /// ' 12 ')` and `date_add(d, '1' || '2')` without ANSI show the day count
+    /// as an integer (`date_add(d, 12)`): Spark folds the string it casts to
+    /// `INT`. Out of line: it is on the path of every call.
+    #[inline(never)]
+    fn call_shown(
+        &self,
+        name: &str,
+        expr: &Expr,
+        kids: &[Bound],
+        cast: &[Bound],
+    ) -> Option<Arc<Expr>> {
+        let days = self.legacy_day_count(name, kids);
+        shown_call(expr, days.as_deref().unwrap_or(kids), cast)
+    }
+
     fn legacy_day_count(&self, name: &str, kids: &[Bound]) -> Option<Vec<Bound>> {
         if self.ctx.conf.ansi
             || !["date_add", "dateadd", "date_sub"]
@@ -1646,7 +1659,18 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
         let mut hashes: Vec<u128> = Vec::new();
         match (order, name) {
             (Canon::Commutative { flatten }, Some(f)) => {
-                collect_operands(x, f, flatten, memo, &mut hashes);
+                // Flattening reads a nested operator's operands again for each
+                // way it is shared, so it stops at a bound; past it the
+                // operands are the call's own (equal expressions written the
+                // same way still match).
+                let mut budget = FLATTEN_BUDGET;
+                if !(flatten && collect_operands(x, f, memo, &mut hashes, &mut budget)) {
+                    hashes.clear();
+                    hashes.extend(
+                        kids.iter()
+                            .map(|c| memo.get(&addr(*c)).copied().unwrap_or(0)),
+                    );
+                }
                 hashes.sort_unstable();
             }
             (Canon::Flipped(_), _) => {
@@ -1669,25 +1693,39 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
     memo.get(&addr(e)).copied().unwrap_or(0)
 }
 
-/// The operand hashes of `x`, a call of `f`: those of nested calls of the
-/// same operator and result type are gathered too when `flatten` (Spark's
-/// `gatherCommutative`).
+/// The most nodes [`collect_operands`] reads for one call.
+const FLATTEN_BUDGET: usize = 64;
+
+/// Adds the operand hashes of `x`, a call of `f`, to `out`: those of nested
+/// calls of the same operator and result type are gathered too (Spark's
+/// `gatherCommutative`). `false` when `budget` nodes were not enough, which
+/// keeps a shared operand (a DAG that is exponentially large as a tree) from
+/// being read once per path.
 fn collect_operands(
     x: &Expr,
     f: &ResolvedFunction,
-    flatten: bool,
     memo: &HashMap<usize, u128>,
     out: &mut Vec<u128>,
-) {
+    budget: &mut usize,
+) -> bool {
+    let mut done = true;
     x.for_each_child(&mut |c| {
-        if flatten
-            && let ExprNode::Resolved(ResolvedExpr::Function(g)) = &c.node
+        if !done {
+            return;
+        }
+        let Some(left) = budget.checked_sub(1) else {
+            done = false;
+            return;
+        };
+        *budget = left;
+        if let ExprNode::Resolved(ResolvedExpr::Function(g)) = &c.node
             && g.id == f.id
             && g.data_type == f.data_type
         {
-            collect_operands(c, g, flatten, memo, out);
+            done = collect_operands(c, g, memo, out, budget);
         } else {
             out.push(memo.get(&addr(&**c)).copied().unwrap_or(0));
         }
     });
+    done
 }

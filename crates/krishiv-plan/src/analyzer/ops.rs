@@ -849,6 +849,7 @@ impl Resolver<'_> {
     /// `semanticEquals`) replaced by the attribute the aggregate computes
     /// it as, added to the aggregate when it does not output it. `None`
     /// when nothing matches, or `e` holds a subquery.
+    #[inline(never)]
     fn group_substitute(&mut self, e: &Arc<Expr>, st: &mut Grouped<'_>) -> Option<Arc<Expr>> {
         let info = st.info;
         let rels = [&info.input];
