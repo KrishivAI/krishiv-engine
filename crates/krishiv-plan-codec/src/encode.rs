@@ -10,9 +10,9 @@ use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExprEnv, HashJoinPlan, JoinFilterPlan, NestedLoopPlan, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SubqueryPlan,
-    SubqueryValueKind,
+    AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution, JoinFilterPlan,
+    NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan, Residual, ScanFilter,
+    ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::{RowStageSettings, SortKey};
@@ -210,6 +210,7 @@ impl Encoder {
             PhysNode::WriteFiles { input } => Kind::WriteFiles(pb::WriteFilesNode {
                 input: self.node_index(input)?,
             }),
+            PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
         };
         Ok(pb::Node { kind: Some(kind) })
     }
@@ -285,6 +286,7 @@ impl Encoder {
             null_safe: join.null_safe.clone(),
             residual: self.residual(join.residual.as_ref())?,
             runtime_filters: join.runtime_filters.iter().map(join_filter).collect(),
+            distribution: distribution(join.distribution) as i32,
         })
     }
 
@@ -294,6 +296,14 @@ impl Encoder {
             build: self.node_index(&join.build)?,
             join_type: join_type(join.join_type) as i32,
             residual: self.residual(join.residual.as_ref())?,
+        })
+    }
+
+    fn exchange(&self, exchange: &ExchangePlan) -> Result<pb::ExchangeNode> {
+        Ok(pb::ExchangeNode {
+            id: exchange.id.0,
+            input: self.node_index(&exchange.input)?,
+            partitioning: Some(partitioning(&exchange.partitioning)),
         })
     }
 
@@ -461,6 +471,30 @@ fn join_type(t: JoinType) -> pb::JoinType {
         JoinType::LeftSemi => pb::JoinType::LeftSemi,
         JoinType::LeftAnti => pb::JoinType::LeftAnti,
         JoinType::NullAwareAnti => pb::JoinType::NullAwareAnti,
+    }
+}
+
+fn distribution(d: JoinDistribution) -> pb::JoinDistribution {
+    match d {
+        JoinDistribution::Broadcast => pb::JoinDistribution::Broadcast,
+        JoinDistribution::Partitioned => pb::JoinDistribution::Partitioned,
+    }
+}
+
+fn partitioning(p: &Partitioning) -> pb::Partitioning {
+    use pb::partitioning::Kind;
+    pb::Partitioning {
+        kind: Some(match p {
+            Partitioning::Hash { keys } => Kind::Hash(pb::HashPartitioning {
+                keys: indexes(keys),
+            }),
+            Partitioning::Single => Kind::Single(pb::Empty {}),
+            Partitioning::Broadcast => Kind::Broadcast(pb::Empty {}),
+            Partitioning::RoundRobin => Kind::RoundRobin(pb::Empty {}),
+            Partitioning::Range { keys } => Kind::Range(pb::RangePartitioning {
+                keys: keys.iter().map(sort_key).collect(),
+            }),
+        }),
     }
 }
 

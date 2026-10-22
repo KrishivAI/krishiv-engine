@@ -47,6 +47,7 @@ variants!(
     NestedLoopJoin,
     Union,
     WriteFiles,
+    Exchange,
 );
 
 fn variant_of(node: &PhysNode) -> Variant {
@@ -64,6 +65,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::NestedLoopJoin(_) => Variant::NestedLoopJoin,
         PhysNode::Union { .. } => Variant::Union,
         PhysNode::WriteFiles { .. } => Variant::WriteFiles,
+        PhysNode::Exchange(_) => Variant::Exchange,
     }
 }
 
@@ -505,4 +507,57 @@ fn limits_bound_expression_depth() {
         matches!(&err, CodecError::Limit(m) if m.contains("expression deeper than 50")),
         "{err:?}"
     );
+}
+
+#[test]
+fn v1_hash_join_without_a_distribution_decodes_as_broadcast() {
+    // v1 bytes carry no `distribution` (field 9): the partitioned join did
+    // not exist yet, and every hash join broadcast its build.
+    let mut m = message("hash_join");
+    let last = m.nodes.len() - 1;
+    let pb::node::Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.distribution = pb::JoinDistribution::Unspecified as i32;
+    let plan = decode(&m.encode_to_vec()).unwrap();
+    let PhysNode::HashJoin(join) = plan.root() else {
+        panic!("not a join")
+    };
+    assert_eq!(
+        join.distribution,
+        krishiv_exec::physical::JoinDistribution::Broadcast
+    );
+}
+
+#[test]
+fn an_unknown_join_distribution_is_corrupt() {
+    let mut m = message("hash_join");
+    let last = m.nodes.len() - 1;
+    let pb::node::Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.distribution = 99;
+    corrupt(&m, "unknown join distribution");
+}
+
+#[test]
+fn an_exchange_without_a_partitioning_is_corrupt() {
+    let mut m = message("exchange_hash");
+    let last = m.nodes.len() - 1;
+    let pb::node::Kind::Exchange(e) = node_mut(&mut m, last) else {
+        panic!("not an exchange")
+    };
+    e.partitioning = None;
+    corrupt(&m, "partitioning is missing");
+}
+
+#[test]
+fn an_exchange_without_a_partitioning_kind_is_corrupt() {
+    let mut m = message("exchange_hash");
+    let last = m.nodes.len() - 1;
+    let pb::node::Kind::Exchange(e) = node_mut(&mut m, last) else {
+        panic!("not an exchange")
+    };
+    e.partitioning = Some(pb::Partitioning { kind: None });
+    corrupt(&m, "partitioning kind is missing");
 }

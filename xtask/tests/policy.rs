@@ -399,12 +399,26 @@ fn security_workflows_are_wired() {
         "the CI-only rust-cache exception is missing"
     );
     let osv = read(".github/workflows/osv-scanner.yml");
-    for lock in ["Cargo.lock", "python/uv.lock", "bench/uv.lock"] {
-        assert!(
-            osv.contains(&format!("--lockfile={lock}")),
-            "osv lacks {lock}"
-        );
+    // The scan walks the tree instead of listing lock files, so a lock
+    // file a pull request adds does not fail the base scan.
+    let blocks: Vec<&str> = osv.split("scan-args: |-").skip(1).collect();
+    assert_eq!(
+        blocks.len(),
+        2,
+        "osv-scanner.yml must have a scan-pr and a scan job"
+    );
+    for block in &blocks {
+        for needle in ["--recursive", "--experimental-exclude=ui", "./"] {
+            assert!(
+                block.contains(needle),
+                "osv scan job lacks {needle:?}: {block}"
+            );
+        }
     }
+    assert!(
+        !osv.contains("--lockfile="),
+        "osv-scanner.yml must not list lock files"
+    );
     assert!(osv.contains("osv-scanner-reusable-pr.yml@"));
     assert!(osv.contains("osv-scanner-reusable.yml@"));
     assert!(osv.contains("schedule:"));

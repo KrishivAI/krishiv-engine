@@ -11,9 +11,10 @@ use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExprEnv, HashJoinPlan, JoinFilterPlan, NestedLoopPlan, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId,
-    SubqueryPlan, SubqueryValueKind,
+    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution,
+    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
+    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
+    SubqueryValueKind,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::{RowStageSettings, SortKey};
@@ -324,6 +325,7 @@ impl Decoder {
             Kind::WriteFiles(w) => PhysNode::WriteFiles {
                 input: self.boxed(w.input)?,
             },
+            Kind::Exchange(e) => PhysNode::Exchange(self.exchange(e)?),
         })
     }
 
@@ -385,6 +387,15 @@ impl Decoder {
                 .iter()
                 .map(join_filter)
                 .collect::<Result<_>>()?,
+            distribution: distribution(j.distribution)?,
+        })
+    }
+
+    fn exchange(&mut self, e: &pb::ExchangeNode) -> Result<ExchangePlan> {
+        Ok(ExchangePlan {
+            id: ExchangeId(e.id),
+            input: self.boxed(e.input)?,
+            partitioning: partitioning(required(&e.partitioning, "the partitioning")?)?,
         })
     }
 
@@ -562,6 +573,33 @@ fn join_type(t: i32) -> Result<JoinType> {
         pb::JoinType::LeftSemi => JoinType::LeftSemi,
         pb::JoinType::LeftAnti => JoinType::LeftAnti,
         _ => JoinType::NullAwareAnti,
+    })
+}
+
+fn distribution(d: i32) -> Result<JoinDistribution> {
+    // v1 bytes carry no distribution (`UNSPECIFIED`): they predate the
+    // partitioned join, when every hash join broadcast its build.
+    Ok(match pb::JoinDistribution::try_from(d) {
+        Ok(pb::JoinDistribution::Unspecified | pb::JoinDistribution::Broadcast) => {
+            JoinDistribution::Broadcast
+        }
+        Ok(pb::JoinDistribution::Partitioned) => JoinDistribution::Partitioned,
+        Err(_) => return Err(corrupt("an unknown join distribution")),
+    })
+}
+
+fn partitioning(p: &pb::Partitioning) -> Result<Partitioning> {
+    use pb::partitioning::Kind;
+    Ok(match required(&p.kind, "a partitioning kind")? {
+        Kind::Hash(h) => Partitioning::Hash {
+            keys: usizes(&h.keys)?,
+        },
+        Kind::Single(_) => Partitioning::Single,
+        Kind::Broadcast(_) => Partitioning::Broadcast,
+        Kind::RoundRobin(_) => Partitioning::RoundRobin,
+        Kind::Range(r) => Partitioning::Range {
+            keys: sort_keys(&r.keys)?,
+        },
     })
 }
 

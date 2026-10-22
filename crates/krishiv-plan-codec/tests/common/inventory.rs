@@ -11,9 +11,10 @@ use krishiv_common::secret::OptionValue;
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExprEnv, HashJoinPlan, JoinFilterPlan, NestedLoopPlan, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId,
-    SubqueryPlan, SubqueryValueKind,
+    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution,
+    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
+    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
+    SubqueryValueKind,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::{RowStageSettings, SortKey};
@@ -240,6 +241,7 @@ fn join(join_type: JoinType) -> HashJoinPlan {
                 bloom_max_fpp: 0.05,
             },
         }],
+        distribution: JoinDistribution::Broadcast,
     }
 }
 
@@ -359,6 +361,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             }),
         ),
         (
+            "hash_join_partitioned",
+            PhysNode::HashJoin(HashJoinPlan {
+                distribution: JoinDistribution::Partitioned,
+                ..join(JoinType::Inner)
+            }),
+        ),
+        (
             "nested_loop_join",
             PhysNode::NestedLoopJoin(NestedLoopPlan {
                 probe: boxed(scan()),
@@ -378,6 +387,48 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::WriteFiles {
                 input: boxed(scan()),
             },
+        ),
+        (
+            "exchange_hash",
+            PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(11),
+                input: boxed(scan()),
+                partitioning: Partitioning::Hash { keys: vec![0, 1] },
+            }),
+        ),
+        (
+            "exchange_single",
+            PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(12),
+                input: boxed(scan()),
+                partitioning: Partitioning::Single,
+            }),
+        ),
+        (
+            "exchange_broadcast",
+            PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(13),
+                input: boxed(scan()),
+                partitioning: Partitioning::Broadcast,
+            }),
+        ),
+        (
+            "exchange_round_robin",
+            PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(14),
+                input: boxed(scan()),
+                partitioning: Partitioning::RoundRobin,
+            }),
+        ),
+        (
+            "exchange_range",
+            PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(15),
+                input: boxed(scan()),
+                partitioning: Partitioning::Range {
+                    keys: vec![SortKey::asc(0), SortKey::desc(1)],
+                },
+            }),
         ),
     ]
 }
