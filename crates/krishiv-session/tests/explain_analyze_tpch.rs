@@ -123,7 +123,15 @@ fn q1_scan_and_aggregate_counts_match_independent_queries() {
         &s,
         "SELECT count(*) FROM lineitem WHERE l_shipdate <= date '1998-09-02'",
     );
+    let total = count(&s, "SELECT count(*) FROM lineitem");
+    assert_eq!(total, (4 * ORDERS) as u64);
     assert!(qualifying > 0);
+    // The fixture straddles the cutoff: the filter must remove rows, so a
+    // scan that returned everything would fail the count below.
+    assert!(
+        qualifying < total,
+        "qualifying {qualifying} of {total} lineitems"
+    );
     // The scan's filter is pushed down: it emits the qualifying rows, which
     // the aggregate then consumes in full.
     let scanned: u64 = m
@@ -142,6 +150,27 @@ fn q1_scan_and_aggregate_counts_match_independent_queries() {
     );
     assert_eq!(rows_out(m, OperatorRole::Source, "HashAggregate"), groups);
     assert_eq!(rows(&got), groups);
+}
+
+#[test]
+fn q9_result_count_matches_independent_query() {
+    let s = session();
+    let df = block_on(s.sql(&query(9))).unwrap();
+    let (got, _) = block_on(df.collect_with_profile()).unwrap();
+    let actual = rows(&got);
+    // One row per (nation, year) group: the distinct groups of the same
+    // joined rows Q9 aggregates, counted without the aggregation.
+    let expected = count(
+        &s,
+        "SELECT count(*) FROM (SELECT DISTINCT n_name AS nation, \
+         extract(year FROM o_orderdate) AS o_year FROM part, supplier, \
+         lineitem, partsupp, orders, nation WHERE s_suppkey = l_suppkey \
+         AND ps_suppkey = l_suppkey AND ps_partkey = l_partkey \
+         AND p_partkey = l_partkey AND o_orderkey = l_orderkey \
+         AND s_nationkey = n_nationkey AND p_name LIKE '%green%')",
+    );
+    assert_eq!(expected, 16, "the fixture yields 16 (nation, year) groups");
+    assert_eq!(actual, expected, "q9 returns one row per group");
 }
 
 #[test]

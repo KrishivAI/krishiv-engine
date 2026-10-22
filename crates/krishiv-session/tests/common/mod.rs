@@ -160,7 +160,12 @@ fn cell(table: &str, col: &str, i: usize, n: usize) -> V {
         ("lineitem", "l_tax") => int(i % 4),
         ("lineitem", "l_returnflag") => V::Text(["A", "N", "R"][i % 3].to_owned()),
         ("lineitem", "l_linestatus") => V::Text(["O", "F"][i % 2].to_owned()),
-        ("lineitem", "l_shipdate") => int(8000 + 10 * (i / 4) + 5 + i % 4),
+        ("lineitem", "l_shipdate") => {
+            // The first half of the orders ships before Q1's 1998-09-02
+            // cutoff (day 10471), the second half after, so the filter
+            // removes rows for every data-set size.
+            int(8000 + 10 * (i / 4) + 5 + i % 4 + if (i / 4) >= n / 2 { 2500 } else { 0 })
+        }
         _ => V::Text(String::new()),
     }
 }

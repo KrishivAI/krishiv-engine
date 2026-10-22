@@ -39,13 +39,14 @@ import krishiv
 print(krishiv.build_info(), sys.version)
 assert krishiv.build_info()["allocator"] == "mimalloc"
 # The acceptance smoke: a session, a query, an Arrow table. `toArrow` needs
-# pyarrow; a target without a pyarrow wheel (noticed above) runs `collect`.
+# pyarrow; a target without a pyarrow wheel (noticed above) runs `count`,
+# which needs no Arrow library.
 df = krishiv.session().sql("select 1")
 try:
     import pyarrow  # noqa: F401
 except ImportError:
-    print("::notice::no pyarrow on this target; the smoke runs collect() instead of toArrow()")
-    assert [tuple(r) for r in df.collect()] == [(1,)]
+    print("::notice::no pyarrow on this target; the smoke runs count() instead of toArrow()")
+    assert df.count() == 1
 else:
     table = df.toArrow()
     assert table.num_rows == 1 and table.column(0).to_pylist() == [1], table
