@@ -9,6 +9,16 @@
 //! published a new generation since the units were planned, the row groups
 //! not started yet are pruned again with it and the push decoder is
 //! rebuilt over the survivors (its buffered bytes carry over).
+//!
+//! **Memory.** [`Decoder::buffered_bytes`] covers the push decoder's
+//! buffered column chunks; [`Decoder::working_bytes`] the row group being
+//! decoded: once the push decoder hands out a row group's reader it no
+//! longer counts that row group's column chunks, but the reader holds them
+//! until it ends, plus one decompressed page per column and the batch being
+//! built. From when the reader is handed out until it ends it is charged its
+//! row group's compressed chunks (exact) and [`Unit::decode`], an estimate of
+//! the rest: per column `min(uncompressed chunk, PAGE_ESTIMATE)` plus one
+//! batch of decoded rows.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -65,6 +75,35 @@ struct Unit {
     chunks: Vec<Range<u64>>,
     /// Compressed bytes of the row group.
     bytes: u64,
+    /// Bytes of `chunks`: what the row group's reader holds compressed.
+    chunk_bytes: usize,
+    /// What decoding the row group holds on top of its chunks (module
+    /// docs).
+    decode: usize,
+}
+
+/// Decompressed bytes one column holds per page while it is decoded: the
+/// common writers' data page size limit (parquet-rs, parquet-mr and
+/// DuckDB all default to 1 MiB pages), capped by the column chunk's own
+/// uncompressed size.
+const PAGE_ESTIMATE: u64 = 1 << 20;
+
+/// [`Unit::decode`] of row group `rg` over the projected `leaves`: a
+/// decompressed page per column and one output batch (`BATCH_ROWS` rows at
+/// the row group's average uncompressed row width). The sizes come from the
+/// footer (untrusted): saturating, and only ever an estimate to reserve.
+fn decode_bytes(rg: &parquet::file::metadata::RowGroupMetaData, leaves: &[usize]) -> usize {
+    let mut pages = 0u64;
+    let mut uncompressed = 0u64;
+    for c in leaves.iter().filter_map(|&l| rg.columns().get(l)) {
+        let unc = u64::try_from(c.uncompressed_size()).unwrap_or(0);
+        pages = pages.saturating_add(unc.min(PAGE_ESTIMATE));
+        uncompressed = uncompressed.saturating_add(unc);
+    }
+    let rows = u64::try_from(rg.num_rows()).unwrap_or(0).max(1);
+    let batch_rows = (BATCH_ROWS as u64).min(rows);
+    let batch = (uncompressed / rows).saturating_mul(batch_rows);
+    usize::try_from(pages.saturating_add(batch)).unwrap_or(usize::MAX)
 }
 
 /// See the module docs.
@@ -73,6 +112,13 @@ pub(crate) struct ParquetDecoder {
     decoder: Option<ParquetPushDecoder>,
     /// The current row group's reader.
     reader: Option<ParquetRecordBatchReader>,
+    /// What the current reader holds: its row group's chunk bytes and
+    /// decoding estimate (0 without a reader).
+    reading: usize,
+    /// The row group (file index) whose chunks the decoder asked for last:
+    /// the push decoder asks for every row group's chunks before it hands
+    /// out that row group's reader.
+    fetching: Option<usize>,
     /// Planned row groups, in order.
     planned: Vec<Unit>,
     meta: Arc<ParquetMetadata>,
@@ -157,22 +203,27 @@ impl ParquetDecoder {
                 }
             };
             let rg = meta.reader.metadata().row_group(u.index);
+            let chunks: Vec<Range<u64>> = leaves
+                .iter()
+                .filter_map(|&l| {
+                    let c = rg.columns().get(l)?;
+                    let start =
+                        u64::try_from(c.dictionary_page_offset().unwrap_or(c.data_page_offset()))
+                            .ok()?;
+                    let len = u64::try_from(c.compressed_size()).ok()?;
+                    Some(start..start.checked_add(len)?)
+                })
+                .collect();
+            let chunk_bytes = chunks
+                .iter()
+                .fold(0u64, |n, r| n.saturating_add(r.end - r.start));
             planned.push(Unit {
                 index: u.index,
                 selection,
-                chunks: leaves
-                    .iter()
-                    .filter_map(|&l| {
-                        let c = rg.columns().get(l)?;
-                        let start = u64::try_from(
-                            c.dictionary_page_offset().unwrap_or(c.data_page_offset()),
-                        )
-                        .ok()?;
-                        let len = u64::try_from(c.compressed_size()).ok()?;
-                        Some(start..start + len)
-                    })
-                    .collect(),
+                chunks,
                 bytes: u.bytes.end - u.bytes.start,
+                chunk_bytes: usize::try_from(chunk_bytes).unwrap_or(usize::MAX),
+                decode: decode_bytes(rg, &leaves),
             });
         }
         let selections = planned
@@ -211,6 +262,8 @@ impl ParquetDecoder {
         Ok(Self {
             decoder: Some(decoder),
             reader: None,
+            reading: 0,
+            fetching: None,
             planned,
             meta: Arc::clone(meta),
             // The units were planned with these generations' filters.
@@ -371,6 +424,7 @@ impl ParquetDecoder {
                     }
                     None => {
                         self.reader = None;
+                        self.reading = 0;
                         continue;
                     }
                 }
@@ -381,8 +435,26 @@ impl ParquetDecoder {
                 decoder.try_next_reader().map_err(|e| decode_error(&e))
             })?;
             match result {
-                DecodeResult::NeedsData(ranges) => return Ok(Step::NeedData(ranges)),
-                DecodeResult::Data(reader) => self.reader = Some(reader),
+                DecodeResult::NeedsData(ranges) => {
+                    let unit = ranges.first().and_then(|r| {
+                        self.planned.iter().find(|u| {
+                            u.chunks
+                                .iter()
+                                .any(|c| c.start <= r.start && r.start < c.end)
+                        })
+                    });
+                    self.fetching = unit.map(|u| u.index);
+                    return Ok(Step::NeedData(ranges));
+                }
+                DecodeResult::Data(reader) => {
+                    // No chunk was asked for (no column projected): the
+                    // reader holds no column data.
+                    let index = self.fetching.take();
+                    self.reading = index
+                        .and_then(|i| self.planned.iter().find(|u| u.index == i))
+                        .map_or(0, |u| u.chunk_bytes.saturating_add(u.decode));
+                    self.reader = Some(reader);
+                }
                 DecodeResult::Finished => return Ok(Step::Done),
             }
         }
@@ -439,6 +511,16 @@ impl Decoder for ParquetDecoder {
         self.decoder.as_ref().map_or(0, |d| {
             usize::try_from(d.buffered_bytes()).unwrap_or(usize::MAX)
         })
+    }
+
+    fn working_bytes(&self) -> usize {
+        self.reading
+    }
+
+    fn next_decode_bytes(&self) -> usize {
+        self.fetching
+            .and_then(|i| self.planned.iter().find(|u| u.index == i))
+            .map_or(0, |u| u.decode)
     }
 
     fn metrics(&self) -> ScanUnitMetrics {

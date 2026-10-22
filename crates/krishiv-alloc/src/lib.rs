@@ -30,6 +30,9 @@
 //! environment instead. [`release`] is the pressure release hook
 //! (`mi_collect(true)`).
 
+#[cfg(feature = "heap-stats")]
+pub mod heap;
+
 use std::ffi::{CStr, c_int, c_long};
 
 /// `(environment variable, mimalloc option number, value)` set under a

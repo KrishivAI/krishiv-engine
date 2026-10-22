@@ -9,8 +9,15 @@ use std::process::ExitCode;
 
 use krishiv_bench_runner::{Runner, RunnerConfig, serve};
 
+#[cfg(not(feature = "heap-stats"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// A measurement build: mimalloc with its live heap counted.
+#[cfg(feature = "heap-stats")]
+#[global_allocator]
+static GLOBAL: krishiv_alloc::heap::Counting<mimalloc::MiMalloc> =
+    krishiv_alloc::heap::Counting(mimalloc::MiMalloc);
 
 fn main() -> ExitCode {
     // First, so a CPU older than the build targets gets a message instead of SIGILL.

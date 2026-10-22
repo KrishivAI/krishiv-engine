@@ -8,13 +8,20 @@
 //! will need ([`Decoder::upcoming`]) within `krishiv.io.prefetchBytes`; map
 //! each batch to the table schema.
 //!
-//! **Memory (ADR 0007).** The stream's [`Reservation`] always covers the
-//! decoder's buffered bytes plus prefetched bytes. Bytes the decoder needs
-//! to progress (one unit's column chunks, in dependency order) are reserved
-//! with waiting ([`Reservation::grow`], which may arbitrate); prefetch only
-//! with [`Reservation::try_grow`], and is the first thing dropped
-//! ([`ScanStream::release_prefetch`], the scan's spill). Dropping the stream
-//! returns everything.
+//! **Memory (ADR 0007).** Prefetched bytes are reserved in the stream's
+//! [`Reservation`] with [`Reservation::try_grow`] only, and are the first
+//! thing dropped ([`ScanStream::release_prefetch`]). What the decoder holds
+//! (its buffered bytes, and the unit being decoded:
+//! [`Decoder::working_bytes`], or before the unit's reader starts its
+//! decoding estimate, [`Decoder::next_decode_bytes`]) is, with the query's
+//! [`ScanGate`], the stream's share of the gate: grown before a unit's
+//! bytes are fetched (the gate may make the stream wait for other streams'
+//! units to end; it never aborts the query) and shrunk as the decoder
+//! releases them. Without a gate it is the stream's reservation too, where
+//! bytes the decoder needs to progress (one unit's column chunks, in
+//! dependency order) are reserved with waiting ([`Reservation::grow`],
+//! which may arbitrate) and the unit being decoded is not counted.
+//! Dropping the stream returns everything.
 //!
 //! **Cancellation.** Every await is drop-safe: dropping a pending
 //! [`ScanStream::next_batch`] cancels its requests; the decoder never saw a
@@ -22,6 +29,7 @@
 
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use bytes::Bytes;
@@ -35,6 +43,7 @@ use crate::format::{Decoder, FileFormat, MetadataNeeds, ScanUnitMetrics, Step};
 use crate::io::{ByteRange, FileRef, IoContext};
 use crate::options::FormatOptions;
 use crate::request::ScanRequest;
+use crate::scan_gate::ScanGate;
 use crate::schema_map::SchemaMapper;
 
 /// Per-scan settings.
@@ -159,6 +168,20 @@ pub struct ScanStream {
     /// skipped instead of re-walking every upcoming range after each batch.
     settled: bool,
     done: bool,
+    /// The query's gate and this stream's id in it (module docs).
+    gate: Option<(Arc<ScanGate>, u64)>,
+    /// A unit's share was asked for and the unit has not ended.
+    unit_open: bool,
+    /// The open unit's reader holds data (its working bytes were seen).
+    reading: bool,
+    /// Bytes of shares that ended over-committed, in total.
+    overcommitted: u64,
+}
+
+impl Drop for ScanStream {
+    fn drop(&mut self) {
+        self.end_unit();
+    }
 }
 
 impl std::fmt::Debug for ScanStream {
@@ -214,6 +237,10 @@ impl ScanStream {
             in_flight: None,
             settled: false,
             done: false,
+            gate: None,
+            unit_open: false,
+            reading: false,
+            overcommitted: 0,
         };
         match stream.open_inner(format, split, req, format_options).await {
             Ok(()) => Ok(stream),
@@ -288,8 +315,85 @@ impl ScanStream {
         }
     }
 
+    /// Shares units' working sets with the query's other streams through
+    /// `gate` (module docs). Without a gate they are not accounted.
+    #[must_use]
+    pub fn with_gate(mut self, gate: Arc<ScanGate>) -> Self {
+        let id = gate.stream_id();
+        self.gate = Some((gate, id));
+        self
+    }
+
+    /// Bytes of decode working sets that ended a unit over-committed
+    /// (without a reservation; see [`ScanGate`]).
+    #[must_use]
+    pub fn overcommitted(&self) -> u64 {
+        self.overcommitted
+    }
+
+    /// What the gate share covers (module docs): the decoder's buffered
+    /// bytes and the open unit's working set or decoding estimate.
+    fn share_target(&self) -> usize {
+        let Some(d) = self.decoder.as_ref() else {
+            return 0;
+        };
+        let unit = match d.working_bytes() {
+            0 if self.unit_open => d.next_decode_bytes(),
+            w => w,
+        };
+        d.buffered_bytes().saturating_add(unit)
+    }
+
+    /// Grows the gate share by what the decoder is about to hold: `incoming`
+    /// bytes pushed into it and, for a unit that starts, its decoding
+    /// estimate. A stream that holds nothing may wait here for other
+    /// streams (module docs).
+    async fn grow_share(&mut self, incoming: u64) -> Result<()> {
+        let Some((gate, id)) = self.gate.clone() else {
+            return Ok(());
+        };
+        let target = self
+            .share_target()
+            .saturating_add(usize::try_from(incoming).unwrap_or(usize::MAX));
+        let held = gate.share(id);
+        if target > held {
+            let over = gate.acquire(id, target - held).await?;
+            self.overcommitted = self
+                .overcommitted
+                .saturating_add(u64::try_from(over).unwrap_or(u64::MAX));
+        }
+        Ok(())
+    }
+
+    /// Ends the open unit once its reader has, and shrinks the gate share
+    /// to what the decoder holds.
+    fn settle_share(&mut self) {
+        let working = self.decoder.as_ref().map_or(0, |d| d.working_bytes());
+        if working > 0 {
+            self.reading = true;
+        } else if self.reading {
+            self.reading = false;
+            self.unit_open = false;
+        }
+        if let Some((gate, id)) = &self.gate {
+            let target = self.share_target();
+            if gate.share(*id) > target {
+                gate.shrink(*id, target);
+            }
+        }
+    }
+
+    fn end_unit(&mut self) {
+        if let Some((gate, id)) = &self.gate {
+            gate.shrink(*id, 0);
+        }
+        self.unit_open = false;
+        self.reading = false;
+    }
+
     fn finish(&mut self) {
         self.done = true;
+        self.end_unit();
         if let Some(d) = self.decoder.take() {
             self.final_metrics = d.metrics();
         }
@@ -312,6 +416,10 @@ impl ScanStream {
                 Step::Done => return Ok(None),
                 Step::Batch(batch) => {
                     self.account();
+                    // A unit whose data was prefetched may have followed the
+                    // last one without a request: its share, before the batch
+                    // moves on.
+                    self.grow_share(0).await?;
                     self.prefetch();
                     let mapper = self
                         .mapper
@@ -320,6 +428,12 @@ impl ScanStream {
                     return mapper.map_batch(&batch).map(Some);
                 }
                 Step::NeedData(ranges) => {
+                    // A unit that ended returns its share (and lets waiting
+                    // streams in) before this one asks for the next.
+                    self.account();
+                    if !self.reading {
+                        self.unit_open = true;
+                    }
                     let data = self.gather(ranges).await?;
                     self.decoder
                         .as_mut()
@@ -360,6 +474,10 @@ impl ScanStream {
             }
             self.account();
         }
+        // With a gate, everything pushed into the decoder is the share's,
+        // asked for before anything is fetched.
+        let incoming = ranges.iter().map(|r| r.end - r.start).sum();
+        self.grow_share(incoming).await?;
         let mut out = Vec::with_capacity(ranges.len());
         let mut missing = Vec::new();
         for r in ranges {
@@ -374,7 +492,7 @@ impl ScanStream {
             let grow = usize::try_from(target)
                 .unwrap_or(usize::MAX)
                 .saturating_sub(self.mem.size());
-            if grow > 0 {
+            if grow > 0 && self.gate.is_none() {
                 self.mem.grow(grow).await?;
             }
             let fetched = self.io.get_ranges(&self.file, &missing).await?;
@@ -388,18 +506,25 @@ impl ScanStream {
         self.ready.bytes + self.in_flight.as_ref().map_or(0, |(n, ..)| *n)
     }
 
+    /// What the reservation covers: prefetched bytes, and without a gate
+    /// the decoder's buffered bytes.
     fn held_bytes(&self) -> u64 {
-        let buffered = self.decoder.as_ref().map_or(0, |d| d.buffered_bytes()) as u64;
+        let buffered = match &self.gate {
+            Some(_) => 0,
+            None => self.decoder.as_ref().map_or(0, |d| d.buffered_bytes()) as u64,
+        };
         buffered + self.prefetched()
     }
 
-    /// Shrinks the reservation to what is held.
+    /// Shrinks the reservation to what is held, and returns the share of a
+    /// unit that ended.
     fn account(&mut self) {
         let held = usize::try_from(self.held_bytes()).unwrap_or(usize::MAX);
         if self.mem.size() > held {
             let extra = self.mem.size() - held;
             self.mem.shrink(extra);
         }
+        self.settle_share();
     }
 
     /// Starts a prefetch of the decoder's upcoming ranges if none is in
@@ -436,8 +561,7 @@ impl ScanStream {
         self.in_flight = Some((bytes, fut, ranges));
     }
 
-    /// Drops prefetched bytes (the scan's response to a spill request) and
-    /// returns the bytes released.
+    /// Drops prefetched bytes and returns the bytes released.
     pub fn release_prefetch(&mut self) -> usize {
         let before = self.mem.size();
         self.ready.clear();
