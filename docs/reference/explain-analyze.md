@@ -57,6 +57,10 @@ Each plan node is followed by the operators that implement it, one line
 each: role (`source`, `operator`, `sink`), operator id, name and the
 pipelines it runs in. A pipeline breaker (aggregate, sort, the build side
 of a hash join) has a sink in one pipeline and a source in the next.
+An `Exchange` node (`hashpartitioning`, `SinglePartition`,
+`rangepartitioning`) or `BroadcastExchange` marks where rows change
+partitions; on one worker it is carried out by the operators around it,
+so it lists no operators of its own.
 
 | Field | Meaning |
 |---|---|
