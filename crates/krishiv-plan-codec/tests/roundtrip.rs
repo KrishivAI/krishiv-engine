@@ -219,6 +219,19 @@ fn corrupt(m: &pb::PhysicalPlan, fragment: &str) {
     );
 }
 
+/// The decimal literal of `m`'s expression table.
+fn decimal_literal(m: &mut pb::PhysicalPlan) -> &mut pb::DecimalLiteral {
+    m.exprs
+        .iter_mut()
+        .find_map(|e| match e.kind.as_mut() {
+            Some(pb::expr::Kind::Literal(pb::Literal {
+                kind: Some(pb::literal::Kind::Decimal(d)),
+            })) => Some(d),
+            _ => None,
+        })
+        .unwrap()
+}
+
 fn node_mut(m: &mut pb::PhysicalPlan, at: usize) -> &mut pb::node::Kind {
     m.nodes[at].kind.as_mut().unwrap()
 }
@@ -370,21 +383,20 @@ fn values_are_validated() {
     // DECIMAL(5,2), 10^5 - 1 is the largest.
     for (unscaled, fits) in [(100_000_i128, false), (99_999, true), (-99_999, true)] {
         let mut m = message("expressions");
-        let decimal = m
-            .exprs
-            .iter_mut()
-            .find_map(|e| match e.kind.as_mut() {
-                Some(pb::expr::Kind::Literal(pb::Literal {
-                    kind: Some(pb::literal::Kind::Decimal(d)),
-                })) => Some(d),
-                _ => None,
-            })
-            .unwrap();
+        let decimal = decimal_literal(&mut m);
         decimal.unscaled = unscaled.to_le_bytes().to_vec();
         let ty = decimal.data_type.as_mut().unwrap();
         (ty.precision, ty.scale) = (5, 2);
         if fits {
-            decode(&m.encode_to_vec()).unwrap();
+            // The decoded literal keeps its value and type: read it back
+            // from the re-encoded message.
+            let decoded = decode(&m.encode_to_vec()).unwrap();
+            let mut again = to_message(&decoded).unwrap();
+            let back = decimal_literal(&mut again);
+            let bytes: [u8; 16] = back.unscaled.as_slice().try_into().unwrap();
+            assert_eq!(i128::from_le_bytes(bytes), unscaled);
+            let ty = back.data_type.as_ref().unwrap();
+            assert_eq!((ty.precision, ty.scale), (5, 2));
         } else {
             corrupt(&m, "beyond its precision");
         }
