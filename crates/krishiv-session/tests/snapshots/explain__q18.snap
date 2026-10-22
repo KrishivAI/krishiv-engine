@@ -1,0 +1,71 @@
+---
+source: crates/krishiv-session/tests/explain.rs
+expression: "logical_and_physical(&s, 18)"
+---
+== Parsed Logical Plan ==
+Limit 100
++- Sort [o_totalprice DESC NULLS LAST, o_orderdate ASC NULLS FIRST], true
+   +- Aggregate [c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice], [c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice, sum(l_quantity)]
+      +- Filter ((((o_orderkey) IN (list-query)) and (c_custkey == o_custkey)) and (o_orderkey == l_orderkey))
+         :  +- Filter (sum(l_quantity) > 300)
+         :     +- Aggregate [l_orderkey], [l_orderkey]
+         :        +- Read lineitem
+         +- Join Inner
+            :- Join Inner
+            :  :- Read customer
+            :  +- Read orders
+            +- Read lineitem
+
+== Analyzed Logical Plan ==
+c_name: string, c_custkey: bigint, o_orderkey: bigint, o_orderdate: date, o_totalprice: decimal(15,2), sum(l_quantity): decimal(25,2)
+Limit 100
++- Sort [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST], true
+   +- Aggregate [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11], [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11, sum(l_quantity#21) AS sum(l_quantity)#50]
+      +- Join LeftSemi, (o_orderkey#8 == l_orderkey#33)
+         :- Filter ((c_custkey#0 == o_custkey#9) and (o_orderkey#8 == l_orderkey#17))
+         :  +- Join Inner
+         :     :- Join Inner
+         :     :  :- Scan spark_catalog.default.customer [c_custkey#0, c_name#1, c_address#2, c_nationkey#3, c_phone#4, c_acctbal#5, c_mktsegment#6, c_comment#7]
+         :     :  +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderstatus#10, o_totalprice#11, o_orderdate#12, o_orderpriority#13, o_clerk#14, o_shippriority#15, o_comment#16]
+         :     +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_partkey#18, l_suppkey#19, l_linenumber#20, l_quantity#21, l_extendedprice#22, l_discount#23, l_tax#24, l_returnflag#25, l_linestatus#26, l_shipdate#27, l_commitdate#28, l_receiptdate#29, l_shipinstruct#30, l_shipmode#31, l_comment#32] (shared #1)
+         +- Project [l_orderkey#33]
+            +- Filter (sum(l_quantity)#49 > CAST(300 AS DECIMAL(25,2)))
+               +- Aggregate [l_orderkey#33], [l_orderkey#33, sum(l_quantity#37) AS sum(l_quantity)#49]
+                  +- Shift +16
+                     +- Shared #1, printed above
+
+== Optimized Logical Plan ==
+Limit 100
++- Sort [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST], true
+   +- Aggregate [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11], [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11, sum(l_quantity#21) AS sum(l_quantity)#50]
+      +- Join LeftSemi, (o_orderkey#8 == l_orderkey#33)
+         :- Project [c_custkey#0, c_name#1, o_orderkey#8, o_totalprice#11, o_orderdate#12, l_quantity#21]
+         :  +- Join Inner, (o_orderkey#8 == l_orderkey#17)
+         :     :- Project [c_custkey#0, c_name#1, o_orderkey#8, o_totalprice#11, o_orderdate#12]
+         :     :  +- Join Inner, (c_custkey#0 == o_custkey#9)
+         :     :     :- Scan spark_catalog.default.customer [c_custkey#0, c_name#1]
+         :     :     +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_totalprice#11, o_orderdate#12]
+         :     +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_quantity#21] (shared #1)
+         +- Project [l_orderkey#33]
+            +- Filter (sum(l_quantity)#49 > 300.00)
+               +- Aggregate [l_orderkey#33], [l_orderkey#33, sum(l_quantity#37) AS sum(l_quantity)#49]
+                  +- Shift +16
+                     +- Shared #1, printed above
+
+== Physical Plan ==
+TopN 100, [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
++- Project [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11, sum(l_quantity#21)#4611686018427387905 AS sum(l_quantity)#50]
+   +- HashAggregate keys=[c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11], functions=[sum(l_quantity#21)]
+      +- HashJoin LeftSemi, [o_orderkey#8] = [l_orderkey#33], RuntimeFilter #3: o_orderkey#8 -> spark_catalog.default.orders.o_orderkey
+         :- Project [c_custkey#0, c_name#1, o_orderkey#8, o_totalprice#11, o_orderdate#12, l_quantity#21]
+         :  +- HashJoin Inner, [o_orderkey#8] = [l_orderkey#17], RuntimeFilter #2: o_orderkey#8 -> spark_catalog.default.orders.o_orderkey
+         :     :- Project [c_custkey#0, c_name#1, o_orderkey#8, o_totalprice#11, o_orderdate#12]
+         :     :  +- HashJoin Inner, [c_custkey#0] = [o_custkey#9], RuntimeFilter #1: c_custkey#0 -> spark_catalog.default.customer.c_custkey
+         :     :     :- Scan spark_catalog.default.customer [c_custkey#0, c_name#1]
+         :     :     +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_totalprice#11, o_orderdate#12]
+         :     +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_quantity#21]
+         +- Project [l_orderkey#33]
+            +- Filter (sum(l_quantity)#49 > 300.00)
+               +- Project [l_orderkey#33, sum(l_quantity#37)#4611686018427387904 AS sum(l_quantity)#49]
+                  +- HashAggregate keys=[l_orderkey#33], functions=[sum(l_quantity#37)]
+                     +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_quantity#21] (ids +16)

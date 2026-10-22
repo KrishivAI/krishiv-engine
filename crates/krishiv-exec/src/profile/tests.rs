@@ -331,7 +331,7 @@ Limit 5
 +- Union
    :- OneRowRelation
    :     · source #2 OneRow p0: out 1 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>); peak mem <mem>; \
-hash_entries=3 hash_buckets=<n> probe_lookups=4 probe_key_compares=<n> max_probe_length=<n> \
+hash_entries=3 hash_buckets=<n> probe_lookups=<n> probe_key_compares=<n> max_probe_length=<n> \
 spill_bytes=<mem> finalize_ns=<t> hash_index=swiss
    +- Limit 1
       +- OneRowRelation

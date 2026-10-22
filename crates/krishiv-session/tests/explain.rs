@@ -1,141 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `EXPLAIN` and `DataFrame::explain`: Spark 4.2's section layout and mode
-//! semantics (probed on 4.2.0), and snapshots of TPC-H Q1, Q3 and Q9.
+//! semantics (probed on 4.2.0), and snapshots of TPC-H Q1, Q3, Q9 and Q18.
 #![cfg(test)]
 
-use std::sync::Arc;
+mod common;
 
 use arrow_array::cast::AsArray;
-use arrow_schema::{DataType as T, Field, Schema};
+use arrow_schema::DataType as T;
 use futures::executor::block_on;
 use krishiv_common::error::ErrorClass;
 use krishiv_session::{ExplainMode, Session};
 
-const TPCH: [(&str, &[(&str, T)]); 8] = [
-    (
-        "region",
-        &[
-            ("r_regionkey", T::Int64),
-            ("r_name", T::Utf8),
-            ("r_comment", T::Utf8),
-        ],
-    ),
-    (
-        "nation",
-        &[
-            ("n_nationkey", T::Int64),
-            ("n_name", T::Utf8),
-            ("n_regionkey", T::Int64),
-            ("n_comment", T::Utf8),
-        ],
-    ),
-    (
-        "supplier",
-        &[
-            ("s_suppkey", T::Int64),
-            ("s_name", T::Utf8),
-            ("s_address", T::Utf8),
-            ("s_nationkey", T::Int64),
-            ("s_phone", T::Utf8),
-            ("s_acctbal", T::Decimal128(15, 2)),
-            ("s_comment", T::Utf8),
-        ],
-    ),
-    (
-        "customer",
-        &[
-            ("c_custkey", T::Int64),
-            ("c_name", T::Utf8),
-            ("c_address", T::Utf8),
-            ("c_nationkey", T::Int64),
-            ("c_phone", T::Utf8),
-            ("c_acctbal", T::Decimal128(15, 2)),
-            ("c_mktsegment", T::Utf8),
-            ("c_comment", T::Utf8),
-        ],
-    ),
-    (
-        "part",
-        &[
-            ("p_partkey", T::Int64),
-            ("p_name", T::Utf8),
-            ("p_mfgr", T::Utf8),
-            ("p_brand", T::Utf8),
-            ("p_type", T::Utf8),
-            ("p_size", T::Int32),
-            ("p_container", T::Utf8),
-            ("p_retailprice", T::Decimal128(15, 2)),
-            ("p_comment", T::Utf8),
-        ],
-    ),
-    (
-        "partsupp",
-        &[
-            ("ps_partkey", T::Int64),
-            ("ps_suppkey", T::Int64),
-            ("ps_availqty", T::Int32),
-            ("ps_supplycost", T::Decimal128(15, 2)),
-            ("ps_comment", T::Utf8),
-        ],
-    ),
-    (
-        "orders",
-        &[
-            ("o_orderkey", T::Int64),
-            ("o_custkey", T::Int64),
-            ("o_orderstatus", T::Utf8),
-            ("o_totalprice", T::Decimal128(15, 2)),
-            ("o_orderdate", T::Date32),
-            ("o_orderpriority", T::Utf8),
-            ("o_clerk", T::Utf8),
-            ("o_shippriority", T::Int32),
-            ("o_comment", T::Utf8),
-        ],
-    ),
-    (
-        "lineitem",
-        &[
-            ("l_orderkey", T::Int64),
-            ("l_partkey", T::Int64),
-            ("l_suppkey", T::Int64),
-            ("l_linenumber", T::Int32),
-            ("l_quantity", T::Decimal128(15, 2)),
-            ("l_extendedprice", T::Decimal128(15, 2)),
-            ("l_discount", T::Decimal128(15, 2)),
-            ("l_tax", T::Decimal128(15, 2)),
-            ("l_returnflag", T::Utf8),
-            ("l_linestatus", T::Utf8),
-            ("l_shipdate", T::Date32),
-            ("l_commitdate", T::Date32),
-            ("l_receiptdate", T::Date32),
-            ("l_shipinstruct", T::Utf8),
-            ("l_shipmode", T::Utf8),
-            ("l_comment", T::Utf8),
-        ],
-    ),
-];
-
 /// A session over empty TPC-H tables (plans do not depend on data).
 fn tpch() -> Session {
     let s = Session::new().unwrap();
-    for (name, cols) in TPCH {
-        let fields: Vec<_> = cols
-            .iter()
-            .map(|(n, t)| Field::new(*n, t.clone(), true))
-            .collect();
-        s.register_batches(name, Arc::new(Schema::new(fields)), vec![])
-            .unwrap();
-    }
+    common::register(&s, 0);
     s
 }
 
-fn query(q: usize) -> String {
-    let path = format!(
-        "{}/../../bench/queries/tpch/q{q:02}.sql",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    std::fs::read_to_string(path).unwrap()
-}
+use common::query;
 
 /// The single `plan` value `EXPLAIN` returns.
 fn explain_sql(s: &Session, sql: &str) -> String {
@@ -290,11 +173,12 @@ fn logical_and_physical(s: &Session, q: usize) -> String {
 }
 
 #[test]
-fn tpch_q1_q3_q9_snapshots() {
+fn tpch_q1_q3_q9_q18_snapshots() {
     let s = tpch();
     insta::assert_snapshot!("q01", logical_and_physical(&s, 1));
     insta::assert_snapshot!("q03", logical_and_physical(&s, 3));
     insta::assert_snapshot!("q09", logical_and_physical(&s, 9));
+    insta::assert_snapshot!("q18", logical_and_physical(&s, 18));
 }
 
 #[test]
