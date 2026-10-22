@@ -1,6 +1,6 @@
 name: PR policy
 
-# Label-dependent repository policy (DCO, PR size cap with the `size-approved`
+# Label-dependent repository policy (DCO, AI-attribution ban, PR size cap with the `size-approved`
 # label; budget and wheel-size gates with the `budget-approved` and
 # `unsafe-reviewed` labels).
 # Kept out of ci.yml so that label changes re-run only these small jobs
@@ -65,6 +65,14 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: cargo xtask dco --base "$BASE_SHA" --head "$HEAD_SHA"
+      - name: No AI attribution (every commit, PR title and body; owner rule)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: .github/scripts/check-ai-attribution.sh "$BASE_SHA" "$HEAD_SHA"
       # The `size-approved` label only counts when the configured approver
       # (repository variable SIZE_APPROVER, the maintainer) applied it after
       # the current head arrived (.github/scripts/approval-label.sh).

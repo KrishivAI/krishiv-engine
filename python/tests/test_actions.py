@@ -310,14 +310,14 @@ def test_duckdb_reads_operator_output(spark: SparkSession, big: Any) -> None:
     duckdb = pytest.importorskip("duckdb")
     con = duckdb.connect()
     relation = con.from_arrow(spark.createDataFrame(big).select("id", "name"))
-    assert relation.aggregate("sum(id), count(distinct name)").fetchone() == (sum(range(big.num_rows)), 1000)
+    assert relation.aggregate("sum(id), count(distinct name)").fetchall() == [(sum(range(big.num_rows)), 1000)]
 
 
 def test_dataframe_is_a_stream_for_duckdb_twice(df: DataFrame) -> None:
     duckdb = pytest.importorskip("duckdb")
     con = duckdb.connect()
     for _ in range(2):  # each scan executes the query again
-        assert con.from_arrow(df).aggregate("sum(id)").fetchone() == (6,)
+        assert con.from_arrow(df).aggregate("sum(id)").fetchall() == [(6,)]
 
 
 def test_requested_schema_and_capsule(df: DataFrame) -> None:

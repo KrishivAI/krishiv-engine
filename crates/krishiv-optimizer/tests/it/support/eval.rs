@@ -288,6 +288,15 @@ impl Interp<'_> {
                 rel.rows.truncate(usize::try_from(n / SCALE).unwrap());
                 rel
             }
+            PlanNode::Offset { input, offset } => {
+                let mut rel = self.plan(input, outer);
+                let V::Num(n) = self.eval(offset, &HashMap::new(), &[], outer) else {
+                    panic!("offset")
+                };
+                let skip = usize::try_from(n / SCALE).unwrap().min(rel.rows.len());
+                rel.rows.drain(..skip);
+                rel
+            }
             PlanNode::SubqueryAlias { input, .. } => self.plan(input, outer),
             PlanNode::WithCte { input, ctes } => {
                 for c in ctes {
