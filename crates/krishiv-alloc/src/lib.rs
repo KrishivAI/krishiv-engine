@@ -77,7 +77,12 @@ pub fn is_generous(limit: u64) -> bool {
 /// `tb`, `p` or `pb` in any case), in bytes; `None` if it is not one.
 /// Allocates nothing, so the constructor can use it.
 pub fn parse_size(value: &[u8]) -> Option<u64> {
-    let value = value.trim_ascii();
+    // Trim like `ValueType::Size` (`str::trim`, Unicode whitespace) when
+    // the value is UTF-8, else ASCII whitespace.
+    let value = match std::str::from_utf8(value) {
+        Ok(s) => s.trim().as_bytes(),
+        Err(_) => value.trim_ascii(),
+    };
     let split = value
         .iter()
         .position(|b| !b.is_ascii_digit())
@@ -301,6 +306,7 @@ mod tests {
         assert_eq!(size("200m"), Some(200 << 20));
         assert_eq!(size("512Mb"), Some(512 << 20));
         assert_eq!(size(" 2g "), Some(2 << 30));
+        assert_eq!(size("\u{2003}4g\u{2003}"), Some(4 << 30));
         assert_eq!(size("24GB"), Some(24 << 30));
         assert_eq!(size("3t"), Some(3 << 40));
         assert_eq!(size("1tb"), Some(1 << 40));
