@@ -48,8 +48,11 @@ jobs:
   # manylinux_2_28 and musllinux_1_2 on x86_64. The wheels are built in the
   # PyPA images by maturin-action; the musllinux ones are tested inside the
   # PyPA musllinux image, the manylinux ones on the runner.
+  # The runner image is pinned on purpose: the old-CPU step installs
+  # qemu-user-static, which ubuntu-latest (26.04) no longer packages. Runner
+  # images are upgraded deliberately, in their own PR, never by drift.
   linux-x86_64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -98,30 +101,9 @@ jobs:
         if: matrix.libc == 'manylinux' && matrix.flavour == 'abi3'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-user
-          uv python install 3.11
-          uv venv --python 3.11 "$RUNNER_TEMP/oldcpu"
-          uv pip install --python "$RUNNER_TEMP/oldcpu/bin/python" dist/*.whl
-          py=$(uv python find 3.11)
-          # qemu-user shows the host's /proc/cpuinfo, so the check is pointed at a
-          # Nehalem-class one; what is proved is that the ImportError comes before the
-          # native module is loaded (which would die with SIGILL under -cpu Nehalem).
-          printf 'flags\t\t: fpu sse sse2 pni ssse3 cx16 sse4_1 sse4_2 popcnt\n' > "$RUNNER_TEMP/nehalem-cpuinfo"
-          export KRISHIV_CPUINFO="$RUNNER_TEMP/nehalem-cpuinfo"
-          set +e
-          PYTHONPATH=$("$RUNNER_TEMP/oldcpu/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])') \
-            qemu-x86_64 -L / -cpu Nehalem "$py" -c 'import krishiv' >"$RUNNER_TEMP/old.out" 2>&1
-          code=$?
-          set -e
-          cat "$RUNNER_TEMP/old.out"
-          test "$code" -eq 1
-          grep -q 'ImportError' "$RUNNER_TEMP/old.out"
-          if grep -qi 'illegal instruction' "$RUNNER_TEMP/old.out"; then
-            echo "::error::import hit SIGILL under QEMU Nehalem"
-            exit 1
-          fi
-          grep -q 'avx2' "$RUNNER_TEMP/old.out"
-          grep -q 'krishiv-compat' "$RUNNER_TEMP/old.out"
+          sudo apt-get install -y -qq qemu-user-static
+          .github/scripts/oldcpu-import.sh "$(command -v qemu-x86_64-static)" dist/*abi3*.whl \
+            quay.io/pypa/manylinux_2_28_x86_64:2026.10.03-1@sha256:39df0042d5cc900b085aa25a0659368b42a0006c54c474299b785b44c1b4ff82
       - name: Test (musllinux, in the PyPA musllinux image)
         if: matrix.libc == 'musllinux'
         env:
