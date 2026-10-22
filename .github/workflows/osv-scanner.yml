@@ -38,6 +38,7 @@ jobs:
         --lockfile=fuzz/Cargo.lock
         --lockfile=crates/krishiv-kernels/fuzz/Cargo.lock
         --lockfile=tools/connect-protogen/Cargo.lock
+        --lockfile=tools/plan-protogen/Cargo.lock
         --lockfile=python/uv.lock
         --lockfile=bench/uv.lock
         --lockfile=tests/scripts/uv.lock
@@ -57,6 +58,7 @@ jobs:
         --lockfile=fuzz/Cargo.lock
         --lockfile=crates/krishiv-kernels/fuzz/Cargo.lock
         --lockfile=tools/connect-protogen/Cargo.lock
+        --lockfile=tools/plan-protogen/Cargo.lock
         --lockfile=python/uv.lock
         --lockfile=bench/uv.lock
         --lockfile=tests/scripts/uv.lock
