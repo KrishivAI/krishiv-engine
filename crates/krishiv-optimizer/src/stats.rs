@@ -260,7 +260,7 @@ impl<'a> Estimator<'a> {
                     let mut null_rows = 0.0;
                     let mut col_id: Option<AttrId> = None;
                     let mut mixed = false;
-                    let mut lits: Vec<&Literal> = Vec::new();
+                    let mut literals: Vec<&Literal> = Vec::new();
                     let mut other = false;
                     for proj in projections.iter() {
                         let s = strip_alias(&proj[j]);
@@ -270,8 +270,8 @@ impl<'a> Estimator<'a> {
                                 if col_id.is_some() {
                                     mixed = true;
                                 }
-                                if !lits.contains(&l) {
-                                    lits.push(l);
+                                if !literals.contains(&l) {
+                                    literals.push(l);
                                 }
                             }
                             ExprNode::Resolved(
@@ -284,7 +284,7 @@ impl<'a> Estimator<'a> {
                                         Some(id) if id == c.id => {}
                                         Some(_) => mixed = true,
                                     }
-                                    if !lits.is_empty() {
+                                    if !literals.is_empty() {
                                         mixed = true;
                                     }
                                 }
@@ -294,7 +294,7 @@ impl<'a> Estimator<'a> {
                         }
                     }
                     let nulls = (null_rows / rows).clamp(0.0, 1.0);
-                    let distinct_lits = to_f64(u64::try_from(lits.len()).unwrap_or(u64::MAX));
+                    let distinct_lits = to_f64(u64::try_from(literals.len()).unwrap_or(u64::MAX));
                     let ndv = if other {
                         rows
                     } else if let Some(id) = col_id {
@@ -315,19 +315,19 @@ impl<'a> Estimator<'a> {
                                 }
                             }
                             sum + distinct_lits
-                        } else if lits.is_empty() {
+                        } else if literals.is_empty() {
                             est.cols.get(&id).map(|c| c.ndv).unwrap_or(per)
                         } else {
                             est.cols.get(&id).map(|c| c.ndv).unwrap_or(per) + distinct_lits
                         };
                         base.clamp(1.0, rows)
-                    } else if lits.is_empty() {
+                    } else if literals.is_empty() {
                         // Every projection is NULL.
                         1.0
                     } else {
                         distinct_lits.clamp(1.0, rows)
                     };
-                    let range = if !mixed && !other && lits.is_empty() {
+                    let range = if !mixed && !other && literals.is_empty() {
                         col_id.and_then(|id| est.cols.get(&id).and_then(|c| c.range))
                     } else {
                         None
