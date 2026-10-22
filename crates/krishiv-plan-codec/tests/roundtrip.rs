@@ -15,7 +15,7 @@ use krishiv_exec::physical::{PhysNode, PhysicalPlan};
 use krishiv_plan::{Expr, ReadSource};
 use krishiv_plan_codec::proto as pb;
 use krishiv_plan_codec::{
-    CodecError, FORMAT_VERSION, Limits, decode, decode_with, encode, to_message,
+    CodecError, FORMAT_VERSION, Limits, MIN_READER_VERSION, decode, decode_with, encode, to_message,
 };
 use prost::Message as _;
 
@@ -267,6 +267,14 @@ fn a_plan_that_needs_a_newer_reader_is_refused() {
 }
 
 #[test]
+fn an_offset_limit_needs_a_v3_reader() {
+    // A `Limit` with a nonzero offset sets `min_reader_version` to 3: an
+    // older reader would silently ignore the skipped rows.
+    assert_eq!(message("limit").min_reader_version, MIN_READER_VERSION);
+    assert_eq!(message("limit_offset").min_reader_version, 3);
+}
+
+#[test]
 fn a_newer_writer_that_stays_compatible_is_read() {
     // N reads N+1 when the writer only added fields: unknown fields (here
     // number 999, a varint) are skipped, and the version is higher.
@@ -456,6 +464,7 @@ fn limits_bound_size_and_depth() {
     for _ in 0..1030 {
         node = PhysNode::Limit {
             input: Box::new(node),
+            offset: 0,
             limit: 1,
         };
     }
