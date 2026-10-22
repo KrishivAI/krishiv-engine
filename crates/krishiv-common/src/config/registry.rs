@@ -588,8 +588,9 @@ pub static IO_LATE_MATERIALIZATION: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::String(Cow::Borrowed("auto"))),
     doc: "Whether a Parquet scan evaluates its pushed filter on the filter's columns before \
           decoding the others for the rows that pass: `auto` decides per row group from the \
-          fraction of rows the filter kept before, `on` and `off` force it. Results are the \
-          same either way.",
+          fraction of rows the filter kept before, `on` and `off` force it. Returned rows are \
+          the same either way; with the filter, decode errors confined to rows it rejects \
+          (a corrupt page or invalid UTF-8 in a column it does not read) are not raised.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

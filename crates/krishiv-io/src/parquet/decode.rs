@@ -352,6 +352,10 @@ impl ParquetDecoder {
             .dynamic
             .iter()
             .any(|(f, seen)| f.filter().generation_hint() != *seen);
+        if changed {
+            self.late
+                .runtime_filters_changed(&self.dynamic_predicates());
+        }
         let late = self.late.want();
         if !changed {
             return self.rebuild(None, late, false);

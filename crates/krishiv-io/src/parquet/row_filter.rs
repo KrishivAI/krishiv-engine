@@ -549,6 +549,9 @@ pub(crate) struct LateMaterialization {
     measured: bool,
     /// What the last measurement (or the first guess) asked for.
     wanted: bool,
+    /// There is no predicate to filter with yet (no static one, no runtime
+    /// filter): the decoder stays as it is until one is published.
+    idle: bool,
 }
 
 impl LateMaterialization {
@@ -581,6 +584,7 @@ impl LateMaterialization {
             sample: false,
             measured: false,
             wanted: guess,
+            idle: false,
         }
     }
 
@@ -617,8 +621,16 @@ impl LateMaterialization {
         dynamic: &[PushdownExpr],
         mask: impl FnOnce(&[ColumnPath]) -> (ProjectionMask, Worth),
     ) -> RowFilter {
+        let expr = self.expr(dynamic);
+        // Without a predicate there is nothing to switch on: asking again
+        // at every row-group boundary would rebuild the decoder for
+        // nothing (`runtime_filters_changed` asks again once one exists).
+        self.idle = expr.is_none();
+        if self.idle {
+            self.wanted = false;
+        }
         let built = if on && !self.disabled {
-            self.expr(dynamic).and_then(|e| {
+            expr.and_then(|e| {
                 let (projection, worth) = mask(&columns(&e));
                 let forced = self.policy == crate::request::RowFilterPolicy::On;
                 let use_it = worth == Worth::Yes || (forced && worth == Worth::Small);
@@ -640,10 +652,19 @@ impl LateMaterialization {
         built.unwrap_or_else(|| RowFilter::new(Vec::new()))
     }
 
+    /// The runtime filters changed. If the scan had no predicate to filter
+    /// with, the first one it gets starts the guess over (module docs).
+    pub(crate) fn runtime_filters_changed(&mut self, dynamic: &[PushdownExpr]) {
+        if self.idle && !self.disabled && self.expr(dynamic).is_some() {
+            self.idle = false;
+            self.wanted = true;
+        }
+    }
+
     /// At a row-group boundary: whether the next row group should use the
     /// filter, from what the last one measured.
     pub(crate) fn want(&mut self) -> bool {
-        if self.disabled {
+        if self.disabled || self.idle {
             return false;
         }
         if self.policy == crate::request::RowFilterPolicy::On {
@@ -666,7 +687,7 @@ impl LateMaterialization {
 
     /// A row group starts: while off, its first batch is measured.
     pub(crate) fn start_row_group(&mut self) {
-        self.sample = !self.on && !self.disabled;
+        self.sample = !self.on && !self.disabled && !self.idle;
     }
 
     /// Measures `batch` (decoded without the filter) if a sample is due.
@@ -1181,6 +1202,41 @@ mod tests {
         late.start_row_group();
         late.observe(&ints(), &[member]);
         assert_eq!(late.counters.take(), (4, 1));
+    }
+
+    #[test]
+    fn a_scan_without_a_predicate_stays_idle_until_a_runtime_filter_arrives() {
+        let mut b = KeyFilterBuilder::new(DataType::Int32, KeyFilterOptions::default())
+            .unwrap_or_else(|| panic!("Int32 keys"));
+        b.add(&Int32Array::from(vec![5]), None).unwrap();
+        let member = PushdownExpr::Membership {
+            column: c("a"),
+            filter: crate::MembershipFilter {
+                id: crate::FilterId(1),
+                generation: 1,
+                keys: Arc::new(b.finish()),
+            },
+        };
+        let auto = crate::request::RowFilterPolicy::Auto;
+        let mut late = LateMaterialization::new(auto, None, None, true, None);
+        let all = |cols: &[ColumnPath]| {
+            assert_eq!(cols, [c("a")]);
+            (ProjectionMask::all(), Worth::Yes)
+        };
+        // The first guess is "on", but there is no predicate: the filter is
+        // empty, and no boundary asks for a rebuild or a sample.
+        assert!(late.is_on());
+        assert_eq!(n(&late.filter(true, &[], all)), 0);
+        for _ in 0..3 {
+            assert!(!late.want(), "nothing to rebuild for");
+            late.start_row_group();
+            assert!(!late.sampling(), "nothing to measure");
+        }
+        // A runtime filter is the first predicate: filtering is wanted again.
+        late.runtime_filters_changed(std::slice::from_ref(&member));
+        assert!(late.want());
+        assert_eq!(n(&late.filter(true, std::slice::from_ref(&member), all)), 1);
+        assert!(late.is_on());
     }
 
     #[test]
