@@ -3,7 +3,7 @@
 //! checks run, scoped to what changed against the base.
 //!
 //! Everything that decides *what* to run is pure (paths in, [`Step`]s out) so it
-//! is testable without a checkout; [`run`] does the I/O. The mapping from every
+//! is testable without a checkout; [`run_precheck`] does the I/O. The mapping from every
 //! required CI check to a precheck step lives in [`mapping`] and is policy-tested
 //! (`xtask/tests/precheck.rs`), so the two cannot drift apart.
 #![expect(
