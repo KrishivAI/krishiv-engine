@@ -27,6 +27,7 @@ from ..paths import data_root
 from .base import Dataset, Engine, Measure, Query, table_path
 from .proc_mem import LocalProc
 
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _UNITS = {"": 1, "k": 1 << 10, "m": 1 << 20, "g": 1 << 30, "t": 1 << 40}
 
 
@@ -99,6 +100,8 @@ class ClickHouseEngine(Engine):
                 ):
                     self._session.query(f"SET {knob} = {value}")
             for t in dataset.tables:
+                if _IDENTIFIER.fullmatch(t) is None:  # the queries name tables bare, so it must be a plain identifier
+                    raise ValueError(f"invalid table name {t!r}: expected letters, digits and underscores")
                 src = sql_string(table_path(dataset, t))
                 self._session.query(f"CREATE VIEW {t} AS SELECT * FROM file({src}, Parquet)")
         except BaseException:
@@ -129,6 +132,8 @@ class ClickHouseEngine(Engine):
 
     def teardown(self) -> None:
         session, self._session = self._session, None
-        if session is not None:
-            session.close()
-        shutil.rmtree(self._scratch, ignore_errors=True)
+        try:
+            if session is not None:
+                session.close()
+        finally:
+            shutil.rmtree(self._scratch, ignore_errors=True)

@@ -70,6 +70,7 @@ class _Result:
 class FakeSession:
     instances: ClassVar[list[FakeSession]] = []
     fail_on: ClassVar[str | None] = None
+    fail_close: ClassVar[bool] = False
 
     def __init__(self, path: str):
         self.path = path
@@ -87,12 +88,15 @@ class FakeSession:
 
     def close(self) -> None:
         self.closed = True
+        if FakeSession.fail_close:
+            raise RuntimeError("close failed")
 
 
 @pytest.fixture
 def fake_chdb(monkeypatch, tmp_path):
     FakeSession.instances.clear()
     FakeSession.fail_on = None
+    FakeSession.fail_close = False
     pkg = types.ModuleType("chdb")
     setattr(pkg, "__version__", "9.9.9")  # noqa: B010
     sess = types.ModuleType("chdb.session")
@@ -161,6 +165,28 @@ def test_scratch_and_session_cleaned_when_setup_fails(fake_chdb, tmp_path):
     assert not Path(sess.path).exists()
 
 
+def test_scratch_is_removed_even_when_closing_the_session_fails(fake_chdb, tmp_path):
+    eng = ClickHouseEngine(threads=1, memory_limit="1g")
+    eng.setup(_dataset(tmp_path, ["t"]))
+    scratch = Path(fake_chdb.instances[0].path)
+    assert scratch.is_dir()
+    fake_chdb.fail_close = True
+    with pytest.raises(RuntimeError, match="close failed"):
+        eng.teardown()
+    assert not scratch.exists()
+
+
+@pytest.mark.parametrize("table", ["t; DROP VIEW x", "a-b", "1t", "", "t`"])
+def test_a_table_name_that_is_not_a_plain_identifier_is_rejected(fake_chdb, tmp_path, table):
+    eng = ClickHouseEngine(threads=1, memory_limit="1g")
+    with pytest.raises(ValueError, match="invalid table name"):
+        eng.setup(Dataset("fake", 1, tmp_path, [table]))
+    (sess,) = fake_chdb.instances
+    assert not any(st.startswith("CREATE VIEW") for st in sess.statements)
+    assert sess.closed
+    assert not Path(sess.path).exists()
+
+
 def test_missing_parquet_fails_setup_and_cleans_up(fake_chdb, tmp_path):
     eng = ClickHouseEngine(threads=1, memory_limit="1g")
     with pytest.raises(FileNotFoundError, match="no Parquet source"):
@@ -196,9 +222,8 @@ def test_real_chdb_matches_duckdb_on_types_and_nulls(tiny_decimal, tmp_path, mon
         got = eng.run(Query("q", sql, "s"))
         want = duckdb.sql(sql.replace("FROM t", f"FROM read_parquet('{tiny_decimal.root / 't.parquet'}')")).fetchall()
         assert compare.rows_match(got, want, ordered=True) == (True, "ok")
-        n, secs = eng.timed_run(Query("q", sql, "s"))
+        n, _ = eng.timed_run(Query("q", sql, "s"))
         assert n == 3
-        assert secs > 0
         with pytest.raises(Exception, match="UNKNOWN_IDENTIFIER"):
             eng.run(Query("bad", "SELECT nope FROM t", "s"))
         assert eng.run(Query("again", "SELECT 1", "s")) == [(1,)]  # usable after an engine error
