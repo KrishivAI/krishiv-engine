@@ -81,7 +81,10 @@ pub fn peak() -> usize {
 /// A compare-exchange loop rather than a plain store: if a concurrent `grew`
 /// raises the peak between the read and the write, the exchange fails and
 /// the retry re-reads live bytes (which already include that growth), so a
-/// newer peak is never overwritten with a stale value.
+/// newer peak is never overwritten with a stale value. Growth that stays
+/// below the old peak leaves it untouched, so a successful exchange is
+/// reconciled with freshly read live bytes (a max, which cannot erase a
+/// newer peak landing in between).
 pub fn reset_peak() {
     reset_peak_racing(|| {});
 }
@@ -94,7 +97,16 @@ fn reset_peak_racing(mut raced: impl FnMut()) {
         let target = live();
         raced();
         match PEAK.compare_exchange_weak(seen, target, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => return,
+            Ok(_) => {
+                // A concurrent `grew` that stays below the old peak leaves
+                // it untouched, so the exchange above can land below the
+                // current live bytes. Re-read live and take the max: either
+                // value's growth is covered by its own `fetch_max`, and the
+                // max never lowers the peak, so a newer peak landing in
+                // between survives either way.
+                PEAK.fetch_max(live(), Ordering::Relaxed);
+                return;
+            }
             Err(now) => seen = now,
         }
     }
@@ -103,9 +115,15 @@ fn reset_peak_racing(mut raced: impl FnMut()) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Both tests below program the shared counters directly, so they must
+    // not run in parallel with each other.
+    static SERIAL: Mutex<()> = Mutex::new(());
 
     #[test]
     fn reset_keeps_a_peak_recorded_during_the_reset() {
+        let _guard = SERIAL.lock().unwrap();
         // This unit-test binary does not install `Counting`, so the counters
         // are set directly; no other test in it touches them.
         LIVE.store(10, Ordering::Relaxed);
@@ -115,6 +133,25 @@ mod tests {
             if !raced {
                 raced = true;
                 // A concurrent allocation of 200 bytes that sets a new peak.
+                grew(200);
+            }
+        });
+        assert_eq!(live(), 210);
+        assert_eq!(peak(), 210);
+    }
+
+    #[test]
+    fn reset_never_lands_below_live_when_growth_stays_below_the_old_peak() {
+        let _guard = SERIAL.lock().unwrap();
+        LIVE.store(10, Ordering::Relaxed);
+        PEAK.store(1_000, Ordering::Relaxed);
+        let mut raced = false;
+        reset_peak_racing(|| {
+            if !raced {
+                raced = true;
+                // Concurrent growth that stays below the old peak: `grew`
+                // leaves `PEAK` at 1,000, so the exchange would land at 10,
+                // below the live 210, without the reconcile.
                 grew(200);
             }
         });
