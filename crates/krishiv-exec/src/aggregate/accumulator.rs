@@ -745,6 +745,20 @@ fn round_up(digits: &mut [u8]) -> bool {
     true
 }
 
+/// The snapshots of a running fold ([`Accumulator::update_running`]).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Running<'a> {
+    /// The group holding each row's partition state.
+    pub(crate) parts: &'a [u32],
+    /// The group that takes the state after each row, or [`Running::NONE`].
+    pub(crate) snapshots: &'a [u32],
+}
+
+impl Running<'_> {
+    /// No snapshot after this row.
+    pub(crate) const NONE: u32 = u32::MAX;
+}
+
 impl Accumulator {
     /// An accumulator for `expr` (decimal sums are bounded while running,
     /// see the module docs).
@@ -920,88 +934,6 @@ impl Accumulator {
         }
     }
 
-    /// Copies group `from`'s state into group `to` (both below the group
-    /// count). A window's running frame keeps the state after each row or
-    /// peer group this way, so the rows are still folded one by one, in
-    /// order, as Spark's window frames fold them.
-    ///
-    /// # Errors
-    /// `INTERNAL_ERROR` for a group outside the table.
-    pub(crate) fn copy_group(&mut self, from: usize, to: usize) -> Result<()> {
-        fn cp<T: Clone>(v: &mut [T], from: usize, to: usize) -> Result<()> {
-            let x = v
-                .get(from)
-                .cloned()
-                .ok_or_else(|| internal(format!("aggregate group {from} out of range")))?;
-            let slot = v
-                .get_mut(to)
-                .ok_or_else(|| internal(format!("aggregate group {to} out of range")))?;
-            *slot = x;
-            Ok(())
-        }
-        fn values(v: &mut Values, heap: &mut usize, from: usize, to: usize) -> Result<()> {
-            match v {
-                Values::Int(x) => cp(x, from, to),
-                Values::Float(x) => cp(x, from, to),
-                Values::Bytes(x) => {
-                    let old = x.get(to).map_or(0, |b| b.len());
-                    cp(x, from, to)?;
-                    let new = x.get(to).map_or(0, |b| b.len());
-                    *heap = heap.saturating_sub(old).saturating_add(new);
-                    Ok(())
-                }
-            }
-        }
-        match &mut self.kind {
-            Kind::Count(c) => cp(c, from, to),
-            Kind::SumInt { sum, seen } => {
-                cp(sum, from, to)?;
-                cp(seen, from, to)
-            }
-            Kind::SumFloat { sum, seen } => {
-                cp(sum, from, to)?;
-                cp(seen, from, to)
-            }
-            Kind::SumDec { sum, state } => {
-                cp(sum, from, to)?;
-                cp(state, from, to)
-            }
-            Kind::AvgFloat { sum, count } => {
-                cp(sum, from, to)?;
-                cp(count, from, to)
-            }
-            Kind::AvgDec {
-                sum,
-                count,
-                overflow,
-            } => {
-                cp(sum, from, to)?;
-                cp(count, from, to)?;
-                cp(overflow, from, to)
-            }
-            Kind::MinMax {
-                values: v,
-                set,
-                heap,
-                ..
-            } => {
-                cp(set, from, to)?;
-                values(v, heap, from, to)
-            }
-            Kind::Pick {
-                values: v,
-                set,
-                null,
-                heap,
-                ..
-            } => {
-                cp(set, from, to)?;
-                cp(null, from, to)?;
-                values(v, heap, from, to)
-            }
-        }
-    }
-
     /// Reserves room for `new` more groups (as [`projected`](Self::projected)).
     pub(crate) fn reserve(&mut self, new: usize) {
         match &mut self.kind {
@@ -1055,16 +987,58 @@ impl Accumulator {
             .map(|&i| arg(cols, i))
             .collect::<Result<_>>()?;
         let state = self.expr.input == AggInput::State;
-        self.fold(groups, &args, state, w)
+        self.fold(groups, &args, state, w, None)
+    }
+
+    /// [`update`](Self::update) over raw arguments, keeping the state after
+    /// chosen rows: after row `i` is folded, if `run.snapshots[i]` is a
+    /// group, `run.parts[i]`'s state is copied into it. A window's running
+    /// frame takes the state after each row or peer group this way: one
+    /// pass over the rows, folded one by one and in order as Spark's frames
+    /// fold them, with the argument columns, validity and conversions read
+    /// once.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for the aggregates a window evaluates elsewhere
+    /// (decimal `sum`/`avg`, string `min`/`max`/`first`/`last`), partial
+    /// states, or slices of other lengths than the rows.
+    pub(crate) fn update_running(
+        &mut self,
+        groups: &[u32],
+        cols: &[ArrayRef],
+        run: &Running<'_>,
+    ) -> Result<()> {
+        if run.parts.len() != groups.len() || run.snapshots.len() != groups.len() {
+            return Err(internal(
+                "a running fold over slices of different lengths".to_owned(),
+            ));
+        }
+        let args: Vec<&ArrayRef> = self
+            .expr
+            .args
+            .iter()
+            .map(|&i| arg(cols, i))
+            .collect::<Result<_>>()?;
+        if self.expr.input == AggInput::State {
+            return Err(internal("a running fold over partial states".to_owned()));
+        }
+        self.fold(groups, &args, false, &Weights::Const(1), Some(run))
     }
 
     /// Merges partial states (`states`: this aggregate's state columns).
     pub(crate) fn merge(&mut self, groups: &[u32], states: &[ArrayRef]) -> Result<()> {
         let args: Vec<&ArrayRef> = states.iter().collect();
-        self.fold(groups, &args, true, &Weights::Const(1))
+        self.fold(groups, &args, true, &Weights::Const(1), None)
     }
 
-    fn fold(&mut self, groups: &[u32], args: &[&ArrayRef], state: bool, w: &Weights) -> Result<()> {
+    fn fold(
+        &mut self,
+        groups: &[u32],
+        args: &[&ArrayRef],
+        state: bool,
+        w: &Weights,
+        run: Option<&Running<'_>>,
+    ) -> Result<()> {
         let want = if state {
             self.state_len()
         } else {
@@ -1092,6 +1066,39 @@ impl Accumulator {
             args.iter().map(arrow_array::Array::logical_nulls).collect();
         let first = nulls.first().and_then(Option::as_ref);
         let valid = |i: usize| first.is_none_or(|n| n.is_valid(i));
+        // After row `i` of a running fold: the state of its partition's
+        // group is copied into the row's snapshot group, if it has one.
+        macro_rules! snapshot {
+            ($i:expr, $($v:ident),+) => {
+                if let Some(r) = run {
+                    let to = r.snapshots[$i];
+                    if to != Running::NONE {
+                        let (to, from) = (to as usize, r.parts[$i] as usize);
+                        $( $v[to] = $v[from].clone(); )+
+                    }
+                }
+            };
+        }
+        if run.is_some()
+            && matches!(
+                self.kind,
+                Kind::SumDec { .. }
+                    | Kind::AvgDec { .. }
+                    | Kind::MinMax {
+                        values: Values::Bytes(_),
+                        ..
+                    }
+                    | Kind::Pick {
+                        values: Values::Bytes(_),
+                        ..
+                    }
+            )
+        {
+            return Err(internal(format!(
+                "{:?} over {:?} has no running fold",
+                self.expr.function, self.expr.arg_type
+            )));
+        }
         match (&mut self.kind, state) {
             (Kind::Count(c), false) => {
                 for (i, &g) in groups.iter().enumerate() {
@@ -1102,6 +1109,7 @@ impl Accumulator {
                         let x = &mut c[g as usize];
                         *x = x.wrapping_add(weight(w, i));
                     }
+                    snapshot!(i, c);
                 }
             }
             (Kind::Count(c), true) => {
@@ -1134,6 +1142,7 @@ impl Accumulator {
                         };
                         seen[g] = true;
                     }
+                    snapshot!(i, sum, seen);
                 }
             }
             (Kind::SumFloat { sum, seen }, _) => {
@@ -1146,6 +1155,7 @@ impl Accumulator {
                         sum[g as usize] += v[i] * wv;
                         seen[g as usize] = true;
                     }
+                    snapshot!(i, sum, seen);
                 }
             }
             (Kind::SumDec { sum, state: st }, _) => {
@@ -1181,6 +1191,7 @@ impl Accumulator {
                         sum[g] += v[i] * wv;
                         count[g] = count[g].wrapping_add(wt);
                     }
+                    snapshot!(i, sum, count);
                 }
             }
             (
@@ -1225,6 +1236,7 @@ impl Accumulator {
                                 vals[g] = v[i];
                                 set[g] = true;
                             }
+                            snapshot!(i, vals, set);
                         }
                     }
                     Values::Float(vals) => {
@@ -1240,6 +1252,7 @@ impl Accumulator {
                                 vals[g] = v[i];
                                 set[g] = true;
                             }
+                            snapshot!(i, vals, set);
                         }
                     }
                     Values::Bytes(vals) => {
@@ -1294,6 +1307,7 @@ impl Accumulator {
                                     vals[g] = v[i];
                                 }
                             }
+                            snapshot!(i, vals, set, null);
                         }
                     }
                     Values::Float(vals) => {
@@ -1307,6 +1321,7 @@ impl Accumulator {
                                     vals[g] = v[i];
                                 }
                             }
+                            snapshot!(i, vals, set, null);
                         }
                     }
                     Values::Bytes(vals) => {
@@ -2136,42 +2151,131 @@ mod tests {
         );
     }
 
-    /// A copied group has the source's state, string heap bytes included;
-    /// a group outside the table is an error.
+    /// A running fold keeps, after each row, the state the row-by-row fold
+    /// of its partition has: every snapshot evaluates as the aggregate of
+    /// the rows folded so far (NULLs and unfolded rows included), for every
+    /// kind a window evaluates this way; the rest are refused.
     #[test]
-    fn groups_copy_their_state() {
-        let expr = AggregateExpr::new(AggregateFunction::Max, 0, DataType::Utf8View, "m");
-        let mut a = Accumulator::new(&expr, true).unwrap();
-        a.resize(3);
-        let col: ArrayRef = Arc::new(arrow_array::StringViewArray::from(vec!["abc", "z"]));
-        a.update(&[0, 1], &[col], &Weights::Const(1)).unwrap();
-        let before = a.size();
-        a.copy_group(0, 2).unwrap();
-        assert_eq!(a.size(), before + 3);
-        a.copy_group(1, 2).unwrap();
-        assert_eq!(a.size(), before + 1);
-        let v = a.evaluate(&[0, 1, 2]).unwrap();
-        let v = v.as_string_view();
-        assert_eq!((v.value(0), v.value(1), v.value(2)), ("abc", "z", "z"));
-        assert!(a.copy_group(5, 0).is_err() && a.copy_group(0, 5).is_err());
-        for f in [
-            AggregateFunction::Count,
-            AggregateFunction::Sum,
-            AggregateFunction::Avg,
-            AggregateFunction::First {
-                ignore_nulls: false,
-            },
-        ] {
-            for t in [
-                DataType::Int64,
-                DataType::Float64,
-                DataType::Decimal128(10, 2),
+    fn running_snapshots_equal_row_by_row_folds() {
+        use AggregateFunction as F;
+        let ints: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(3),
+            None,
+            Some(-7),
+            Some(5),
+            None,
+            Some(2),
+            Some(9),
+        ]));
+        let floats: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(0.5),
+            None,
+            Some(-1.25),
+            Some(2.0),
+            None,
+            Some(8.0),
+            Some(-3.5),
+        ]));
+        // Partition 0: rows 0..4, partition 1: rows 4..7; group 2 takes rows
+        // the filter drops (rows 3 and 6); a snapshot after every row.
+        let (n, parts_of) = (7, [0_u32, 0, 0, 0, 1, 1, 1]);
+        let groups = [0_u32, 0, 0, 2, 1, 1, 2];
+        let snapshots: Vec<u32> = (3..3 + 7).collect();
+        for (col, t) in [(&ints, DataType::Int64), (&floats, DataType::Float64)] {
+            for f in [
+                F::Count,
+                F::Sum,
+                F::Avg,
+                F::Min,
+                F::Max,
+                F::First {
+                    ignore_nulls: false,
+                },
+                F::First { ignore_nulls: true },
+                F::Last {
+                    ignore_nulls: false,
+                },
+                F::Last { ignore_nulls: true },
             ] {
-                let mut a = Accumulator::new(&AggregateExpr::new(f, 0, t, "x"), false).unwrap();
-                a.resize(2);
-                a.copy_group(0, 1).unwrap();
-                assert!(a.copy_group(2, 0).is_err(), "{f:?}");
+                let expr = AggregateExpr::new(f, 0, t.clone(), "x");
+                let mut fast = Accumulator::new(&expr, true).unwrap();
+                fast.resize(3 + n);
+                // Two calls: a snapshot never needs rows of the same call.
+                for (lo, hi) in [(0, 3), (3, 7)] {
+                    fast.update_running(
+                        &groups[lo..hi],
+                        &[col.slice(lo, hi - lo)],
+                        &Running {
+                            parts: &parts_of[lo..hi],
+                            snapshots: &snapshots[lo..hi],
+                        },
+                    )
+                    .unwrap();
+                }
+                let ids: Vec<u32> = snapshots.clone();
+                let got = fast.evaluate(&ids).unwrap();
+                // The same rows, one at a time, evaluated after each.
+                let mut slow = Accumulator::new(&expr, true).unwrap();
+                slow.resize(3);
+                for row in 0..n {
+                    slow.update(&[groups[row]], &[col.slice(row, 1)], &Weights::Const(1))
+                        .unwrap();
+                    let want = slow.evaluate(&[parts_of[row]]).unwrap();
+                    assert_eq!(
+                        got.slice(row, 1).to_data(),
+                        want.to_data(),
+                        "{f:?} over {t:?}, row {row}"
+                    );
+                }
             }
         }
+        // Rows without a snapshot only fold.
+        let expr = AggregateExpr::new(F::Sum, 0, DataType::Int64, "x");
+        let mut a = Accumulator::new(&expr, true).unwrap();
+        a.resize(2);
+        a.update_running(
+            &[0, 0],
+            &[ints.slice(0, 2)],
+            &Running {
+                parts: &[0, 0],
+                snapshots: &[Running::NONE, Running::NONE],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            a.evaluate(&[0])
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .value(0),
+            3
+        );
+        // Kinds a window evaluates elsewhere, and bad shapes, are errors.
+        for (f, t) in [
+            (F::Sum, DataType::Decimal128(10, 2)),
+            (F::Max, DataType::Utf8View),
+        ] {
+            let mut a = Accumulator::new(&AggregateExpr::new(f, 0, t.clone(), "x"), true).unwrap();
+            a.resize(2);
+            let col: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+            let run = Running {
+                parts: &[0],
+                snapshots: &[1],
+            };
+            let e = a.update_running(&[0], &[col], &run).unwrap_err();
+            assert!(
+                e.to_string().contains("no running fold"),
+                "{f:?} {t:?}: {e}"
+            );
+        }
+        let mut a = Accumulator::new(&expr, true).unwrap();
+        a.resize(2);
+        let short = Running {
+            parts: &[0],
+            snapshots: &[],
+        };
+        let e = a
+            .update_running(&[0, 0], &[ints.slice(0, 2)], &short)
+            .unwrap_err();
+        assert!(e.to_string().contains("different lengths"), "{e}");
     }
 }

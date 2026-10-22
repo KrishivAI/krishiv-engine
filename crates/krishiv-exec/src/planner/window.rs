@@ -185,6 +185,11 @@ impl Planner<'_> {
             }
             other => return Err(unsupported(&format!("the window aggregate {other}"))),
         };
+        // The analyzer rejects `count(DISTINCT x) OVER (...)` as Spark does;
+        // a plan that still holds one must not be computed as `count(x)`.
+        if c.f.distinct {
+            return Err(unsupported("DISTINCT window aggregates"));
+        }
         if function != AggregateFunction::Count && args.len() != 1 {
             return Err(internal("a window aggregate of several arguments"));
         }

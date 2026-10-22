@@ -2162,7 +2162,7 @@
   },
   {
    "id": "first_last",
-   "sql": "SELECT p, o, v, first(v) OVER (PARTITION BY p ORDER BY o, v) f, last(v) OVER (PARTITION BY p ORDER BY o) l, first(v) IGNORE NULLS OVER (ORDER BY o, p, v) fi, last_value(v, true) OVER (PARTITION BY p) li, first_value(v) OVER (PARTITION BY p ORDER BY v NULLS LAST) fv FROM t",
+   "sql": "SELECT p, o, v, first(v) OVER (PARTITION BY p ORDER BY o, v) f, last(v) OVER (PARTITION BY p ORDER BY o, v) l, last(o) OVER (PARTITION BY p ORDER BY o) lo, first(v) IGNORE NULLS OVER (ORDER BY o, p, v) fi, last_value(v, true) OVER (PARTITION BY p ORDER BY o, v ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) li, first_value(v) OVER (PARTITION BY p ORDER BY v NULLS LAST) fv FROM t",
    "conf": {},
    "ok": true,
    "output": [
@@ -2192,6 +2192,11 @@
      "nullable": true
     },
     {
+     "name": "lo",
+     "type": "int",
+     "nullable": true
+    },
+    {
      "name": "fi",
      "type": "int",
      "nullable": true
@@ -2213,7 +2218,8 @@
      "1",
      "10",
      "5",
-     "20",
+     "10",
+     "1",
      "2",
      "20",
      "5"
@@ -2224,6 +2230,7 @@
      "20",
      "5",
      "20",
+     "1",
      "2",
      "20",
      "5"
@@ -2235,6 +2242,7 @@
      "5",
      null,
      "2",
+     "2",
      "20",
      "5"
     ],
@@ -2244,6 +2252,7 @@
      "5",
      "5",
      "5",
+     null,
      "2",
      "20",
      "5"
@@ -2254,6 +2263,7 @@
      "7",
      "7",
      "7",
+     "3",
      "2",
      "7",
      "7"
@@ -2264,6 +2274,7 @@
      "1",
      "2",
      "1",
+     "4",
      "2",
      "1",
      "1"
@@ -2274,6 +2285,7 @@
      "2",
      "2",
      "2",
+     null,
      "2",
      "1",
      "1"
@@ -2576,7 +2588,7 @@
   },
   {
    "id": "doubles",
-   "sql": "SELECT k, c, x, sum(x) OVER (PARTITION BY k ORDER BY c, x ROWS UNBOUNDED PRECEDING) rs, avg(x) OVER (PARTITION BY k) a, sum(x) OVER (ORDER BY k, c, x) s FROM e",
+   "sql": "SELECT k, c, x, sum(x) OVER (PARTITION BY k ORDER BY c, x ROWS UNBOUNDED PRECEDING) rs, avg(x) OVER (PARTITION BY k ORDER BY c, x ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) a, sum(x) OVER (ORDER BY k, c, x) s FROM e",
    "conf": {},
    "ok": true,
    "output": [

@@ -18,7 +18,8 @@ use krishiv_types::batch::Weights;
 
 use super::{Shape, WindowFunction, WindowFunctionPlan, WindowPlan};
 use crate::aggregate::{
-    Accumulator, AggInput, AggregateExpr, AggregateFunction, avg_decimal_wide, wide_sum_value,
+    Accumulator, AggInput, AggregateExpr, AggregateFunction, Running, avg_decimal_wide,
+    wide_sum_value,
 };
 use crate::error::{Result, internal};
 
@@ -345,33 +346,50 @@ fn aggregate(
             };
             acc.resize(parts + 1 + segments);
             let mut groups: Vec<u32> = Vec::new();
+            let mut snapshots: Vec<u32> = Vec::new();
             let mut at = 0;
             let mut segment = 0;
             for s in u.slices {
                 let mask = filter_mask(f, s)?;
                 let args = arguments(a, s)?;
-                let mut i = 0;
-                while i < s.len {
-                    let row = at + i;
-                    // The rest of the segment within this slice.
-                    let end = match shape {
-                        Shape::RunningRows => row + 1,
-                        _ => u.peers[u.peer_of[row] as usize].1,
-                    };
-                    let len = (end - row).min(s.len - i);
-                    let p = u.part_of[row];
+                let parts_of = &u.part_of[at..at + s.len];
+                // Without a filter every row folds into its partition's group.
+                if mask.is_some() {
                     groups.clear();
                     groups.extend(
-                        (i..i + len).map(|j| if passes(mask.as_ref(), j) { p } else { trash }),
+                        parts_of
+                            .iter()
+                            .enumerate()
+                            .map(|(j, &p)| if passes(mask.as_ref(), j) { p } else { trash }),
                     );
-                    let piece: Vec<ArrayRef> = args.iter().map(|c| c.slice(i, len)).collect();
-                    acc.update(&groups, &piece, &one)?;
-                    i += len;
-                    if at + i == end {
-                        acc.copy_group(p as usize, parts + 1 + segment)?;
-                        segment += 1;
-                    }
                 }
+                let folded: &[u32] = if mask.is_some() { &groups } else { parts_of };
+                // A segment's state is kept after its last row.
+                snapshots.clear();
+                for row in at..at + s.len {
+                    let last = match shape {
+                        Shape::RunningRows => true,
+                        _ => row + 1 == u.peers[u.peer_of[row] as usize].1,
+                    };
+                    snapshots.push(if last {
+                        let slot = id(parts + 1 + segment)?;
+                        if slot == Running::NONE {
+                            return Err(too_large());
+                        }
+                        segment += 1;
+                        slot
+                    } else {
+                        Running::NONE
+                    });
+                }
+                acc.update_running(
+                    folded,
+                    &args,
+                    &Running {
+                        parts: parts_of,
+                        snapshots: &snapshots,
+                    },
+                )?;
                 at += s.len;
             }
             let ids: Vec<u32> = (0..segments)
@@ -707,9 +725,18 @@ pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -
                         Shape::Whole => parts,
                         _ => parts + segments,
                     };
-                    // Group ids, states, evaluated values, and (but for
-                    // one segment per row) the gathered output.
-                    rows * 4
+                    // Group ids (a whole frame's, or a filtered running
+                    // frame's: an unfiltered one folds into the partition
+                    // groups as they are), snapshot slots (running frames),
+                    // states, evaluated values, and (but for one segment per
+                    // row) the gathered output.
+                    let ids = if shape == Shape::Whole || f.filter.is_some() {
+                        rows * 4
+                    } else {
+                        0
+                    };
+                    let slots = if shape == Shape::Whole { 0 } else { rows * 4 };
+                    ids + slots
                         + groups * state
                         + width(&out, segments)
                         + if shape == Shape::RunningRows {

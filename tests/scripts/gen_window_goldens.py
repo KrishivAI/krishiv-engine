@@ -8,8 +8,10 @@ nullability) and rows, or the error condition, SQLSTATE and message parameters S
 recorded as text: integers in decimal, doubles as Python's `repr` (`nan`, `inf`), decimals in plain
 notation with their scale, dates in ISO form, strings as they are, NULL as `null`. Rows are compared as multisets
 (ties in an
-`ORDER BY` order rows nondeterministically in Spark too). Output is deterministic and contains no local
-paths or hostnames.
+`ORDER BY` order rows nondeterministically in Spark too). Every function whose value depends on the
+order of rows in a frame (`first`, `last`, floating-point sums and averages) is given a total `ORDER BY`
+(the values below make the ordering keys unique), so the fixture does not encode one Spark run's
+physical order. Output is deterministic and contains no local paths or hostnames.
 
 Usage (from repo root), against a Spark 4.2.0 Spark Connect server (temporary views only; nothing
 outlives the session):
@@ -177,8 +179,11 @@ CASES: list[tuple[str, str, dict[str, str]]] = [
     ),
     (
         "first_last",
-        "SELECT p, o, v, first(v) OVER (PARTITION BY p ORDER BY o, v) f, last(v) OVER (PARTITION BY p ORDER BY o) l,"
-        " first(v) IGNORE NULLS OVER (ORDER BY o, p, v) fi, last_value(v, true) OVER (PARTITION BY p) li,"
+        "SELECT p, o, v, first(v) OVER (PARTITION BY p ORDER BY o, v) f, last(v) OVER (PARTITION BY p ORDER BY o, v) l,"
+        " last(o) OVER (PARTITION BY p ORDER BY o) lo,"
+        " first(v) IGNORE NULLS OVER (ORDER BY o, p, v) fi,"
+        " last_value(v, true) OVER (PARTITION BY p ORDER BY o, v ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED"
+        " FOLLOWING) li,"
         " first_value(v) OVER (PARTITION BY p ORDER BY v NULLS LAST) fv FROM t",
         {},
     ),
@@ -204,7 +209,8 @@ CASES: list[tuple[str, str, dict[str, str]]] = [
     (
         "doubles",
         "SELECT k, c, x, sum(x) OVER (PARTITION BY k ORDER BY c, x ROWS UNBOUNDED PRECEDING) rs,"
-        " avg(x) OVER (PARTITION BY k) a, sum(x) OVER (ORDER BY k, c, x) s FROM e",
+        " avg(x) OVER (PARTITION BY k ORDER BY c, x ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) a,"
+        " sum(x) OVER (ORDER BY k, c, x) s FROM e",
         {},
     ),
     ("decimal_overflow_running", "SELECT i, sum(x) OVER (ORDER BY i ROWS UNBOUNDED PRECEDING) s FROM m", {}),

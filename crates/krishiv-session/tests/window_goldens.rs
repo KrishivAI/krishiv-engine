@@ -428,3 +428,55 @@ fn a_second_filter_filters_the_windows_output() {
     // Spark 4.2: (2, 7, 1) and (1, 35, 2) before the filter.
     assert_eq!(got, ["\"2\",\"7\",\"1\""]);
 }
+
+/// A DataFrame filter over an aggregate with windows filters their output
+/// (Spark 4.2.0: `df.filter(col("r") > 1)` over `rank() OVER (...) AS r`
+/// returns the rows with `r > 1`), while the same predicate as a SQL
+/// `HAVING` cannot name the window's alias and filters below the windows.
+#[test]
+fn a_dataframe_filter_sees_the_window_output_and_having_does_not() {
+    use krishiv_session::functions::{col, lit};
+    let s = session(&fixture());
+    let select = "SELECT p, sum(v) AS s, rank() OVER (ORDER BY sum(v)) AS r FROM t GROUP BY p";
+    let rows = block_on(async {
+        let df = s.sql(select).await?;
+        let batches = df.filter(col("r").gt(lit(1))).collect().await?;
+        let mut rows = Vec::new();
+        for b in &batches {
+            for i in 0..b.num_rows() {
+                let cells: Vec<String> = b
+                    .columns()
+                    .iter()
+                    .map(|c| {
+                        if c.is_null(i) {
+                            "NULL".to_owned()
+                        } else {
+                            match c.data_type() {
+                                DataType::Int32 => {
+                                    c.as_primitive::<Int32Type>().value(i).to_string()
+                                }
+                                _ => c.as_primitive::<Int64Type>().value(i).to_string(),
+                            }
+                        }
+                    })
+                    .collect();
+                rows.push(cells.join("|"));
+            }
+        }
+        rows.sort();
+        Ok::<_, krishiv_common::error::KrishivError>(rows)
+    })
+    .unwrap();
+    assert_eq!(rows, ["1|35|3", "2|7|2"]);
+    let err = block_on(async {
+        s.sql(&format!("{select} HAVING r > 1"))
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert_eq!(
+        err.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+}

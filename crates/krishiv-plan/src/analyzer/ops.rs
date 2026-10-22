@@ -423,11 +423,18 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
-        // The first filter over an aggregate with windows filters below
-        // them; a further one (a DataFrame filter) filters their output.
+        // A `HAVING` over an aggregate with windows filters below them
+        // (Spark's `UnresolvedHaving`: it cannot name a window's alias). Only
+        // SQL has a `HAVING`: lowering stamps the filter with the span of
+        // its text, as every node it builds, and a DataFrame filter has a
+        // plan id and no span. A DataFrame filter, and any further filter,
+        // filters the output of the windows (checked against Spark 4.2.0:
+        // `df.filter(col("r") > 1)` over `... rank() OVER (...) AS r` works,
+        // `HAVING r > 1` is UNRESOLVED_COLUMN).
         if let Some(info) = c.agg.clone()
             && info.has_windows()
             && info.having.is_none()
+            && p.origin.sql.is_some()
         {
             return self.having_below_windows(p, &info, predicate, env);
         }
