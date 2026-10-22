@@ -14,7 +14,7 @@ use super::tests::{Env, rows, write};
 use crate::request::{
     CmpOp, Collation, ColumnPath, PushdownExpr, RowFilterPolicy, ScalarValue, ScanRequest,
 };
-use crate::{FormatOptions, MetadataNeeds};
+use crate::{FileFormat as _, FormatOptions, MetadataNeeds};
 
 use super::ParquetFormat;
 
@@ -106,6 +106,60 @@ fn the_filter_follows_each_row_groups_measured_fraction() {
         .map(|(_, v)| v)
         .collect();
     assert_eq!(zeros.len(), 25 + 1 + 10, "every matching row survives");
+}
+
+/// Parquet options parsed over a session holding `session`.
+fn options_over(session: &[(&str, &str)], user: &[(&str, &str)]) -> FormatOptions {
+    let (conf, _) = krishiv_common::config::Config::from_pairs(session.iter().copied()).unwrap();
+    let user = user
+        .iter()
+        .map(|(k, v)| {
+            (
+                (*k).to_owned(),
+                krishiv_common::secret::OptionValue::from_user(k, (*v).to_owned()),
+            )
+        })
+        .collect();
+    ParquetFormat.options().parse(&user, &conf).unwrap().0
+}
+
+/// `krishiv.io.lateMaterialization` decides the scans that leave the
+/// policy to the session (`auto` requests); the scan's own
+/// `lateMaterialization` option beats the session's, and a request that
+/// forces a policy beats both.
+#[test]
+fn the_session_setting_chooses_the_policy_of_auto_scans() {
+    let env = Env::new();
+    let key = "krishiv.io.lateMaterialization";
+    let run = |session: &[(&str, &str)], user: &[(&str, &str)], policy| {
+        let (f, _, _) = file(&env);
+        let o = options_over(session, user);
+        let schema = env
+            .rt
+            .block_on(
+                env.io
+                    .read_metadata(&ParquetFormat, &f, MetadataNeeds::default(), &o),
+            )
+            .unwrap()
+            .schema();
+        let mut req = ScanRequest::new(schema, vec![ColumnPath::new("k"), ColumnPath::new("v")]);
+        req.predicate = Some(k_is_zero());
+        req.row_filter = policy;
+        rows(&env.scan(&f, &req, &o).unwrap())
+    };
+    let auto = RowFilterPolicy::Auto;
+    assert_eq!(run(&[(key, "off")], &[], auto), 15_000);
+    assert_eq!(run(&[(key, "on")], &[], auto), 36);
+    assert_eq!(run(&[(key, "auto")], &[], auto), 25 + 5000 + 10);
+    assert_eq!(
+        run(&[(key, "off")], &[("lateMaterialization", "on")], auto),
+        36
+    );
+    assert_eq!(run(&[(key, "off")], &[], RowFilterPolicy::On), 36);
+    assert_eq!(run(&[(key, "on")], &[], RowFilterPolicy::Off), 15_000);
+    // Anything else is not a policy.
+    let bad = krishiv_common::config::Config::from_pairs([(key, "sometimes")]);
+    assert!(bad.is_err(), "{bad:?}");
 }
 
 #[test]
