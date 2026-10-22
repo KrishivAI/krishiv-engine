@@ -64,6 +64,11 @@ pub(crate) fn statement(s: &Statement, sql: &str, opts: ParserOptions) -> R {
     match s {
         Statement::Query(q) => query(q, sql, opts),
         Statement::Explain(e) => statement(&e.statement, sql, opts),
+        // Assignments and resets carry raw strings, and drops name one
+        // view: nothing Spark's builder checks. A created view's query is
+        // checked as a statement of its own.
+        Statement::Set(_) | Statement::Reset(_) | Statement::DropView(_) => Ok(()),
+        Statement::CreateView(v) => query(&v.query, sql, opts),
     }
 }
 

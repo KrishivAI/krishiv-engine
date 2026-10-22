@@ -313,7 +313,7 @@ impl Session {
     ///
     /// # Errors
     /// Spark's parse and analysis errors; `KRISHIV_UNSUPPORTED_FEATURE`
-    /// for statements other than queries.
+    /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let (session, query) = (self.clone(), query.to_owned());
         self.on_executor(async move { session.sql_here(&query).await })
@@ -323,15 +323,20 @@ impl Session {
     async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let statement = krishiv_sql::parse_statement(query, &env.parser).map_err(|e| e.error)?;
-        let q = match statement {
-            Statement::Query(q) => q,
-            Statement::Explain(e) => return self.explain_statement(&e).await,
-            _ => return Err(unsupported_statement("statements other than queries")),
-        };
-        let plan = krishiv_sql::lower(&q, SourceId(0)).map_err(|e| e.error)?;
-        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        df.analyzed_in(env).await?;
-        Ok(df)
+        match statement {
+            Statement::Query(q) => {
+                let plan = krishiv_sql::lower(&q, SourceId(0)).map_err(|e| e.error)?;
+                let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+                df.analyzed_in(env).await?;
+                Ok(df)
+            }
+            Statement::Explain(e) => self.explain_statement(&e).await,
+            Statement::Set(s) => self.exec_set(&s).await,
+            Statement::Reset(r) => self.exec_reset(&r).await,
+            Statement::CreateView(v) => self.exec_create_view(&v).await,
+            Statement::DropView(v) => self.exec_drop_view(&v).await,
+            _ => Err(unsupported_statement("statements other than queries")),
+        }
     }
 
     /// The table or view `name`, lazily (Spark Connect's `spark.table`: an
@@ -551,7 +556,14 @@ impl Session {
         plan: &Arc<LogicalPlan>,
         env: &QueryEnv,
     ) -> Result<AnalyzedPlan, KrishivError> {
-        let plan = Plan::try_new(Arc::clone(plan))?;
+        // Temporary views over queries inline as subqueries, so the
+        // analyzer sees one plan however the view was made.
+        let plan = crate::catalog::expand_temp_views(
+            &self.state.catalog,
+            plan,
+            env.analysis.conf.case_sensitive,
+        )?;
+        let plan = Plan::try_new(plan)?;
         DefaultAnalyzer
             .analyze(&plan, &env.analysis)
             .await

@@ -240,11 +240,14 @@ fn temporary_tables_are_listed_replaced_and_dropped() {
         class(s.register_batches("t", other, vec![batch])),
         ErrorClass::InternalError
     );
-    // A temporary view of anything but a read by path is not supported yet.
+    // A temporary view of a missing table fails with its error.
     let e = block_on(s.table("missing").create_or_replace_temp_view("v"));
     assert_eq!(class(e), ErrorClass::TableOrViewNotFound);
-    let e = block_on(session().table("people").create_or_replace_temp_view("v"));
-    assert_eq!(class(e), ErrorClass::KrishivUnsupportedFeature);
+    // A view over any DataFrame reads through its plan.
+    let s = session();
+    block_on(s.table("people").create_or_replace_temp_view("v")).unwrap();
+    assert_eq!(s.temp_table_names(), ["people", "v"]);
+    assert_eq!(block_on(s.table("v").count()).unwrap(), 3);
 }
 
 /// Writes a Parquet file with `id INT NOT NULL`.

@@ -28,10 +28,13 @@ use crate::ast::{
     TableAlias, TableFactor, TableFactorKind, TableOption, TemporalClause, TemporalKind, Unpivot,
     UnpivotColumns, Values, With,
 };
-use crate::ast::{DataTypeSpec, Explain, ExplainMode, Statement, StructField};
+use crate::ast::{
+    CreateView, DataTypeSpec, DropView, Explain, ExplainMode, Reset, Set, SetKind, Statement,
+    StructField, ViewColumn,
+};
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
-use crate::lexer::{Sym, Token, TokenKind, tokenize, unquote_ident};
+use crate::lexer::{Sym, Token, TokenKind, tokenize, unescape_string, unquote_ident};
 use crate::{MAX_DEPTH, ParserOptions, validate};
 
 /// Why a rule did not match.
@@ -416,6 +419,24 @@ pub(crate) fn retry_keywords(cast_types: &[usize], far: usize) -> Vec<usize> {
     let excess = keywords.len().saturating_sub(MAX_CAST_RETRIES);
     keywords.drain(..excess);
     keywords
+}
+
+/// A backquoted or quoted token decoded as a `SET`/`RESET` key or value;
+/// `None` for any other token. Double quotes name an identifier when the
+/// options say so, else a string, as for identifiers and literals.
+fn decode_quoted(raw: &str, kind: TokenKind, opts: ParserOptions) -> Option<String> {
+    match kind {
+        TokenKind::QuotedIdent => Some(unquote_ident(raw)),
+        TokenKind::DoubleQuoted if opts.double_quoted_identifiers => Some(
+            raw.get(1..raw.len().saturating_sub(1))
+                .unwrap_or_default()
+                .replace("\"\"", "\""),
+        ),
+        TokenKind::String | TokenKind::DoubleQuoted => {
+            Some(unescape_string(raw, !opts.escaped_string_literals))
+        }
+        _ => None,
+    }
 }
 
 /// `out` after Spark's post-parse checks ([`TopRule::validate`]), whose
@@ -1057,13 +1078,21 @@ impl<'s> Parser<'s> {
 
     fn statement(&mut self) -> PR<Query> {
         let q = self.query()?;
+        self.command_end()?;
+        Ok(q)
+    }
+
+    /// Trailing `;`s and the end of the input after a complete statement.
+    /// Anything else is a syntax error at the token parsing stopped at;
+    /// one extraneous token before the end (or any after `;`, read by
+    /// ANTLR's `SEMICOLON*` loop) is reported as "extra input", as in
+    /// Spark.
+    fn command_end(&mut self) -> PR<()> {
         let mut semi = false;
         while self.eat_sym(Sym::Semi) {
             semi = true;
         }
         if self.pos < self.toks.len() {
-            // ANTLR drops one extraneous token before the end, or any after
-            // `;` (its `SEMICOLON*` loop), as "extra input".
             // An unterminated quote with text after it is several tokens
             // to Spark, so no single extraneous token.
             let last = self.tok(0).filter(|_| self.pos + 1 == self.toks.len());
@@ -1075,7 +1104,7 @@ impl<'s> Parser<'s> {
             }
             return self.fail();
         }
-        Ok(q)
+        Ok(())
     }
 
     /// `(EXPLAIN [mode])* query ;* EOF`. The `EXPLAIN` prefixes are read
@@ -1120,6 +1149,23 @@ impl<'s> Parser<'s> {
             }
             explains.push((start, mode.unwrap_or(ExplainMode::Simple), logical));
         }
+        // `SET`, `RESET`, `CREATE TEMPORARY VIEW` and `DROP VIEW` start no
+        // query, so a statement starting with one is that command. Under
+        // `EXPLAIN` they stay queries, which fail as in Spark.
+        if explains.is_empty() {
+            if self.kw_at(0, "SET") {
+                return self.set_command();
+            }
+            if self.kw_at(0, "RESET") {
+                return self.reset_command();
+            }
+            if self.kw_at(0, "CREATE") {
+                return self.create_command();
+            }
+            if self.kw_at(0, "DROP") {
+                return self.drop_command();
+            }
+        }
         let query = self.statement()?;
         let end = query.span.end;
         // The outermost `EXPLAIN LOGICAL` is reported first, before any
@@ -1139,6 +1185,315 @@ impl<'s> Parser<'s> {
             });
         }
         Ok(statement)
+    }
+
+    /// `SET`, `SET -v`, `SET key` or `SET key = value`. The value is the
+    /// raw rest of the statement, trimmed (decoded when it is one quoted
+    /// token); anything after its `;` is extra input, as for queries.
+    fn set_command(&mut self) -> PR<Statement> {
+        let start = self.start();
+        self.expect_kw("SET")?;
+        // `SET -v`.
+        if self.sym_at(0, Sym::Minus)
+            && self.kind(1) == Some(TokenKind::Word)
+            && self.text(1).eq_ignore_ascii_case("v")
+        {
+            self.pos += 2;
+            let span = self.span_from(start);
+            self.command_end()?;
+            return Ok(Statement::Set(Set {
+                kind: SetKind::Verbose,
+                span,
+            }));
+        }
+        // `SET` with nothing after it lists every explicitly set key.
+        if self.pos >= self.toks.len() || self.sym_at(0, Sym::Semi) {
+            let span = self.span_from(start);
+            self.command_end()?;
+            return Ok(Statement::Set(Set {
+                kind: SetKind::All,
+                span,
+            }));
+        }
+        // A quoted key (backquotes, or quotes as Spark allows).
+        if let Some((key, key_span)) = self.quoted_key()? {
+            if self.eat_sym(Sym::Eq) {
+                let (value, value_span) = self.set_value()?;
+                let span = self.span_from(start);
+                self.command_end()?;
+                return Ok(Statement::Set(Set {
+                    kind: SetKind::Assign {
+                        key,
+                        key_span,
+                        value,
+                        value_span,
+                    },
+                    span,
+                }));
+            }
+            let span = self.span_from(start);
+            self.command_end()?;
+            return Ok(Statement::Set(Set {
+                kind: SetKind::Show { key, key_span },
+                span,
+            }));
+        }
+        // A bare key runs to the first `=` (an assignment) or to the `;`
+        // or end of input (a lookup); the text is the key as written.
+        let mut eq = None;
+        let mut semi = self.toks.len();
+        for (i, t) in self.toks.iter().enumerate().skip(self.pos) {
+            match t.kind {
+                TokenKind::Sym(Sym::Eq) => {
+                    eq = Some(i);
+                    break;
+                }
+                TokenKind::Sym(Sym::Semi) => {
+                    semi = i;
+                    break;
+                }
+                TokenKind::Unterminated => {
+                    self.pos = i;
+                    return self.fail();
+                }
+                _ => {}
+            }
+        }
+        if let Some(e) = eq {
+            let from = self.start();
+            let (key, key_span) = self.trimmed_span(from, self.toks[e].span.start);
+            if key.is_empty() {
+                self.pos = e;
+                return self.fail();
+            }
+            self.pos = e + 1;
+            let (value, value_span) = self.set_value()?;
+            let span = self.span_from(start);
+            self.command_end()?;
+            return Ok(Statement::Set(Set {
+                kind: SetKind::Assign {
+                    key,
+                    key_span,
+                    value,
+                    value_span,
+                },
+                span,
+            }));
+        }
+        let from = self.start();
+        let to = (self.pos..semi)
+            .filter_map(|i| self.toks.get(i))
+            .map(|t| t.span.end)
+            .max()
+            .unwrap_or(from);
+        let (key, key_span) = self.trimmed_span(from, to);
+        self.pos = semi;
+        let span = self.span_from(start);
+        self.command_end()?;
+        Ok(Statement::Set(Set {
+            kind: SetKind::Show { key, key_span },
+            span,
+        }))
+    }
+
+    /// The raw rest of a `SET key =` assignment, trimmed: decoded when it
+    /// is one quoted token. An unterminated quote fails where the quote
+    /// is, as in Spark. The cursor ends at the `;` or end of input.
+    fn set_value(&mut self) -> PR<(String, Span)> {
+        let from_pos = self.pos;
+        let mut end = self.toks.len();
+        for (i, t) in self.toks.iter().enumerate().skip(self.pos) {
+            if t.kind == TokenKind::Sym(Sym::Semi) {
+                end = i;
+                break;
+            }
+            if t.kind == TokenKind::Unterminated {
+                self.pos = i;
+                return self.fail();
+            }
+        }
+        let from = self.tok(0).map_or(self.src.len(), |t| t.span.start);
+        let to = (self.pos..end)
+            .filter_map(|i| self.toks.get(i))
+            .map(|t| t.span.end)
+            .max()
+            .unwrap_or(from);
+        let (value, value_span) = self.trimmed_span(from, to);
+        self.pos = end;
+        // One quoted token for the whole value is decoded, as Spark
+        // allows quoted keys and values.
+        if from_pos + 1 == end
+            && let Some(t) = self.toks.get(from_pos)
+            && t.span.range() == value_span.range()
+            && let Some(decoded) = decode_quoted(t.span.text(self.src), t.kind, self.opts)
+        {
+            return Ok((decoded, value_span));
+        }
+        Ok((value, value_span))
+    }
+
+    /// The backquoted or quoted key at the cursor, decoded; `None` when
+    /// the token is no quoted key. An unterminated quote fails where the
+    /// quote is, as in Spark.
+    fn quoted_key(&mut self) -> PR<Option<(String, Span)>> {
+        let Some(t) = self.tok(0) else {
+            return Ok(None);
+        };
+        if t.kind == TokenKind::Unterminated {
+            return self.fail();
+        }
+        let Some(key) = decode_quoted(t.span.text(self.src), t.kind, self.opts) else {
+            return Ok(None);
+        };
+        self.bump();
+        Ok(Some((key, t.span)))
+    }
+
+    /// `text[from..to]` trimmed the way Spark trims statement text, with
+    /// its span.
+    fn trimmed_span(&self, from: usize, to: usize) -> (String, Span) {
+        let raw = self.src.get(from..to).unwrap_or_default();
+        let trimmed = raw.trim_matches(|c: char| c <= ' ');
+        let leading = raw.len() - raw.trim_start_matches(|c: char| c <= ' ').len();
+        (
+            trimmed.to_owned(),
+            Span::new(from + leading, from + leading + trimmed.len()),
+        )
+    }
+
+    /// `RESET` or `RESET key`: the key is the trimmed rest of the
+    /// statement, decoded when it is one quoted token.
+    fn reset_command(&mut self) -> PR<Statement> {
+        let start = self.start();
+        self.expect_kw("RESET")?;
+        if self.pos >= self.toks.len() || self.sym_at(0, Sym::Semi) {
+            let span = self.span_from(start);
+            self.command_end()?;
+            return Ok(Statement::Reset(Reset {
+                key: None,
+                key_span: None,
+                span,
+            }));
+        }
+        if let Some((key, key_span)) = self.quoted_key()? {
+            let span = self.span_from(start);
+            self.command_end()?;
+            return Ok(Statement::Reset(Reset {
+                key: Some(key),
+                key_span: Some(key_span),
+                span,
+            }));
+        }
+        let mut semi = self.toks.len();
+        for (i, t) in self.toks.iter().enumerate().skip(self.pos) {
+            if t.kind == TokenKind::Sym(Sym::Semi) {
+                semi = i;
+                break;
+            }
+            if t.kind == TokenKind::Unterminated {
+                self.pos = i;
+                return self.fail();
+            }
+        }
+        let from = self.start();
+        let to = (self.pos..semi)
+            .filter_map(|i| self.toks.get(i))
+            .map(|t| t.span.end)
+            .max()
+            .unwrap_or(from);
+        let (key, key_span) = self.trimmed_span(from, to);
+        self.pos = semi;
+        let span = self.span_from(start);
+        self.command_end()?;
+        Ok(Statement::Reset(Reset {
+            key: Some(key),
+            key_span: Some(key_span),
+            span,
+        }))
+    }
+
+    /// `CREATE [OR REPLACE] TEMPORARY VIEW [IF NOT EXISTS] name
+    /// [(column [COMMENT '...'], ...)] AS query` (`TEMP` for `TEMPORARY`).
+    fn create_command(&mut self) -> PR<Statement> {
+        let start = self.start();
+        self.expect_kw("CREATE")?;
+        let or_replace = if self.kw_at(0, "OR") && self.kw_at(1, "REPLACE") {
+            self.pos += 2;
+            true
+        } else {
+            false
+        };
+        if !self.eat_kw("TEMP") && !self.eat_kw("TEMPORARY") {
+            return self.fail();
+        }
+        self.expect_kw("VIEW")?;
+        let if_not_exists =
+            if self.kw_at(0, "IF") && self.kw_at(1, "NOT") && self.kw_at(2, "EXISTS") {
+                self.pos += 3;
+                true
+            } else {
+                false
+            };
+        // Temporary views take one name part; a `.` fails here, where the
+        // name is complete.
+        let name = self.any_ident()?;
+        let columns = if self.sym_at(0, Sym::LParen) {
+            self.paren_list(Self::view_column)?
+        } else {
+            Vec::new()
+        };
+        self.expect_kw("AS")?;
+        let query = Box::new(self.query()?);
+        let span = self.span_from(start);
+        self.command_end()?;
+        Ok(Statement::CreateView(CreateView {
+            or_replace,
+            if_not_exists,
+            name,
+            columns,
+            query,
+            span,
+        }))
+    }
+
+    /// `name [COMMENT '...']` in a `CREATE VIEW` column list.
+    fn view_column(&mut self) -> PR<ViewColumn> {
+        let start = self.start();
+        let name = self.any_ident()?;
+        let comment = if self.eat_kw("COMMENT") {
+            match self.string_lit() {
+                Some(comment) => Some(comment),
+                None => return self.fail(),
+            }
+        } else {
+            None
+        };
+        Ok(ViewColumn {
+            name,
+            comment,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `DROP VIEW [IF EXISTS] name`.
+    fn drop_command(&mut self) -> PR<Statement> {
+        let start = self.start();
+        self.expect_kw("DROP")?;
+        self.expect_kw("VIEW")?;
+        let if_exists = if self.kw_at(0, "IF") && self.kw_at(1, "EXISTS") {
+            self.pos += 2;
+            true
+        } else {
+            false
+        };
+        let name = self.any_ident()?;
+        let span = self.span_from(start);
+        self.command_end()?;
+        Ok(Statement::DropView(DropView {
+            if_exists,
+            name,
+            span,
+        }))
     }
 
     /// A query; a failure at a position is remembered, so the subquery

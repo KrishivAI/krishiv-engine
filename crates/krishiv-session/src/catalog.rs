@@ -28,7 +28,7 @@ use krishiv_io::IoContext;
 use krishiv_plan::analyzer::{
     BoxFuture, Catalog, CatalogResolver, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
 };
-use krishiv_plan::{ExprNode, LogicalPlan, PlanNode, ReadSource, Scan, TableVersion};
+use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, ReadSource, Scan, TableVersion};
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -46,6 +46,14 @@ pub(crate) enum TempTable {
     /// A read by path, with the columns inferred when the view was created.
     Files {
         source: ReadSource,
+        columns: Vec<TableColumn>,
+    },
+    /// A view over a query: the unresolved plan and the output columns it
+    /// had when it was created (renamed when the view declares aliases).
+    /// Queries inline the plan as a subquery, so a view replaced while a
+    /// query runs does not change what it reads, as for tables.
+    View {
+        plan: Arc<LogicalPlan>,
         columns: Vec<TableColumn>,
     },
 }
@@ -97,10 +105,20 @@ impl SessionCatalog {
 
     /// The entry `name`: case-insensitively unless `case_sensitive`, when
     /// the name must be as registered.
-    fn get(&self, name: &str, case_sensitive: bool) -> Option<Arc<TempTable>> {
+    pub(crate) fn get(&self, name: &str, case_sensitive: bool) -> Option<Arc<TempTable>> {
         let tables = self.tables.read().unwrap_or_else(PoisonError::into_inner);
         let (registered, table) = tables.get(&name.to_lowercase())?;
         (!case_sensitive || registered == name).then(|| Arc::clone(table))
+    }
+
+    /// Whether an entry `name` exists: case-insensitively unless
+    /// `case_sensitive`, when the name must be as registered.
+    pub(crate) fn exists(&self, name: &str, case_sensitive: bool) -> bool {
+        let tables = self.tables.read().unwrap_or_else(PoisonError::into_inner);
+        match tables.get(&name.to_lowercase()) {
+            Some((registered, _)) => !case_sensitive || registered == name,
+            None => false,
+        }
     }
 }
 
@@ -396,10 +414,11 @@ impl Catalog for QueryCatalog {
             let Some(table) = found else {
                 return Ok(None);
             };
-            let columns = match &*table {
+            let (columns, kind) = match &*table {
                 TempTable::Memory { columns, .. } | TempTable::Files { columns, .. } => {
-                    columns.clone()
+                    (columns.clone(), TableKind::Table)
                 }
+                TempTable::View { columns, .. } => (columns.clone(), TableKind::View),
             };
             self.loaded
                 .lock()
@@ -413,7 +432,7 @@ impl Catalog for QueryCatalog {
                 },
                 columns,
                 version: None,
-                kind: TableKind::Table,
+                kind,
             }))
         })
     }
@@ -462,6 +481,12 @@ impl TableProviderResolver for QueryCatalog {
                     TempTable::Files { .. } => {
                         self.files_provider(&FilesKey::View(last.to_lowercase()))
                     }
+                    // Views are inlined as subqueries before analysis, so
+                    // no scan ever reads one.
+                    TempTable::View { .. } => Err(InternalError {
+                        message: "a scan of a temporary view that was not inlined".to_owned(),
+                    }
+                    .into()),
                 }
             }
             source @ ReadSource::Files { .. } => {
@@ -470,6 +495,131 @@ impl TableProviderResolver for QueryCatalog {
             _ => Err(unsupported("this scan")),
         }
     }
+}
+
+/// Inlines the temporary views `plan` reads: a read of a view (a
+/// single-part name with no options, not shadowed by a `WITH` definition)
+/// becomes the view's plan as a subquery named for the view, with the
+/// columns the view had when it was created. Tables, file views and reads
+/// by path are left for the analyzer, as are reads a `WITH` definition
+/// shadows (definitions shadow tables, as in Spark).
+///
+/// Views over views inline recursively; a view reading itself (through
+/// `OR REPLACE`) is an error, as the engine has no recursive views.
+///
+/// # Errors
+/// `INTERNAL_ERROR` for a view that reads itself.
+pub(crate) fn expand_temp_views(
+    catalog: &SessionCatalog,
+    plan: &Arc<LogicalPlan>,
+    case_sensitive: bool,
+) -> Result<Arc<LogicalPlan>, KrishivError> {
+    Expander {
+        catalog,
+        case_sensitive,
+        path: Vec::new(),
+    }
+    .go(Arc::clone(plan), &mut Vec::new())
+}
+
+/// [`expand_temp_views`]: the views on the current expansion path, by
+/// lower-case name, for cycle detection.
+struct Expander<'a> {
+    catalog: &'a SessionCatalog,
+    case_sensitive: bool,
+    path: Vec<String>,
+}
+
+impl Expander<'_> {
+    /// `plan` with its views inlined; `scope` holds the `WITH`
+    /// definitions visible where `plan` reads.
+    fn go(
+        &mut self,
+        plan: Arc<LogicalPlan>,
+        scope: &mut Vec<String>,
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        if let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
+            && let [view] = name.as_slice()
+            && options.is_empty()
+            && !scope
+                .iter()
+                .any(|c| same_name(c, view, self.case_sensitive))
+            && let Some(entry) = self.catalog.get(view, self.case_sensitive)
+            && let TempTable::View {
+                plan: definition,
+                columns,
+            } = &*entry
+        {
+            let key = view.to_lowercase();
+            if self.path.contains(&key) {
+                return Err(InternalError {
+                    message: format!("temporary view `{key}` reads itself"),
+                }
+                .into());
+            }
+            self.path.push(key);
+            // A view's definitions are its own: outer `WITH` names do not
+            // reach into it.
+            let input = self.go(Arc::clone(definition), &mut Vec::new());
+            self.path.pop();
+            let columns = columns.iter().map(|c| c.name.clone()).collect();
+            return Ok(Arc::new(
+                LogicalPlan::new(PlanNode::SubqueryAlias {
+                    input: input?,
+                    alias: view.clone(),
+                    columns,
+                })
+                .with_origin(plan.origin),
+            ));
+        }
+        if let PlanNode::WithCte { ctes, .. } = &plan.node {
+            let outer = scope.len();
+            scope.extend(ctes.iter().map(|c| c.name.clone()));
+            let expanded = self.children_and_exprs(plan, scope);
+            scope.truncate(outer);
+            return expanded;
+        }
+        self.children_and_exprs(plan, scope)
+    }
+
+    /// `plan` with its child relations and the subquery plans in its
+    /// expressions expanded.
+    fn children_and_exprs(
+        &mut self,
+        plan: Arc<LogicalPlan>,
+        scope: &mut Vec<String>,
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        let plan = plan.map_children(|child| self.go(child, scope))?;
+        plan.map_expressions(|expr| self.expand_expr(expr, scope))
+    }
+
+    /// `expr` with the views read by the subquery plans inside it inlined.
+    fn expand_expr(
+        &mut self,
+        expr: Arc<Expr>,
+        scope: &mut Vec<String>,
+    ) -> Result<Arc<Expr>, KrishivError> {
+        let expr = expr.map_children(|child| self.expand_expr(child, scope))?;
+        if let ExprNode::Subquery { kind, plan } = &expr.node {
+            let expanded = self.go(Arc::clone(plan), scope)?;
+            if !Arc::ptr_eq(&expanded, plan) {
+                return Ok(Arc::new(Expr {
+                    node: ExprNode::Subquery {
+                        kind: kind.clone(),
+                        plan: expanded,
+                    },
+                    origin: expr.origin,
+                }));
+            }
+        }
+        Ok(expr)
+    }
+}
+
+/// Whether `a` and `b` name the same view: exactly when `case_sensitive`,
+/// else ignoring ASCII case, as the session catalog stores names.
+fn same_name(a: &str, b: &str, case_sensitive: bool) -> bool {
+    a == b || !case_sensitive && a.eq_ignore_ascii_case(b)
 }
 
 #[cfg(test)]
@@ -525,9 +675,9 @@ mod tests {
 
     fn first_column(t: &TempTable) -> &str {
         match t {
-            TempTable::Files { columns, .. } | TempTable::Memory { columns, .. } => {
-                &columns[0].name
-            }
+            TempTable::Files { columns, .. }
+            | TempTable::Memory { columns, .. }
+            | TempTable::View { columns, .. } => &columns[0].name,
         }
     }
 

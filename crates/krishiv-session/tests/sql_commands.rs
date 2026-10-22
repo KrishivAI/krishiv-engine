@@ -1,0 +1,484 @@
+// SPDX-License-Identifier: Apache-2.0
+//! `SET`/`RESET` and temporary views through `Session::sql`: result
+//! schemas and rows, configuration updates, view lifecycles and Spark's
+//! error classes.
+#![cfg(test)]
+
+use std::sync::Arc;
+
+use arrow_array::Array;
+use arrow_array::cast::AsArray;
+use arrow_array::types::Int32Type;
+use arrow_array::{Int32Array, RecordBatch, StringArray};
+use arrow_schema::{DataType as ArrowType, Field, Schema};
+use futures::executor::block_on;
+use krishiv_common::error::{ErrorClass, KrishivError};
+use krishiv_session::Session;
+
+fn people() -> (Arc<Schema>, RecordBatch) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", ArrowType::Int32, false),
+        Field::new("name", ArrowType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![3, 1, 2])),
+            Arc::new(StringArray::from(vec![Some("c"), None, Some("b")])),
+        ],
+    )
+    .unwrap();
+    (schema, batch)
+}
+
+fn session() -> Session {
+    let s = Session::new().unwrap();
+    let (schema, batch) = people();
+    s.register_batches("people", schema, vec![batch]).unwrap();
+    s
+}
+
+fn class<T: std::fmt::Debug>(r: Result<T, KrishivError>) -> ErrorClass {
+    r.unwrap_err().error_class()
+}
+
+/// The rows of `sql` as strings (`~` for NULL), with the schema names.
+fn rows(s: &Session, sql: &str) -> (Vec<String>, Vec<Vec<String>>) {
+    let df = block_on(s.sql(sql)).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    let names: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
+    let batches = block_on(df.collect()).unwrap();
+    let mut out = Vec::new();
+    for b in &batches {
+        for i in 0..b.num_rows() {
+            let mut row = Vec::new();
+            for c in b.columns() {
+                if c.is_null(i) {
+                    row.push("~".to_owned());
+                } else {
+                    match c.data_type() {
+                        ArrowType::Utf8View => row.push(c.as_string_view().value(i).to_owned()),
+                        ArrowType::Utf8 => {
+                            row.push(c.as_string::<i32>().value(i).to_owned());
+                        }
+                        ArrowType::Int32 => {
+                            row.push(c.as_primitive::<Int32Type>().value(i).to_string());
+                        }
+                        other => panic!("{sql}: unexpected type {other}"),
+                    }
+                }
+            }
+            out.push(row);
+        }
+    }
+    (names, out)
+}
+
+#[test]
+fn set_returns_spark_rows_and_sets() {
+    let s = Session::new().unwrap();
+    // Nothing set: no rows, but the `key`/`value` string columns.
+    let df = block_on(s.sql("SET")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(
+        schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<Vec<_>>(),
+        ["key", "value"]
+    );
+    assert_eq!(schema.field(0).data_type(), &ArrowType::Utf8View);
+    assert!(!schema.field(0).is_nullable() && !schema.field(1).is_nullable());
+    assert_eq!(block_on(df.count()).unwrap(), 0);
+    // `SET key = value` sets through the session configuration and shows
+    // the effective value; the key reads back the same.
+    let (names, found) = rows(&s, "SET my.app.theme = dark");
+    assert_eq!(names, ["key", "value"]);
+    assert_eq!(found, [vec!["my.app.theme", "dark"]]);
+    assert_eq!(s.conf().get("my.app.theme").as_deref(), Some("dark"));
+    let (_, found) = rows(&s, "SET my.app.theme");
+    assert_eq!(found, [vec!["my.app.theme", "dark"]]);
+    // The value is the raw rest of the statement, trimmed.
+    let (_, found) = rows(&s, "SET my.app.greeting =  hello = world  ;");
+    assert_eq!(found, [vec!["my.app.greeting", "hello = world"]]);
+    // Quoted keys and values are decoded as Spark allows.
+    let (_, found) = rows(&s, "SET `my.app.quoted` = 'a b'");
+    assert_eq!(found, [vec!["my.app.quoted", "a b"]]);
+    let (_, found) = rows(&s, "SET 'sp ace' = \"q\"");
+    assert_eq!(found, [vec!["sp ace", "q"]]);
+    // A registered key shows its effective value, whatever the spelling.
+    let (_, found) = rows(&s, "SET spark.sql.ansi.enabled");
+    assert_eq!(found, [vec!["spark.sql.ansi.enabled", "true"]]);
+    block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
+    assert_eq!(
+        s.conf().get("spark.sql.ansi.enabled").as_deref(),
+        Some("false")
+    );
+    let (_, found) = rows(&s, "SET krishiv.sql.ansi.enabled");
+    assert_eq!(found, [vec!["krishiv.sql.ansi.enabled", "false"]]);
+    // `SET` lists every explicitly set key, in order. (The engine runs
+    // the unions in any order, so the test sorts.)
+    let (names, listed) = rows(&s, "SET");
+    assert_eq!(names, ["key", "value"]);
+    let mut keys: Vec<&str> = listed.iter().map(|r| r[0].as_str()).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "krishiv.sql.ansi.enabled",
+            "my.app.greeting",
+            "my.app.quoted",
+            "my.app.theme",
+            "sp ace",
+        ]
+    );
+    // An unset key shows `<undefined>`, as in Spark.
+    let (_, found) = rows(&s, "SET my.app.missing");
+    assert_eq!(found, [vec!["my.app.missing", "<undefined>"]]);
+}
+
+#[test]
+fn set_verbose_shows_meaning_and_version() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET my.app.flag = on")).unwrap();
+    let df = block_on(s.sql("SET -v")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(
+        schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<Vec<_>>(),
+        ["key", "value", "meaning", "Since version"]
+    );
+    assert!(!schema.field(0).is_nullable() && !schema.field(1).is_nullable());
+    assert!(schema.field(2).is_nullable() && schema.field(3).is_nullable());
+    let (names, listed) = rows(&s, "SET -v");
+    assert_eq!(names, ["key", "value", "meaning", "Since version"]);
+    // Registered entries carry the registry's meaning and version.
+    let ansi = listed
+        .iter()
+        .find(|r| r[0] == "krishiv.sql.ansi.enabled")
+        .unwrap();
+    assert_eq!(ansi[1], "true");
+    assert!(ansi[2].contains("ANSI"), "{ansi:?}");
+    assert_eq!(ansi[3], "0.1.0");
+    // Unregistered keys have neither.
+    let flag = listed.iter().find(|r| r[0] == "my.app.flag").unwrap();
+    assert_eq!(&flag[1..], ["on", "~", "~"]);
+    // Sorted by key. (The engine runs the unions in any order, so the
+    // test sorts.)
+    let mut keys: Vec<&str> = listed.iter().map(|r| r[0].as_str()).collect();
+    keys.sort_unstable();
+    assert!(keys.windows(2).all(|w| w[0] <= w[1]));
+}
+
+#[test]
+fn set_failures_come_from_the_config() {
+    let s = Session::new().unwrap();
+    // An unknown `krishiv.*` key fails as setting it does.
+    assert_eq!(
+        class(block_on(s.sql("SET krishiv.nope = 1"))),
+        ErrorClass::KrishivUnknownConfig
+    );
+    // An invalid value fails as setting it does.
+    let e = block_on(s.sql("SET krishiv.exec.batchSize = many")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivInvalidConfigValue);
+    assert_eq!(
+        s.conf().get("krishiv.exec.batchSize").as_deref(),
+        Some("4096")
+    );
+    // A static entry cannot change at runtime.
+    assert_eq!(
+        class(block_on(s.sql("SET krishiv.memory.limit = 1g"))),
+        ErrorClass::CannotModifyStaticConfig
+    );
+    assert_eq!(
+        class(block_on(s.sql("RESET krishiv.memory.limit"))),
+        ErrorClass::CannotModifyStaticConfig
+    );
+}
+
+#[test]
+fn reset_restores_the_session() {
+    let s = Session::builder()
+        .config("spark.sql.ansi.enabled", "false")
+        .config("my.app.keep", "yes")
+        .build()
+        .unwrap();
+    block_on(s.sql("SET spark.sql.ansi.enabled = true")).unwrap();
+    block_on(s.sql("SET krishiv.exec.batchSize = 1024")).unwrap();
+    block_on(s.sql("SET my.app.keep = no")).unwrap();
+    block_on(s.sql("SET my.app.temp = x")).unwrap();
+    // `RESET key` restores the value the session was built with: the
+    // builder's value, or the default when neither sets it.
+    let df = block_on(s.sql("RESET spark.sql.ansi.enabled")).unwrap();
+    assert_eq!(block_on(df.schema()).unwrap().fields().len(), 0);
+    assert_eq!(block_on(df.count()).unwrap(), 0);
+    assert_eq!(
+        s.conf().get("spark.sql.ansi.enabled").as_deref(),
+        Some("false")
+    );
+    block_on(s.sql("RESET my.app.keep")).unwrap();
+    assert_eq!(s.conf().get("my.app.keep").as_deref(), Some("yes"));
+    block_on(s.sql("RESET krishiv.exec.batchSize")).unwrap();
+    assert_eq!(
+        s.conf().get("krishiv.exec.batchSize").as_deref(),
+        Some("4096")
+    );
+    // Resetting an unknown key is a no-op, as unsetting it is.
+    block_on(s.sql("RESET my.app.never")).unwrap();
+    // Resetting a registered key nobody set keeps its default.
+    let fresh = Session::new().unwrap();
+    block_on(fresh.sql("RESET krishiv.exec.batchSize")).unwrap();
+    assert_eq!(
+        fresh.conf().get("krishiv.exec.batchSize").as_deref(),
+        Some("4096")
+    );
+    // `RESET` restores everything the session set, keeping the builder's
+    // values, and returns an empty frame as in Spark.
+    block_on(s.sql("RESET")).unwrap();
+    assert_eq!(
+        s.conf().get("spark.sql.ansi.enabled").as_deref(),
+        Some("false")
+    );
+    assert_eq!(s.conf().get("my.app.keep").as_deref(), Some("yes"));
+    assert_eq!(s.conf().get("my.app.temp"), None);
+    let (names, listed) = rows(&s, "SET");
+    assert_eq!(names, ["key", "value"]);
+    // Builder values survive under their canonical keys.
+    let mut keys: Vec<&str> = listed.iter().map(|r| r[0].as_str()).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["krishiv.sql.ansi.enabled", "my.app.keep"]);
+}
+
+#[test]
+fn temp_views_created_by_sql_are_visible_to_later_queries() {
+    let s = session();
+    // Creation returns an empty frame as in Spark, and the view reads in
+    // a later query.
+    let df = block_on(s.sql("CREATE TEMPORARY VIEW v AS SELECT id, name FROM people")).unwrap();
+    assert_eq!(block_on(df.schema()).unwrap().fields().len(), 0);
+    assert_eq!(block_on(df.count()).unwrap(), 0);
+    assert_eq!(s.temp_table_names(), ["people", "v"]);
+    let (names, found) = rows(&s, "SELECT * FROM v ORDER BY id");
+    assert_eq!(names, ["id", "name"]);
+    assert_eq!(
+        found,
+        [
+            vec!["1".to_owned(), "~".to_owned()],
+            vec!["2".to_owned(), "b".to_owned()],
+            vec!["3".to_owned(), "c".to_owned()],
+        ]
+    );
+    // The view is a subquery: qualified by its own name.
+    assert_eq!(rows(&s, "SELECT v.id FROM v ORDER BY id").1.len(), 3);
+    // A view over a view reads through it.
+    block_on(s.sql("CREATE TEMP VIEW w AS SELECT id FROM v WHERE id > 1")).unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM w ORDER BY id").1.len(), 2);
+    // A view follows the table it reads: replacing the table changes the
+    // next query.
+    let (schema, _) = people();
+    s.register_batches("people", schema, vec![]).unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM v").1.len(), 0);
+    // Dropping the view hides it again, as in Spark.
+    let df = block_on(s.sql("DROP VIEW v")).unwrap();
+    assert_eq!(block_on(df.schema()).unwrap().fields().len(), 0);
+    let e = block_on(s.sql("SELECT * FROM v")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+    // `w` read through `v`: it fails too now that `v` is gone.
+    assert_eq!(
+        class(block_on(s.sql("SELECT * FROM w")).and_then(|df| block_on(df.schema()).map(|_| ()))),
+        ErrorClass::TableOrViewNotFound
+    );
+    block_on(s.sql("DROP VIEW w")).unwrap();
+    assert_eq!(s.temp_table_names(), ["people"]);
+}
+
+#[test]
+fn create_view_options_replace_errors_and_arity() {
+    let s = session();
+    // `OR REPLACE` swaps the definition; without it the view already
+    // exists, exactly as in Spark.
+    block_on(s.sql("CREATE TEMP VIEW v AS SELECT id FROM people")).unwrap();
+    let e = block_on(s.sql("CREATE TEMPORARY VIEW v AS SELECT id FROM people")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TempTableOrViewAlreadyExists);
+    assert_eq!(
+        e.to_string(),
+        "[TEMP_TABLE_OR_VIEW_ALREADY_EXISTS] Cannot create the temporary view `v` because it \
+         already exists.\nChoose a different name, drop or replace the existing view. \
+         SQLSTATE: 42P07"
+    );
+    // A clash with a table is the same error.
+    let e = block_on(s.sql("CREATE TEMP VIEW people AS SELECT 1")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TempTableOrViewAlreadyExists);
+    block_on(s.sql("CREATE OR REPLACE TEMP VIEW v AS SELECT id AS x FROM people")).unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM v").0, ["x"]);
+    // `IF NOT EXISTS` turns a clash into a no-op; with `OR REPLACE` it
+    // is an error, as in Spark.
+    block_on(s.sql("CREATE TEMP VIEW IF NOT EXISTS v AS SELECT 99 AS y")).unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM v").0, ["x"]);
+    let e = block_on(s.sql("CREATE OR REPLACE TEMP VIEW IF NOT EXISTS v AS SELECT 1")).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::CreateViewWithIfNotExistsAndReplace
+    );
+    // Declared columns rename the output, with comments allowed.
+    block_on(s.sql("CREATE OR REPLACE TEMP VIEW v (a COMMENT 'the id') AS SELECT id FROM people"))
+        .unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM v").0, ["a"]);
+    // Arity mismatches fail as in Spark, naming both column lists.
+    let e = block_on(s.sql("CREATE OR REPLACE TEMP VIEW v (a, b) AS SELECT id FROM people"))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::CreateViewColumnArityMismatchNotEnoughDataColumns
+    );
+    assert_eq!(
+        e.message_parameters(),
+        [
+            ("viewName", "`v`".to_owned()),
+            ("viewColumns", "`a`, `b`".to_owned()),
+            ("dataColumns", "`id`".to_owned()),
+        ]
+    );
+    block_on(s.sql("CREATE OR REPLACE TEMP VIEW v AS SELECT id, name FROM people")).unwrap();
+    let e = block_on(s.sql("CREATE OR REPLACE TEMP VIEW v (a) AS SELECT id, name FROM people"))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::CreateViewColumnArityMismatchTooManyDataColumns
+    );
+    // The view's query is analyzed at creation: its errors come first.
+    let e = block_on(s.sql("CREATE TEMP VIEW broken AS SELECT nope FROM people")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnresolvedColumnWithSuggestion);
+    let e = block_on(s.sql("CREATE TEMP VIEW missing AS SELECT * FROM nosuch")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+    assert!(!s.temp_table_names().contains(&"broken".to_owned()));
+    // So are lowering errors: the IR has no `VALUES` yet.
+    let e = block_on(s.sql("CREATE TEMP VIEW vals AS VALUES (1, 2)")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+#[test]
+fn drop_view_needs_the_view() {
+    let s = session();
+    block_on(s.sql("CREATE TEMP VIEW v AS SELECT id FROM people")).unwrap();
+    // A missing view fails as in Spark, naming the view and search path.
+    let e = block_on(s.sql("DROP VIEW nosuch")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+    assert_eq!(
+        e.message_parameters(),
+        [
+            ("relationName", "`nosuch`".to_owned()),
+            (
+                "searchPath",
+                "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]".to_owned()
+            ),
+        ]
+    );
+    // `IF EXISTS` tolerates it, returning an empty frame as in Spark.
+    let df = block_on(s.sql("DROP VIEW IF EXISTS nosuch")).unwrap();
+    assert_eq!(block_on(df.schema()).unwrap().fields().len(), 0);
+    assert_eq!(block_on(df.count()).unwrap(), 0);
+    // Qualified names never reach a temporary view.
+    assert_eq!(
+        class(
+            block_on(s.sql("SELECT * FROM default.v"))
+                .and_then(|df| block_on(df.schema()).map(|_| ()))
+        ),
+        ErrorClass::TableOrViewNotFound
+    );
+    block_on(s.sql("DROP VIEW v")).unwrap();
+    assert_eq!(
+        class(block_on(s.sql("SELECT * FROM v")).and_then(|df| block_on(df.schema()).map(|_| ()))),
+        ErrorClass::TableOrViewNotFound
+    );
+}
+
+#[test]
+fn views_resolve_like_subqueries() {
+    let s = session();
+    block_on(s.sql("CREATE TEMP VIEW v AS SELECT id FROM people")).unwrap();
+    // A self-join reads the view twice.
+    let (_, found) = rows(
+        &s,
+        "SELECT a.id FROM v a JOIN v b ON a.id = b.id ORDER BY a.id",
+    );
+    assert_eq!(found.len(), 3);
+    // Views read inside subquery expressions too.
+    let (_, found) = rows(
+        &s,
+        "SELECT id FROM people WHERE EXISTS (SELECT 1 FROM v WHERE v.id = people.id) ORDER BY id",
+    );
+    assert_eq!(found.len(), 3);
+    // A `WITH` definition shadows a view of the same name, as in Spark.
+    assert_eq!(
+        rows(&s, "WITH v AS (SELECT 99 AS id) SELECT * FROM v").1,
+        [vec!["99".to_owned()]]
+    );
+    // So does one inside the view: it keeps its own definitions.
+    block_on(s.sql("CREATE OR REPLACE TEMP VIEW w AS WITH v AS (SELECT 7 AS id) SELECT * FROM v"))
+        .unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM w").1, [vec!["7".to_owned()]]);
+    assert_eq!(rows(&s, "SELECT * FROM v ORDER BY id").1.len(), 3);
+}
+
+#[test]
+fn views_with_read_options_are_rejected() {
+    // Options on a view read reach the analyzer's view handling, which
+    // the engine does not implement: the read fails naming views, as a
+    // scan of an unimplemented source does.
+    let s = session();
+    block_on(s.sql("CREATE TEMP VIEW v AS SELECT id FROM people")).unwrap();
+    let e = block_on(s.sql("SELECT * FROM v WITH ('a' = 'b')")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(e.to_string().contains("views"), "{e}");
+}
+
+#[test]
+fn view_cycles_fail() {
+    let s = session();
+    block_on(s.sql("CREATE TEMP VIEW a AS SELECT id FROM people")).unwrap();
+    block_on(s.sql("CREATE TEMP VIEW b AS SELECT id FROM a")).unwrap();
+    // `OR REPLACE` can point `a` back at `b`: the cycle fails when read.
+    block_on(s.sql("CREATE OR REPLACE TEMP VIEW a AS SELECT id FROM b")).unwrap();
+    let e = block_on(s.sql("SELECT * FROM a")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+}
+
+#[test]
+fn view_names_follow_case_sensitivity() {
+    // Temporary views resolve case-insensitively by default, exactly when
+    // registered with `spark.sql.caseSensitive` on.
+    let s = session();
+    block_on(s.sql("CREATE TEMP VIEW V AS SELECT id FROM people")).unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM v").1.len(), 3);
+    block_on(s.sql("DROP VIEW v")).unwrap();
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    block_on(s.sql("CREATE TEMP VIEW V AS SELECT id FROM people")).unwrap();
+    let e = block_on(s.sql("SELECT * FROM v")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+    assert_eq!(rows(&s, "SELECT * FROM V").1.len(), 3);
+    let e = block_on(s.sql("DROP VIEW v")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+    block_on(s.sql("DROP VIEW V")).unwrap();
+}
+
+#[test]
+fn create_or_replace_temp_view_takes_any_dataframe() {
+    // The SQL views reuse this machinery, so a DataFrame over anything
+    // but a read by path becomes a view over its plan too.
+    let s = session();
+    block_on(
+        s.table("people")
+            .select([krishiv_session::functions::col("id")])
+            .create_or_replace_temp_view("v"),
+    )
+    .unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM v ORDER BY id").1.len(), 3);
+    // Analysis errors still come first.
+    let e = block_on(s.table("missing").create_or_replace_temp_view("w"));
+    assert_eq!(class(e), ErrorClass::TableOrViewNotFound);
+}

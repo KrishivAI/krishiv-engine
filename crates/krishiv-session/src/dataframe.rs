@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use arrow_array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
 use futures::StreamExt;
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::KrishivError;
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{AnalyzedPlan, TableColumn};
 use krishiv_plan::{
@@ -701,7 +701,8 @@ impl DataFrame {
 
     /// Registers this DataFrame as the temporary view `name`, replacing any
     /// table or view of that name (PySpark's `createOrReplaceTempView`).
-    /// Views over reads by path are supported so far.
+    /// A view over a read by path lists its files again at every query;
+    /// any other view inlines its plan as a subquery wherever it is read.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -711,8 +712,7 @@ impl DataFrame {
     /// ```
     ///
     /// # Errors
-    /// Analysis errors; `KRISHIV_UNSUPPORTED_FEATURE` for a DataFrame other
-    /// than a read by path.
+    /// Analysis errors.
     pub async fn create_or_replace_temp_view(&self, name: &str) -> Result<(), KrishivError> {
         let (df, name) = (self.clone(), name.to_owned());
         self.session
@@ -723,26 +723,33 @@ impl DataFrame {
     async fn temp_view_here(&self, name: &str) -> Result<(), KrishivError> {
         // Spark analyzes the view's plan first: its errors come first.
         let analysis = self.analysis().await?;
-        let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node else {
-            return Err(KrishivUnsupportedFeature {
-                feature: "temporary views other than reads by path".to_owned(),
-            }
-            .into());
-        };
+        let columns: Vec<TableColumn> = analysis
+            .analyzed
+            .output
+            .iter()
+            .map(|c| TableColumn {
+                name: c.name.clone(),
+                data_type: c.data_type.clone(),
+                nullable: c.nullable,
+            })
+            .collect();
+        // A view over files keeps listing them: files added or changed
+        // later show up in the next query.
+        if let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node {
+            self.session.state.catalog.put(
+                name,
+                TempTable::Files {
+                    source: source.clone(),
+                    columns,
+                },
+            );
+            return Ok(());
+        }
         self.session.state.catalog.put(
             name,
-            TempTable::Files {
-                source: source.clone(),
-                columns: analysis
-                    .analyzed
-                    .output
-                    .iter()
-                    .map(|c| TableColumn {
-                        name: c.name.clone(),
-                        data_type: c.data_type.clone(),
-                        nullable: c.nullable,
-                    })
-                    .collect(),
+            TempTable::View {
+                plan: Arc::clone(&self.plan),
+                columns,
             },
         );
         Ok(())
