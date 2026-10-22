@@ -716,3 +716,111 @@ fn decode_restores_fixed_width_keys() {
     );
     assert!(e.to_string().contains("8-byte key row"), "{e}");
 }
+
+/// Payload rows carry every supported type back exactly: floats bit for
+/// bit (no normalization), NULLs, strings inline and on the heap; they
+/// have no hash word, so a lone `Int64` payload takes 16 bytes.
+#[test]
+fn payload_rows_round_trip_exactly() {
+    let ints: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(-7)]));
+    let floats: ArrayRef = Arc::new(Float64Array::from(vec![
+        Some(-0.0),
+        Some(f64::from_bits(0x7ff8_0000_0000_0001)),
+        None,
+    ]));
+    let s = strings(&[
+        Some("short".to_owned()),
+        None,
+        Some("a value longer than twelve bytes".to_owned()),
+    ]);
+    for strs in s {
+        let cols = vec![Arc::clone(&ints), Arc::clone(&floats), strs];
+        let types: Vec<DataType> = cols.iter().map(|c| c.data_type().clone()).collect();
+        let layout = RowLayout::for_payload(&types).unwrap_or_else(|e| panic!("{e}"));
+        let enc = layout.encode(&cols, 0).unwrap_or_else(|e| panic!("{e}"));
+        let g = enc
+            .gather(&layout, &[2, 0, 1])
+            .unwrap_or_else(|e| panic!("{e}"));
+        let stride = layout.stride();
+        let heap_of = |j: usize| -> &[u8] {
+            g.heap.as_ref().map_or(&[][..], |(o, b)| {
+                let at = |k: usize| usize::try_from(o[k]).unwrap_or(0);
+                &b[at(j)..at(j + 1)]
+            })
+        };
+        let rows: Vec<(&[u8], &[u8])> = (0..3)
+            .map(|j| (&g.fixed[j * stride..(j + 1) * stride], heap_of(j)))
+            .collect();
+        let back = layout.decode_rows(&rows).unwrap_or_else(|e| panic!("{e}"));
+        for (c, b) in cols.iter().zip(&back) {
+            let want = arrow_select::take::take(
+                c.as_ref(),
+                &arrow_array::UInt32Array::from(vec![2, 0, 1]),
+                None,
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(want.to_data(), b.to_data(), "{}", c.data_type());
+        }
+    }
+    let one = RowLayout::for_payload(&[DataType::Int64]).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(one.stride(), 16);
+    // Payload rows have no hash word: equality compares their values, and
+    // the rows are not hashed.
+    let two: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 1]));
+    let e = one.encode(&[two], 0).unwrap_or_else(|e| panic!("{e}"));
+    assert!(e.hashes().is_empty());
+    assert!(!one.eq(e.row(0), &[], e.row(1), &[]));
+    assert!(one.eq(e.row(0), &[], e.row(2), &[]));
+    let none = RowLayout::for_payload(&[DataType::Int32, DataType::Int32])
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(none.stride(), 16);
+    let short = vec![(&[0u8; 3][..], &[][..])];
+    assert!(one.decode_rows(&short).is_err());
+}
+
+/// An index sized for too few keys (a low estimate) grows from the stored
+/// hashes and finds exactly what one sized for every row finds, for both
+/// kinds; a high estimate only over-sizes.
+#[test]
+fn estimate_sized_indexes_grow_to_the_same_answer() {
+    let n = 50_000usize;
+    let a: ArrayRef = Arc::new(Int64Array::from_iter_values(
+        (0..n).map(|i| i64::try_from(i % 20_000).unwrap_or(0)),
+    ));
+    let layout =
+        RowLayout::for_join(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
+    let b = layout
+        .encode(&[Arc::clone(&a)], 0)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let all: Vec<usize> = (0..n).collect();
+    let src = Gathered {
+        rows: b.gather(&layout, &all).unwrap_or_else(|e| panic!("{e}")),
+        hashes: b.hashes().to_vec(),
+        stride: layout.stride(),
+    };
+    let probe = layout.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let which: Vec<u32> = (0..u32::try_from(n).unwrap_or(0)).collect();
+    let run = |keys: usize, choice: IndexChoice| {
+        let mut next = vec![NO_MATCH; n];
+        let ix = JoinIndex::build_expecting(&layout, &src, n, keys, 9, choice, &mut next)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(ix.len(), 20_000);
+        let mut heads = Vec::new();
+        ix.find(&layout, &probe, &which, &src, &mut heads);
+        (heads, next, ix.memory_size())
+    };
+    let exact = run(n, IndexChoice::Salted);
+    for (keys, choice) in [
+        (1, IndexChoice::Salted),
+        (5_000, IndexChoice::Salted),
+        (1, IndexChoice::Flat),
+        (20_000, IndexChoice::Adaptive),
+        (10 * n, IndexChoice::Adaptive),
+    ] {
+        let (heads, next, _) = run(keys, choice);
+        assert_eq!(heads, exact.0, "{keys} {choice:?}");
+        assert_eq!(next, exact.1, "{keys} {choice:?}");
+    }
+    // Sized by the estimate, the directory is smaller than by rows.
+    assert!(run(20_000, IndexChoice::Salted).2 < exact.2);
+}

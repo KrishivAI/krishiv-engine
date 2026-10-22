@@ -98,6 +98,7 @@ fn metrics() -> QueryMetrics {
         (Cow::Borrowed("probe_key_compares"), Metric::Count(6)),
         (Cow::Borrowed("max_probe_length"), Metric::Max(3)),
         (Cow::Borrowed("spill_bytes"), Metric::Count(2048)),
+        (Cow::Borrowed("finalize_ns"), Metric::Count(2_500_000)),
         (
             Cow::Borrowed("hash_index"),
             Metric::Text("swiss".to_owned()),
@@ -331,7 +332,7 @@ Limit 5
    :- OneRowRelation
    :     · source #2 OneRow p0: out 1 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>); peak mem <mem>; \
 hash_entries=3 hash_buckets=<n> probe_lookups=4 probe_key_compares=<n> max_probe_length=<n> \
-spill_bytes=<mem> hash_index=swiss
+spill_bytes=<mem> finalize_ns=<t> hash_index=swiss
    +- Limit 1
       +- OneRowRelation
 Result:
@@ -343,6 +344,7 @@ Pipelines:
     let plain = p.to_text(TextOptions::default());
     assert!(plain.contains("wall 3.0 ms"), "{plain}");
     assert!(plain.contains("compute 10.0 µs"), "{plain}");
+    assert!(plain.contains("finalize_ns=2.5 ms"), "{plain}");
     assert!(plain.contains("spill_bytes=2.0 KiB"), "{plain}");
     assert!(plain.contains("hash_buckets=4 (load 0.75)"), "{plain}");
     assert!(

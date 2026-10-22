@@ -236,6 +236,8 @@ async fn memory_pool_defaults_for_scratch_and_spill_only() {
     assert_eq!(pool.reserved(), 4096);
     // Without its own high-water mark, a pool reports what it holds now.
     assert_eq!(pool.peak_reserved(), 4096);
+    // Nor its own path of limits: its own limit.
+    assert_eq!(pool.effective_limit(), pool.limit());
 }
 
 #[test]
@@ -1245,4 +1247,17 @@ fn refusals_start_pressure_epochs_that_drivers_release_once() {
     assert_eq!(CALLS.load(Ordering::SeqCst), before + 1);
     assert!(!release_if_pressured_here());
     assert_eq!(CALLS.load(Ordering::SeqCst), before + 1);
+}
+
+#[test]
+fn the_effective_limit_is_the_smallest_on_the_path_to_the_root() {
+    let r = root(Some(4 << 20), 1);
+    let q = r.child("q", None);
+    assert_eq!(q.effective_limit(), Some(4 << 20));
+    let tight = r.child("tight", Some(2 << 20));
+    assert_eq!(tight.effective_limit(), Some(2 << 20));
+    let wide = tight.child("wide", Some(8 << 20));
+    assert_eq!(wide.effective_limit(), Some(2 << 20));
+    let free = root(None, 1).child("q", None);
+    assert_eq!(free.effective_limit(), None);
 }
