@@ -612,7 +612,7 @@ mod tests {
         assert_eq!(got.class.as_deref(), Some("TABLE_OR_VIEW_NOT_FOUND"));
         assert_eq!(got.sql_state.as_deref(), Some("42P01"));
         assert!(e.parse("SELECT 1").is_ok());
-        let got = e.parse("SELEC 1").unwrap_err();
+        let got = e.parse("XYZZY 1").unwrap_err();
         assert_eq!(got.class.as_deref(), Some("PARSE_SYNTAX_ERROR"));
         // `"a"` is a string, until double-quoted identifiers are on.
         assert!(e.parse("SELECT \"a\" FROM t").is_ok());
