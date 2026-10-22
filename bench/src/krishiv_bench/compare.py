@@ -163,9 +163,37 @@ def _check_sort_keys(sort_keys: Sequence[int], a: list, b: list) -> None:
 
 
 def _unordered_diff(a: list, b: list) -> int | None:
-    """Index (in sorted order) of the first difference between two row multisets, None if they are equal."""
+    """Index (in coarse-sorted order) of the first difference between two row multisets, None if they are equal.
+
+    Both sides are sorted by the coarse key, so equal rows normally sit at the same position. Rows that tie on the
+    coarse key but are distinct (``(1, None)`` and ``(1, "")``) may sit in either order, so a run of equal coarse
+    keys is matched as a multiset with ``row_equal``.
+    """
     sa, sb = sorted(a, key=_sort_key), sorted(b, key=_sort_key)
-    return next((i for i, (x, y) in enumerate(zip(sa, sb, strict=False)) if not row_equal(x, y)), None)
+    if len(sa) != len(sb):
+        return min(len(sa), len(sb))
+    i = 0
+    while i < len(sa):
+        if row_equal(sa[i], sb[i]):
+            i += 1
+            continue
+        k = _sort_key(sa[i])
+        lo = i
+        while lo > 0 and _sort_key(sa[lo - 1]) == k:
+            lo -= 1
+        hi = i + 1
+        while hi < len(sa) and _sort_key(sa[hi]) == k:
+            hi += 1
+        if any(_sort_key(r) != k for r in sb[lo:hi]) or (hi < len(sb) and _sort_key(sb[hi]) == k):
+            return i
+        remaining = list(sb[lo:hi])
+        for r in sa[lo:hi]:
+            j = next((j for j, c in enumerate(remaining) if row_equal(r, c)), None)
+            if j is None:
+                return i
+            del remaining[j]
+        i = hi
+    return None
 
 
 def _position_failure(a: list, b: list, i: int) -> str:
@@ -372,18 +400,30 @@ def derive_sort_keys(sql: str) -> list[int] | None:
 def derive_limit(sql: str) -> tuple[int | None, bool]:
     """(LIMIT n, OFFSET skips rows) of the final top-level ORDER BY clause; (None, False) if there is none.
 
-    The second item is true for ``OFFSET n`` with n > 0 and for an OFFSET that is not a plain number (it may skip
-    rows); ``OFFSET 0`` skips nothing and is false. OFFSET works without a LIMIT.
+    A number counts only when it is the whole clause: ``LIMIT 1 + 1`` gives no limit (no cut is inferred from a
+    numeric prefix). The second item is true for ``OFFSET n`` with n > 0 and for an OFFSET that is not a plain
+    number (``OFFSET 0 + 1``: it may skip rows); ``OFFSET 0`` skips nothing and is false. OFFSET works without a
+    LIMIT.
     """
     masked = _top_level(sql)
     ob = _final_order_by(masked)
     if ob is None:
         return None, False
     tail = masked[ob.end() :]
-    lim = re.search(r"\blimit\s+(\d+)\b", tail, re.I)
-    off = re.search(r"\boffset\b\s*(\d+)?", tail, re.I)
-    skips = off is not None and (off.group(1) is None or int(off.group(1)) > 0)
-    return (int(lim.group(1)) if lim else None), skips
+    limit: int | None = None
+    skips = False
+    marks = list(re.finditer(r"\b(limit|offset|fetch)\b", tail, re.I))
+    for n, m in enumerate(marks):
+        stop = marks[n + 1].start() if n + 1 < len(marks) else len(tail)
+        clause = tail[m.end() : stop].replace(";", " ").strip()
+        word = m.group(1).lower()
+        if word == "limit":
+            whole = re.fullmatch(r"\d+", clause)  # a number only when it is the whole clause (not ``1 + 1``)
+            limit = int(clause) if whole else None
+        elif word == "offset":
+            whole = re.fullmatch(r"(\d+)(?:\s+rows?)?", clause, re.I)
+            skips = whole is None or int(whole.group(1)) > 0
+    return limit, skips
 
 
 def has_top_level_order_by(sql: str) -> bool:

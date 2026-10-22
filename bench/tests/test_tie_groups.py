@@ -102,9 +102,11 @@ def test_offset_zero_is_not_a_boundary():
     a = [(1, "a"), (2, "b"), (3, "c")]
     b = [(1, "z"), (2, "b"), (3, "c")]
     sql = "select k, v from t order by k limit 3 offset 0"
-    assert c.compare_rows(a, b, True, sql=sql, sort_keys=[0]).status == "mismatch"
+    res = c.compare_rows(a, b, True, sql=sql, sort_keys=[0])
+    assert (res.ok, res.status) == (False, "mismatch")
     # the same query with a real offset relaxes the first group
-    assert c.compare_rows(a, b, True, sql=sql.replace("offset 0", "offset 1"), sort_keys=[0]).status == "tie-at-limit"
+    res = c.compare_rows(a, b, True, sql=sql.replace("offset 0", "offset 1"), sort_keys=[0])
+    assert (res.ok, res.status) == (True, "tie-at-limit")
 
 
 def test_offset_without_limit_cuts_the_first_group_only():
@@ -229,6 +231,57 @@ def test_derive_limit():
     assert c.derive_limit("select a from (select a from t order by a limit 5) x") == (None, False)
 
 
+@pytest.mark.parametrize(
+    ("tail", "expected"),
+    [
+        ("limit 1 + 1", (None, False)),  # a numeric prefix is not the limit
+        ("limit 2 * 3 offset 0", (None, False)),
+        ("limit all", (None, False)),
+        ("limit 7;", (7, False)),
+        ("limit 3 offset 0 + 1", (3, True)),  # not a plain number: it may skip rows
+        ("limit 3 offset 1 + 0", (3, True)),
+        ("limit 3 offset 0 rows", (3, False)),
+        ("limit 3 offset 2 rows", (3, True)),
+        ("offset 0 limit 4", (4, False)),
+    ],
+)
+def test_derive_limit_takes_a_number_only_when_it_is_the_whole_clause(tail, expected):
+    assert c.derive_limit(f"select a from t order by a {tail}") == expected
+
+
+def test_limit_expression_is_not_read_as_its_numeric_prefix():
+    a = [(1, "a"), (2, "b")]
+    b = [(1, "a"), (2, "z")]
+    # LIMIT 1 + 1 returns two rows: the result is not known to be cut at one row, so the last group differing is real
+    res = c.compare_rows([(1, "a")], [(1, "z")], True, sql="select k, v from t order by k limit 1 + 1", sort_keys=[0])
+    assert (res.ok, res.status) == (False, "mismatch")
+    res = c.compare_rows(a, b, True, sql="select k, v from t order by k limit 1 + 1", sort_keys=[0])
+    assert (res.ok, res.status) == (False, "mismatch")
+    res = c.compare_rows(a, b, True, sql="select k, v from t order by k limit 2", sort_keys=[0])
+    assert (res.ok, res.status) == (True, "tie-at-limit")
+
+
+def test_offset_expression_may_skip_rows():
+    a = [(1, "a"), (2, "b")]
+    b = [(1, "z"), (2, "b")]
+    res = c.compare_rows(a, b, True, sql="select k, v from t order by k offset 0 + 1", sort_keys=[0])
+    assert (res.ok, res.status) == (True, "tie-at-limit")
+
+
+def test_distinct_rows_tied_on_the_coarse_sort_key_match_as_a_multiset():
+    # None and "" have the same coarse key, so input order must not matter
+    a = [(1, None), (1, "")]
+    assert c._unordered_diff(a, a[::-1]) is None
+    res = c.compare_rows(a, a[::-1], True, sort_keys=[0])
+    assert (res.ok, res.status) == (True, "ok")
+    res = c.compare_rows(a, a[::-1], False)
+    assert (res.ok, res.status) == (True, "ok")
+    # a genuinely different multiset in the same coarse run is still found
+    assert c._unordered_diff([(1, None), (1, None)], [(1, None), (1, "")]) == 1
+    res = c.compare_rows([(1, None), (1, None)], [(1, ""), (1, None)], True, sort_keys=[0])
+    assert (res.ok, res.status) == (False, "mismatch")
+
+
 def test_q65_shape_end_to_end_from_sql():
     # tie group (able, NULL) is reordered; the group cut by LIMIT 3 holds different members in the two engines
     a = [("able", None, 1), ("able", None, 2), ("able", "d", 3)]
@@ -345,7 +398,13 @@ def test_report_cross_engine_check_keeps_the_stored_offset(tmp_path, monkeypatch
     a = [(1, "a"), (2, "b"), (3, "c")]
     b = [(1, "z"), (2, "b"), (3, "c")]  # differs only in the first tie group
     with_offset = report.render({"duckdb": result("d1", a, True), "krishiv": result("k1", b, True)})
-    assert "tie-at-limit: rows differ only in the tie group cut by OFFSET, rows 0..0" in with_offset
+    line = (
+        "- `q01` **duckdb vs krishiv**: tie-at-limit: rows differ only in the tie group cut by OFFSET, "
+        "rows 0..0 (sort key (1,))"
+    )
+    unverified = with_offset.split("**Checks skipped (NOT verified):**")[1]
+    assert line in unverified.splitlines()
+    assert "**Mismatches / failures:**" not in with_offset
     without = report.render({"duckdb": result("d2", a, False), "krishiv": result("k2", b, False)})
     assert "`q01` **duckdb vs krishiv**: value mismatch in tie group at rows 0..0" in without
 
