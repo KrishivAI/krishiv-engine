@@ -440,3 +440,29 @@ fn repeated_correlation_keys_stay_unique() {
     check(a.plan.root());
     assert!(a.plan.root().to_string().contains("Aggregate [a#3], "));
 }
+
+/// A foldable `LIMIT` that is negative or NULL fails analysis as Spark's
+/// `checkLimitLikeClause` does (it used to reach the planner).
+#[test]
+fn negative_and_null_limits_fail_analysis() {
+    let g = goldens();
+    let err = |sql: &str| {
+        analyze(&g, sql, ResolutionConf::default())
+            .unwrap_err()
+            .error
+    };
+    let e = err("SELECT a FROM t LIMIT -1");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE"
+    );
+    assert_eq!(e.sql_state(), Some("42K0E"));
+    assert!(e.message().contains("\"-1\""), "{}", e.message());
+    assert!(e.message().contains("but got -1"), "{}", e.message());
+    let e = err("SELECT a FROM t LIMIT CAST(NULL AS INT)");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL"
+    );
+    assert!(analyze(&g, "SELECT a FROM t LIMIT 0", ResolutionConf::default()).is_ok());
+}

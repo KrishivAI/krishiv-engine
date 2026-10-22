@@ -348,6 +348,41 @@ impl Resolver<'_> {
             .ok_or_else(|| unsupported("a plan shape", root.origin))
     }
 
+    /// Spark's `checkLimitLikeClause` on a bound `LIMIT` count: it must be
+    /// an `INT`, and a foldable count must be neither NULL nor negative.
+    /// Kept out of the resolver's recursive match so its locals do not
+    /// grow every frame of a deep plan.
+    #[inline(never)]
+    fn check_limit(&self, b: &Bound, origin: Origin) -> Result<(), AnalysisError> {
+        let expr = || format!("\"{}\"", super::exprs::pretty(&b.shown()));
+        let name = "limit".to_owned();
+        if b.ty.data_type != Some(krishiv_types::DataType::Integer) {
+            return Err(AnalysisError::new(
+                krishiv_common::error::InvalidLimitLikeExpressionDataType {
+                    expr: expr(),
+                    name,
+                    data_type: super::coerce::quoted_type(b.ty.data_type.as_ref()),
+                },
+                origin,
+            ));
+        }
+        match super::fold::constant(&b.expr, self.ctx.conf.ansi) {
+            Some(super::Constant::Null) => Err(AnalysisError::new(
+                krishiv_common::error::InvalidLimitLikeExpressionIsNull { expr: expr(), name },
+                origin,
+            )),
+            Some(super::Constant::Integral(v)) if v < 0 => Err(AnalysisError::new(
+                krishiv_common::error::InvalidLimitLikeExpressionIsNegative {
+                    expr: expr(),
+                    name,
+                    v: v.to_string(),
+                },
+                origin,
+            )),
+            _ => Ok(()),
+        }
+    }
+
     pub(super) fn child(&self, c: &Arc<LogicalPlan>, env: &Env) -> Result<Rel, AnalysisError> {
         self.memo
             .get(&(addr(&*self.rep(c)), env.id))
@@ -580,16 +615,7 @@ impl Resolver<'_> {
                 let c = self.child(input, env)?;
                 let cx = Self::cx(&[], &[], env, "Limit");
                 let b = self.bind(limit, &cx)?;
-                if b.ty.data_type != Some(krishiv_types::DataType::Integer) {
-                    return Err(AnalysisError::new(
-                        krishiv_common::error::InvalidLimitLikeExpressionDataType {
-                            expr: format!("\"{}\"", super::exprs::pretty(&b.shown())),
-                            name: "limit".to_owned(),
-                            data_type: super::coerce::quoted_type(b.ty.data_type.as_ref()),
-                        },
-                        limit.origin,
-                    ));
-                }
+                self.check_limit(&b, limit.origin)?;
                 let node = PlanNode::Limit {
                     input: Arc::clone(&c.plan),
                     limit: b.expr,
