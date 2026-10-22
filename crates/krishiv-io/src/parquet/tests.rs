@@ -73,6 +73,17 @@ impl Env {
     }
 
     pub(super) fn options(&self, kv: &[(&str, &str)]) -> FormatOptions {
+        self.options_over(&[], kv)
+    }
+
+    /// The options of `kv` over a session that holds `session`.
+    pub(super) fn options_over(
+        &self,
+        session: &[(&str, &str)],
+        kv: &[(&str, &str)],
+    ) -> FormatOptions {
+        let (conf, _) =
+            krishiv_common::config::Config::from_pairs(session.iter().copied()).unwrap();
         let user = kv
             .iter()
             .map(|(k, v)| {
@@ -82,11 +93,7 @@ impl Env {
                 )
             })
             .collect();
-        ParquetFormat
-            .options()
-            .parse(&user, &krishiv_common::config::Config::new())
-            .unwrap()
-            .0
+        ParquetFormat.options().parse(&user, &conf).unwrap().0
     }
 
     pub(super) fn scan(
@@ -1058,4 +1065,26 @@ fn runtime_filters_prune_row_groups_at_open_and_at_boundaries() {
     });
     assert_eq!(read, (3000, 97));
     assert_eq!(late.stats().counts().units_pruned, 97);
+}
+
+/// `lateMaterialization` is the session's `krishiv.io.lateMaterialization`
+/// unless the read sets it; anything but `auto`, `on` and `off` is refused.
+#[test]
+fn late_materialization_defaults_to_the_session_setting() {
+    let env = Env::new();
+    let key = "krishiv.io.lateMaterialization";
+    let policy = |session: &[(&str, &str)], read: &[(&str, &str)]| {
+        env.options_over(session, read)
+            .str("lateMaterialization")
+            .map(str::to_owned)
+    };
+    assert_eq!(policy(&[], &[]).as_deref(), Some("auto"));
+    assert_eq!(policy(&[(key, "off")], &[]).as_deref(), Some("off"));
+    assert_eq!(policy(&[(key, "on")], &[]).as_deref(), Some("on"));
+    assert_eq!(
+        policy(&[(key, "off")], &[("lateMaterialization", "on")]).as_deref(),
+        Some("on")
+    );
+    let bad = krishiv_common::config::Config::from_pairs([(key, "sometimes")]);
+    assert!(bad.is_err(), "{bad:?}");
 }
