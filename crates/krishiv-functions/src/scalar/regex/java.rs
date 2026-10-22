@@ -250,6 +250,7 @@ impl Translator<'_> {
                     self.at += close + 1;
                     self.quantified = true;
                 }
+                '|' => self.out.push('|'),
                 c => self.literal(c),
             }
         }

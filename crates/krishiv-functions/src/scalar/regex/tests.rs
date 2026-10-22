@@ -553,3 +553,40 @@ fn catastrophic_pattern_hits_the_backtrack_limit() {
     // The same shape on a short input stays under the limit.
     assert_eq!(one("aaa!", r"^(a*)*\1c", "x"), some("aaa!"));
 }
+
+/// `|` is alternation, also inside groups, under inline flags and before an
+/// anchor (it was translated as a literal bar).
+#[test]
+fn alternation_alternates() {
+    let cases = [
+        ("abc|", "a|b", "XXc|"),
+        ("abc|", "(a|b)c", "aX|"),
+        ("abc|", "x(?:a|b)|c", "abX|"),
+        ("aBc|", "(?i)a|b", "XXc|"),
+        ("abc|", r"c\||b", "aXX"),
+        ("xa\nb", "(a|b)$", "xa\nX"),
+        ("abc|", "[|]", "abcX"),
+        ("a|b", r"a\|b", "X"),
+    ];
+    for (s, re, want) in cases {
+        assert_eq!(one(s, re, "X"), some(want), "{s:?} {re}");
+    }
+    assert_eq!(translate("a|b", false).unwrap().text, "a|b");
+}
+
+/// The look-around the translation adds for `$` and the multiline anchors
+/// is only a trailing assertion, so a pattern with none of its own stays
+/// linear on an input ending in a line terminator: no backtrack limit on
+/// these near misses, in the plain and the terminated form.
+#[test]
+fn translated_anchors_stay_linear_on_a_near_miss() {
+    let a = "a".repeat(60);
+    for re in ["(a+)+$", "(a*)*$", "(a|aa)+$", "(?m)(a+)+$", "(?m)^(a+)+$"] {
+        for tail in ["b\n", "b"] {
+            let input = format!("{a}{tail}");
+            assert!(try_one(&input, re, "x").is_ok(), "{re} {tail:?}");
+        }
+    }
+    let near_miss = format!("{a}b\n");
+    assert_eq!(one(&near_miss, "(a+)+$", "x"), some(&near_miss));
+}

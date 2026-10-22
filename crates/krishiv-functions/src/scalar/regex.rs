@@ -19,7 +19,10 @@
 //! input (ReDoS). The JVM has no limit and runs until the query is killed;
 //! here one match attempt stops after [`BACKTRACK_LIMIT`] steps with
 //! `KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED`. Patterns without those
-//! constructs run in linear time and never reach the limit.
+//! constructs run in linear time and never reach the limit. The look-around
+//! the translation adds for `$` and the multiline anchors does not change
+//! that: it only follows the pattern (`(a+)+$` stays linear on a near miss
+//! ending in a line terminator; pinned in the tests).
 
 use std::sync::Arc;
 
