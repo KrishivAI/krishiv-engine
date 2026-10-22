@@ -52,7 +52,7 @@ def engine(tmp_path: Path):
     binary.write_text(FAKE_RUNNER)
     binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
     eng = KrishivEngine(threads=2, memory_limit="1g", binary=binary)
-    eng.timeout_s = 3
+    eng.timeout_s = 30  # generous: process start-up on a loaded host must not fail the ok paths
     eng.setup(Dataset("tpch", 1, tmp_path, ["t"]))
     yield eng
     eng.teardown()
@@ -308,5 +308,6 @@ def test_partitioned_dataset_registers_one_table(tmp_path):
     assert discover_tables(tmp_path) == ["hits", "other"]
     assert table_source(tmp_path, "hits").endswith("hits/*.parquet")
     assert table_source(tmp_path, "other").endswith("other.parquet")
-    rows = duckdb.sql(f"select count(*) from read_parquet('{table_source(tmp_path, 'hits')}')").fetchone()
-    assert rows == (6,)
+    rel = duckdb.sql(f"select count(*) from read_parquet('{table_source(tmp_path, 'hits')}')")
+    assert rel is not None
+    assert rel.fetchall() == [(6,)]
