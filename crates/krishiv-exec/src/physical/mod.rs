@@ -33,6 +33,12 @@
 //!   and options); instantiation connects the two through one cell per id.
 //! - A subquery's value is read by the expressions of the node that lists
 //!   it ([`SubqueryPlan`]) as the column of attribute [`SubqueryId::attr`].
+//! - Data moves between partitions only at [`PhysNode::Exchange`] nodes,
+//!   which the planner's property pass places where a node's required
+//!   distribution is not met (ADR 0012). The plan holds no partition count:
+//!   the count and the assignment of partitions to tasks belong to the task
+//!   that runs a fragment (design P2-T171, I5). On one worker each exchange
+//!   is lowered into the operators around it ([`instantiate`]).
 
 mod data;
 mod instantiate;
@@ -76,6 +82,66 @@ impl SubqueryId {
     pub fn attr(self) -> AttrId {
         AttrId(self.0)
     }
+}
+
+/// An exchange of a plan, numbered by the planner. Shuffle output is keyed
+/// by it (with the stage, map partition and attempt; ADR 0013, I10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExchangeId(pub u64);
+
+/// How an [`PhysNode::Exchange`] places its input's rows into partitions.
+/// Columns are indices into the exchange's input (and output: an exchange
+/// keeps its input's columns).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Partitioning {
+    /// By the routing hash `h` of the key columns: a row goes to the
+    /// partition its top bits name (design P2-T171 §5.1, T157 Appendix
+    /// C). `h` is seedless, so equal keys meet in one partition in every
+    /// process; partition counts are powers of two, so a partition nests
+    /// in a key group and a radix partition of a breaker is a union of
+    /// partitions.
+    Hash {
+        /// The key columns, in hash order.
+        keys: Vec<usize>,
+    },
+    /// Every row in one partition (a gather). Partitions are read in
+    /// partition order, so a range-partitioned sorted input stays sorted.
+    Single,
+    /// Every partition receives every row.
+    Broadcast,
+    /// Rows dealt to partitions in turn. Each producer starts at an offset
+    /// derived from its partition index, never from its attempt, and deals
+    /// its rows in input order (I10: a retried task writes the same rows to
+    /// the same partitions).
+    RoundRobin,
+    /// By ranges of the sort keys, partition `i` before partition `i + 1`
+    /// in key order. Bounds are sampled when the exchange runs.
+    Range {
+        /// The sort keys.
+        keys: Vec<SortKey>,
+    },
+}
+
+/// An exchange: `input`'s rows placed into partitions by `partitioning`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExchangePlan {
+    /// Its number in the plan.
+    pub id: ExchangeId,
+    /// The input.
+    pub input: Box<PhysNode>,
+    /// Where each row goes.
+    pub partitioning: Partitioning,
+}
+
+/// How a hash join gets matching rows of its two inputs into one task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinDistribution {
+    /// The build input is broadcast to every task of the probe input,
+    /// which stays where it is.
+    Broadcast,
+    /// Both inputs are hash-partitioned on their keys, the same way: each
+    /// task builds and probes one partition.
+    Partitioned,
 }
 
 /// What every expression of a plan is evaluated with, fixed at planning.
@@ -184,6 +250,8 @@ pub enum PhysNode {
         /// The rows to write.
         input: Box<PhysNode>,
     },
+    /// Moves rows between partitions.
+    Exchange(ExchangePlan),
 }
 
 /// A table scan.
@@ -323,6 +391,8 @@ pub struct HashJoinPlan {
     pub residual: Option<Residual>,
     /// The runtime filters the build publishes.
     pub runtime_filters: Vec<JoinFilterPlan>,
+    /// Broadcast or partitioned.
+    pub distribution: JoinDistribution,
 }
 
 /// A nested-loop join over every pair of rows.
@@ -340,6 +410,21 @@ pub struct NestedLoopPlan {
 
 plan_data!(tuple ScanId(id));
 plan_data!(tuple SubqueryId(id));
+plan_data!(tuple ExchangeId(id));
+plan_data!(enum Partitioning {
+    Hash { keys },
+    Single,
+    Broadcast,
+    RoundRobin,
+    Range { keys },
+});
+plan_data!(struct ExchangePlan { id, input, partitioning });
+plan_data!(
+    enum JoinDistribution {
+        Broadcast,
+        Partitioned,
+    }
+);
 plan_data!(struct ExprEnv { ansi, zone, query_start_micros, user });
 plan_data!(enum PhysNode {
     Scan(scan),
@@ -355,6 +440,7 @@ plan_data!(enum PhysNode {
     NestedLoopJoin(join),
     Union { inputs },
     WriteFiles { input },
+    Exchange(exchange),
 });
 plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage });
 plan_data!(struct ScanFilter { layout, predicate, exact });
@@ -371,7 +457,8 @@ plan_data!(struct SubqueryPlan { id, kind, data_type, plan });
 plan_data!(struct AggregatePlan { group_by, aggregates, distinct, output });
 plan_data!(struct Residual { layout, conjuncts });
 plan_data!(struct HashJoinPlan {
-    probe, build, join_type, probe_keys, build_keys, null_safe, residual, runtime_filters
+    probe, build, join_type, probe_keys, build_keys, null_safe, residual, runtime_filters,
+    distribution
 });
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
 plan_data!(struct PhysicalPlan { root, schema, explain, warnings, env });
@@ -398,6 +485,7 @@ impl PhysNode {
             | Self::TopN { input, .. }
             | Self::Aggregate { input, .. }
             | Self::WriteFiles { input } => vec![input.as_ref()],
+            Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::Union { inputs } => inputs.iter().collect(),
@@ -424,6 +512,7 @@ impl PhysNode {
             | Self::TopN { input, .. }
             | Self::Aggregate { input, .. }
             | Self::WriteFiles { input } => vec![input.as_mut()],
+            Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::Union { inputs } => inputs.iter_mut().collect(),

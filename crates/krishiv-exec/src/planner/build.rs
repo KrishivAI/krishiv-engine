@@ -32,6 +32,7 @@ use krishiv_plan::{
 
 use super::eval::{self, EvalEnv, PhysExpr};
 use super::explain::ExplainNode;
+use super::properties::{Distribution, Placement, range_keys};
 use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
 use super::subquery::{Slot, SubqueryValue};
 use super::{PhysicalPlanner, PlanningContext};
@@ -93,6 +94,8 @@ pub(crate) struct Planned {
     pub(crate) explain: ExplainNode,
     /// Scan columns a runtime filter from above may target.
     pub(crate) sites: Vec<Site>,
+    /// How its rows are placed in partitions.
+    pub(crate) placement: Placement,
 }
 
 impl Planned {
@@ -102,6 +105,14 @@ impl Planned {
             .iter()
             .position(|a| *a == id)
             .ok_or_else(|| internal(&format!("attribute #{} is not an input column", id.0)))
+    }
+
+    /// The attribute of column `c`.
+    pub(crate) fn column_attr(&self, c: usize) -> Result<AttrId> {
+        self.layout
+            .get(c)
+            .copied()
+            .ok_or_else(|| internal(&format!("column {c} is not an input column")))
     }
 
     /// The node `make` builds over this relation, with output `schema`
@@ -117,6 +128,7 @@ impl Planned {
             schema,
             node: make(Box::new(self.node)),
             sites: kept(&self.sites, &layout),
+            placement: self.placement.restrict(&layout),
             layout,
             explain: ExplainNode::new(explain.0, explain.1, vec![self.explain]),
         }
@@ -150,6 +162,8 @@ pub(crate) struct Planner<'a> {
     next_scan: u64,
     /// The next subquery's id.
     next_subquery: u64,
+    /// The next exchange's id.
+    pub(crate) next_exchange: u64,
     /// The runtime filters each scan receives, by scan.
     pub(crate) scan_filters: HashMap<ScanId, Vec<ScanRuntimeFilter>>,
 }
@@ -168,6 +182,7 @@ impl<'a> Planner<'a> {
             next_filter: 1,
             next_scan: 0,
             next_subquery: next_id.saturating_add(SUBQUERY_GAP),
+            next_exchange: 0,
             scan_filters: HashMap::new(),
         }
     }
@@ -262,6 +277,9 @@ impl<'a> Planner<'a> {
                         .checked_add(*offset)
                         .ok_or_else(|| internal("attribute id overflow"))?;
                 }
+                // The layout's ids shifted without overflow, so do these.
+                planned.placement = std::mem::take(&mut planned.placement)
+                    .map_attrs(|a| a.0.checked_add(*offset).map(AttrId));
                 // The subtree prints its own ids; its output reads shifted.
                 planned
                     .explain
@@ -300,6 +318,13 @@ impl<'a> Planner<'a> {
                     .collect();
                 let mut planned = select(planned, &source, "CteRef")?;
                 planned.layout = r.output.iter().map(|c| c.id).collect();
+                planned.placement = std::mem::take(&mut planned.placement).map_attrs(|a| {
+                    r.source
+                        .iter()
+                        .position(|s| *s == a)
+                        .and_then(|i| r.output.get(i))
+                        .map(|o| o.id)
+                });
                 // Each reference is planned anew: its scans are its own.
                 planned.sites = renamed(&planned.sites, &r.source, &planned.layout);
                 planned.explain.detail = format!("{} [{}]", r.name, columns(&r.output));
@@ -316,9 +341,13 @@ impl<'a> Planner<'a> {
                 }
             }
             PlanNode::Offset { input, offset } => self.limit(input, limit_value(offset)?, u64::MAX),
-            PlanNode::Sort { input, order, .. } => {
+            PlanNode::Sort {
+                input,
+                order,
+                global,
+            } => {
                 let input = self.plan(input)?;
-                self.sort(input, order)
+                self.sort(input, order, *global)
             }
             PlanNode::JoinHint { input, strategy } => {
                 if !self.consumed_hints.contains(&(Arc::as_ptr(p) as usize)) {
@@ -365,6 +394,16 @@ impl<'a> Planner<'a> {
             return Ok(Self::skip_rows(top, skip, n));
         }
         let input = self.plan(input)?;
+        // Each partition keeps at most `skip + n` rows before the gather;
+        // the skip applies only after it.
+        let input = if input.placement.satisfies(Distribution::Single) {
+            input
+        } else if let Some(total) = skip.checked_add(n) {
+            Self::local_limit(input, total)
+        } else {
+            input
+        };
+        let input = self.require(input, Distribution::Single)?;
         Ok(Self::skip_rows(input, skip, n))
     }
 
@@ -463,6 +502,7 @@ impl<'a> Planner<'a> {
             layout,
             explain: ExplainNode::new("Union", columns(&out), explain),
             sites,
+            placement: Placement::Unknown,
         })
     }
 
@@ -505,7 +545,11 @@ impl<'a> Planner<'a> {
                 }
                 _ => return Err(internal("a scalar subquery of several columns")),
             };
+            // One partition holds the whole result: a scalar subquery must
+            // see every row to fail on a second one, and `EXISTS` must see
+            // every row to be false.
             let planned = self.plan(&plan)?;
+            let planned = self.require(planned, Distribution::Single)?;
             let scalar = kind == SubqueryValueKind::Scalar;
             let planned = select(planned, &out[..usize::from(scalar)], "Project")?;
             let id = SubqueryId(self.next_subquery);
@@ -573,6 +617,7 @@ impl<'a> Planner<'a> {
         children.extend(prepared.explain);
         Planned {
             sites: kept(&input.sites, &layout),
+            placement: input.placement.restrict(&layout),
             schema,
             node: make(Box::new(input.node), input.layout, prepared.subqueries),
             layout,
@@ -670,6 +715,7 @@ impl<'a> Planner<'a> {
             layout: scan.output.iter().map(|c| c.id).collect(),
             explain: ExplainNode::leaf("Scan", detail),
             sites,
+            placement: Placement::Unknown,
         };
         match filter {
             Some(predicate) if !exact => self.filter(planned, predicate),
@@ -774,6 +820,14 @@ impl<'a> Planner<'a> {
         // widening cast of it.
         let types = |id: AttrId| column_type(&input, id);
         let mut sites = Vec::new();
+        // The input's placement follows each plain column to every name the
+        // projection gives it.
+        let placed = input.placement.clone();
+        let renames: Vec<(AttrId, AttrId)> = exprs
+            .iter()
+            .zip(&layout)
+            .filter_map(|(e, out)| column_of(e).map(|src| (src, *out)))
+            .collect();
         for (e, out) in exprs.iter().zip(&layout) {
             if let Some(src) = key_source(e, &types) {
                 sites.extend(input.sites.iter().filter(|s| s.attr == src).map(|s| Site {
@@ -797,6 +851,7 @@ impl<'a> Planner<'a> {
             },
         );
         planned.sites = sites;
+        planned.placement = placed.project(&renames);
         Ok(planned)
     }
 
@@ -891,8 +946,16 @@ impl<'a> Planner<'a> {
         ))
     }
 
-    fn sort(&mut self, input: Planned, order: &[SortOrder]) -> Result<Planned> {
+    /// A sort; a global one (`ORDER BY`) needs its input in ranges of the
+    /// keys, a local one (`SORT BY`) sorts each partition.
+    fn sort(&mut self, input: Planned, order: &[SortOrder], global: bool) -> Result<Planned> {
         let (input, keys) = self.sort_keys(input, order)?;
+        let input = if global {
+            let by = range_keys(&keys, &input.layout)?;
+            self.require(input, Distribution::Ordered(&by))?
+        } else {
+            input
+        };
         let schema = sort_op(&input.schema, &keys, None)?.schema();
         let layout = input.layout.clone();
         let sites = input.sites.clone();
@@ -906,8 +969,47 @@ impl<'a> Planner<'a> {
         Ok(planned)
     }
 
+    /// `input` cut to `n` rows in each partition.
+    fn local_limit(input: Planned, n: u64) -> Planned {
+        let schema = Arc::clone(&input.schema);
+        let layout = input.layout.clone();
+        let mut local = input.wrap(
+            |input| PhysNode::Limit {
+                input,
+                offset: 0,
+                limit: n,
+            },
+            schema,
+            layout,
+            ("LocalLimit", n.to_string()),
+        );
+        local.sites.clear();
+        local
+    }
+
     fn top_n(&mut self, input: Planned, order: &[SortOrder], n: u64) -> Result<Planned> {
         let (input, keys) = self.sort_keys(input, order)?;
+        // Each partition keeps its best `n` rows before the gather.
+        let input = if input.placement.satisfies(Distribution::Single) {
+            input
+        } else {
+            let schema = top_n_op(&input.schema, &keys, n)?.schema();
+            let layout = input.layout.clone();
+            let local = keys.clone();
+            let mut local = input.wrap(
+                |input| PhysNode::TopN {
+                    input,
+                    keys: local,
+                    limit: n,
+                },
+                schema,
+                layout,
+                ("LocalTopN", format!("{n}, {}", orders(order))),
+            );
+            local.sites.clear();
+            local
+        };
+        let input = self.require(input, Distribution::Single)?;
         let schema = top_n_op(&input.schema, &keys, n)?.schema();
         let layout = input.layout.clone();
         let mut planned = input.wrap(
@@ -1053,6 +1155,7 @@ fn one_row() -> Planned {
         layout: Vec::new(),
         explain: ExplainNode::leaf("OneRowRelation", ""),
         sites: Vec::new(),
+        placement: Placement::Single,
     }
 }
 

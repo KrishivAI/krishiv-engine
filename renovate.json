@@ -14,6 +14,12 @@
       "before 6am on monday"
     ]
   },
+  "pip_requirements": {
+    "fileMatch": [
+      "(^|/)[\\w-]*requirements([-\\w]*)?\\.(txt|pip)$",
+      "(^|/)ci-interop-constraints\\.txt$"
+    ]
+  },
   "packageRules": [
     {
       "description": "Arrow family moves in lockstep (ADR 0028)",

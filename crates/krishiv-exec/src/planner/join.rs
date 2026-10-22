@@ -31,10 +31,11 @@ use krishiv_plan::{
 
 use super::build::{Planned, Planner, unsupported};
 use super::explain::ExplainNode;
+use super::properties::Distribution;
 use crate::error::Result;
 use crate::join::JoinType;
 use crate::physical::{
-    HashJoinPlan, NestedLoopPlan, PhysNode, Residual, hash_join, nested_loop_join,
+    HashJoinPlan, JoinDistribution, NestedLoopPlan, PhysNode, Residual, hash_join, nested_loop_join,
 };
 
 impl Planner<'_> {
@@ -130,6 +131,31 @@ impl Planner<'_> {
         let build_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.1)).collect();
         let (probe, probe_keys) = self.with_columns(probe, &probe_exprs)?;
         let (build, build_keys) = self.with_columns(build, &build_exprs)?;
+        let build_plan = if build_left { &logical.0 } else { &logical.1 };
+        let build_rows = self.estimated_rows(build_plan);
+        // A hint decides, else the build's estimated size. The null-aware
+        // anti join reads whether the whole build has a NULL key, so its
+        // build is always broadcast.
+        let distribution = if join_type == JoinType::NullAwareAnti {
+            JoinDistribution::Broadcast
+        } else {
+            choice.distribution.unwrap_or(
+                if estimated_bytes(build_rows, &build.schema) <= BROADCAST_MAX_BYTES {
+                    JoinDistribution::Broadcast
+                } else {
+                    JoinDistribution::Partitioned
+                },
+            )
+        };
+        let (probe, build) = match distribution {
+            JoinDistribution::Broadcast => {
+                let build = self.require(build, Distribution::Broadcast)?;
+                (probe, build)
+            }
+            JoinDistribution::Partitioned => {
+                self.co_partition(probe, &probe_keys, build, &build_keys)?
+            }
+        };
         let filter = residual_of(&probe, &build, &residual);
         let null_safe = keys.iter().map(|k| k.2).collect();
         // Inner and left semi joins drop unmatched probe rows: the build
@@ -137,8 +163,6 @@ impl Planner<'_> {
         let mut published = Vec::new();
         let mut runtime_filters = Vec::new();
         if matches!(join_type, JoinType::Inner | JoinType::LeftSemi) {
-            let build_plan = if build_left { &logical.0 } else { &logical.1 };
-            let build_rows = self.estimated_rows(build_plan);
             let key_types: Vec<_> = probe_keys
                 .iter()
                 .map(|&k| probe.schema.field(k).data_type().clone())
@@ -155,6 +179,15 @@ impl Planner<'_> {
         if join_type == JoinType::Inner {
             sites.extend(build.sites.iter().cloned());
         }
+        // Rows stay where the probe placed them; an inner join's matched
+        // rows are equally placed by the build's keys.
+        let placement = match (distribution, join_type) {
+            (JoinDistribution::Partitioned, JoinType::Inner) => {
+                probe.placement.clone().union(build.placement.clone())
+            }
+            _ => probe.placement.clone(),
+        }
+        .restrict(&layout);
         let mut detail = format!(
             "{join_type:?}, [{}] = [{}]",
             text(&probe_exprs),
@@ -177,6 +210,7 @@ impl Planner<'_> {
             null_safe,
             residual: filter,
             runtime_filters,
+            distribution,
         };
         // Validates the join and gives its schema, over placeholder cells.
         let schema = hash_join(
@@ -194,6 +228,7 @@ impl Planner<'_> {
             layout,
             explain: ExplainNode::new("HashJoin", detail, vec![probe.explain, build.explain]),
             sites,
+            placement,
         })
     }
 }
@@ -219,6 +254,8 @@ impl Planner<'_> {
         join_type: JoinType,
         residual: &[&Expr],
     ) -> Result<Planned> {
+        // Every probe row meets every build row: the build is broadcast.
+        let build = self.require(build, Distribution::Broadcast)?;
         let filter = residual_of(&probe, &build, residual);
         let mut layout = probe.layout.clone();
         let mut sites = probe.sites.clone();
@@ -234,6 +271,7 @@ impl Planner<'_> {
         } else {
             format!("{join_type:?}, {}", r.join(" AND "))
         };
+        let placement = probe.placement.clone().restrict(&layout);
         let (probe_schema, build_schema) = (Arc::clone(&probe.schema), Arc::clone(&build.schema));
         let plan = NestedLoopPlan {
             probe: Box::new(probe.node),
@@ -247,6 +285,7 @@ impl Planner<'_> {
             node: PhysNode::NestedLoopJoin(plan),
             layout,
             explain: ExplainNode::new("NestedLoopJoin", detail, vec![probe.explain, build.explain]),
+            placement,
             sites,
         })
     }
@@ -259,6 +298,48 @@ pub(crate) struct Choice {
     pub(crate) build_left: bool,
     /// A nested loop over every pair of rows (`SHUFFLE_REPLICATE_NL`).
     pub(crate) cartesian: bool,
+    /// The distribution a hint asks for (`BROADCAST`; `SHUFFLE_HASH` and
+    /// `MERGE`, Spark's shuffled joins).
+    pub(crate) distribution: Option<JoinDistribution>,
+}
+
+/// The largest estimated build a hash join broadcasts without a hint: 10
+/// MiB, the default of Spark's `spark.sql.autoBroadcastJoinThreshold`.
+pub(crate) const BROADCAST_MAX_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
+
+/// The estimated bytes of `rows` rows of `schema`, after Spark's size
+/// estimate: 8 bytes per row plus each column's default size.
+pub(crate) fn estimated_bytes(rows: f64, schema: &arrow_schema::Schema) -> f64 {
+    let width: u64 = schema
+        .fields()
+        .iter()
+        .map(|f| default_size(f.data_type()))
+        .fold(8, u64::saturating_add);
+    #[expect(clippy::cast_precision_loss, reason = "an estimate")]
+    let width = width as f64;
+    rows * width
+}
+
+/// Spark's `DataType.defaultSize` (Spark 4.0 source) for the Arrow
+/// carriers of Spark's types.
+fn default_size(t: &arrow_schema::DataType) -> u64 {
+    use arrow_schema::DataType as T;
+    match t {
+        T::Null | T::Boolean | T::Int8 => 1,
+        T::Int16 => 2,
+        T::Int32 | T::Float32 | T::Date32 => 4,
+        T::Decimal128(p, _) | T::Decimal256(p, _) if *p > 18 => 16,
+        T::Utf8 | T::LargeUtf8 | T::Utf8View => 20,
+        T::Binary | T::LargeBinary | T::BinaryView => 100,
+        T::List(f) | T::LargeList(f) | T::Map(f, _) => default_size(f.data_type()),
+        T::Struct(fs) => fs
+            .iter()
+            .map(|f| default_size(f.data_type()))
+            .fold(0, u64::saturating_add),
+        T::Dictionary(_, v) => default_size(v),
+        // Int64, Float64, timestamps, decimals of up to 18 digits.
+        _ => 8,
+    }
 }
 
 /// Spark's `JoinType.sql`.
@@ -352,6 +433,7 @@ impl Planner<'_> {
                 let want_left = sl && !sr;
                 if can_build(want_left, kind) {
                     choice.build_left = want_left;
+                    choice.distribution = Some(JoinDistribution::Broadcast);
                 } else {
                     let why = format!(
                         "build {} for {} join (a single-node nested-loop join cannot).",
@@ -380,6 +462,7 @@ impl Planner<'_> {
                 JoinStrategy::ShuffleMerge,
                 "no sort-merge join in a single-node plan; a hash join runs instead.".to_owned(),
             );
+            choice.distribution = Some(JoinDistribution::Partitioned);
             return choice;
         }
         let (hl, hr) = hinted(JoinStrategy::ShuffleHash);
@@ -392,6 +475,7 @@ impl Planner<'_> {
                 let want_left = sl && !sr;
                 if can_build(want_left, kind) {
                     choice.build_left = want_left;
+                    choice.distribution = Some(JoinDistribution::Partitioned);
                 } else {
                     let why = format!(
                         "build {} for {} join (a single-node hash join cannot).",
@@ -538,5 +622,62 @@ fn sides(
         Some((Arc::clone(r), Arc::clone(l)))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType as T, Field, Fields, Schema};
+
+    use super::{default_size, estimated_bytes};
+
+    #[test]
+    fn sizes_follow_sparks_default_sizes() {
+        let item = |t: T| Arc::new(Field::new("item", t, true));
+        for (t, size) in [
+            (T::Null, 1),
+            (T::Boolean, 1),
+            (T::Int8, 1),
+            (T::Int16, 2),
+            (T::Int32, 4),
+            (T::Float32, 4),
+            (T::Date32, 4),
+            (T::Int64, 8),
+            (T::Float64, 8),
+            (T::Decimal128(18, 2), 8),
+            (T::Decimal128(19, 2), 16),
+            (T::Utf8View, 20),
+            (T::LargeUtf8, 20),
+            (T::Binary, 100),
+            (T::List(item(T::Int32)), 4),
+            (
+                T::Map(
+                    item(T::Struct(Fields::from(vec![
+                        Field::new("key", T::Int32, false),
+                        Field::new("value", T::Utf8, true),
+                    ]))),
+                    false,
+                ),
+                24,
+            ),
+            (
+                T::Struct(Fields::from(vec![
+                    Field::new("a", T::Int16, true),
+                    Field::new("b", T::Utf8, true),
+                ])),
+                22,
+            ),
+            (T::Dictionary(Box::new(T::Int32), Box::new(T::Utf8)), 20),
+        ] {
+            assert_eq!(default_size(&t), size, "{t}");
+        }
+        let schema = Schema::new(vec![
+            Field::new("k", T::Int64, false),
+            Field::new("s", T::Utf8, true),
+        ]);
+        // 8 per row, plus 8 and 20.
+        assert!((estimated_bytes(1000.0, &schema) - 36_000.0).abs() < f64::EPSILON);
     }
 }
