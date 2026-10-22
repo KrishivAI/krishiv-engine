@@ -40,6 +40,7 @@
 mod calendar;
 mod decode;
 mod meta;
+mod thrift_guard;
 mod write;
 
 use std::sync::Arc;

@@ -616,6 +616,46 @@ fn corrupt_footers_are_errors() {
     }
 }
 
+/// Files the `parquet_read` fuzz target flagged: footers whose Thrift
+/// lists declare billions of elements in a few bytes. Each is a footer
+/// error, found without a loop over the declared count or an allocation
+/// sized by it.
+#[test]
+fn fuzz_artifacts_are_prompt_footer_errors() {
+    let env = Env::new();
+    let o = env.options(&[]);
+    let mut seen = 0;
+    for line in include_str!("../../tests/fixtures/fuzz/parquet_read.hex").lines() {
+        let Some((name, hex)) = line.split_once(' ').filter(|_| !line.starts_with('#')) else {
+            continue;
+        };
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        let f = env.put(name, bytes);
+        let start = std::time::Instant::now();
+        let r =
+            env.rt.block_on(
+                env.io
+                    .read_metadata(&ParquetFormat, &f, MetadataNeeds::default(), &o),
+            );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "{name} took {:?}",
+            start.elapsed()
+        );
+        let e = r.map(|_| ()).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::FailedReadFileCannotReadFileFooter,
+            "{name}: {e}"
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 7);
+}
+
 /// A table field without an id matches its file column by name even when
 /// another table field claims the same column by id (both read the value;
 /// Spark 4.2's vectorized reader returns 0 for one of them).
