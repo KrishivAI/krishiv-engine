@@ -18,7 +18,7 @@ Paths are relative to this crate.
 
 ## Extension points
 - New memory consumer: take a `Reservation` from the pool and grow it with `try_grow`; do not allocate unaccounted.
-- On-disk spill format change: bump its version in `src/spillfile/format.rs`; readers accept N-1.
+- On-disk spill format change: bump its version in `src/spillfile/format.rs` and keep reading the previous version (ADR 0029: version N reads N-1). Today only version 1 exists, so the reader accepts exactly it.
 
 ## Invariants
 - Every operator allocation is accounted through reservations; pools are empty at query end (tested).
