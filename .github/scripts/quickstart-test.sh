@@ -72,5 +72,7 @@ grep -q 'pip install' "$work"/*.bash || { echo "::error::the quickstart has no i
 grep -q 'analyze=True' "$work/quickstart.py" || { echo "::error::the quickstart lost its EXPLAIN ANALYZE example"; exit 1; }
 
 cd "$work"
-"$py" -I quickstart.py
+# The README fixture uses `tempfile.mkdtemp()`; point it inside `$work` so the
+# exit trap removes it (Python's tempfile honours `TMPDIR`).
+TMPDIR="$work" "$py" -I quickstart.py
 echo "quickstart OK against $(basename "$wheel")"

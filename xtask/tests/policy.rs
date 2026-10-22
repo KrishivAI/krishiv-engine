@@ -480,17 +480,54 @@ fn release_publishing_is_manual_and_gated() {
         ["workflow_dispatch:"],
         "the TestPyPI workflow must run on manual dispatch only"
     );
-    // The upload job names an environment (whose required reviewers the owner
-    // configures) before the upload step, and only main or a `v*` tag may reach it.
-    let env = wf.find("environment:\n      name: testpypi").unwrap();
-    let upload = wf.find("uses: pypa/gh-action-pypi-publish@").unwrap();
+    // Scope the gate assertions to the `publish` job: a match anywhere else
+    // in the file (another job, a comment) must not satisfy them.
+    let publish = wf
+        .find("\n  publish:\n")
+        .map(|i| &wf[i..])
+        .expect("publish-testpypi.yml has a `publish` job");
+    let env = publish
+        .find("environment:\n      name: testpypi")
+        .expect("the publish job must declare the testpypi environment");
+    let upload = publish
+        .find("uses: pypa/gh-action-pypi-publish@")
+        .expect("the publish job must upload via gh-action-pypi-publish");
     assert!(
         env < upload,
-        "the upload job must sit behind the testpypi environment"
+        "the publish job must declare the testpypi environment before the upload step"
     );
     assert!(wf.contains("github.ref == 'refs/heads/main'") && wf.contains("refs/tags/v"));
-    assert!(wf.contains("repository-url: https://test.pypi.org/legacy/"));
-    assert!(!wf.contains("pypi.org/legacy") || wf.contains("test.pypi.org/legacy"));
+    // The upload step's effective `repository-url` must be TestPyPI: scoping
+    // to the step's `with:` block keeps a production URL anywhere else (or
+    // next to the TestPyPI one) from passing.
+    let after_upload = &publish[upload..];
+    let with_off = after_upload
+        .find("\n        with:\n")
+        .expect("the upload step must have a `with:` block");
+    let with_block: Vec<&str> = after_upload[with_off..]
+        .lines()
+        .skip_while(|l| l.trim() != "with:")
+        .skip(1)
+        .take_while(|l| l.trim().is_empty() || l.starts_with("          "))
+        .collect();
+    let urls: Vec<&&str> = with_block
+        .iter()
+        .filter(|l| l.contains("repository-url:"))
+        .collect();
+    assert_eq!(
+        urls.len(),
+        1,
+        "the upload step must set exactly one repository-url, got: {with_block:?}"
+    );
+    assert_eq!(
+        urls[0].trim(),
+        "repository-url: https://test.pypi.org/legacy/",
+        "the upload step must target TestPyPI"
+    );
+    assert!(
+        !publish.contains("//pypi.org/legacy/") && !publish.contains("upload.pypi.org"),
+        "the publish job must not reference production PyPI"
+    );
     assert!(
         !wf.contains("secrets."),
         "upload is by trusted publishing, no token"
@@ -550,4 +587,10 @@ fn release_publishing_is_manual_and_gated() {
     ] {
         assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
     }
+    // The README fixture uses `tempfile.mkdtemp()`; the script must point it
+    // inside the scratch directory so the exit trap removes it.
+    assert!(
+        read(".github/scripts/quickstart-test.sh").contains("TMPDIR=\"$work\""),
+        "quickstart-test.sh must run Python with TMPDIR=\"$work\""
+    );
 }
