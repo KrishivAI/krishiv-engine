@@ -357,12 +357,13 @@ fn runtime_filter_keys_filter_while_decoding() {
     // rows holding a key, and every one of them.
     assert_eq!(out[0].num_rows(), 1000);
     let after = keys_of(&out[1..]);
-    assert!(after.iter().all(|k| [3, 17_001].contains(k)), "{after:?}");
-    let in_first = k[..1000]
+    let mut want: Vec<i64> = k[1000..]
         .iter()
-        .filter(|k| [3, 17_001].contains(*k))
-        .count();
-    assert_eq!(after.len() + in_first, 2);
+        .copied()
+        .filter(|k| [3, 17_001].contains(k))
+        .collect();
+    want.sort_unstable();
+    assert_eq!(after, want);
 }
 
 /// Other columns smaller than twice the predicate columns do not pay for

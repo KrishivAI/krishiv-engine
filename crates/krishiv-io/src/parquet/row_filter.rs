@@ -691,6 +691,10 @@ impl LateMaterialization {
     }
 
     /// Measures `batch` (decoded without the filter) if a sample is due.
+    /// When the projection omits a predicate column the batch cannot
+    /// measure anything (`evaluate` keeps every row for a missing
+    /// column): filtering is wanted for the next row group, which then
+    /// decodes the predicate columns through its own projection.
     pub(crate) fn observe(&mut self, batch: &RecordBatch, dynamic: &[PushdownExpr]) {
         if !std::mem::take(&mut self.sample) {
             return;
@@ -700,9 +704,14 @@ impl LateMaterialization {
         };
         let n = batch.num_rows();
         let w = widened(batch, self.widen);
-        if w.num_rows() == n {
-            self.counters.add(n, evaluate(&e, &w).count_set_bits());
+        if w.num_rows() != n {
+            return;
         }
+        if columns(&e).iter().any(|c| column(&w, c).is_none()) {
+            self.wanted = true;
+            return;
+        }
+        self.counters.add(n, evaluate(&e, &w).count_set_bits());
     }
 }
 
@@ -1202,6 +1211,27 @@ mod tests {
         late.start_row_group();
         late.observe(&ints(), &[member]);
         assert_eq!(late.counters.take(), (4, 1));
+    }
+
+    #[test]
+    fn a_sample_without_the_predicate_column_wants_filtering() {
+        let auto = crate::request::RowFilterPolicy::Auto;
+        let e = cmp("a", CmpOp::Eq, ScalarValue::Int32(3));
+        // An estimate above 1% starts without the filter.
+        let mut late = LateMaterialization::new(auto, Some(&e), None, true, Some(0.5));
+        assert!(!late.is_on());
+        late.start_row_group();
+        assert!(late.sampling());
+        // The sampled batch holds only the output column: nothing was
+        // measured, so the next row group filters through its own
+        // predicate projection instead of recording a 1.0 kept fraction.
+        let output_only = batch(vec![(
+            "b",
+            Arc::new(Int32Array::from_iter_values(0..1000)) as ArrayRef,
+        )]);
+        late.observe(&output_only, &[]);
+        assert_eq!(late.counters.take(), (0, 0));
+        assert!(late.want());
     }
 
     #[test]
