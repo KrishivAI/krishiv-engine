@@ -1,0 +1,9 @@
+# Exact versions of the Arrow PyCapsule consumers the Python interop tests run
+# against in CI (ci.yml and nightly.yml). Pinned for reproducibility; upgrades
+# arrive through Renovate PRs.
+#
+# duckdb stays on 1.x: DuckDB 2.0 removed `fetchone()` on relations, which the
+# interop tests still call. Moving to 2.0 lands with the `fetchall()` change.
+pyarrow==26.0.0
+polars==2.0.0
+duckdb==1.5.6
