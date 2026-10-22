@@ -369,7 +369,9 @@ def test_theirs_query_rejects_row_count_drift(tiny, monkeypatch):
     assert ok["status"] == "ok"
     bad = reproduce.theirs_query("x", q("SELECT 1"), tiny, 1, 1, 2, 60, nrows=3)
     assert bad["status"] == "error"
-    assert bad["reason"] == "timed run returned 4 rows, expected 3"
+    assert bad["reason"] == "EngineError: timed run returned 4 rows, expected 3"
+    assert bad["error_class"] == "EngineError"
+    assert bad["error_message"] == "timed run returned 4 rows, expected 3"
     assert "best_s" not in bad
     assert "runs_s" not in bad
 
