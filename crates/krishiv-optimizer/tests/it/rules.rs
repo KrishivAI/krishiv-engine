@@ -3,13 +3,14 @@
 //! (when the result is deterministic) the same rows as the unoptimised plan
 //! on generated data.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::error::ErrorClass;
-use krishiv_optimizer::{TopN, optimize};
+use krishiv_optimizer::{ColumnStats, Statistics, TableStats, TopN, optimize};
 use krishiv_plan::{
     Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, LogicalPlan, Plan, PlanNode,
-    ResolvedExpr, ResolvedFunction,
+    ResolvedExpr, ResolvedFunction, Scan,
 };
 use krishiv_types::DataType;
 
@@ -476,9 +477,46 @@ fn an_expansion_has_a_copy_of_its_rows_per_projection() {
     };
     let one_set = rows("SELECT a FROM t GROUP BY GROUPING SETS ((a), (a))");
     let four_sets = rows("SELECT count(*) FROM t GROUP BY CUBE(a, b)");
-    assert!(
-        (four_sets / one_set - 2.0).abs() < 1e-9,
-        "{four_sets} vs {one_set}"
+    assert_eq!(one_set, 2_000_000.0, "duplicate sets double the rows");
+    assert_eq!(four_sets, 4_000_000.0, "a 2-cube quadruples the rows");
+}
+
+#[test]
+fn expansion_copies_keep_their_input_ndv() {
+    #[derive(Debug)]
+    struct Stats(HashMap<String, TableStats>);
+    impl Statistics for Stats {
+        fn table(&self, scan: &Scan) -> Option<TableStats> {
+            let name = match &scan.source {
+                krishiv_plan::ReadSource::Table { name, .. } => name.last()?.clone(),
+                _ => return None,
+            };
+            self.0.get(&name).cloned()
+        }
+    }
+    let stats = Stats(HashMap::from([(
+        "t".to_owned(),
+        TableStats {
+            rows: 1_000,
+            columns: HashMap::from([(
+                "a".to_owned(),
+                ColumnStats {
+                    distinct: Some(10),
+                    nulls: Some(0),
+                    min: None,
+                    max: None,
+                },
+            )]),
+        },
+    )]));
+    let ctx = support::ctx();
+    let plan = support::resolve("SELECT a FROM t GROUP BY GROUPING SETS ((a), (a))", &ctx);
+    let optimized = optimize(&plan).unwrap();
+    // Two projections of 1,000 rows; the grouping copy has 10 distinct
+    // values, the id one and the position two: 20 groups, not 2,000 rows.
+    assert_eq!(
+        krishiv_optimizer::estimated_rows(optimized.root(), &stats),
+        20.0
     );
 }
 

@@ -328,14 +328,17 @@ fn invalid_uses_have_spark_error_classes() -> R {
         error_class(&s, "SELECT grouping(a, b) FROM t GROUP BY ROLLUP(a, b)")?,
         ErrorClass::WrongNumArgsWithoutSuggestion
     );
-    // 64 grouping expressions do not fit the 64-bit id.
-    let keys: Vec<String> = (0..64).map(|i| format!("a + {i}")).collect();
-    let query = format!(
-        "SELECT count(*) FROM t GROUP BY ROLLUP({})",
-        keys.join(", ")
-    );
+    // 65 grouping expressions do not fit the 64-bit id; 64 still do.
+    let rollup = |n: usize| {
+        let keys: Vec<String> = (0..n).map(|i| format!("a + {i}")).collect();
+        format!(
+            "SELECT count(*) FROM t GROUP BY ROLLUP({})",
+            keys.join(", ")
+        )
+    };
+    block_on(s.sql(&rollup(64)))?; // Analyzer-only: 65 sets would still run.
     assert_eq!(
-        error_class(&s, &query)?,
+        error_class(&s, &rollup(65))?,
         ErrorClass::GroupingSizeLimitExceeded
     );
     // A cube has 2^n sets: 17 expressions are too many, 16 still are not.
@@ -346,6 +349,7 @@ fn invalid_uses_have_spark_error_classes() -> R {
             keys.join(", ")
         )
     };
+    block_on(s.sql(&cube(16)))?; // Analyzer-only: 65,536 sets would still run.
     assert_eq!(
         error_class(&s, &cube(17))?,
         ErrorClass::GroupingSizeLimitExceeded
@@ -355,6 +359,26 @@ fn invalid_uses_have_spark_error_classes() -> R {
     assert_eq!(
         run(&df).err().map(|e| e.error_class()),
         Some(ErrorClass::GroupingSizeLimitExceeded)
+    );
+    Ok(())
+}
+
+#[test]
+fn grouping_reads_the_top_bit_of_a_64_expression_id() -> R {
+    let s = session()?;
+    let keys: Vec<String> = (0..64).map(|i| format!("a + {i}")).collect();
+    let query = format!(
+        "SELECT grouping(a + 0), grouping(a + 63) FROM t GROUP BY ROLLUP({})",
+        keys.join(", ")
+    );
+    let got = rows(&s, &query)?;
+    assert!(
+        got.iter().any(|r| r == "1\t1"),
+        "the grand total (id -1) reads both bits as 1, got {got:?}"
+    );
+    assert!(
+        !got.iter().any(|r| r.contains('-')),
+        "no negative bits, got {got:?}"
     );
     Ok(())
 }
@@ -376,6 +400,16 @@ fn duplicate_sets_keep_their_rows_but_not_late_grouping_calls() -> R {
             "SELECT a FROM t GROUP BY GROUPING SETS ((a), (a)) HAVING grouping(a) = 0"
         )?,
         ErrorClass::UnsupportedGroupingExpression
+    );
+    Ok(())
+}
+
+#[test]
+fn grouping_calls_inside_aggregate_arguments_resolve() -> R {
+    let s = session()?;
+    assert_eq!(
+        rows(&s, "SELECT sum(grouping(a)) FROM t GROUP BY ROLLUP(a)")?,
+        sorted(&["0", "0", "3"])
     );
     Ok(())
 }

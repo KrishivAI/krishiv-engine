@@ -28,11 +28,8 @@ struct Case {
     output: String,
 }
 
-fn load(file: &str) -> R<Vec<Case>> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/spark-golden/v4.2.0/results")
-        .join(file);
-    let text = std::fs::read_to_string(&path)?;
+fn parse_cases(text: &str, file: &str) -> R<Vec<Case>> {
+    let total = text.split("-- !query\n").skip(1).count();
     let cases: Vec<Case> = text
         .split("-- !query\n")
         .skip(1)
@@ -49,7 +46,34 @@ fn load(file: &str) -> R<Vec<Case>> {
     if cases.is_empty() {
         return Err(format!("no statements in {file}").into());
     }
+    if cases.len() != total {
+        return Err(format!(
+            "dropped {} of {total} statements in {file}",
+            total - cases.len()
+        )
+        .into());
+    }
     Ok(cases)
+}
+
+fn load(file: &str) -> R<Vec<Case>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/spark-golden/v4.2.0/results")
+        .join(file);
+    let text = std::fs::read_to_string(&path)?;
+    parse_cases(&text, file)
+}
+
+#[test]
+fn malformed_blocks_are_not_dropped_silently() {
+    let good = "-- !query\nSELECT 1\n-- !query schema\nstruct<a:int>\n-- !query output\n1\n";
+    assert_eq!(parse_cases(good, "good").unwrap().len(), 1);
+    let bad =
+        format!("{good}-- !query\nSELECT 2\n-- !query schema\nstruct<a:int>\n-- !output\n2\n");
+    assert!(
+        parse_cases(&bad, "bad").is_err(),
+        "a block without the schema/output separators must fail, not vanish"
+    );
 }
 
 fn spark_type(t: &DataType) -> String {

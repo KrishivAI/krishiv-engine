@@ -45,7 +45,7 @@ use crate::{
 
 /// The most grouping expressions one `GROUP BY` takes: the grouping id is a
 /// `BIGINT` with one bit each.
-const MAX_GROUPING: usize = 63;
+const MAX_GROUPING: usize = 64;
 
 /// The most expressions of a `CUBE`: 2^16 grouping sets (the SQL front end
 /// bounds `CUBE (..)` items the same way).
@@ -623,7 +623,14 @@ impl Resolver<'_> {
     ) -> Result<Arc<Expr>, AnalysisError> {
         match &e.node {
             ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
-                return Ok(Arc::clone(e));
+                // `grouping` calls inside aggregate arguments still resolve,
+                // but ordinary columns stay on the input (no copy).
+                let rebuilt =
+                    Arc::clone(e).map_children(|c| self.rewrite(&c, an, false, env, memo))?;
+                if Arc::ptr_eq(&rebuilt, e) {
+                    return Ok(Arc::clone(e));
+                }
+                return self.retype(rebuilt, env);
             }
             ExprNode::Subquery { .. } => return Ok(Arc::clone(e)),
             ExprNode::Function(f) if GroupingFn::from_name(&f.name).is_some() => {
@@ -736,26 +743,91 @@ impl Resolver<'_> {
                     ));
                 };
                 // Bit `n - 1 - j` of the id, as a `TINYINT`.
+                // With 64 expressions the id can be negative (bit 63 set),
+                // where signed `div`/`%` on `i64::MIN` reads -1 instead of 1:
+                // there the quotient is floored before `pmod(_, 2)` (bit 63
+                // is the sign). Smaller ids stay non-negative and keep the
+                // plain `div`/`%` extraction.
                 let shift = n - 1 - j;
-                // The divisors are literals that are not 0, so the id's
-                // bit is never null: `grouping` is not nullable (Spark).
-                let high = if shift == 0 {
-                    id
-                } else {
-                    let high = self.call(
-                        "div",
-                        vec![id, literal(Literal::Long(1_i64 << shift))],
+                let bit = if n < 64 {
+                    // The divisors are literals that are not 0, so the id's
+                    // bit is never null: `grouping` is not nullable (Spark).
+                    let high = if shift == 0 {
+                        id
+                    } else {
+                        let high = self.call(
+                            "div",
+                            vec![id, literal(Literal::Long(1_i64 << shift))],
+                            env,
+                            Origin::UNKNOWN,
+                        )?;
+                        not_null(&high)
+                    };
+                    self.call(
+                        "%",
+                        vec![high, literal(Literal::Long(2))],
+                        env,
+                        Origin::UNKNOWN,
+                    )?
+                } else if shift >= 63 {
+                    let cond = self.call(
+                        "<",
+                        vec![Arc::clone(&id), literal(Literal::Long(0))],
                         env,
                         Origin::UNKNOWN,
                     )?;
-                    not_null(&high)
+                    self.call(
+                        "when",
+                        vec![cond, literal(Literal::Long(1)), literal(Literal::Long(0))],
+                        env,
+                        Origin::UNKNOWN,
+                    )?
+                } else {
+                    let pow = 1_i64 << shift;
+                    let high = self.call(
+                        "div",
+                        vec![Arc::clone(&id), literal(Literal::Long(pow))],
+                        env,
+                        Origin::UNKNOWN,
+                    )?;
+                    let high = not_null(&high);
+                    let rem = self.call(
+                        "%",
+                        vec![Arc::clone(&id), literal(Literal::Long(pow))],
+                        env,
+                        Origin::UNKNOWN,
+                    )?;
+                    let neg = self.call(
+                        "<",
+                        vec![Arc::clone(&id), literal(Literal::Long(0))],
+                        env,
+                        Origin::UNKNOWN,
+                    )?;
+                    let zero = self.call(
+                        "==",
+                        vec![rem, literal(Literal::Long(0))],
+                        env,
+                        Origin::UNKNOWN,
+                    )?;
+                    let nonzero = self.call("not", vec![zero], env, Origin::UNKNOWN)?;
+                    let adjust = self.call("and", vec![neg, nonzero], env, Origin::UNKNOWN)?;
+                    let one = literal(Literal::Long(1));
+                    let decremented =
+                        self.call("-", vec![Arc::clone(&high), one], env, Origin::UNKNOWN)?;
+                    let floor = self.call(
+                        "when",
+                        vec![adjust, decremented, Arc::clone(&high)],
+                        env,
+                        Origin::UNKNOWN,
+                    )?;
+                    // `pmod` (not `%`) so a negative quotient reads 0/1.
+                    self.call(
+                        "pmod",
+                        vec![floor, literal(Literal::Long(2))],
+                        env,
+                        Origin::UNKNOWN,
+                    )?
                 };
-                let bit = self.call(
-                    "%",
-                    vec![high, literal(Literal::Long(2))],
-                    env,
-                    Origin::UNKNOWN,
-                )?;
                 let bit = not_null(&bit);
                 let cast = Arc::new(Expr::new(ExprNode::Cast {
                     expr: bit,

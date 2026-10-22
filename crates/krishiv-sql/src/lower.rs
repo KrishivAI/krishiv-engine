@@ -508,7 +508,7 @@ impl Lowerer {
             GroupItemKind::GroupingSets(items) => {
                 let mut sets = Vec::new();
                 for item in items {
-                    sets.extend(self.item_sets(item, written)?);
+                    sets.extend(self.deeper(|l| l.item_sets(item, &mut *written))?);
                 }
                 sets
             }
