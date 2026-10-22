@@ -75,7 +75,10 @@ def main(argv=None) -> None:
     rr.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
     rr.add_argument("--sf", type=float, default=10)
     rr.add_argument("--dataset", help="dataset dir under $KRISHIV_DATA (default per suite)")
-    rr.add_argument("--engines", help="comma list (default: krishiv,duckdb,polars,datafusion,sail,spark-local)")
+    rr.add_argument(
+        "--engines",
+        help="comma list (default: krishiv,duckdb,polars,datafusion,sail,spark-local; clickhouse is opt-in)",
+    )
     rr.add_argument("--methods", default="ours,theirs", help="comma list of: ours, theirs")
     rr.add_argument("--reps", type=int, default=3, help="interleaved blocks per query (2 samples per engine each)")
     rr.add_argument("--queries", help="comma list, e.g. q01,q05")

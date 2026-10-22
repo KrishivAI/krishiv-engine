@@ -126,6 +126,10 @@ fn consumed_stream_is_rejected() {
 
 static RELEASED: AtomicUsize = AtomicUsize::new(0);
 
+/// Serializes the two tests that observe `RELEASED`, so a parallel test
+/// cannot change the counter between a snapshot and its assertions.
+static RELEASED_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 unsafe extern "C" fn count_release(stream: *mut FFI_ArrowArrayStream) {
     RELEASED.fetch_add(1, Ordering::SeqCst);
     // SAFETY: called by `Drop` with the live stream.
@@ -136,6 +140,7 @@ unsafe extern "C" fn count_release(stream: *mut FFI_ArrowArrayStream) {
 
 #[test]
 fn stream_without_callbacks_is_released_and_rejected() {
+    let _guard = RELEASED_LOCK.lock().unwrap();
     let mut stream = FFI_ArrowArrayStream::empty();
     // SAFETY: `count_release` releases this stream (it has no private data).
     unsafe {
@@ -953,4 +958,143 @@ fn a_batch_without_columns_keeps_its_rows() {
     let mut reader = query::QueryReader::new(empty, None, stream);
     assert_eq!(reader.next().unwrap().unwrap().num_rows(), 7);
     assert!(reader.next().is_none());
+}
+
+/// A reader whose destructor panics, as an engine stream might when its
+/// runtime is gone (interpreter shutdown) or a lock is poisoned.
+struct PanicsOnDrop {
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Iterator for PanicsOnDrop {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        None
+    }
+}
+
+impl RecordBatchReader for PanicsOnDrop {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+}
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+        panic!("destructor bug");
+    }
+}
+
+/// The exported stream's `release` callback (`extern "C"`, in arrow-rs) drops
+/// the reader: a panic in its destructor must not unwind into C, which would
+/// abort the host process.
+#[test]
+fn a_panicking_destructor_does_not_unwind_into_release() {
+    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader = Box::new(PanicsOnDrop {
+        dropped: Arc::clone(&dropped),
+    });
+    let exported = ffi::export_stream(reader, None);
+    let mut consumer = ArrowArrayStreamReader::try_new(exported).unwrap();
+    assert!(consumer.next().is_none());
+    drop(consumer);
+    assert!(dropped.load(Ordering::SeqCst), "the reader was released");
+}
+
+/// A requested schema without fields (a `select` of no columns) keeps the
+/// row count of every batch, as the own schema does.
+#[test]
+fn requested_schema_keeps_the_rows_of_a_batch_without_columns() {
+    let empty = Arc::new(Schema::empty());
+    let options = arrow_array::RecordBatchOptions::new().with_row_count(Some(7));
+    let batch = RecordBatch::try_new_with_options(Arc::clone(&empty), vec![], &options).unwrap();
+    let reader = MemoryReader::new(Arc::clone(&empty), vec![batch]);
+    let requested = ffi::reconcile_requested(&empty, &Schema::empty()).unwrap();
+    assert_eq!(requested, Requested::Use(Arc::clone(&empty)));
+    let mut imported = round_trip(Box::new(reader), Some(requested)).unwrap();
+    let got = imported.next_batch().unwrap().unwrap();
+    assert_eq!(got.num_rows(), 7);
+    assert_eq!(got.num_columns(), 0);
+    assert!(imported.next_batch().is_none());
+}
+
+/// Room for a C struct at an address one byte past an 8-byte boundary: a
+/// byte array (no padding, so a move keeps every byte; `MaybeUninit` so the
+/// provenance of the pointers inside survives the move) holding a `T` at
+/// offset 1.
+#[repr(C, align(8))]
+struct Misaligned<T>(
+    [std::mem::MaybeUninit<u8>; 128],
+    std::marker::PhantomData<T>,
+);
+
+impl<T> Misaligned<T> {
+    /// Holds a copy of `value` at an unaligned address and returns it.
+    fn new(value: T) -> Self {
+        assert!(size_of::<T>() < 128);
+        let mut this = Self(
+            [std::mem::MaybeUninit::uninit(); 128],
+            std::marker::PhantomData,
+        );
+        // SAFETY: the buffer holds `size_of::<T>()` bytes past offset 1.
+        unsafe { this.ptr().write_unaligned(value) };
+        this
+    }
+
+    fn ptr(&mut self) -> *mut T {
+        // SAFETY: one byte into the 128-byte array.
+        unsafe { self.0.as_mut_ptr().add(1).cast::<T>() }
+    }
+
+    /// Moves the value back out, aligned, so its drop can release it.
+    fn take(&mut self) -> T {
+        // SAFETY: written by `new`, read once.
+        unsafe { self.ptr().read_unaligned() }
+    }
+}
+
+/// A capsule pointer that is not aligned for its struct is rejected before
+/// anything is moved or released; the data is left untouched.
+#[test]
+fn misaligned_pointers_are_rejected() {
+    let _guard = RELEASED_LOCK.lock().unwrap();
+    let mut stream = FFI_ArrowArrayStream::empty();
+    // SAFETY: `count_release` releases this stream (it has no private data).
+    unsafe {
+        stream.set_release(Some(count_release));
+    }
+    let before = RELEASED.load(Ordering::SeqCst);
+    let mut unaligned = Misaligned::new(stream);
+    let ptr = unaligned.ptr();
+    assert!(!ptr.is_aligned());
+    // SAFETY: the pointer is checked before being dereferenced.
+    let err = unsafe { ffi::import_stream(ptr) }.unwrap_err();
+    assert!(err.to_string().contains("not aligned"), "{err}");
+    assert_eq!(RELEASED.load(Ordering::SeqCst), before, "nothing released");
+    drop(unaligned.take());
+    assert_eq!(RELEASED.load(Ordering::SeqCst), before + 1);
+
+    let (schema_c, array_c) = exported_struct(&StructArray::from(batch()));
+    let mut unaligned_array = Misaligned::new(array_c);
+    let array_ptr = unaligned_array.ptr();
+    // SAFETY: as above.
+    let err = unsafe { ffi::import_array(&raw const schema_c, array_ptr) }.unwrap_err();
+    assert!(err.to_string().contains("not aligned"), "{err}");
+    let array_c = unaligned_array.take();
+    assert!(!array_c.is_released(), "the array was not moved out");
+
+    let mut unaligned_schema = Misaligned::new(schema_c);
+    let schema_ptr = unaligned_schema.ptr();
+    // SAFETY: as above.
+    let err = unsafe { ffi::read_schema(schema_ptr) }.unwrap_err();
+    assert!(err.to_string().contains("not aligned"), "{err}");
+    let mut array_c = array_c;
+    // SAFETY: as above.
+    let err = unsafe { ffi::import_array(schema_ptr, &raw mut array_c) }.unwrap_err();
+    assert!(err.to_string().contains("not aligned"), "{err}");
+    assert!(!array_c.is_released(), "the array was not moved out");
+    drop(unaligned_schema.take());
 }

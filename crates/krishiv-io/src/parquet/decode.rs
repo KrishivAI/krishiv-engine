@@ -46,10 +46,11 @@ use parquet::errors::ParquetError;
 
 use super::calendar::Guard;
 use super::meta::{ParquetMetadata, spark_read_type};
+use super::row_filter::{CACHE_BYTES, LateMaterialization, Worth};
 use crate::error::{FormatError, FormatResult};
 use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
 use crate::options::FormatOptions;
-use crate::request::{ColumnPath, ScanRequest, project_batch};
+use crate::request::{ColumnPath, PushdownExpr, RowFilterPolicy, ScanRequest, project_batch};
 use crate::runtime_filter::ScanFilter;
 use crate::stats::{TriState, prune};
 
@@ -134,6 +135,12 @@ pub(crate) struct ParquetDecoder {
     poisoned: bool,
     /// Spark's calendar rules for the output columns.
     guard: Guard,
+    /// Late materialisation (`row_filter.rs`).
+    late: LateMaterialization,
+    /// The projected leaves.
+    leaves: Vec<usize>,
+    /// The row filter's leaves while it is on (the only ones prefetched).
+    late_leaves: Vec<usize>,
 }
 
 impl std::fmt::Debug for ParquetDecoder {
@@ -246,11 +253,48 @@ impl ParquetDecoder {
         } else {
             meta.reader.clone()
         };
+        let widen = spark_read_type(&DataType::Struct(meta.reader.schema().fields().clone()))
+            != DataType::Struct(meta.reader.schema().fields().clone());
+        let policy = match (req.row_filter, o.str("lateMaterialization")) {
+            (RowFilterPolicy::Auto, Some("on")) => RowFilterPolicy::On,
+            (RowFilterPolicy::Auto, Some("off")) => RowFilterPolicy::Off,
+            (p, _) => p,
+        };
+        let kept = req.predicate.as_ref().and_then(|p| {
+            let p = p.to_nnf();
+            let (mut rows, mut kept) = (0f64, 0f64);
+            for u in &planned {
+                let rg = meta.row_groups.get(u.index)?;
+                #[expect(clippy::cast_precision_loss, reason = "an estimate")]
+                let n = rg.rows as f64;
+                rows += n;
+                kept += n * super::row_filter::estimate(&p, &rg.statistics)?;
+            }
+            (rows > 0.0).then(|| kept / rows)
+        });
+        let mut late = LateMaterialization::new(
+            policy,
+            req.predicate.as_ref(),
+            widen.then_some(widen_column as super::row_filter::Widen),
+            !row_index && guard.is_empty(),
+            kept,
+        );
+        let dynamic: Vec<PushdownExpr> = req
+            .dynamic
+            .iter()
+            .filter_map(crate::ScanFilter::predicate)
+            .collect();
+        let mut late_leaves = Vec::new();
+        let row_filter = late.filter(late.is_on(), &dynamic, |cols| {
+            predicate_mask(meta, cols, &leaves, &mut late_leaves, &planned)
+        });
         let decoder = super::contain("planning", FormatError::Corrupt, || {
             ParquetPushDecoderBuilder::new_with_metadata(reader)
                 .with_projection(mask)
                 .with_batch_size(BATCH_ROWS)
                 .with_row_group_selections(selections)
+                .with_row_filter(row_filter)
+                .with_max_predicate_cache_size(CACHE_BYTES)
                 .build()
                 .map_err(|e| FormatError::Corrupt(e.to_string()))
         })?;
@@ -275,11 +319,13 @@ impl ParquetDecoder {
             projection: req.projection.clone(),
             output,
             row_index,
-            widen: spark_read_type(&DataType::Struct(meta.reader.schema().fields().clone()))
-                != DataType::Struct(meta.reader.schema().fields().clone()),
+            widen,
             metrics,
             poisoned: false,
             guard,
+            late,
+            leaves,
+            late_leaves,
         })
     }
 
@@ -352,12 +398,20 @@ impl ParquetDecoder {
         let Some(decoder) = self.decoder.as_ref() else {
             return Ok(());
         };
+        if !decoder.is_at_row_group_boundary() {
+            return Ok(());
+        }
         let changed = self
             .dynamic
             .iter()
             .any(|(f, seen)| f.filter().generation_hint() != *seen);
-        if !changed || !decoder.is_at_row_group_boundary() {
-            return Ok(());
+        if changed {
+            self.late
+                .runtime_filters_changed(&self.dynamic_predicates());
+        }
+        let late = self.late.want();
+        if !changed {
+            return self.rebuild(None, late, false);
         }
         let remaining = decoder.row_groups_remaining();
         let start = self.planned.len().saturating_sub(remaining);
@@ -387,25 +441,73 @@ impl ParquetDecoder {
                 None => self.planned.push(u),
             }
         }
-        if self.planned.len() - start == before {
+        let selections = (self.planned.len() - start != before).then(|| {
+            self.planned[start..]
+                .iter()
+                .map(|u| RowGroupSelection::new(u.index, u.selection.clone()))
+                .collect()
+        });
+        self.rebuild(selections, late, true)
+    }
+
+    /// Rebuilds the decoder at a row-group boundary when the remaining row
+    /// groups changed (`selections`) or the row filter should be switched
+    /// or refreshed (`late`, and a new runtime-filter generation:
+    /// `regenerated`; see `row_filter.rs`).
+    fn rebuild(
+        &mut self,
+        selections: Option<Vec<RowGroupSelection>>,
+        late: bool,
+        regenerated: bool,
+    ) -> FormatResult<()> {
+        let refresh = late != self.late.is_on() || (late && regenerated);
+        if selections.is_none() && !refresh {
             return Ok(());
         }
-        let selections = self.planned[start..]
-            .iter()
-            .map(|u| RowGroupSelection::new(u.index, u.selection.clone()))
-            .collect();
         let decoder = self
             .decoder
             .take()
             .ok_or_else(|| FormatError::Corrupt("the decoder failed earlier".to_owned()))?;
+        let filter = refresh.then(|| {
+            let dynamic = self.dynamic_predicates();
+            let (meta, leaves, picked, planned) = (
+                &self.meta,
+                &self.leaves,
+                &mut self.late_leaves,
+                &self.planned,
+            );
+            let f = self.late.filter(late, &dynamic, |cols| {
+                predicate_mask(meta, cols, leaves, picked, planned)
+            });
+            if !self.late.is_on() {
+                picked.clear();
+            }
+            f
+        });
         let rebuilt = super::contain("planning", FormatError::Corrupt, || {
             decoder
                 .into_builder()
-                .and_then(|b| b.with_row_group_selections(selections).build())
+                .and_then(|mut b| {
+                    if let Some(s) = selections {
+                        b = b.with_row_group_selections(s);
+                    }
+                    if let Some(f) = filter {
+                        b = b.with_row_filter(f);
+                    }
+                    b.build()
+                })
                 .map_err(|e| FormatError::Corrupt(e.to_string()))
         })?;
         self.decoder = Some(rebuilt);
         Ok(())
+    }
+
+    /// The current runtime filters as file-level predicates.
+    fn dynamic_predicates(&self) -> Vec<PushdownExpr> {
+        self.dynamic
+            .iter()
+            .filter_map(|(f, _)| f.predicate())
+            .collect()
     }
 
     fn step_inner(&mut self) -> FormatResult<Step> {
@@ -419,6 +521,10 @@ impl ParquetDecoder {
                 })?;
                 match next {
                     Some(batch) => {
+                        if self.late.sampling() {
+                            let dynamic = self.dynamic_predicates();
+                            self.late.observe(&batch, &dynamic);
+                        }
                         self.metrics.rows += batch.num_rows() as u64;
                         return Ok(Step::Batch(self.finish(batch)?));
                     }
@@ -453,6 +559,7 @@ impl ParquetDecoder {
                     self.reading = index
                         .and_then(|i| self.planned.iter().find(|u| u.index == i))
                         .map_or(0, |u| u.chunk_bytes.saturating_add(u.decode));
+                    self.late.start_row_group();
                     self.reader = Some(reader);
                 }
                 DecodeResult::Finished => return Ok(Step::Done),
@@ -496,6 +603,46 @@ impl Decoder for ParquetDecoder {
             .saturating_sub(decoder.row_groups_remaining());
         let mut out = Vec::new();
         let mut total = 0u64;
+        // With the filter on by default (nothing measured yet), the row
+        // group in flight asks for the filter's chunks first: fetch its
+        // other chunks meanwhile, as without the filter.
+        if self.late.is_guess()
+            && self.reader.is_none()
+            && !decoder.is_at_row_group_boundary()
+            && let Some(u) = next.checked_sub(1).and_then(|i| self.planned.get(i))
+        {
+            let rg = self.meta.reader.metadata().row_group(u.index);
+            for l in &self.leaves {
+                if self.late_leaves.binary_search(l).is_err()
+                    && let Some(r) = chunk(rg, *l)
+                    && total + (r.end - r.start) <= max_bytes
+                {
+                    total += r.end - r.start;
+                    out.push(r);
+                }
+            }
+        }
+        // With the filter on after a selective row group, a row group's
+        // other chunks are fetched only if some row passes (none for most
+        // groups of a selective filter). Otherwise every chunk is prefetched,
+        // as the next row group may be read without the filter.
+        if self.late.is_on() && !self.late.is_guess() {
+            for u in self.planned.iter().skip(next) {
+                let rg = self.meta.reader.metadata().row_group(u.index);
+                let chunks: Vec<Range<u64>> = self
+                    .late_leaves
+                    .iter()
+                    .filter_map(|&l| chunk(rg, l))
+                    .collect();
+                let size: u64 = chunks.iter().map(|r| r.end - r.start).sum();
+                if total + size > max_bytes {
+                    break;
+                }
+                total += size;
+                out.extend(chunks);
+            }
+            return out;
+        }
         for chunks in self.planned.iter().skip(next).map(|u| &u.chunks) {
             let size: u64 = chunks.iter().map(|r| r.end - r.start).sum();
             if total + size > max_bytes {
@@ -526,6 +673,63 @@ impl Decoder for ParquetDecoder {
     fn metrics(&self) -> ScanUnitMetrics {
         self.metrics
     }
+}
+
+/// The byte range of leaf `l`'s column chunk in `rg` (as the planned
+/// units' chunks).
+fn chunk(rg: &parquet::file::metadata::RowGroupMetaData, l: usize) -> Option<Range<u64>> {
+    let c = rg.columns().get(l)?;
+    let start = u64::try_from(c.dictionary_page_offset().unwrap_or(c.data_page_offset())).ok()?;
+    let len = u64::try_from(c.compressed_size()).ok()?;
+    Some(start..start + len)
+}
+
+/// The filter pays only where the projected columns outside the predicate
+/// hold at least this many times the compressed bytes of those inside it:
+/// the predicate columns are decoded a second time for the rows that pass
+/// (arrow-rs's predicate cache is off, see `row_filter.rs`), and with the
+/// filter wrongly on for a row group that costs that much again.
+const SIZE_RATIO: u64 = 2;
+
+/// The predicate's projection over `cols` (top-level columns), stored in
+/// `picked` as sorted leaves, and whether filtering may pay: some projected
+/// leaf lies outside it, holding at least [`SIZE_RATIO`] times the
+/// predicate leaves' compressed bytes in the `planned` row groups.
+fn predicate_mask(
+    meta: &ParquetMetadata,
+    cols: &[ColumnPath],
+    leaves: &[usize],
+    picked: &mut Vec<usize>,
+    planned: &[Unit],
+) -> (ProjectionMask, Worth) {
+    let (mask, p) = projection_mask(meta, cols);
+    let (mut inside, mut outside) = (0u64, 0u64);
+    for u in planned {
+        let rg = meta.reader.metadata().row_group(u.index);
+        for &l in leaves {
+            let size = chunk(rg, l).map_or(0, |r| r.end - r.start);
+            if p.binary_search(&l).is_ok() {
+                inside = inside.saturating_add(size);
+            } else {
+                outside = outside.saturating_add(size);
+            }
+        }
+    }
+    let worth = if leaves.iter().all(|l| p.binary_search(l).is_ok()) {
+        Worth::Never
+    } else if outside >= inside.saturating_mul(SIZE_RATIO) {
+        Worth::Yes
+    } else {
+        Worth::Small
+    };
+    *picked = p;
+    (mask, worth)
+}
+
+/// [`spark_read_array`] for the row filter: a column it cannot widen is
+/// not evaluated there.
+fn widen_column(a: &ArrayRef) -> Option<ArrayRef> {
+    spark_read_array(a).ok()
 }
 
 /// `a` as [`spark_read_type`] types it.

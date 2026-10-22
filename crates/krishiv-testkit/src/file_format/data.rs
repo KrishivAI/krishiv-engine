@@ -380,6 +380,16 @@ pub fn predicate(batch: &RecordBatch, cols: &[&str], r: &mut Rng, depth: u32) ->
                 collation,
             }
         }
+        4 if a.data_type() == &DataType::Utf8View && !a.is_empty() => {
+            let s: Vec<char> = a.as_string_view().value(r.index(a.len())).chars().collect();
+            let start = r.index(s.len() + 1);
+            let len = r.index(s.len() - start + 1).max(1);
+            PushdownExpr::Contains {
+                column: col,
+                needle: s[start..].iter().take(len).collect(),
+                collation,
+            }
+        }
         _ => {
             let ops = [
                 CmpOp::Eq,
@@ -532,6 +542,20 @@ pub fn eval(e: &PushdownExpr, batch: &RecordBatch, i: usize) -> Option<bool> {
                 Collation::Utf8Binary => prefix.clone(),
             };
             Some(v.starts_with(&p))
+        }
+        PushdownExpr::Contains {
+            column,
+            needle,
+            collation,
+        } => {
+            let ScalarValue::Utf8(v) = fold(&value(&col(column), i)?, collation) else {
+                return None;
+            };
+            let n = match collation {
+                Collation::Other(_) => needle.to_lowercase(),
+                Collation::Utf8Binary => needle.clone(),
+            };
+            Some(v.contains(&n))
         }
         _ => None,
     }
