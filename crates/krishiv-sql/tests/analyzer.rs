@@ -450,6 +450,9 @@ fn folding_and_grouped_ordering_match_spark() {
         "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
         "NON_FOLDABLE_ARGUMENT",
         "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE",
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL",
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE",
     ] {
         assert!(raised.contains(class), "{class} not raised");
     }
