@@ -135,8 +135,10 @@ jobs:
       - name: Build the instrumented extension and run the Python tests
         run: |
           uv venv --python 3.11 "$RUNNER_TEMP/venv"
+          # Interop versions are pinned in python/ci-interop-constraints.txt.
           uv pip install --python "$RUNNER_TEMP/venv/bin/python" "maturin>=1.9.4,<2" pytest \
-            "pyarrow>=16" "polars>=1.0" "duckdb>=1.1"
+            pyarrow polars duckdb \
+            --constraint "$GITHUB_WORKSPACE/python/ci-interop-constraints.txt"
           # Exports RUSTFLAGS, LLVM_PROFILE_FILE and the instrumented target dir.
           # shellcheck source=/dev/null
           source <(cargo llvm-cov show-env --sh)
