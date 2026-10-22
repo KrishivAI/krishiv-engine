@@ -327,7 +327,7 @@ pub fn run_setup(root: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        for hook in ["pre-commit", "pre-push"] {
+        for hook in ["pre-commit", "pre-push", "commit-msg"] {
             let path = root.join(".githooks").join(hook);
             let mut perms = std::fs::metadata(&path)
                 .map_err(|e| format!("cannot stat {}: {e}", path.display()))?
@@ -337,6 +337,6 @@ pub fn run_setup(root: &Path) -> Result<(), String> {
                 .map_err(|e| format!("cannot chmod {}: {e}", path.display()))?;
         }
     }
-    println!("setup: core.hooksPath = .githooks (pre-commit, pre-push installed)");
+    println!("setup: core.hooksPath = .githooks (pre-commit, pre-push, commit-msg installed)");
     Ok(())
 }

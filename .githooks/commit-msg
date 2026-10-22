@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# SPDX-License-Identifier: Apache-2.0
+# Krishiv commit-msg: refuses AI attribution (Co-Authored-By for an AI or bot,
+# Claude-Session:, "Generated with", robot emoji). The same check runs in CI
+# (.github/scripts/check-ai-attribution.sh). Enabled by `cargo xtask setup`.
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+exec bash "$root/.github/scripts/check-ai-attribution.sh" --message-file "$1"
