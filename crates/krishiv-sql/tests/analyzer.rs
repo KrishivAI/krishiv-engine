@@ -20,8 +20,8 @@ use krishiv_plan::analyzer::{
     ResolutionConf, TableColumn,
 };
 use krishiv_plan::{
-    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, LogicalPlan, PlanNode,
-    ResolvedExpr, SourceId,
+    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, Literal, LogicalPlan,
+    PlanNode, ResolvedExpr, SourceId,
 };
 use krishiv_sql::{ParserOptions, parse_and_lower, redact_sql};
 use serde_json::Value;
@@ -443,6 +443,20 @@ fn repeated_correlation_keys_stay_unique() {
 
 /// A foldable `LIMIT` that is negative or NULL fails analysis as Spark's
 /// `checkLimitLikeClause` does (it used to reach the planner).
+/// The `LIMIT` count of `plan`, wherever it sits.
+fn limit_of(plan: &Arc<LogicalPlan>) -> Option<Arc<Expr>> {
+    if let PlanNode::Limit { limit, .. } = &plan.node {
+        return Some(Arc::clone(limit));
+    }
+    let mut found = None;
+    plan.for_each_child(&mut |c| {
+        if found.is_none() {
+            found = limit_of(c);
+        }
+    });
+    found
+}
+
 #[test]
 fn negative_and_null_limits_fail_analysis() {
     let g = goldens();
@@ -464,5 +478,10 @@ fn negative_and_null_limits_fail_analysis() {
         e.error_class().name(),
         "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL"
     );
-    assert!(analyze(&g, "SELECT a FROM t LIMIT 0", ResolutionConf::default()).is_ok());
+    let a = analyze(&g, "SELECT a FROM t LIMIT 0", ResolutionConf::default()).unwrap();
+    let limit = limit_of(a.plan.root()).expect("a Limit node");
+    assert!(
+        matches!(&limit.node, ExprNode::Literal(Literal::Integer(0))),
+        "{limit:?}"
+    );
 }

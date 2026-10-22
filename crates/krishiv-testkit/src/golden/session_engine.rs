@@ -136,27 +136,49 @@ impl SessionEngine {
         if first.eq_ignore_ascii_case("RESET") {
             let key = sql.get(5..).map(str::trim).filter(|k| !k.is_empty());
             match key {
-                None => self.conf.clone_from(&self.base),
-                Some(key) => {
-                    self.conf.retain(|(k, _)| !k.eq_ignore_ascii_case(key));
-                    if let Some(kv) = self.base.iter().rev().find(|(k, _)| k == key) {
-                        self.conf.push(kv.clone());
-                    }
-                }
-            }
-            if let Some(s) = &self.session {
-                let conf = s.conf();
-                match key {
-                    Some(key) => match self.base.iter().rev().find(|(k, _)| k == key) {
-                        Some((k, v)) => drop(conf.set(k, v)),
-                        None => drop(conf.unset(key)),
-                    },
-                    None => {
-                        for (k, _) in &self.conf {
+                None => {
+                    let old = std::mem::replace(&mut self.conf, self.base.clone());
+                    if let Some(s) = &self.session {
+                        let conf = s.conf();
+                        // Every key the run set, including ones `base` does
+                        // not hold: unsetting only `base` keys would leave a
+                        // `SET` key behind in the session.
+                        for (k, _) in &old {
                             drop(conf.unset(k));
                         }
                         for (k, v) in &self.base {
                             drop(conf.set(k, v));
+                        }
+                    }
+                }
+                Some(key) => {
+                    let mut removed: Vec<String> = Vec::new();
+                    self.conf.retain(|(k, _)| {
+                        let hit = k.eq_ignore_ascii_case(key);
+                        if hit {
+                            removed.push(k.clone());
+                        }
+                        !hit
+                    });
+                    let base = self
+                        .base
+                        .iter()
+                        .rev()
+                        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                        .cloned();
+                    if let Some(kv) = &base {
+                        self.conf.push(kv.clone());
+                    }
+                    if let Some(s) = &self.session {
+                        let conf = s.conf();
+                        // Unset under the stored spellings: the session keeps
+                        // an unregistered key under the case it was set with.
+                        for k in &removed {
+                            drop(conf.unset(k));
+                        }
+                        match base {
+                            Some((k, v)) => drop(conf.set(&k, &v)),
+                            None => drop(conf.unset(key)),
                         }
                     }
                 }
@@ -628,6 +650,49 @@ mod tests {
         assert_eq!(e.conf, e.base);
         e.apply_set("SET spark.sql.session.timeZone");
         assert_eq!(e.conf, e.base);
+        Ok(())
+    }
+
+    #[test]
+    fn reset_clears_set_keys_and_ignores_case() -> R {
+        let mut e = engine(vec![]).map_err(err)?;
+        let session_get =
+            |e: &SessionEngine, key: &str| e.session.as_ref().and_then(|s| s.conf().get(key));
+        // A bare `RESET` unsets a `SET` key the run never had, in the
+        // session as well as in `conf`.
+        e.apply_set("SET spark.sql.ansi.enabled = false");
+        assert_eq!(
+            session_get(&e, "spark.sql.ansi.enabled").as_deref(),
+            Some("false")
+        );
+        e.apply_set("RESET");
+        assert_eq!(e.conf, e.base);
+        assert_eq!(
+            session_get(&e, "spark.sql.ansi.enabled").as_deref(),
+            Some("true")
+        );
+        // `RESET key` matches case-insensitively, in both directions.
+        e.apply_set("SET My.Custom.Key = 1");
+        e.apply_set("RESET my.custom.key");
+        assert!(
+            e.conf
+                .iter()
+                .all(|(k, _)| !k.eq_ignore_ascii_case("My.Custom.Key"))
+        );
+        assert_eq!(session_get(&e, "My.Custom.Key"), None);
+        assert_eq!(session_get(&e, "my.custom.key"), None);
+        // ... and restores a base value it finds case-insensitively.
+        e.base
+            .push(("my.base.key".to_owned(), "base-val".to_owned()));
+        e.conf
+            .push(("my.base.key".to_owned(), "base-val".to_owned()));
+        if let Some(s) = &e.session {
+            drop(s.conf().set("my.base.key", "base-val"));
+        }
+        e.apply_set("SET my.base.key = changed");
+        e.apply_set("RESET MY.BASE.KEY");
+        assert_eq!(e.conf_value("my.base.key"), Some("base-val"));
+        assert_eq!(session_get(&e, "my.base.key").as_deref(), Some("base-val"));
         Ok(())
     }
 
