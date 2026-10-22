@@ -5,7 +5,7 @@ description = "Krishiv benchmark harness (P0-T19): runs query suites against eng
 requires-python = ">=3.11"
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
-  "duckdb==1.5.6",
+  "duckdb==2.0.0",
   "pyarrow>=17",
   "numpy>=2",
   "psutil>=6",

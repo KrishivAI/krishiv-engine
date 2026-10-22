@@ -42,6 +42,7 @@ from .abba import LOAD_INDICATIVE, bootstrap_ci, discover_tables, geomean, geome
 from .adapters import Dataset, Engine, Query
 from .adapters.process import EngineCrashed, EngineError, EngineTimeout, ProcessEngine
 from .dialect import dialect_reason
+from .errors import describe_error, error_fields
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
 from .runner import git_info, load_queries, machine_info
 
@@ -69,7 +70,10 @@ def resolve_dataset(suite: str, dataset: str | None, sf: float) -> Dataset:
 
 
 def _fail(status: str, e: Exception | str) -> dict:
-    return {"status": status, "reason": str(e)[:1000]}
+    if isinstance(e, Exception):
+        fields = error_fields(e)
+        return {"status": status, "reason": fields["error"], **fields}
+    return {"status": status, "reason": e[:1000]}
 
 
 def _status_of(e: Exception) -> str:
@@ -89,7 +93,7 @@ def setup_engines(engines: MutableMapping[str, Any], ds: Dataset) -> dict[str, d
             e.teardown()
             if n == REFERENCE:
                 raise SystemExit(f"{REFERENCE} setup failed: {exc}") from exc
-            failed[n] = _fail(_status_of(exc), f"setup: {exc}")
+            failed[n] = _fail(_status_of(exc), f"setup: {describe_error(exc)}")
             del engines[n]
     return failed
 
@@ -109,19 +113,25 @@ def correctness(qm: Mapping[str, Query], engines: Mapping[str, Engine]) -> tuple
         for name in rows:
             verdict[name] = _fail("error", "no DuckDB reference result")
         return verdict, 0
-    ordered = compare.has_top_level_order_by(qm[REFERENCE].sql)
+    sql = qm[REFERENCE].sql
+    ordered = compare.has_top_level_order_by(sql)
     for name, r in rows.items():
         if name == REFERENCE:
             verdict[name] = {"status": "ok"}
             continue
-        ok, msg = compare.rows_match(r, ref, ordered)
-        if ok:
+        res = compare.compare_rows(r, ref, ordered, sql=sql)
+        if res.ok:
             verdict[name] = {"status": "ok"}
+            if res.status != "ok":
+                verdict[name]["note"] = res.message  # e.g. tie-at-limit
         else:
             reason = dialect_reason(name, qm[name].suite, qm[name].id, r, ref)
-            verdict[name] = _fail("mismatch-dialect", f"{reason}: {msg}") if reason else _fail("mismatch", msg)
-        if ok and "krishiv" in rows and name != "krishiv":
-            kok, kmsg = compare.rows_match(r, rows["krishiv"], ordered)
+            if reason:
+                verdict[name] = _fail("mismatch-dialect", f"{reason}: {res.message}")
+            else:
+                verdict[name] = _fail("mismatch", res.message)
+        if res.ok and "krishiv" in rows and name != "krishiv":
+            kok, kmsg = compare.rows_match(r, rows["krishiv"], ordered, sql=sql)
             if not kok:  # equal to DuckDB but not to Krishiv: Krishiv itself differs (also flagged on its own verdict)
                 verdict[name]["vs_krishiv"] = kmsg[:200]
     return verdict, len(ref)

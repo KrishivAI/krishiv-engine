@@ -220,8 +220,10 @@ def test_real_chdb_matches_duckdb_on_types_and_nulls(tiny_decimal, tmp_path, mon
         assert "ClickHouse " in eng.version()
         sql = "SELECT g, count(*), sum(d), count(s), min(dt) FROM t GROUP BY g ORDER BY g"
         got = eng.run(Query("q", sql, "s"))
-        want = duckdb.sql(sql.replace("FROM t", f"FROM read_parquet('{tiny_decimal.root / 't.parquet'}')")).fetchall()
-        assert compare.rows_match(got, want, ordered=True) == (True, "ok")
+        rel = duckdb.sql(sql.replace("FROM t", f"FROM read_parquet('{tiny_decimal.root / 't.parquet'}')"))
+        assert rel is not None
+        want = rel.fetchall()
+        assert compare.rows_match(got, want, ordered=True, sql=sql) == (True, "ok (tie-groups)")
         n, _ = eng.timed_run(Query("q", sql, "s"))
         assert n == 3
         with pytest.raises(Exception, match="UNKNOWN_IDENTIFIER"):
@@ -258,7 +260,7 @@ def test_known_dialect_difference_is_recorded_with_its_reason():
     v = verdict["clickhouse"]
     assert v["status"] == "mismatch-dialect"
     assert "truncates" in v["reason"]
-    assert "value mismatch at row 0" in v["reason"]
+    assert "value mismatch" in v["reason"]
 
 
 @pytest.mark.parametrize(
