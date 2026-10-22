@@ -411,7 +411,7 @@ pub(crate) fn expressions() -> PhysNode {
         Literal::Float(f32::NAN),
         Literal::Double(f64::INFINITY),
         Literal::Decimal {
-            unscaled: i128::MIN,
+            unscaled: -(10_i128.pow(38) - 1),
             data_type: decimal,
         },
         Literal::String("héllo \u{1F600}".to_owned()),

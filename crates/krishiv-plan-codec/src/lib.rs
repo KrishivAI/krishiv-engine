@@ -36,7 +36,7 @@
 //! coordinator planned with (checked at worker registration, P3).
 //!
 //! # Decoding untrusted bytes
-//! [`decode_with`] bounds the size, the table sizes and the plan depth
+//! [`decode_with`] bounds the size, the table sizes and the plan and expression depth
 //! ([`Limits`]), requires every reference to point to an earlier entry,
 //! every node to be used once and counts to agree.
 
@@ -69,8 +69,9 @@ pub struct Limits {
     pub max_nodes: usize,
     /// The most expressions.
     pub max_exprs: usize,
-    /// The deepest plan (and explain tree). Plans are dropped and compared
-    /// by recursion, so this bounds the stack they need.
+    /// The deepest plan, explain tree and expression. Plans and expressions
+    /// are dropped, compared and compiled by recursion, so this bounds the
+    /// stack they need.
     pub max_depth: usize,
 }
 

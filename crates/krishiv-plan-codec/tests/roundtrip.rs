@@ -161,7 +161,8 @@ fn a_url_with_credentials_is_refused_without_naming_it() {
     let canary = "canary-7c21-sig";
     let url = format!("s3://bucket/data?X-Amz-Signature={canary}");
     let option = OptionValue::from_user("path", url);
-    assert!(matches!(option, OptionValue::Url(_)), "{option:?}");
+    // The message must not format the option: it holds the credential.
+    assert!(matches!(option, OptionValue::Url(_)), "not a URL option");
     let plan = scan_with(BTreeMap::from([("path".to_owned(), option)]));
     let err = encode(&plan).unwrap_err();
     let text = format!("{err} {err:?}");
@@ -365,6 +366,30 @@ fn values_are_validated() {
     decimal.data_type.as_mut().unwrap().precision = 39;
     corrupt(&m, "invalid decimal type");
 
+    // The unscaled value must fit the precision: 10^5 is one too many for
+    // DECIMAL(5,2), 10^5 - 1 is the largest.
+    for (unscaled, fits) in [(100_000_i128, false), (99_999, true), (-99_999, true)] {
+        let mut m = message("expressions");
+        let decimal = m
+            .exprs
+            .iter_mut()
+            .find_map(|e| match e.kind.as_mut() {
+                Some(pb::expr::Kind::Literal(pb::Literal {
+                    kind: Some(pb::literal::Kind::Decimal(d)),
+                })) => Some(d),
+                _ => None,
+            })
+            .unwrap();
+        decimal.unscaled = unscaled.to_le_bytes().to_vec();
+        let ty = decimal.data_type.as_mut().unwrap();
+        (ty.precision, ty.scale) = (5, 2);
+        if fits {
+            decode(&m.encode_to_vec()).unwrap();
+        } else {
+            corrupt(&m, "beyond its precision");
+        }
+    }
+
     let mut m = message("expressions");
     let byte = m
         .exprs
@@ -434,4 +459,38 @@ fn limits_bound_size_and_depth() {
         ..Limits::default()
     };
     assert_eq!(decode_with(&bytes, &roomy).unwrap(), deep);
+}
+
+#[test]
+fn limits_bound_expression_depth() {
+    let mut e = inventory::col(1, "a", krishiv_types::DataType::Boolean);
+    for _ in 0..50 {
+        e = inventory::call(
+            krishiv_plan::Builtin::Not,
+            vec![e],
+            krishiv_types::DataType::Boolean,
+        );
+    }
+    let plan = plan_of(PhysNode::Filter {
+        input: Box::new(PhysNode::OneRow),
+        layout: Vec::new(),
+        predicate: e,
+        subqueries: Vec::new(),
+    });
+    let bytes = encode(&plan).unwrap();
+    // 50 calls over a column: 51 deep.
+    let exact = Limits {
+        max_depth: 51,
+        ..Limits::default()
+    };
+    assert_eq!(decode_with(&bytes, &exact).unwrap(), plan);
+    let tight = Limits {
+        max_depth: 50,
+        ..Limits::default()
+    };
+    let err = decode_with(&bytes, &tight).unwrap_err();
+    assert!(
+        matches!(&err, CodecError::Limit(m) if m.contains("expression deeper than 50")),
+        "{err:?}"
+    );
 }

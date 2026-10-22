@@ -88,6 +88,7 @@ pub fn from_message(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPla
     }
     let mut d = Decoder {
         exprs: Vec::with_capacity(m.exprs.len()),
+        expr_depths: Vec::with_capacity(m.exprs.len()),
         slots: Vec::with_capacity(m.nodes.len()),
         depths: Vec::with_capacity(m.nodes.len()),
         child_depth: 0,
@@ -95,6 +96,18 @@ pub fn from_message(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPla
     };
     for e in &m.exprs {
         let expr = d.expr(e)?;
+        // `d.expr` checked every reference, so each child has a depth.
+        let depth = 1 + expr_children(e)
+            .map(|c| d.expr_depths[c as usize])
+            .max()
+            .unwrap_or(0);
+        if depth > d.max_depth {
+            return Err(CodecError::Limit(format!(
+                "expression deeper than {} nodes",
+                d.max_depth
+            )));
+        }
+        d.expr_depths.push(depth);
         d.exprs.push(Arc::new(expr));
     }
     for n in &m.nodes {
@@ -162,6 +175,18 @@ fn explain(table: &[pb::ExplainNode], root: u32, max_depth: usize) -> Result<Exp
     Ok(root)
 }
 
+/// The table entries `m` refers to.
+fn expr_children(m: &pb::Expr) -> impl Iterator<Item = u32> + '_ {
+    use pb::expr::Kind;
+    let (one, many): (Option<u32>, &[u32]) = match &m.kind {
+        Some(Kind::Cast(c)) => (Some(c.expr), &[]),
+        Some(Kind::Alias(a)) => (Some(a.expr), &[]),
+        Some(Kind::Function(f)) => (f.filter, &f.args),
+        _ => (None, &[]),
+    };
+    one.into_iter().chain(many.iter().copied())
+}
+
 /// `i` as an index into a table of `len` entries.
 fn slot(i: u32, len: usize) -> Result<usize> {
     let at = usize::try_from(i).map_err(|_| corrupt("an index out of range"))?;
@@ -202,6 +227,9 @@ macro_rules! enum_of {
 struct Decoder {
     /// Decoded expressions.
     exprs: Vec<Arc<Expr>>,
+    /// The depth of each decoded expression (a shared subexpression counts
+    /// once per path, since evaluation recurses along paths).
+    expr_depths: Vec<usize>,
     /// Decoded nodes not yet used by a parent.
     slots: Vec<Option<PhysNode>>,
     /// The depth of each decoded node.
@@ -642,9 +670,15 @@ fn literal(l: &pb::Literal) -> Result<Literal> {
                 .as_slice()
                 .try_into()
                 .map_err(|_| corrupt("a decimal literal that is not 16 bytes"))?;
+            let unscaled = i128::from_le_bytes(bytes);
+            let data_type = decimal(required(&d.data_type, "a decimal type")?)?;
+            // Spark's Decimal holds |unscaled| < 10^precision; 10^38 fits i128.
+            if unscaled.unsigned_abs() >= 10_u128.pow(u32::from(data_type.precision())) {
+                return Err(corrupt("a decimal literal beyond its precision"));
+            }
             Literal::Decimal {
-                unscaled: i128::from_le_bytes(bytes),
-                data_type: decimal(required(&d.data_type, "a decimal type")?)?,
+                unscaled,
+                data_type,
             }
         }
         Kind::String(v) => Literal::String(v.clone()),
