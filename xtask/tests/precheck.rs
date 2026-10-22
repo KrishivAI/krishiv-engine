@@ -649,3 +649,198 @@ fn external_checks_are_ci_only() {
         assert!(matches!(mapping(c), Some(Mapping::CiOnly(_))), "{c}");
     }
 }
+
+// ---- the I/O wrappers, against throwaway repositories and fake commands ----
+
+use xtask::precheck::{Cmd, collect_changes, execute, on_path, run_step, verdict};
+
+fn cmd(program: &str, args: &[&str], dir: &str) -> Cmd {
+    Cmd {
+        program: program.to_owned(),
+        args: args.iter().map(|s| (*s).to_owned()).collect(),
+        env: Vec::new(),
+        dir: dir.to_owned(),
+        heavy: false,
+    }
+}
+
+fn step_of(id: &'static str, action: Action) -> Step {
+    Step {
+        id,
+        action,
+        notes: Vec::new(),
+    }
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn changes_are_collected_from_committed_dirty_and_untracked_files() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/*\"]\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    for name in ["a", "b"] {
+        let dir = root.join("crates").join(name);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "").unwrap();
+    }
+    git(root, &["init", "-q", "-b", "main"]);
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", "base"]);
+    git(root, &["checkout", "-q", "-b", "feature"]);
+    std::fs::write(root.join("crates/a/src/lib.rs"), "// committed\n").unwrap();
+    git(root, &["commit", "-q", "-am", "change a"]);
+    std::fs::write(root.join("crates/b/src/lib.rs"), "// dirty\n").unwrap();
+    std::fs::create_dir_all(root.join("python")).unwrap();
+    std::fs::write(root.join("python/new.py"), "").unwrap();
+
+    let ch = collect_changes(root, "main").unwrap();
+    assert_eq!(
+        ch.paths,
+        [
+            "crates/a/src/lib.rs",
+            "crates/b/src/lib.rs",
+            "python/new.py"
+        ]
+    );
+    assert_eq!(
+        ch.scope,
+        Scope::Packages {
+            touched: vec!["a".into(), "b".into()],
+            with_dependents: vec!["a".into(), "b".into()]
+        }
+    );
+    assert!(ch.python && !ch.bench);
+    assert!(
+        collect_changes(root, "no-such-ref")
+            .unwrap_err()
+            .contains("git diff")
+    );
+    let empty = tempfile::tempdir().unwrap();
+    assert!(
+        collect_changes(empty.path(), "main")
+            .unwrap_err()
+            .contains("cargo metadata failed")
+    );
+}
+
+#[test]
+fn a_run_step_passes_fails_and_logs() {
+    let d = tempfile::tempdir().unwrap();
+    let logs = d.path().join("logs");
+    let steps = [
+        step_of(
+            "ok",
+            Action::Run(vec![cmd("sh", &["-c", "echo hello"], "")]),
+        ),
+        step_of(
+            "bad",
+            Action::Run(vec![
+                cmd("sh", &["-c", "echo boom >&2; exit 3"], ""),
+                cmd("sh", &["-c", "echo never"], ""),
+            ]),
+        ),
+        step_of("note", Action::Note("fyi".into())),
+        step_of("skip", Action::Skip("because".into())),
+        step_of(
+            "gone",
+            Action::Run(vec![cmd("definitely-not-a-program-xyz", &[], "")]),
+        ),
+    ];
+    let out = execute(d.path(), &steps, None, &logs).unwrap();
+    let st: Vec<Status> = out.iter().map(|o| o.status).collect();
+    assert_eq!(
+        st,
+        [
+            Status::Pass,
+            Status::Fail,
+            Status::Pass,
+            Status::Skipped,
+            Status::Fail
+        ]
+    );
+    assert!(out[1].detail.contains("failed") && out[1].detail.contains("bad.log"));
+    assert!(
+        out[4]
+            .detail
+            .contains("cannot run definitely-not-a-program-xyz")
+    );
+    assert_eq!(
+        (out[2].detail.as_str(), out[3].detail.as_str()),
+        ("fyi", "because")
+    );
+    assert!(
+        std::fs::read_to_string(logs.join("ok.log"))
+            .unwrap()
+            .contains("hello")
+    );
+    let bad = std::fs::read_to_string(logs.join("bad.log")).unwrap();
+    assert!(bad.contains("boom") && !bad.contains("never"));
+    assert_eq!(verdict(&out).unwrap_err(), "precheck failed: bad, gone");
+    assert!(verdict(&out[..1]).is_ok());
+}
+
+#[test]
+fn a_run_step_uses_its_dir_env_and_root_token() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir(d.path().join("sub")).unwrap();
+    let mut c = cmd(
+        "sh",
+        &[
+            "-c",
+            "pwd > out.txt; echo \"$V\" >> out.txt; echo {ROOT} >> out.txt",
+        ],
+        "sub",
+    );
+    c.env.push(("V".to_owned(), "val".to_owned()));
+    let o = run_step(
+        d.path(),
+        &step_of("e", Action::Run(vec![c])),
+        None,
+        d.path(),
+    );
+    assert_eq!(o.status, Status::Pass);
+    let text = std::fs::read_to_string(d.path().join("sub/out.txt")).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines[0].ends_with("/sub") && lines[1] == "val");
+    assert!(lines[2].ends_with(d.path().file_name().unwrap().to_str().unwrap()));
+}
+
+#[test]
+fn notes_make_a_passing_step_partial() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = step_of("p", Action::Run(vec![cmd("true", &[], "")]));
+    s.notes.push("taplo not installed".to_owned());
+    let o = run_step(d.path(), &s, None, d.path());
+    assert_eq!(
+        (o.status, o.detail.as_str()),
+        (Status::Partial, "taplo not installed")
+    );
+}
+
+#[test]
+fn on_path_finds_installed_binaries_only() {
+    assert!(on_path("sh"));
+    assert!(!on_path("definitely-not-a-program-xyz"));
+}

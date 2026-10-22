@@ -13,7 +13,7 @@
 )]
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
@@ -868,7 +868,9 @@ pub fn cap_prefix(cap: &str) -> Vec<String> {
         .collect()
 }
 
-fn on_path(bin: &str) -> bool {
+/// Whether `bin` is an executable file on `PATH`.
+#[must_use]
+pub fn on_path(bin: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|p| {
         std::env::split_paths(&p).any(|d| {
             let f = d.join(bin);
@@ -940,7 +942,9 @@ fn exec(root: &Path, cmd: &Cmd, cap: Option<&str>, log: &mut String) -> Result<(
     }
 }
 
-fn run_step(root: &Path, step: &Step, cap: Option<&str>, log_dir: &Path) -> Outcome {
+/// Runs one step, writing its log to `log_dir`.
+#[must_use]
+pub fn run_step(root: &Path, step: &Step, cap: Option<&str>, log_dir: &Path) -> Outcome {
     let started = Instant::now();
     let (status, detail) = match &step.action {
         Action::Note(n) => (Status::Pass, n.clone()),
@@ -982,15 +986,11 @@ fn run_step(root: &Path, step: &Step, cap: Option<&str>, log_dir: &Path) -> Outc
     }
 }
 
-/// `cargo xtask precheck [--base REF] [--fast] [--full] [--memory-cap SIZE]`.
+/// Reads the workspace packages and the changed paths of `root` against `base`.
 ///
 /// # Errors
-/// Returns the usage or environment error, or the failed-check summary.
-pub fn run_precheck(root: &Path, flags: &[&str]) -> Result<(), String> {
-    let o = Opts::parse(flags)?;
-    if o.memory_cap.is_some() && !on_path("systemd-run") {
-        return Err("--memory-cap needs systemd-run, which is not installed".to_owned());
-    }
+/// Returns the cargo or git failure.
+pub fn collect_changes(root: &Path, base: &str) -> Result<Changes, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let meta = Command::new(cargo)
         .args([
@@ -1011,29 +1011,66 @@ pub fn run_precheck(root: &Path, flags: &[&str]) -> Result<(), String> {
         ));
     }
     let pkgs = parse_packages(&String::from_utf8_lossy(&meta.stdout), root)?;
-    let paths = changed_paths(root, &o.base)?;
-    let ch = Changes::detect(&paths, &pkgs);
-    let exe = std::env::current_exe().map_err(|e| format!("cannot find the xtask binary: {e}"))?;
-    let exe = exe.to_string_lossy().into_owned();
-    let steps = plan(&ch, &o, &on_path, &exe);
-    let log_dir: PathBuf = root.join("target/precheck");
-    std::fs::create_dir_all(&log_dir)
+    Ok(Changes::detect(&changed_paths(root, base)?, &pkgs))
+}
+
+/// Runs `steps` in order, one outcome each; logs go to `log_dir`.
+///
+/// # Errors
+/// Returns the error of creating `log_dir`.
+pub fn execute(
+    root: &Path,
+    steps: &[Step],
+    cap: Option<&str>,
+    log_dir: &Path,
+) -> Result<Vec<Outcome>, String> {
+    std::fs::create_dir_all(log_dir)
         .map_err(|e| format!("cannot create {}: {e}", log_dir.display()))?;
     let mut outcomes = Vec::new();
     for (i, step) in steps.iter().enumerate() {
         eprintln!("[{}/{}] {}", i + 1, steps.len(), step.id);
-        outcomes.push(run_step(root, step, o.memory_cap.as_deref(), &log_dir));
+        outcomes.push(run_step(root, step, cap, log_dir));
     }
-    println!("\n{}", render_table(&outcomes));
-    if failed(&outcomes) {
-        let names: Vec<&str> = outcomes
-            .iter()
-            .filter(|o| o.status == Status::Fail)
-            .map(|o| o.id)
-            .collect();
-        Err(format!("precheck failed: {}", names.join(", ")))
-    } else {
-        println!("precheck: OK");
+    Ok(outcomes)
+}
+
+/// The verdict of a finished run: `Ok` unless a step failed.
+///
+/// # Errors
+/// Names the failed steps.
+pub fn verdict(outcomes: &[Outcome]) -> Result<(), String> {
+    let names: Vec<&str> = outcomes
+        .iter()
+        .filter(|o| o.status == Status::Fail)
+        .map(|o| o.id)
+        .collect();
+    if names.is_empty() {
         Ok(())
+    } else {
+        Err(format!("precheck failed: {}", names.join(", ")))
     }
+}
+
+/// `cargo xtask precheck [--base REF] [--fast] [--full] [--memory-cap SIZE]`.
+///
+/// # Errors
+/// Returns the usage or environment error, or the failed-check summary.
+pub fn run_precheck(root: &Path, flags: &[&str]) -> Result<(), String> {
+    let o = Opts::parse(flags)?;
+    if o.memory_cap.is_some() && !on_path("systemd-run") {
+        return Err("--memory-cap needs systemd-run, which is not installed".to_owned());
+    }
+    let ch = collect_changes(root, &o.base)?;
+    let exe = std::env::current_exe().map_err(|e| format!("cannot find the xtask binary: {e}"))?;
+    let steps = plan(&ch, &o, &on_path, &exe.to_string_lossy());
+    let outcomes = execute(
+        root,
+        &steps,
+        o.memory_cap.as_deref(),
+        &root.join("target/precheck"),
+    )?;
+    println!("\n{}", render_table(&outcomes));
+    verdict(&outcomes)?;
+    println!("precheck: OK");
+    Ok(())
 }
