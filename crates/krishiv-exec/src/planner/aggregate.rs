@@ -253,7 +253,7 @@ fn replace(
 
 /// `Some(true)` for `last`/`last_value`, `Some(false)` for `first`/
 /// `first_value`: the aggregates that pick a row's value.
-fn picks(name: &str) -> Option<bool> {
+pub(super) fn picks(name: &str) -> Option<bool> {
     match name {
         "first" | "first_value" => Some(false),
         "last" | "last_value" => Some(true),
@@ -261,6 +261,6 @@ fn picks(name: &str) -> Option<bool> {
     }
 }
 
-fn non_null_literal(e: &Expr) -> bool {
+pub(super) fn non_null_literal(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Literal(l) if !matches!(l, krishiv_plan::Literal::Null(_)))
 }

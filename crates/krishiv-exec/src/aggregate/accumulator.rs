@@ -32,7 +32,7 @@ use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Decimal128Array, Float64Array,
     Int64Array, PrimitiveArray, StringArray, StringViewArray,
 };
-use arrow_buffer::NullBuffer;
+use arrow_buffer::{NullBuffer, i256};
 use arrow_schema::{DataType, TimeUnit};
 use krishiv_kernels::decimal::DecimalNative;
 use krishiv_types::batch::Weights;
@@ -644,6 +644,94 @@ fn avg_fast(sum: i128, sum_scale: i8, count: i64, p: u8, s: i8) -> Option<i128> 
     Some(if (sum < 0) != (count < 0) { -v } else { v })
 }
 
+/// A decimal `sum` that was kept exact (a window frame's, which Spark
+/// keeps as an unbounded `Decimal`; only the evaluation checks it), as
+/// `decimal(p, s)`: NULL for no value, else the value if it fits; past
+/// `p` digits NULL, or with `ansi` `NUMERIC_VALUE_OUT_OF_RANGE`.
+///
+/// # Errors
+/// `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION` as above.
+pub(crate) fn wide_sum_value(sum: Option<i256>, p: u8, s: i8, ansi: bool) -> Result<Option<i128>> {
+    let Some(sum) = sum else {
+        return Ok(None);
+    };
+    let bound = i256::from_i128(pow10(p));
+    let fits = sum < bound && sum > bound.wrapping_neg();
+    match sum.to_i128() {
+        Some(v) if fits => Ok(Some(v)),
+        _ if !ansi => Ok(None),
+        _ => {
+            let digits = sum.wrapping_abs().to_string();
+            let scale = usize::try_from(s).unwrap_or(0);
+            Err(out_of_range(
+                plain_digits(&digits, scale, sum.is_negative()),
+                p,
+                s,
+            ))
+        }
+    }
+}
+
+/// Spark's decimal `avg` of an exact `sum` (scale `sum_scale`) over
+/// `count` rows as `decimal(p, s)`, as [`avg_decimal`] computes it for a
+/// sum within `i128`: `Ok(None)` when it does not fit, with the scale-39
+/// quotient's text for the error.
+pub(crate) fn avg_decimal_wide(
+    sum: i256,
+    sum_scale: i8,
+    count: i64,
+    p: u8,
+    s: i8,
+) -> (Option<i128>, String) {
+    if let Some(sum) = sum.to_i128() {
+        if let Some(v) = avg_fast(sum, sum_scale, count, p, s) {
+            return (Some(v), String::new());
+        }
+        return avg_decimal(sum, sum_scale, count, p, s);
+    }
+    let negative = sum.is_negative() != (count < 0);
+    let a = sum.wrapping_abs();
+    let b = i256::from_i128(i128::from(count.unsigned_abs()));
+    let ss = usize::try_from(sum_scale).unwrap_or(0);
+    let (Some(mut int), Some(rem)) = (a.checked_div(b), a.checked_rem(b)) else {
+        return (None, String::new());
+    };
+    // `rem < count < 2^63`: the digit loop runs in `u128`, as `avg_decimal`.
+    let b = u128::from(count.unsigned_abs());
+    let mut rem = rem
+        .to_i128()
+        .and_then(|r| u128::try_from(r).ok())
+        .unwrap_or(0);
+    let mut digit = || {
+        rem *= 10;
+        let d = u8::try_from(rem / b).unwrap_or(9);
+        rem %= b;
+        d
+    };
+    let mut frac: Vec<u8> = (0..39 - ss).map(|_| digit()).collect();
+    if digit() >= 5 && round_up(&mut frac) {
+        int = int.wrapping_add(i256::ONE);
+    }
+    let mut digits = int.to_string();
+    digits.extend(frac.iter().map(|d| char::from(b'0' + d)));
+    let text = plain_digits(&digits, 39, negative && digits.bytes().any(|d| d != b'0'));
+    let keep = usize::try_from(s).unwrap_or(0).saturating_sub(ss);
+    let up = frac.get(keep).is_some_and(|&d| d >= 5);
+    let ten = i256::from_i128(10);
+    let mut v = Some(int);
+    for &d in frac.iter().take(keep) {
+        v = v
+            .and_then(|v| v.checked_mul(ten))
+            .and_then(|v| v.checked_add(i256::from_i128(i128::from(d))));
+    }
+    let v = v
+        .and_then(|v| v.checked_add(i256::from_i128(i128::from(up))))
+        .and_then(i256::to_i128)
+        .filter(|&v| v < pow10(p))
+        .map(|v| if negative { -v } else { v });
+    (v, text)
+}
+
 /// Adds one unit in the last place of `digits`; `true` if it carries out.
 fn round_up(digits: &mut [u8]) -> bool {
     for d in digits.iter_mut().rev() {
@@ -823,6 +911,88 @@ impl Accumulator {
                 set.resize(n, false);
                 null.resize(n, false);
                 values.resize(n);
+            }
+        }
+    }
+
+    /// Copies group `from`'s state into group `to` (both below the group
+    /// count). A window's running frame keeps the state after each row or
+    /// peer group this way, so the rows are still folded one by one, in
+    /// order, as Spark's window frames fold them.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a group outside the table.
+    pub(crate) fn copy_group(&mut self, from: usize, to: usize) -> Result<()> {
+        fn cp<T: Clone>(v: &mut [T], from: usize, to: usize) -> Result<()> {
+            let x = v
+                .get(from)
+                .cloned()
+                .ok_or_else(|| internal(format!("aggregate group {from} out of range")))?;
+            let slot = v
+                .get_mut(to)
+                .ok_or_else(|| internal(format!("aggregate group {to} out of range")))?;
+            *slot = x;
+            Ok(())
+        }
+        fn values(v: &mut Values, heap: &mut usize, from: usize, to: usize) -> Result<()> {
+            match v {
+                Values::Int(x) => cp(x, from, to),
+                Values::Float(x) => cp(x, from, to),
+                Values::Bytes(x) => {
+                    let old = x.get(to).map_or(0, |b| b.len());
+                    cp(x, from, to)?;
+                    let new = x.get(to).map_or(0, |b| b.len());
+                    *heap = heap.saturating_sub(old).saturating_add(new);
+                    Ok(())
+                }
+            }
+        }
+        match &mut self.kind {
+            Kind::Count(c) => cp(c, from, to),
+            Kind::SumInt { sum, seen } => {
+                cp(sum, from, to)?;
+                cp(seen, from, to)
+            }
+            Kind::SumFloat { sum, seen } => {
+                cp(sum, from, to)?;
+                cp(seen, from, to)
+            }
+            Kind::SumDec { sum, state } => {
+                cp(sum, from, to)?;
+                cp(state, from, to)
+            }
+            Kind::AvgFloat { sum, count } => {
+                cp(sum, from, to)?;
+                cp(count, from, to)
+            }
+            Kind::AvgDec {
+                sum,
+                count,
+                overflow,
+            } => {
+                cp(sum, from, to)?;
+                cp(count, from, to)?;
+                cp(overflow, from, to)
+            }
+            Kind::MinMax {
+                values: v,
+                set,
+                heap,
+                ..
+            } => {
+                cp(set, from, to)?;
+                values(v, heap, from, to)
+            }
+            Kind::Pick {
+                values: v,
+                set,
+                null,
+                heap,
+                ..
+            } => {
+                cp(set, from, to)?;
+                cp(null, from, to)?;
+                values(v, heap, from, to)
             }
         }
     }
@@ -1900,5 +2070,103 @@ mod tests {
         assert_eq!(value_bytes(&bv), 4);
         assert_eq!(plain(-5, 3), "-0.005");
         assert!(float_lt(1.0, f64::NAN) && !float_lt(f64::NAN, f64::NAN) && !float_lt(-0.0, 0.0));
+    }
+
+    /// Beyond `i128`, the exact average rounds as Spark's (`HALF_UP` to
+    /// scale 39, then to the result's scale; expected values from Python's
+    /// `decimal`), and reports the scale-39 quotient when it does not fit.
+    #[test]
+    fn wide_averages_round_as_spark() {
+        let wide = |v: i128, mul: i128| {
+            i256::from_i128(v)
+                .checked_mul(i256::from_i128(mul))
+                .unwrap()
+        };
+        let three = wide(3, 10_i128.pow(38));
+        assert_eq!(
+            avg_decimal_wide(three, 0, 7, 38, 0).0,
+            Some(42_857_142_857_142_857_142_857_142_857_142_857_143)
+        );
+        let (none, text) = avg_decimal_wide(three, 0, 7, 38, 2);
+        assert_eq!(none, None);
+        assert_eq!(
+            text,
+            "42857142857142857142857142857142857142.857142857142857142857142857142857142857"
+        );
+        let negative = wide(-5, 10_i128.pow(38)).wrapping_add(i256::from_i128(3));
+        assert_eq!(
+            avg_decimal_wide(negative, 0, 9, 38, 0).0,
+            Some(-55_555_555_555_555_555_555_555_555_555_555_555_555)
+        );
+        let half = wide(2, 10_i128.pow(38)).wrapping_add(i256::ONE);
+        assert_eq!(
+            avg_decimal_wide(half, 0, 4, 38, 0).0,
+            Some(50_000_000_000_000_000_000_000_000_000_000_000_000)
+        );
+        // Within `i128` it is `avg_decimal` itself.
+        assert_eq!(
+            avg_decimal_wide(i256::from_i128(15), 1, 2, 10, 5),
+            (Some(75_000), String::new())
+        );
+        assert_eq!(
+            avg_decimal_wide(i256::from_i128(10_i128.pow(38) - 1), 0, 1, 38, 4).0,
+            None
+        );
+    }
+
+    #[test]
+    fn wide_sums_are_checked_when_evaluated() {
+        let big = i256::from_i128(10_i128.pow(38));
+        assert_eq!(wide_sum_value(None, 38, 0, true).unwrap(), None);
+        assert_eq!(
+            wide_sum_value(Some(i256::from_i128(-7)), 3, 1, true).unwrap(),
+            Some(-7)
+        );
+        assert_eq!(wide_sum_value(Some(big), 38, 0, false).unwrap(), None);
+        let e = wide_sum_value(Some(big.wrapping_neg()), 38, 2, true).unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("-1000000000000000000000000000000000000.00"),
+            "{e}"
+        );
+    }
+
+    /// A copied group has the source's state, string heap bytes included;
+    /// a group outside the table is an error.
+    #[test]
+    fn groups_copy_their_state() {
+        let expr = AggregateExpr::new(AggregateFunction::Max, 0, DataType::Utf8View, "m");
+        let mut a = Accumulator::new(&expr, true).unwrap();
+        a.resize(3);
+        let col: ArrayRef = Arc::new(arrow_array::StringViewArray::from(vec!["abc", "z"]));
+        a.update(&[0, 1], &[col], &Weights::Const(1)).unwrap();
+        let before = a.size();
+        a.copy_group(0, 2).unwrap();
+        assert_eq!(a.size(), before + 3);
+        a.copy_group(1, 2).unwrap();
+        assert_eq!(a.size(), before + 1);
+        let v = a.evaluate(&[0, 1, 2]).unwrap();
+        let v = v.as_string_view();
+        assert_eq!((v.value(0), v.value(1), v.value(2)), ("abc", "z", "z"));
+        assert!(a.copy_group(5, 0).is_err() && a.copy_group(0, 5).is_err());
+        for f in [
+            AggregateFunction::Count,
+            AggregateFunction::Sum,
+            AggregateFunction::Avg,
+            AggregateFunction::First {
+                ignore_nulls: false,
+            },
+        ] {
+            for t in [
+                DataType::Int64,
+                DataType::Float64,
+                DataType::Decimal128(10, 2),
+            ] {
+                let mut a = Accumulator::new(&AggregateExpr::new(f, 0, t, "x"), false).unwrap();
+                a.resize(2);
+                a.copy_group(0, 1).unwrap();
+                assert!(a.copy_group(2, 0).is_err(), "{f:?}");
+            }
+        }
     }
 }

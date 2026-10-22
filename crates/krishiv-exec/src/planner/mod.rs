@@ -36,6 +36,7 @@ pub(crate) mod pushdown;
 mod runtime_filter;
 pub(crate) mod subquery;
 mod table;
+mod window;
 
 use std::fmt;
 use std::sync::Arc;
