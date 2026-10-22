@@ -357,6 +357,40 @@ fn window_functions_match_spark() {
     for case in cases {
         report.push_str(&check(&s, &tables, case));
     }
+    // Every class the window code raises is matched against Spark above.
+    let matched: Vec<&str> = cases
+        .iter()
+        .filter(|c| !c["ok"].as_bool().unwrap())
+        .filter_map(|c| c["error_class"].as_str())
+        .collect();
+    for class in [
+        "DATATYPE_MISMATCH.RANGE_FRAME_WITHOUT_ORDER",
+        "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_INVALID_BOUND",
+        "DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE",
+        "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+        "DISTINCT_WINDOW_FUNCTION_UNSUPPORTED",
+        "INVALID_AGGREGATE_FILTER.CONTAINS_WINDOW_FUNCTION",
+        "INVALID_SQL_SYNTAX.INVALID_WINDOW_REFERENCE",
+        "INVALID_SQL_SYNTAX.UNRESOLVED_WINDOW_REFERENCE",
+        "INVALID_SQL_SYNTAX.REPETITIVE_WINDOW_DEFINITION",
+        "MISSING_WINDOW_SPECIFICATION",
+        "MISSING_GROUP_BY",
+        "MISSING_AGGREGATION",
+        "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION",
+        "ARITHMETIC_OVERFLOW",
+        "UNSUPPORTED_EXPR_FOR_OPERATOR",
+        "UNSUPPORTED_EXPR_FOR_WINDOW",
+        "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_AGGREGATE_WITH_WINDOW_AND_HAVING",
+        "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_WINDOW",
+        "WINDOW_FUNCTION_FRAME_NOT_ORDERED",
+        "WINDOW_FUNCTION_NOT_ALLOWED_IN_CLAUSE",
+        "WINDOW_FUNCTION_WITHOUT_OVER_CLAUSE",
+        "_LEGACY_ERROR_TEMP_1031",
+        "_LEGACY_ERROR_TEMP_1036",
+    ] {
+        assert!(matched.contains(&class), "{class} not covered");
+    }
     assert!(cases.len() > 100, "the fixture lost cases");
     assert!(report.is_empty(), "mismatches against Spark:\n{report}");
 }
