@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1411,14 +1411,14 @@ dependencies = [
 
 [[package]]
 name = "krishiv-alloc"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "libmimalloc-sys",
 ]
 
 [[package]]
 name = "krishiv-bench-runner"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1437,7 +1437,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-cli"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "clap",
  "futures",
@@ -1454,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-common"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "codspeed-criterion-compat",
  "serde_json",
@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connect"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "insta",
  "krishiv-common",
@@ -1478,27 +1478,27 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connector-sdk"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-connectors-cdc"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-connectors-delta"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-connectors-iceberg"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-connectors-kafka"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-exec"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1533,11 +1533,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-flight-sql"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-functions"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1552,7 +1552,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-io"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1581,7 +1581,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-kernels"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1599,11 +1599,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-mcp"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-memory"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1621,7 +1621,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-optimizer"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1638,7 +1638,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-plan"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1676,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-python"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1692,11 +1692,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-scheduler"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-server"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "axum",
  "krishiv-ui-assets",
@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-session"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1730,15 +1730,15 @@ dependencies = [
 
 [[package]]
 name = "krishiv-shuffle"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-sim"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-sql"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "codspeed-criterion-compat",
  "insta",
@@ -1752,15 +1752,15 @@ dependencies = [
 
 [[package]]
 name = "krishiv-state"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-stream"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-testkit"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -1793,7 +1793,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-types"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1806,11 +1806,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-udf-sdk"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 
 [[package]]
 name = "krishiv-ui-assets"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "rust-embed",
 ]
@@ -3287,7 +3287,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 dependencies = [
  "krishiv-common",
  "serde",

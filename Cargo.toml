@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.1.0-dev"
+version = "0.1.0-alpha"
 edition = "2024"
 # MSRV = latest stable (1.99) minus two minor releases.
 rust-version = "1.97"
