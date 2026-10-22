@@ -268,7 +268,10 @@ fn ai_attribution_guard_passes_its_tests_and_is_wired() {
         String::from_utf8_lossy(&out.stderr)
     );
     let policy = read(".github/workflows/pr-policy.yml");
-    assert!(policy.contains(".github/scripts/check-ai-attribution.sh"));
+    assert!(
+        policy.contains("run: .github/scripts/check-ai-attribution.sh \"$BASE_SHA\" \"$HEAD_SHA\""),
+        "pr-policy.yml must run the attribution gate (a mention of the script is not enough)"
+    );
     assert!(policy.contains("PR_BODY: ${{ github.event.pull_request.body }}"));
     assert!(read(".githooks/commit-msg").contains("check-ai-attribution.sh"));
 }

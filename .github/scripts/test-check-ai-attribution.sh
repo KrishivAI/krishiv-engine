@@ -54,6 +54,11 @@ case "$out" in *"line 5"*"Claude-Session"*) ;; *) fail "multi-line: wrong line n
 case "$out" in *"Jane Doe"*) fail "human co-author was flagged: $out" ;; esac
 echo "ok: multi-line message names only the offending line"
 
+# Fail closed: a missing message file is refused, never a clean pass.
+if out=$(bash "$script" --message-file "$tmp/does-not-exist" 2>&1); then fail "missing message file was allowed"; fi
+case "$out" in *"cannot read message file"*) ;; *) fail "missing message file: wrong error: $out" ;; esac
+echo "ok: missing message file refused"
+
 # CI range mode: every commit in BASE..HEAD, plus the PR title and body.
 export GIT_AUTHOR_NAME=T GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=T GIT_COMMITTER_EMAIL=t@example.com
 git init -q -b main "$tmp/w"
@@ -70,6 +75,14 @@ head_clean=$(git rev-parse HEAD)
   bash "$script" "$base" "$head_clean" >/dev/null 2>&1 || fail "clean range refused"
 )
 echo "ok: clean commit range accepted"
+
+# Fail closed: an invalid range is refused, never a clean pass.
+if out=$(unset PR_TITLE PR_BODY; bash "$script" does-not-exist "$head_clean" 2>&1); then fail "invalid base was allowed"; fi
+case "$out" in *"cannot list commits"*) ;; *) fail "invalid base: wrong error: $out" ;; esac
+echo "ok: invalid base refused"
+if out=$(unset PR_TITLE PR_BODY; bash "$script" "$base" does-not-exist 2>&1); then fail "invalid head was allowed"; fi
+case "$out" in *"cannot list commits"*) ;; *) fail "invalid head: wrong error: $out" ;; esac
+echo "ok: invalid head refused"
 
 echo 3 >> f && git commit -q -am "bad
 

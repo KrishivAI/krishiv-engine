@@ -33,7 +33,11 @@ check_text() {
 }
 
 if [ "${1:-}" = "--message-file" ] && [ $# -eq 2 ]; then
-  check_text "commit message" "$(cat "$2")" && echo "ai-attribution: OK (commit message)"
+  text=$(cat "$2" 2>/dev/null) || {
+    echo "ai-attribution: cannot read message file: $2" >&2
+    exit 1
+  }
+  check_text "commit message" "$text" && echo "ai-attribution: OK (commit message)"
   exit $?
 elif [ $# -ne 2 ]; then
   echo "usage: $0 --message-file FILE | BASE HEAD" >&2
@@ -43,10 +47,14 @@ fi
 base=$1
 head=$2
 bad=0
+revs=$(git rev-list --no-merges "$base..$head" 2>/dev/null) || {
+  echo "ai-attribution: cannot list commits in range $base..$head" >&2
+  exit 1
+}
 while read -r sha; do
   [ -n "$sha" ] || continue
   check_text "commit $(git rev-parse --short "$sha")" "$(git log -1 --format=%B "$sha")" || bad=1
-done < <(git rev-list --no-merges "$base..$head")
+done <<< "$revs"
 if [ -n "${PR_TITLE+set}" ]; then
   check_text "PR title" "$PR_TITLE" || bad=1
 fi
