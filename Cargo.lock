@@ -1655,6 +1655,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "krishiv-plan-codec"
+version = "0.1.0-dev"
+dependencies = [
+ "arrow-ipc",
+ "arrow-schema",
+ "krishiv-common",
+ "krishiv-exec",
+ "krishiv-io",
+ "krishiv-optimizer",
+ "krishiv-plan",
+ "krishiv-sql",
+ "krishiv-types",
+ "object_store",
+ "prost",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "krishiv-python"
 version = "0.1.0-dev"
 dependencies = [
