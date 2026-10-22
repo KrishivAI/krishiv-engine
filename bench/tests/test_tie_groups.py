@@ -30,6 +30,10 @@ def cast_any(x: object) -> Any:
     return x
 
 
+def outcome(res: c.Comparison) -> tuple[bool, str]:
+    return res.ok, res.status
+
+
 def test_rows_in_a_tie_group_may_come_in_any_order():
     # sort key = column 0; the three rows with key 1 differ in column 1 and are swapped between the engines
     a = [(1, "x"), (1, "y"), (1, "z"), (2, "w")]
@@ -62,7 +66,13 @@ def test_tie_group_swap_across_a_key_boundary_is_not_a_tie():
     # rows 1 and 2 have different keys, so exchanging them is an ordering violation, not a tie reorder
     a = [(1, "a"), (1, "b"), (2, "c")]
     b = [(1, "a"), (2, "c"), (1, "b")]
-    assert not c.compare_rows(a, b, True, sort_keys=[0]).ok
+    res = c.compare_rows(a, b, True, sort_keys=[0])
+    assert (res.ok, res.status, res.mode, res.message) == (
+        False,
+        "mismatch",
+        "tie-groups",
+        "ORDER differs at row 1 (same rows as a set)",
+    )
 
 
 def test_limit_boundary_tie_is_reported_not_failed():
@@ -72,8 +82,8 @@ def test_limit_boundary_tie_is_reported_not_failed():
     assert (res.ok, res.status, res.mode) == (True, "tie-at-limit", "tie-groups")
     assert res.message == "tie-at-limit: rows differ only in the tie group cut by LIMIT, rows 1..2 (sort key (2,))"
     # without a cut (fewer rows than the limit) the same difference is a real mismatch
-    assert c.compare_rows(a, b, True, sort_keys=[0], limit=4).status == "mismatch"
-    assert c.compare_rows(a, b, True, sort_keys=[0]).status == "mismatch"
+    assert outcome(c.compare_rows(a, b, True, sort_keys=[0], limit=4)) == (False, "mismatch")
+    assert outcome(c.compare_rows(a, b, True, sort_keys=[0])) == (False, "mismatch")
 
 
 def test_limit_tolerance_covers_only_the_last_group():
@@ -87,15 +97,15 @@ def test_limit_tolerance_covers_only_the_last_group():
 def test_limit_does_not_excuse_a_key_difference():
     a = [(1, "a"), (2, "b")]
     b = [(1, "a"), (3, "b")]
-    assert c.compare_rows(a, b, True, sort_keys=[0], limit=2).status == "mismatch"
+    assert outcome(c.compare_rows(a, b, True, sort_keys=[0], limit=2)) == (False, "mismatch")
 
 
 def test_offset_makes_the_first_group_a_boundary_too():
     a = [(1, "a"), (2, "b"), (3, "c")]
     b = [(1, "z"), (2, "b"), (3, "c")]
     sql = "select k, v from t order by k limit 3 offset 5"
-    assert c.compare_rows(a, b, True, sql=sql, sort_keys=[0]).status == "tie-at-limit"
-    assert c.compare_rows(a, b, True, sort_keys=[0], limit=3).status == "mismatch"
+    assert outcome(c.compare_rows(a, b, True, sql=sql, sort_keys=[0])) == (True, "tie-at-limit")
+    assert outcome(c.compare_rows(a, b, True, sort_keys=[0], limit=3)) == (False, "mismatch")
 
 
 def test_offset_zero_is_not_a_boundary():
@@ -118,12 +128,12 @@ def test_offset_without_limit_cuts_the_first_group_only():
     assert res.message == "tie-at-limit: rows differ only in the tie group cut by OFFSET, rows 0..1 (sort key (1,))"
     # no LIMIT cut the end, so a difference in the last group is real
     last = [(1, "a"), (1, "b"), (2, "c"), (3, "z")]
-    assert c.compare_rows(a, last, True, sql=sql, sort_keys=[0]).status == "mismatch"
+    assert outcome(c.compare_rows(a, last, True, sql=sql, sort_keys=[0])) == (False, "mismatch")
     middle = [(1, "a"), (1, "b"), (2, "z"), (3, "d")]
-    assert c.compare_rows(a, middle, True, sql=sql, sort_keys=[0]).status == "mismatch"
+    assert outcome(c.compare_rows(a, middle, True, sql=sql, sort_keys=[0])) == (False, "mismatch")
     # the stored form (no sql): the offset flag alone is enough
-    assert c.compare_rows(a, first, True, sort_keys=[0], offset=True).status == "tie-at-limit"
-    assert c.compare_rows(a, first, True, sort_keys=[0]).status == "mismatch"
+    assert outcome(c.compare_rows(a, first, True, sort_keys=[0], offset=True)) == (True, "tie-at-limit")
+    assert outcome(c.compare_rows(a, first, True, sort_keys=[0])) == (False, "mismatch")
 
 
 def test_message_names_the_boundary_that_cut_the_group():
@@ -145,14 +155,14 @@ def test_offset_is_kept_when_the_limit_is_stored_or_passed_separately():
     b = [(1, "z"), (2, "b"), (3, "c")]
     sql = "select k, v from t order by k limit 3 offset 5"
     # a stored limit (no sql) keeps its OFFSET through `offset`
-    assert c.compare_rows(a, b, True, sort_keys=[0], limit=3, offset=True).status == "tie-at-limit"
+    assert outcome(c.compare_rows(a, b, True, sort_keys=[0], limit=3, offset=True)) == (True, "tie-at-limit")
     assert c.rows_match(a, b, True, sort_keys=[0], limit=3, offset=True) == (
         True,
         "tie-at-limit: rows differ only in the tie group cut by OFFSET, rows 0..0 (sort key (1,))",
     )
     # an explicit limit does not drop the OFFSET found in the sql, unless `offset` says otherwise
-    assert c.compare_rows(a, b, True, sql=sql, sort_keys=[0], limit=3).status == "tie-at-limit"
-    assert c.compare_rows(a, b, True, sql=sql, sort_keys=[0], limit=3, offset=False).status == "mismatch"
+    assert outcome(c.compare_rows(a, b, True, sql=sql, sort_keys=[0], limit=3)) == (True, "tie-at-limit")
+    assert outcome(c.compare_rows(a, b, True, sql=sql, sort_keys=[0], limit=3, offset=False)) == (False, "mismatch")
 
 
 def test_derived_sort_keys_outside_the_result_width_fall_back_to_whole_rows():
@@ -217,6 +227,23 @@ def test_derive_sort_keys():
     sql = "with w as (select a, b from t order by b) select f(a, b) as fb, a from w order by fb limit 5"
     assert c.derive_sort_keys(sql) == [0]
     assert c.derive_sort_keys("select a, 'order by z' as s from t order by a") == [0]
+
+
+def test_a_qualified_sort_key_is_matched_exactly_not_by_its_last_part():
+    both = "select a.id, b.id from a join b on a.k = b.k order by "
+    assert c.derive_sort_keys(both + "b.id") == [1]
+    assert c.derive_sort_keys(both + "a.id") == [0]
+    assert c.derive_sort_keys(both + "b.id, a.id") == [1, 0]
+    # no select item is c.id: the key is not derivable, whatever else is called id
+    assert c.derive_sort_keys("select a.id, b.name from a join b join c order by c.id") is None
+    # qualified key, bare selected column of that name: the one unambiguous case
+    assert c.derive_sort_keys("select id, name from b order by b.id") == [0]
+    # the selected id is another table's, or an alias that hides the base column
+    assert c.derive_sort_keys("select a.id as id, b.x from a join b order by b.id") is None
+    assert c.derive_sort_keys("select x + 1 as id from t order by t.id") is None
+    # an unqualified name selected twice is ambiguous
+    assert c.derive_sort_keys("select a.id, b.id from a join b order by id") is None
+    assert c.derive_sort_keys("select a.id, b.name from a join b order by id") == [0]
 
 
 def test_derive_limit():
@@ -288,7 +315,7 @@ def test_q65_shape_end_to_end_from_sql():
     b = [("able", None, 2), ("able", None, 1), ("able", "d", 4)]
     res = c.compare_rows(a, b, True, sql=Q65)
     assert (res.ok, res.status) == (True, "tie-at-limit")
-    assert c.compare_rows(a[:2], b[:2], True, sql=Q65).status == "ok"
+    assert outcome(c.compare_rows(a[:2], b[:2], True, sql=Q65)) == (True, "ok")
 
 
 def test_unordered_comparison_is_unchanged():

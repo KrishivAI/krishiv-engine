@@ -388,13 +388,30 @@ def derive_sort_keys(sql: str) -> list[int] | None:
                 return None
             keys.append(idx)
             continue
-        n = _norm(item)
-        last = n.rsplit(".", 1)[-1]
-        idx = next((i for i, (name, expr) in enumerate(names) if n in (name, expr) or last == name), None)
+        idx = _key_index(_norm(item), names)
         if idx is None:
             return None
         keys.append(idx)
     return keys
+
+
+def _key_index(n: str, names: list[tuple[str | None, str]]) -> int | None:
+    """The select-list position an ORDER BY item (normalised) refers to, None when it is not one unambiguous column.
+
+    The item's text equal to a select expression wins (``b.id`` is the column selected as ``b.id``, not an earlier
+    ``a.id``). An unqualified item is an output name and must be unique. A qualified item with no such expression
+    matches only a lone bare column of that name (``select id from b order by b.id``): a qualified key can name
+    another table's column or a base column the output alias hides, so it never matches by its last part alone.
+    """
+    exact = [i for i, (_, expr) in enumerate(names) if expr == n]
+    if exact:
+        return exact[0]
+    if "." not in n:
+        named = [i for i, (name, _) in enumerate(names) if name == n]
+    else:
+        last = n.rsplit(".", 1)[-1]
+        named = [i for i, (name, expr) in enumerate(names) if name == last and expr == name]
+    return named[0] if len(named) == 1 else None
 
 
 def derive_limit(sql: str) -> tuple[int | None, bool]:
