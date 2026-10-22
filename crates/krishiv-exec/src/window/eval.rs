@@ -443,8 +443,14 @@ fn decimal_aggregate(
         return Err(internal("decimal window aggregate input".to_owned()));
     };
     let avg = a.function == AggregateFunction::Avg;
-    // The state after each segment: (exact sum, rows summed).
-    let mut states: Vec<(i256, i64)> = Vec::new();
+    // The state after each segment: (exact sum, rows summed). Sized exactly
+    // (what `cost` reserves): one state per segment.
+    let segments = match shape {
+        Shape::Whole => u.parts.len(),
+        Shape::RunningRows => u.rows,
+        Shape::RunningPeers => u.peers.len(),
+    };
+    let mut states: Vec<(i256, i64)> = Vec::with_capacity(segments);
     let mut seg_of: Vec<u32> = Vec::with_capacity(u.rows);
     let (mut sum, mut count) = (i256::ZERO, 0_i64);
     let mut at = 0;

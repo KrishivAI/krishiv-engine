@@ -1,5 +1,5 @@
 {
-  "cases": 9046,
+  "cases": 9106,
   "entries": [
     {
       "id": "abs#23a3b7c1c876/ansi_off",
@@ -2018,6 +2018,14 @@
       "reason": "SELECT csc(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
+      "id": "cume_dist#8e537826960c/ansi_off",
+      "reason": "SELECT a, b, cume_dist() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "cume_dist#8e537826960c/ansi_on",
+      "reason": "SELECT a, b, cume_dist() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
       "id": "date_add#21463b8ad243/ansi_off",
       "reason": "SELECT date_add('2016-07-30', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -3120,6 +3128,14 @@
     {
       "id": "degrees#f25a20630422/ansi_on",
       "reason": "SELECT degrees(TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dense_rank#33978a0a2b37/ansi_off",
+      "reason": "SELECT a, b, dense_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "dense_rank#33978a0a2b37/ansi_on",
+      "reason": "SELECT a, b, dense_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
     },
     {
       "id": "endswith#279b1454889c/ansi_off",
@@ -7418,6 +7434,206 @@
       "reason": "SELECT nanvl(INTERVAL '1 02:03:04' DAY TO SECOND, 123) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
+      "id": "ntile#07ff6bea2932/ansi_off",
+      "reason": "SELECT a, b, ntile(array(1, 2)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#07ff6bea2932/ansi_on",
+      "reason": "SELECT a, b, ntile(array(1, 2)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#099872738f82/ansi_off",
+      "reason": "SELECT a, b, ntile(CAST(1.5 AS FLOAT)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#099872738f82/ansi_on",
+      "reason": "SELECT a, b, ntile(CAST(1.5 AS FLOAT)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#0b19c62fc42c/ansi_off",
+      "reason": "SELECT a, b, ntile(CAST(2147483647 AS INT)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "ntile#0b19c62fc42c/ansi_on",
+      "reason": "SELECT a, b, ntile(CAST(2147483647 AS INT)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "ntile#137b7445940e/ansi_off",
+      "reason": "SELECT a, b, ntile(CAST(-2147483648 AS INT)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "ntile#137b7445940e/ansi_on",
+      "reason": "SELECT a, b, ntile(CAST(-2147483648 AS INT)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "ntile#2380b319de33/ansi_off",
+      "reason": "SELECT a, b, ntile(named_struct('a', 1, 'b', 'x')) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#2380b319de33/ansi_on",
+      "reason": "SELECT a, b, ntile(named_struct('a', 1, 'b', 'x')) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#3063d67a158d/ansi_off",
+      "reason": "SELECT a, b, ntile(TIMESTAMP'2024-02-29 12:34:56.123456') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#3063d67a158d/ansi_on",
+      "reason": "SELECT a, b, ntile(TIMESTAMP'2024-02-29 12:34:56.123456') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#361de60aa130/ansi_off",
+      "reason": "SELECT a, b, ntile(X'01') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#361de60aa130/ansi_on",
+      "reason": "SELECT a, b, ntile(X'01') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#3a6664925ef7/ansi_off",
+      "reason": "SELECT a, b, ntile(1L) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#3a6664925ef7/ansi_on",
+      "reason": "SELECT a, b, ntile(1L) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#43a1dffc8bd8/ansi_off",
+      "reason": "SELECT a, b, ntile(CAST(1 AS TINYINT)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#43a1dffc8bd8/ansi_on",
+      "reason": "SELECT a, b, ntile(CAST(1 AS TINYINT)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#4efe10eface4/ansi_off",
+      "reason": "SELECT a, b, ntile(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#4efe10eface4/ansi_on",
+      "reason": "SELECT a, b, ntile(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#64dea4bc6b11/ansi_off",
+      "reason": "SELECT a, b, ntile(CAST(1.5 AS DECIMAL(10,2))) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#64dea4bc6b11/ansi_on",
+      "reason": "SELECT a, b, ntile(CAST(1.5 AS DECIMAL(10,2))) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#68ca2244acba/ansi_off",
+      "reason": "SELECT a, b, ntile(INTERVAL '1 02:03:04' DAY TO SECOND) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#68ca2244acba/ansi_on",
+      "reason": "SELECT a, b, ntile(INTERVAL '1 02:03:04' DAY TO SECOND) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#69cfc7f73056/ansi_off",
+      "reason": "SELECT a, b, ntile(1.5D) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#69cfc7f73056/ansi_on",
+      "reason": "SELECT a, b, ntile(1.5D) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#71997e38d3c3/ansi_off",
+      "reason": "SELECT a, b, ntile(INTERVAL '1-2' YEAR TO MONTH) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#71997e38d3c3/ansi_on",
+      "reason": "SELECT a, b, ntile(INTERVAL '1-2' YEAR TO MONTH) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#926952d0556c/ansi_off",
+      "reason": "SELECT a, b, ntile(CAST(NULL AS int)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "ntile#926952d0556c/ansi_on",
+      "reason": "SELECT a, b, ntile(CAST(NULL AS int)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "ntile#9778529c30f3/ansi_off",
+      "reason": "SELECT a, b, ntile(true) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#9778529c30f3/ansi_on",
+      "reason": "SELECT a, b, ntile(true) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#9aae42a01b47/ansi_off",
+      "reason": "SELECT a, b, ntile(1) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "ntile#9aae42a01b47/ansi_on",
+      "reason": "SELECT a, b, ntile(1) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "ntile#a7e93fefbd27/ansi_off",
+      "reason": "SELECT a, b, ntile('1') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#a7e93fefbd27/ansi_on",
+      "reason": "SELECT a, b, ntile('1') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#b057e0922cf7/ansi_off",
+      "reason": "SELECT a, b, ntile(CAST(1 AS SMALLINT)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#b057e0922cf7/ansi_on",
+      "reason": "SELECT a, b, ntile(CAST(1 AS SMALLINT)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#ce82b1801005/ansi_off",
+      "reason": "SELECT a, b, ntile(DATE'2024-02-29') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#ce82b1801005/ansi_on",
+      "reason": "SELECT a, b, ntile(DATE'2024-02-29') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#ddd5d18c89ca/ansi_off",
+      "reason": "SELECT a, b, ntile(CAST(1.5 AS DECIMAL(38,18))) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#ddd5d18c89ca/ansi_on",
+      "reason": "SELECT a, b, ntile(CAST(1.5 AS DECIMAL(38,18))) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#de29f798ec62/ansi_off",
+      "reason": "SELECT a, b, ntile(NULL) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#de29f798ec62/ansi_on",
+      "reason": "SELECT a, b, ntile(NULL) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#ee94d47fa379/ansi_off",
+      "reason": "SELECT a, b, ntile(2) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "ntile#ee94d47fa379/ansi_on",
+      "reason": "SELECT a, b, ntile(2) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "ntile#fa460a3ff5bc/ansi_off",
+      "reason": "SELECT a, b, ntile(map('a', 1)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#fa460a3ff5bc/ansi_on",
+      "reason": "SELECT a, b, ntile(map('a', 1)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#fd2d64a4f115/ansi_off",
+      "reason": "SELECT a, b, ntile('abc') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ntile#fd2d64a4f115/ansi_on",
+      "reason": "SELECT a, b, ntile('abc') OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
       "id": "nullif#14e8c8714543/ansi_off",
       "reason": "SELECT nullif(2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -8002,6 +8218,14 @@
       "reason": "SELECT nvl2(NULL, INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
+      "id": "percent_rank#1ddc61efeebe/ansi_off",
+      "reason": "SELECT a, b, percent_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "percent_rank#1ddc61efeebe/ansi_on",
+      "reason": "SELECT a, b, percent_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
       "id": "pmod#12b81d80212f/ansi_off",
       "reason": "SELECT pmod('1', 3) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -8466,6 +8690,14 @@
       "reason": "SELECT radians(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
+      "id": "rank#a1a83b14b6f8/ansi_off",
+      "reason": "SELECT a, b, rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "rank#a1a83b14b6f8/ansi_on",
+      "reason": "SELECT a, b, rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
       "id": "replace#19a6746c3d66/ansi_off",
       "reason": "SELECT replace('ABCabc', 'abc', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
     },
@@ -8800,6 +9032,14 @@
     {
       "id": "round#fbd0b62ad90e/ansi_on",
       "reason": "SELECT round(2.5, TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "row_number#d1083672f912/ansi_off",
+      "reason": "SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "row_number#d1083672f912/ansi_on",
+      "reason": "SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
     },
     {
       "id": "rpad#01185a535503/ansi_off",
@@ -12510,6 +12750,11 @@
     },
     {
       "cases": 2,
+      "function": "cume_dist",
+      "pass": 0
+    },
+    {
+      "cases": 2,
       "function": "curdate",
       "pass": 2
     },
@@ -12572,6 +12817,11 @@
       "cases": 50,
       "function": "degrees",
       "pass": 36
+    },
+    {
+      "cases": 2,
+      "function": "dense_rank",
+      "pass": 0
     },
     {
       "cases": 2,
@@ -12749,6 +12999,11 @@
       "pass": 2
     },
     {
+      "cases": 50,
+      "function": "ntile",
+      "pass": 0
+    },
+    {
       "cases": 98,
       "function": "nullif",
       "pass": 70
@@ -12767,6 +13022,11 @@
       "cases": 136,
       "function": "nvl2",
       "pass": 94
+    },
+    {
+      "cases": 2,
+      "function": "percent_rank",
+      "pass": 0
     },
     {
       "cases": 2,
@@ -12799,6 +13059,11 @@
       "pass": 36
     },
     {
+      "cases": 2,
+      "function": "rank",
+      "pass": 0
+    },
+    {
       "cases": 156,
       "function": "replace",
       "pass": 114
@@ -12812,6 +13077,11 @@
       "cases": 98,
       "function": "round",
       "pass": 70
+    },
+    {
+      "cases": 2,
+      "function": "row_number",
+      "pass": 0
     },
     {
       "cases": 270,
