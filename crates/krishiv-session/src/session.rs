@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::RecordBatch;
@@ -105,6 +105,11 @@ pub(crate) struct SessionState {
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
     query_ids: AtomicU64,
+    /// SQL source ids handed to view lowerings: every `CREATE TEMPORARY
+    /// VIEW` lowers its query with an id of its own, so errors raised
+    /// while expanding a view point into the view's text, not the outer
+    /// statement's (`SourceId(0)` stays the outer statement's).
+    sql_sources: AtomicU32,
 }
 
 /// Builds a [`Session`].
@@ -248,6 +253,7 @@ impl SessionBuilder {
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
                 query_ids: AtomicU64::new(0),
+                sql_sources: AtomicU32::new(1),
             }),
         })
     }
@@ -497,6 +503,11 @@ impl Session {
     /// A fresh DataFrame plan id.
     pub(crate) fn next_plan_id(&self) -> PlanId {
         PlanId(self.state.plan_ids.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// A fresh SQL source id for a view lowering (see `sql_sources`).
+    pub(crate) fn next_source_id(&self) -> SourceId {
+        SourceId(self.state.sql_sources.fetch_add(1, Ordering::Relaxed))
     }
 
     /// The analysis inputs of one query.

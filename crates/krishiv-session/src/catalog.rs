@@ -21,14 +21,18 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::config::Config;
-use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    InternalError, KrishivError, KrishivUnsupportedFeature, RecursiveView,
+};
 use krishiv_exec::files::FileReads;
 use krishiv_exec::planner::{FileTable, MemoryTable, TableProvider, TableProviderResolver};
 use krishiv_io::IoContext;
 use krishiv_plan::analyzer::{
     BoxFuture, Catalog, CatalogResolver, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
 };
-use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, ReadSource, Scan, TableVersion};
+use krishiv_plan::{
+    Cte, Expr, ExprNode, LogicalPlan, Origin, PlanNode, ReadSource, Scan, TableVersion,
+};
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -58,11 +62,17 @@ pub(crate) enum TempTable {
     },
 }
 
+/// The prefix of the hidden names snapshots pin tables under: no SQL
+/// text spells them, and [`SessionCatalog::names`] hides them.
+const HIDDEN_PREFIX: &str = "__krishiv_snapshot_";
+
 /// The temporary tables and views of a session, by lower-case name.
 #[derive(Debug, Default)]
 pub(crate) struct SessionCatalog {
     tables: RwLock<BTreeMap<String, (String, Arc<TempTable>)>>,
     epoch: AtomicU64,
+    /// Hidden names handed out by [`SessionCatalog::pin`].
+    hidden: AtomicU64,
 }
 
 impl SessionCatalog {
@@ -73,6 +83,22 @@ impl SessionCatalog {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(name.to_lowercase(), (name.to_owned(), Arc::new(table)));
         self.epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Pins `table` (an entry of this catalog) under a hidden name that no
+    /// SQL text spells, returning the name: snapshot views read it however
+    /// the session's names change afterwards.
+    pub(crate) fn pin(&self, table: &Arc<TempTable>) -> String {
+        let name = format!(
+            "{HIDDEN_PREFIX}{}",
+            self.hidden.fetch_add(1, Ordering::AcqRel)
+        );
+        self.tables
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.clone(), (name.clone(), Arc::clone(table)));
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        name
     }
 
     /// Removes `name`; whether it existed.
@@ -89,13 +115,14 @@ impl SessionCatalog {
         removed
     }
 
-    /// The names, as registered, in order.
+    /// The names, as registered, in order, without snapshot pins.
     pub(crate) fn names(&self) -> Vec<String> {
         self.tables
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
             .map(|(n, _)| n.clone())
+            .filter(|n| !n.starts_with(HIDDEN_PREFIX))
             .collect()
     }
 
@@ -572,14 +599,42 @@ impl Expander<'_> {
                 .with_origin(plan.origin),
             ));
         }
-        if let PlanNode::WithCte { ctes, .. } = &plan.node {
-            let outer = scope.len();
-            scope.extend(ctes.iter().map(|c| c.name.clone()));
-            let expanded = self.children_and_exprs(plan, scope);
-            scope.truncate(outer);
-            return expanded;
+        if let PlanNode::WithCte { input, ctes } = &plan.node {
+            let (input, ctes) = (Arc::clone(input), ctes.clone());
+            return self.go_with_cte(plan.origin, input, ctes, scope);
         }
         self.children_and_exprs(plan, scope)
+    }
+
+    /// `WITH` query parts (of `origin`) with their views inlined: each
+    /// definition expands with only the preceding definitions in scope, as
+    /// in Spark, so a body still reads a view of its own name.
+    fn go_with_cte(
+        &mut self,
+        origin: Origin,
+        input: Arc<LogicalPlan>,
+        ctes: Vec<Cte>,
+        scope: &mut Vec<String>,
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        let outer = scope.len();
+        let mut expanded = Vec::with_capacity(ctes.len());
+        for cte in ctes {
+            let definition = self.go(Arc::clone(&cte.plan), scope)?;
+            scope.push(cte.name.clone());
+            expanded.push(Cte {
+                name: cte.name,
+                plan: definition,
+            });
+        }
+        let input = self.go(input, scope)?;
+        scope.truncate(outer);
+        Ok(Arc::new(
+            LogicalPlan::new(PlanNode::WithCte {
+                input,
+                ctes: expanded,
+            })
+            .with_origin(origin),
+        ))
     }
 
     /// `plan` with its child relations and the subquery plans in its
@@ -616,15 +671,220 @@ impl Expander<'_> {
     }
 }
 
+/// Whether creating the temporary view `name` over `plan` would close a
+/// recursive reference: `plan` reads `name` itself, or a view that reads
+/// it transitively. Spark reports that when the view is created, as
+/// `RECURSIVE_VIEW`; the read-time guard in [`expand_temp_views`] stays
+/// for anything analysis meets another way.
+///
+/// A read of `name` counts only when the view exists (an `OR REPLACE`
+/// whose query sees the old definition): a fresh view over its own name
+/// resolves nowhere, and analysis reports it as missing.
+///
+/// # Errors
+/// `RECURSIVE_VIEW` naming the view and the cycle.
+pub(crate) fn check_view_cycle(
+    catalog: &SessionCatalog,
+    name: &str,
+    plan: &Arc<LogicalPlan>,
+    case_sensitive: bool,
+) -> Result<(), KrishivError> {
+    Checker {
+        catalog,
+        case_sensitive,
+        target: name,
+        stack: vec![name.to_owned()],
+        scope: Vec::new(),
+    }
+    .check(plan)
+}
+
+/// [`check_view_cycle`]: the views on the current expansion path from the
+/// new view down (by name as read), and the `WITH` definitions in scope.
+struct Checker<'a> {
+    catalog: &'a SessionCatalog,
+    case_sensitive: bool,
+    target: &'a str,
+    stack: Vec<String>,
+    scope: Vec<String>,
+}
+
+impl Checker<'_> {
+    fn check(&mut self, plan: &Arc<LogicalPlan>) -> Result<(), KrishivError> {
+        if let PlanNode::Read(ReadSource::Table { name, options }) = &plan.node
+            && let [view] = name.as_slice()
+            && options.is_empty()
+            && !self
+                .scope
+                .iter()
+                .any(|c| same_name(c, view, self.case_sensitive))
+        {
+            if same_name(view, self.target, self.case_sensitive) {
+                if self.catalog.get(self.target, self.case_sensitive).is_some() {
+                    return Err(recursive_view(self.target, &self.stack));
+                }
+            } else if let Some(entry) = self.catalog.get(view, self.case_sensitive)
+                && let TempTable::View {
+                    plan: definition, ..
+                } = &*entry
+            {
+                let key = view.to_lowercase();
+                if self.stack.iter().any(|v| v.to_lowercase() == key) {
+                    return Err(recursive_view(self.target, &self.stack));
+                }
+                self.stack.push(view.clone());
+                // A view's definitions are its own: outer `WITH` names do
+                // not reach into it.
+                let outer = std::mem::take(&mut self.scope);
+                let found = self.check(definition);
+                self.scope = outer;
+                self.stack.pop();
+                found?;
+            }
+            return Ok(());
+        }
+        if let PlanNode::WithCte { input, ctes } = &plan.node {
+            let outer = self.scope.len();
+            for cte in ctes.iter() {
+                self.check(&cte.plan)?;
+                self.scope.push(cte.name.clone());
+            }
+            self.check(input)?;
+            self.scope.truncate(outer);
+            return Ok(());
+        }
+        let mut children = Vec::new();
+        plan.for_each_child(&mut |child| children.push(Arc::clone(child)));
+        for child in &children {
+            self.check(child)?;
+        }
+        let mut exprs = Vec::new();
+        plan.for_each_expr(&mut |expr| exprs.push(Arc::clone(expr)));
+        for expr in &exprs {
+            self.check_expr(expr)?;
+        }
+        Ok(())
+    }
+
+    /// `expr` with the views read by the subquery plans inside it checked.
+    fn check_expr(&mut self, expr: &Arc<Expr>) -> Result<(), KrishivError> {
+        let mut children = Vec::new();
+        expr.for_each_child(&mut |child| children.push(Arc::clone(child)));
+        for child in &children {
+            self.check_expr(child)?;
+        }
+        if let ExprNode::Subquery { plan, .. } = &expr.node {
+            self.check(plan)?;
+        }
+        Ok(())
+    }
+}
+
+/// `RECURSIVE_VIEW` for a cycle through `stack` back to `target`.
+fn recursive_view(target: &str, stack: &[String]) -> KrishivError {
+    let mut path: Vec<String> = stack.iter().map(|v| quote(v)).collect();
+    path.push(quote(target));
+    RecursiveView {
+        view_ident: quote(target),
+        new_path: path.join(" -> "),
+    }
+    .into()
+}
+
+/// Snapshots the temporary memory tables the analyzed `plan` reads: pins
+/// each under a hidden name and rewrites its scans to it, so the plan stays
+/// bound to the tables it was analyzed against however the session's names
+/// change afterwards (a view built from itself reads the old definition).
+/// Reads of files are self-contained and need no pinning.
+///
+/// # Errors
+/// `INTERNAL_ERROR` for a scan of a temporary view that was not inlined.
+pub(crate) fn pin_temp_tables(
+    catalog: &SessionCatalog,
+    plan: &Arc<LogicalPlan>,
+    case_sensitive: bool,
+) -> Result<Arc<LogicalPlan>, KrishivError> {
+    Pinner {
+        catalog,
+        case_sensitive,
+        pins: HashMap::new(),
+    }
+    .run(plan)
+}
+
+/// [`pin_temp_tables`]: the pins handed out so far, by lower-case table
+/// name.
+struct Pinner<'a> {
+    catalog: &'a SessionCatalog,
+    case_sensitive: bool,
+    pins: HashMap<String, String>,
+}
+
+impl Pinner<'_> {
+    fn run(&mut self, plan: &Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
+        if let PlanNode::Scan(scan) = &plan.node
+            && let ReadSource::Table { name, .. } = &scan.source
+            && let Some(last) = name.last()
+        {
+            let key = last.to_lowercase();
+            if !self.pins.contains_key(&key) {
+                let pin = match self.catalog.get(last, self.case_sensitive) {
+                    Some(table) if matches!(&*table, TempTable::Memory { .. }) => {
+                        self.catalog.pin(&table)
+                    }
+                    _ => String::new(),
+                };
+                self.pins.insert(key.clone(), pin);
+            }
+            if let Some(hidden) = self.pins.get(&key).filter(|h| !h.is_empty()) {
+                let mut pinned = scan.clone();
+                if let ReadSource::Table { name, .. } = &mut pinned.source {
+                    *name = vec![hidden.clone()];
+                }
+                return Ok(Arc::new(
+                    LogicalPlan::new(PlanNode::Scan(pinned)).with_origin(plan.origin),
+                ));
+            }
+            return Ok(Arc::clone(plan));
+        }
+        let plan = Arc::clone(plan).map_children(|child| self.run(&child))?;
+        plan.map_expressions(|expr| self.run_expr(&expr))
+    }
+
+    /// `expr` with the scans read by the subquery plans inside it pinned.
+    fn run_expr(&mut self, expr: &Arc<Expr>) -> Result<Arc<Expr>, KrishivError> {
+        let expr = Arc::clone(expr).map_children(|child| self.run_expr(&child))?;
+        if let ExprNode::Subquery { kind, plan } = &expr.node {
+            let pinned = self.run(plan)?;
+            if !Arc::ptr_eq(&pinned, plan) {
+                return Ok(Arc::new(Expr {
+                    node: ExprNode::Subquery {
+                        kind: kind.clone(),
+                        plan: pinned,
+                    },
+                    origin: expr.origin,
+                }));
+            }
+        }
+        Ok(expr)
+    }
+}
+
 /// Whether `a` and `b` name the same view: exactly when `case_sensitive`,
 /// else ignoring ASCII case, as the session catalog stores names.
 fn same_name(a: &str, b: &str, case_sensitive: bool) -> bool {
     a == b || !case_sensitive && a.eq_ignore_ascii_case(b)
 }
 
+/// A name as Spark quotes it in errors: `` `name` ``.
+fn quote(name: &str) -> String {
+    format!("`{}`", name.replace('`', "``"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use krishiv_common::error::ErrorClass;
     use krishiv_types::DataType;
 
     #[test]
@@ -679,6 +939,23 @@ mod tests {
             | TempTable::Memory { columns, .. }
             | TempTable::View { columns, .. } => &columns[0].name,
         }
+    }
+
+    #[test]
+    fn expanding_a_cycle_is_an_internal_error() {
+        // `CREATE TEMPORARY VIEW` rejects recursive views itself; the
+        // expansion guard stays for anything else that closes a cycle.
+        let session = SessionCatalog::default();
+        let view = |name: &str| TempTable::View {
+            plan: Arc::new(LogicalPlan::table([name])),
+            columns: Vec::new(),
+        };
+        session.put("a", view("b"));
+        session.put("b", view("a"));
+        let plan = Arc::new(LogicalPlan::table(["a"]));
+        let e = expand_temp_views(&session, &plan, false).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InternalError);
+        assert!(e.message().contains("`a`"), "{e}");
     }
 
     #[test]

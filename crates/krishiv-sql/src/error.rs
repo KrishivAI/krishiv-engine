@@ -17,8 +17,9 @@
 //! not a string (an unquoted password value) has its parameters redacted.
 
 use krishiv_common::error::{
-    FailedToParseTooComplex, InvalidIdentifier, InvalidStatementOrClause, KrishivError,
-    ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
+    FailedToParseTooComplex, InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax,
+    InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature,
+    LegacyErrorTemp0053, ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
     UnclosedBracketedComment,
 };
 
@@ -115,6 +116,51 @@ pub(crate) fn invalid_statement(operation: &str, span: Span) -> ParseError {
     at(
         InvalidStatementOrClause {
             operation: operation.to_owned(),
+        },
+        span,
+    )
+}
+
+/// `INVALID_SET_SYNTAX`: a `SET` that is not `SET`, `SET -v`, `SET key`
+/// or `SET key = value` with a plain key.
+pub(crate) fn invalid_set_syntax(span: Span) -> ParseError {
+    at(InvalidSetSyntax {}, span)
+}
+
+/// `INVALID_RESET_COMMAND_FORMAT`: a `RESET` that is not `RESET` or
+/// `RESET key` with a plain key.
+pub(crate) fn invalid_reset_command_format(span: Span) -> ParseError {
+    at(InvalidResetCommandFormat {}, span)
+}
+
+/// `_LEGACY_ERROR_TEMP_0053`: `IF NOT EXISTS` on a temporary view.
+pub(crate) fn temp_view_if_not_exists(span: Span) -> ParseError {
+    at(LegacyErrorTemp0053 {}, span)
+}
+
+/// `INVALID_TEMP_OBJ_QUALIFIER`: a qualified temporary view name.
+pub(crate) fn invalid_temp_obj_qualifier(
+    object_type: &str,
+    object_name: String,
+    qualifier: String,
+    span: Span,
+) -> ParseError {
+    at(
+        InvalidTempObjQualifier {
+            object_type: object_type.to_owned(),
+            object_name,
+            qualifier,
+        },
+        span,
+    )
+}
+
+/// `KRISHIV_UNSUPPORTED_FEATURE` for the `SET TIME ZONE` form `form`
+/// (e.g. an `INTERVAL` zone).
+pub(crate) fn unsupported_set_time_zone(form: &str, span: Span) -> ParseError {
+    at(
+        KrishivUnsupportedFeature {
+            feature: form.to_owned(),
         },
         span,
     )

@@ -102,11 +102,19 @@ fn set_returns_spark_rows_and_sets() {
     // The value is the raw rest of the statement, trimmed.
     let (_, found) = rows(&s, "SET my.app.greeting =  hello = world  ;");
     assert_eq!(found, [vec!["my.app.greeting", "hello = world"]]);
-    // Quoted keys and values are decoded as Spark allows.
+    // Only backquotes quote keys and values: a single-quoted value stays
+    // quoted, as in Spark.
     let (_, found) = rows(&s, "SET `my.app.quoted` = 'a b'");
-    assert_eq!(found, [vec!["my.app.quoted", "a b"]]);
-    let (_, found) = rows(&s, "SET 'sp ace' = \"q\"");
+    assert_eq!(found, [vec!["my.app.quoted", "'a b'"]]);
+    let (_, found) = rows(&s, "SET `sp ace` = `q`");
     assert_eq!(found, [vec!["sp ace", "q"]]);
+    // An assignment shows the value as written, not canonicalised.
+    let (_, found) = rows(&s, "SET spark.sql.ansi.enabled=TRUE");
+    assert_eq!(found, [vec!["spark.sql.ansi.enabled", "TRUE"]]);
+    assert_eq!(
+        s.conf().get("spark.sql.ansi.enabled").as_deref(),
+        Some("true")
+    );
     // A registered key shows its effective value, whatever the spelling.
     let (_, found) = rows(&s, "SET spark.sql.ansi.enabled");
     assert_eq!(found, [vec!["spark.sql.ansi.enabled", "true"]]);
@@ -117,12 +125,11 @@ fn set_returns_spark_rows_and_sets() {
     );
     let (_, found) = rows(&s, "SET krishiv.sql.ansi.enabled");
     assert_eq!(found, [vec!["krishiv.sql.ansi.enabled", "false"]]);
-    // `SET` lists every explicitly set key, in order. (The engine runs
-    // the unions in any order, so the test sorts.)
+    // `SET` lists every explicitly set key, in the engine's order:
+    // sorted by key, as in Spark.
     let (names, listed) = rows(&s, "SET");
     assert_eq!(names, ["key", "value"]);
-    let mut keys: Vec<&str> = listed.iter().map(|r| r[0].as_str()).collect();
-    keys.sort_unstable();
+    let keys: Vec<&str> = listed.iter().map(|r| r[0].as_str()).collect();
     assert_eq!(
         keys,
         [
@@ -133,6 +140,7 @@ fn set_returns_spark_rows_and_sets() {
             "sp ace",
         ]
     );
+    assert!(keys.windows(2).all(|w| w[0] <= w[1]));
     // An unset key shows `<undefined>`, as in Spark.
     let (_, found) = rows(&s, "SET my.app.missing");
     assert_eq!(found, [vec!["my.app.missing", "<undefined>"]]);
@@ -141,7 +149,7 @@ fn set_returns_spark_rows_and_sets() {
 #[test]
 fn set_verbose_shows_meaning_and_version() {
     let s = Session::new().unwrap();
-    block_on(s.sql("SET my.app.flag = on")).unwrap();
+    block_on(s.sql("SET my.app.x = on")).unwrap();
     let df = block_on(s.sql("SET -v")).unwrap();
     let schema = block_on(df.schema()).unwrap();
     assert_eq!(
@@ -152,8 +160,11 @@ fn set_verbose_shows_meaning_and_version() {
             .collect::<Vec<_>>(),
         ["key", "value", "meaning", "Since version"]
     );
-    assert!(!schema.field(0).is_nullable() && !schema.field(1).is_nullable());
-    assert!(schema.field(2).is_nullable() && schema.field(3).is_nullable());
+    // All four columns are non-nullable strings.
+    for f in schema.fields() {
+        assert_eq!(f.data_type(), &ArrowType::Utf8View, "{}", f.name());
+        assert!(!f.is_nullable(), "{}", f.name());
+    }
     let (names, listed) = rows(&s, "SET -v");
     assert_eq!(names, ["key", "value", "meaning", "Since version"]);
     // Registered entries carry the registry's meaning and version.
@@ -164,14 +175,15 @@ fn set_verbose_shows_meaning_and_version() {
     assert_eq!(ansi[1], "true");
     assert!(ansi[2].contains("ANSI"), "{ansi:?}");
     assert_eq!(ansi[3], "0.1.0");
-    // Unregistered keys have neither.
-    let flag = listed.iter().find(|r| r[0] == "my.app.flag").unwrap();
-    assert_eq!(&flag[1..], ["on", "~", "~"]);
-    // Sorted by key. (The engine runs the unions in any order, so the
-    // test sorts.)
-    let mut keys: Vec<&str> = listed.iter().map(|r| r[0].as_str()).collect();
-    keys.sort_unstable();
-    assert!(keys.windows(2).all(|w| w[0] <= w[1]));
+    // Explicitly set unregistered keys are not listed, as in Spark.
+    assert!(listed.iter().all(|r| r[0] != "my.app.x"));
+    for r in &listed {
+        assert!(!r.iter().any(|c| c == "~"), "{r:?}");
+    }
+    // Sorted by key, in the engine's order.
+    let keys: Vec<&str> = listed.iter().map(|r| r[0].as_str()).collect();
+    assert!(!keys.is_empty());
+    assert!(keys.windows(2).all(|w| w[0] < w[1]));
 }
 
 #[test]
@@ -315,10 +327,14 @@ fn create_view_options_replace_errors_and_arity() {
     assert_eq!(e.error_class(), ErrorClass::TempTableOrViewAlreadyExists);
     block_on(s.sql("CREATE OR REPLACE TEMP VIEW v AS SELECT id AS x FROM people")).unwrap();
     assert_eq!(rows(&s, "SELECT * FROM v").0, ["x"]);
-    // `IF NOT EXISTS` turns a clash into a no-op; with `OR REPLACE` it
-    // is an error, as in Spark.
-    block_on(s.sql("CREATE TEMP VIEW IF NOT EXISTS v AS SELECT 99 AS y")).unwrap();
-    assert_eq!(rows(&s, "SELECT * FROM v").0, ["x"]);
+    // `IF NOT EXISTS` on a temporary view fails at parse time, as in
+    // Spark, with or without `OR REPLACE`.
+    let e = block_on(s.sql("CREATE TEMP VIEW IF NOT EXISTS v AS SELECT 99 AS y")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::LegacyErrorTemp0053);
+    assert!(
+        e.message()
+            .contains("It is not allowed to define a TEMPORARY view with IF NOT EXISTS.")
+    );
     let e = block_on(s.sql("CREATE OR REPLACE TEMP VIEW IF NOT EXISTS v AS SELECT 1")).unwrap_err();
     assert_eq!(
         e.error_class(),
@@ -334,6 +350,12 @@ fn create_view_options_replace_errors_and_arity() {
     assert_eq!(
         e.error_class(),
         ErrorClass::CreateViewColumnArityMismatchNotEnoughDataColumns
+    );
+    assert_eq!(e.sql_state(), Some("21S01"));
+    assert!(
+        e.message()
+            .starts_with("Cannot create view `v`, the reason is not enough data columns"),
+        "{e}"
     );
     assert_eq!(
         e.message_parameters(),
@@ -368,6 +390,8 @@ fn drop_view_needs_the_view() {
     // A missing view fails as in Spark, naming the view and search path.
     let e = block_on(s.sql("DROP VIEW nosuch")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+    assert_eq!(e.sql_state(), Some("42P01"));
+    assert!(e.message().contains("`nosuch`"), "{e}");
     assert_eq!(
         e.message_parameters(),
         [
@@ -438,14 +462,55 @@ fn views_with_read_options_are_rejected() {
 }
 
 #[test]
-fn view_cycles_fail() {
+fn recursive_views_fail_when_created() {
     let s = session();
     block_on(s.sql("CREATE TEMP VIEW a AS SELECT id FROM people")).unwrap();
     block_on(s.sql("CREATE TEMP VIEW b AS SELECT id FROM a")).unwrap();
-    // `OR REPLACE` can point `a` back at `b`: the cycle fails when read.
-    block_on(s.sql("CREATE OR REPLACE TEMP VIEW a AS SELECT id FROM b")).unwrap();
-    let e = block_on(s.sql("SELECT * FROM a")).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    // `OR REPLACE` pointing `a` back at `b` closes a cycle: it fails when
+    // created with `RECURSIVE_VIEW`, as in Spark, and `a` keeps its old
+    // definition.
+    let e = block_on(s.sql("CREATE OR REPLACE TEMP VIEW a AS SELECT id FROM b")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::RecursiveView);
+    assert_eq!(e.sql_state(), Some("42K0H"));
+    assert_eq!(
+        e.message(),
+        "Recursive view `a` detected (cycle: `a` -> `b` -> `a`)."
+    );
+    assert_eq!(rows(&s, "SELECT * FROM a ORDER BY id").1.len(), 3);
+    // A direct self-reference fails the same way.
+    let e = block_on(s.sql("CREATE OR REPLACE TEMP VIEW b AS SELECT id FROM b")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::RecursiveView);
+    assert!(e.message().contains("cycle: `b` -> `b`"), "{e}");
+    // A fresh view over its own missing name resolves nowhere: analysis
+    // reports it as missing, as in Spark.
+    let e = block_on(s.sql("CREATE TEMP VIEW fresh AS SELECT * FROM fresh")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+}
+
+#[test]
+fn dataframe_temp_views_snapshot_their_input() {
+    use krishiv_session::functions::{col, lit};
+    let s = Session::new().unwrap();
+    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+        "id",
+        arrow_schema::DataType::Int32,
+        false,
+    )]));
+    let batch = arrow_array::RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(arrow_array::Int32Array::from(vec![1]))],
+    )
+    .unwrap();
+    s.register_batches("t", schema, vec![batch]).unwrap();
+    // A DataFrame view built from a table of the same name reads the old
+    // definition, as in Spark: the input is snapshotted.
+    block_on(
+        s.table("t")
+            .select([(col("id") + lit(1)).alias("id")])
+            .create_or_replace_temp_view("t"),
+    )
+    .unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM t").1, [vec!["2".to_owned()]]);
 }
 
 #[test]
@@ -481,4 +546,139 @@ fn create_or_replace_temp_view_takes_any_dataframe() {
     // Analysis errors still come first.
     let e = block_on(s.table("missing").create_or_replace_temp_view("w"));
     assert_eq!(class(e), ErrorClass::TableOrViewNotFound);
+}
+
+#[test]
+fn set_rejects_bad_syntax() {
+    let s = Session::new().unwrap();
+    // Anything but `SET`, `SET -v`, `SET key` or `SET key = value` with a
+    // plain key fails with `INVALID_SET_SYNTAX`, as in Spark.
+    for sql in ["SET a b", "SET -x", "SET = 1", "SET -v x", "SET 'k'=1"] {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InvalidSetSyntax, "{sql}");
+        assert_eq!(e.sql_state(), Some("42000"), "{sql}");
+        assert!(
+            e.message().contains("Expected format is 'SET'"),
+            "{sql}: {e}"
+        );
+    }
+    // Nothing was set by the failures.
+    assert_eq!(
+        block_on(block_on(s.sql("SET")).unwrap().count()).unwrap(),
+        0
+    );
+    // A double-quoted key is a syntax error, as in Spark.
+    let e = block_on(s.sql("SET \"k\"=\"v\"")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.sql_state(), Some("42601"));
+}
+
+#[test]
+fn reset_rejects_bad_format() {
+    let s = Session::new().unwrap();
+    // Anything but `RESET` or `RESET key` with a plain key fails with
+    // `INVALID_RESET_COMMAND_FORMAT`, as in Spark.
+    let e = block_on(s.sql("RESET a b")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InvalidResetCommandFormat);
+    assert_eq!(e.sql_state(), Some("42000"));
+    assert!(e.message().contains("Expected format is 'RESET'"), "{e}");
+}
+
+#[test]
+fn set_time_zone_sets_the_session_zone() {
+    let s = Session::new().unwrap();
+    // `SET TIME ZONE '<zone>'` sets the session zone and shows it, as in
+    // Spark.
+    let (names, found) = rows(&s, "SET TIME ZONE 'UTC'");
+    assert_eq!(names, ["key", "value"]);
+    assert_eq!(found, [vec!["spark.sql.session.timeZone", "UTC"]]);
+    assert_eq!(
+        s.conf().get("spark.sql.session.timeZone").as_deref(),
+        Some("UTC")
+    );
+    let (_, found) = rows(&s, "SET spark.sql.session.timeZone");
+    assert_eq!(found, [vec!["spark.sql.session.timeZone", "UTC"]]);
+    // `LOCAL` resolves to the system's zone.
+    let (_, found) = rows(&s, "SET TIME ZONE LOCAL");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0][0], "spark.sql.session.timeZone");
+    assert!(!found[0][1].is_empty());
+    assert_eq!(
+        s.conf().get("spark.sql.session.timeZone").as_deref(),
+        Some(found[0][1].as_str())
+    );
+    // An invalid zone fails through the session configuration.
+    let e = block_on(s.sql("SET TIME ZONE 'not a zone!'")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivInvalidConfigValue);
+    // `INTERVAL` zones name their unsupported form.
+    let e = block_on(s.sql("SET TIME ZONE INTERVAL '1' DAY")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(e.to_string().contains("INTERVAL"), "{e}");
+}
+
+#[test]
+fn create_temp_view_rejects_qualified_names() {
+    let s = Session::new().unwrap();
+    // A qualified temporary view name parses and fails with
+    // `INVALID_TEMP_OBJ_QUALIFIER`, as in Spark.
+    let e = block_on(s.sql("CREATE TEMP VIEW a.b AS SELECT 1")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InvalidTempObjQualifier);
+    assert_eq!(e.sql_state(), Some("42602"));
+    assert_eq!(
+        e.message_parameters(),
+        [
+            ("objectType", "view".to_owned()),
+            ("objectName", "`a`.`b`".to_owned()),
+            ("qualifier", "`a`".to_owned()),
+        ]
+    );
+    assert!(!s.temp_table_names().contains(&"a".to_owned()));
+}
+
+#[test]
+fn cte_bodies_see_preceding_ctes_only() {
+    let s = session();
+    block_on(s.sql("CREATE TEMP VIEW c AS SELECT 1 AS id")).unwrap();
+    // The CTE body reads the view of its own name, while the outer query
+    // reads the CTE, as in Spark.
+    assert_eq!(
+        rows(&s, "WITH c AS (SELECT * FROM c) SELECT * FROM c").1,
+        [vec!["1".to_owned()]]
+    );
+    // A later CTE still reads an earlier one.
+    assert_eq!(
+        rows(
+            &s,
+            "WITH a AS (SELECT 1 AS id), b AS (SELECT * FROM a) SELECT * FROM b"
+        )
+        .1,
+        [vec!["1".to_owned()]]
+    );
+}
+
+#[test]
+fn explain_runs_commands() {
+    let s = session();
+    // `EXPLAIN` of a command prints a plan containing the command.
+    for (sql, fragment) in [
+        ("EXPLAIN SET x=1", "SET x=1"),
+        ("EXPLAIN SET", "SET"),
+        ("EXPLAIN SET -v", "SET -v"),
+        ("EXPLAIN RESET", "RESET"),
+        ("EXPLAIN RESET spark.sql.ansi.enabled", "RESET"),
+        (
+            "EXPLAIN CREATE TEMP VIEW v AS SELECT 1",
+            "CREATE TEMPORARY VIEW",
+        ),
+        ("EXPLAIN DROP VIEW v", "DROP VIEW"),
+    ] {
+        let (_, found) = rows(&s, sql);
+        assert_eq!(found.len(), 1, "{sql}");
+        assert!(found[0][0].contains(fragment), "{sql}: {:?}", found[0]);
+    }
+    let (_, found) = rows(&s, "EXPLAIN SET TIME ZONE 'UTC'");
+    assert!(found[0][0].contains("SET TIME ZONE"), "{found:?}");
+    // `EXPLAIN` of an `EXPLAIN` stays unsupported.
+    let e = block_on(s.sql("EXPLAIN EXPLAIN SET x=1")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }

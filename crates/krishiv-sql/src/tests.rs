@@ -1030,14 +1030,12 @@ fn set_statements() {
     assert_eq!((key.as_str(), value.as_str()), ("my.key", "a=b=c"));
     assert_eq!(value_span.text(sql), "a=b=c");
     assert_eq!(s.span.text(sql), "SET my.key = a=b=c");
-    // Quoted keys and values are decoded as Spark allows them.
+    // Quoted keys and values: only backquotes are special, as in Spark.
     for (sql, key, value) in [
         ("SET `my.key` = 1", "my.key", "1"),
-        ("SET 'my key' = 'a b'", "my key", "a b"),
-        ("SET \"k\" = \"v\"", "k", "v"),
         ("SET `a``b` = `x``y`", "a`b", "x`y"),
-        ("SET k = 'a;b'", "k", "a;b"),
-        ("SET 'a=b'", "a=b", ""),
+        ("SET k = 'a;b'", "k", "'a;b'"),
+        ("SET `k` = 'v'", "k", "'v'"),
     ] {
         let s = set(sql);
         match &s.kind {
@@ -1048,18 +1046,32 @@ fn set_statements() {
             kind => panic!("{sql} is {kind:?}"),
         }
     }
-    // A double-quoted key is an identifier when the options say so.
-    let quoted = ParserOptions {
-        double_quoted_identifiers: true,
-        ..ParserOptions::default()
-    };
-    let Statement::Set(s) = parse_statement("SET \"a\"\"b\" = 1", &quoted).unwrap() else {
-        panic!("quoted")
-    };
-    let SetKind::Assign { key, .. } = &s.kind else {
+    // A backquoted key with no `=` is a lookup.
+    let s = set("SET `a=b`");
+    let SetKind::Show { key, .. } = &s.kind else {
         panic!("{:?}", s.kind)
     };
-    assert_eq!(key, "a\"b");
+    assert_eq!(key, "a=b");
+    // Double-quoted keys are syntax errors; single-quoted keys fail the
+    // key check (asserted in `set_errors_follow_spark`).
+    for sql in ["SET \"k\" = \"v\"", "SET \"k\""] {
+        assert_eq!(
+            parse_statement(sql, &d).unwrap_err().error.error_class(),
+            ErrorClass::ParseSyntaxError,
+            "{sql}"
+        );
+    }
+    // `SET TIME ZONE ...`.
+    let s = set("SET TIME ZONE 'UTC'");
+    let SetKind::TimeZone { zone, .. } = &s.kind else {
+        panic!("{:?}", s.kind)
+    };
+    assert_eq!(zone, &ast::TimeZone::Named("UTC".to_owned()));
+    let s = set("set time zone local");
+    let SetKind::TimeZone { zone, .. } = &s.kind else {
+        panic!("{:?}", s.kind)
+    };
+    assert_eq!(zone, &ast::TimeZone::Local);
     // `parse_query` takes queries only.
     assert_eq!(
         err("SET a = 1", &d).error.error_class(),
@@ -1077,10 +1089,30 @@ fn set_statements() {
 fn set_errors_follow_spark() {
     let d = ParserOptions::default();
     let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    // Anything but `SET`, `SET -v`, a plain key or `key = value` is
+    // `INVALID_SET_SYNTAX`.
+    for sql in [
+        "SET a b",
+        "SET -x",
+        "SET = 1",
+        "SET -v x",
+        "SET -v x y",
+        "SET 'k'=1",
+        "SET 'k'",
+    ] {
+        let e = fail(sql);
+        assert_eq!(e.error.error_class(), ErrorClass::InvalidSetSyntax, "{sql}");
+        assert_eq!(e.error.sql_state(), Some("42000"), "{sql}");
+    }
+    assert!(
+        fail("SET a b")
+            .error
+            .to_string()
+            .contains("Expected format is 'SET'"),
+    );
     // An empty key fails at the `=`.
     let e = fail("SET = 1");
-    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    assert_eq!(e.span.range(), 4..5);
+    assert_eq!(e.span.range(), 0..3);
     // An unterminated quote fails at the quote.
     let e = fail("SET x = 'abc");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
@@ -1092,18 +1124,14 @@ fn set_errors_follow_spark() {
     let e = fail("SET k'x = 1");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     assert_eq!(e.span.range(), 5..6);
-    // Anything after `SET -v` is extra input.
-    let e = fail("SET -v x");
+    // An `INTERVAL` time zone is a supported grammar form the engine does
+    // not implement.
+    let e = fail("SET TIME ZONE INTERVAL '1' DAY");
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(e.error.to_string().contains("INTERVAL"), "{e:?}");
+    // A missing zone is a syntax error.
+    let e = fail("SET TIME ZONE");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    assert_eq!(e.span.range(), 7..8);
-    // Several tokens there leave no single token to report.
-    let e = fail("SET -v x y");
-    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    assert_eq!(
-        e.error.to_string(),
-        "[PARSE_SYNTAX_ERROR] Syntax error at or near 'x'. SQLSTATE: 42601"
-    );
-    assert_eq!(e.span.range(), 7..8);
     // Anything after the value's `;` is extra input, as for queries.
     let e = fail("SET x = 1; SELECT 2");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
@@ -1113,10 +1141,13 @@ fn set_errors_follow_spark() {
          SQLSTATE: 42601"
     );
     assert_eq!(e.span.range(), 11..17);
-    // `EXPLAIN` takes queries only.
-    let e = fail("EXPLAIN SET x = 1");
-    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    assert_eq!(e.span.range(), 8..11);
+    // Under `EXPLAIN`, a command is the explained statement.
+    let ast::Statement::Explain(e) = parse_statement("EXPLAIN SET x = 1", &d).unwrap() else {
+        panic!("not an EXPLAIN")
+    };
+    let ast::Statement::Set(_) = *e.statement else {
+        panic!("not a SET")
+    };
 }
 
 /// `RESET` statements and their errors.
@@ -1140,6 +1171,23 @@ fn reset_statements() {
     assert_eq!(r.span.text(sql), "RESET spark.sql.ansi.enabled");
     let r = reset("RESET `my key`");
     assert_eq!(r.key.as_deref(), Some("my key"));
+    // Anything but one plain key is `INVALID_RESET_COMMAND_FORMAT`.
+    for sql in ["RESET a b", "RESET a=b", "RESET 'k'", "RESET \"k\""] {
+        let e = parse_statement(sql, &d).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidResetCommandFormat,
+            "{sql}"
+        );
+        assert_eq!(e.error.sql_state(), Some("42000"), "{sql}");
+    }
+    assert!(
+        parse_statement("RESET a b", &d)
+            .unwrap_err()
+            .error
+            .to_string()
+            .contains("Expected format is 'RESET'"),
+    );
     // An unterminated quote fails at the quote.
     let e = parse_statement("RESET 'abc", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
@@ -1191,6 +1239,27 @@ fn create_view_statements() {
     // The view's query gets Spark's post-parse checks.
     let e = parse_statement("CREATE TEMP VIEW v AS SELECT DATE '2020-02-30'", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::InvalidTypedLiteral);
+    // `IF NOT EXISTS` without `OR REPLACE` parses and fails with
+    // `_LEGACY_ERROR_TEMP_0053`, as in Spark.
+    let e = parse_statement("CREATE TEMP VIEW IF NOT EXISTS v AS SELECT 1", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0053);
+    assert_eq!(
+        e.error.message(),
+        "It is not allowed to define a TEMPORARY view with IF NOT EXISTS."
+    );
+    // A qualified name parses and fails with
+    // `INVALID_TEMP_OBJ_QUALIFIER`, as in Spark.
+    let e = parse_statement("CREATE TEMP VIEW a.b AS SELECT 1", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidTempObjQualifier);
+    assert_eq!(e.error.sql_state(), Some("42602"));
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("objectType", "view".to_owned()),
+            ("objectName", "`a`.`b`".to_owned()),
+            ("qualifier", "`a`".to_owned()),
+        ]
+    );
     // Only temporary views: anything else fails where it stands.
     let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
     let e = fail("CREATE VIEW v AS SELECT 1");
@@ -1199,10 +1268,6 @@ fn create_view_statements() {
     let e = fail("CREATE GLOBAL TEMPORARY VIEW v AS SELECT 1");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     assert_eq!(e.span.range(), 7..13);
-    // A qualified name fails at the `.`, where the name is complete.
-    let e = fail("CREATE TEMP VIEW a.b AS SELECT 1");
-    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    assert_eq!(e.span.range(), 18..19);
     // `AS` is required, and the query follows it.
     let e = fail("CREATE TEMP VIEW v SELECT 1");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);

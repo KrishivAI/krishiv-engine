@@ -143,10 +143,10 @@ pub enum ExplainMode {
     Verbose,
 }
 
-/// `SET`, `SET -v`, `SET key` or `SET key = value`: the key is decoded
-/// (backquotes and quotes removed) and the value of an assignment is the
-/// raw rest of the statement, trimmed (decoded when it is one quoted
-/// token).
+/// `SET`, `SET -v`, `SET key`, `SET key = value` or `SET TIME ZONE ...`:
+/// the key of an assignment or lookup is decoded only when backquoted,
+/// and the value of an assignment is the raw rest of the statement,
+/// trimmed (decoded only when it is one backquoted token).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Set {
     /// What it is.
@@ -165,25 +165,44 @@ pub enum SetKind {
     Verbose,
     /// `SET key`: the one row of `key`.
     Show {
-        /// The key, decoded.
+        /// The key, decoded when backquoted.
         key: String,
         /// The key as written.
         key_span: Span,
     },
     /// `SET key = value`.
     Assign {
-        /// The key, decoded.
+        /// The key, decoded when backquoted.
         key: String,
         /// The key as written.
         key_span: Span,
-        /// The value, decoded.
+        /// The value: the raw rest of the statement, trimmed, or the
+        /// decoded value when it is one backquoted token.
         value: String,
         /// The value as written (trimmed).
         value_span: Span,
     },
+    /// `SET TIME ZONE ...`: the zone to use.
+    TimeZone {
+        /// The zone.
+        zone: TimeZone,
+        /// The zone as written.
+        zone_span: Span,
+    },
 }
 
-/// `RESET` or `RESET key`: the key is decoded as for [`Set`].
+/// `SET TIME ZONE LOCAL` or `SET TIME ZONE '<zone id>'`: the zone to use.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TimeZone {
+    /// `LOCAL`: the system's time zone.
+    Local,
+    /// A zone id as written (unescaped).
+    Named(String),
+}
+
+/// `RESET` or `RESET key`: the key is decoded when backquoted, and a bare
+/// key holds no whitespace.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Reset {
     /// The key to reset; `None` resets every key the session set.
