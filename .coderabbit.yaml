@@ -78,10 +78,24 @@ reviews:
       instructions: >-
         Third-party actions must be pinned by full commit SHA; jobs use
         least-privilege permissions and GitHub-hosted runners only.
+    - path: "bench/**"
+      instructions: >-
+        Report only correctness, security, licence and reproducibility issues.
+        Do not comment on style, naming or other nitpicks.
+    - path: "docs/**"
+      instructions: >-
+        Report only correctness, security, licence and reproducibility issues.
+        Do not comment on style, naming or other nitpicks.
+    - path: "**/*.md"
+      instructions: >-
+        Report only correctness, security, licence and reproducibility issues.
+        Do not comment on style, naming or other nitpicks.
   auto_review:
     enabled: true
     drafts: false
     base_branches: ["main"]
+    # Review when a PR opens; later reviews run only on `@coderabbitai review`.
+    auto_incremental_review: false
   finishing_touches:
     docstrings:
       enabled: false
