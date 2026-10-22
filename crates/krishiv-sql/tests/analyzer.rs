@@ -386,6 +386,31 @@ fn resolution_corpus_matches_spark() {
     }
 }
 
+/// The columns a `Sort` or `Filter` of `plan` reads that its input does
+/// not output: a plan like that analyzes but cannot be planned.
+fn dangling(plan: &Arc<LogicalPlan>, out: &mut Vec<String>) {
+    fn reads(e: &Arc<Expr>, ids: &mut BTreeSet<AttrId>) {
+        if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node {
+            ids.insert(c.id);
+        }
+        e.for_each_child(&mut |k| reads(k, ids));
+    }
+    if let PlanNode::Sort { input, .. } | PlanNode::Filter { input, .. } = &plan.node {
+        let have: BTreeSet<AttrId> = input
+            .resolved_output()
+            .unwrap()
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        let mut used = BTreeSet::new();
+        plan.for_each_expr(&mut |e| reads(e, &mut used));
+        for id in used.difference(&have) {
+            out.push(format!("{id:?} in\n{plan}"));
+        }
+    }
+    plan.for_each_child(&mut |c| dangling(c, out));
+}
+
 /// Constant folding of the arguments that need a constant (`round`'s and
 /// `ceil`'s scale, `date_part`'s field, `LIMIT`), ORDER BY and HAVING over
 /// grouping expressions: Spark's outcome for each statement
@@ -402,8 +427,15 @@ fn folding_and_grouped_ordering_match_spark() {
         if let Some(diff) = compare(sql, &got, case) {
             failures.push(format!("{sql} {}: {diff}", case["conf"]));
         }
-        if let Err(e) = &got {
-            raised.insert(e.error.error_class().name());
+        match &got {
+            Ok(a) => {
+                let mut bad = Vec::new();
+                dangling(a.plan.root(), &mut bad);
+                failures.extend(bad.into_iter().map(|b| format!("{sql}: dangling {b}")));
+            }
+            Err(e) => {
+                raised.insert(e.error.error_class().name());
+            }
         }
     }
     assert!(

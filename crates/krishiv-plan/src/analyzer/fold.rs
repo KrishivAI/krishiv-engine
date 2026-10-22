@@ -19,6 +19,7 @@
 //! branch never raises. `CASE`, `if` and `coalesce` evaluate lazily, as
 //! Spark's do.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
@@ -32,10 +33,11 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, bind_scalar, is_argument_pure};
 use krishiv_functions::signature::FunctionKind;
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
+use krishiv_kernels::{KernelCtx, SparkVersion};
 use krishiv_types::DataType;
 
-use super::Constant;
 use super::fold_ops;
+use super::{Constant, SparkProfile};
 use crate::{
     Builtin, CastMode, Expr, ExprNode, FunctionId, Literal, ResolvedExpr, ResolvedFunction,
 };
@@ -47,11 +49,44 @@ pub(super) struct Conf {
     pub ansi: bool,
     /// `spark.sql.decimalOperations.allowPrecisionLoss`.
     pub decimal_loss: bool,
+    /// The kernels' context: the session's Spark line, whose error classes
+    /// and messages the kernels raise.
+    pub kernel: KernelCtx,
+}
+
+impl Conf {
+    /// The settings of a session on `profile`.
+    pub(super) fn new(ansi: bool, decimal_loss: bool, profile: SparkProfile) -> Self {
+        // The kernels model 4.0 as their oldest line; 3.5 behaves as it.
+        let version = match profile {
+            SparkProfile::V3_5 | SparkProfile::V4_0 => SparkVersion::V4_0,
+            SparkProfile::V4_1 => SparkVersion::V4_1,
+            _ => SparkVersion::V4_2,
+        };
+        Self {
+            ansi,
+            decimal_loss,
+            kernel: KernelCtx::new().with_spark_version(version),
+        }
+    }
 }
 
 /// One folded subexpression: `None` when it is not foldable, else its
 /// one-row value or the error evaluating it raises.
 type Folded = Option<Result<ArrayRef, KrishivError>>;
+
+/// What a folded node's value depends on besides the node: its address
+/// and the settings it was folded under.
+type Key = (usize, bool, bool, SparkVersion);
+
+/// The values of the expressions folded so far in one resolver pass, by
+/// node address. Folding a call folds its arguments, and `Resolver::expr`
+/// shares subtrees, so without a memo `e = f(e', e')` folds `e'` twice at
+/// every level (exponential in the depth), and each enclosing call folds
+/// its arguments again. Each entry keeps its node alive, so an address is
+/// never reused for another node while the memo lives.
+#[derive(Debug, Default)]
+pub(super) struct Memo(HashMap<Key, (Arc<Expr>, Folded)>);
 
 /// Whether `e` is a plain literal (what `first(x, true)` requires of its
 /// flag, where Spark matches `Literal` and does not fold).
@@ -60,14 +95,14 @@ pub(super) const fn is_literal(e: &Expr) -> bool {
 }
 
 /// The value of `e` as a constant, when it is foldable.
-pub(super) fn constant(e: &Expr, conf: Conf) -> Option<Constant> {
+pub(super) fn constant(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Option<Constant> {
     match &e.node {
         ExprNode::Literal(Literal::Null(_)) => return Some(Constant::Null),
         ExprNode::Literal(Literal::Boolean(v)) => return Some(Constant::Boolean(*v)),
         ExprNode::Literal(Literal::String(v)) => return Some(Constant::String(v.clone())),
         _ => {}
     }
-    let folded = fold(e, conf)?;
+    let folded = fold(e, conf, memo)?;
     Some(match folded.and_then(|a| value(&a, conf.ansi)) {
         Ok(c) => c,
         Err(e) => Constant::Error(e),
@@ -127,17 +162,30 @@ fn unsupported() -> KrishivError {
 }
 
 /// `e` as a one-row array: `None` when it is not foldable here.
-fn fold(e: &Expr, conf: Conf) -> Folded {
-    match &e.node {
-        ExprNode::Literal(l) => literal(l).map(Ok),
-        ExprNode::Cast { expr, to, mode: m } => fold_cast(expr, to, *m, conf),
-        ExprNode::Resolved(ResolvedExpr::Function(f)) => call(f, conf),
-        _ => None,
+fn fold(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Folded {
+    if let ExprNode::Literal(l) = &e.node {
+        return literal(l).map(Ok);
     }
+    let key = (
+        Arc::as_ptr(e) as usize,
+        conf.ansi,
+        conf.decimal_loss,
+        conf.kernel.spark_version(),
+    );
+    if let Some((_, hit)) = memo.0.get(&key) {
+        return hit.clone();
+    }
+    let folded = match &e.node {
+        ExprNode::Cast { expr, to, mode: m } => fold_cast(expr, to, *m, conf, memo),
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => call(f, conf, memo),
+        _ => None,
+    };
+    memo.0.insert(key, (Arc::clone(e), folded.clone()));
+    folded
 }
 
-fn fold_cast(expr: &Expr, to: &DataType, m: CastMode, conf: Conf) -> Folded {
-    let inner = match fold(expr, conf)? {
+fn fold_cast(expr: &Arc<Expr>, to: &DataType, m: CastMode, conf: Conf, memo: &mut Memo) -> Folded {
+    let inner = match fold(expr, conf, memo)? {
         Ok(a) => a,
         Err(e) => return Some(Err(e)),
     };
@@ -179,17 +227,21 @@ fn fold_cast(expr: &Expr, to: &DataType, m: CastMode, conf: Conf) -> Folded {
 
 /// Every child of a call, folded; `None` when any is not foldable (a call
 /// is foldable only if all its arguments are, whichever it evaluates).
-fn kids(f: &ResolvedFunction, conf: Conf) -> Option<Vec<Result<ArrayRef, KrishivError>>> {
+fn kids(
+    f: &ResolvedFunction,
+    conf: Conf,
+    memo: &mut Memo,
+) -> Option<Vec<Result<ArrayRef, KrishivError>>> {
     // Stops at the first argument that is not foldable (a column), so a
     // deep non-constant tree costs one descent, not an evaluation.
-    f.args.iter().map(|a| fold(a, conf)).collect()
+    f.args.iter().map(|a| fold(a, conf, memo)).collect()
 }
 
-fn call(f: &ResolvedFunction, conf: Conf) -> Folded {
+fn call(f: &ResolvedFunction, conf: Conf, memo: &mut Memo) -> Folded {
     if !f.deterministic || f.distinct || f.filter.is_some() || f.kind != FunctionKind::Scalar {
         return None;
     }
-    let kids = kids(f, conf)?;
+    let kids = kids(f, conf, memo)?;
     match &f.id {
         FunctionId::Builtin(b) => operator(*b, f, kids, conf),
         FunctionId::Registry { name, .. } => registry(name, f, kids, conf),
@@ -225,14 +277,16 @@ fn operator(
             | Builtin::Divide
             | Builtin::Remainder,
             [l, r],
-        ) => fold_ops::arithmetic(op, l, r, &out, conf.ansi),
-        (Builtin::IntegralDivide, [l, r]) => fold_ops::integral_divide(l, r, conf.ansi),
-        (Builtin::Negative, [a]) => fold_ops::negate(a, conf.ansi),
+        ) => fold_ops::arithmetic(op, l, r, &out, conf.ansi, &conf.kernel),
+        (Builtin::IntegralDivide, [l, r]) => {
+            fold_ops::integral_divide(l, r, conf.ansi, &conf.kernel)
+        }
+        (Builtin::Negative, [a]) => fold_ops::negate(a, conf.ansi, &conf.kernel),
         (Builtin::Eq | Builtin::Lt | Builtin::LtEq | Builtin::Gt | Builtin::GtEq, [l, r]) => {
             if fold_ops::is_null(l) || fold_ops::is_null(r) {
                 return Some(Ok(fold_ops::bool_array(None)));
             }
-            fold_ops::comparison(op, l, r)
+            fold_ops::comparison(op, l, r, &conf.kernel)
         }
         (Builtin::Not, [a]) => {
             let v = fold_ops::boolean(a)?;
@@ -329,6 +383,7 @@ fn registry(
         Err(e) => return Some(Err(e)),
     };
     let opts = BindOptions::new()
+        .with_kernel(conf.kernel)
         .with_ansi(conf.ansi)
         .with_decimal_precision_loss(conf.decimal_loss);
     let bind: Vec<BindArg> = args.iter().cloned().map(BindArg::Literal).collect();
@@ -396,11 +451,9 @@ mod tests {
 
     fn constant(e: &Expr, ansi: bool) -> Option<Constant> {
         super::constant(
-            e,
-            Conf {
-                ansi,
-                decimal_loss: true,
-            },
+            &Arc::new(e.clone()),
+            Conf::new(ansi, true, SparkProfile::V4_2),
+            &mut Memo::default(),
         )
     }
 
@@ -623,6 +676,65 @@ mod tests {
             vec![lit(Literal::Double(1.0)), lit(Literal::Double(0.0))],
             DataType::Double,
         )
+    }
+
+    /// `e_n = e_(n-1) + e_(n-1)` over one shared node each: 2^n evaluations
+    /// without a memo, one per node with it, and a second fold of the same
+    /// expression (an enclosing call's) evaluates nothing again.
+    #[test]
+    fn a_shared_subtree_folds_once() {
+        let long = || lit(Literal::Long(1));
+        let mut e = Arc::new(op(Builtin::Add, vec![long(), long()], DataType::Long));
+        let depth = 200;
+        for _ in 0..depth {
+            e = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Builtin(Builtin::Add),
+                    kind: FunctionKind::Scalar,
+                    args: vec![Arc::clone(&e), Arc::clone(&e)],
+                    distinct: false,
+                    filter: None,
+                    data_type: DataType::Long,
+                    nullable: false,
+                    deterministic: true,
+                },
+            ))));
+        }
+        let conf = Conf::new(false, true, SparkProfile::V4_2);
+        let mut memo = Memo::default();
+        // 2 * 2^200 wraps to 0 in legacy mode: the value is the kernels'.
+        let first = super::constant(&e, conf, &mut memo);
+        assert!(first.is_some());
+        assert_eq!(memo.0.len(), depth + 1, "one entry per distinct node");
+        assert_eq!(super::constant(&e, conf, &mut memo), first);
+        assert_eq!(memo.0.len(), depth + 1);
+        // Another setting folds under its own entries.
+        let ansi = Conf::new(true, true, SparkProfile::V4_2);
+        let _ = super::constant(&e, ansi, &mut memo);
+        assert_eq!(memo.0.len(), 2 * (depth + 1));
+    }
+
+    /// The kernels raise the session's Spark line's error: `%` by zero is
+    /// `DIVIDE_BY_ZERO` before 4.1 and `REMAINDER_BY_ZERO` after it.
+    #[test]
+    fn folding_follows_the_session_spark_line() {
+        let rem = Arc::new(op(
+            Builtin::Remainder,
+            vec![int(1), int(0)],
+            DataType::Integer,
+        ));
+        let class = |profile| match super::constant(
+            &rem,
+            Conf::new(true, true, profile),
+            &mut Memo::default(),
+        ) {
+            Some(Constant::Error(e)) => e.error_class(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(class(SparkProfile::V4_0), ErrorClass::DivideByZero);
+        assert_eq!(class(SparkProfile::V3_5), ErrorClass::DivideByZero);
+        assert_eq!(class(SparkProfile::V4_1), ErrorClass::RemainderByZero);
+        assert_eq!(class(SparkProfile::V4_2), ErrorClass::RemainderByZero);
     }
 
     #[test]

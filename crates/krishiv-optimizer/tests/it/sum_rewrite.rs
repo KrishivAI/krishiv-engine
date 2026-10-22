@@ -38,9 +38,9 @@ fn plan(sql: &str) -> String {
     let resolved = support::resolve(sql, &ctx);
     let optimized = optimize(&resolved).unwrap();
     assert_eq!(
-        optimized.root().resolved_output().map(|o| o.len()),
-        resolved.root().resolved_output().map(|o| o.len()),
-        "{sql}: the output keeps its columns"
+        optimized.root().resolved_output(),
+        resolved.root().resolved_output(),
+        "{sql}: the output keeps its attributes (id, name, type, nullability)"
     );
     let again = optimize(&optimized).unwrap();
     assert!(

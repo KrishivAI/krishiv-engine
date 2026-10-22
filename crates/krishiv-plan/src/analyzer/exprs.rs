@@ -617,12 +617,10 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
-        let conf = fold::Conf {
-            ansi: self.ctx.conf.ansi,
-            decimal_loss: self.ctx.conf.decimal_precision_loss,
-        };
-        let constants: Vec<Option<Constant>> =
-            kids.iter().map(|k| fold::constant(&k.expr, conf)).collect();
+        let constants: Vec<Option<Constant>> = kids
+            .iter()
+            .map(|k| self.fold(&k.expr, self.ctx.conf.ansi))
+            .collect();
         let literals: Vec<bool> = kids.iter().map(|k| fold::is_literal(&k.expr)).collect();
         // Rendered only if a rule's error quotes an argument.
         let sql = |i: usize| kids.get(i).map(|k| pretty(&k.shown()));
@@ -681,6 +679,14 @@ impl Resolver<'_> {
         shown_call(expr, days.as_deref().unwrap_or(kids), cast)
     }
 
+    /// The value of `e` as a constant (`fold::constant`) under this
+    /// session's settings, with `ansi` for the arithmetic: shared with
+    /// every other fold of the pass.
+    pub(super) fn fold(&self, e: &Arc<Expr>, ansi: bool) -> Option<Constant> {
+        let conf = fold::Conf::new(ansi, self.ctx.conf.decimal_precision_loss, self.ctx.profile);
+        fold::constant(e, conf, &mut self.folds.borrow_mut())
+    }
+
     fn legacy_day_count(&self, name: &str, kids: &[Bound]) -> Option<Vec<Bound>> {
         if self.ctx.conf.ansi
             || !["date_add", "dateadd", "date_sub"]
@@ -693,17 +699,10 @@ impl Resolver<'_> {
         if kid.ty.data_type != Some(DataType::String) {
             return None;
         }
-        let conf = fold::Conf {
-            ansi: false,
-            decimal_loss: self.ctx.conf.decimal_precision_loss,
-        };
-        let Some(Constant::String(text)) = fold::constant(&kid.expr, conf) else {
+        let Some(Constant::String(text)) = self.fold(&kid.expr, false) else {
             return None;
         };
-        let days = text
-            .trim_matches(|c: char| c.is_whitespace() || c.is_control())
-            .parse::<i32>()
-            .ok()?;
+        let days = krishiv_functions::registry::legacy_day_count(&text)?;
         let mut shown = kids.to_vec();
         shown[1].shown = Some(Arc::new(Expr::new(ExprNode::Literal(Literal::String(
             days.to_string(),

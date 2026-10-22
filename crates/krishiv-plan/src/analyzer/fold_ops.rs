@@ -49,8 +49,8 @@ pub(super) fn arithmetic(
     r: &ArrayRef,
     out: &ArrowType,
     ansi: bool,
+    ctx: &KernelCtx,
 ) -> Eval {
-    let ctx = KernelCtx::new();
     if let (
         ArrowType::Decimal128(lp, ls),
         ArrowType::Decimal128(rp, rs),
@@ -71,21 +71,21 @@ pub(super) fn arithmetic(
         };
         let (a, b) = (operand::<Decimal128Type>(l), operand::<Decimal128Type>(r));
         return if ansi {
-            done(decimal_arith::<AnsiError>(a, b, &plan, &ctx))
+            done(decimal_arith::<AnsiError>(a, b, &plan, ctx))
         } else {
-            done(decimal_arith::<NullOnOverflow>(a, b, &plan, &ctx))
+            done(decimal_arith::<NullOnOverflow>(a, b, &plan, ctx))
         };
     }
     if l.data_type() != out || r.data_type() != out {
         return None;
     }
     match out {
-        ArrowType::Int8 => integral::<Int8Type>(op, l, r, ansi, &ctx),
-        ArrowType::Int16 => integral::<Int16Type>(op, l, r, ansi, &ctx),
-        ArrowType::Int32 => integral::<Int32Type>(op, l, r, ansi, &ctx),
-        ArrowType::Int64 => integral::<Int64Type>(op, l, r, ansi, &ctx),
-        ArrowType::Float32 => floating::<Float32Type>(op, l, r, ansi, &ctx),
-        ArrowType::Float64 => floating::<Float64Type>(op, l, r, ansi, &ctx),
+        ArrowType::Int8 => integral::<Int8Type>(op, l, r, ansi, ctx),
+        ArrowType::Int16 => integral::<Int16Type>(op, l, r, ansi, ctx),
+        ArrowType::Int32 => integral::<Int32Type>(op, l, r, ansi, ctx),
+        ArrowType::Int64 => integral::<Int64Type>(op, l, r, ansi, ctx),
+        ArrowType::Float32 => floating::<Float32Type>(op, l, r, ansi, ctx),
+        ArrowType::Float64 => floating::<Float64Type>(op, l, r, ansi, ctx),
         _ => None,
     }
 }
@@ -135,26 +135,23 @@ where
 }
 
 /// `l div r` over `bigint`s or decimals.
-pub(super) fn integral_divide(l: &ArrayRef, r: &ArrayRef, ansi: bool) -> Eval {
-    let ctx = KernelCtx::new();
+pub(super) fn integral_divide(l: &ArrayRef, r: &ArrayRef, ansi: bool, ctx: &KernelCtx) -> Eval {
     match (l.data_type(), r.data_type()) {
         (ArrowType::Int64, ArrowType::Int64) => {
             let (a, b) = (operand::<Int64Type>(l), operand::<Int64Type>(r));
             if ansi {
-                done(integer::integral_divide::<AnsiError>(a, b, &ctx))
+                done(integer::integral_divide::<AnsiError>(a, b, ctx))
             } else {
-                done(integer::integral_divide::<JavaWrap>(a, b, &ctx))
+                done(integer::integral_divide::<JavaWrap>(a, b, ctx))
             }
         }
         (ArrowType::Decimal128(lp, ls), ArrowType::Decimal128(rp, rs)) => {
             let (lt, rt) = ((*lp, *ls), (*rp, *rs));
             let (a, b) = (operand::<Decimal128Type>(l), operand::<Decimal128Type>(r));
             if ansi {
-                done(decimal_integral_divide::<AnsiError>(a, b, lt, rt, &ctx))
+                done(decimal_integral_divide::<AnsiError>(a, b, lt, rt, ctx))
             } else {
-                done(decimal_integral_divide::<NullOnOverflow>(
-                    a, b, lt, rt, &ctx,
-                ))
+                done(decimal_integral_divide::<NullOnOverflow>(a, b, lt, rt, ctx))
             }
         }
         _ => None,
@@ -162,21 +159,20 @@ pub(super) fn integral_divide(l: &ArrayRef, r: &ArrayRef, ansi: bool) -> Eval {
 }
 
 /// Unary `-`.
-pub(super) fn negate(a: &ArrayRef, ansi: bool) -> Eval {
-    let ctx = KernelCtx::new();
+pub(super) fn negate(a: &ArrayRef, ansi: bool, ctx: &KernelCtx) -> Eval {
     macro_rules! int {
         ($t:ty) => {
             if ansi {
                 done(integer::unary::<$t, AnsiError>(
                     UnaryOp::Negate,
                     a.as_primitive::<$t>(),
-                    &ctx,
+                    ctx,
                 ))
             } else {
                 done(integer::unary::<$t, JavaWrap>(
                     UnaryOp::Negate,
                     a.as_primitive::<$t>(),
-                    &ctx,
+                    ctx,
                 ))
             }
         };
@@ -204,20 +200,19 @@ pub(super) fn negate(a: &ArrayRef, ansi: bool) -> Eval {
 
 /// `l op r` for `= < <= > >=` over two operands of one numeric type, or
 /// two strings (compared by bytes, as Spark's `UTF8String` is).
-pub(super) fn comparison(op: Builtin, l: &ArrayRef, r: &ArrayRef) -> Eval {
+pub(super) fn comparison(op: Builtin, l: &ArrayRef, r: &ArrayRef, ctx: &KernelCtx) -> Eval {
     if l.data_type() != r.data_type() {
         return None;
     }
-    let ctx = KernelCtx::new();
     macro_rules! prim {
         ($t:ty) => {{
             let (a, b) = (operand::<$t>(l), operand::<$t>(r));
             match op {
-                Builtin::Eq => done(compare::compare::<$t, Equal>(a, b, &ctx)),
-                Builtin::Lt => done(compare::compare::<$t, Less>(a, b, &ctx)),
-                Builtin::LtEq => done(compare::compare::<$t, LessEq>(a, b, &ctx)),
-                Builtin::Gt => done(compare::compare::<$t, Greater>(a, b, &ctx)),
-                Builtin::GtEq => done(compare::compare::<$t, GreaterEq>(a, b, &ctx)),
+                Builtin::Eq => done(compare::compare::<$t, Equal>(a, b, ctx)),
+                Builtin::Lt => done(compare::compare::<$t, Less>(a, b, ctx)),
+                Builtin::LtEq => done(compare::compare::<$t, LessEq>(a, b, ctx)),
+                Builtin::Gt => done(compare::compare::<$t, Greater>(a, b, ctx)),
+                Builtin::GtEq => done(compare::compare::<$t, GreaterEq>(a, b, ctx)),
                 _ => None,
             }
         }};
@@ -295,6 +290,24 @@ mod tests {
     use krishiv_common::error::ErrorClass;
 
     use super::*;
+
+    // The session's current Spark line, as the tests that do not choose
+    // one use it.
+    fn arithmetic(op: Builtin, l: &ArrayRef, r: &ArrayRef, out: &ArrowType, ansi: bool) -> Eval {
+        super::arithmetic(op, l, r, out, ansi, &KernelCtx::new())
+    }
+
+    fn integral_divide(l: &ArrayRef, r: &ArrayRef, ansi: bool) -> Eval {
+        super::integral_divide(l, r, ansi, &KernelCtx::new())
+    }
+
+    fn negate(a: &ArrayRef, ansi: bool) -> Eval {
+        super::negate(a, ansi, &KernelCtx::new())
+    }
+
+    fn comparison(op: Builtin, l: &ArrayRef, r: &ArrayRef) -> Eval {
+        super::comparison(op, l, r, &KernelCtx::new())
+    }
 
     fn i32s(v: Option<i32>) -> ArrayRef {
         Arc::new(Int32Array::from(vec![v]))
@@ -432,6 +445,25 @@ mod tests {
     }
 
     #[test]
+    fn the_session_spark_version_reaches_the_kernels() {
+        use krishiv_kernels::SparkVersion;
+        let int = ArrowType::Int32;
+        let rem = |ctx: &KernelCtx| {
+            super::arithmetic(
+                Builtin::Remainder,
+                &i32s(Some(1)),
+                &i32s(Some(0)),
+                &int,
+                true,
+                ctx,
+            )
+        };
+        let v40 = KernelCtx::new().with_spark_version(SparkVersion::V4_0);
+        assert_eq!(err(rem(&v40)), ErrorClass::DivideByZero);
+        assert_eq!(err(rem(&KernelCtx::new())), ErrorClass::RemainderByZero);
+    }
+
+    #[test]
     fn decimal_arithmetic() {
         let out = ArrowType::Decimal128(7, 2);
         let a = dec(Some(150), 5, 2);
@@ -455,7 +487,7 @@ mod tests {
             &ArrowType::Decimal128(38, 38),
             true,
         );
-        assert!(bad.is_none_or(|r| r.is_err() || r.is_ok()));
+        assert!(matches!(bad, Some(Err(_))), "{bad:?}");
     }
 
     #[test]

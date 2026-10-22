@@ -106,6 +106,8 @@ pub(super) struct Resolver<'a> {
     depth: usize,
     op_outer: Option<usize>,
     root_env: Option<Arc<Env>>,
+    /// Constant folding's values over this pass (see `fold::Memo`).
+    pub(super) folds: std::cell::RefCell<super::fold::Memo>,
 }
 
 type Resolved = (
@@ -132,6 +134,7 @@ pub(super) fn resolve(
         depth: 0,
         op_outer: None,
         root_env: None,
+        folds: std::cell::RefCell::default(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -477,10 +480,6 @@ impl Resolver<'_> {
             InvalidLimitLikeExpressionIsNegative, InvalidLimitLikeExpressionIsNull,
             InvalidLimitLikeExpressionIsUnfoldable,
         };
-        let conf = super::fold::Conf {
-            ansi: self.ctx.conf.ansi,
-            decimal_loss: self.ctx.conf.decimal_precision_loss,
-        };
         // A nondeterministic expression is pulled out of the operator into
         // an attribute of this name before Spark checks it.
         let nondeterministic = {
@@ -502,7 +501,7 @@ impl Resolver<'_> {
             format!("\"{}\"", super::exprs::pretty(&b.shown()))
         };
         let name = "limit".to_owned();
-        match super::fold::constant(&b.expr, conf) {
+        match self.fold(&b.expr, self.ctx.conf.ansi) {
             // An attribute carries no position of its own: Spark cites the
             // input there, the expression otherwise.
             None => Err(AnalysisError::new(

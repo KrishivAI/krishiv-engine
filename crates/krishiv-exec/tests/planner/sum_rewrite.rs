@@ -269,15 +269,24 @@ fn the_rewrite_applies_and_agrees() {
             (None, Some(7), Some(-7), Some(i32::MIN), Some(i64::MIN)),
         ];
         let db = db(&rows, 2, ansi);
-        for sql in [
-            "SELECT SUM(si + 65536), SUM(si - 65536), SUM(65536 - si), SUM(si + 1), SUM(si) FROM s",
-            "SELECT g, SUM(ti + 1), SUM(CAST(si AS BIGINT) - 3) FROM s GROUP BY g",
-            "SELECT SUM(si + 1) FROM s WHERE si > 100000",
+        // The expected rows are those of Spark 4.2.0, ANSI on and off alike
+        // (no sum overflows).
+        for (sql, expected) in [
+            (
+                "SELECT SUM(si + 65536), SUM(si - 65536), SUM(65536 - si), SUM(si + 1), SUM(si) FROM s",
+                vec!["196600|-196616|196616|-5|-8"],
+            ),
+            (
+                "SELECT g, SUM(ti + 1), SUM(CAST(si AS BIGINT) - 3) FROM s GROUP BY g",
+                vec!["1|1|-7", "2|NULL|NULL", "NULL|8|-10"],
+            ),
+            ("SELECT SUM(si + 1) FROM s WHERE si > 100000", vec!["NULL"]),
         ] {
             let (original, optimized, text) = db.both(sql);
             assert!(text.contains("count("), "{sql}\n{text}");
-            assert_eq!(original, optimized, "{sql} (ansi {ansi})");
-            assert!(original.is_ok(), "{sql}: {original:?}");
+            let expected: Vec<String> = expected.into_iter().map(str::to_owned).collect();
+            assert_eq!(original, Ok(expected), "{sql} (ansi {ansi})");
+            assert_eq!(optimized, original, "{sql} (ansi {ansi})");
         }
     }
     // No rows: the sum is NULL, as the shifted sum is.
@@ -293,7 +302,11 @@ fn the_rewrite_applies_and_agrees() {
 #[test]
 fn per_row_overflow_is_kept() {
     let rows: Vec<Row> = vec![(Some(0), None, None, Some(i32::MAX), Some(i64::MAX))];
-    for sql in ["SELECT SUM(i + 1) FROM s", "SELECT SUM(l + 1) FROM s"] {
+    // Spark 4.2.0 without ANSI: `i + 1` and `l + 1` wrap.
+    for (sql, wrapped) in [
+        ("SELECT SUM(i + 1) FROM s", "-2147483648"),
+        ("SELECT SUM(l + 1) FROM s", "-9223372036854775808"),
+    ] {
         let ansi = db(&rows, 1, true);
         let (original, optimized, text) = ansi.both(sql);
         assert!(!text.contains("count("), "{sql}\n{text}");
@@ -301,7 +314,7 @@ fn per_row_overflow_is_kept() {
         assert_eq!(optimized, original, "{sql}");
         let legacy = db(&rows, 1, false);
         let (original, optimized, _) = legacy.both(sql);
-        assert!(original.is_ok(), "{sql}: {original:?}");
+        assert_eq!(original, Ok(vec![wrapped.to_owned()]), "{sql}");
         assert_eq!(optimized, original, "{sql}");
     }
 }

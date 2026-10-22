@@ -320,6 +320,14 @@ fn legacy_day_counts_and_binary_predicates() {
     for ok in ["1", " -2 ", "+3", "-0", "2147483647"] {
         assert!(legacy("date_add", ok).is_ok(), "{ok}");
     }
+    // The day count the analyzer shows is read by the same function.
+    for (text, days) in [(" 12 ", Some(12)), ("-2", Some(-2)), ("+3", Some(3))] {
+        assert_eq!(super::legacy_day_count(text), days, "{text:?}");
+    }
+    for bad in ["1.5", "1.", "1e2", "0x1", "2147483648", "abc", ""] {
+        assert_eq!(super::legacy_day_count(bad), None, "{bad:?}");
+        assert!(legacy("date_add", bad).is_err(), "{bad:?}");
+    }
     for (name, shown) in [
         ("date_add", "date_add"),
         ("dateadd", "date_add"),

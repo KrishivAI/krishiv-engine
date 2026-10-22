@@ -40,15 +40,6 @@ struct Grouped<'a> {
     pass: &'a mut Vec<Attr>,
 }
 
-/// Whether `r`, a projection of `exprs`, is a [`Resolver::restore`]: bare
-/// columns, with no origin (a written projection has one).
-fn is_restore(r: &Rel, exprs: &[Arc<Expr>]) -> bool {
-    r.plan.origin == Origin::UNKNOWN
-        && exprs
-            .iter()
-            .all(|e| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_))))
-}
-
 /// The two attributes of a `USING` column.
 type Keys = (Attr, Attr);
 
@@ -561,7 +552,11 @@ impl Resolver<'_> {
     }
 
     /// The aggregate under `c`'s filters, sorts and limits (`HAVING`), and
-    /// those layers, top first; `None` when `c` is not such a stack.
+    /// those layers, top first; `None` when `c` is not such a stack. A
+    /// `HAVING` that had to grow the aggregate left a projection over its
+    /// filter (`restore`), and that is not such a stack: Spark does not
+    /// resolve a sort through it (`GROUP BY x + 1 HAVING sum(l) > 1 ORDER BY
+    /// x + 1` is UNRESOLVED_COLUMN, checked against 4.2.0).
     fn through_to_agg(c: &Rel) -> Option<(Vec<Rel>, Rel)> {
         let mut layers = Vec::new();
         let mut cur = c.clone();
@@ -571,8 +566,6 @@ impl Resolver<'_> {
             }
             let child = match cur.widen.as_deref() {
                 Some(Widen::Through { child }) => child.clone(),
-                // What `restore` put over a grown aggregate.
-                Some(Widen::Project { input, exprs }) if is_restore(&cur, exprs) => input.clone(),
                 _ => return None,
             };
             layers.push(cur);
@@ -586,12 +579,6 @@ impl Resolver<'_> {
         let mut built = inner;
         for rel in layers.iter().rev() {
             let child = built;
-            // A restore only drops what the sort adds: the sort's own
-            // restore does it, over everything.
-            if matches!(rel.widen.as_deref(), Some(Widen::Project { .. })) {
-                built = child;
-                continue;
-            }
             let plan = Arc::clone(&rel.plan)
                 .map_children(|_| Ok::<_, Infallible>(Arc::clone(&child.plan)))
                 .unwrap_or_else(|never| match never {});
@@ -808,6 +795,12 @@ impl Resolver<'_> {
                     if !visible.contains(&c.id) && !pass.iter().any(|a| a.col.id == c.id) =>
                 {
                     if let Some(k) = info.keys.iter().find(|k| k.col.id == c.id) {
+                        // An output that already computes the key (`x AS
+                        // m`) stands for it, as in Spark: nothing grows.
+                        let key = semantic_key(&x, &mut memo);
+                        if let Some((_, a)) = known.iter().find(|(kk, _)| *kk == key) {
+                            return Ok(col_expr(&a.col, x.origin));
+                        }
                         if !grown.out.iter().any(|o| o.col.id == c.id) {
                             grown.aggregates.push(col_expr(&k.col, Origin::UNKNOWN));
                             grown.out.push(k.clone());

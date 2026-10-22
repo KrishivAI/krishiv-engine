@@ -80,14 +80,17 @@ fn date(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Date, c)
 }
 
-/// Whether `date_add`/`date_sub` without ANSI read `s` as a day count: an
-/// `int` with an optional sign, surrounded by whitespace or control
-/// characters (`UTF8String.toIntExact`). A fraction is not read (`'1.5'`,
-/// `'1.'`), nor an exponent, a hex number or one past `int` (checked
-/// against a Spark 4.2 run of each).
-fn legacy_int(s: &str) -> bool {
-    let t = s.trim_matches(|c: char| c.is_whitespace() || c.is_control());
-    t.parse::<i32>().is_ok()
+/// The day count `date_add`/`date_sub` without ANSI read `s` as: an `int`
+/// with an optional sign, surrounded by whitespace or control characters
+/// (`UTF8String.toIntExact`). A fraction is not read (`'1.5'`, `'1.'`),
+/// nor an exponent, a hex number or one past `int` (checked against a
+/// Spark 4.2 run of each). The typing rule here and the analyzer's shown
+/// form of the call both read the day count through this.
+#[must_use]
+pub fn legacy_day_count(s: &str) -> Option<i32> {
+    s.trim_matches(|c: char| c.is_whitespace() || c.is_control())
+        .parse::<i32>()
+        .ok()
 }
 
 /// `date_add`/`date_sub` with ANSI off: a string literal day count that is
@@ -95,7 +98,7 @@ fn legacy_int(s: &str) -> bool {
 fn day_arith(function: &str, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     if !c.ansi()
         && let Some(Constant::String(s)) = c.constant(1)
-        && !legacy_int(s)
+        && legacy_day_count(s).is_none()
     {
         return Err(SecondFunctionArgumentNotInteger {
             function_name: function.to_owned(),
