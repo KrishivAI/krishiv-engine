@@ -441,8 +441,49 @@ fn needs(id: &'static str, tool: &str, has: &dyn Fn(&str) -> bool, cmds: Vec<Cmd
     if has(tool) {
         run(id, cmds)
     } else {
-        skip(id, format!("not installed: {tool}"))
+        skip(id, not_installed(tool))
     }
+}
+
+/// How to install a missing developer tool.
+const SETUP_HINT: &str = "run `cargo xtask setup --install`";
+
+fn not_installed(tool: &str) -> String {
+    format!("not installed: {tool} ({SETUP_HINT})")
+}
+
+/// Error when `--memory-cap` is used without `systemd-run`.
+#[must_use]
+pub fn memory_cap_error() -> String {
+    "--memory-cap needs systemd-run, which is not installed; omit --memory-cap or run under `systemd-run --user --scope` manually".to_owned()
+}
+
+/// Whether this host can run x86-64-v3 code (the feature set of
+/// `Target::X86_64V3` in `krishiv-kernels`).
+#[must_use]
+pub fn host_has_x86_64v3() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("bmi1")
+            && std::arch::is_x86_feature_detected!("bmi2")
+            && std::arch::is_x86_feature_detected!("fma")
+            && std::arch::is_x86_feature_detected!("lzcnt")
+            && std::arch::is_x86_feature_detected!("movbe")
+            && std::arch::is_x86_feature_detected!("popcnt")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
+    }
+}
+
+/// The `KRISHIV_REQUIRE_TARGETS` value for a host with (`true`) or without
+/// (`false`) x86-64-v3 support. CI runners have v3, so they require it;
+/// other hosts run the baseline only instead of failing.
+#[must_use]
+pub fn kernel_require_targets(v3: bool) -> &'static str {
+    if v3 { "baseline,x86_64v3" } else { "baseline" }
 }
 
 fn pkg_args(scope: &Scope, dependents: bool) -> Vec<String> {
@@ -600,7 +641,10 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
             vec![
                 Cmd::new("cargo", &["nextest", "run", "--locked", "--no-tests=pass"])
                     .args_owned(pkg_args(&ch.scope, true))
-                    .env("KRISHIV_REQUIRE_TARGETS", "baseline,x86_64v3")
+                    .env(
+                        "KRISHIV_REQUIRE_TARGETS",
+                        kernel_require_targets(host_has_x86_64v3()),
+                    )
                     .heavy(),
                 Cmd::new("cargo", &["test", "--doc", "--locked"])
                     .args_owned(pkg_args(&ch.scope, true))
@@ -621,9 +665,9 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
     } else if !rust {
         skip("diff-coverage", NO_RUST)
     } else if !has("cargo-llvm-cov") {
-        skip("diff-coverage", "not installed: cargo-llvm-cov")
+        skip("diff-coverage", not_installed("cargo-llvm-cov"))
     } else if !has("cargo-nextest") {
-        skip("diff-coverage", "not installed: cargo-nextest")
+        skip("diff-coverage", not_installed("cargo-nextest"))
     } else {
         run(
             "diff-coverage",
@@ -650,7 +694,7 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
                 ])],
             )
         } else {
-            skip("diff-coverage-python", "not installed: uv")
+            skip("diff-coverage-python", not_installed("uv"))
         }
     } else if ch.python {
         skip(
@@ -677,12 +721,12 @@ fn text_lint(has: &dyn Fn(&str) -> bool) -> Step {
     if has("typos") {
         cmds.push(Cmd::new("typos", &[]));
     } else {
-        notes.push("typos not installed".to_owned());
+        notes.push(format!("typos not installed ({SETUP_HINT})"));
     }
     if has("taplo") {
         cmds.push(Cmd::new("taplo", &["fmt", "--check"]));
     } else {
-        notes.push("taplo not installed".to_owned());
+        notes.push(format!("taplo not installed ({SETUP_HINT})"));
     }
     if has("markdownlint-cli2") {
         cmds.push(Cmd::new("markdownlint-cli2", &["**/*.md"]));
@@ -699,10 +743,15 @@ fn text_lint(has: &dyn Fn(&str) -> bool) -> Step {
             ],
         ));
     } else {
-        notes.push("markdownlint-cli2 (or docker) not installed".to_owned());
+        notes.push(format!(
+            "markdownlint-cli2 (or docker) not installed ({SETUP_HINT})"
+        ));
     }
     if cmds.is_empty() {
-        skip("text-lint", format!("not installed: {}", notes.join(", ")))
+        skip(
+            "text-lint",
+            format!("not installed: {} ({SETUP_HINT})", notes.join(", ")),
+        )
     } else {
         Step {
             id: "text-lint",
@@ -1058,7 +1107,7 @@ pub fn verdict(outcomes: &[Outcome]) -> Result<(), String> {
 pub fn run_precheck(root: &Path, flags: &[&str]) -> Result<(), String> {
     let o = Opts::parse(flags)?;
     if o.memory_cap.is_some() && !on_path("systemd-run") {
-        return Err("--memory-cap needs systemd-run, which is not installed".to_owned());
+        return Err(memory_cap_error());
     }
     let ch = collect_changes(root, &o.base)?;
     let exe = std::env::current_exe().map_err(|e| format!("cannot find the xtask binary: {e}"))?;

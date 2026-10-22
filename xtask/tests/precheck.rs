@@ -12,8 +12,8 @@ use std::path::Path;
 
 use xtask::precheck::{
     Action, Changes, EXTERNAL_CI_CHECKS, Mapping, Opts, Outcome, Pkg, REQUIRED_CI_CHECKS, STEP_IDS,
-    Scope, Status, Step, cap_prefix, dependents_closure, failed, mapping, parse_packages, plan,
-    render_table,
+    Scope, Status, Step, cap_prefix, dependents_closure, failed, host_has_x86_64v3,
+    kernel_require_targets, mapping, memory_cap_error, parse_packages, plan, render_table,
 };
 
 fn pkg(name: &str, deps: &[&str]) -> Pkg {
@@ -256,19 +256,45 @@ fn the_plan_has_one_row_per_step_id_in_order() {
 #[test]
 fn rust_steps_are_scoped_to_the_touched_crates() {
     let steps = make_plan(&detect(&["crates/common/src/lib.rs"]), &opts(&[]), true);
-    let clippy = args_of(&steps, "clippy").join(" ");
-    assert!(
-        clippy.contains("-p common") && !clippy.contains("-p exec"),
-        "{clippy}"
+    assert_eq!(
+        args_of(&steps, "clippy"),
+        [
+            "clippy",
+            "--locked",
+            "--all-targets",
+            "-p",
+            "common",
+            "--",
+            "-D",
+            "warnings"
+        ]
     );
-    assert!(
-        clippy.ends_with("-- -D warnings") && clippy.contains("--all-targets"),
-        "{clippy}"
+    assert_eq!(
+        args_of(&steps, "nextest"),
+        [
+            "nextest",
+            "run",
+            "--locked",
+            "--no-tests=pass",
+            "-p",
+            "cli",
+            "-p",
+            "common",
+            "-p",
+            "exec",
+            "-p",
+            "xtask"
+        ]
     );
-    let test = args_of(&steps, "nextest").join(" ");
-    assert!(
-        test.contains("-p common -p exec -p cli -p xtask") || test.contains("-p cli"),
-        "{test}"
+    let Action::Run(nextest) = &step(&steps, "nextest").action else {
+        panic!()
+    };
+    assert_eq!(nextest.len(), 2);
+    assert_eq!(
+        nextest[1].args,
+        [
+            "test", "--doc", "--locked", "-p", "cli", "-p", "common", "-p", "exec", "-p", "xtask"
+        ]
     );
     let Action::Run(doc) = &step(&steps, "doc").action else {
         panic!()
@@ -450,7 +476,53 @@ fn missing_tools_are_reported_never_silent() {
             why.starts_with("not installed:") && why.contains(tool),
             "{id}: {why}"
         );
+        assert!(why.contains("cargo xtask setup --install"), "{id}: {why}");
     }
+}
+
+#[test]
+fn missing_tools_name_the_setup_fix() {
+    let ch = detect(&["crates/exec/Cargo.toml"]);
+    let steps = make_plan(&ch, &opts(&[]), false);
+    for id in ["deny", "machete", "nextest", "diff-coverage"] {
+        let why = skip_reason(&steps, id).unwrap_or_else(|| panic!("{id} ran"));
+        assert_eq!(
+            why,
+            match id {
+                "deny" => "not installed: cargo-deny (run `cargo xtask setup --install`)",
+                "machete" => "not installed: cargo-machete (run `cargo xtask setup --install`)",
+                "nextest" => "not installed: cargo-nextest (run `cargo xtask setup --install`)",
+                _ => "not installed: cargo-llvm-cov (run `cargo xtask setup --install`)",
+            },
+            "{id}"
+        );
+    }
+}
+
+#[test]
+fn memory_cap_error_names_the_fix() {
+    let e = memory_cap_error();
+    assert!(e.contains("systemd-run"), "{e}");
+    assert!(e.contains("omit --memory-cap"), "{e}");
+    assert!(e.contains("systemd-run --user --scope"), "{e}");
+}
+
+#[test]
+fn kernel_targets_require_v3_only_where_supported() {
+    assert_eq!(kernel_require_targets(true), "baseline,x86_64v3");
+    assert_eq!(kernel_require_targets(false), "baseline");
+    let steps = make_plan(&detect(&["crates/common/src/lib.rs"]), &opts(&[]), true);
+    let Action::Run(nextest) = &step(&steps, "nextest").action else {
+        panic!()
+    };
+    let want = kernel_require_targets(host_has_x86_64v3());
+    assert!(
+        nextest[0]
+            .env
+            .contains(&("KRISHIV_REQUIRE_TARGETS".to_owned(), want.to_owned())),
+        "{:?}",
+        nextest[0].env
+    );
 }
 
 #[test]
@@ -466,6 +538,13 @@ fn text_lint_runs_what_is_installed_and_notes_the_rest() {
     assert!(
         s.notes.iter().any(|n| n.contains("taplo"))
             && s.notes.iter().any(|n| n.contains("markdownlint"))
+    );
+    assert!(
+        s.notes
+            .iter()
+            .all(|n| n.contains("cargo xtask setup --install")),
+        "{:?}",
+        s.notes
     );
     let with_docker = plan(&ch, &opts(&[]), &|b| b == "docker", "x");
     let Action::Run(cmds) = &step(&with_docker, "text-lint").action else {
@@ -674,7 +753,14 @@ fn step_of(id: &'static str, action: Action) -> Step {
 
 fn git(dir: &Path, args: &[&str]) {
     let out = std::process::Command::new("git")
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+        ])
         .args(args)
         .current_dir(dir)
         .output()
