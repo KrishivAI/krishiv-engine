@@ -48,18 +48,20 @@ def test_provenance_records_dataset_generator_version(root: Path, monkeypatch: p
 
     prov = runner.dataset_provenance("tpch-dbgen", 1)
     assert prov["generator"] == "duckdb 1.5.6 tpch extension (dbgen)"
-    assert prov["manifest_path"].endswith("tpch-dbgen-sf1.sha256")
+    assert prov["manifest_path"] == str(root / "manifests" / "tpch-dbgen-sf1.sha256")
     assert prov["manifest_sha256"] is None
 
     prov = runner.dataset_provenance("tpch-dbgen@1.5.6", 1)
     assert prov["generator"] == "duckdb 1.5.6 tpch extension (dbgen)"
+    assert prov["manifest_path"] == str(root / "manifests" / "tpch-dbgen-sf1-dbgen-1.5.6.sha256")
 
     prov = runner.dataset_provenance("tpch-dbgen@9.9.9", 1)
     assert prov["generator"] == "duckdb 9.9.9 tpch extension (dbgen)"
-    assert prov["manifest_path"].endswith("tpch-dbgen-sf1-dbgen-9.9.9.sha256")
+    assert prov["manifest_path"] == str(root / "manifests" / "tpch-dbgen-sf1-dbgen-9.9.9.sha256")
 
     prov = runner.dataset_provenance(f"tpch-dbgen@{ver}", 1)
     assert prov["generator"] == f"duckdb {ver} tpch extension (dbgen)"
+    assert prov["manifest_path"] == str(root / "manifests" / f"tpch-dbgen-sf1-dbgen-{ver}.sha256")
 
     man = root / "manifests" / f"tpch-dbgen-sf1-dbgen-{ver}.sha256"
     man.parent.mkdir(parents=True, exist_ok=True)
@@ -143,7 +145,7 @@ def test_run_suite_checks_answers_only_for_matching_generator(root: Path, monkey
     import duckdb
 
     from krishiv_bench import compare, runner
-    from krishiv_bench.adapters.base import Engine
+    from krishiv_bench.adapters.base import Engine, Query
 
     ver = duckdb.__version__
 
@@ -164,7 +166,7 @@ def test_run_suite_checks_answers_only_for_matching_generator(root: Path, monkey
         return d
 
     monkeypatch.setattr(runner, "make_engine", lambda *a, **k: _FakeEngine())
-    monkeypatch.setattr(runner, "load_queries", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "load_queries", lambda *a, **k: [Query("q01", "select 1", "tpch")])
 
     _make_ds("tpch-dbgen")
     calls: list = []
@@ -174,6 +176,7 @@ def test_run_suite_checks_answers_only_for_matching_generator(root: Path, monkey
     rec = json.loads(out.read_text())
     assert rec["answers_available"] is False
     assert rec["dataset"]["generator"] == "duckdb 1.5.6 tpch extension (dbgen)"
+    assert rec["queries"]["q01"]["answer_check"]["status"] == "not_checked"
 
     _make_ds(f"tpch-dbgen@{ver}")
     calls.clear()
@@ -182,6 +185,8 @@ def test_run_suite_checks_answers_only_for_matching_generator(root: Path, monkey
     rec = json.loads(out.read_text())
     assert rec["answers_available"] is True
     assert rec["dataset"]["generator"] == f"duckdb {ver} tpch extension (dbgen)"
+    assert rec["queries"]["q01"]["answer_check"]["status"] == "pass"
+    assert rec["queries"]["q01"]["answer_check"]["detail"] == "ok"
 
     def _boom(sf: float):
         raise RuntimeError("offline")
