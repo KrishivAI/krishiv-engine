@@ -308,5 +308,6 @@ def test_partitioned_dataset_registers_one_table(tmp_path):
     assert discover_tables(tmp_path) == ["hits", "other"]
     assert table_source(tmp_path, "hits").endswith("hits/*.parquet")
     assert table_source(tmp_path, "other").endswith("other.parquet")
-    rows = duckdb.sql(f"select count(*) from read_parquet('{table_source(tmp_path, 'hits')}')").fetchone()
-    assert rows == (6,)
+    rel = duckdb.sql(f"select count(*) from read_parquet('{table_source(tmp_path, 'hits')}')")
+    assert rel is not None
+    assert rel.fetchall() == [(6,)]
