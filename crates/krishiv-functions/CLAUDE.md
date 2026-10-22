@@ -23,7 +23,7 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
   `Arc<dyn ScalarFunction>` (`return_type`, `invoke(&[Arg], rows)`), IR-free (Arrow types only) so the physical planner
   (krishiv-exec) calls it per batch. Arguments arrive after the analyzer's implicit casts; strings/binary in any Arrow
   carrier (read as `Utf8`/`Binary`), results in plain carriers. One family module per kernel family (`string`,
-  `datetime`, `math`, `arith`, `hash`), each with `NAMES` and a `bind` over the argument shape. `BindOptions` holds ANSI, `KernelCtx` (Spark
+  `datetime`, `math`, `arith`, `hash`, `regex`), each with `NAMES` and a `bind` over the argument shape. `BindOptions` holds ANSI, `KernelCtx` (Spark
   version), session zone, the query start instant (`current_date`, `current_timestamp`, `localtimestamp`), the session user (`current_user`, `user`, `session_user`; family `session`) and `decimalOperations.allowPrecisionLoss`. `round`/`ceil`/`floor` bind
   their scale from a `BindArg::Literal`. Operators, `CAST` and aggregates are not bound here.
 
@@ -35,12 +35,19 @@ Paths are relative to this crate.
 - `src/registry/conditional.rs` conditional evaluators; `src/registry/hashing.rs` hash signatures
 - `src/registry/catalog.rs` catalog rows loaded from `vendored/spark-functions.tsv`
 - `src/scalar/mod.rs` `bind_scalar`; `src/scalar/args.rs` argument handling shared by bindings
-- `src/scalar/{string,datetime,math,arith,hash,session}.rs` family bindings (`NAMES` and `bind`)
+- `src/scalar/{string,datetime,math,arith,hash,session,regex}.rs` family bindings (`NAMES` and `bind`); `src/scalar/regex/java.rs` Java-to-`fancy_regex` translation
 - `vendored/spark-functions.tsv` generated from Spark runs; never edit by hand
 
 ## Extension points
 - New scalar function: a signature in `src/registry/`, a catalog row (regenerate with `tests/scripts/gen_function_registry.py`), a binding in its family module under `src/scalar/`, tests in `src/scalar/tests/`.
 - New function family: a `src/scalar/<family>.rs` with `NAMES` and `bind`, wired into `bind_scalar` in `src/scalar/mod.rs`.
+
+- `scalar/regex` (`regexp_replace`): Java patterns are translated to `fancy_regex` by `regex/java.rs` (ASCII `\d\w\s`,
+  Java's `.`/`$`/`^` and line terminators, `\Q..\E`, POSIX `\p{..}`); the replacement is read as `Matcher.appendReplacement`
+  does (errors are `INVALID_REGEXP_REPLACE`). Unsupported Java constructs are `INVALID_PARAMETER_VALUE.PATTERN`.
+  Patterns with back-references or look-around backtrack: one match attempt is capped at `BACKTRACK_LIMIT` steps
+  (`KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED`), a deliberate divergence from the JVM, which has no limit. Add new
+  regex functions to this family.
 
 ## Invariants
 - Behaviour keyed by Spark version (3.5, 4.0, 4.1, 4.2), never ad-hoc flags.

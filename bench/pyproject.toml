@@ -17,6 +17,7 @@ dependencies = [
   "polars==2.0.0",
   "datafusion==55.0.0",
   "pysail==0.7.2",
+  "chdb==4.4.0",
 ]
 
 [dependency-groups]

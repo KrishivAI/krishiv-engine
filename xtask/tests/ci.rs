@@ -89,7 +89,7 @@ fn docs_bench_and_plan_only_changes_skip_rust_jobs() {
     assert!(!rust_relevant(["docs/guide/intro.md", "docs/img/a.png"]));
     assert!(!rust_relevant(["bench/src/krishiv_bench/cli.py"]));
     assert!(!rust_relevant([
-        "README.md",
+        "CHANGELOG.md",
         ".superpowers/sdd/x/report.md"
     ]));
     assert!(!rust_relevant(Vec::<&str>::new()));
@@ -98,13 +98,20 @@ fn docs_bench_and_plan_only_changes_skip_rust_jobs() {
         "crates/krishiv-common/src/lib.rs"
     ]));
     assert!(rust_relevant(["Cargo.toml"]));
+    // The README's Quickstart is run by CI, so editing it runs the wheel jobs.
+    assert!(rust_relevant(["README.md"]));
+    assert!(!rust_relevant([
+        "CHANGELOG.md",
+        "RELEASING.md",
+        "docs/README.md"
+    ]));
     assert!(rust_relevant([".github/workflows/ci.yml"]));
     assert!(rust_relevant([".github/pull_request_template.md"]));
     assert!(rust_relevant([".claude/agents/reviewer.md"]));
     // Crate Markdown can be included into rustdoc.
     assert!(rust_relevant(["crates/krishiv-sql/README.md"]));
     assert!(rust_relevant(["xtask/README.md"]));
-    assert!(!rust_relevant(["README.md", "CONTRIBUTING.md"]));
+    assert!(!rust_relevant(["CONTRIBUTING.md", "docs/README.md"]));
 }
 
 const GOOD: &str = "aaa\u{1f}dev@example.com\u{1f}dev@example.com\u{1f}feat: x\n\nSigned-off-by: Dev One <dev@example.com>\nCo-Authored-By: X <x@y>\n\u{1e}\n";

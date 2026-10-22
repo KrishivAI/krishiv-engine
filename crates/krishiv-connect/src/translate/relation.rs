@@ -79,6 +79,10 @@ impl Translator<'_> {
                 input: self.input("Limit", l.input.as_deref())?,
                 limit: Arc::new(Expr::literal(Literal::Integer(l.limit))),
             },
+            RelType::Offset(o) => PlanNode::Offset {
+                input: self.input("Offset", o.input.as_deref())?,
+                offset: Arc::new(Expr::literal(Literal::Integer(o.offset))),
+            },
             RelType::Aggregate(a) => self.aggregate(a)?,
             RelType::SubqueryAlias(a) => {
                 if !a.qualifier.is_empty() {

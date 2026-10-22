@@ -192,10 +192,12 @@ pub enum PhysNode {
         /// The subqueries the items read.
         subqueries: Vec<SubqueryPlan>,
     },
-    /// The first `limit` rows of `input`.
+    /// `limit` rows of `input` after skipping the first `offset`.
     Limit {
         /// The input.
         input: Box<PhysNode>,
+        /// The number of leading rows to skip.
+        offset: u64,
         /// The row count.
         limit: u64,
     },
@@ -429,7 +431,7 @@ plan_data!(enum PhysNode {
     OneRow,
     Filter { input, layout, predicate, subqueries },
     Project { input, layout, items, nullable, subqueries },
-    Limit { input, limit },
+    Limit { input, offset, limit },
     ReplicateRows { input, layout, count, subqueries },
     Sort { input, keys },
     TopN { input, keys, limit },

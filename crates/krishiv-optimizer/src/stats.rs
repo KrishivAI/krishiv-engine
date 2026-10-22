@@ -249,6 +249,12 @@ impl<'a> Estimator<'a> {
                 let rows = est.rows.min(n);
                 est.with_rows(rows)
             }
+            PlanNode::Offset { input, offset } => {
+                let est = Est::clone(&self.plan(input));
+                let skipped = limit_value(offset).map_or(0.0, to_f64);
+                let rows = (est.rows - skipped).max(0.0);
+                est.with_rows(rows)
+            }
             PlanNode::Shift { input, offset } => {
                 let est = self.plan(input);
                 Est {

@@ -215,6 +215,16 @@ pub enum PushdownExpr {
         /// The comparison's collation.
         collation: Collation,
     },
+    /// `contains(column, needle)` / `column LIKE '%needle%'`: statistics
+    /// cannot answer it; stages that see values evaluate it.
+    Contains {
+        /// The column.
+        column: ColumnPath,
+        /// The substring.
+        needle: String,
+        /// The comparison's collation.
+        collation: Collation,
+    },
     /// Conjunction.
     And(Vec<PushdownExpr>),
     /// Disjunction.
@@ -280,8 +290,9 @@ impl PushdownExpr {
 
     /// The expression with negations pushed to the leaves (negation normal
     /// form), so pruning never has to negate a three-valued answer. A
-    /// negated `IN` becomes a conjunction of `<>`; a negated `StartsWith`
-    /// or `Membership` stays a `Not` leaf (pruning answers unknown for it).
+    /// negated `IN` becomes a conjunction of `<>`; a negated `StartsWith`,
+    /// `Contains` or `Membership` stays a `Not` leaf (pruning answers
+    /// unknown for it).
     #[must_use]
     pub fn to_nnf(&self) -> Self {
         self.nnf(false)
@@ -329,9 +340,10 @@ impl PushdownExpr {
                     })
                     .collect(),
             ),
-            (leaf @ (Self::StartsWith { .. } | Self::Membership { .. }), true) => {
-                Self::Not(Box::new(leaf.clone()))
-            }
+            (
+                leaf @ (Self::StartsWith { .. } | Self::Contains { .. } | Self::Membership { .. }),
+                true,
+            ) => Self::Not(Box::new(leaf.clone())),
             (leaf, false) => leaf.clone(),
         }
     }
@@ -349,6 +361,7 @@ impl PushdownExpr {
             Self::Cmp { column, .. }
             | Self::In { column, .. }
             | Self::StartsWith { column, .. }
+            | Self::Contains { column, .. }
             | Self::Membership { column, .. }
             | Self::IsNull(column)
             | Self::IsNotNull(column) => out.push(column),

@@ -102,6 +102,22 @@ const _: () = assert!(align_of::<RawSchema>() == align_of::<FFI_ArrowSchema>());
 const _: () = assert!(size_of::<RawArray>() == size_of::<FFI_ArrowArray>());
 const _: () = assert!(align_of::<RawArray>() == align_of::<FFI_ArrowArray>());
 
+/// Checks that a producer's pointer to a C struct `T` (a capsule pointer) is
+/// non-null and aligned, as moving out of it or borrowing it requires; nothing
+/// is read through it before this.
+fn aligned<T>(ptr: *const T, what: &str) -> Result<(), KrishivError> {
+    if ptr.is_null() {
+        return Err(invalid(format!("the {what} pointer is null")));
+    }
+    if !ptr.is_aligned() {
+        return Err(invalid(format!(
+            "the {what} pointer {ptr:p} is not aligned to {} bytes",
+            align_of::<T>()
+        )));
+    }
+    Ok(())
+}
+
 /// A non-negative count or length from a producer, as `usize`.
 fn count(value: i64, what: &str) -> Result<usize, KrishivError> {
     usize::try_from(value).map_err(|_| invalid(format!("negative {what} {value}")))
@@ -149,7 +165,8 @@ unsafe fn pointers<T>(
 /// `schema` must point to a C schema whose pointers are valid as the C data
 /// interface describes (the producer's promise).
 pub(crate) unsafe fn check_schema(schema: *const FFI_ArrowSchema) -> Result<(), KrishivError> {
-    // SAFETY: forwarded from the caller; `RawSchema` is the C layout.
+    // SAFETY: forwarded from the caller; `RawSchema` is the C layout. Only
+    // unaligned reads follow, so alignment is not required here.
     unsafe { check_raw_schema(schema.cast(), 0) }
 }
 
@@ -391,9 +408,10 @@ unsafe fn check_raw_array(
 ///
 /// # Safety
 ///
-/// `schema` must be non-null and point to a C schema whose pointers are valid
-/// as the C data interface describes.
+/// `schema` must point to a C schema whose pointers are valid as the C data
+/// interface describes. A null or misaligned pointer is rejected unread.
 pub(crate) unsafe fn read_schema(schema: *const FFI_ArrowSchema) -> Result<Schema, KrishivError> {
+    aligned(schema, "schema")?;
     // SAFETY: forwarded from the caller.
     unsafe { check_schema(schema) }?;
     // SAFETY: checked above; borrowed only.
@@ -431,15 +449,17 @@ const _: () = assert!(align_of::<RawStream>() == align_of::<FFI_ArrowArrayStream
 ///
 /// # Safety
 ///
-/// `ptr` must be non-null, aligned and point to an initialized `struct
-/// ArrowArrayStream` that the caller may move out of (for a PyCapsule: the
-/// pointer of a live capsule named [`STREAM_CAPSULE`]).
+/// `ptr` must point to an initialized `struct ArrowArrayStream` that the
+/// caller may move out of (for a PyCapsule: the pointer of a live capsule
+/// named [`STREAM_CAPSULE`]). A null or misaligned pointer is rejected unread.
 pub(crate) unsafe fn import_stream(
     ptr: *mut FFI_ArrowArrayStream,
 ) -> Result<ValidatingReader, KrishivError> {
+    aligned(ptr, "stream")?;
     // SAFETY: the caller guarantees `ptr` is valid for reads and writes and
-    // initialized; `from_raw` moves the struct out and leaves an empty,
-    // released one, so the producer's capsule destructor does nothing.
+    // initialized, and it is aligned (checked); `from_raw` moves the struct
+    // out and leaves an empty, released one, so the producer's capsule
+    // destructor does nothing.
     let stream = Box::new(unsafe { FFI_ArrowArrayStream::from_raw(ptr) });
     if stream.release().is_none() {
         return Err(invalid("the Arrow stream was already consumed"));
@@ -615,13 +635,17 @@ fn validated_batch(schema: SchemaRef, data: &ArrayData) -> Result<RecordBatch, K
 /// `schema` must point to an initialized C schema, only borrowed here (the
 /// schema capsule keeps ownership); `array` must point to an initialized C
 /// array the caller may move out of (the pointers of live capsules named
-/// [`SCHEMA_CAPSULE`] and [`ARRAY_CAPSULE`]). Both non-null and aligned.
+/// [`SCHEMA_CAPSULE`] and [`ARRAY_CAPSULE`]). A null or misaligned pointer
+/// is rejected before either is read.
 pub(crate) unsafe fn import_array(
     schema: *const FFI_ArrowSchema,
     array: *mut FFI_ArrowArray,
 ) -> Result<RecordBatch, KrishivError> {
+    aligned(schema, "schema")?;
+    aligned(array, "array")?;
     // SAFETY: the caller guarantees `array` is a valid, initialized C array
-    // we may move out of; `from_raw` leaves a released one behind.
+    // we may move out of, and it is aligned (checked); `from_raw` leaves a
+    // released one behind.
     let array = unsafe { FFI_ArrowArray::from_raw(array) };
     if array.is_released() {
         return Err(invalid("the Arrow array was already consumed"));
@@ -730,11 +754,13 @@ pub(crate) fn reconcile_requested(ours: &Schema, requested: &Schema) -> Result<R
 }
 
 /// The reader behind every exported stream: renames to the requested schema
-/// and keeps panics and NUL bytes away from arrow-rs's C callbacks.
+/// and keeps panics and NUL bytes away from arrow-rs's C callbacks, in
+/// `get_next` and in `release`.
 struct ExportReader {
     schema: SchemaRef,
     rename: bool,
-    inner: Box<dyn RecordBatchReader + Send>,
+    /// `None` only while [`Drop`] runs.
+    inner: Option<Box<dyn RecordBatchReader + Send>>,
     done: bool,
 }
 
@@ -745,14 +771,17 @@ impl Iterator for ExportReader {
         if self.done {
             return None;
         }
-        let item = match catch_panic(|| self.inner.next()) {
+        let inner = self.inner.as_mut()?;
+        let item = match catch_panic(|| inner.next()) {
             Ok(item) => item,
             Err(e) => Some(Err(ArrowError::ExternalError(Box::new(e)))),
         };
         let item = match item {
-            Some(Ok(batch)) if self.rename => Some(RecordBatch::try_new(
+            // The row count is kept: a batch without columns has no other source for it.
+            Some(Ok(batch)) if self.rename => Some(RecordBatch::try_new_with_options(
                 Arc::clone(&self.schema),
                 batch.columns().to_vec(),
+                &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
             )),
             other => other,
         };
@@ -769,6 +798,19 @@ impl Iterator for ExportReader {
 impl RecordBatchReader for ExportReader {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
+    }
+}
+
+impl Drop for ExportReader {
+    /// Runs inside the exported stream's `release` callback (arrow-rs,
+    /// `extern "C"`, also reached from the capsule's destructor): a panic in
+    /// the inner reader's destructor (an engine stream whose runtime is gone,
+    /// a poisoned lock) must not unwind into C, which aborts the host process.
+    /// The panic hook has already reported it; it is otherwise dropped.
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            drop(catch_unwind(AssertUnwindSafe(move || drop(inner))));
+        }
     }
 }
 
@@ -795,7 +837,7 @@ pub(crate) fn export_stream(
     FFI_ArrowArrayStream::new(Box::new(ExportReader {
         schema,
         rename,
-        inner: reader,
+        inner: Some(reader),
         done: false,
     }))
 }
