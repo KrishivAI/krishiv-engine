@@ -1,0 +1,5 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM (SELECT a, rank() OVER (ORDER BY c) AS r FROM t)"
+---
+Scan spark_catalog.default.t [a#0]

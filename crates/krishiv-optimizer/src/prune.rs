@@ -104,6 +104,7 @@ impl Graph {
             }
             // Inputs match by position: each is read whole.
             PlanNode::Union { inputs, .. } => inputs.iter().for_each(|i| child(i, None)),
+            PlanNode::Window { input, .. } => child(input, Some(window_need(p, req))),
             _ => {}
         }
         subqueries(p, &mut |kind, s| {
@@ -228,6 +229,32 @@ impl Rewrite<'_> {
                 };
                 replace(&rebuilt, node)
             }
+            PlanNode::Window {
+                input,
+                exprs,
+                partition_by,
+                order_by,
+            } => {
+                let kept: Vec<Arc<Expr>> = exprs
+                    .iter()
+                    .filter(|e| output_of(e).is_none_or(|c| req.contains(&c.id)))
+                    .cloned()
+                    .collect();
+                if kept.is_empty() {
+                    // No window column is read: the input alone (Spark's
+                    // `ColumnPruning` removes such a window).
+                    Arc::clone(input)
+                } else {
+                    let need = window_need(&rebuilt, req);
+                    let node = PlanNode::Window {
+                        input: narrow(input, &need),
+                        exprs: kept,
+                        partition_by: partition_by.clone(),
+                        order_by: order_by.clone(),
+                    };
+                    replace(&rebuilt, node)
+                }
+            }
             _ => rebuilt,
         };
         self.done.insert(i, Arc::clone(&out));
@@ -337,6 +364,36 @@ fn join_need(p: &LogicalPlan, req: &Attrs) -> Attrs {
     } = &p.node
     {
         references_into(c, &mut need);
+    }
+    need
+}
+
+/// What a window reads of its input: what is read of it (its input's
+/// columns among them), the window expressions that are read, and its
+/// partitioning and ordering.
+fn window_need(p: &LogicalPlan, req: &Attrs) -> Attrs {
+    let mut need = req.clone();
+    if let PlanNode::Window {
+        exprs,
+        partition_by,
+        order_by,
+        ..
+    } = &p.node
+    {
+        let read: Vec<&Arc<Expr>> = exprs
+            .iter()
+            .filter(|e| output_of(e).is_none_or(|c| req.contains(&c.id)))
+            .collect();
+        // A window nobody reads is dropped: its keys are not needed.
+        if !read.is_empty() {
+            read.iter().for_each(|e| references_into(e, &mut need));
+            partition_by
+                .iter()
+                .for_each(|e| references_into(e, &mut need));
+            order_by
+                .iter()
+                .for_each(|o| references_into(&o.expr, &mut need));
+        }
     }
     need
 }
