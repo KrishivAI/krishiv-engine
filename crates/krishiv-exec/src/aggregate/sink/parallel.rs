@@ -43,7 +43,7 @@ use krishiv_memory::Reservation;
 
 use super::super::rowtable::{Mode, PARTS, RowTable, final_tasks, split_ref};
 use super::super::table::Table;
-use super::{CHUNK, Final, Global, HashAggregate, Run, bump, lend_headroom, reserve_to, tasks_of};
+use super::{CHUNK, Global, HashAggregate, Run, bump, lend_headroom, reserve_to, tasks_of};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::sync::lock;
@@ -143,12 +143,8 @@ impl HashAggregate {
             bump(&self.counters.groups, table.len() as u64);
             bump(&self.counters.hash_entries, table.len() as u64);
             bump(&self.counters.hash_buckets, table.buckets() as u64);
-            let mut inner = lock(&g.inner);
-            inner.busy = false;
-            let _ = g.done.set(Final::Table {
-                table: Table::Rows(table),
-                _held: held,
-            });
+            lock(&g.inner).busy = false;
+            self.finish_memory(g, ctx, vec![Table::Rows(table)], held)?;
             return Ok(true);
         }
         let inputs: Arc<[RowTable]> = inputs.into();
@@ -251,15 +247,13 @@ impl HashAggregate {
         }
         bump(&self.counters.groups, groups as u64);
         bump(&self.counters.hash_entries, groups as u64);
-        let mut inner = lock(&g.inner);
-        inner.busy = false;
-        inner.row_merge = false;
-        inner.spill_asked = false;
-        let _ = g.done.set(Final::Parts {
-            tables,
-            chunks,
-            _held: reservations,
-        });
+        {
+            let mut inner = lock(&g.inner);
+            inner.busy = false;
+            inner.row_merge = false;
+            inner.spill_asked = false;
+        }
+        self.publish_memory(g, ctx, tables, chunks, reservations)?;
         Ok(true)
     }
 

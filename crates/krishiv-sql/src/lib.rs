@@ -122,8 +122,9 @@ pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, Par
     parser::parse_query(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
-/// Parses one statement, optionally followed by `;`: a query, or
-/// `EXPLAIN [EXTENDED | FORMATTED | CODEGEN | COST]` of a statement.
+/// Parses one statement, optionally followed by `;`: a query, `SET`,
+/// `RESET`, `CREATE TEMPORARY VIEW`, `DROP VIEW`, or `EXPLAIN
+/// [EXTENDED | FORMATTED | CODEGEN | COST]` of a statement.
 ///
 /// ```
 /// use krishiv_sql::ast::{ExplainMode, Statement};
