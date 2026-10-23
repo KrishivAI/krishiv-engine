@@ -141,5 +141,8 @@ fn engine_raised_set_of_this_repo_is_a_small_subset_of_the_catalog() {
     let catalog = parse_error_classes(&json).unwrap();
     assert!(catalog.len() > 1_900, "full Spark 4.2.0 catalog is loaded");
     let in_use = raised(&catalog, &collect_engine(root));
-    assert!(in_use.len() < catalog.len() / 10, "{}", in_use.len());
+    // The scanner counts what the engine raises, not the whole catalog. The
+    // set grows as the engine raises more of Spark's classes (193 of 1,930
+    // with the window frame checks), so the bound is a quarter, not a tenth.
+    assert!(in_use.len() < catalog.len() / 4, "{}", in_use.len());
 }
