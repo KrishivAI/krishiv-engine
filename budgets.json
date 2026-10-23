@@ -1,7 +1,7 @@
 {
-  "transitive_crates": 128,
-  "transitive_crates_all_features": 222,
-  "binary_bytes": 25966680,
+  "transitive_crates": 136,
+  "transitive_crates_all_features": 313,
+  "binary_bytes": 26620856,
   "clean_build_secs": null,
   "unsafe_sites": {
     "krishiv-alloc": 9,
@@ -10,13 +10,13 @@
     "krishiv-python": 122
   },
   "wheel_bytes": {
-    "cp311-abi3-macosx_11_0_arm64": 8164424,
-    "cp311-abi3-manylinux_2_28_aarch64": 8221967,
-    "cp311-abi3-manylinux_2_28_x86_64": 9673096,
-    "cp311-abi3-musllinux_1_2_x86_64": 9921005,
-    "cp314-cp314t-macosx_11_0_arm64": 8161541,
-    "cp314-cp314t-manylinux_2_28_aarch64": 8217754,
-    "cp314-cp314t-manylinux_2_28_x86_64": 9671978,
-    "cp314-cp314t-musllinux_1_2_x86_64": 9919716
+    "cp311-abi3-macosx_11_0_arm64": 8660887,
+    "cp311-abi3-manylinux_2_28_aarch64": 8755379,
+    "cp311-abi3-manylinux_2_28_x86_64": 10443661,
+    "cp311-abi3-musllinux_1_2_x86_64": 10667594,
+    "cp314-cp314t-macosx_11_0_arm64": 8654276,
+    "cp314-cp314t-manylinux_2_28_aarch64": 8752468,
+    "cp314-cp314t-manylinux_2_28_x86_64": 10443673,
+    "cp314-cp314t-musllinux_1_2_x86_64": 10666813
   }
 }
