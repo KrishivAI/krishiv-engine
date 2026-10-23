@@ -2,6 +2,8 @@ name: CodSpeed
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   workflow_dispatch:
@@ -18,8 +20,30 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # Merge queue: CodSpeed compares a pull request against its base and already
+  # reported there. Publish the required context on the merge-group commit.
+  merge-group-status:
+    name: CodSpeed merge-group status
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - name: Report the CodSpeed context as passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          gh api "repos/$REPO/statuses/$SHA" \
+            -f state=success \
+            -f context="CodSpeed Performance Analysis" \
+            -f description="Benchmarks ran on the pull request; skipped for the merge group"
+
   benchmarks:
     name: Benchmarks
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
