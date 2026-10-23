@@ -1512,3 +1512,22 @@ async fn fan_in_errors() {
         .unwrap();
     assert_eq!(e.error_class(), ErrorClass::DivideByZero);
 }
+
+/// A breaker's finalized state goes once the pipeline reading it has ended,
+/// not at query end: three breakers that cannot spill, each holding ~1 MiB
+/// and read by the next, run under a 2.5 MiB limit, because at most two of
+/// them hold memory at once.
+#[tokio::test(start_paused = true)]
+async fn a_finalized_state_is_released_after_its_last_reader() {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(1).unwrap());
+    let root = root(5 * MIB / 2);
+    let q = query(&root, 1, ExecConfig::default());
+    let (_, scan) = scan(32 * DEFAULT_BATCH_SIZE as u64); // ~1 MiB
+    let first = Arc::new(Break(scan, Buffer::new(false, None), false));
+    let second = Arc::new(Break(first, Buffer::new(false, None), false));
+    let third = Arc::new(Break(second, Buffer::new(false, None), false));
+    let out = run(&runner, third, &q).await.unwrap();
+    assert_eq!(rows(&out), 32 * DEFAULT_BATCH_SIZE);
+    assert_eq!(root.stats().aborts, 0);
+    assert_released(&root);
+}

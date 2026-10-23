@@ -227,6 +227,10 @@ pub(super) fn hull(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> Option<(u64,
     }
 }
 
+/// A CTE scope: every visible CTE (outer ones as `None`, this level's as
+/// `Some(index)`); inner `WITH` names shadow as `None`.
+type CteScope = Vec<(String, Option<usize>)>;
+
 impl Resolver<'_> {
     pub(super) fn fresh(&mut self) -> AttrId {
         self.next_id += 1;
@@ -718,6 +722,12 @@ impl Resolver<'_> {
     /// The CTE definitions resolved in turn, then the input over them. Out
     /// of line: it keeps the recursive `node` frame small (deep plans
     /// resolve on a small stack).
+    ///
+    /// Only definitions the input needs (transitively) are resolved:
+    /// Spark does not analyze a CTE the query never references, so an
+    /// unused definition's column errors (like `AMBIGUOUS_REFERENCE`)
+    /// never fail the query. Table existence still fails even when unused,
+    /// but that comes from Bind, which visits every definition.
     #[inline(never)]
     fn with_cte(
         &mut self,
@@ -727,11 +737,18 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let o = p.origin;
+        let needed = Self::needed_ctes(input, ctes, &env.ctes, self.ctx.conf.case_sensitive);
+        if !needed.iter().any(|b| *b) {
+            return self.rel(input, env);
+        }
         let mut visible = env.ctes.clone();
         let mut scope = env.ctes_id;
         let mut defs = Vec::new();
         let mut rels = Vec::new();
-        for c in ctes {
+        for (c, keep) in ctes.iter().zip(needed.iter()) {
+            if !keep {
+                continue;
+            }
             let e = self.env(visible.clone(), scope, env.outer.clone());
             let r = self.rel(&c.plan, &e)?;
             defs.push(Cte {
@@ -753,5 +770,151 @@ impl Resolver<'_> {
         let mut r = self.make(o, node, i.out.to_vec(), &kids);
         r.carriers = Arc::clone(&i.carriers);
         Ok(r)
+    }
+
+    /// Which definitions of `ctes` the input needs, transitively: a
+    /// definition is needed when the input (or another needed definition)
+    /// reads its name. Reads shadowed by an inner `WITH` never count, and
+    /// a definition's own reads see only the outer CTEs and the earlier
+    /// definitions, so a forward reference never marks a later definition.
+    fn needed_ctes(
+        input: &Arc<LogicalPlan>,
+        ctes: &[Cte],
+        outer: &[(String, Rel)],
+        case_sensitive: bool,
+    ) -> Vec<bool> {
+        let n = ctes.len();
+        let mut needed = vec![false; n];
+        if n == 0 {
+            return needed;
+        }
+        let outer_scope: Vec<(String, Option<usize>)> =
+            outer.iter().map(|(name, _)| (name.clone(), None)).collect();
+        let mut input_scope = outer_scope.clone();
+        input_scope.extend(
+            ctes.iter()
+                .enumerate()
+                .map(|(i, c)| (c.name.clone(), Some(i))),
+        );
+        let mut stack = Self::cte_refs(input, &input_scope, case_sensitive);
+        let mut memo: Vec<Option<Vec<usize>>> = (0..n).map(|_| None).collect();
+        while let Some(i) = stack.pop() {
+            if i >= n || needed[i] {
+                continue;
+            }
+            needed[i] = true;
+            let refs = match &memo[i] {
+                Some(r) => r.clone(),
+                None => {
+                    let mut scope = outer_scope.clone();
+                    scope.extend(
+                        ctes[..i]
+                            .iter()
+                            .enumerate()
+                            .map(|(j, c)| (c.name.clone(), Some(j))),
+                    );
+                    let r = Self::cte_refs(&ctes[i].plan, &scope, case_sensitive);
+                    memo[i] = Some(r.clone());
+                    r
+                }
+            };
+            for j in refs {
+                if j < n && !needed[j] {
+                    stack.push(j);
+                }
+            }
+        }
+        needed
+    }
+
+    /// Indices of this `WITH` level's definitions that `root` reads, with
+    /// `scope` naming every visible CTE (outer ones as `None`, this level's
+    /// as `Some(index)`). A single-part read resolves to the innermost
+    /// scope entry matching its name; only reads resolving to this level
+    /// are reported. Inner `WITH` names shadow as `None`.
+    fn cte_refs(root: &Arc<LogicalPlan>, scope: &CteScope, case_sensitive: bool) -> Vec<usize> {
+        enum Item<'a> {
+            Plan(&'a Arc<LogicalPlan>, CteScope),
+            Expr(&'a Arc<Expr>, CteScope),
+        }
+        let mut out = Vec::new();
+        // Visits are keyed by scope contents, not scope length: the same
+        // plan reached through two inner `WITH` scopes with different names
+        // but equal lengths resolves its reads differently (a shadowing name
+        // hides what the other scope reports), so each scope gets a visit.
+        let mut seen: HashSet<(usize, CteScope)> = HashSet::new();
+        let mut stack = vec![Item::Plan(root, scope.clone())];
+        while let Some(item) = stack.pop() {
+            match item {
+                Item::Plan(p, sc) => {
+                    if !seen.insert((addr(&**p), sc.clone())) {
+                        continue;
+                    }
+                    match &p.node {
+                        PlanNode::Read(ReadSource::Table { name, .. }) => {
+                            if let [n] = name.as_slice() {
+                                for (sname, idx) in sc.iter().rev() {
+                                    if same(sname, n, case_sensitive) {
+                                        if let Some(i) = idx
+                                            && !out.contains(i)
+                                        {
+                                            out.push(*i);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        PlanNode::CteRef(r) => {
+                            // An already-resolved reference: re-analysis
+                            // must keep the definition it names.
+                            for (sname, idx) in sc.iter().rev() {
+                                if same(sname, &r.name, case_sensitive) {
+                                    if let Some(i) = idx
+                                        && !out.contains(i)
+                                    {
+                                        out.push(*i);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        PlanNode::WithCte { input, ctes } => {
+                            let mut ext = sc.clone();
+                            ext.extend(ctes.iter().map(|c| (c.name.clone(), None)));
+                            stack.push(Item::Plan(input, ext));
+                            let mut cur = sc.clone();
+                            for c in ctes {
+                                stack.push(Item::Plan(&c.plan, cur.clone()));
+                                cur.push((c.name.clone(), None));
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    p.for_each_expr(&mut |e| {
+                        stack.push(Item::Expr(e, sc.clone()));
+                    });
+                    // `WithCte` already pushed its children above.
+                    if !matches!(p.node, PlanNode::WithCte { .. }) {
+                        p.for_each_child(&mut |c| {
+                            stack.push(Item::Plan(c, sc.clone()));
+                        });
+                    }
+                }
+                Item::Expr(e, sc) => {
+                    if !seen.insert((addr(&**e), sc.clone())) {
+                        continue;
+                    }
+                    if let ExprNode::Subquery { plan, .. } = &e.node {
+                        stack.push(Item::Plan(plan, sc.clone()));
+                    }
+                    e.for_each_child(&mut |c| {
+                        stack.push(Item::Expr(c, sc.clone()));
+                    });
+                }
+            }
+        }
+        out
     }
 }

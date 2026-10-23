@@ -79,6 +79,7 @@ mod metrics;
 mod morsel;
 mod operator;
 mod operators;
+mod output_spill;
 pub mod physical;
 mod pipeline;
 pub mod planner;

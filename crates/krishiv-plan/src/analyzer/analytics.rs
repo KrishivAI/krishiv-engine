@@ -393,7 +393,7 @@ impl Resolver<'_> {
         });
         let keys: Vec<Attr> = gid.iter().cloned().collect();
         let items = self.select_items_in(&c, aggregates, env, "Aggregate", Some(&keys))?;
-        let bound = self.group_keys(&c, &flat, aggregates, &items, env)?;
+        let bound = self.group_keys(&c, &flat, &items, env)?;
         let mut memo = HashMap::new();
         // The distinct expressions, and the sets as positions among them.
         let mut distinct: Vec<usize> = Vec::new();

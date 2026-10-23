@@ -6,6 +6,17 @@
 ## Purpose
 The `krishiv` binary: sql, server, coordinator, worker, mcp, ui, doctor, migrate subcommands.
 
+## Key files
+Paths are relative to this crate.
+- `src/main.rs` subcommand dispatch and the allocator/memory hook set-up
+- `src/sql.rs` the `krishiv sql` subcommand: input (`-e`, `-f`, stdin), output (`-o`), `--conf`, `--table`, `--timing`
+- `tests/sql.rs` end-to-end tests of `krishiv sql`; `tests/version.rs` version output
+- `Cargo.toml` features (`mimalloc` links `krishiv-alloc` and `krishiv-memory`)
+
+## Extension points
+- New subcommand: a variant and dispatch in `src/main.rs`, the logic in its own module like `src/sql.rs`, tests in `tests/`.
+- New output format for `krishiv sql`: extend the `-o` handling in `src/sql.rs`.
+
 ## Invariants
 - One executable with subcommands (ADR 0026).
 - `#![forbid(unsafe_code)]`.
@@ -14,5 +25,5 @@ The `krishiv` binary: sql, server, coordinator, worker, mcp, ui, doctor, migrate
 ## ADRs (in `../krishiv-internal/adr/`)
 0004, 0026
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-cli --no-tests=pass` · `cargo clippy -p krishiv-cli --all-targets -- -D warnings`

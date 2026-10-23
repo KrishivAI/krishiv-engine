@@ -37,6 +37,22 @@ files read back by pyarrow, DuckDB and Spark 4.2: `tests/fixtures/parquet/writte
 `krishiv-testkit/tests/parquet_write_interop.rs`); fuzz
 target `fuzz/fuzz_targets/parquet_read.rs` (seeds: `tests/scripts/fuzz_seed_parquet.py`).
 
+## Key files
+Paths are relative to this crate.
+- `src/format.rs` `FileFormat`, `Decoder`, `Encoder`, `Capabilities`; `src/request.rs` scan request and pushdown types
+- `src/stats.rs` statistics and sound pruning (`TriState`); `src/split.rs` Spark split planner
+- `src/scan.rs` `ScanStream`; `src/write.rs` `FileWriter`; `src/commit.rs` save modes and `_SUCCESS`
+- `src/io/mod.rs` `IoContext` and `IoScheduler`, the only path to object stores; `src/io/cache.rs` metadata cache
+- `src/schema_map.rs` `SchemaMapper`; `src/options.rs` typed format options
+- `src/runtime_filter/mod.rs` runtime filters and their key normalization
+- `src/parquet/mod.rs` `ParquetFormat`; `src/parquet/decode.rs` and `write.rs` the reader and writer
+- `src/scan_gate.rs` `ScanGate`, admission of the decode working sets of a query's scan streams (ADR 0007)
+- `src/parquet/thrift_guard.rs` structural check of a footer before arrow-rs decodes it
+- `src/csv/mod.rs` CSV format
+
+## Extension points
+- New format: implement `FileFormat` in a module like `src/parquet/`, route all bytes through `IoContext`, and instantiate `krishiv_testkit::file_format_conformance!`.
+
 ## Invariants
 - Formats never touch `object_store`: all I/O goes through `IoContext` (counters, retries, `if_match`/
   `if_unmodified_since`, cache, budget). `ParquetObjectReader/Writer` are banned (`cargo xtask source-guard`).
@@ -54,6 +70,6 @@ target `fuzz/fuzz_targets/parquet_read.rs` (seeds: `tests/scripts/fuzz_seed_parq
 ## ADRs (in `../krishiv-internal/adr/`)
 0014, 0028, 0007, 0026, 0037, 0038; the P2-T117 design note
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-io --no-tests=pass` · `cargo clippy -p krishiv-io --all-targets -- -D warnings` ·
 conformance: `cargo nextest run -p krishiv-testkit --test file_format_mock` · bench: `cargo bench -p krishiv-io --bench io`
