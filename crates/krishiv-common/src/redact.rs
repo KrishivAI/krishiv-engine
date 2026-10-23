@@ -29,6 +29,22 @@ use crate::secret::{is_sensitive_key, semicolon_authority, url_secret_ranges};
 
 pub use crate::secret::REDACTED;
 
+// Counts the bytes the scanners examine, so a test can assert linear work
+// without timing anything. Compiled out of non-test builds.
+#[cfg(test)]
+thread_local! {
+    static WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn tick(n: usize) {
+    WORK.with(|w| w.set(w.get() + n));
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn tick(_: usize) {}
+
 /// `text` with the secrets it can find replaced by [`REDACTED`]; borrowed
 /// when there are none.
 #[must_use]
@@ -202,10 +218,13 @@ fn is_key_char(b: u8) -> bool {
 
 /// The end of the run starting at `from` that `stop` does not end.
 fn run_end(text: &str, from: usize, stop: fn(u8) -> bool) -> usize {
-    text.as_bytes()
+    let end = text
+        .as_bytes()
         .get(from..)
         .and_then(|rest| rest.iter().position(|&b| stop(b)))
-        .map_or(text.len(), |n| from + n)
+        .map_or(text.len(), |n| from + n);
+    tick(end.saturating_sub(from) + 1);
+    end
 }
 
 /// URL credentials. A run of non-space text can hold several URLs (a
@@ -220,6 +239,7 @@ fn urls(text: &str, out: &mut Vec<Range<usize>>) {
         let run_end = run_end(text, run_start, ends_url);
         for seg in url_segments(&text[run_start..run_end]) {
             let (start, end) = (run_start + seg.start, run_start + seg.end);
+            tick(end - start);
             out.extend(
                 url_secret_ranges(&text[start..end])
                     .into_iter()
@@ -236,12 +256,14 @@ fn urls(text: &str, out: &mut Vec<Range<usize>>) {
 /// Linear: the userinfo ends come from two precomputed tables.
 fn url_segments(run: &str) -> Vec<Range<usize>> {
     let bytes = run.as_bytes();
+    tick(4 * run.len());
     // (start, where the part after the scheme begins), in order.
     let mut starts: Vec<(usize, usize)> = Vec::new();
     let mut floor = 0;
     for (i, _) in run.match_indices("://") {
         // The scheme runs back from `://` over scheme characters, but never
         // past the previous match, which bounds the backward scans.
+        tick(i - floor);
         let start = bytes[floor..i]
             .iter()
             .rposition(|&b| !(b.is_ascii_alphanumeric() || b"+-.:".contains(&b)))
@@ -331,6 +353,7 @@ fn pairs(text: &str, out: &mut Vec<Range<usize>>) {
             .iter()
             .rposition(|&c| !is_key_char(c))
             .map_or(0, |p| p + 1);
+        tick(sep - start + 1);
         if start == end || !is_sensitive_key(&text[start..end]) {
             continue;
         }
@@ -339,6 +362,7 @@ fn pairs(text: &str, out: &mut Vec<Range<usize>>) {
         while bytes.get(v) == Some(&b' ') {
             v += 1;
         }
+        tick(v - sep);
         let range = match bytes.get(v) {
             Some(&q @ (b'"' | b'\'')) => v + 1..quoted_end(bytes, v + 1, q),
             _ => {
@@ -364,6 +388,7 @@ fn pairs(text: &str, out: &mut Vec<Range<usize>>) {
 fn quoted_end(bytes: &[u8], from: usize, q: u8) -> usize {
     let mut i = from;
     while let Some(&b) = bytes.get(i) {
+        tick(1);
         if b == b'\\' {
             i += 2;
         } else if b == q {
@@ -382,6 +407,7 @@ fn quoted_end(bytes: &[u8], from: usize, q: u8) -> usize {
 /// The token after an HTTP authorization scheme (`Bearer x`, `Basic x`).
 fn schemes(text: &str, out: &mut Vec<Range<usize>>) {
     let lower = text.to_ascii_lowercase();
+    tick(lower.len());
     for word in ["bearer ", "basic "] {
         let mut covered = 0;
         for (i, _) in lower.match_indices(word) {
@@ -555,27 +581,28 @@ mod tests {
         }
     }
 
-    /// Adversarial inputs without spaces take time linear in their size:
-    /// quadrupling the input at most quadruples the work (plus noise), where
-    /// a quadratic scan would multiply it by 16.
+    /// Adversarial inputs without spaces cost work linear in their size:
+    /// quadrupling the input at most quadruples the bytes examined (plus a
+    /// small allowance for the boundaries), where a quadratic scan would
+    /// multiply it by 16. The work is a byte count, not a duration, so the
+    /// result does not depend on machine load or coverage instrumentation.
     #[test]
     fn work_is_linear_on_adversarial_runs() {
         for unit in ["jdbc:", "x://", "token=", "a:b@", "?sig=", "bearer "] {
-            let time = |n: usize| {
+            let work = |n: usize| {
                 let text = unit.repeat(n / unit.len());
-                (0..3)
-                    .map(|_| {
-                        let start = std::time::Instant::now();
-                        std::hint::black_box(redact(&text));
-                        start.elapsed()
-                    })
-                    .min()
-                    .unwrap_or_default()
+                super::WORK.with(|w| w.set(0));
+                std::hint::black_box(redact(&text));
+                super::WORK.with(std::cell::Cell::get)
             };
-            let (small, large) = (time(256 << 10), time(1 << 20));
+            let (small, large) = (work(256 << 10), work(1 << 20));
             assert!(
-                large < small * 10 + std::time::Duration::from_millis(5),
-                "{unit}: {small:?} -> {large:?}"
+                small > 256 << 10,
+                "{unit}: the counter is not wired: {small}"
+            );
+            assert!(
+                large <= small * 4 + small / 8,
+                "{unit}: {small} -> {large} bytes examined"
             );
         }
     }
