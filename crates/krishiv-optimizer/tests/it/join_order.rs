@@ -424,3 +424,57 @@ fn implied_filters_of_on_conditions_keep_the_rows() {
         "SELECT t.a, u.d FROM t LEFT JOIN u ON (t.b = 'x' AND u.d = 'y') OR (t.b = 'z' AND u.a > 2)",
     );
 }
+
+/// The fixture's statistics without distinct counts for the columns
+/// `keep` does not name, as Parquet footers give them (footers carry no
+/// distinct counts).
+fn without_distinct(keep: &[&str]) -> Fixture {
+    let mut f = fixture();
+    for t in f.0.values_mut() {
+        for (name, c) in &mut t.columns {
+            if !keep.contains(&name.as_str()) {
+                c.distinct = None;
+            }
+        }
+    }
+    f
+}
+
+/// `col = literal` and `col IN (...)` read the column's distinct count
+/// when one is known; without one the selectivity is the default, not
+/// `1 / rows` (which would estimate a single matching row for
+/// `l_returnflag = 'R'` and make 60M rows look like the smallest input).
+#[test]
+fn literal_equalities_without_a_distinct_count_use_the_default() {
+    let ctx = support::ctx();
+    let rows = |sql: &str, stats: &Fixture| {
+        krishiv_optimizer::estimated_rows(support::resolve(sql, &ctx).root(), stats)
+    };
+    let known = fixture();
+    let footers = without_distinct(&[]);
+    let lineitem = 59_986_052.0;
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * b;
+    let eq = "SELECT l_orderkey FROM lineitem WHERE l_returnflag = 'R'";
+    assert!(
+        close(rows(eq, &known), lineitem / 3.0),
+        "{}",
+        rows(eq, &known)
+    );
+    assert!(
+        close(rows(eq, &footers), lineitem * 0.2),
+        "{}",
+        rows(eq, &footers)
+    );
+    // The literal on the left reads the same.
+    let flipped = "SELECT l_orderkey FROM lineitem WHERE 'R' = l_returnflag";
+    assert!(close(rows(flipped, &footers), lineitem * 0.2));
+    let within = "SELECT l_orderkey FROM lineitem WHERE l_shipmode IN ('MAIL', 'SHIP')";
+    assert!(close(rows(within, &known), lineitem * 2.0 / 7.0));
+    assert!(close(rows(within, &footers), lineitem * 0.2));
+    // A distinct count from statistics still counts without the others.
+    let only = without_distinct(&["l_returnflag"]);
+    assert!(close(rows(eq, &only), lineitem / 3.0));
+    // An equality between two columns of one input keeps `1 / ndv`.
+    let cols = "SELECT l_orderkey FROM lineitem WHERE l_commitdate = l_receiptdate";
+    assert!(close(rows(cols, &footers), 1.0), "{}", rows(cols, &footers));
+}

@@ -2,7 +2,8 @@
 //! Table statistics and cardinality estimates.
 //!
 //! Estimates follow the textbook independence assumptions: a predicate's
-//! selectivity is `1 / NDV` for an equality with a literal, the covered
+//! selectivity is `1 / NDV` for an equality with a literal (when the
+//! column's distinct count is known, else [`DEFAULT_SELECTIVITY`]), the covered
 //! fraction of `[min, max]` for a range, `1 / max(NDV)` for an equi-join,
 //! and [`DEFAULT_SELECTIVITY`] when nothing better is known; conjunctions
 //! multiply and disjunctions add. Without statistics a table holds
@@ -77,8 +78,11 @@ pub fn estimated_rows(plan: &Arc<LogicalPlan>, stats: &dyn Statistics) -> f64 {
 /// What is known of one attribute.
 #[derive(Debug, Clone)]
 pub(crate) struct Col {
-    /// Distinct non-null values, at least 1.
+    /// Distinct non-null values, at least 1. Without statistics, every
+    /// value is taken as distinct (`ndv` = rows).
     pub(crate) ndv: f64,
+    /// Whether `ndv` comes from statistics rather than that assumption.
+    pub(crate) ndv_known: bool,
     /// The fraction of rows that are null.
     pub(crate) nulls: f64,
     /// Bounds, as numbers on one scale.
@@ -114,6 +118,7 @@ impl Est {
 fn distinct(rows: f64) -> Col {
     Col {
         ndv: rows.max(1.0),
+        ndv_known: false,
         nulls: 0.0,
         range: None,
     }
@@ -283,6 +288,7 @@ impl<'a> Estimator<'a> {
                 let s = stats.columns.get(&c.name).cloned().unwrap_or_default();
                 let col = Col {
                     ndv: s.distinct.map_or(rows, to_f64).clamp(1.0, rows),
+                    ndv_known: s.distinct.is_some(),
                     nulls: s.nulls.map_or(0.0, |n| (to_f64(n) / rows).min(1.0)),
                     range: s
                         .min
@@ -359,7 +365,19 @@ pub(crate) fn selectivity(pred: &Expr, est: &Est) -> f64 {
         (Some((Builtin::Eq | Builtin::EqNullSafe, [a, b], _)), _) => {
             match (column(a, est), column(b, est)) {
                 (Some(x), Some(y)) => 1.0 / x.ndv.max(y.ndv),
-                (Some(x), None) | (None, Some(x)) => 1.0 / x.ndv,
+                // `col = literal`: one value of the column's. Without a
+                // distinct count, `1 / rows` would claim every value is
+                // unique (one matching row); a low-cardinality column
+                // (`l_returnflag = 'R'`) would then look tiny and be
+                // built.
+                (Some(x), None) | (None, Some(x)) => {
+                    let with_literal = literal(a).is_some() || literal(b).is_some();
+                    if with_literal && !x.ndv_known {
+                        DEFAULT_SELECTIVITY
+                    } else {
+                        1.0 / x.ndv
+                    }
+                }
                 (None, None) => DEFAULT_SELECTIVITY,
             }
         }
@@ -374,8 +392,8 @@ pub(crate) fn selectivity(pred: &Expr, est: &Est) -> f64 {
             }
         }
         (Some((Builtin::In, [v, list @ ..], _)), _) => match column(v, est) {
-            Some(c) => to_f64(u64::try_from(list.len()).unwrap_or(u64::MAX)) / c.ndv,
-            None => DEFAULT_SELECTIVITY,
+            Some(c) if c.ndv_known => to_f64(u64::try_from(list.len()).unwrap_or(u64::MAX)) / c.ndv,
+            _ => DEFAULT_SELECTIVITY,
         },
         (Some((Builtin::IsNull, [a], _)), _) => {
             column(a, est).map_or(DEFAULT_SELECTIVITY, |c| c.nulls)
