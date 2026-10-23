@@ -10,7 +10,7 @@ Query optimizer: rule- and cost-based rewrites, including the IVM rewrite pass.
 Paths are relative to this crate.
 - `src/lib.rs` rule batches and the `optimize` entry point
 - `src/dag.rs` `dag::Rewriter`, the rewrite-once rule for shared subtrees
-- `src/fold.rs` constant folding; `src/pushdown.rs` predicate pushdown; `src/prune.rs` column pruning
+- `src/fold.rs` constant folding; `src/pushdown.rs` predicate pushdown (below a window only on partition keys); `src/prune.rs` column pruning (removes unused window columns)
 - `src/project.rs` projection rules; `src/limit.rs` limit rules
 - `src/restrict.rs` subquery restriction rules
 - `src/join_order.rs` inner-join ordering; `src/stats.rs` `Statistics` it reads

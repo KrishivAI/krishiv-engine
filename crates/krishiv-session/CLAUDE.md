@@ -16,7 +16,7 @@ Paths are relative to this crate.
 - `src/catalog.rs` session catalog (temporary tables and views)
 - `src/dataframe.rs` DataFrame transformations (IR only) and async actions; `src/column.rs` and `src/functions.rs` user API
 - `src/explain.rs` EXPLAIN; `src/profile.rs` profile for EXPLAIN ANALYZE
-- `tests/session.rs`, `tests/explain_analyze.rs`, `tests/spill.rs`, `tests/tpch_q1.rs` end-to-end tests
+- `tests/session.rs`, `tests/explain_analyze.rs`, `tests/spill.rs`, `tests/tpch_q1.rs` and `tests/window_goldens.rs` (window functions against Spark goldens) end-to-end tests
 
 ## Extension points
 - New DataFrame action: an async method in `src/dataframe.rs` running on the session executor; transformations only build IR.

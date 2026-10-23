@@ -19,7 +19,7 @@ syntax = "proto3";
 package krishiv.plan.v1;
 
 message PhysicalPlan {
-  // The writer's format version (3).
+  // The writer's format version (4).
   uint32 format_version = 1;
   // The oldest reader version that understands every field in use.
   uint32 min_reader_version = 2;
@@ -67,6 +67,8 @@ message Node {
     UnionNode union = 12;
     WriteFilesNode write_files = 13;
     ExchangeNode exchange = 14;
+    // v4: a plan with a window needs a v4 reader.
+    WindowNode window = 15;
   }
 }
 
@@ -126,7 +128,7 @@ enum SubqueryValueKind {
 message LimitNode {
   uint32 input = 1;
   uint64 limit = 2;
-  // v3: the number of leading rows to skip (`OFFSET`).
+  // v3: the number of leading rows to skip. v2 bytes leave this as zero.
   uint64 offset = 3;
 }
 
@@ -152,6 +154,51 @@ message TopNNode {
   uint32 input = 1;
   repeated SortKey keys = 2;
   uint64 limit = 3;
+}
+
+// v4: window functions over an input sorted by the partitioning columns,
+// then the ordering.
+message WindowNode {
+  uint32 input = 1;
+  repeated uint64 partition_by = 2;
+  repeated SortKey order_by = 3;
+  repeated WindowFunctionPlan functions = 4;
+}
+
+message WindowFunctionPlan {
+  oneof function {
+    Empty row_number = 1;
+    Empty rank = 2;
+    Empty dense_rank = 3;
+    Empty percent_rank = 4;
+    Empty cume_dist = 5;
+    // The bucket count.
+    int32 ntile = 6;
+    AggregateExpr aggregate = 7;
+  }
+  WindowFrame frame = 8;
+  // A boolean input column an aggregate is restricted to.
+  optional uint64 filter = 9;
+  string name = 10;
+}
+
+message WindowFrame {
+  FrameUnits units = 1;
+  FrameBound lower = 2;
+  FrameBound upper = 3;
+}
+
+enum FrameUnits {
+  FRAME_UNITS_UNSPECIFIED = 0;
+  FRAME_UNITS_ROWS = 1;
+  FRAME_UNITS_RANGE = 2;
+}
+
+enum FrameBound {
+  FRAME_BOUND_UNSPECIFIED = 0;
+  FRAME_BOUND_UNBOUNDED_PRECEDING = 1;
+  FRAME_BOUND_CURRENT_ROW = 2;
+  FRAME_BOUND_UNBOUNDED_FOLLOWING = 3;
 }
 
 message AggregateNode {

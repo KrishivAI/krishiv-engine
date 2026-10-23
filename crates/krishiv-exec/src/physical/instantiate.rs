@@ -314,6 +314,15 @@ impl Instantiation<'_> {
                 let sort = sort_op(&input.schema, keys, self.spill.clone())?;
                 Ok(breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort))
             }
+            PhysNode::Window { input, window } => {
+                let input = self.node(input)?;
+                let op = crate::window::Window::new(
+                    Arc::clone(&input.schema),
+                    window.clone(),
+                    self.env.ansi,
+                )?;
+                Ok(operator(input, Arc::new(op)))
+            }
             PhysNode::TopN { input, keys, limit } => {
                 let input = self.node(input)?;
                 let top = top_n_op(&input.schema, keys, *limit)?;

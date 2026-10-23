@@ -9,13 +9,14 @@ arena is reserved, and it provides the pressure release hook (`mi_collect`) for 
 
 ## Key files
 Paths are relative to this crate.
-- `src/lib.rs` the whole crate (about 280 lines):
+- `src/lib.rs` the allocator policy (about 460 lines, with its tests):
 - `LIMITED_OPTIONS` the three `MIMALLOC_*` options (purge delay, THP off, minimal purge size) and their mimalloc option numbers
 - `limit_in_args` detects `--memory-limit` or `krishiv.memory.limit=` in program arguments
 - `LIMIT_VAR` the `KRISHIV_MEMORY_LIMIT` environment variable
 - `init` (glibc only, inside the `.init_array` constructor) applies `LIMITED_OPTIONS` when a limit is known at process start
 - `release` the pressure release hook (`mi_collect(true)`)
 - `install` links the constructor and returns `release` for `krishiv_memory::set_release_hook`
+- `src/heap.rs` (feature `heap-stats`) `Counting<A>`, a global-allocator wrapper that counts live and peak heap bytes for memory measurements; `tests/heap_stats.rs` covers it
 - `Cargo.toml` depends on `libmimalloc-sys` (`extended`) only
 
 ## Extension points

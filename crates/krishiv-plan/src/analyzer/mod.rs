@@ -75,6 +75,7 @@ mod setops;
 mod subquery;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+mod windows;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

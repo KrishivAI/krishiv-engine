@@ -13,6 +13,7 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
 - `src/translate/mod.rs` `translate_*` entry points; `src/translate/relation.rs` and `expression.rs` (IR building)
 - `src/translate/literal.rs` literals; `src/translate/names.rs` names and plan-id origins
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
+- `tests/fuzz_regressions.rs` fuzz findings (inputs that once ran out of memory) must end in a typed error
 - `tests/goldens.rs` golden runner over `tests/snapshots/` and `tests/fixtures/pyspark-4.2/`
 
 ## Extension points

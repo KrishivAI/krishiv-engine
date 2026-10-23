@@ -66,6 +66,12 @@ pub enum ExprNode {
         /// The subquery plan.
         plan: Arc<LogicalPlan>,
     },
+    /// `function OVER window` (Spark's `WindowExpression`). Unresolved,
+    /// `function` is an [`ExprNode::Function`] call; resolved, it is a
+    /// window or aggregate function and the window is a
+    /// [`WindowSpecRef::Spec`] with its frame set (Spark's defaults
+    /// applied).
+    Window(WindowExpr),
     /// An expression bound by the analyzer.
     Resolved(ResolvedExpr),
 }
@@ -188,6 +194,100 @@ pub enum NullOrdering {
     NullsFirst,
     /// `NULLS LAST`.
     NullsLast,
+}
+
+/// `function OVER window`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowExpr {
+    /// The window or aggregate function call.
+    pub function: Arc<Expr>,
+    /// The window it is evaluated over.
+    pub window: WindowSpecRef,
+}
+
+/// The window of a [`WindowExpr`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WindowSpecRef {
+    /// An inline window (a named one, after SQL lowering substituted its
+    /// definition).
+    Spec(WindowSpec),
+    /// `OVER w` with no `WINDOW` clause defining `w` around it
+    /// (unresolved only; the analyzer reports
+    /// `MISSING_WINDOW_SPECIFICATION` once the operator's input resolved,
+    /// as Spark's `WindowsSubstitution` does).
+    Named(String),
+}
+
+/// `(PARTITION BY ... ORDER BY ... frame)` (Spark's
+/// `WindowSpecDefinition`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowSpec {
+    /// The partitioning expressions.
+    pub partition_by: Vec<Arc<Expr>>,
+    /// The ordering within a partition.
+    pub order_by: Vec<SortOrder>,
+    /// The frame; `None` is Spark's unspecified frame (unresolved plans
+    /// only: the analyzer sets the function's frame or Spark's default).
+    pub frame: Option<WindowFrame>,
+}
+
+/// A window frame (Spark's `SpecifiedWindowFrame`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowFrame {
+    /// `ROWS` or `RANGE`.
+    pub units: FrameUnits,
+    /// The start bound.
+    pub lower: FrameBound,
+    /// The end bound.
+    pub upper: FrameBound,
+}
+
+/// The units of a [`WindowFrame`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FrameUnits {
+    /// `ROWS`: bounds count rows.
+    Rows,
+    /// `RANGE`: bounds are values of the ordering key.
+    Range,
+}
+
+/// A bound of a [`WindowFrame`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FrameBound {
+    /// `UNBOUNDED PRECEDING`: the partition's first row.
+    UnboundedPreceding,
+    /// `CURRENT ROW` (with its peers, in `RANGE` units).
+    CurrentRow,
+    /// `UNBOUNDED FOLLOWING`: the partition's last row.
+    UnboundedFollowing,
+    /// A value bound, signed as Spark keeps it: SQL's `n PRECEDING` is
+    /// `-(n)` (the canonical `negative` call), `n FOLLOWING` is `n`, and a
+    /// DataFrame `rowsBetween(-1, 1)` is the literals `-1` and `1`.
+    Offset(Arc<Expr>),
+}
+
+impl WindowFrame {
+    /// `units BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING`.
+    #[must_use]
+    pub const fn unbounded(units: FrameUnits) -> Self {
+        Self {
+            units,
+            lower: FrameBound::UnboundedPreceding,
+            upper: FrameBound::UnboundedFollowing,
+        }
+    }
+
+    /// `units BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
+    #[must_use]
+    pub const fn running(units: FrameUnits) -> Self {
+        Self {
+            units,
+            lower: FrameBound::UnboundedPreceding,
+            upper: FrameBound::CurrentRow,
+        }
+    }
 }
 
 /// The identity of a resolved attribute (Spark's `ExprId`).
@@ -361,6 +461,20 @@ impl Expr {
                 SubqueryKind::In(values) => values.iter().for_each(f),
                 SubqueryKind::Scalar | SubqueryKind::Exists => {}
             },
+            ExprNode::Window(w) => {
+                f(&w.function);
+                if let WindowSpecRef::Spec(spec) = &w.window {
+                    spec.partition_by.iter().for_each(&mut *f);
+                    spec.order_by.iter().for_each(|o| f(&o.expr));
+                    if let Some(frame) = &spec.frame {
+                        for b in [&frame.lower, &frame.upper] {
+                            if let FrameBound::Offset(e) = b {
+                                f(e);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -386,6 +500,20 @@ impl Expr {
                 SubqueryKind::In(values) => values.iter_mut().for_each(f),
                 SubqueryKind::Scalar | SubqueryKind::Exists => {}
             },
+            ExprNode::Window(w) => {
+                f(&mut w.function);
+                if let WindowSpecRef::Spec(spec) = &mut w.window {
+                    spec.partition_by.iter_mut().for_each(&mut *f);
+                    spec.order_by.iter_mut().for_each(|o| f(&mut o.expr));
+                    if let Some(frame) = &mut spec.frame {
+                        for b in [&mut frame.lower, &mut frame.upper] {
+                            if let FrameBound::Offset(e) = b {
+                                f(e);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -472,6 +600,20 @@ impl Expr {
         let out = f(Arc::clone(&self))?.map_children(|c| c.down(f, done))?;
         done.insert(Arc::as_ptr(&self), (self, Arc::clone(&out)));
         Ok(out)
+    }
+}
+
+/// The operand of `-(x)` (the canonical `negative`, unresolved or
+/// resolved): a frame bound written `x PRECEDING`.
+pub(crate) fn negated(e: &Expr) -> Option<&Arc<Expr>> {
+    let (name, args) = match &e.node {
+        ExprNode::Function(f) => (f.name.as_str(), &f.args),
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => (f.id.name(), &f.args),
+        _ => return None,
+    };
+    match &args[..] {
+        [x] if name == crate::Builtin::Negative.name() => Some(x),
+        _ => None,
     }
 }
 

@@ -27,6 +27,11 @@ thiserror.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Count the live heap (`krishiv_alloc::heap`) and report its peak in PROFILE
+# (`"peak_heap_bytes"`): a measurement build.
+heap-stats = ["krishiv-alloc/heap-stats"]
+
 [dev-dependencies]
 arrow-schema.workspace = true
 parquet = { workspace = true, features = ["arrow"] }

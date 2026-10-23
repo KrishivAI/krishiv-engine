@@ -15,7 +15,7 @@ use krishiv_exec::physical::{PhysNode, PhysicalPlan};
 use krishiv_plan::{Expr, ReadSource};
 use krishiv_plan_codec::proto as pb;
 use krishiv_plan_codec::{
-    CodecError, FORMAT_VERSION, Limits, decode, decode_with, encode, to_message,
+    CodecError, FORMAT_VERSION, Limits, MIN_READER_VERSION, decode, decode_with, encode, to_message,
 };
 use prost::Message as _;
 
@@ -42,6 +42,7 @@ variants!(
     ReplicateRows,
     Sort,
     TopN,
+    Window,
     Aggregate,
     HashJoin,
     NestedLoopJoin,
@@ -60,6 +61,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
         PhysNode::Sort { .. } => Variant::Sort,
         PhysNode::TopN { .. } => Variant::TopN,
+        PhysNode::Window { .. } => Variant::Window,
         PhysNode::Aggregate { .. } => Variant::Aggregate,
         PhysNode::HashJoin(_) => Variant::HashJoin,
         PhysNode::NestedLoopJoin(_) => Variant::NestedLoopJoin,
@@ -267,6 +269,73 @@ fn a_plan_that_needs_a_newer_reader_is_refused() {
 }
 
 #[test]
+fn an_offset_limit_needs_a_v3_reader() {
+    // A `Limit` with a nonzero offset sets `min_reader_version` to 3: an
+    // older reader would silently ignore the skipped rows.
+    assert_eq!(message("limit").min_reader_version, MIN_READER_VERSION);
+    assert_eq!(message("limit_offset").min_reader_version, 3);
+}
+
+#[test]
+fn a_window_needs_a_v4_reader() {
+    // A `Window` node sets `min_reader_version` to 4: an older reader has
+    // no such node. Plans without one stay readable by older readers.
+    assert_eq!(FORMAT_VERSION, 4);
+    assert_eq!(message("window_ranking").min_reader_version, 4);
+    assert_eq!(message("window_aggregates").min_reader_version, 4);
+    for (name, plan) in cases() {
+        if !name.starts_with("window") {
+            let m = to_message(&plan).unwrap();
+            assert!(m.min_reader_version <= 3, "{name} needs a newer reader");
+        }
+    }
+}
+
+#[test]
+fn a_window_plan_survives_the_wire_with_every_field() {
+    for name in ["window_ranking", "window_aggregates"] {
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+}
+
+#[test]
+fn a_corrupt_window_is_refused() {
+    use pb::node::Kind;
+    let edit = |f: &dyn Fn(&mut pb::WindowNode)| {
+        let mut m = message("window_ranking");
+        for node in &mut m.nodes {
+            if let Some(Kind::Window(w)) = &mut node.kind {
+                f(w);
+            }
+        }
+        m
+    };
+    corrupt(
+        &edit(&|w| w.functions[0].function = None),
+        "a window function is missing",
+    );
+    corrupt(
+        &edit(&|w| w.functions[0].frame = None),
+        "a window frame is missing",
+    );
+    corrupt(
+        &edit(&|w| w.functions[0].frame.as_mut().unwrap().units = 0),
+        "unknown window frame unit",
+    );
+    corrupt(
+        &edit(&|w| w.functions[0].frame.as_mut().unwrap().lower = 9),
+        "unknown window frame bound",
+    );
+    corrupt(
+        &edit(&|w| {
+            w.functions[5].function = Some(pb::window_function_plan::Function::Ntile(0));
+        }),
+        "ntile with a bucket count below one",
+    );
+}
+
+#[test]
 fn a_newer_writer_that_stays_compatible_is_read() {
     // N reads N+1 when the writer only added fields: unknown fields (here
     // number 999, a varint) are skipped, and the version is higher.
@@ -456,8 +525,8 @@ fn limits_bound_size_and_depth() {
     for _ in 0..1030 {
         node = PhysNode::Limit {
             input: Box::new(node),
-            limit: 1,
             offset: 0,
+            limit: 1,
         };
     }
     // The plan itself is deeper than the default bound; its explain tree

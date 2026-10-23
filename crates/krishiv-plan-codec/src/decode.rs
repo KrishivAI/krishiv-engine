@@ -17,6 +17,9 @@ use krishiv_exec::physical::{
     SubqueryValueKind,
 };
 use krishiv_exec::planner::ExplainNode;
+use krishiv_exec::window::{
+    FrameBound, FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan,
+};
 use krishiv_exec::{RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{
@@ -287,8 +290,8 @@ impl Decoder {
             },
             Kind::Limit(l) => PhysNode::Limit {
                 input: self.boxed(l.input)?,
-                limit: l.limit,
                 offset: l.offset,
+                limit: l.limit,
             },
             Kind::ReplicateRows(r) => PhysNode::ReplicateRows {
                 input: self.boxed(r.input)?,
@@ -304,6 +307,10 @@ impl Decoder {
                 input: self.boxed(t.input)?,
                 keys: sort_keys(&t.keys)?,
                 limit: t.limit,
+            },
+            Kind::Window(w) => PhysNode::Window {
+                input: self.boxed(w.input)?,
+                window: window_plan(w)?,
             },
             Kind::Aggregate(a) => PhysNode::Aggregate {
                 input: self.boxed(a.input)?,
@@ -535,6 +542,57 @@ fn aggregate(a: &pb::AggregateNode) -> Result<AggregatePlan> {
             pb::AggregateOutput::Final => AggregateOutput::Final,
             _ => AggregateOutput::Partial,
         },
+    })
+}
+
+fn window_plan(w: &pb::WindowNode) -> Result<WindowPlan> {
+    Ok(WindowPlan {
+        partition_by: usizes(&w.partition_by)?,
+        order_by: sort_keys(&w.order_by)?,
+        functions: w
+            .functions
+            .iter()
+            .map(window_function)
+            .collect::<Result<_>>()?,
+    })
+}
+
+fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
+    use pb::window_function_plan::Function;
+    let function = match required(&f.function, "a window function")? {
+        Function::RowNumber(_) => WindowFunction::RowNumber,
+        Function::Rank(_) => WindowFunction::Rank,
+        Function::DenseRank(_) => WindowFunction::DenseRank,
+        Function::PercentRank(_) => WindowFunction::PercentRank,
+        Function::CumeDist(_) => WindowFunction::CumeDist,
+        Function::Ntile(buckets) => {
+            if *buckets <= 0 {
+                return Err(corrupt("an ntile with a bucket count below one"));
+            }
+            WindowFunction::Ntile(*buckets)
+        }
+        Function::Aggregate(a) => WindowFunction::Aggregate(aggregate_expr(a)?),
+    };
+    let frame = required(&f.frame, "a window frame")?;
+    let bound = |b: i32| {
+        Ok(match enum_of!(pb::FrameBound, b, "window frame bound")? {
+            pb::FrameBound::UnboundedPreceding => FrameBound::UnboundedPreceding,
+            pb::FrameBound::CurrentRow => FrameBound::CurrentRow,
+            _ => FrameBound::UnboundedFollowing,
+        })
+    };
+    Ok(WindowFunctionPlan {
+        function,
+        frame: WindowFrame {
+            units: match enum_of!(pb::FrameUnits, frame.units, "window frame unit")? {
+                pb::FrameUnits::Rows => FrameUnits::Rows,
+                _ => FrameUnits::Range,
+            },
+            lower: bound(frame.lower)?,
+            upper: bound(frame.upper)?,
+        },
+        filter: f.filter.map(usize_of).transpose()?,
+        name: f.name.clone(),
     })
 }
 

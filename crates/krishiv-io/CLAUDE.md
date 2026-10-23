@@ -46,6 +46,8 @@ Paths are relative to this crate.
 - `src/schema_map.rs` `SchemaMapper`; `src/options.rs` typed format options
 - `src/runtime_filter/mod.rs` runtime filters and their key normalization
 - `src/parquet/mod.rs` `ParquetFormat`; `src/parquet/decode.rs` and `write.rs` the reader and writer
+- `src/scan_gate.rs` `ScanGate`, admission of the decode working sets of a query's scan streams (ADR 0007)
+- `src/parquet/thrift_guard.rs` structural check of a footer before arrow-rs decodes it
 - `src/csv/mod.rs` CSV format
 
 ## Extension points

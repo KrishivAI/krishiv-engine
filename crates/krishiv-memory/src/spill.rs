@@ -55,6 +55,13 @@ pub trait Spillable: Send + Sync {
     fn owner(&self) -> Option<OwnerId> {
         None
     }
+    /// Whether this consumer frees memory by giving up a reservation for
+    /// memory it goes on using (a scan's decode working sets, which then
+    /// count as over-committed) rather than by spilling it: the arbitrator
+    /// asks it only after every other victim, and before an abort.
+    fn last_resort(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Default)]

@@ -54,11 +54,11 @@ pub use encode::{encode, to_message};
 pub use error::{CodecError, Result};
 
 /// The format version this crate writes.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// The `min_reader_version` this crate writes: readers older than this
 /// cannot understand the plan.
-pub const MIN_READER_VERSION: u32 = 3;
+pub const MIN_READER_VERSION: u32 = 2;
 
 /// What [`decode_with`] accepts.
 #[derive(Debug, Clone, PartialEq, Eq)]

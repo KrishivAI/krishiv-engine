@@ -27,9 +27,7 @@
 
 /// File magic.
 pub(crate) const MAGIC: [u8; 4] = *b"KSPL";
-/// Format version written. Version 1 is the only one, so the reader accepts
-/// exactly it; a bump must keep reading the previous version (ADR 0029:
-/// version N reads N-1).
+/// Format version written (ADR 0029: version N reads N-1).
 pub(crate) const VERSION: u32 = 1;
 /// Length of the file header.
 pub(crate) const FILE_HEADER_LEN: usize = 8;

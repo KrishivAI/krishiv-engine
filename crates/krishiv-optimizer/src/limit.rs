@@ -70,6 +70,7 @@ pub(crate) fn max_rows(plan: &LogicalPlan) -> Option<u64> {
         | PlanNode::SubqueryAlias { input, .. }
         | PlanNode::WithCte { input, .. }
         | PlanNode::Shift { input, .. }
+        | PlanNode::Window { input, .. }
         | PlanNode::JoinHint { input, .. } => max_rows(input),
         PlanNode::Union { inputs, .. } => inputs
             .iter()

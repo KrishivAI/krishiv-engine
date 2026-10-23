@@ -48,6 +48,9 @@ Paths are relative to this crate.
 - Ambiguities ANTLR resolves by prediction are decided deterministically; every decision is checked
   against a real Spark run (`tests/fixtures/spark-4.2.0/sql-parse-probe.json`,
   `tests/scripts/gen_sql_parse_probe.py`) and the golden corpus (`krishiv-testkit` `tests/sql_parse.rs`).
+- `OVER w` resolves as Spark's `WindowsSubstitution`: the innermost `WINDOW` clause around decides (derived
+  tables in its `FROM` see it, subquery expressions do not); a name it lacks is `MISSING_WINDOW_SPECIFICATION`
+  at lowering; with no clause around, the name stays in the IR for the analyzer. `n PRECEDING` is `-(n)`.
 - Lowering mirrors Spark's `AstBuilder` shapes (comma joins fold left into inner joins, balanced `AND`/`OR`,
   `<>` as `not(==)`, `HAVING` as a filter over the aggregate); the TPC-H oracle is `krishiv-plan`'s hand-built
   plans. Constructs the IR lacks fail with `KRISHIV_UNSUPPORTED_FEATURE` naming the construct, never silently.

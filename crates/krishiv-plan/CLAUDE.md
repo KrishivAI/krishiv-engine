@@ -17,6 +17,7 @@ Paths are relative to this crate.
 - `src/encode.rs` canonical encoding and `StructuralHash`; `src/dag.rs` DAG-aware equality and transforms
 - `src/walk.rs` child mapping and tree rewrites; `src/display.rs` pretty-printer (insta snapshots)
 - `src/analyzer/mod.rs` analyzer entry; `src/analyzer/bind.rs` Bind stage (async, catalog and access policy)
+- `src/analyzer/windows.rs` window binding and extraction into `Window` relations
 - `src/analyzer/resolve.rs` Resolve stage (sync); `src/analyzer/builtins.rs` `BuiltinFunctions`; `src/analyzer/coerce.rs` implicit coercion
 - `src/tests/inventory.rs` node inventory checked by the tests
 
@@ -44,6 +45,10 @@ Paths are relative to this crate.
   only `AnalysisContext` (its config is `ResolutionConf`); resolved plans are deterministic and a fixed point.
   Memo keys are addresses: keep every keyed `Arc` alive for the memo's lifetime. Walks over expressions use a
   visited set (expressions are DAGs too). Self-joins of a shared subtree get a `Shift` instance, never a copy.
+- Windows (`analyzer/windows.rs`): a window's function binds as a window call (not an aggregate of the
+  operator); frames are resolved at bind time (names show them); select lists extract windows into
+  `PlanNode::Window`s (Spark's `ExtractWindowExpressions`); a `HAVING` over an aggregate with windows filters
+  below them. Window goldens: `tests/scripts/gen_window_goldens.py` → `tests/fixtures/spark-4.2.0/window-goldens.json`.
 - Analyzer goldens come from a real Spark run: `tests/scripts/gen_analyzer_goldens.py` →
   `tests/fixtures/spark-4.2.0/analyzer-goldens.json`.
 - `#![forbid(unsafe_code)]`.

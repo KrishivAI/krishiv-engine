@@ -9,7 +9,7 @@ Bench-only helper (P2-T142): a line-protocol process around `krishiv-session` th
 ## Key files
 Paths are relative to this crate.
 - `src/lib.rs` the line protocol (documented there) and the commands around `krishiv-session`
-- `src/main.rs` binary entry; installs the mimalloc release hook from `krishiv-alloc`
+- `src/main.rs` binary entry; installs the mimalloc release hook from `krishiv-alloc`; with feature `heap-stats` it counts the live heap (reported as `peak_heap_bytes` and `peak_untracked_bytes`)
 - `build.rs` build-info values checked by `tests/build_info.rs`
 - `tests/protocol.rs` protocol tests; `tests/memory_bound.rs` memory-bound tests; `tests/spill_equivalence.rs` spill tests
 

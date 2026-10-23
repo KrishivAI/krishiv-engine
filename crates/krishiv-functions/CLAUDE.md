@@ -30,7 +30,7 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
 ## Key files
 Paths are relative to this crate.
 - `src/signature.rs` call-site types the analyzer uses (`FunctionKind`, `ArgType`, `InputType`, `ResultType`, `Arity`)
-- `src/registry/mod.rs` `builtins()` and `Registry::lookup`
+- `src/registry/mod.rs` `builtins()` and `Registry::lookup`; its `Execution` includes `Window` (run by the window operator, never called without `OVER`)
 - `src/registry/defs.rs` string, datetime and aggregate signatures; `src/registry/math.rs` math and `try_*` signatures
 - `src/registry/conditional.rs` conditional evaluators; `src/registry/hashing.rs` hash signatures
 - `src/registry/catalog.rs` catalog rows loaded from `vendored/spark-functions.tsv`
