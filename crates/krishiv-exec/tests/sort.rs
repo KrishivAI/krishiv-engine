@@ -675,6 +675,12 @@ async fn edge_cases_and_errors() {
 
     let class = |e: KrishivError| e.error_class();
     let s = b.schema();
+    // A sort without keys gathers (see below); a TopN without keys is not
+    // planned (a limit without an order is a `Limit`).
+    assert_eq!(
+        class(TopN::new(Arc::clone(&s), &[], 0, 3).unwrap_err()),
+        ErrorClass::InternalError
+    );
     let out_of_range = Sort::new(Arc::clone(&s), &[SortKey::asc(9)], None);
     assert_eq!(class(out_of_range.unwrap_err()), ErrorClass::InternalError);
     for (offset, limit) in [(1, TopN::MAX_ROWS), (usize::MAX, 2)] {

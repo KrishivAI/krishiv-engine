@@ -353,7 +353,7 @@ fn a_window_requires_its_partitioning() {
         ),
         vec!["Exchange hashpartitioning(a#0)".to_owned()]
     );
-    // Partitioned by a key of the placement and more: still clustered.
+    // Grouped by the same keys: clustered already.
     assert_eq!(
         exchanges_of(
             &env,
@@ -363,4 +363,23 @@ fn a_window_requires_its_partitioning() {
         .len(),
         1
     );
+    // Placed by a subset of the partitioning keys (`a` of `a, b`): rows
+    // with equal `a, b` share a partition, so no exchange.
+    assert_eq!(
+        exchanges_of(
+            &env,
+            "SELECT a, b, sum(c) OVER (PARTITION BY a, b) FROM \
+             (SELECT a, max(b) AS b, count(*) AS c FROM t GROUP BY a)"
+        ),
+        vec!["Exchange hashpartitioning(a#0)".to_owned()]
+    );
+    // Placed by more keys than the partitioning (`a, b` for `a`): rows with
+    // equal `a` may be apart, so the window exchanges by `a`.
+    let more = exchanges_of(
+        &env,
+        "SELECT a, sum(c) OVER (PARTITION BY a) FROM \
+         (SELECT a, b, count(*) AS c FROM t GROUP BY a, b)",
+    );
+    assert_eq!(more.len(), 2, "{more:?}");
+    assert_eq!(more[0], "Exchange hashpartitioning(a#0)");
 }
