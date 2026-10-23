@@ -212,6 +212,10 @@ fn hull(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> Option<(u64, u64)> {
     }
 }
 
+/// A CTE scope: every visible CTE (outer ones as `None`, this level's as
+/// `Some(index)`); inner `WITH` names shadow as `None`.
+type CteScope = Vec<(String, Option<usize>)>;
+
 impl Resolver<'_> {
     pub(super) fn fresh(&mut self) -> AttrId {
         self.next_id += 1;
@@ -761,22 +765,22 @@ impl Resolver<'_> {
     /// as `Some(index)`). A single-part read resolves to the innermost
     /// scope entry matching its name; only reads resolving to this level
     /// are reported. Inner `WITH` names shadow as `None`.
-    fn cte_refs(
-        root: &Arc<LogicalPlan>,
-        scope: &[(String, Option<usize>)],
-        case_sensitive: bool,
-    ) -> Vec<usize> {
+    fn cte_refs(root: &Arc<LogicalPlan>, scope: &CteScope, case_sensitive: bool) -> Vec<usize> {
         enum Item<'a> {
-            Plan(&'a Arc<LogicalPlan>, Vec<(String, Option<usize>)>),
-            Expr(&'a Arc<Expr>, Vec<(String, Option<usize>)>),
+            Plan(&'a Arc<LogicalPlan>, CteScope),
+            Expr(&'a Arc<Expr>, CteScope),
         }
         let mut out = Vec::new();
-        let mut seen: HashSet<(usize, usize)> = HashSet::new();
-        let mut stack = vec![Item::Plan(root, scope.to_vec())];
+        // Visits are keyed by scope contents, not scope length: the same
+        // plan reached through two inner `WITH` scopes with different names
+        // but equal lengths resolves its reads differently (a shadowing name
+        // hides what the other scope reports), so each scope gets a visit.
+        let mut seen: HashSet<(usize, CteScope)> = HashSet::new();
+        let mut stack = vec![Item::Plan(root, scope.clone())];
         while let Some(item) = stack.pop() {
             match item {
                 Item::Plan(p, sc) => {
-                    if !seen.insert((addr(&**p), sc.len())) {
+                    if !seen.insert((addr(&**p), sc.clone())) {
                         continue;
                     }
                     match &p.node {
@@ -832,7 +836,7 @@ impl Resolver<'_> {
                     }
                 }
                 Item::Expr(e, sc) => {
-                    if !seen.insert((addr(&**e), sc.len())) {
+                    if !seen.insert((addr(&**e), sc.clone())) {
                         continue;
                     }
                     if let ExprNode::Subquery { plan, .. } = &e.node {

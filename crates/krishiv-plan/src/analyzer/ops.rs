@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     AmbiguousReference, AssignmentArityMismatch, DatatypeMismatchFilterNotBoolean,
-    FailedToParseTooComplex, GroupByPosAggregate, GroupByPosOutOfRange,
+    FailedToParseTooComplex, GroupByAggregate, GroupByPosAggregate, GroupByPosOutOfRange,
     InvalidLimitLikeExpressionDataType, InvalidLimitLikeExpressionIsNegative,
     InvalidLimitLikeExpressionIsNull, InvalidLimitLikeExpressionIsUnfoldable,
     InvalidWhereCondition, JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy,
@@ -834,8 +834,43 @@ impl Resolver<'_> {
                 *slot = Some(self.bind(k, &cx)?);
             }
         }
-        let group = group.into_iter().flatten().collect();
+        let group: Vec<Bound> = group.into_iter().flatten().collect();
+        self.check_grouping(&group, &items)?;
         self.build_aggregate(p.origin, &c, group, &items, false)
+    }
+
+    /// Spark's `GROUP_BY_AGGREGATE` and
+    /// `UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_GROUP_BY` for named
+    /// keys: a grouping expression may not contain an aggregate call,
+    /// however it was written (directly, or through a select-list alias
+    /// resolving to one, which otherwise hides in the grouping-key set
+    /// `check_aggregation` skips), and it may not compute what a lateral
+    /// alias reader computes (as `group_ordinal` enforces for ordinals).
+    fn check_grouping(&self, group: &[Bound], items: &[Bound]) -> Result<(), AnalysisError> {
+        let mut memo = HashMap::new();
+        let mut lateral: Vec<u128> = Vec::new();
+        for b in items {
+            if !b.lateral.is_empty() {
+                lateral.push(semantic_key(&b.expr, &mut memo));
+            }
+        }
+        for b in group {
+            if has_aggregate(&b.expr) {
+                return Err(AnalysisError::new(
+                    GroupByAggregate {
+                        sql_expr: pretty(&b.expr),
+                    },
+                    b.expr.origin,
+                ));
+            }
+            if lateral.contains(&semantic_key(&b.expr, &mut memo)) {
+                return Err(AnalysisError::new(
+                    UnsupportedFeatureLateralColumnAliasInGroupBy {},
+                    Origin::UNKNOWN,
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// `GROUP BY n`: the `n`-th select item, unaliased.
@@ -1653,6 +1688,25 @@ fn alias_id(e: &Expr) -> Option<AttrId> {
         ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => Some(output.id),
         _ => None,
     }
+}
+
+/// Whether `e` calls an aggregate function. Subquery plans are not
+/// expressions and are not visited, so their own aggregates never count.
+fn has_aggregate(e: &Arc<Expr>) -> bool {
+    let mut seen = HashSet::new();
+    let mut stack = vec![Arc::clone(e)];
+    while let Some(x) = stack.pop() {
+        if !seen.insert(super::bind::addr(&*x)) {
+            continue;
+        }
+        if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
+            && f.kind == FunctionKind::Aggregate
+        {
+            return true;
+        }
+        x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    false
 }
 
 /// Spark's `UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_AGGREGATE_FUNC`:
