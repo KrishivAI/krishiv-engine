@@ -555,3 +555,34 @@ fn filtered_dimensions_count_the_keys_they_keep() {
     assert!(line("d_date_sk") < line("cd_demo_sk"), "{text}");
     insta::assert_snapshot!(text);
 }
+
+/// TPC-DS q13's shape: one `or` over three inputs whose disjuncts all hold
+/// the same key equalities. The equalities are join conditions of their
+/// own, so the inputs meet in equi-joins; as one condition over all three
+/// inputs they could only meet in a cross product (q13 crossed a filtered
+/// customer_demographics with the fact side).
+#[test]
+fn equalities_every_disjunct_holds_join_their_inputs() {
+    let sql = "SELECT count(*) FROM lineitem, orders, customer \
+               WHERE (l_orderkey = o_orderkey AND o_custkey = c_custkey \
+                      AND l_quantity > 10 AND c_acctbal > 0) \
+                  OR (l_orderkey = o_orderkey AND o_custkey = c_custkey \
+                      AND l_quantity < 5 AND o_totalprice > 100)";
+    let plan = support::resolve(sql, &support::ctx());
+    let optimized = optimize_with(&plan, &fixture()).unwrap();
+    no_cross_product(optimized.root(), sql);
+    insta::assert_snapshot!(optimized.root().to_string());
+    // The same rows, and a disjunct of only shared equalities leaves just
+    // the equalities.
+    same_rows(
+        "SELECT t.a, u.d, x.b FROM t, u, t x \
+         WHERE (t.a = u.a AND u.a = x.a AND t.b = 'p') OR (t.a = u.a AND u.a = x.a AND x.c > 1)",
+    );
+    let only = same_rows(
+        "SELECT t.a, u.d, x.b FROM t, u, t x \
+         WHERE (t.a = u.a AND u.a = x.a) OR (t.a = u.a AND u.a = x.a AND x.c > 1)",
+    );
+    assert!(!only.root().to_string().contains(" or "), "{}", only.root());
+    // Equalities only some disjuncts hold stay inside the `or`.
+    same_rows("SELECT t.a, u.d FROM t, u WHERE (t.a = u.a AND t.b = 'p') OR (t.c = u.a)");
+}

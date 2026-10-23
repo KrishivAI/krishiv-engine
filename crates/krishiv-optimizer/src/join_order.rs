@@ -23,7 +23,8 @@ use krishiv_plan::{
 };
 
 use crate::expr::{
-    Attrs, and_all, column, conjuncts, has_subquery, implied, is_deterministic, references,
+    Attrs, and_all, column, common_equalities, conjuncts, has_subquery, implied, is_deterministic,
+    references,
 };
 use crate::stats::{Est, Estimator, Statistics, equi_columns, selectivity};
 
@@ -228,6 +229,7 @@ impl Reorder<'_> {
         if leaves.len() < 2 {
             return self.children(root);
         }
+        let preds = preds.iter().flat_map(common_equalities).collect();
         let ests: Vec<Rc<Est>> = leaves.iter().map(|l| self.est.plan(l)).collect();
         let graph = Graph::new(&leaves, &ests, preds);
         if graph.parts(false) < graph.parts(true) {
