@@ -311,6 +311,14 @@ fn conditional_functions_legacy() {
     );
     // [14, 16]: the `NULL` cast result never equals zero.
     assert_eq!(rows(&cx, "SELECT nullifzero('abc')"), ["abc"]);
+    // A boolean against a number stays unsupported at run time, as before:
+    // the kernels have no boolean-numeric cast.
+    fails(
+        &cx,
+        "SELECT nullif(true, 1)",
+        ErrorClass::KrishivUnsupportedFeature,
+        Some("0A000"),
+    );
     // [15].
     assert_eq!(
         rows(
@@ -517,5 +525,83 @@ fn conditional_nullif_with_null() {
     assert_eq!(
         rows(&cx, "SELECT nullif(NULL, 1), nullif(1, NULL)"),
         ["NULL\t1"]
+    );
+}
+
+/// The golden `conditional-functions` `nanvl` statements over the golden
+/// table: `b` is evaluated only where `a` is NaN, so `1 / 0` never raises
+/// for the other rows.
+#[test]
+fn conditional_nanvl_over_rows() {
+    for ansi in [true, false] {
+        let cx = conditional_cx(ansi);
+        // [0-2].
+        assert_eq!(
+            rows(&cx, "SELECT nanvl(c2, c1/c2 + c1/c2) FROM conditional_t"),
+            ["0.0", "0.0", "1.0", "1.0"],
+            "ansi = {ansi}"
+        );
+        assert_eq!(
+            rows(&cx, "SELECT nanvl(c2, 1/0) FROM conditional_t"),
+            ["0.0", "0.0", "1.0", "1.0"],
+            "ansi = {ansi}"
+        );
+        assert_eq!(rows(&cx, "SELECT nanvl(1-0, 1/0)"), ["1.0"]);
+    }
+}
+
+/// `nanvl(a, b)`: `b` where `a` is NaN, else `a`; a malformed `a` raises
+/// with ANSI on and is NULL without.
+#[test]
+fn conditional_nanvl_takes_the_second_argument_for_nan_only() {
+    let ansi = cx(true);
+    assert_eq!(
+        rows(&ansi, "SELECT nanvl(cast('NaN' as double), 123)"),
+        ["123.0"]
+    );
+    assert_eq!(rows(&ansi, "SELECT nanvl(1, 123)"), ["1.0"]);
+    fails(
+        &ansi,
+        "SELECT nanvl('abc', 123)",
+        ErrorClass::CastInvalidInput,
+        Some("22018"),
+    );
+    let legacy = cx(false);
+    assert_eq!(rows(&legacy, "SELECT nanvl('abc', 123)"), ["NULL"]);
+    assert_eq!(rows(&legacy, "SELECT nanvl(1, 123)"), ["1.0"]);
+}
+
+/// The output column names keep the call as written, never the rewritten
+/// form (`CASE WHEN`, `coalesce`).
+#[test]
+fn conditional_names_keep_the_call_as_written() {
+    let cx = conditional_cx(true);
+    let names_of = |sql: &str| {
+        let runnable = plan(&cx, sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        super::names(runnable.schema())
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names_of("SELECT nullif(c2, 0) FROM conditional_t"),
+        ["nullif(c2, 0)"]
+    );
+    assert_eq!(
+        names_of("SELECT nullifzero(c2) FROM conditional_t"),
+        ["nullifzero(c2)"]
+    );
+    assert_eq!(
+        names_of("SELECT if(c2 >= 0, 1-0, 1/0) FROM conditional_t"),
+        ["(IF((c2 >= 0), (1 - 0), (1 / 0)))"]
+    );
+    assert_eq!(names_of("SELECT zeroifnull(1)"), ["zeroifnull(1)"]);
+    assert_eq!(
+        names_of("SELECT nanvl(c2, 1/0) FROM conditional_t"),
+        ["nanvl(c2, (1 / 0))"]
+    );
+    assert_eq!(
+        names_of("SELECT nvl(c2, 0) FROM conditional_t"),
+        ["nvl(c2, 0)"]
     );
 }

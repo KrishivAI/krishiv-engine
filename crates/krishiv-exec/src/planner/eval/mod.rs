@@ -276,8 +276,12 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             match &f.id {
                 FunctionId::Builtin(b) => builtin(*b, f, args, input),
                 FunctionId::Registry { name, .. } => {
-                    if cond::is_conditional(name) {
-                        cond::conditional(name, f, args, input)
+                    if name == "coalesce" {
+                        cond::coalesce(f, args)
+                    } else if name == "nullif" || name == "nullifzero" {
+                        cond::null_if(f, args, input)
+                    } else if name == "nanvl" {
+                        cond::nan_vl(f, args, input)
                     } else {
                         func::compile(name, f, args, input, e)
                     }

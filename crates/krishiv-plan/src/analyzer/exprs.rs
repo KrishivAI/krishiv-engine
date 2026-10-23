@@ -145,6 +145,99 @@ fn shown_call(expr: &Expr, kids: &[Bound], cast: &[Bound]) -> Option<Arc<Expr>> 
     differs.then(|| with_children(expr, kids.iter().map(Bound::shown).collect()))
 }
 
+/// A conditional function rewritten during analysis (Spark's
+/// `RuntimeReplaceable`).
+#[derive(Clone, Copy)]
+enum Conditional {
+    /// `if(c, t, e)`: `CASE WHEN c THEN t ELSE e END`.
+    If,
+    /// `nvl(a, b)` / `ifnull(a, b)`: `coalesce(a, b)`.
+    Coalesce,
+    /// `nvl2(x, t, e)`: `CASE WHEN x IS NOT NULL THEN t ELSE e END`.
+    Nvl2,
+    /// `nullif(a, b)`: `a` at its own type with the `=`-cast `b` to compare
+    /// against.
+    NullIf,
+    /// `nullifzero(x)`: `nullif(x, 0)`.
+    NullIfZero,
+    /// `zeroifnull(x)`: `coalesce(x, 0)` at the met type.
+    ZeroIfNull,
+    /// `nanvl(a, b)`: both sides are `float`/`double` already.
+    Nanvl,
+}
+
+impl Conditional {
+    /// Which conditional `name` is, ASCII case-insensitively (function
+    /// names are); `None` for any other function, `coalesce` included.
+    fn of(name: &str) -> Option<Self> {
+        Some(match name.to_ascii_lowercase().as_str() {
+            "if" => Self::If,
+            "nvl" | "ifnull" => Self::Coalesce,
+            "nvl2" => Self::Nvl2,
+            "nullif" => Self::NullIf,
+            "nullifzero" => Self::NullIfZero,
+            "zeroifnull" => Self::ZeroIfNull,
+            "nanvl" => Self::Nanvl,
+            _ => return None,
+        })
+    }
+}
+
+/// Whether `t` is a numeric type.
+fn is_conditional_numeric(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Byte
+            | DataType::Short
+            | DataType::Integer
+            | DataType::Long
+            | DataType::Float
+            | DataType::Double
+            | DataType::Decimal(_)
+    )
+}
+
+/// The cast `b` needs for a legacy `nullif(a, b)` comparison that `=`
+/// refuses (`None` when no legacy shape applies): the string side meets
+/// the other side's type, a number meets a boolean at `BOOLEAN`. `None` as
+/// the cast (rather than a type) leaves `b` as it is: `a` is the side the
+/// evaluator casts in place.
+fn legacy_nullif_cast(a: &Bound, b: &Bound) -> Option<Option<DataType>> {
+    let (x, y) = (a.ty.data_type.as_ref(), b.ty.data_type.as_ref());
+    match (x, y) {
+        (Some(DataType::String), _) => Some(None),
+        (_, Some(DataType::String)) => Some(x.cloned()),
+        (Some(DataType::Boolean), Some(n)) if is_conditional_numeric(n) => {
+            Some(Some(DataType::Boolean))
+        }
+        (Some(n), Some(DataType::Boolean)) if is_conditional_numeric(n) => Some(None),
+        _ => None,
+    }
+}
+
+/// The literal zero of `t`: what `zeroifnull` meets its argument with (`'0'`
+/// for a legacy `STRING`). `None` for any other type, which a met argument
+/// never has.
+fn zero_literal(t: &DataType, origin: Origin) -> Option<Arc<Expr>> {
+    let literal = match t {
+        DataType::Byte => Literal::Byte(0),
+        DataType::Short => Literal::Short(0),
+        DataType::Integer => Literal::Integer(0),
+        DataType::Long => Literal::Long(0),
+        DataType::Float => Literal::Float(0.0),
+        DataType::Double => Literal::Double(0.0),
+        DataType::Decimal(d) => Literal::Decimal {
+            unscaled: 0,
+            data_type: *d,
+        },
+        DataType::String => Literal::String("0".to_owned()),
+        _ => return None,
+    };
+    Some(Arc::new(
+        Expr::new(ExprNode::Literal(literal)).with_origin(origin),
+    ))
+}
+
 /// Spark's error for a cast of `arg` to `to` it refuses.
 fn bad_cast(
     bad: BadCast,
@@ -471,6 +564,9 @@ impl Resolver<'_> {
                 {
                     return Err(AnalysisError::new(NestedAggregateFunction {}, inner));
                 }
+                if let Some(which) = Conditional::of(&f.name) {
+                    return self.conditional_call(which, &entry, e, f, kids);
+                }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
                 call_kids.extend(kids.get(n).cloned());
@@ -770,8 +866,241 @@ impl Resolver<'_> {
         })
     }
 
-    /// `(values) IN (subquery)`: the values and the subquery's columns, each
-    /// pair cast to the type it meets at (the subquery under a projection
+    /// A conditional function rewritten during analysis (Spark's
+    /// `RuntimeReplaceable`): `if` and `nvl2` become `CASE WHEN`, `nvl` and
+    /// `ifnull` become `coalesce`, `zeroifnull` becomes `coalesce` with a
+    /// zero, and `nullif` / `nullifzero` become a same-typed `nullif` the
+    /// evaluator runs once. `coalesce` keeps its name (the evaluator lowers
+    /// it lazily), as does `nanvl` (both sides are `float`/`double`).
+    fn conditional_call(
+        &mut self,
+        which: Conditional,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        f: &FunctionCall,
+        kids: &[Bound],
+    ) -> Result<Bound, AnalysisError> {
+        let n = f.args.len();
+        // The arity and the input checks quote the call as written.
+        let (mut call_kids, ty) = self.typed_call(entry, e, &kids[..n])?;
+        call_kids.extend(kids.get(n).cloned());
+        let origin = e.origin;
+        let node = |node: ExprNode| Arc::new(Expr::new(node).with_origin(origin));
+        // The call as written (before casts), naming the output and quoting
+        // errors: never the rewritten form.
+        let shown = node(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: entry.id.clone(),
+                kind: entry.kind,
+                args: kids.iter().map(Bound::shown).collect(),
+                distinct: f.distinct,
+                filter: kids.get(n).map(Bound::shown),
+                data_type: ty.data_type.clone().unwrap_or(DataType::Null),
+                nullable: ty.nullable,
+                deterministic: entry.deterministic,
+            },
+        )));
+        let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
+        let resolved =
+            |id: FunctionId, args: Vec<Arc<Expr>>, distinct: bool, filter: Option<Arc<Expr>>| {
+                node(ExprNode::Resolved(ResolvedExpr::Function(
+                    ResolvedFunction {
+                        id,
+                        kind: FunctionKind::Scalar,
+                        args,
+                        distinct,
+                        filter,
+                        data_type: data_type.clone(),
+                        nullable: ty.nullable,
+                        deterministic: entry.deterministic,
+                    },
+                )))
+            };
+        let expr = match which {
+            // `if(c, t, e)`: the branches' common type, as `when` types it.
+            Conditional::If => {
+                let args = call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect();
+                resolved(
+                    FunctionId::Builtin(Builtin::When),
+                    args,
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                )
+            }
+            // `nvl(a, b)` / `ifnull(a, b)`: `coalesce`, cast likewise.
+            Conditional::Coalesce => {
+                let args = call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect();
+                self.coalesce_node(
+                    origin,
+                    e,
+                    args,
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                    &ty,
+                )?
+            }
+            // `nvl2(x, t, e)`: `t` where `x` is not null, else `e`.
+            Conditional::Nvl2 => {
+                let cond = self.operator_call(Builtin::IsNotNull, origin, &call_kids[..1])?;
+                let mut args = vec![cond.expr];
+                args.extend(call_kids[1..n].iter().map(|k| Arc::clone(&k.expr)));
+                resolved(
+                    FunctionId::Builtin(Builtin::When),
+                    args,
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                )
+            }
+            // `nullif(a, b)`: `NULL` where `a = b`, else `a` (evaluated
+            // once by the evaluator); `b` carries the analyzer's own `=`
+            // cast, `a` keeps its type.
+            Conditional::NullIf => {
+                let other =
+                    self.nullif_other(&call_kids[0], &call_kids[1], &shown, kids, f, origin)?;
+                resolved(
+                    entry.id.clone(),
+                    vec![Arc::clone(&call_kids[0].expr), other],
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                )
+            }
+            // `nullifzero(x)`: `nullif(x, 0)`, named as written.
+            Conditional::NullIfZero => {
+                let zero = Bound {
+                    expr: node(ExprNode::Literal(Literal::Integer(0))),
+                    ty: arg_type(DataType::Integer, false),
+                    agg: None,
+                    outer: None,
+                    lateral: Vec::new(),
+                    shown: None,
+                };
+                let other = self.nullif_other(&call_kids[0], &zero, &shown, kids, f, origin)?;
+                resolved(
+                    entry.id.clone(),
+                    vec![Arc::clone(&call_kids[0].expr), other],
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                )
+            }
+            // `zeroifnull(x)`: `coalesce(x, 0)` at the met type.
+            Conditional::ZeroIfNull => {
+                let Some(to) = ty.data_type.as_ref() else {
+                    return Err(unsupported("zeroifnull of an untyped NULL", origin));
+                };
+                let Some(zero) = zero_literal(to, origin) else {
+                    return Err(unsupported(format!("zeroifnull of {}", to.sql()), origin));
+                };
+                let args = vec![Arc::clone(&call_kids[0].expr), zero];
+                self.coalesce_node(
+                    origin,
+                    e,
+                    args,
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                    &ty,
+                )?
+            }
+            // `nanvl(a, b)`: `b` where `a` is NaN, else `a`; both sides are
+            // already `float`/`double`.
+            Conditional::Nanvl => {
+                let args = call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect();
+                resolved(
+                    entry.id.clone(),
+                    args,
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                )
+            }
+        };
+        let mut lateral: Vec<AttrId> = Vec::new();
+        for id in kids.iter().flat_map(|k| k.lateral.iter()) {
+            if !lateral.contains(id) {
+                lateral.push(*id);
+            }
+        }
+        Ok(Bound {
+            expr,
+            ty: ArgType {
+                data_type: ty.data_type.clone(),
+                nullable: ty.nullable,
+            },
+            agg: kids.iter().find_map(|k| k.agg),
+            outer: kids.iter().filter_map(|k| k.outer).min(),
+            lateral,
+            shown: Some(shown),
+        })
+    }
+
+    /// A resolved `coalesce` call: `nvl` / `ifnull` / `zeroifnull` keep the
+    /// result type their own casts met at.
+    fn coalesce_node(
+        &mut self,
+        origin: Origin,
+        e: &Arc<Expr>,
+        args: Vec<Arc<Expr>>,
+        distinct: bool,
+        filter: Option<Arc<Expr>>,
+        ty: &ArgType,
+    ) -> Result<Arc<Expr>, AnalysisError> {
+        let id = match self
+            .ctx
+            .functions
+            .lookup(&["coalesce".to_owned()], self.ctx.profile)
+        {
+            FunctionLookup::Found(entry) => entry.id,
+            _ => return Err(unsupported("function coalesce", e.origin)),
+        };
+        Ok(Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id,
+                    kind: FunctionKind::Scalar,
+                    args,
+                    distinct,
+                    filter,
+                    data_type: ty.data_type.clone().unwrap_or(DataType::Null),
+                    nullable: ty.nullable,
+                    deterministic: true,
+                },
+            )))
+            .with_origin(origin),
+        ))
+    }
+
+    /// The second argument of `nullif(a, b)`: `b` cast to the type `=`
+    /// compares at, through the analyzer's own comparison coercion. In
+    /// legacy mode `=` leaves two shapes to P2-T071d (a string against
+    /// another type, a boolean against a number); there Spark casts the
+    /// string to the other side's type and the number to `BOOLEAN`, which
+    /// this mirrors so `nullif` keeps Spark's rows.
+    fn nullif_other(
+        &mut self,
+        a: &Bound,
+        b: &Bound,
+        shown: &Arc<Expr>,
+        kids: &[Bound],
+        f: &FunctionCall,
+        origin: Origin,
+    ) -> Result<Arc<Expr>, AnalysisError> {
+        let args = [arg_of(a), arg_of(b)];
+        let ansi = self.ctx.conf.ansi;
+        match coerce::operator(
+            Builtin::Eq,
+            &args,
+            ansi,
+            self.ctx.conf.decimal_precision_loss,
+        ) {
+            Ok(typed) => Ok(self.implicit_cast(b, typed.casts[1].clone()).expr),
+            Err(m) => {
+                if !ansi && let Some(to) = legacy_nullif_cast(a, b) {
+                    return Ok(self.implicit_cast(b, to).expr);
+                }
+                Err(self.mismatch(m, shown, kids, &f.name, origin))
+            }
+        }
+    }
+
+    /// `(values) IN (subquery)`: the values and the subquery's columns, each    /// pair cast to the type it meets at (the subquery under a projection
     /// that casts). Returns the values and the subquery plan.
     fn in_subquery(
         &mut self,

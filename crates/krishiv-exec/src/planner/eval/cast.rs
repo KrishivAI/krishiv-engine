@@ -17,11 +17,7 @@ use crate::planner::build::{internal, unsupported};
 #[derive(Debug)]
 struct Cast {
     e: Arc<dyn PhysExpr>,
-    to: ArrowType,
-    /// The kernels' target: `Utf8` where the result is a `Utf8View` string.
-    kernel_to: ArrowType,
-    mode: KernelMode,
-    zone: FixedOffset,
+    parts: CastParts,
     nullable: bool,
 }
 
@@ -32,20 +28,32 @@ fn needs_zone(from: &ArrowType, to: &ArrowType) -> bool {
         || (zoned(to) && !matches!(from, ArrowType::Int64 | ArrowType::Timestamp(..)))
 }
 
-pub(super) fn compile(
-    e: Arc<dyn PhysExpr>,
-    to: &DataType,
+/// A cast's plan data, without its child: what [`NullIf`](super::cond::NullIf)
+/// needs to cast an already-evaluated array.
+#[derive(Debug, Clone)]
+pub(super) struct CastParts {
+    /// The result type.
+    pub(super) to: ArrowType,
+    /// The kernels' target: `Utf8` where the result is a `Utf8View` string.
+    pub(super) kernel_to: ArrowType,
+    pub(super) mode: KernelMode,
+    pub(super) zone: FixedOffset,
+}
+
+/// The cast of `from` to `to` in `mode`, with the session zone of `env`.
+pub(super) fn parts(
+    from: &ArrowType,
+    to: ArrowType,
     mode: CastMode,
-    input: Input<'_>,
-) -> Result<Arc<dyn PhysExpr>> {
+    env: &super::EvalEnv,
+) -> Result<CastParts> {
     let mode = match mode {
         CastMode::Ansi => KernelMode::Ansi,
         CastMode::Legacy => KernelMode::Legacy,
         CastMode::Try => KernelMode::Try,
         _ => return Err(internal("a cast mode the analyzer did not pin")),
     };
-    let target = to.to_arrow();
-    let zone = match (needs_zone(e.data_type(), &target), input.env.zone) {
+    let zone = match (needs_zone(from, &to), env.zone) {
         (_, Some(offset)) => FixedOffset(offset),
         (false, None) => FixedOffset(0),
         (true, None) => {
@@ -54,27 +62,61 @@ pub(super) fn compile(
             ));
         }
     };
-    let kernel_to = match &target {
+    let kernel_to = match &to {
         ArrowType::Utf8View => ArrowType::Utf8,
         ArrowType::BinaryView => ArrowType::Binary,
         other => other.clone(),
     };
-    // Every cast to a narrower or textual type can produce NULL in legacy
-    // and `TRY_CAST` modes; ANSI keeps the input's nullability.
-    let nullable = e.nullable() || mode != KernelMode::Ansi;
-    Ok(Arc::new(Cast {
-        e,
-        to: target,
+    Ok(CastParts {
+        to,
         kernel_to,
         mode,
         zone,
-        nullable,
-    }))
+    })
+}
+
+/// `a` through `p`.
+pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
+    let input = from_view(a)?;
+    let opts = CastOptions {
+        mode: p.mode,
+        time_zone: &p.zone,
+    };
+    let out = cast(input.as_ref(), &p.kernel_to, &opts)?;
+    let out: ArrayRef = match (out.data_type(), &p.to) {
+        (a, b) if a == b => out,
+        (ArrowType::Timestamp(..), ArrowType::Timestamp(..)) => {
+            let data = out.to_data().into_builder().data_type(p.to.clone());
+            arrow_array::make_array(data.build().map_err(|e| internal(&e.to_string()))?)
+        }
+        _ => to_view(&out)?,
+    };
+    if out.data_type() != &p.to {
+        return Err(internal(&format!(
+            "a cast to {} produced {}",
+            p.to,
+            out.data_type()
+        )));
+    }
+    Ok(out)
+}
+
+pub(super) fn compile(
+    e: Arc<dyn PhysExpr>,
+    to: &DataType,
+    mode: CastMode,
+    input: Input<'_>,
+) -> Result<Arc<dyn PhysExpr>> {
+    let parts = parts(e.data_type(), to.to_arrow(), mode, input.env)?;
+    // Every cast to a narrower or textual type can produce NULL in legacy
+    // and `TRY_CAST` modes; ANSI keeps the input's nullability.
+    let nullable = e.nullable() || parts.mode != KernelMode::Ansi;
+    Ok(Arc::new(Cast { e, parts, nullable }))
 }
 
 impl PhysExpr for Cast {
     fn data_type(&self) -> &ArrowType {
-        &self.to
+        &self.parts.to
     }
 
     fn nullable(&self) -> bool {
@@ -83,27 +125,7 @@ impl PhysExpr for Cast {
 
     fn eval(&self, batch: &RecordBatch) -> Result<Value> {
         let v = self.e.eval(batch)?;
-        let input = from_view(v.array())?;
-        let opts = CastOptions {
-            mode: self.mode,
-            time_zone: &self.zone,
-        };
-        let out = cast(input.as_ref(), &self.kernel_to, &opts)?;
-        let out: ArrayRef = match (out.data_type(), &self.to) {
-            (a, b) if a == b => out,
-            (ArrowType::Timestamp(..), ArrowType::Timestamp(..)) => {
-                let data = out.to_data().into_builder().data_type(self.to.clone());
-                arrow_array::make_array(data.build().map_err(|e| internal(&e.to_string()))?)
-            }
-            _ => to_view(&out)?,
-        };
-        if out.data_type() != &self.to {
-            return Err(internal(&format!(
-                "a cast to {} produced {}",
-                self.to,
-                out.data_type()
-            )));
-        }
+        let out = apply(&self.parts, v.array())?;
         Ok(match v {
             Value::Scalar(_) => Value::Scalar(out),
             Value::Array(_) => Value::Array(out),
