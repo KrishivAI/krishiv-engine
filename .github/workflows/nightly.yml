@@ -267,9 +267,11 @@ jobs:
           key: fuzz-kernels-corpus-${{ github.run_id }}
           restore-keys: fuzz-kernels-corpus-
       # cargo-fuzz has no --locked; the committed fuzz/Cargo.lock pins the graph.
+      # `--target`: the prebuilt cargo-fuzz defaults to a musl target the
+      # sanitizers cannot link for (see the fuzz-build job of ci.yml).
       - name: differential (10 minutes)
         working-directory: crates/krishiv-kernels/fuzz
-        run: cargo +nightly-2026-08-12 fuzz run differential -- -max_total_time=600
+        run: cargo +nightly-2026-08-12 fuzz run --target x86_64-unknown-linux-gnu differential -- -max_total_time=600
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
