@@ -293,16 +293,16 @@ fn operator(
             | Builtin::Divide
             | Builtin::Remainder,
             [l, r],
-        ) => fold_ops::arithmetic(op, l, r, &out, conf.ansi, &conf.kernel),
+        ) => fold_ops::arithmetic(op, l, r, &out, conf.ansi, &conf.kernel.baseline()),
         (Builtin::IntegralDivide, [l, r]) => {
-            fold_ops::integral_divide(l, r, conf.ansi, &conf.kernel)
+            fold_ops::integral_divide(l, r, conf.ansi, &conf.kernel.baseline())
         }
-        (Builtin::Negative, [a]) => fold_ops::negate(a, conf.ansi, &conf.kernel),
+        (Builtin::Negative, [a]) => fold_ops::negate(a, conf.ansi, &conf.kernel.baseline()),
         (Builtin::Eq | Builtin::Lt | Builtin::LtEq | Builtin::Gt | Builtin::GtEq, [l, r]) => {
             if fold_ops::is_null(l) || fold_ops::is_null(r) {
                 return Some(Ok(fold_ops::bool_array(None)));
             }
-            fold_ops::comparison(op, l, r, &conf.kernel)
+            fold_ops::comparison(op, l, r, &conf.kernel.baseline())
         }
         (Builtin::Not, [a]) => {
             let v = fold_ops::boolean(a)?;

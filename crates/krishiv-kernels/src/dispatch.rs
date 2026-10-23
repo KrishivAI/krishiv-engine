@@ -189,6 +189,57 @@ impl KernelCtx {
     }
 }
 
+/// How a kernel entry point runs its loops; every dispatching entry point
+/// takes `ctx: &impl Dispatch`. Sealed: the implementations are
+/// [`KernelCtx`] (the CPU target chosen at run time, so each loop is
+/// compiled once per [`Target`]) and [`Baseline`].
+pub trait Dispatch: crate::unsafe_dispatch::Run {
+    /// The Spark version whose errors kernels raise.
+    fn spark_version(&self) -> SparkVersion;
+}
+
+impl Dispatch for KernelCtx {
+    #[inline]
+    fn spark_version(&self) -> SparkVersion {
+        self.version
+    }
+}
+
+/// A dispatch that always runs the build-baseline code: an entry point
+/// called with it instantiates one loop, without the per-target clones and
+/// the scalar-operand loops a [`KernelCtx`] needs (a scalar operand is
+/// repeated into an array first). For evaluating one row or a constant
+/// (plan-time folding), where vector width does not matter but code size
+/// does. The results are a [`KernelCtx`]'s: every target and operand shape
+/// computes the same values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Baseline {
+    version: SparkVersion,
+}
+
+impl Baseline {
+    /// Raising the errors of Spark `version`.
+    #[must_use]
+    pub fn new(version: SparkVersion) -> Self {
+        Self { version }
+    }
+}
+
+impl Dispatch for Baseline {
+    #[inline]
+    fn spark_version(&self) -> SparkVersion {
+        self.version
+    }
+}
+
+impl KernelCtx {
+    /// This context's Spark version, on the baseline code only.
+    #[must_use]
+    pub fn baseline(&self) -> Baseline {
+        Baseline::new(self.version)
+    }
+}
+
 impl Default for KernelCtx {
     fn default() -> Self {
         Self::new()
@@ -224,6 +275,90 @@ mod tests {
         }
         // v4 implies v3.
         assert!(!Target::X86_64V4.is_available() || Target::X86_64V3.is_available());
+    }
+
+    /// `Baseline` computes what every target computes, for every operand
+    /// shape, errors (and their Spark version) included.
+    #[test]
+    fn baseline_matches_every_target() {
+        use arrow_array::types::{Decimal128Type, Float64Type, Int32Type};
+        use arrow_array::{Decimal128Array, Float64Array, Int32Array};
+
+        use crate::compare::{Less, compare};
+        use crate::decimal::{DecimalOp, DecimalPlan, decimal_arith};
+        use crate::integer::{self, UnaryOp};
+        use crate::{Add, AnsiError, JavaWrap, NullOnOverflow, Operand, float};
+
+        let a = Int32Array::from(vec![Some(i32::MAX), Some(-3), None, Some(i32::MIN)]);
+        let b = Int32Array::from(vec![Some(1), Some(4), Some(2), Some(0)]);
+        let x = Float64Array::from(vec![Some(1.0), Some(-0.0), None, Some(f64::NAN)]);
+        let d = Decimal128Array::from(vec![Some(99_999), None, Some(-5)])
+            .with_precision_and_scale(5, 2)
+            .unwrap();
+        let plan = DecimalPlan::new(DecimalOp::Multiply, (5, 2), (5, 2), (5, 2)).unwrap();
+        let shapes: [(Operand<'_, Int32Type>, Operand<'_, Int32Type>); 4] = [
+            (Operand::Array(&a), Operand::Array(&b)),
+            (Operand::Array(&a), Operand::Scalar(Some(7))),
+            (Operand::Scalar(Some(-7)), Operand::Array(&b)),
+            (Operand::Scalar(None), Operand::Array(&b)),
+        ];
+        for t in Target::available() {
+            let ctx = KernelCtx::with_target(t)
+                .unwrap()
+                .with_spark_version(SparkVersion::V4_0);
+            let base = ctx.baseline();
+            assert_eq!(Dispatch::spark_version(&base), SparkVersion::V4_0);
+            for (l, r) in shapes {
+                assert_eq!(
+                    integer::binary::<Int32Type, Add, JavaWrap>(l, r, &ctx),
+                    integer::binary::<Int32Type, Add, JavaWrap>(l, r, &base)
+                );
+                assert_eq!(
+                    integer::binary::<Int32Type, Add, AnsiError>(l, r, &ctx),
+                    integer::binary::<Int32Type, Add, AnsiError>(l, r, &base)
+                );
+                assert_eq!(
+                    integer::remainder::<Int32Type, AnsiError>(l, r, &ctx),
+                    integer::remainder::<Int32Type, AnsiError>(l, r, &base)
+                );
+                assert_eq!(
+                    compare::<Int32Type, Less>(l, r, &ctx),
+                    compare::<Int32Type, Less>(l, r, &base)
+                );
+            }
+            // The cases above raise: overflow, then remainder by zero.
+            let (l, r) = (Operand::Array(&a), Operand::Array(&b));
+            assert!(integer::binary::<Int32Type, Add, AnsiError>(l, r, &base).is_err());
+            assert!(integer::remainder::<Int32Type, AnsiError>(l, r, &base).is_err());
+            assert_eq!(
+                integer::unary::<Int32Type, AnsiError>(UnaryOp::Negate, &a, &ctx),
+                integer::unary::<Int32Type, AnsiError>(UnaryOp::Negate, &a, &base)
+            );
+            let (fx, fz) = (
+                Operand::Array(&x),
+                Operand::<Float64Type>::Scalar(Some(0.0)),
+            );
+            assert_eq!(
+                float::divide::<Float64Type, JavaWrap>(fx, fz, &ctx),
+                float::divide::<Float64Type, JavaWrap>(fx, fz, &base)
+            );
+            assert_eq!(
+                compare::<Float64Type, Less>(fz, fx, &ctx),
+                compare::<Float64Type, Less>(fz, fx, &base)
+            );
+            let (dl, dr) = (
+                Operand::Array(&d),
+                Operand::<Decimal128Type>::Scalar(Some(-200)),
+            );
+            assert_eq!(
+                decimal_arith::<NullOnOverflow>(dl, dr, &plan, &ctx),
+                decimal_arith::<NullOnOverflow>(dl, dr, &plan, &base)
+            );
+            assert_eq!(
+                decimal_arith::<AnsiError>(dr, dl, &plan, &ctx),
+                decimal_arith::<AnsiError>(dr, dl, &plan, &base)
+            );
+        }
     }
 
     #[test]

@@ -12,7 +12,7 @@
 use arrow_array::{Array, ArrowPrimitiveType, PrimitiveArray};
 
 use crate::chunk::{self, LaneOp, Resolved};
-use crate::dispatch::KernelCtx;
+use crate::dispatch::Dispatch;
 use crate::error::KernelError;
 use crate::integer::{UnaryOp, finish};
 use crate::ops::{ArithOp, Operand};
@@ -108,7 +108,7 @@ pub fn binary<T>(
     op: ArithOp,
     l: Operand<'_, T>,
     r: Operand<'_, T>,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<PrimitiveArray<T>, KernelError>
 where
     T: ArrowPrimitiveType<Native: SparkFloat>,
@@ -161,7 +161,7 @@ impl<F: SparkFloat, const REM: bool> LaneOp<F> for DivLane<REM> {
 pub fn divide<T, O>(
     l: Operand<'_, T>,
     r: Operand<'_, T>,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<PrimitiveArray<T>, KernelError>
 where
     T: ArrowPrimitiveType<Native: SparkFloat>,
@@ -185,7 +185,7 @@ where
 pub fn remainder<T, O>(
     l: Operand<'_, T>,
     r: Operand<'_, T>,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<PrimitiveArray<T>, KernelError>
 where
     T: ArrowPrimitiveType<Native: SparkFloat>,

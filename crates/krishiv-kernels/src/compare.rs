@@ -22,10 +22,10 @@ use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, GenericByteArray};
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, NullBuffer};
 
 use crate::chunk::{self, CHUNK, Resolved, Side, split};
-use crate::dispatch::KernelCtx;
+use crate::dispatch::Dispatch;
 use crate::error::{KernelError, with_capacity};
 use crate::ops::Operand;
-use crate::unsafe_dispatch::{Kernel, run};
+use crate::unsafe_dispatch::{Kernel, run, scalar_loops};
 
 mod sealed {
     pub trait Sealed {}
@@ -174,7 +174,7 @@ compare_ops!(
 pub fn compare<T, Op>(
     l: Operand<'_, T>,
     r: Operand<'_, T>,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<BooleanArray, KernelError>
 where
     T: ArrowPrimitiveType<Native: SparkOrd>,
@@ -195,12 +195,12 @@ where
     };
     let mut words = with_capacity::<u64>(len.div_ceil(CHUNK))?;
     macro_rules! go {
-        ($ls:literal, $rs:literal) => {
+        ($ls:literal, $rs:literal, $l:expr, $r:expr) => {
             run(
                 ctx,
                 Compare::<'_, T::Native, Op, $ls, $rs> {
-                    l,
-                    r,
+                    l: $l,
+                    r: $r,
                     len,
                     words: &mut words,
                     op: PhantomData,
@@ -208,10 +208,20 @@ where
             )
         };
     }
-    match (l, r) {
-        (Side::Array(_), Side::Array(_)) => go!(false, false),
-        (Side::Array(_), Side::Scalar(_)) => go!(false, true),
-        (Side::Scalar(_), _) => go!(true, false),
+    if scalar_loops(ctx) {
+        match (l, r) {
+            (Side::Array(_), Side::Array(_)) => go!(false, false, l, r),
+            (Side::Array(_), Side::Scalar(_)) => go!(false, true, l, r),
+            (Side::Scalar(_), _) => go!(true, false, l, r),
+        }
+    } else {
+        let (mut lb, mut rb) = (Vec::new(), Vec::new());
+        go!(
+            false,
+            false,
+            l.to_array(len, &mut lb)?,
+            r.to_array(len, &mut rb)?
+        );
     }
     Ok(BooleanArray::new(bits(words, len), nulls))
 }

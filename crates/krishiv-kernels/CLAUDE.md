@@ -12,6 +12,9 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   has-nulls axis (compute-through-nulls makes it ~1.0x); `specialize` is the opt-in `const NULLS` axis for kernels
   whose work changes with NULLs (division, strings).
   A `LaneOp` reports a `Fault` (overflow, divide-by-zero); the policy maps each fault to wrap / NULL / raise.
+- `Dispatch` (sealed): `KernelCtx` picks the CPU target at run time (three clones of each loop, plus scalar-operand
+  loops); `Baseline` runs the build-baseline loop only, a scalar repeated into an array (one loop per kernel), for
+  one-row/constant evaluation such as plan-time folding. Dispatching entry points take `ctx: &impl Dispatch`.
 - `unsafe_dispatch`: the only `unsafe` (calling `#[target_feature]` clones); `xtask source-guard` rejects `unsafe`
   in any other file here and `xtask budgets` counts unsafe sites.
 - `version`: the Spark version profile (`KernelCtx::with_spark_version`); error classes/messages differ by version.

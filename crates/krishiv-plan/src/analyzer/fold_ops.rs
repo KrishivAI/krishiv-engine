@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The operators a foldable expression may contain, evaluated on one-row
 //! arrays through the same kernels the executor runs (so overflow,
-//! division by zero and ANSI/legacy behaviour are the kernels').
+//! division by zero and ANSI/legacy behaviour are the kernels'), on their
+//! build-baseline code only ([`Baseline`]): one row gains nothing from the
+//! per-CPU clones, and each instantiation here would add three.
 //!
 //! Every function answers `None` for an operand shape it does not
 //! evaluate: the expression is then not folded (a constant-only argument
@@ -22,7 +24,7 @@ use krishiv_kernels::decimal::{
 };
 use krishiv_kernels::integer::{self, SparkIntegral, UnaryOp};
 use krishiv_kernels::{
-    Add, AnsiError, ArithOp, JavaWrap, KernelCtx, KernelError, Mul, NullOnOverflow, Operand, Sub,
+    Add, AnsiError, ArithOp, Baseline, JavaWrap, KernelError, Mul, NullOnOverflow, Operand, Sub,
     float,
 };
 
@@ -49,7 +51,7 @@ pub(super) fn arithmetic(
     r: &ArrayRef,
     out: &ArrowType,
     ansi: bool,
-    ctx: &KernelCtx,
+    ctx: &Baseline,
 ) -> Eval {
     if let (
         ArrowType::Decimal128(lp, ls),
@@ -96,7 +98,7 @@ fn integral<T: SparkIntegral>(
     l: &ArrayRef,
     r: &ArrayRef,
     ansi: bool,
-    ctx: &KernelCtx,
+    ctx: &Baseline,
 ) -> Eval {
     let (a, b) = (operand::<T>(l), operand::<T>(r));
     macro_rules! run {
@@ -117,7 +119,7 @@ fn integral<T: SparkIntegral>(
     }
 }
 
-fn floating<T>(op: Builtin, l: &ArrayRef, r: &ArrayRef, ansi: bool, ctx: &KernelCtx) -> Eval
+fn floating<T>(op: Builtin, l: &ArrayRef, r: &ArrayRef, ansi: bool, ctx: &Baseline) -> Eval
 where
     T: arrow_array::ArrowPrimitiveType<Native: float::SparkFloat>,
 {
@@ -135,7 +137,7 @@ where
 }
 
 /// `l div r` over `bigint`s or decimals.
-pub(super) fn integral_divide(l: &ArrayRef, r: &ArrayRef, ansi: bool, ctx: &KernelCtx) -> Eval {
+pub(super) fn integral_divide(l: &ArrayRef, r: &ArrayRef, ansi: bool, ctx: &Baseline) -> Eval {
     match (l.data_type(), r.data_type()) {
         (ArrowType::Int64, ArrowType::Int64) => {
             let (a, b) = (operand::<Int64Type>(l), operand::<Int64Type>(r));
@@ -159,7 +161,7 @@ pub(super) fn integral_divide(l: &ArrayRef, r: &ArrayRef, ansi: bool, ctx: &Kern
 }
 
 /// Unary `-`.
-pub(super) fn negate(a: &ArrayRef, ansi: bool, ctx: &KernelCtx) -> Eval {
+pub(super) fn negate(a: &ArrayRef, ansi: bool, ctx: &Baseline) -> Eval {
     macro_rules! int {
         ($t:ty) => {
             if ansi {
@@ -200,7 +202,7 @@ pub(super) fn negate(a: &ArrayRef, ansi: bool, ctx: &KernelCtx) -> Eval {
 
 /// `l op r` for `= < <= > >=` over two operands of one numeric type, or
 /// two strings (compared by bytes, as Spark's `UTF8String` is).
-pub(super) fn comparison(op: Builtin, l: &ArrayRef, r: &ArrayRef, ctx: &KernelCtx) -> Eval {
+pub(super) fn comparison(op: Builtin, l: &ArrayRef, r: &ArrayRef, ctx: &Baseline) -> Eval {
     if l.data_type() != r.data_type() {
         return None;
     }
@@ -289,24 +291,26 @@ mod tests {
     };
     use krishiv_common::error::ErrorClass;
 
+    use krishiv_kernels::KernelCtx;
+
     use super::*;
 
     // The session's current Spark line, as the tests that do not choose
     // one use it.
     fn arithmetic(op: Builtin, l: &ArrayRef, r: &ArrayRef, out: &ArrowType, ansi: bool) -> Eval {
-        super::arithmetic(op, l, r, out, ansi, &KernelCtx::new())
+        super::arithmetic(op, l, r, out, ansi, &KernelCtx::new().baseline())
     }
 
     fn integral_divide(l: &ArrayRef, r: &ArrayRef, ansi: bool) -> Eval {
-        super::integral_divide(l, r, ansi, &KernelCtx::new())
+        super::integral_divide(l, r, ansi, &KernelCtx::new().baseline())
     }
 
     fn negate(a: &ArrayRef, ansi: bool) -> Eval {
-        super::negate(a, ansi, &KernelCtx::new())
+        super::negate(a, ansi, &KernelCtx::new().baseline())
     }
 
     fn comparison(op: Builtin, l: &ArrayRef, r: &ArrayRef) -> Eval {
-        super::comparison(op, l, r, &KernelCtx::new())
+        super::comparison(op, l, r, &KernelCtx::new().baseline())
     }
 
     fn i32s(v: Option<i32>) -> ArrayRef {
@@ -448,7 +452,7 @@ mod tests {
     fn the_session_spark_version_reaches_the_kernels() {
         use krishiv_kernels::SparkVersion;
         let int = ArrowType::Int32;
-        let rem = |ctx: &KernelCtx| {
+        let rem = |ctx: &Baseline| {
             super::arithmetic(
                 Builtin::Remainder,
                 &i32s(Some(1)),
@@ -459,8 +463,11 @@ mod tests {
             )
         };
         let v40 = KernelCtx::new().with_spark_version(SparkVersion::V4_0);
-        assert_eq!(err(rem(&v40)), ErrorClass::DivideByZero);
-        assert_eq!(err(rem(&KernelCtx::new())), ErrorClass::RemainderByZero);
+        assert_eq!(err(rem(&v40.baseline())), ErrorClass::DivideByZero);
+        assert_eq!(
+            err(rem(&KernelCtx::new().baseline())),
+            ErrorClass::RemainderByZero
+        );
     }
 
     #[test]

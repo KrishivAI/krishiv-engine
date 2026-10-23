@@ -34,7 +34,8 @@ decoder in `krishiv-connect`, native DataFrame APIs) lower into the IR.
   `tests/fixtures/spark-4.2.0/analyzer-goldens.json`; the constant-folding and ORDER BY-over-aggregate cases are a
   separate fixture (`--section folding --views`, safe on the shared oracle) `analyzer-folding-goldens.json`.
 - Constant arguments (`round`'s scale, `date_part`'s field, `LIMIT`): `analyzer/fold.rs` folds what Spark's
-  `foldable` allows through the kernels the executor runs (`fold_ops.rs`) and raises what folding raises, at the
+  `foldable` allows through the kernels the executor runs (`fold_ops.rs`, on `krishiv_kernels::Baseline`: one loop per
+  kernel instead of nine, which keeps the binary small) and raises what folding raises, at the
   argument. A function is folded only if it is deterministic and in the argument-pure families
   (`krishiv_functions::scalar::is_argument_pure`: string, math, arithmetic; datetime/session/hash read session
   state). `first`/`last` match a boolean `Literal` and do not fold (`CallTypes::is_literal`).
