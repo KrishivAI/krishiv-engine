@@ -387,17 +387,22 @@ impl SpillScope {
     }
 }
 
-/// A process-unique id: pid, wall-clock nanoseconds, attempt. Uniqueness is
+/// A process-unique id: pid, wall-clock nanoseconds, attempt, and a
+/// process-wide counter (threads of one process starting at the same
+/// nanosecond with the same attempt would otherwise get the same id, and
+/// collide on the root's probe file). Uniqueness across processes is
 /// enforced by `create_new` on the lock file, not assumed from this.
-fn new_id(attempt: u32) -> String {
+pub(super) fn new_id(attempt: u32) -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    format!("{}-{nanos:x}-{attempt}", std::process::id())
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{nanos:x}-{attempt}-{n:x}", std::process::id())
 }
 
 /// Ids are `[0-9a-f-]`; anything else under our prefix is not ours.
-fn valid_id(id: &str) -> bool {
+pub(super) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id
             .bytes()

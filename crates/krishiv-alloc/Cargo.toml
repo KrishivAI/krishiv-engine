@@ -13,3 +13,7 @@ workspace = true
 
 [dependencies]
 libmimalloc-sys = { workspace = true, features = ["extended"] }
+
+[features]
+# Live-heap counting for memory measurements (`krishiv_alloc::heap`).
+heap-stats = []

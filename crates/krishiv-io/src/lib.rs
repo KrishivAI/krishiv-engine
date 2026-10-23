@@ -37,6 +37,7 @@ pub mod parquet;
 mod request;
 pub mod runtime_filter;
 mod scan;
+mod scan_gate;
 mod schema_map;
 pub mod split;
 mod stats;
@@ -68,6 +69,7 @@ pub use runtime_filter::{
     KeyFilterBuilder, KeyFilterOptions, Published, RowHash, RuntimeFilter, ScanFilter,
 };
 pub use scan::{ScanOptions, ScanStream};
+pub use scan_gate::ScanGate;
 pub use schema_map::{FIELD_ID_KEY, SchemaMapper};
 pub use stats::{ColumnStatistics, FileStatistics, Precision, TriState, prune};
 pub use write::{FileWriter, WriteOptions, WrittenFileInfo, spark_file_name};
