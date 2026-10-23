@@ -48,15 +48,17 @@
 //! rows, partitions and peer groups). String and binary results are views
 //! of the input's buffers, never copies. A batch's reservation is released
 //! when its last output slice is emitted.
-//! The operator does not spill: a partition must fit in memory (the sort
-//! below spills; spilling a partition that does not fit is a later part of
-//! P2-T055).
+//! With a spill scope, the buffered rows spill under memory pressure and a
+//! partition larger than memory is evaluated from disk (`spill.rs`,
+//! `stream.rs`); without one, a partition must fit in memory.
 //!
 //! # Weights
 //! Window functions are defined for insert-only input: weights other than
 //! 1 are `KRISHIV_UNSUPPORTED_FEATURE` (incremental windows are P4).
 
 mod eval;
+mod spill;
+mod stream;
 #[cfg(all(test, not(loom)))]
 mod tests;
 
@@ -67,13 +69,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use arrow_array::{Array, RecordBatch, RecordBatchOptions};
 use arrow_row::OwnedRow;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use krishiv_memory::{ConsumerHandle, Reservation};
+use futures::future::BoxFuture;
+use krishiv_common::error::KrishivError;
+use krishiv_memory::{ConsumerHandle, Reservation, SpillFile, SpillScope, SpillSignal};
 use krishiv_types::batch::{Batch, Weights};
 
 use crate::aggregate::{AggregateExpr, AggregateFunction};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
-use crate::operator::{LocalState, Operator, OperatorOutput};
+use crate::operator::{FlushOutput, LocalState, Operator, OperatorOutput};
 use crate::operators::{KeyEncoder, SortKey};
 
 /// A window function.
@@ -273,6 +277,17 @@ impl WindowFunctionPlan {
 /// Window functions over an input sorted by its partitioning, then its
 /// ordering (see the module docs).
 pub struct Window {
+    env: Arc<Env>,
+    /// Where the buffered rows spill to (none: they never spill).
+    spill: Option<SpillScope>,
+    partitions: AtomicU64,
+    rows: AtomicU64,
+    counters: Arc<spill::Counters>,
+}
+
+/// What evaluating a window takes, shared with the steps that run on the
+/// blocking pool.
+struct Env {
     input: SchemaRef,
     schema: SchemaRef,
     plan: WindowPlan,
@@ -281,14 +296,12 @@ pub struct Window {
     /// `spark.sql.ansi.enabled`: overflow raises instead of wrapping or
     /// becoming NULL.
     ansi: bool,
-    partitions: AtomicU64,
-    rows: AtomicU64,
 }
 
 impl std::fmt::Debug for Window {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Window")
-            .field("plan", &self.plan)
+            .field("plan", &self.env.plan)
             .finish_non_exhaustive()
     }
 }
@@ -307,6 +320,8 @@ struct Pending {
 }
 
 struct Local {
+    /// A row was taken (the next one is not the input's first).
+    started: bool,
     pending: VecDeque<Pending>,
     /// Where the last partition seen starts: an index into `pending` and a
     /// row. Rows before it are complete.
@@ -325,6 +340,40 @@ struct Local {
     /// Complete rows below this many wait for more (the configured batch
     /// size).
     batch_rows: usize,
+    /// Rows written to disk, in input order, while the input runs: from the
+    /// first spill on, the rows wait for the flush phase (see
+    /// [`spill`](self::spill)).
+    spilled: Option<VecDeque<SpillFile>>,
+    /// The flush phase: the spilled rows read back and evaluated.
+    replay: Option<Box<spill::Replay>>,
+    /// Rows were lost (a failed or cancelled spill or step): every call
+    /// fails with this error, never with a short result.
+    failed: Option<KrishivError>,
+    signal: Arc<SpillSignal>,
+    /// The operator has a spill scope.
+    spillable: bool,
+}
+
+impl Local {
+    /// Fails if rows were lost.
+    fn check(&self) -> Result<()> {
+        self.failed.clone().map_or(Ok(()), Err)
+    }
+
+    /// The bytes the buffered rows hold, which a spill frees.
+    fn pending_bytes(&self) -> usize {
+        self.pending.iter().map(|p| p.reserved).sum()
+    }
+
+    /// Publishes what a spill would free (nothing in the flush phase).
+    fn publish(&self) {
+        let bytes = if self.replay.is_some() || !self.spillable {
+            0
+        } else {
+            self.pending_bytes()
+        };
+        self.signal.set_spillable_bytes(bytes);
+    }
 }
 
 fn downcast(l: &mut LocalState) -> Result<&mut Local> {
@@ -334,14 +383,20 @@ fn downcast(l: &mut LocalState) -> Result<&mut Local> {
 
 impl Window {
     /// A window over batches of `input`, sorted by `plan`'s partitioning
-    /// and ordering.
+    /// and ordering; with `spill`, its buffered rows spill there under
+    /// memory pressure.
     ///
     /// # Errors
     /// `INTERNAL_ERROR` for a column outside the input or a filter that is
     /// not boolean; `KRISHIV_UNSUPPORTED_FEATURE` for a key type the sort
     /// cannot order, a frame not evaluated yet, or an aggregate of a type
     /// it does not take.
-    pub fn new(input: SchemaRef, plan: WindowPlan, ansi: bool) -> Result<Self> {
+    pub fn new(
+        input: SchemaRef,
+        plan: WindowPlan,
+        ansi: bool,
+        spill: Option<SpillScope>,
+    ) -> Result<Self> {
         let width = input.fields().len();
         let column = |i: usize, what: &str| {
             if i < width {
@@ -388,14 +443,18 @@ impl Window {
                 .transpose()
         };
         Ok(Self {
-            partition_keys: encoder(&partition)?,
-            order_keys: encoder(&plan.order_by)?,
-            schema: Arc::new(Schema::new(fields)),
-            input,
-            plan,
-            ansi,
+            env: Arc::new(Env {
+                partition_keys: encoder(&partition)?,
+                order_keys: encoder(&plan.order_by)?,
+                schema: Arc::new(Schema::new(fields)),
+                input,
+                plan,
+                ansi,
+            }),
+            spill,
             partitions: AtomicU64::new(0),
             rows: AtomicU64::new(0),
+            counters: Arc::default(),
         })
     }
 
@@ -423,10 +482,10 @@ impl Window {
             let last = (n > 0).then(|| rows.row(n - 1).owned());
             Ok((out, last))
         };
-        let (mut part_start, prev_partition) = flags(&self.partition_keys, &l.prev_partition)?;
-        let (order_start, prev_order) = flags(&self.order_keys, &l.prev_order)?;
-        if l.pending.is_empty()
-            && l.last_start.is_none()
+        let env = &*self.env;
+        let (mut part_start, prev_partition) = flags(&env.partition_keys, &l.prev_partition)?;
+        let (order_start, prev_order) = flags(&env.order_keys, &l.prev_order)?;
+        if !l.started
             && let Some(first) = part_start.first_mut()
         {
             // The first row of the input starts a partition.
@@ -442,10 +501,11 @@ impl Window {
         let cost = batch
             .get_array_memory_size()
             .saturating_add(2 * n)
-            .saturating_add(eval::cost(&self.plan, n, parts, peers)?);
+            .saturating_add(eval::cost(&env.plan, n, parts, peers)?);
         if l.reservation.try_grow(cost).is_err() {
             return Ok(Err(cost));
         }
+        l.started |= n > 0;
         if prev_partition.is_some() {
             l.prev_partition = prev_partition;
         }
@@ -519,7 +579,7 @@ impl Window {
                     peer_start: &l.pending[i].peer_start[offset..offset + len],
                 })
                 .collect();
-            eval::evaluate(&self.plan, &unit, self.ansi)?
+            eval::evaluate(&self.env.plan, &unit, self.env.ansi)?
         };
         // One output batch per slice: its input columns, then the slice of
         // each window column.
@@ -535,9 +595,12 @@ impl Window {
                 .collect();
             cols.extend(columns.iter().map(|c| c.slice(at, len)));
             at += len;
-            let batch =
-                RecordBatch::try_new_with_options(Arc::clone(&self.schema), cols, &options(len))
-                    .map_err(|e| internal(format!("window produced an invalid batch: {e}")))?;
+            let batch = RecordBatch::try_new_with_options(
+                Arc::clone(&self.env.schema),
+                cols,
+                &options(len),
+            )
+            .map_err(|e| internal(format!("window produced an invalid batch: {e}")))?;
             l.out.push_back((Batch::new(batch), 0));
         }
         // Advance past the evaluated rows; a fully evaluated input batch
@@ -577,12 +640,18 @@ impl Operator for Window {
     }
 
     fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+        Arc::clone(&self.env.schema)
     }
 
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
         let consumer: Arc<ConsumerHandle> = Arc::clone(ctx.consumer().consumer());
         Ok(Box::new(Local {
+            started: false,
+            spilled: None,
+            replay: None,
+            failed: None,
+            signal: Arc::clone(ctx.consumer().signal()),
+            spillable: self.spill.is_some(),
             pending: VecDeque::new(),
             last_start: None,
             prev_partition: None,
@@ -596,6 +665,7 @@ impl Operator for Window {
 
     fn execute(&self, input: &Batch, l: &mut LocalState) -> Result<OperatorOutput> {
         let l = downcast(l)?;
+        l.check()?;
         if let Some(b) = Self::emit(l) {
             return Ok(OperatorOutput::HaveMoreOutput(b));
         }
@@ -609,33 +679,81 @@ impl Operator for Window {
                     .to_owned(),
             ));
         }
-        if input.data().schema().fields().len() != self.input.fields().len() {
+        if input.data().schema().fields().len() != self.env.input.fields().len() {
             return Err(internal("window input of the wrong width".to_owned()));
         }
         if let Err(bytes) = self.append(l, input.data().clone())? {
             return Ok(OperatorOutput::NeedMemory { bytes });
         }
-        if Self::complete_rows(l) >= l.batch_rows {
+        // After a spill, rows wait for the flush phase: the spilled ones
+        // come first.
+        if l.spilled.is_none() && Self::complete_rows(l) >= l.batch_rows {
             self.flush_complete(l)?;
         }
+        l.publish();
         Ok(OperatorOutput::NeedMoreInput(Self::emit(l)))
+    }
+
+    fn spill<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        target: usize,
+        ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<usize>> {
+        let _ = target;
+        Box::pin(async move { self.spill_pending(downcast(local)?, ctx, false).await })
     }
 
     fn finish(&self, l: &mut LocalState) -> Result<Option<Batch>> {
         let l = downcast(l)?;
+        l.check()?;
         if let Some(b) = Self::emit(l) {
             return Ok(Some(b));
+        }
+        if l.spilled.is_some() {
+            // The rest is evaluated in the flush phase.
+            return Ok(None);
         }
         if !std::mem::replace(&mut l.finished, true) {
             self.flush_complete(l)?;
         }
+        l.publish();
         Ok(Self::emit(l))
+    }
+
+    fn needs_flush(&self) -> bool {
+        self.spill.is_some()
+    }
+
+    fn end_input<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move { self.start_replay(downcast(local)?, ctx).await })
+    }
+
+    fn flush<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<FlushOutput>> {
+        Box::pin(async move { self.replay(downcast(local)?, ctx).await })
     }
 
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         crate::metrics::counts([
             ("partitions", self.partitions.load(Ordering::Relaxed)),
             ("rows", self.rows.load(Ordering::Relaxed)),
+            ("spills", self.counters.spills.load(Ordering::Relaxed)),
+            (
+                "spill_file_bytes",
+                self.counters.bytes.load(Ordering::Relaxed),
+            ),
+            (
+                "external_partitions",
+                self.counters.external.load(Ordering::Relaxed),
+            ),
         ])
     }
 }

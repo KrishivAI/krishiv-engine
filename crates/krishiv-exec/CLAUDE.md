@@ -35,7 +35,10 @@ Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFi
 `Sort` below it; `planner/window.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one
 partition, evaluates complete partitions), `eval.rs` boundaries, ranking functions, frame aggregates (through the
 aggregate `Accumulator`, one row at a time in Spark's order; decimal `sum`/`avg` exact in `i256`, checked when
-evaluated), `tests.rs` (property test against a naive reference).
+evaluated), `spill.rs` (buffered rows spill under pressure; after a spill rows wait for the flush phase, which reads
+them back in order; a partition that does not fit is copied to its own file; failed/cancelled steps leave the state
+failed, never a short result), `stream.rs` (a partition evaluated from disk: lead and trailing readers, bounded
+memory), `tests.rs` (property test against a naive reference; spilled vs in-memory equality).
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
