@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
 
@@ -643,8 +645,10 @@ jobs:
           grep -q '^SF:python/krishiv/' python-coverage.lcov \
             || { echo "::error::python-coverage.lcov has no python/krishiv paths"; exit 1; }
           cargo xtask diff-coverage --base HEAD^1 --head HEAD --lcov python-coverage.lcov --fail-under 90
+      # Skipped on merge-queue runs: the coverage report only feeds the PR diff
+      # gate above and an informational upload, both already done on the PR.
       - name: Upload Python coverage to Codecov (informational)
-        if: matrix.coverage
+        if: matrix.coverage && github.event_name != 'merge_group'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: python-coverage.xml

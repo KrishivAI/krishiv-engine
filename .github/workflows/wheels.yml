@@ -261,6 +261,10 @@ jobs:
   # Every wheel's size, measured (artifact `wheel-sizes`); gated here only
   # when there is no pull request to carry a label (nightly, manual runs).
   sizes:
+    # Not on merge-queue runs: the size of a wheel is a property of the pull
+    # request, already measured and gated there (`wheel-sizes` in pr-policy.yml).
+    # A skipped job does not fail the `wheels-targets` caller or `wheels-ok`.
+    if: github.event_name != 'merge_group'
     needs: [linux-x86_64, linux-aarch64, macos-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -288,5 +292,5 @@ jobs:
           path: ${{ runner.temp }}/wheel-sizes/wheel-sizes.json
           if-no-files-found: error
       - name: Wheel sizes (no pull request)
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
         run: cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json"
