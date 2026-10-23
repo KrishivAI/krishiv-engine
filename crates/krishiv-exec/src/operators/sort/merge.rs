@@ -201,6 +201,13 @@ pub(crate) struct Merger {
     /// Whether a cursor moved to a new batch since the last output, so
     /// `sources` holds batches no cursor is on any more.
     retired: bool,
+    /// Per source: the output slot it was given in the batch being built
+    /// (valid while its `stamp` equals `generation`): the sources an output
+    /// uses are numbered in one pass, without sorting them.
+    slot: Vec<u32>,
+    /// A 64-bit count of output batches: it never wraps.
+    stamp: Vec<u64>,
+    generation: u64,
 }
 
 impl Merger {
@@ -257,6 +264,9 @@ impl Merger {
             cursors,
             sources,
             retired: false,
+            slot: Vec::new(),
+            stamp: Vec::new(),
+            generation: 0,
         };
         for i in 0..merger.cursors.len() {
             // Plays `i` up until it meets an empty node (initial build).
@@ -346,17 +356,29 @@ impl Merger {
         }
         // Interleave only the batches this output uses: an in-memory merge
         // has one source per buffered batch, and passing them all would
-        // make every output batch cost O(buffered batches).
-        let mut used: Vec<usize> = out.iter().map(|&(s, _)| s).collect();
-        used.sort_unstable();
-        used.dedup();
-        let sources: Vec<Batch> = used.iter().map(|&s| self.sources[s].clone()).collect();
-        for o in &mut out {
-            o.0 = used
-                .binary_search(&o.0)
-                .map_err(|_| internal(format!("merge source {} is not in use", o.0)))?;
+        // make every output batch cost O(buffered batches). They are
+        // numbered in order of first use and borrowed, not cloned.
+        let n = self.sources.len();
+        if self.stamp.len() < n {
+            self.stamp.resize(n, 0);
+            self.slot.resize(n, 0);
         }
-        let batch = interleave_batches(&self.schema, &sources, &out)?;
+        self.generation += 1;
+        let mut used: Vec<&Batch> = Vec::new();
+        for o in &mut out {
+            let s = o.0;
+            let (Some(stamp), Some(slot)) = (self.stamp.get_mut(s), self.slot.get_mut(s)) else {
+                return Err(internal(format!("merge source {s} is not in use")));
+            };
+            if *stamp != self.generation {
+                *stamp = self.generation;
+                *slot = u32::try_from(used.len())
+                    .map_err(|_| internal("too many merge sources".to_owned()))?;
+                used.push(&self.sources[s]);
+            }
+            o.0 = *slot as usize;
+        }
+        let batch = interleave_batches(&self.schema, &used, &out)?;
         if self.retired {
             // Only the batches cursors are on stay referenced.
             self.sources = self.cursors.iter().map(|c| c.batch().clone()).collect();
@@ -371,16 +393,16 @@ impl Merger {
 
 /// The rows at `indices` (`(source batch, row)`) of `sources`, weights
 /// included: a constant weight shared by every source stays constant.
-pub(crate) fn interleave_batches(
+pub(crate) fn interleave_batches<B: std::borrow::Borrow<Batch>>(
     schema: &SchemaRef,
-    sources: &[Batch],
+    sources: &[B],
     indices: &[(usize, usize)],
 ) -> Result<Batch> {
     let columns = (0..schema.fields().len())
         .map(|c| {
             let arrays: Vec<&dyn Array> = sources
                 .iter()
-                .map(|b| b.data().column(c).as_ref())
+                .map(|b| b.borrow().data().column(c).as_ref())
                 .collect();
             interleave(&arrays, indices)
         })
@@ -389,19 +411,25 @@ pub(crate) fn interleave_batches(
     let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
     let data = RecordBatch::try_new_with_options(Arc::clone(schema), columns, &options)
         .map_err(|e| internal(e.to_string()))?;
-    let first = sources.first().map(Batch::weights);
+    let first = sources.first().map(|b| b.borrow().weights());
     let weights = match first {
-        Some(Weights::Const(w)) if sources.iter().all(|b| b.weights() == &Weights::Const(*w)) => {
+        Some(Weights::Const(w))
+            if sources
+                .iter()
+                .all(|b| b.borrow().weights() == &Weights::Const(*w)) =>
+        {
             Weights::Const(*w)
         }
         _ => Weights::Column(
             indices
                 .iter()
-                .map(|&(b, r)| match sources.get(b).map(Batch::weights) {
-                    Some(Weights::Const(w)) => Ok(*w),
-                    Some(Weights::Column(c)) if r < c.len() => Ok(c.value(r)),
-                    _ => Err(internal(format!("merge index ({b}, {r}) is out of range"))),
-                })
+                .map(
+                    |&(b, r)| match sources.get(b).map(|b| b.borrow().weights()) {
+                        Some(Weights::Const(w)) => Ok(*w),
+                        Some(Weights::Column(c)) if r < c.len() => Ok(c.value(r)),
+                        _ => Err(internal(format!("merge index ({b}, {r}) is out of range"))),
+                    },
+                )
                 .collect::<Result<Int64Array>>()?,
         ),
     };
