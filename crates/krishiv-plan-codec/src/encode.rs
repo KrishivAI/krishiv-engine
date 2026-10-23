@@ -15,6 +15,7 @@ use krishiv_exec::physical::{
     ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind,
 };
 use krishiv_exec::planner::ExplainNode;
+use krishiv_exec::window::{FrameBound, FrameUnits, WindowFunction, WindowFunctionPlan};
 use krishiv_exec::{RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, KeyFilterOptions};
 use krishiv_plan::{
@@ -125,7 +126,7 @@ struct Encoder {
     /// shared subexpression is written once.
     expr_ids: HashMap<*const Expr, u32>,
     /// The oldest reader version that understands every field written so
-    /// far (a `Limit` with a nonzero offset needs version 3).
+    /// far (a `Limit` with a nonzero offset needs version 3, a `Window` version 4).
     min_reader: u32,
 }
 
@@ -147,10 +148,19 @@ impl Encoder {
     fn node(&mut self, node: &PhysNode) -> Result<pb::Node> {
         use pb::node::Kind;
         let kind = match node {
-            PhysNode::Window { .. } => {
-                return Err(CodecError::Unsupported(
-                    "a Window node (the next commit adds it)".to_owned(),
-                ));
+            PhysNode::Window { input, window } => {
+                // An older reader has no `Window` node to read.
+                self.min_reader = self.min_reader.max(4);
+                Kind::Window(pb::WindowNode {
+                    input: self.node_index(input)?,
+                    partition_by: indexes(&window.partition_by),
+                    order_by: window.order_by.iter().map(sort_key).collect(),
+                    functions: window
+                        .functions
+                        .iter()
+                        .map(window_function)
+                        .collect::<Result<_>>()?,
+                })
             }
             PhysNode::Scan(scan) => Kind::Scan(self.scan(scan)?),
             PhysNode::OneRow => Kind::OneRow(pb::Empty {}),
@@ -557,6 +567,45 @@ fn row_stage(s: &RowStageSettings) -> pb::RowStageSettings {
     pb::RowStageSettings {
         min_rows: s.min_rows,
         max_pass_rate: s.max_pass_rate,
+    }
+}
+
+fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
+    use pb::window_function_plan::Function;
+    let function = match &f.function {
+        WindowFunction::RowNumber => Function::RowNumber(pb::Empty {}),
+        WindowFunction::Rank => Function::Rank(pb::Empty {}),
+        WindowFunction::DenseRank => Function::DenseRank(pb::Empty {}),
+        WindowFunction::PercentRank => Function::PercentRank(pb::Empty {}),
+        WindowFunction::CumeDist => Function::CumeDist(pb::Empty {}),
+        WindowFunction::Ntile(buckets) => Function::Ntile(*buckets),
+        WindowFunction::Aggregate(a) => Function::Aggregate(aggregate_expr(a)),
+    };
+    Ok(pb::WindowFunctionPlan {
+        function: Some(function),
+        frame: Some(pb::WindowFrame {
+            units: match f.frame.units {
+                FrameUnits::Rows => pb::FrameUnits::Rows,
+                FrameUnits::Range => pb::FrameUnits::Range,
+            } as i32,
+            lower: frame_bound(f.frame.lower)? as i32,
+            upper: frame_bound(f.frame.upper)? as i32,
+        }),
+        filter: f.filter.map(|c| c as u64),
+        name: f.name.clone(),
+    })
+}
+
+fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
+    match b {
+        FrameBound::UnboundedPreceding => Ok(pb::FrameBound::UnboundedPreceding),
+        FrameBound::CurrentRow => Ok(pb::FrameBound::CurrentRow),
+        FrameBound::UnboundedFollowing => Ok(pb::FrameBound::UnboundedFollowing),
+        // `FrameBound` is `#[non_exhaustive]`: a bound added later needs a
+        // codec change, not a silently wrong frame.
+        _ => Err(CodecError::Unsupported(
+            "a window frame bound the format does not know".to_owned(),
+        )),
     }
 }
 

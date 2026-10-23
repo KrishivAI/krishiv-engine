@@ -277,6 +277,65 @@ fn an_offset_limit_needs_a_v3_reader() {
 }
 
 #[test]
+fn a_window_needs_a_v4_reader() {
+    // A `Window` node sets `min_reader_version` to 4: an older reader has
+    // no such node. Plans without one stay readable by older readers.
+    assert_eq!(FORMAT_VERSION, 4);
+    assert_eq!(message("window_ranking").min_reader_version, 4);
+    assert_eq!(message("window_aggregates").min_reader_version, 4);
+    for (name, plan) in cases() {
+        if !name.starts_with("window") {
+            let m = to_message(&plan).unwrap();
+            assert!(m.min_reader_version <= 3, "{name} needs a newer reader");
+        }
+    }
+}
+
+#[test]
+fn a_window_plan_survives_the_wire_with_every_field() {
+    for name in ["window_ranking", "window_aggregates"] {
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+}
+
+#[test]
+fn a_corrupt_window_is_refused() {
+    use pb::node::Kind;
+    let edit = |f: &dyn Fn(&mut pb::WindowNode)| {
+        let mut m = message("window_ranking");
+        for node in &mut m.nodes {
+            if let Some(Kind::Window(w)) = &mut node.kind {
+                f(w);
+            }
+        }
+        m
+    };
+    corrupt(
+        &edit(&|w| w.functions[0].function = None),
+        "a window function is missing",
+    );
+    corrupt(
+        &edit(&|w| w.functions[0].frame = None),
+        "a window frame is missing",
+    );
+    corrupt(
+        &edit(&|w| w.functions[0].frame.as_mut().unwrap().units = 0),
+        "unknown window frame unit",
+    );
+    corrupt(
+        &edit(&|w| w.functions[0].frame.as_mut().unwrap().lower = 9),
+        "unknown window frame bound",
+    );
+    corrupt(
+        &edit(&|w| {
+            w.functions[5].function = Some(pb::window_function_plan::Function::Ntile(0));
+        }),
+        "ntile with a bucket count below one",
+    );
+}
+
+#[test]
 fn a_newer_writer_that_stays_compatible_is_read() {
     // N reads N+1 when the writer only added fields: unknown fields (here
     // number 999, a varint) are skipped, and the version is higher.
