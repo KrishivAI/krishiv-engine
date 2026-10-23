@@ -39,6 +39,32 @@ impl TimeZoneRules for FixedOffset {
     }
 }
 
+impl FixedOffset {
+    /// The zone a `spark.sql.session.timeZone` value names, when it is a
+    /// fixed offset: `UTC`, `GMT`, `Z`, `Etc/UTC` or `[UTC|GMT][+-]hh[:mm]`
+    /// (hours up to 18). `None` for region ids, which need the time-zone
+    /// database, and for malformed zones.
+    #[must_use]
+    pub fn parse(zone: &str) -> Option<Self> {
+        let zone = zone.trim();
+        if ["UTC", "GMT", "Z", "Etc/UTC"].contains(&zone) {
+            return Some(Self(0));
+        }
+        let rest = zone
+            .strip_prefix("UTC")
+            .or_else(|| zone.strip_prefix("GMT"))
+            .unwrap_or(zone);
+        let (sign, hm) = match rest.as_bytes().first()? {
+            b'+' => (1, &rest[1..]),
+            b'-' => (-1, &rest[1..]),
+            _ => return None,
+        };
+        let (h, m) = hm.split_once(':').unwrap_or((hm, "0"));
+        let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
+        ((0..=18).contains(&h) && (0..60).contains(&m)).then(|| Self(sign * (h * 3600 + m * 60)))
+    }
+}
+
 /// Days since 1970-01-01 of a proleptic Gregorian date, or `None` for an
 /// invalid month/day (Howard Hinnant's `days_from_civil`).
 pub(crate) fn days_from_civil(year: i64, month: u32, day: u32) -> Option<i64> {
@@ -142,6 +168,34 @@ pub(crate) fn utc_to_local(utc: i64, tz: &dyn TimeZoneRules) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_zones_parse_as_fixed_offsets_or_none() {
+        for (zone, offset) in [
+            ("UTC", Some(0)),
+            (" GMT ", Some(0)),
+            ("Z", Some(0)),
+            ("Etc/UTC", Some(0)),
+            ("+05:30", Some(19_800)),
+            ("UTC-08:00", Some(-28_800)),
+            ("GMT+1", Some(3600)),
+            ("-18:00", Some(-64_800)),
+        ] {
+            assert_eq!(FixedOffset::parse(zone), offset.map(FixedOffset), "{zone}");
+        }
+        // Region ids need the tz database; malformed or out-of-range
+        // offsets are not zones.
+        for zone in [
+            "America/Los_Angeles",
+            "",
+            "+19:00",
+            "+05:60",
+            "+ab",
+            "UTC*1",
+        ] {
+            assert_eq!(FixedOffset::parse(zone), None, "{zone}");
+        }
+    }
 
     #[test]
     fn civil_round_trips_and_spark_values() {

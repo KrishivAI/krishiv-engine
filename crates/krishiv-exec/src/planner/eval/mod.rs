@@ -174,7 +174,7 @@ impl EvalEnv {
         let zone = config
             .get(&SESSION_TIME_ZONE)
             .and_then(|v| v.as_str())
-            .and_then(fixed_offset);
+            .and_then(|z| krishiv_kernels::cast::FixedOffset::parse(z).map(|o| o.0));
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -209,25 +209,6 @@ impl EvalEnv {
             user: Arc::clone(&self.user),
         }
     }
-}
-
-/// The offset of `UTC`, `GMT`, `Z` or `[+-]hh:mm`, in seconds.
-fn fixed_offset(zone: &str) -> Option<i32> {
-    if ["UTC", "GMT", "Z", "Etc/UTC"].contains(&zone) {
-        return Some(0);
-    }
-    let rest = zone
-        .strip_prefix("UTC")
-        .or_else(|| zone.strip_prefix("GMT"))
-        .unwrap_or(zone);
-    let (sign, hm) = match rest.as_bytes().first()? {
-        b'+' => (1, &rest[1..]),
-        b'-' => (-1, &rest[1..]),
-        _ => return None,
-    };
-    let (h, m) = hm.split_once(':').unwrap_or((hm, "0"));
-    let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
-    ((0..=18).contains(&h) && (0..60).contains(&m)).then(|| sign * (h * 3600 + m * 60))
 }
 
 /// The input an expression is compiled against.

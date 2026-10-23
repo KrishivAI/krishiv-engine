@@ -198,32 +198,10 @@ impl ResolutionConf {
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
             session_zone: match conf(Self::KEYS[9]) {
                 None => Some(0),
-                Some(s) => fixed_offset(s),
+                Some(s) => krishiv_kernels::cast::FixedOffset::parse(s).map(|o| o.0),
             },
         }
     }
-}
-
-/// The offset of `UTC`, `GMT`, `Z` or `[+-]hh:mm`, in seconds east of UTC;
-/// `None` for region ids (which need the time-zone database) and malformed
-/// zones.
-fn fixed_offset(zone: &str) -> Option<i32> {
-    let zone = zone.trim();
-    if ["UTC", "GMT", "Z", "Etc/UTC"].contains(&zone) {
-        return Some(0);
-    }
-    let rest = zone
-        .strip_prefix("UTC")
-        .or_else(|| zone.strip_prefix("GMT"))
-        .unwrap_or(zone);
-    let (sign, hm) = match rest.as_bytes().first()? {
-        b'+' => (1, &rest[1..]),
-        b'-' => (-1, &rest[1..]),
-        _ => return None,
-    };
-    let (h, m) = hm.split_once(':').unwrap_or((hm, "0"));
-    let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
-    ((0..=18).contains(&h) && (0..60).contains(&m)).then(|| sign * (h * 3600 + m * 60))
 }
 
 /// Everything resolution may read.
