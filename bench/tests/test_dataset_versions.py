@@ -149,6 +149,10 @@ def test_run_suite_checks_answers_only_for_matching_generator(root: Path, monkey
 
     ver = duckdb.__version__
 
+    # Stated oracle for `select 1`: exactly one row with the value 1.
+    ORACLE_ROWS = [(1,)]
+    ORACLE_ANSWER = [["1"]]
+
     class _FakeEngine(Engine):
         def version(self) -> str:
             return "fake"
@@ -157,7 +161,8 @@ def test_run_suite_checks_answers_only_for_matching_generator(root: Path, monkey
             pass
 
         def run(self, query):
-            return []
+            assert query.sql == "select 1"
+            return list(ORACLE_ROWS)
 
     def _make_ds(ds_name: str):
         d = dataset_dir(ds_name, 1)
@@ -170,7 +175,7 @@ def test_run_suite_checks_answers_only_for_matching_generator(root: Path, monkey
 
     _make_ds("tpch-dbgen")
     calls: list = []
-    monkeypatch.setattr(compare, "load_tpch_answers", lambda sf: calls.append(sf) or {"q01": []})
+    monkeypatch.setattr(compare, "load_tpch_answers", lambda sf: calls.append(sf) or {"q01": [list(r) for r in ORACLE_ANSWER]})
     out = runner.run_suite("fake", "tpch", 1, iterations=1, warmup=0, dataset="tpch-dbgen")
     assert calls == []
     rec = json.loads(out.read_text())
@@ -185,8 +190,15 @@ def test_run_suite_checks_answers_only_for_matching_generator(root: Path, monkey
     rec = json.loads(out.read_text())
     assert rec["answers_available"] is True
     assert rec["dataset"]["generator"] == f"duckdb {ver} tpch extension (dbgen)"
+    assert rec["queries"]["q01"]["rows_returned"] == 1
     assert rec["queries"]["q01"]["answer_check"]["status"] == "pass"
     assert rec["queries"]["q01"]["answer_check"]["detail"] == "ok"
+
+    # A different (or empty) result must not pass against the same oracle.
+    ok, _ = compare.answer_check([(2,)], ORACLE_ANSWER, False)
+    assert not ok
+    ok, _ = compare.answer_check([], ORACLE_ANSWER, False)
+    assert not ok
 
     def _boom(sf: float):
         raise RuntimeError("offline")
