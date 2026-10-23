@@ -275,6 +275,37 @@ fn an_offset_limit_needs_a_v3_reader() {
 }
 
 #[test]
+fn joins_that_build_their_preserved_side_need_a_v4_reader() {
+    // An older reader would refuse the join type as unknown (corrupt): the
+    // plan says up front, with `min_reader_version`, that it needs v4.
+    for name in ["hash_join", "hash_join_anti", "nested_loop_join"] {
+        assert_eq!(
+            message(name).min_reader_version,
+            MIN_READER_VERSION,
+            "{name}"
+        );
+    }
+    for name in [
+        "hash_join_right_semi",
+        "hash_join_right_anti",
+        "hash_join_right_outer",
+    ] {
+        assert_eq!(message(name).min_reader_version, 4, "{name}");
+    }
+}
+
+#[test]
+fn an_unspecified_join_type_is_corrupt() {
+    let mut m = message("hash_join");
+    for node in &mut m.nodes {
+        if let Some(pb::node::Kind::HashJoin(j)) = &mut node.kind {
+            j.join_type = pb::JoinType::Unspecified as i32;
+        }
+    }
+    corrupt(&m, "join type");
+}
+
+#[test]
 fn a_newer_writer_that_stays_compatible_is_read() {
     // N reads N+1 when the writer only added fields: unknown fields (here
     // number 999, a varint) are skipped, and the version is higher.

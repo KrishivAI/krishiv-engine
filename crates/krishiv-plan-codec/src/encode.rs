@@ -28,6 +28,11 @@ use crate::error::{CodecError, Result};
 use crate::proto as pb;
 use crate::{FORMAT_VERSION, MIN_READER_VERSION};
 
+/// The format version that added the joins that build their preserved
+/// side (`RightSemi`, `RightAnti`, `RightOuter`): the reader a plan using
+/// one needs.
+const BUILD_PRESERVED_JOINS: u32 = 4;
+
 /// Encodes `plan` as `krishiv.plan.v1` bytes. Deterministic: the same plan
 /// always gives the same bytes.
 ///
@@ -297,7 +302,7 @@ impl Encoder {
         Ok(pb::HashJoinNode {
             probe: self.node_index(&join.probe)?,
             build: self.node_index(&join.build)?,
-            join_type: join_type(join.join_type) as i32,
+            join_type: self.join_type(join.join_type) as i32,
             probe_keys: indexes(&join.probe_keys),
             build_keys: indexes(&join.build_keys),
             null_safe: join.null_safe.clone(),
@@ -311,9 +316,17 @@ impl Encoder {
         Ok(pb::NestedLoopJoinNode {
             probe: self.node_index(&join.probe)?,
             build: self.node_index(&join.build)?,
-            join_type: join_type(join.join_type) as i32,
+            join_type: self.join_type(join.join_type) as i32,
             residual: self.residual(join.residual.as_ref())?,
         })
+    }
+
+    fn join_type(&mut self, t: JoinType) -> pb::JoinType {
+        if t.builds_preserved() {
+            // An older reader does not know these join types.
+            self.min_reader = self.min_reader.max(BUILD_PRESERVED_JOINS);
+        }
+        join_type(t)
     }
 
     fn exchange(&self, exchange: &ExchangePlan) -> Result<pb::ExchangeNode> {
@@ -488,6 +501,9 @@ fn join_type(t: JoinType) -> pb::JoinType {
         JoinType::LeftSemi => pb::JoinType::LeftSemi,
         JoinType::LeftAnti => pb::JoinType::LeftAnti,
         JoinType::NullAwareAnti => pb::JoinType::NullAwareAnti,
+        JoinType::RightSemi => pb::JoinType::RightSemi,
+        JoinType::RightAnti => pb::JoinType::RightAnti,
+        JoinType::RightOuter => pb::JoinType::RightOuter,
     }
 }
 

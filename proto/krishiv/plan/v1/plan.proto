@@ -203,6 +203,11 @@ enum JoinType {
   JOIN_TYPE_LEFT_SEMI = 3;
   JOIN_TYPE_LEFT_ANTI = 4;
   JOIN_TYPE_NULL_AWARE_ANTI = 5;
+  // v4: joins that build their preserved side and return its rows by
+  // their matches. A plan that uses one needs a v4 reader.
+  JOIN_TYPE_RIGHT_SEMI = 6;
+  JOIN_TYPE_RIGHT_ANTI = 7;
+  JOIN_TYPE_RIGHT_OUTER = 8;
 }
 
 message Residual {

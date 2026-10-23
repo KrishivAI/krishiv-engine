@@ -150,8 +150,10 @@ use crate::operators::Predicate;
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::rows;
 
-/// The join type. The probe (left) side is preserved by the outer and anti
-/// joins; the build (right) side never is.
+/// The join type. The probe (left) side is preserved by the left outer and
+/// anti joins; the build side is preserved by the right semi, right anti
+/// and right outer joins, which build the input whose rows they return
+/// (design P2-T166).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JoinType {
     /// Matching pairs.
@@ -164,11 +166,29 @@ pub enum JoinType {
     LeftAnti,
     /// `NOT IN`: see the module docs.
     NullAwareAnti,
+    /// Build rows with at least one match, each once: a left semi join
+    /// that builds its left input. Planned data only for now: no operator
+    /// runs it yet.
+    RightSemi,
+    /// Build rows with no match: a left anti join that builds its left
+    /// input. Planned data only for now.
+    RightAnti,
+    /// Matching pairs, and each unmatched build row with NULL probe
+    /// columns: a left outer join that builds its preserved input. Planned
+    /// data only for now.
+    RightOuter,
 }
 
 impl JoinType {
     fn emits_build(self) -> bool {
         matches!(self, Self::Inner | Self::LeftOuter)
+    }
+
+    /// Whether the join returns rows of its build side by their matches
+    /// (right semi, right anti, right outer).
+    #[must_use]
+    pub fn builds_preserved(self) -> bool {
+        matches!(self, Self::RightSemi | Self::RightAnti | Self::RightOuter)
     }
 }
 
@@ -399,6 +419,11 @@ impl Shared {
         if n == 0 || build_keys.len() != n || null_safe.len() != n {
             return Err(internal(
                 "a hash join needs matching, non-empty key lists".to_owned(),
+            ));
+        }
+        if join_type.builds_preserved() {
+            return Err(unsupported(
+                "hash joins that return rows of their build side by their matches",
             ));
         }
         if join_type == JoinType::NullAwareAnti
@@ -754,6 +779,40 @@ mod tests {
             null_safe: vec![false; keys],
             filter: filter.then(|| Arc::new(crate::FnPredicate(all)) as Arc<dyn Predicate>),
             spill: None,
+        }
+    }
+
+    /// The joins that build their preserved side are plan data only: no
+    /// hash join runs them yet, and none is planned.
+    #[test]
+    fn joins_that_build_their_preserved_side_are_refused() {
+        for t in [
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+            JoinType::RightOuter,
+        ] {
+            assert!(t.builds_preserved());
+            let e = HashJoin::try_new(spec(t, 1, false))
+                .err()
+                .unwrap_or_else(|| panic!("{t:?} was accepted"));
+            assert_eq!(
+                e.error_class(),
+                krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+                "{t:?}"
+            );
+            assert!(
+                e.to_string().contains("return rows of their build side"),
+                "{e}"
+            );
+        }
+        for t in [
+            JoinType::Inner,
+            JoinType::LeftOuter,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::NullAwareAnti,
+        ] {
+            assert!(!t.builds_preserved(), "{t:?}");
         }
     }
 

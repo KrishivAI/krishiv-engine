@@ -568,12 +568,16 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
 }
 
 fn join_type(t: i32) -> Result<JoinType> {
-    Ok(match enum_of!(pb::JoinType, t, "join type")? {
-        pb::JoinType::Inner => JoinType::Inner,
-        pb::JoinType::LeftOuter => JoinType::LeftOuter,
-        pb::JoinType::LeftSemi => JoinType::LeftSemi,
-        pb::JoinType::LeftAnti => JoinType::LeftAnti,
-        _ => JoinType::NullAwareAnti,
+    Ok(match pb::JoinType::try_from(t) {
+        Ok(pb::JoinType::Inner) => JoinType::Inner,
+        Ok(pb::JoinType::LeftOuter) => JoinType::LeftOuter,
+        Ok(pb::JoinType::LeftSemi) => JoinType::LeftSemi,
+        Ok(pb::JoinType::LeftAnti) => JoinType::LeftAnti,
+        Ok(pb::JoinType::NullAwareAnti) => JoinType::NullAwareAnti,
+        Ok(pb::JoinType::RightSemi) => JoinType::RightSemi,
+        Ok(pb::JoinType::RightAnti) => JoinType::RightAnti,
+        Ok(pb::JoinType::RightOuter) => JoinType::RightOuter,
+        Ok(pb::JoinType::Unspecified) | Err(_) => return Err(corrupt("an unknown join type")),
     })
 }
 
