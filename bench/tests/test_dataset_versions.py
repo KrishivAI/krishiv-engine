@@ -175,7 +175,9 @@ def test_run_suite_checks_answers_only_for_matching_generator(root: Path, monkey
 
     _make_ds("tpch-dbgen")
     calls: list = []
-    monkeypatch.setattr(compare, "load_tpch_answers", lambda sf: calls.append(sf) or {"q01": [list(r) for r in ORACLE_ANSWER]})
+    monkeypatch.setattr(
+        compare, "load_tpch_answers", lambda sf: calls.append(sf) or {"q01": [list(r) for r in ORACLE_ANSWER]}
+    )
     out = runner.run_suite("fake", "tpch", 1, iterations=1, warmup=0, dataset="tpch-dbgen")
     assert calls == []
     rec = json.loads(out.read_text())
