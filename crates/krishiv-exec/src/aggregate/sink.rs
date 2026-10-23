@@ -23,6 +23,7 @@
 //! to an output file ([`crate::output_spill`]), and its tables go once the
 //! last chunk's reader is done with them.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock, Weak};
 
@@ -105,6 +106,10 @@ pub struct HashAggregate {
     /// Overrides the thread-local row tables' index mode (tests force
     /// abandons).
     row_mode: Option<Mode>,
+    /// A gate the result's spill waits at before writing (tests cancel a
+    /// query during the spill).
+    #[cfg(test)]
+    output_gate: Option<Arc<crate::testing::BlockingGate>>,
 }
 
 impl HashAggregate {
@@ -117,6 +122,8 @@ impl HashAggregate {
             core: Arc::new(AggCore::new(spec)?),
             counters: Arc::default(),
             row_mode: None,
+            #[cfg(test)]
+            output_gate: None,
         }))
     }
 
@@ -129,6 +136,22 @@ impl HashAggregate {
             core: Arc::new(AggCore::new(spec)?),
             counters: Arc::default(),
             row_mode: Some(mode),
+            output_gate: None,
+        }))
+    }
+
+    /// [`new`](Self::new) whose result's spill waits at `gate` before it
+    /// writes.
+    #[cfg(test)]
+    pub(crate) fn with_output_gate(
+        spec: AggregateSpec,
+        gate: Arc<crate::testing::BlockingGate>,
+    ) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self {
+            core: Arc::new(AggCore::new(spec)?),
+            counters: Arc::default(),
+            row_mode: None,
+            output_gate: Some(gate),
         }))
     }
 
@@ -264,14 +287,14 @@ impl Spiller {
         Ok(Run(files))
     }
 
-    /// Writes chunks `from..` of an in-memory result to one output file
+    /// Writes `chunks` of an in-memory result to one output file
     /// (blocking I/O); the writer's scratch may use the pool's
     /// spill-scratch floor.
-    fn write_chunks(&self, mem: &InMemory, from: usize) -> Result<SpillFile> {
+    fn write_chunks(&self, mem: &InMemory, chunks: std::ops::Range<usize>) -> Result<SpillFile> {
         let schema = Arc::clone(&self.core.output_schema);
         let scratch = self.consumer.reservation().for_spill_scratch();
         let mut w = self.scope.writer(schema, scratch)?;
-        for chunk in from..mem.chunks.len() {
+        for chunk in chunks {
             self.query.check_cancelled()?;
             w.write(&mem.batch(chunk)?)?;
         }
@@ -402,20 +425,25 @@ enum Out {
     /// In memory; chunks `next..` are unread. Readers share the tables,
     /// which go (with their memory) once the last chunk's reader is done.
     Memory { mem: Arc<InMemory>, next: usize },
-    /// The unread chunks are being written to a spill file.
+    /// The unread chunks are being written to spill files.
     Spilling,
-    /// On disk; the first reader takes the file.
-    File(Option<SpillFile>),
+    /// On disk, in order: each reader takes the next file, so several read
+    /// at once.
+    Files(VecDeque<SpillFile>),
     /// Every chunk was claimed.
     Done,
+    /// A spill lost the unread chunks: every reader fails with the error
+    /// (never a short result).
+    Failed(KrishivError),
 }
 
 /// What a reader got from [`Output::claim`].
 enum Claim {
     Chunk(Arc<InMemory>, usize),
-    File(Option<SpillFile>),
+    File(SpillFile),
     Wait,
     Done,
+    Failed(KrishivError),
 }
 
 /// The finalized output with its spill hook: an in-memory result is
@@ -428,15 +456,19 @@ struct Output {
     /// directory only).
     spill: Option<(Arc<OutputSpill>, Spiller)>,
     executor: Arc<dyn Executor>,
+    #[cfg(test)]
+    gate: Option<Arc<crate::testing::BlockingGate>>,
 }
 
 impl Output {
     fn on_disk(file: Option<SpillFile>, executor: Arc<dyn Executor>) -> Self {
         Self {
-            state: Mutex::new(Out::File(file)),
+            state: Mutex::new(Out::Files(file.into_iter().collect())),
             changed: Event::default(),
             spill: None,
             executor,
+            #[cfg(test)]
+            gate: None,
         }
     }
 
@@ -454,8 +486,9 @@ impl Output {
                 (Arc::clone(mem), *next - 1)
             }
             Out::Spilling => return Claim::Wait,
-            Out::File(f) => return Claim::File(f.take()),
+            Out::Files(files) => return files.pop_front().map_or(Claim::Done, Claim::File),
             Out::Done => return Claim::Done,
+            Out::Failed(e) => return Claim::Failed(e.clone()),
         };
         if chunk + 1 >= mem.chunks.len() {
             // The last chunk: the readers' clones are all that is left.
@@ -489,27 +522,69 @@ impl SpillUnread for Output {
             self.set_spillable(0);
             let freed = mem.bytes();
             let s = s.clone();
-            let guard = s.query.blocking_started();
+            // One file per group of the unread chunks, up to the readers'
+            // parallelism: readers go on in parallel from disk.
+            let groups = ranges(from..mem.chunks.len(), self.executor.parallelism());
+            let query = Arc::clone(&s.query);
+            let guard = query.blocking_started();
+            #[cfg(test)]
+            let gate = self.gate.clone();
             let written = run_blocking(&*self.executor, move || {
-                let _guard = guard;
+                #[cfg(test)]
+                if let Some(g) = &gate {
+                    g.pass();
+                }
+                let mut files = VecDeque::with_capacity(groups.len());
+                let mut failed = None;
+                for chunks in groups {
+                    match s.write_chunks(&mem, chunks) {
+                        Ok(f) => files.push_back(f),
+                        Err(e) => {
+                            failed = Some(e);
+                            break;
+                        }
+                    }
+                }
                 // On success the tables go here (or with the last reader's
-                // clone); a failed write leaves them as they were.
-                Ok(s.write_chunks(&mem, from).map_err(|e| (e, mem)))
+                // clone); a failed write leaves them as they were. The
+                // guard travels with the result, so the query does not end
+                // before what it holds is dropped.
+                let out = match failed {
+                    None => Ok(files),
+                    Some(e) => Err((e, mem)),
+                };
+                Ok((out, guard))
             })
             .await;
             let (next, result) = match written {
-                Ok(Ok(file)) => (Out::File(Some(file)), Ok(freed)),
-                Ok(Err((e, mem))) => {
+                Ok((Ok(files), _guard)) => (Out::Files(files), Ok(freed)),
+                Ok((Err((e, mem)), _guard)) => {
+                    // The tables are intact: readers go on from memory.
                     self.set_spillable(mem.bytes());
                     (Out::Memory { mem, next: from }, refused(e))
                 }
-                Err(e) => (Out::Done, Err(e)),
+                Err(e) => {
+                    // The unread chunks are lost: fail the query before
+                    // any reader can see the state.
+                    query.fail(e.clone());
+                    (Out::Failed(e.clone()), Err(e))
+                }
             };
             *lock(&self.state) = next;
             self.changed.notify();
             result
         })
     }
+}
+
+/// `chunks` cut into at most `parts` contiguous ranges of near-equal size.
+fn ranges(chunks: std::ops::Range<usize>, parts: usize) -> Vec<std::ops::Range<usize>> {
+    let n = chunks.len();
+    let parts = parts.clamp(1, n.max(1));
+    (0..parts)
+        .map(|i| chunks.start + i * n / parts..chunks.start + (i + 1) * n / parts)
+        .filter(|r| !r.is_empty())
+        .collect()
 }
 
 struct Global {
@@ -954,6 +1029,8 @@ impl HashAggregate {
             changed: Event::default(),
             spill,
             executor: Arc::clone(ctx.executor()),
+            #[cfg(test)]
+            gate: self.output_gate.clone(),
         });
         if let Some((hook, _)) = &out.spill {
             let weak: Weak<dyn SpillUnread> = Arc::downgrade(&out) as Weak<Output>;
@@ -1288,15 +1365,23 @@ impl Source for HashAggregate {
                 .get()
                 .ok_or_else(|| internal("aggregate read before it finalized".to_owned()))?
                 .out;
-            if l.reader.is_some() {
-                return read_file(l, None).await;
-            }
             loop {
+                // An open file first; once read, claim the next one.
+                if l.reader.is_some()
+                    && let Some(b) = read_file(l, None).await?
+                {
+                    return Ok(Some(b));
+                }
                 let changed = out.changed.listen();
                 match out.claim() {
                     Claim::Chunk(mem, chunk) => return mem.batch(chunk).map(Some),
-                    Claim::File(None) | Claim::Done => return Ok(None),
-                    Claim::File(file) => return read_file(l, file).await,
+                    Claim::Done => return Ok(None),
+                    Claim::Failed(e) => return Err(e),
+                    Claim::File(file) => {
+                        if let Some(b) = read_file(l, Some(file)).await? {
+                            return Ok(Some(b));
+                        }
+                    }
                     // A spill of the unread chunks is being written.
                     Claim::Wait => changed.await,
                 }

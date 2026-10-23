@@ -10,6 +10,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
 use arrow_array::{ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use krishiv_common::error::ErrorClass;
 use krishiv_memory::{
     ConsumerHandle, MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillOwner, TreePool,
 };
@@ -281,4 +282,95 @@ fn merge_groups_rewrite_no_more_than_needed() {
     assert_eq!(plan(9, 8), [2]);
     assert_eq!(plan(3, 2), [2]);
     assert_eq!(plan(40, 4), [4; 12]);
+}
+
+/// A spill of a sorted result that fails (its spill directory is full)
+/// fails the read: the reader gets the error, never a short result.
+#[tokio::test(start_paused = true)]
+async fn a_failed_spill_of_the_result_fails_the_read() {
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+    let batches: Vec<Batch> = (0..10_i64)
+        .map(|b| {
+            // Scattered values: the spilled rows do not compress away.
+            let k = (b * 1000..(b + 1) * 1000).map(|i| (i * 2_654_435_761) % 1_000_003);
+            let k: ArrayRef = Arc::new(Int64Array::from_iter_values(k));
+            Batch::new(RecordBatch::try_new(Arc::clone(&schema), vec![k]).unwrap())
+        })
+        .collect();
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let root = TreePool::with_clock(
+        &MemoryConfig {
+            limit: Some(1 << 30),
+            quantum: 1,
+            ..MemoryConfig::default()
+        },
+        Arc::new(crate::executor::TokioClock),
+    );
+    let limit = 4 << 20;
+    let config = ExecConfig {
+        batch_size: 1000,
+        ..ExecConfig::default()
+    };
+    let query = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        config,
+        root.child("q", Some(limit)),
+    );
+    let ctx = |op| {
+        TaskContext::new(
+            Arc::clone(&query),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(op),
+            "Sort",
+        )
+    };
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("sort-unit-failed-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.clone(),
+        max_bytes: 4096,
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let sort = Sort::new(schema, &[SortKey::asc(0)], Some(manager.scope().unwrap())).unwrap();
+    let sink_ctx = ctx(0);
+    let global = Sink::global_state(&sort, &sink_ctx).unwrap();
+    let mut local = Sink::local_state(&sort, &sink_ctx, &global).unwrap();
+    for b in batches {
+        assert!(matches!(
+            sort.sink(b, &mut local, &global).unwrap(),
+            crate::operator::SinkStatus::NeedMoreInput
+        ));
+    }
+    sort.combine(local, &global).unwrap();
+    sort.finalize(&global, &sink_ctx).await.unwrap();
+    assert_eq!(sort.metrics().runs_spilled, 0, "sorted in memory");
+
+    let source_ctx = ctx(1).with_dependency(Arc::clone(&global));
+    let source_global = Source::global_state(&sort, &source_ctx).unwrap();
+    let mut local = Source::local_state(&sort, &source_ctx, &source_global).unwrap();
+    let first = sort.get_data(&mut local, &source_global).await.unwrap();
+    assert_eq!(first.map(|b| b.num_rows()), Some(1000));
+    // Another consumer of the query needs the memory the result holds: the
+    // result's spill is asked for and fails on the full directory.
+    let pool = Arc::clone(query.pool());
+    let want = pool.register("want", None);
+    let reserved = pool.reserve(want, 3_400_000).await;
+    let failed = query
+        .error()
+        .unwrap_or_else(|| unreachable!("the spill failed"));
+    assert_ne!(failed.error_class(), ErrorClass::UnableToAcquireMemory);
+    let read = sort.get_data(&mut local, &source_global).await;
+    let e = read.err().unwrap_or_else(|| unreachable!("a short result"));
+    assert_eq!(e.error_class(), failed.error_class(), "{e}");
+    drop(reserved);
+    pool.unregister(want);
+    drop((local, source_global, source_ctx, global, sink_ctx));
+    assert_eq!(manager.used_bytes(), 0);
+    assert_eq!(root.reserved(), 0);
+    drop(manager);
+    let _ = std::fs::remove_dir_all(dir);
 }

@@ -26,7 +26,6 @@
 //! part until it is done with it. The state stays partition-local: one
 //! output per breaker instance, on the worker that finalized it.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
 use futures::future::BoxFuture;
@@ -36,6 +35,7 @@ use krishiv_memory::{ConsumerHandle, OwnerId, SpillSignal, SpillTicket, Spillabl
 use crate::context::{QueryContext, TaskContext};
 use crate::error::Result;
 use crate::executor::Executor;
+use crate::sync::{Mutex, lock};
 
 /// The spill side of a finished output.
 pub(crate) trait SpillUnread: Send + Sync + 'static {
@@ -62,8 +62,10 @@ pub(crate) struct OutputSpill {
     me: Weak<Self>,
     signal: SpillSignal,
     output: OnceLock<Weak<dyn SpillUnread>>,
-    /// A spill task is running: requests join it.
-    running: AtomicBool,
+    /// A spill task is running: requests join it. A lock, not an atomic:
+    /// the task's last check for a pending request and a request's check
+    /// of this flag are ordered by it, so no request is left unserved.
+    running: Mutex<bool>,
     query: Arc<QueryContext>,
     executor: Arc<dyn Executor>,
 }
@@ -77,7 +79,7 @@ impl OutputSpill {
             me: Weak::clone(me),
             signal: SpillSignal::new(),
             output: OnceLock::new(),
-            running: AtomicBool::new(false),
+            running: Mutex::new(false),
             query: Arc::clone(ctx.query()),
             executor: Arc::clone(ctx.executor()),
         });
@@ -97,11 +99,13 @@ impl OutputSpill {
 
     /// Starts the spill task unless one is running.
     fn start(&self) {
-        if self.running.swap(true, Ordering::AcqRel) {
+        let mut running = lock(&self.running);
+        if *running {
             return;
         }
         // Always alive here: `self` is borrowed from the `Arc`.
         if let Some(me) = self.me.upgrade() {
+            *running = true;
             drop(
                 self.executor
                     .spawn(self.query.class(), Box::pin(me.serve())),
@@ -109,13 +113,20 @@ impl OutputSpill {
         }
     }
 
+    /// The spill task: serves requests until none is pending. It counts as
+    /// the query's blocking work for its whole run, so the query does not
+    /// end while it holds the output, its memory or a file.
     async fn serve(self: Arc<Self>) {
-        self.service().await;
-        self.running.store(false, Ordering::Release);
-        // A request that arrived after the last one completed starts a new
-        // generation: serve it too.
-        if self.signal.spill_requested().is_some() {
-            self.start();
+        let _in_flight = self.query.blocking_started();
+        loop {
+            self.service().await;
+            let mut running = lock(&self.running);
+            // A request that arrived after the last one completed starts a
+            // new generation: serve it too.
+            if self.signal.spill_requested().is_none() {
+                *running = false;
+                return;
+            }
         }
     }
 
@@ -168,7 +179,7 @@ impl Spillable for OutputSpill {
 
 #[cfg(all(test, not(loom)))]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use krishiv_memory::{MemoryConfig, MemoryError, MemoryPool, SpillOwner, TreePool};
 

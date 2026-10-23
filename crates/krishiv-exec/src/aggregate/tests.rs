@@ -148,7 +148,7 @@ async fn exec_with(
 /// manager removes its session, then the directory itself goes (also when
 /// the test panics).
 struct TestSpill {
-    _manager: SpillManager,
+    manager: SpillManager,
     _dir: tempfile::TempDir,
 }
 
@@ -166,13 +166,7 @@ fn spill_dir() -> (TestSpill, SpillScope) {
     })
     .unwrap();
     let scope = manager.scope().unwrap();
-    (
-        TestSpill {
-            _manager: manager,
-            _dir: dir,
-        },
-        scope,
-    )
+    (TestSpill { manager, _dir: dir }, scope)
 }
 
 fn cell(a: &ArrayRef, i: usize) -> String {
@@ -2136,6 +2130,15 @@ async fn row_layout_metrics() {
 /// keys, read into a breaker that cannot spill (as a join build or a
 /// result buffer would be in its place).
 fn unread_plan(groups: i64, spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
+    unread_plan_with(groups, spill, None)
+}
+
+/// [`unread_plan`] whose result's spill waits at `gate`.
+fn unread_plan_with(
+    groups: i64,
+    spill: Option<SpillScope>,
+    gate: Option<Arc<crate::testing::BlockingGate>>,
+) -> Arc<dyn ExecNode> {
     let s = schema(vec![("k", DataType::Int64), ("x", DataType::Int64)]);
     let batches = (0..groups)
         .step_by(1024)
@@ -2146,8 +2149,12 @@ fn unread_plan(groups: i64, spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
         .collect();
     let mut sp = spec(&s, vec![0], vec![agg(Sum, 1, &s)]);
     sp.spill = spill;
+    let agg = match gate {
+        Some(gate) => HashAggregate::with_output_gate(sp, gate).unwrap(),
+        None => HashAggregate::new(sp).unwrap(),
+    };
     Arc::new(crate::testing::Break(
-        node(scan(&s, batches), sp),
+        AggregateNode::new(scan(&s, batches), agg),
         crate::testing::Buffer::new(false, None),
         false,
     ))
@@ -2201,4 +2208,55 @@ async fn an_unread_result_spills_for_its_reader() {
             }
         }
     }
+}
+
+/// A query cancelled while its aggregate's result is being spilled ends
+/// only once the spill has let go of the result's memory and its files.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_during_a_result_spill_releases_everything() {
+    let (spill, scope) = spill_dir();
+    let gate = crate::testing::BlockingGate::new();
+    let plan = unread_plan_with(20_000, Some(scope), Some(Arc::clone(&gate)));
+    // Threads of their own: the spill blocks at the gate on the blocking
+    // pool while the query is cancelled.
+    let executor = TokioExecutor::new(&crate::ExecutorConfig {
+        compute_threads: 1,
+        io_threads: 1,
+        blocking_threads: 1,
+    })
+    .unwrap();
+    let runner = QueryRunner::new(executor);
+    let root = pool(1_800_000);
+    let q = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig {
+            seed: Some(7),
+            agg_row_layout: false,
+            ..ExecConfig::default()
+        },
+        root.child("q", Some(1_800_000)),
+    );
+    let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
+    let drained = tokio::spawn(async move {
+        let mut rows = 0;
+        while let Some(b) = stream.next().await {
+            rows += b.map_or(0, |b| b.num_rows());
+        }
+        rows
+    });
+    while !gate.reached() {
+        tokio::task::yield_now().await;
+    }
+    q.cancel();
+    gate.open();
+    q.finished().await;
+    // Nothing the spill held outlives the query.
+    assert_eq!(root.reserved(), 0, "memory left after the query");
+    assert_eq!(spill.manager.used_bytes(), 0, "spill files left");
+    assert!(drained.await.unwrap() < 20_000);
+    assert_eq!(
+        q.error().map(|e| e.error_class()),
+        Some(ErrorClass::OperationCanceled)
+    );
 }

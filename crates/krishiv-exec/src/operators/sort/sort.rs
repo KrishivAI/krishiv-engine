@@ -19,7 +19,7 @@ use super::merge::{Merger, SortedBatch, SpillRun, data_bytes, interleave_batches
 use super::{BATCH_SLACK_BYTES, SPILL_BATCH_BYTES, SPILL_BUFFER_BYTES, blocking, finalized};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
-use crate::executor::Executor;
+use crate::executor::{Executor, run_blocking};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::operators::{global_ref, local_mut};
 use crate::output_spill::{OutputSpill, SpillUnread, refused};
@@ -247,6 +247,9 @@ enum HeldState {
     /// The rest of the merge, spilled: the reader takes the run.
     Spilled(Option<SpillRun>),
     Done,
+    /// The merge was lost (a failed spill or step): every reader fails
+    /// with the error, never with a short result.
+    Failed(KrishivError),
 }
 
 /// The merge and the buffers it reads, taken out of a [`Held`].
@@ -260,12 +263,11 @@ impl Held {
     }
 
     /// Takes the merge (opening it if needed) and leaves `Busy`; `Err` with
-    /// the state found otherwise (`Busy`, `Spilled`, `Done`).
+    /// the state found otherwise (`Busy`, `Spilled`, `Done`, `Failed`).
     fn take(&self) -> Result<std::result::Result<Taken, HeldState>> {
         let mut state = lock(&self.state);
         Ok(match mem::replace(&mut *state, HeldState::Busy) {
             HeldState::Buffers(held) => {
-                // An error fails the query (the merge stays taken).
                 let batches = held.iter().flat_map(|b| b.batches.iter().cloned());
                 let merger = Merger::new(
                     Arc::clone(&self.schema),
@@ -273,16 +275,26 @@ impl Held {
                     batches.collect(),
                     &[],
                     &self.handle,
-                )?;
-                Ok((Box::new(merger), held))
+                );
+                match merger {
+                    Ok(m) => Ok((Box::new(m), held)),
+                    Err(e) => {
+                        *state = HeldState::Failed(e.clone());
+                        return Err(e);
+                    }
+                }
             }
             HeldState::Merging(m, held) => Ok((m, held)),
-            HeldState::Done => {
-                *state = HeldState::Done;
-                Err(HeldState::Done)
+            HeldState::Failed(e) => {
+                *state = HeldState::Failed(e.clone());
+                Err(HeldState::Failed(e))
             }
-            // `Busy` (already set) or a spilled run for the reader.
-            found => Err(found),
+            HeldState::Busy => Err(HeldState::Busy),
+            // Done, or the spilled run handed to the reader: done here.
+            found => {
+                *state = HeldState::Done;
+                Err(found)
+            }
         })
     }
 
@@ -331,13 +343,17 @@ impl SpillUnread for Held {
             let row_bytes = held.iter().map(|b| b.row_bytes).max().unwrap_or(1);
             let rows = spill_rows(row_bytes, self.batch_rows);
             let query = Arc::clone(&self.query);
-            let written = blocking(&self.query, &self.executor, move || {
+            let guard = self.query.blocking_started();
+            let written = run_blocking(&*self.executor, move || {
                 let run = write_rest(&mut merger, writer, rows, &query);
-                // The merged batches go with the merge, whatever happened.
+                // The merged batches go with the merge, whatever happened;
+                // the guard travels with the run (a file), so the query
+                // does not end before it is dropped.
                 drop((merger, held));
-                run
+                Ok((run, guard))
             })
-            .await;
+            .await
+            .and_then(|(run, _guard)| run);
             self.handle.release_credit();
             match written {
                 Ok(run) => {
@@ -348,8 +364,10 @@ impl SpillUnread for Held {
                     Ok(freed)
                 }
                 Err(e) => {
-                    // Rows already merged are lost: the query fails.
-                    self.put(HeldState::Done);
+                    // Rows already merged are lost: fail the query before
+                    // the reader can see the state, and the reader too.
+                    self.query.fail(e.clone());
+                    self.put(HeldState::Failed(e.clone()));
                     Err(e)
                 }
             }
@@ -896,6 +914,7 @@ async fn read_held(
             // A spill of the rest is being written.
             Err(HeldState::Busy) => changed.await,
             Err(HeldState::Spilled(Some(run))) => return Ok(Err(run)),
+            Err(HeldState::Failed(e)) => return Err(e),
             Err(_) => {
                 l.state = SourceState::Done;
                 return Ok(Ok(None));
@@ -911,7 +930,7 @@ async fn read_held(
     let (merger, next) = match step {
         Ok((merger, next)) => (merger, next),
         Err(e) => {
-            held.put(HeldState::Done);
+            held.put(HeldState::Failed(e.clone()));
             return Err(e);
         }
     };
@@ -920,13 +939,19 @@ async fn read_held(
             held.put(HeldState::Merging(merger, buffers));
             Ok(Ok(Some(batch)))
         }
-        other => {
-            // Read to the end (or failed): the buffers go.
+        Ok(None) => {
+            // Read to the end: the buffers go.
             held.set_spillable(0);
             drop((merger, buffers));
             held.put(HeldState::Done);
             l.state = SourceState::Done;
-            other.map(Ok)
+            Ok(Ok(None))
+        }
+        Err(e) => {
+            held.set_spillable(0);
+            drop((merger, buffers));
+            held.put(HeldState::Failed(e.clone()));
+            Err(e)
         }
     }
 }
