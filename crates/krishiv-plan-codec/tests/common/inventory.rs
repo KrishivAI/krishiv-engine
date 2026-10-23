@@ -172,6 +172,7 @@ pub(crate) fn subquery() -> SubqueryPlan {
         data_type: ArrowType::Int64,
         plan: PhysNode::Limit {
             input: boxed(PhysNode::OneRow),
+            offset: 0,
             limit: 1,
         },
     }
@@ -300,7 +301,16 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             "limit",
             PhysNode::Limit {
                 input: boxed(scan()),
+                offset: 0,
                 limit: u64::MAX,
+            },
+        ),
+        (
+            "limit_offset",
+            PhysNode::Limit {
+                input: boxed(scan()),
+                offset: 7,
+                limit: 5,
             },
         ),
         (

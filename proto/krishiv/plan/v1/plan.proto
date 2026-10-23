@@ -19,7 +19,7 @@ syntax = "proto3";
 package krishiv.plan.v1;
 
 message PhysicalPlan {
-  // The writer's format version (2).
+  // The writer's format version (3).
   uint32 format_version = 1;
   // The oldest reader version that understands every field in use.
   uint32 min_reader_version = 2;
@@ -126,6 +126,8 @@ enum SubqueryValueKind {
 message LimitNode {
   uint32 input = 1;
   uint64 limit = 2;
+  // v3: the number of leading rows to skip. v2 bytes leave this as zero.
+  uint64 offset = 3;
 }
 
 message ReplicateRowsNode {
