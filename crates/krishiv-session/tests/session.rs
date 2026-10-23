@@ -1127,3 +1127,57 @@ fn decimal_quotients_round_before_they_are_summed() {
         ["11694972e-6"]
     );
 }
+
+/// Typed datetime literals resolve in the analyzer with the session zone:
+/// the default session (no `spark.sql.session.timeZone`) reads plain
+/// `TIMESTAMP '...'` as UTC, and output names render in the session zone.
+#[test]
+fn typed_timestamp_literals_use_the_session_zone() {
+    use arrow_array::types::TimestampMicrosecondType;
+    // The default session works: `2024-01-01 10:00:00` is 10:00 UTC.
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "TIMESTAMP '2024-01-01 10:00:00'");
+    let batches = block_on(
+        block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(batches[0].num_rows(), 1);
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        1_704_103_200_000_000
+    );
+    // A non-UTC session zone moves instants without a zone, and names
+    // render in that zone, not in UTC.
+    let s = Session::builder()
+        .config("spark.sql.session.timeZone", "+05:30")
+        .build()
+        .unwrap();
+    let df = block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "TIMESTAMP '2024-01-01 10:00:00'");
+    let batches = block_on(
+        block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        1_704_083_400_000_000
+    );
+    // An explicit zone ignores the session zone for the value, but the
+    // name still renders in it: 10:00 UTC is 15:30 in +05:30.
+    let df = block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00+00:00'")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "TIMESTAMP '2024-01-01 15:30:00'");
+}

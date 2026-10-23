@@ -53,9 +53,7 @@ impl Session {
             }
             .into());
         };
-        let env = self.query_env();
-        let plan =
-            krishiv_sql::lower(q, krishiv_plan::SourceId(0), &env.parser).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower(q, krishiv_plan::SourceId(0)).map_err(|e| e.error)?;
         let explained = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let text = match e.mode {
             // Krishiv's extensions (ADR 0023): a query that fails to
@@ -79,8 +77,7 @@ impl Session {
         else {
             return Err(internal("SELECT 1 is not a query".to_owned()));
         };
-        let plan =
-            krishiv_sql::lower(&q, krishiv_plan::SourceId(0), &env.parser).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower(&q, krishiv_plan::SourceId(0)).map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()))
             .select([lit(text.to_owned()).alias("plan")]);
         df.analyzed_in(env).await?;

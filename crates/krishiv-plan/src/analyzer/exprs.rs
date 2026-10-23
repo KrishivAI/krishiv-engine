@@ -30,6 +30,7 @@ use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, Function
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, FunctionId,
     FunctionKind, Literal, LogicalPlan, Origin, ResolvedExpr, ResolvedFunction, Star, SubqueryKind,
+    TypedLiteralKind,
 };
 
 /// Where an operator's expressions resolve.
@@ -171,13 +172,14 @@ fn bad_cast(
     arg: &Bound,
     to: &DataType,
     mode: CastMode,
+    zone: Option<i32>,
 ) -> AnalysisError {
     let shown = ExprNode::Cast {
         expr: arg.shown(),
         to: to.clone(),
         mode,
     };
-    let sql_expr = format!("\"{}\"", pretty(&Expr::new(shown)));
+    let sql_expr = format!("\"{}\"", pretty(&Expr::new(shown), zone));
     let src_type = quoted_type(arg.ty.data_type.as_ref());
     let target_type = quoted_type(Some(to));
     let error: KrishivError = match bad {
@@ -256,6 +258,188 @@ pub(super) fn literal_type(v: &Literal) -> Option<DataType> {
         Literal::TimestampNtz(_) => DataType::TimestampNtz,
         Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. } => return None,
     })
+}
+
+/// A typed datetime literal as Spark's `AstBuilder` builds it: the same
+/// `CAST('...' AS TIMESTAMP)` kernels execution uses, evaluated here with
+/// the session's resolved time zone and timestamp type. Plain `TIMESTAMP`
+/// means `TIMESTAMP_NTZ` when `spark.sql.timestampType = TIMESTAMP_NTZ`
+/// and the value names no zone, else an instant. Values needing the query
+/// clock (`now`, `today`, a bare time of day) or the time-zone database
+/// (a region id in the value, or a region session zone for a value
+/// without a zone) are `KRISHIV_UNSUPPORTED_FEATURE`, as the kernels
+/// report them.
+///
+/// # Errors
+/// `INVALID_TYPED_LITERAL` for text the type does not read, at the
+/// literal's origin; `KRISHIV_UNSUPPORTED_FEATURE` for clock- or
+/// time-zone-dependent values.
+fn typed_literal(
+    kind: TypedLiteralKind,
+    value: &str,
+    conf: &super::ResolutionConf,
+    origin: Origin,
+) -> Result<Literal, AnalysisError> {
+    use krishiv_common::error::{ErrorClass, InvalidTypedLiteral, KrishivUnsupportedFeature};
+    use krishiv_kernels::cast::{
+        CastMode as KernelMode, CastOptions, FixedOffset, TimestampText, cast, timestamp_has_zone,
+        timestamp_text,
+    };
+    let invalid = |value_type: &str| {
+        AnalysisError::new(
+            InvalidTypedLiteral {
+                value: format!("'{value}'"),
+                value_type: format!("\"{value_type}\""),
+            },
+            origin,
+        )
+    };
+    let unsupported = |feature: &str| {
+        AnalysisError::new(
+            KrishivUnsupportedFeature {
+                feature: feature.to_owned(),
+            },
+            origin,
+        )
+    };
+    let type_name = match kind {
+        TypedLiteralKind::Date => "DATE",
+        TypedLiteralKind::Timestamp => "TIMESTAMP",
+        TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
+        TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+    };
+    // Clock-dependent spellings evaluate with the query clock, which the
+    // analyzer has not got.
+    if is_special(value) {
+        return Err(unsupported(
+            "a timestamp literal that needs the query clock",
+        ));
+    }
+    let shape = timestamp_text(value);
+    if shape == TimestampText::Malformed {
+        // `DATE` shares the timestamp grammar's shape check: a malformed
+        // date is `INVALID_TYPED_LITERAL` too.
+        return Err(invalid(type_name));
+    }
+    // A bare time of day is valid only for an instant type, and needs the
+    // clock there too.
+    if shape == TimestampText::TimeOnly {
+        let without_zone = kind == TypedLiteralKind::TimestampNtz
+            || (kind == TypedLiteralKind::Timestamp && conf.timestamp_ntz);
+        if without_zone {
+            return Err(invalid(type_name));
+        }
+        return Err(unsupported(
+            "a timestamp literal that needs the query clock",
+        ));
+    }
+    // One string cast through the kernels, as a microsecond instant or
+    // NTZ wall-clock value.
+    let cast_one = |value: &str, to: &arrow_schema::DataType, zone: &FixedOffset| {
+        use arrow_array::StringArray;
+        use arrow_array::cast::AsArray as _;
+        use arrow_array::types::TimestampMicrosecondType;
+        let input = StringArray::from(vec![value]);
+        let opts = CastOptions {
+            mode: KernelMode::Ansi,
+            time_zone: zone,
+        };
+        let out = cast(&input, to, &opts).map_err(KrishivError::from)?;
+        if out.is_null(0) {
+            // ANSI casts raise rather than null malformed input; a NULL
+            // here is unreachable.
+            return Err(KrishivError::from(KrishivUnsupportedFeature {
+                feature: "a timestamp literal".to_owned(),
+            }));
+        }
+        Ok(out.as_primitive::<TimestampMicrosecondType>().value(0))
+    };
+    let ltz_arrow = || {
+        arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into()))
+    };
+    let ntz_arrow = || arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None);
+    let map_error = |e: KrishivError| {
+        if e.error_class() == ErrorClass::KrishivUnsupportedFeature {
+            AnalysisError::new(e, origin)
+        } else {
+            invalid(type_name)
+        }
+    };
+    match kind {
+        TypedLiteralKind::Date => {
+            use arrow_array::cast::AsArray as _;
+            use arrow_array::types::Date32Type;
+            let input = arrow_array::StringArray::from(vec![value]);
+            let opts = CastOptions {
+                mode: KernelMode::Ansi,
+                time_zone: &FixedOffset(0),
+            };
+            let out = cast(&input, &arrow_schema::DataType::Date32, &opts)
+                .map_err(|e| map_error(KrishivError::from(e)))?;
+            if out.is_null(0) {
+                return Err(invalid(type_name));
+            }
+            Ok(Literal::Date(out.as_primitive::<Date32Type>().value(0)))
+        }
+        TypedLiteralKind::TimestampNtz => {
+            let micros = cast_one(value, &ntz_arrow(), &FixedOffset(0)).map_err(map_error)?;
+            Ok(Literal::TimestampNtz(micros))
+        }
+        TypedLiteralKind::TimestampLtz => {
+            // Session-independent values (an explicit zone) evaluate under
+            // any zone; only session-dependent ones read the session zone.
+            if timestamp_has_zone(value) {
+                let micros = cast_one(value, &ltz_arrow(), &FixedOffset(0)).map_err(map_error)?;
+                Ok(Literal::Timestamp(micros))
+            } else {
+                match conf.session_zone {
+                    Some(off) => {
+                        let micros =
+                            cast_one(value, &ltz_arrow(), &FixedOffset(off)).map_err(map_error)?;
+                        Ok(Literal::Timestamp(micros))
+                    }
+                    None => Err(unsupported(
+                        "a timestamp literal in a session time zone other than a fixed offset",
+                    )),
+                }
+            }
+        }
+        TypedLiteralKind::Timestamp if conf.timestamp_ntz => {
+            // Under `TIMESTAMP_NTZ`, a value naming a zone is still an
+            // instant; without one it is wall-clock time.
+            if timestamp_has_zone(value) {
+                let micros = cast_one(value, &ltz_arrow(), &FixedOffset(0)).map_err(map_error)?;
+                Ok(Literal::Timestamp(micros))
+            } else {
+                let micros = cast_one(value, &ntz_arrow(), &FixedOffset(0)).map_err(map_error)?;
+                Ok(Literal::TimestampNtz(micros))
+            }
+        }
+        TypedLiteralKind::Timestamp => {
+            if timestamp_has_zone(value) {
+                let micros = cast_one(value, &ltz_arrow(), &FixedOffset(0)).map_err(map_error)?;
+                Ok(Literal::Timestamp(micros))
+            } else {
+                match conf.session_zone {
+                    Some(off) => {
+                        let micros =
+                            cast_one(value, &ltz_arrow(), &FixedOffset(off)).map_err(map_error)?;
+                        Ok(Literal::Timestamp(micros))
+                    }
+                    None => Err(unsupported(
+                        "a timestamp literal in a session time zone other than a fixed offset",
+                    )),
+                }
+            }
+        }
+    }
+}
+
+/// Whether `value` is one of Spark's special date/timestamp spellings
+/// (`now`, `today`, ...), which depend on the session's clock and zone.
+fn is_special(value: &str) -> bool {
+    let v = value.trim().to_ascii_lowercase();
+    ["epoch", "now", "today", "yesterday", "tomorrow"].contains(&v.as_str())
 }
 
 /// Where a node is bound: inside an aggregate call's arguments (`agg`),
@@ -481,6 +665,20 @@ impl Resolver<'_> {
                 nullable: matches!(v, Literal::Null(_)),
                 data_type: literal_type(v),
             }),
+            ExprNode::TypedLiteral { kind, value } => {
+                let literal = typed_literal(*kind, value, &self.ctx.conf, e.origin)?;
+                let ty = ArgType {
+                    nullable: false,
+                    data_type: literal_type(&literal),
+                };
+                // Shown as the resolved literal: Spark's names show the
+                // normalized value (`TIMESTAMP '2016-03-11 20:54:00'` for
+                // `.000`), formatted in the session zone by `pretty`.
+                Bound {
+                    expr: Arc::new(Expr::new(ExprNode::Literal(literal)).with_origin(e.origin)),
+                    ..keep(ty)
+                }
+            }
             ExprNode::Star(_) => {
                 return Err(AnalysisError::new(
                     InvalidUsageOfStarOrRegex {
@@ -497,7 +695,10 @@ impl Resolver<'_> {
                 {
                     return Err(AnalysisError::new(
                         InvalidAggregateFilterNotBoolean {
-                            filter_expr: format!("\"{}\"", pretty(&filter.shown())),
+                            filter_expr: format!(
+                                "\"{}\"",
+                                pretty(&filter.shown(), self.ctx.conf.session_zone)
+                            ),
                         },
                         e.origin,
                     ));
@@ -565,7 +766,14 @@ impl Resolver<'_> {
                 };
                 let child = &kids[0].ty;
                 if let Err(bad) = coerce::can_cast(child.data_type.as_ref(), to, mode) {
-                    return Err(bad_cast(bad, e.origin, &kids[0], to, mode));
+                    return Err(bad_cast(
+                        bad,
+                        e.origin,
+                        &kids[0],
+                        to,
+                        mode,
+                        self.ctx.conf.session_zone,
+                    ));
                 }
                 let nullable = child.nullable
                     || child.data_type.as_ref().is_some_and(|from| {
@@ -683,7 +891,8 @@ impl Resolver<'_> {
             .map(|k| fold::constant(&k.expr, self.ctx.conf.ansi))
             .collect();
         // Rendered only if a rule's error quotes an argument.
-        let sql = |i: usize| kids.get(i).map(|k| pretty(&k.shown()));
+        let zone = self.ctx.conf.session_zone;
+        let sql = |i: usize| kids.get(i).map(|k| pretty(&k.shown(), zone));
         let given: Vec<ArgType> = kids.iter().map(|k| k.ty.clone()).collect();
         let ansi = self.ctx.conf.ansi;
         let loss = self.ctx.conf.decimal_precision_loss;
@@ -844,7 +1053,8 @@ impl Resolver<'_> {
         cx: &Cx<'_>,
     ) -> Result<(Vec<Bound>, Arc<LogicalPlan>), AnalysisError> {
         let shown = with_children(e, kids.iter().map(Bound::shown).collect());
-        let sql_expr = format!("\"{}\"", pretty(&shown));
+        let zone = self.ctx.conf.session_zone;
+        let sql_expr = format!("\"{}\"", pretty(&shown, zone));
         let texts = |v: Vec<String>| v.join(", ");
         if kids.len() != rel.out.len() {
             return Err(AnalysisError::new(
@@ -853,7 +1063,7 @@ impl Resolver<'_> {
                     left_length: kids.len().to_string(),
                     left_columns: texts(
                         kids.iter()
-                            .map(|k| format!("\"{}\"", pretty(&k.shown())))
+                            .map(|k| format!("\"{}\"", pretty(&k.shown(), zone)))
                             .collect(),
                     ),
                     right_length: rel.out.len().to_string(),
@@ -886,7 +1096,10 @@ impl Resolver<'_> {
                 None => {
                     let left = format!(
                         "{}:{}",
-                        pretty(&super::ops::qualified(&k.shown(), cx.scope)),
+                        pretty(
+                            &super::ops::qualified(&k.shown(), cx.scope),
+                            self.ctx.conf.session_zone
+                        ),
                         k.ty.data_type
                             .as_ref()
                             .map_or_else(|| "void".to_owned(), DataType::simple_string)
@@ -977,7 +1190,8 @@ impl Resolver<'_> {
         function: &str,
         origin: Origin,
     ) -> AnalysisError {
-        let sql_expr = format!("\"{}\"", pretty(call));
+        let zone = self.ctx.conf.session_zone;
+        let sql_expr = format!("\"{}\"", pretty(call, zone));
         let error: KrishivError = match m {
             Mismatch::DiffTypes(left, right) => DatatypeMismatchBinaryOpDiffTypes {
                 sql_expr,
@@ -1003,7 +1217,9 @@ impl Resolver<'_> {
                     Some(name) if param == 1 => (
                         format!(
                             "\"{name}({})\"",
-                            kids.get(1).map(|k| pretty(&k.shown())).unwrap_or_default()
+                            kids.get(1)
+                                .map(|k| pretty(&k.shown(), zone))
+                                .unwrap_or_default()
                         ),
                         0,
                     ),
@@ -1016,7 +1232,7 @@ impl Resolver<'_> {
                     input_sql: format!(
                         "\"{}\"",
                         kids.get(arg)
-                            .map(|k| pretty(&k.shown()))
+                            .map(|k| pretty(&k.shown(), zone))
                             .unwrap_or_default()
                     ),
                     input_type: quoted_type(ty.as_ref()),
@@ -1428,8 +1644,10 @@ fn call_checks(
 
 /// Spark's generated name for an unaliased expression (`toPrettySQL`):
 /// `(a + 1)`, `count(1)`, `CASE WHEN ... END`. Built bottom-up with an
-/// explicit stack, once per distinct node.
-pub(super) fn pretty(e: &Expr) -> String {
+/// explicit stack, once per distinct node. Timestamp literals render in
+/// `zone`, the session's resolved zone, through the same cast-to-string
+/// kernels `CAST(ts AS STRING)` uses.
+pub(super) fn pretty(e: &Expr, zone: Option<i32>) -> String {
     let mut done: HashMap<usize, String> = HashMap::new();
     let mut stack = vec![(e, false)];
     while let Some((x, expanded)) = stack.pop() {
@@ -1447,7 +1665,7 @@ pub(super) fn pretty(e: &Expr) -> String {
             .iter()
             .map(|c| done.get(&addr(*c)).map_or("", String::as_str))
             .collect();
-        let mut s = pretty_node(x, &k);
+        let mut s = pretty_node(x, &k, zone);
         if s.len() > MAX_NAME {
             // A shared subexpression repeated in a name doubles it per level:
             // names stay bounded (Spark's would not).
@@ -1484,13 +1702,22 @@ fn outer_names(plan: &crate::LogicalPlan) -> String {
         .join(", ")
 }
 
-fn pretty_node(x: &Expr, k: &[&str]) -> String {
+fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
     match &x.node {
         ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
             c.name.clone()
         }
         ExprNode::Column(c) => c.name.last().cloned().unwrap_or_default(),
-        ExprNode::Literal(v) => pretty_literal(v),
+        ExprNode::Literal(v) => pretty_literal(v, zone),
+        ExprNode::TypedLiteral { kind, value } => {
+            let keyword = match kind {
+                TypedLiteralKind::Date => "DATE",
+                TypedLiteralKind::Timestamp => "TIMESTAMP",
+                TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
+                TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+            };
+            format!("{keyword} '{value}'")
+        }
         ExprNode::Cast { to, mode, .. } => {
             let cast = if *mode == CastMode::Try {
                 "TRY_CAST"
@@ -1519,7 +1746,7 @@ fn pretty_node(x: &Expr, k: &[&str]) -> String {
             }
         }
         ExprNode::Star(_) => "*".to_owned(),
-        ExprNode::Window(w) => pretty_window(w, k),
+        ExprNode::Window(w) => pretty_window(w, k, zone),
         ExprNode::Function(FunctionCall { name, distinct, .. }) => call(name, None, *distinct, k),
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
             let op = match &f.id {
@@ -1540,7 +1767,7 @@ fn pretty_node(x: &Expr, k: &[&str]) -> String {
 /// `DENSE_RANK()` and `PERCENT_RANK()` upper case, as Spark's `RankLike`
 /// writes them), then the window as `WindowSpecDefinition.sql` writes it.
 /// `k` holds the children's names in [`Expr::for_each_child`] order.
-fn pretty_window(w: &crate::WindowExpr, k: &[&str]) -> String {
+fn pretty_window(w: &crate::WindowExpr, k: &[&str], zone: Option<i32>) -> String {
     use crate::{FrameBound, FrameUnits, WindowSpecRef};
     let function = match &w.function.node {
         ExprNode::Resolved(ResolvedExpr::Function(f))
@@ -1587,7 +1814,7 @@ fn pretty_window(w: &crate::WindowExpr, k: &[&str]) -> String {
             FrameBound::Offset(e) => {
                 let own = rest.next().copied().unwrap_or_default();
                 match crate::expr::negated(e) {
-                    Some(n) => format!("{} PRECEDING", pretty(n)),
+                    Some(n) => format!("{} PRECEDING", pretty(n, zone)),
                     None => format!("{own} FOLLOWING"),
                 }
             }
@@ -1674,7 +1901,7 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
     }
 }
 
-fn pretty_literal(v: &Literal) -> String {
+fn pretty_literal(v: &Literal, zone: Option<i32>) -> String {
     let text = v.to_string();
     match v {
         // A URL's credentials never reach a name (ADR 0038).
@@ -1687,58 +1914,82 @@ fn pretty_literal(v: &Literal) -> String {
         Literal::Float(x) => format!("{x:?}"),
         Literal::Double(x) => format!("{x:?}"),
         Literal::Decimal { .. } => text.trim_end_matches("BD").to_owned(),
-        // Spark's `toPrettySQL` of a timestamp literal, in the session zone.
-        // Lowering evaluates session-independent values (and session ones in
-        // a fixed-offset zone) with the kernels and formats here in UTC;
-        // values without a zone read the same either way, so names match
-        // Spark's for them.
-        Literal::Timestamp(us) => format!("TIMESTAMP '{}'", format_timestamp(*us)),
-        Literal::TimestampNtz(us) => format!("TIMESTAMP_NTZ '{}'", format_timestamp(*us)),
+        // Spark's `toPrettySQL` of a timestamp literal, in the session
+        // zone: the same cast-to-string kernels `CAST(ts AS STRING)` uses.
+        Literal::Timestamp(us) => format!("TIMESTAMP '{}'", cast_to_string_timestamp(*us, zone)),
+        Literal::TimestampNtz(us) => {
+            format!("TIMESTAMP_NTZ '{}'", cast_to_string_ntz(*us))
+        }
+        Literal::Date(days) => format!("DATE '{}'", cast_to_string_date(*days)),
         _ => text,
     }
 }
 
-/// Microseconds since the epoch as `yyyy-MM-dd HH:mm:ss[.fraction]`, the
-/// proleptic Gregorian date (as Spark prints a timestamp literal).
-fn format_timestamp(micros: i64) -> String {
-    const MICROS_PER_DAY: i64 = 86_400_000_000;
-    const MICROS_PER_SECOND: i64 = 1_000_000;
-    let days = micros.div_euclid(MICROS_PER_DAY);
-    let rest = micros.rem_euclid(MICROS_PER_DAY);
-    let (y, m, d) = civil_from_days(days);
-    let sign = if y < 0 { "-" } else { "" };
-    let mut out = format!("{sign}{:04}-{:02}-{:02}", y.unsigned_abs(), m, d);
-    let secs = rest / MICROS_PER_SECOND;
-    let frac = rest % MICROS_PER_SECOND;
-    {
-        use std::fmt::Write as _;
-        let _ = write!(
-            &mut out,
-            " {:02}:{:02}:{:02}",
-            secs / 3600,
-            secs / 60 % 60,
-            secs % 60
-        );
-        if frac != 0 {
-            let digits = format!("{frac:06}");
-            let _ = write!(&mut out, ".{}", digits.trim_end_matches('0'));
-        }
-    }
-    out
+/// `micros` (a UTC instant) as `CAST(micros AS STRING)` renders it: in the
+/// session zone. The cast never fails (out-of-range locals fall back to
+/// the instant itself, as the kernels do).
+fn cast_to_string_timestamp(micros: i64, zone: Option<i32>) -> String {
+    use arrow_array::Array as _;
+    use arrow_array::TimestampMicrosecondArray;
+    use arrow_array::cast::AsArray as _;
+    use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
+    // A region session zone needs the time-zone database, which the engine
+    // has not got: fall back to UTC for the name (the query itself fails
+    // with `KRISHIV_UNSUPPORTED_FEATURE` where the zone matters).
+    let fixed = FixedOffset(zone.unwrap_or(0));
+    let input = TimestampMicrosecondArray::from(vec![micros])
+        .with_data_type(krishiv_types::DataType::Timestamp.to_arrow());
+    let opts = CastOptions {
+        mode: KernelMode::Ansi,
+        time_zone: &fixed,
+    };
+    cast(&input, &arrow_schema::DataType::Utf8, &opts)
+        .ok()
+        .and_then(|out| {
+            let s = out.as_string::<i32>();
+            (s.len() == 1 && !s.is_null(0)).then(|| s.value(0).to_owned())
+        })
+        .unwrap_or_else(|| micros.to_string())
 }
 
-/// `(year, month, day)` of a day number (H. Hinnant's `civil_from_days`).
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    (year, month, day)
+/// `micros` (NTZ wall-clock time) as `CAST(micros AS STRING)` renders it.
+fn cast_to_string_ntz(micros: i64) -> String {
+    use arrow_array::Array as _;
+    use arrow_array::TimestampMicrosecondArray;
+    use arrow_array::cast::AsArray as _;
+    use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
+    let input = TimestampMicrosecondArray::from(vec![micros]);
+    let opts = CastOptions {
+        mode: KernelMode::Ansi,
+        time_zone: &FixedOffset(0),
+    };
+    cast(&input, &arrow_schema::DataType::Utf8, &opts)
+        .ok()
+        .and_then(|out| {
+            let s = out.as_string::<i32>();
+            (s.len() == 1 && !s.is_null(0)).then(|| s.value(0).to_owned())
+        })
+        .unwrap_or_else(|| micros.to_string())
+}
+
+/// `days` as `CAST(days AS STRING)` renders it.
+fn cast_to_string_date(days: i32) -> String {
+    use arrow_array::Array as _;
+    use arrow_array::Date32Array;
+    use arrow_array::cast::AsArray as _;
+    use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
+    let input = Date32Array::from(vec![days]);
+    let opts = CastOptions {
+        mode: KernelMode::Ansi,
+        time_zone: &FixedOffset(0),
+    };
+    cast(&input, &arrow_schema::DataType::Utf8, &opts)
+        .ok()
+        .and_then(|out| {
+            let s = out.as_string::<i32>();
+            (s.len() == 1 && !s.is_null(0)).then(|| s.value(0).to_owned())
+        })
+        .unwrap_or_else(|| days.to_string())
 }
 
 /// A semantic key: equal for expressions that compute the same value,

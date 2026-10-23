@@ -16,23 +16,17 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arrow_array::StringArray;
-use arrow_array::cast::AsArray;
-use arrow_array::types::TimestampMicrosecondType;
-use arrow_schema::{DataType as ArrowType, TimeUnit};
 use krishiv_common::error::{
-    ErrorClass, FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature,
-    MissingWindowSpecification,
+    FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature, MissingWindowSpecification,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_common::stack::{STEP, on_big_stack};
-use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
 use krishiv_plan::{
     Builtin, CastMode, ColumnRef, Cte, Expr as IrExpr, ExprNode, FrameBound as IrFrameBound,
     FrameUnits as IrFrameUnits, FunctionCall, Grouping, JoinCondition, JoinKind as IrJoin,
     Literal as IrLiteral, LogicalPlan, Origin, Plan, PlanNode, ReadSource, SortOrder, SourceId,
-    Star, SubqueryKind, WindowExpr, WindowFrame as IrWindowFrame, WindowSpec as IrWindowSpec,
-    WindowSpecRef,
+    Star, SubqueryKind, TypedLiteralKind as IrTypedKind, WindowExpr, WindowFrame as IrWindowFrame,
+    WindowSpec as IrWindowSpec, WindowSpecRef,
 };
 use krishiv_types::DecimalType;
 
@@ -49,38 +43,30 @@ type R<T> = Result<T, ParseError>;
 
 /// Parses and lowers one query; spans index `source`.
 ///
-/// Typed timestamp literals (`TIMESTAMP '...'`, `TIMESTAMP_LTZ '...`,
-/// `TIMESTAMP_NTZ '...'`) are evaluated here, at analysis time, through
-/// the same `CAST('...' AS TIMESTAMP)` kernels execution uses (so their
-/// parsing rules match), with `options` supplying `spark.sql.timestampType`
-/// (what plain `TIMESTAMP` means) and `spark.sql.session.timeZone` (for
-/// instants without a zone). The result is a constant `Literal`, never a
-/// per-row cast.
+/// Typed datetime literals (`TIMESTAMP '...'`, `TIMESTAMP_LTZ '...'`,
+/// `TIMESTAMP_NTZ '...'`, `DATE '...'`) lower to an unresolved
+/// [`ExprNode::TypedLiteral`] (the type keyword and the raw string): the
+/// analyzer resolves them with the session's time zone and timestamp type.
 ///
 /// # Errors
 /// A [`ParseError`]: the parser's, or a lowering error with its span.
 pub fn parse_and_lower(sql: &str, options: &ParserOptions, source: SourceId) -> R<Plan> {
-    lower(&parse_query(sql, options)?, source, options).map_err(|e| e.redacted_in(sql))
+    lower(&parse_query(sql, options)?, source).map_err(|e| e.redacted_in(sql))
 }
 
 /// Lowers `query` into an unresolved plan whose spans index `source`.
-///
-/// `options` supplies `spark.sql.timestampType` and
-/// `spark.sql.session.timeZone` for typed timestamp literals (see
-/// [`parse_and_lower`]).
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for constructs the IR lacks, Spark's
 /// literal errors (`INVALID_NUMERIC_LITERAL_RANGE`, `INVALID_TYPED_LITERAL`,
 /// decimal bounds, unsupported cast types) and `FAILED_TO_PARSE_TOO_COMPLEX`
 /// for plans deeper than `MAX_DEPTH`.
-pub fn lower(query: &Query, source: SourceId, options: &ParserOptions) -> R<Plan> {
+pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
     let mut l = Lowerer {
         source,
         depth: 0,
         root: query.span,
         windows: Vec::new(),
-        options: *options,
     };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
@@ -124,9 +110,6 @@ struct Lowerer {
     /// last; `None` stands for a subquery expression's boundary (Spark's
     /// `WindowsSubstitution` does not enter subquery plans).
     windows: Vec<Option<Arc<WindowDefs>>>,
-    /// The session configs timestamp literals read (`spark.sql.timestampType`
-    /// and `spark.sql.session.timeZone`).
-    options: ParserOptions,
 }
 
 /// A `WINDOW` clause: each name's specification, references to other
@@ -759,7 +742,7 @@ impl Lowerer {
     fn expr_inner(&mut self, e: &Expr) -> R<IrExpr> {
         let sp = e.span;
         Ok(match &e.kind {
-            ExprKind::Literal(v) => self.ex(ExprNode::Literal(literal(v, sp, &self.options)?), sp),
+            ExprKind::Literal(v) => self.ex(literal(v, sp)?, sp),
             ExprKind::Keyword(k) => {
                 self.ex(ExprNode::Literal(IrLiteral::String(k.value.clone())), sp)
             }
@@ -1156,24 +1139,34 @@ fn is_path(s: &str) -> bool {
     s.contains('/') || s.contains(':')
 }
 
-fn literal(v: &Literal, sp: Span, options: &ParserOptions) -> R<IrLiteral> {
+fn literal(v: &Literal, sp: Span) -> R<ExprNode> {
     Ok(match v {
-        Literal::Null => IrLiteral::Null(None),
-        Literal::Boolean(b) => IrLiteral::Boolean(*b),
-        Literal::String(s) => IrLiteral::String(s.clone()),
-        Literal::Number { text, kind } => number(text, *kind, sp)?,
+        Literal::Null => ExprNode::Literal(IrLiteral::Null(None)),
+        Literal::Boolean(b) => ExprNode::Literal(IrLiteral::Boolean(*b)),
+        Literal::String(s) => ExprNode::Literal(IrLiteral::String(s.clone())),
+        Literal::Number { text, kind } => ExprNode::Literal(number(text, *kind, sp)?),
         Literal::Typed { type_name, value } => {
             let kind = TypedKind::of(&type_name.value, type_name.quoted).map_err(|e| err(e, sp))?;
             match kind {
-                TypedKind::Date => IrLiteral::Date(
-                    literal::date(value).ok_or_else(|| err(kind.invalid(value), sp))?,
-                ),
-                TypedKind::Binary => IrLiteral::Binary(
+                TypedKind::Date => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::Date,
+                    value: value.clone(),
+                },
+                TypedKind::Timestamp => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::Timestamp,
+                    value: value.clone(),
+                },
+                TypedKind::TimestampNtz => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::TimestampNtz,
+                    value: value.clone(),
+                },
+                TypedKind::TimestampLtz => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::TimestampLtz,
+                    value: value.clone(),
+                },
+                TypedKind::Binary => ExprNode::Literal(IrLiteral::Binary(
                     literal::hex(value).ok_or_else(|| err(kind.invalid(value), sp))?,
-                ),
-                TypedKind::Timestamp | TypedKind::TimestampLtz | TypedKind::TimestampNtz => {
-                    timestamp_literal(kind, value, options, sp)?
-                }
+                )),
                 _ => {
                     let t = type_name.value.to_ascii_uppercase();
                     return Err(unsupported(&format!("{t} literals"), sp));
@@ -1182,177 +1175,6 @@ fn literal(v: &Literal, sp: Span, options: &ParserOptions) -> R<IrLiteral> {
         }
         _ => return Err(unsupported("INTERVAL literals", sp)),
     })
-}
-
-/// A typed timestamp literal as Spark's `AstBuilder` builds it: the same
-/// `CAST('...' AS TIMESTAMP)` kernels execution uses, evaluated once here
-/// (a constant, never per row).
-///
-/// Plain `TIMESTAMP` means `TIMESTAMP_NTZ` when
-/// `spark.sql.timestampType = TIMESTAMP_NTZ` and the value names no zone,
-/// else `TIMESTAMP_LTZ`. Values needing the query clock (`now`, `today`,
-/// a bare time of day) or the tz database (a region id in the value, or a
-/// region session zone for a value without a zone) are
-/// `KRISHIV_UNSUPPORTED_FEATURE`, as the kernels report them.
-///
-/// # Errors
-/// `INVALID_TYPED_LITERAL` for text the type does not read, with the span
-/// of the literal.
-fn timestamp_literal(
-    kind: TypedKind,
-    value: &str,
-    options: &ParserOptions,
-    sp: Span,
-) -> R<IrLiteral> {
-    use krishiv_kernels::cast::TimestampText;
-    use krishiv_kernels::cast::timestamp_text;
-    // Clock-dependent spellings evaluate with the query clock, which this
-    // layer has not got.
-    if literal::is_special(value) {
-        return Err(unsupported(
-            "a timestamp literal that needs the query clock",
-            sp,
-        ));
-    }
-    let shape = timestamp_text(value);
-    if shape == TimestampText::Malformed {
-        return Err(err(kind.invalid(value), sp));
-    }
-    // A bare time of day is valid only for an instant type, and needs the
-    // clock there too.
-    if shape == TimestampText::TimeOnly {
-        let without_zone = kind == TypedKind::TimestampNtz
-            || (kind == TypedKind::Timestamp && options.timestamp_ntz);
-        if without_zone {
-            return Err(err(kind.invalid(value), sp));
-        }
-        return Err(unsupported(
-            "a timestamp literal that needs the query clock",
-            sp,
-        ));
-    }
-    match kind {
-        TypedKind::TimestampNtz => {
-            let micros =
-                cast_timestamp_ntz(value).map_err(|e| map_timestamp_error(e, kind, value, sp))?;
-            Ok(IrLiteral::TimestampNtz(micros))
-        }
-        TypedKind::TimestampLtz => {
-            let micros = cast_timestamp_ltz(value, options.session_offset)
-                .map_err(|e| map_timestamp_error(e, kind, value, sp))?;
-            Ok(IrLiteral::Timestamp(micros))
-        }
-        TypedKind::Timestamp if options.timestamp_ntz => {
-            // Under `TIMESTAMP_NTZ`, a value naming a zone is still an
-            // instant; without one it is wall-clock time.
-            if has_explicit_zone(value) {
-                let micros = cast_timestamp_ltz(value, options.session_offset)
-                    .map_err(|e| map_timestamp_error(e, kind, value, sp))?;
-                Ok(IrLiteral::Timestamp(micros))
-            } else {
-                let micros = cast_timestamp_ntz(value)
-                    .map_err(|e| map_timestamp_error(e, kind, value, sp))?;
-                Ok(IrLiteral::TimestampNtz(micros))
-            }
-        }
-        _ => {
-            let micros = cast_timestamp_ltz(value, options.session_offset)
-                .map_err(|e| map_timestamp_error(e, kind, value, sp))?;
-            Ok(IrLiteral::Timestamp(micros))
-        }
-    }
-}
-
-/// Whether `value` names an explicit zone: an instant whose `CAST` result
-/// does not move with the session zone. Probed with the cast kernels
-/// themselves (no second parser): the same value cast in two session zones
-/// agrees exactly then.
-fn has_explicit_zone(value: &str) -> bool {
-    let (Ok(a), Ok(b)) = (
-        cast_one(value, &ltz_arrow(), &FixedOffset(0)),
-        cast_one(value, &ltz_arrow(), &FixedOffset(3600)),
-    ) else {
-        // Malformed or needing the tz database or clock: the caller maps
-        // the error; the zone question is moot.
-        return false;
-    };
-    a == b
-}
-
-/// The Arrow carrier of `TIMESTAMP`.
-fn ltz_arrow() -> ArrowType {
-    ArrowType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-}
-
-/// The Arrow carrier of `TIMESTAMP_NTZ`.
-fn ntz_arrow() -> ArrowType {
-    ArrowType::Timestamp(TimeUnit::Microsecond, None)
-}
-
-/// `value` cast as Spark casts `CAST(value AS TIMESTAMP_NTZ)`.
-fn cast_timestamp_ntz(value: &str) -> Result<i64, KrishivError> {
-    let out = cast_one(value, &ntz_arrow(), &FixedOffset(0))?;
-    Ok(out)
-}
-
-/// `value` cast as Spark casts `CAST(value AS TIMESTAMP)` in `session`.
-/// `None` (a region session zone, or unset) serves values with an explicit
-/// zone; values without one need the zone and are unsupported there.
-fn cast_timestamp_ltz(value: &str, session: Option<i32>) -> Result<i64, KrishivError> {
-    // Session-independent values (an explicit offset) evaluate under any
-    // zone; only session-dependent ones read `session`.
-    let probe = cast_one(value, &ltz_arrow(), &FixedOffset(0));
-    let probe2 = cast_one(value, &ltz_arrow(), &FixedOffset(3600));
-    match (probe, probe2) {
-        (Ok(a), Ok(b)) if a == b => Ok(a),
-        (Ok(_), Ok(_)) => match session {
-            Some(off) => cast_one(value, &ltz_arrow(), &FixedOffset(off)),
-            None => Err(KrishivUnsupportedFeature {
-                feature: "a timestamp literal in a session time zone other than a fixed offset"
-                    .to_owned(),
-            }
-            .into()),
-        },
-        (Ok(a), Err(_)) => Ok(a),
-        (Err(e), _) => Err(e),
-    }
-}
-
-/// One string cast through the kernels, as a microsecond instant or NTZ
-/// wall-clock value.
-fn cast_one(value: &str, to: &ArrowType, zone: &FixedOffset) -> Result<i64, KrishivError> {
-    let input = StringArray::from(vec![value]);
-    let opts = CastOptions {
-        mode: KernelMode::Ansi,
-        time_zone: zone,
-    };
-    let out = cast(&input, to, &opts).map_err(KrishivError::from)?;
-    if out.is_null(0) {
-        // ANSI casts raise rather than null malformed input; a NULL here
-        // is unreachable.
-        return Err(KrishivUnsupportedFeature {
-            feature: "a timestamp literal".to_owned(),
-        }
-        .into());
-    }
-    Ok(out.as_primitive::<TimestampMicrosecondType>().value(0))
-}
-
-/// A cast failure as the literal's error: malformed text is
-/// `INVALID_TYPED_LITERAL` at the literal; anything needing the tz database
-/// or clock stays `KRISHIV_UNSUPPORTED_FEATURE`.
-fn map_timestamp_error(e: KrishivError, kind: TypedKind, value: &str, sp: Span) -> ParseError {
-    if e.error_class() == ErrorClass::KrishivUnsupportedFeature {
-        return err(e, sp);
-    }
-    err(kind.invalid(value), sp)
-}
-
-/// The literal lowering, for tests of timestamp literals without parsing a
-/// whole query.
-#[cfg(test)]
-pub(crate) fn literal_for_tests(v: &Literal, sp: Span, options: &ParserOptions) -> R<IrLiteral> {
-    literal(v, sp, options)
 }
 
 /// A numeric literal as Spark's `AstBuilder` types it.

@@ -123,6 +123,15 @@ pub struct ResolutionConf {
     pub decimal_precision_loss: bool,
     /// `spark.sql.runSQLOnFiles`: `` format.`path` `` reads files.
     pub run_sql_on_files: bool,
+    /// `spark.sql.timestampType = TIMESTAMP_NTZ`: plain `TIMESTAMP '...'`
+    /// without a zone is a `TIMESTAMP_NTZ`.
+    pub timestamp_ntz: bool,
+    /// `spark.sql.session.timeZone` as a fixed offset in seconds east of
+    /// UTC (`UTC` is `Some(0)`); `None` for a region id or a malformed
+    /// zone, which need the time-zone database. Unset is `Some(0)`, the
+    /// default the cast path uses, so the default session resolves
+    /// timestamp literals.
+    pub session_zone: Option<i32>,
 }
 
 impl Default for ResolutionConf {
@@ -137,13 +146,15 @@ impl Default for ResolutionConf {
             lateral_column_alias: true,
             decimal_precision_loss: true,
             run_sql_on_files: true,
+            timestamp_ntz: false,
+            session_zone: Some(0),
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 8] = [
+    pub const KEYS: [&'static str; 10] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -152,6 +163,8 @@ impl ResolutionConf {
         "spark.sql.lateralColumnAlias.enableImplicitResolution",
         "spark.sql.decimalOperations.allowPrecisionLoss",
         "spark.sql.runSQLOnFiles",
+        "spark.sql.timestampType",
+        "spark.sql.session.timeZone",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -169,7 +182,7 @@ impl ResolutionConf {
             d.run_sql_on_files,
         ];
         let mut v = [false; 8];
-        for ((slot, key), default) in v.iter_mut().zip(Self::KEYS).zip(defaults) {
+        for ((slot, key), default) in v.iter_mut().zip(Self::KEYS[..8].iter()).zip(defaults) {
             *slot = conf(key).map_or(default, |s| s.trim().eq_ignore_ascii_case("true"));
         }
         Self {
@@ -181,8 +194,36 @@ impl ResolutionConf {
             lateral_column_alias: v[5],
             decimal_precision_loss: v[6],
             run_sql_on_files: v[7],
+            timestamp_ntz: conf(Self::KEYS[8])
+                .is_some_and(|s| s.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
+            session_zone: match conf(Self::KEYS[9]) {
+                None => Some(0),
+                Some(s) => fixed_offset(s),
+            },
         }
     }
+}
+
+/// The offset of `UTC`, `GMT`, `Z` or `[+-]hh:mm`, in seconds east of UTC;
+/// `None` for region ids (which need the time-zone database) and malformed
+/// zones.
+fn fixed_offset(zone: &str) -> Option<i32> {
+    let zone = zone.trim();
+    if ["UTC", "GMT", "Z", "Etc/UTC"].contains(&zone) {
+        return Some(0);
+    }
+    let rest = zone
+        .strip_prefix("UTC")
+        .or_else(|| zone.strip_prefix("GMT"))
+        .unwrap_or(zone);
+    let (sign, hm) = match rest.as_bytes().first()? {
+        b'+' => (1, &rest[1..]),
+        b'-' => (-1, &rest[1..]),
+        _ => return None,
+    };
+    let (h, m) = hm.split_once(':').unwrap_or((hm, "0"));
+    let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
+    ((0..=18).contains(&h) && (0..60).contains(&m)).then(|| sign * (h * 3600 + m * 60))
 }
 
 /// Everything resolution may read.
@@ -257,11 +298,20 @@ impl ContextFingerprint {
             c.lateral_column_alias,
             c.decimal_precision_loss,
             c.run_sql_on_files,
+            c.timestamp_ntz,
             self.files,
         ];
         num(
             &mut b,
             flags.iter().fold(0, |acc, f| acc << 1 | u64::from(*f)),
+        );
+        // The session zone: `None` (a region id) is one input.
+        num(
+            &mut b,
+            match c.session_zone {
+                Some(v) => u64::from(u32::from_ne_bytes(v.to_ne_bytes())),
+                None => 0x8000_0000,
+            },
         );
         num(&mut b, self.current.len() as u64);
         self.current.iter().for_each(|p| text(&mut b, p));

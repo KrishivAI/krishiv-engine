@@ -954,135 +954,68 @@ fn multipart_identifiers_parse_like_spark() {
     assert_eq!(e.error.error_class(), ErrorClass::ParseEmptyStatement);
 }
 
-/// Typed datetime literals lower through the `CAST` kernels, once, with the
-/// session zone and `spark.sql.timestampType`.
+/// Typed datetime literals lower to an unresolved node (the type keyword
+/// and the raw string), with no time zone involved: the analyzer resolves
+/// them with the session zone.
 #[test]
-fn typed_timestamp_literals_lower_like_cast() {
+fn typed_datetime_literals_lower_unresolved() {
     use crate::ast::{ExprKind, SetExprKind};
-    use krishiv_plan::{Literal as IrLiteral, SourceId};
+    use krishiv_plan::SourceId;
 
-    let utc = ParserOptions {
-        session_offset: Some(0),
-        ..ParserOptions::default()
-    };
-    let plus5 = ParserOptions {
-        session_offset: Some(5 * 3600 + 30 * 60),
-        ..ParserOptions::default()
-    };
-    let ntz = ParserOptions {
-        timestamp_ntz: true,
-        session_offset: Some(0),
-        ..ParserOptions::default()
-    };
-    let region = ParserOptions {
-        session_offset: None,
-        ..ParserOptions::default()
-    };
-    let lit = |sql: &str, options: &ParserOptions| {
-        let q = parser::parse_query_unchecked(sql, *options).unwrap();
+    // Each kind keeps its keyword and raw string, with the literal's span,
+    // and lowers without a time zone.
+    for (sql, keyword) in [
+        ("SELECT DATE '2016-03-12'", "DATE"),
+        ("SELECT TIMESTAMP '2024-01-01 10:00:00'", "TIMESTAMP"),
+        (
+            "SELECT TIMESTAMP_NTZ '2024-01-01 10:00:00'",
+            "TIMESTAMP_NTZ",
+        ),
+        (
+            "SELECT TIMESTAMP_LTZ '2024-01-01 10:00:00'",
+            "TIMESTAMP_LTZ",
+        ),
+    ] {
+        let q = crate::parse_query(sql, &ParserOptions::default()).unwrap();
         let SetExprKind::Select(s) = q.body.kind else {
             panic!("{sql} is not a select");
         };
-        let ExprKind::Literal(v) = s.projection[0].expr.kind.clone() else {
-            panic!("{sql} is not a literal");
+        let ExprKind::Literal(crate::ast::Literal::Typed { type_name, value }) =
+            s.projection[0].expr.kind.clone()
+        else {
+            panic!("{sql} is not a typed literal");
         };
-        crate::lower::literal_for_tests(&v, s.projection[0].expr.span, options)
+        assert_eq!(type_name.value.to_ascii_uppercase(), keyword, "{sql}");
+        assert!(!value.is_empty(), "{sql}");
+        assert_eq!(s.projection[0].expr.span.range(), 7..sql.len(), "{sql}");
+        // Lowering succeeds with the default options (no zone) and keeps
+        // the raw text: the plan holds a `TypedLiteral`, never micros.
+        let plan = crate::parse_and_lower(sql, &ParserOptions::default(), SourceId(0)).unwrap();
+        let text = plan.root().to_string();
+        assert!(text.contains(&format!("{keyword} '")), "{sql}: {text}");
+    }
+    // The wall-clock text is preserved exactly, including an explicit zone.
+    let q = parser::parse_query_unchecked(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'",
+        ParserOptions::default(),
+    )
+    .unwrap();
+    let SetExprKind::Select(s) = q.body.kind else {
+        panic!("not a select");
     };
-    // `2024-01-01 10:00:00` in UTC is 10:00 UTC.
-    assert_eq!(
-        lit("SELECT TIMESTAMP '2024-01-01 10:00:00'", &utc).unwrap(),
-        IrLiteral::Timestamp(1_704_103_200_000_000)
-    );
-    // The same wall-clock time in +05:30 is 04:30 UTC.
-    assert_eq!(
-        lit("SELECT TIMESTAMP '2024-01-01 10:00:00'", &plus5).unwrap(),
-        IrLiteral::Timestamp(1_704_083_400_000_000)
-    );
-    // Explicit offsets ignore the session zone.
-    assert_eq!(
-        lit("SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'", &utc).unwrap(),
-        IrLiteral::Timestamp(1_704_083_400_000_000)
-    );
-    assert_eq!(
-        lit("SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'", &plus5).unwrap(),
-        IrLiteral::Timestamp(1_704_083_400_000_000)
-    );
-    // `TIMESTAMP_LTZ` is always an instant.
-    assert_eq!(
-        lit("SELECT TIMESTAMP_LTZ '2024-01-01 10:00:00'", &utc).unwrap(),
-        IrLiteral::Timestamp(1_704_103_200_000_000)
-    );
-    // `TIMESTAMP_NTZ` is wall-clock time, the zone ignored.
-    assert_eq!(
-        lit("SELECT TIMESTAMP_NTZ '2024-01-01 10:00:00'", &utc).unwrap(),
-        IrLiteral::TimestampNtz(1_704_103_200_000_000)
-    );
-    assert_eq!(
-        lit("SELECT TIMESTAMP_NTZ '2024-01-01 10:00:00+05:30'", &utc).unwrap(),
-        IrLiteral::TimestampNtz(1_704_103_200_000_000)
-    );
-    // Plain `TIMESTAMP` under `TIMESTAMP_NTZ` is wall-clock without a zone,
-    // an instant with one.
-    assert_eq!(
-        lit("SELECT TIMESTAMP '2024-01-01 10:00:00'", &ntz).unwrap(),
-        IrLiteral::TimestampNtz(1_704_103_200_000_000)
-    );
-    assert_eq!(
-        lit("SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'", &ntz).unwrap(),
-        IrLiteral::Timestamp(1_704_083_400_000_000)
-    );
-    // Invalid text is `INVALID_TYPED_LITERAL` at the literal.
-    for (sql, options) in [
-        ("SELECT TIMESTAMP '2024-13-01 10:00:00'", &utc),
-        ("SELECT TIMESTAMP_NTZ '10:00'", &utc),
-        ("SELECT TIMESTAMP '10:00'", &ntz),
-        ("SELECT TIMESTAMP_LTZ 'not-a-date'", &utc),
-    ] {
-        let e = lit(sql, options).unwrap_err();
-        assert_eq!(
-            e.error.error_class(),
-            ErrorClass::InvalidTypedLiteral,
-            "{sql}"
-        );
-        assert_eq!(e.span.range(), 7..sql.len(), "{sql}");
-    }
-    // A region session zone serves explicit offsets but not wall-clock time.
-    assert!(lit("SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'", &region).is_ok());
-    let e = lit("SELECT TIMESTAMP '2024-01-01 10:00:00'", &region).unwrap_err();
-    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.error.to_string().contains("session time zone"), "{e}");
-    // Clock-dependent spellings need the query clock.
-    for sql in [
-        "SELECT TIMESTAMP 'now'",
-        "SELECT TIMESTAMP_LTZ '10:00'",
-        "SELECT TIMESTAMP '10:00'",
-    ] {
-        let e = lit(sql, &utc).unwrap_err();
-        assert_eq!(
-            e.error.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{sql}"
-        );
-        assert!(e.error.to_string().contains("query clock"), "{sql}: {e}");
-    }
-    // `parse_and_lower` evaluates once (a constant): the plan holds a
-    // literal, not a cast.
-    let plan = crate::parse_and_lower("SELECT TIMESTAMP '2024-01-01 10:00:00'", &utc, SourceId(0))
-        .unwrap();
-    assert!(plan.root().to_string().contains("1704103200000000"));
-    // The session configs flow through `from_conf`.
-    let opts = ParserOptions::from_conf(|k| {
-        [
-            ("spark.sql.timestampType", "TIMESTAMP_NTZ"),
-            ("spark.sql.session.timeZone", "+05:30"),
-        ]
-        .iter()
-        .find(|(key, _)| *key == k)
-        .map(|(_, v)| *v)
-    });
-    assert!(opts.timestamp_ntz);
-    assert_eq!(opts.session_offset, Some(19_800));
-    let default = ParserOptions::from_conf(|_| None);
-    assert!(!default.timestamp_ntz);
-    assert_eq!(default.session_offset, None);
+    let ExprKind::Literal(crate::ast::Literal::Typed { value, .. }) =
+        s.projection[0].expr.kind.clone()
+    else {
+        panic!("not a typed literal");
+    };
+    assert_eq!(value, "2024-01-01 10:00:00+05:30");
+    let plan = crate::parse_and_lower(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00'",
+        &ParserOptions::default(),
+        SourceId(0),
+    )
+    .unwrap();
+    let text = plan.root().to_string();
+    assert!(text.contains("TIMESTAMP '2024-01-01 10:00:00'"), "{text}");
+    assert!(!text.contains("1704103200000000"), "{text}");
 }

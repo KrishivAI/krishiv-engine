@@ -1347,6 +1347,23 @@ fn resolution_reads_only_its_configs() {
         ResolutionConf::from_conf(|_| None),
         ResolutionConf::default()
     );
+    // The timestamp type and session zone flow through `from_conf`: unset
+    // is UTC, fixed offsets resolve, regions and malformed zones are `None`.
+    let ntz =
+        ResolutionConf::from_conf(|k| (k == "spark.sql.timestampType").then_some("TIMESTAMP_NTZ"));
+    assert!(ntz.timestamp_ntz);
+    assert_eq!(ntz.session_zone, Some(0));
+    let plus =
+        ResolutionConf::from_conf(|k| (k == "spark.sql.session.timeZone").then_some("+05:30"));
+    assert_eq!(plus.session_zone, Some(19_800));
+    assert!(!plus.timestamp_ntz);
+    let region = ResolutionConf::from_conf(|k| {
+        (k == "spark.sql.session.timeZone").then_some("America/Los_Angeles")
+    });
+    assert_eq!(region.session_zone, None);
+    let bad =
+        ResolutionConf::from_conf(|k| (k == "spark.sql.session.timeZone").then_some("Mars/Base"));
+    assert_eq!(bad.session_zone, None);
     // Analysis has no configuration source besides `AnalysisContext::conf`
     // (the type holds none): the same context gives the same result.
     let c = ctx();
@@ -1909,4 +1926,117 @@ fn try_arithmetic_casts_its_arguments_in_try_mode() {
     );
     // A TRY cast of a string may be NULL; `try_*` results are nullable anyway.
     assert!(try_add.output[0].nullable);
+}
+
+/// Typed datetime literals resolve in the analyzer with the session zone.
+#[test]
+fn typed_literals_resolve_with_the_session_zone() {
+    use crate::{ExprNode, LogicalPlan, Plan, TypedLiteralKind};
+    let project = |kind: TypedLiteralKind, value: &str, conf: ResolutionConf| {
+        let expr = Expr::new(ExprNode::TypedLiteral {
+            kind,
+            value: value.to_owned(),
+        });
+        let plan = LogicalPlan::new(crate::PlanNode::Project {
+            input: std::sync::Arc::new(LogicalPlan::new(crate::PlanNode::OneRowRelation)),
+            exprs: vec![std::sync::Arc::new(expr)],
+        });
+        let plan = Plan::try_new(plan).unwrap();
+        let ctx = context(MemoryCatalog::new("spark_catalog"), conf);
+        block_on(DefaultAnalyzer.analyze(&plan, &ctx))
+    };
+    let utc = ResolutionConf {
+        session_zone: Some(0),
+        ..ResolutionConf::default()
+    };
+    let plus = ResolutionConf {
+        session_zone: Some(19_800),
+        ..ResolutionConf::default()
+    };
+    let ntz_conf = ResolutionConf {
+        timestamp_ntz: true,
+        session_zone: Some(0),
+        ..ResolutionConf::default()
+    };
+    let region = ResolutionConf {
+        session_zone: None,
+        ..ResolutionConf::default()
+    };
+    // Plain `TIMESTAMP` is an instant by default, wall-clock under NTZ.
+    let a = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    assert_eq!(a.output[0].name, "TIMESTAMP '2024-01-01 10:00:00'");
+    let a = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", ntz_conf).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp_ntz");
+    assert_eq!(a.output[0].name, "TIMESTAMP_NTZ '2024-01-01 10:00:00'");
+    // An explicit zone stays an instant under NTZ and ignores the session.
+    let a = project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00+05:30",
+        ntz_conf,
+    )
+    .unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    // The session zone moves wall-clock instants; names render in it.
+    let utc_plan = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", utc).unwrap();
+    let plus_plan = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", plus).unwrap();
+    assert_ne!(
+        utc_plan.plan.root().to_string(),
+        plus_plan.plan.root().to_string()
+    );
+    let a = project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00+00:00",
+        plus,
+    )
+    .unwrap();
+    assert_eq!(a.output[0].name, "TIMESTAMP '2024-01-01 15:30:00'");
+    // `DATE` resolves without a zone.
+    let a = project(TypedLiteralKind::Date, "2016-03-12", utc).unwrap();
+    assert_eq!(a.output[0].name, "DATE '2016-03-12'");
+    assert_eq!(a.output[0].data_type.simple_string(), "date");
+    // Malformed text is `INVALID_TYPED_LITERAL`.
+    for (kind, value) in [
+        (TypedLiteralKind::Timestamp, "2024-13-01 10:00:00"),
+        (TypedLiteralKind::TimestampNtz, "10:00"),
+        (TypedLiteralKind::Date, "2020-02-30"),
+        (TypedLiteralKind::Date, "not-a-date"),
+    ] {
+        let e = project(kind, value, utc).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidTypedLiteral,
+            "{value}"
+        );
+    }
+    // Clock-dependent spellings need the query clock.
+    for (kind, value) in [
+        (TypedLiteralKind::Timestamp, "now"),
+        (TypedLiteralKind::TimestampLtz, "10:00"),
+        (TypedLiteralKind::Timestamp, "10:00"),
+    ] {
+        let e = project(kind, value, utc).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{value}"
+        );
+    }
+    // A region session serves explicit zones but not wall-clock time.
+    project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00+05:30",
+        region,
+    )
+    .unwrap();
+    let e = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", region).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    // A region id in the value needs the time-zone database.
+    let e = project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00 America/Los_Angeles",
+        utc,
+    )
+    .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
