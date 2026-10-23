@@ -33,9 +33,16 @@ const PENDING: [&str; 1] = ["range_offset"];
 /// `ntile(1 + 1)` and a frame bound `1 + 1 PRECEDING` are not foldable yet
 /// (the analyzer's general constant folding of operators is separate P2b
 /// work).
-const GAPS: [(&str, &str); 2] = [
+///
+/// The fixture's tables are temporary views in Spark, which qualifies their
+/// columns by the view's name (`t.v`); this session registers them as
+/// tables of the session catalog (`spark_catalog.default.t.v`), so an
+/// error that prints a qualified column differs in the qualifier only.
+const GAPS: [(&str, &str); 4] = [
     ("ntile_folded", "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"),
     ("frame_folded_bound", "KRISHIV_UNSUPPORTED_FEATURE"),
+    ("lag_not_ordered", "WINDOW_FUNCTION_FRAME_NOT_ORDERED"),
+    ("nth_value_not_ordered", "WINDOW_FUNCTION_FRAME_NOT_ORDERED"),
 ];
 
 fn fixture() -> Value {
@@ -130,7 +137,8 @@ fn session(g: &Value) -> Session {
 
 /// A result value as the fixture writes it, by Spark type `t`.
 fn text(a: &ArrayRef, i: usize) -> Value {
-    if a.is_null(i) {
+    // A `VOID` column is all NULL (its nulls are logical, not in a bitmap).
+    if a.is_null(i) || a.data_type() == &DataType::Null {
         return Value::Null;
     }
     let s = match a.data_type() {
@@ -371,6 +379,10 @@ fn window_functions_match_spark() {
         "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_INVALID_BOUND",
         "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE",
         "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_WRONG_COMPARISON",
+        "INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX",
+        "FAILED_FUNCTION_CALL",
+        "INVALID_PARAMETER_VALUE.BOOLEAN",
+        "_LEGACY_ERROR_TEMP_1035",
         "DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE",
         "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
         "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",

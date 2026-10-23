@@ -5,8 +5,8 @@
 
 use krishiv_common::error::{
     DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
-    DatatypeMismatchValueOutOfRange, InvalidExtractField, KrishivError, LegacyErrorTemp1210,
-    NonFoldableArgument, SecondFunctionArgumentNotInteger,
+    DatatypeMismatchValueOutOfRange, InvalidExtractField, InvalidParameterValueBoolean,
+    KrishivError, LegacyErrorTemp1210, NonFoldableArgument, SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{DataType, DecimalType};
@@ -500,8 +500,81 @@ fn ntile(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     }
 }
 
+/// The `ignoreNulls` flag (argument `i`) of `name`, when given, must be a
+/// boolean literal (`INVALID_PARAMETER_VALUE.BOOLEAN`, Spark's builder).
+fn null_flag(c: &CallTypes<'_>, i: usize, name: &str) -> Result<(), KrishivError> {
+    if c.args().len() > i && !matches!(c.constant(i), Some(Constant::Boolean(_))) {
+        return Err(InvalidParameterValueBoolean {
+            function_name: format!("`{name}`"),
+            parameter: "`ignoreNulls`".to_owned(),
+            invalid_value: format!("\"{}\"", c.sql(i).unwrap_or_default()),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// `lag`/`lead(input, offset, default[, ignoreNulls])` (the parser fills
+/// `offset` 1 and `default` NULL): the input's type, nullable. The offset
+/// and the default are checked with the window (the frame they make).
+fn offset_value(c: &CallTypes<'_>, name: &str) -> Result<ArgType, KrishivError> {
+    null_flag(c, 3, name)?;
+    Ok(ArgType::new(
+        c.data_type(0).cloned().unwrap_or(DataType::Null),
+        true,
+    ))
+}
+
+fn lag(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    offset_value(c, "lag")
+}
+
+fn lead(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    offset_value(c, "lead")
+}
+
+/// `nth_value(input, offset[, ignoreNulls])`: the input's type, nullable.
+/// Spark's `NthValue` checks, in its order: `offset` foldable, then its
+/// value (implicitly an `INT`) above 0 (a NULL reads as 0).
+fn nth_value(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    null_flag(c, 2, "nth_value")?;
+    let sql = |i: usize| c.sql(i).unwrap_or_default();
+    let call = format!("\"nth_value({}, {})\"", sql(0), sql(1));
+    let Some(offset) = c.constant(1) else {
+        return Err(DatatypeMismatchNonFoldableInput {
+            sql_expr: call,
+            input_name: "`offset`".to_owned(),
+            input_type: "\"INT\"".to_owned(),
+            input_expr: format!("\"{}\"", sql(1)),
+        }
+        .into());
+    };
+    let value = match offset {
+        Constant::Integral(v) | Constant::Fractional(v) => *v,
+        Constant::String(t) => t.trim().parse::<i64>().unwrap_or(0),
+        Constant::Error(e) => return Err(e.clone()),
+        _ => 0,
+    };
+    if value <= 0 {
+        return Err(DatatypeMismatchValueOutOfRange {
+            sql_expr: call,
+            expr_name: "offset".to_owned(),
+            value_range: format!("(0, {}]", i64::MAX),
+            current_value: format!("{value}L"),
+        }
+        .into());
+    }
+    Ok(ArgType::new(
+        c.data_type(0).cloned().unwrap_or(DataType::Null),
+        true,
+    ))
+}
+
 fn windows() -> Vec<Spec> {
     vec![
+        window("lag", lag),
+        window("lead", lead),
+        window("nth_value", nth_value),
         window("row_number", rank_like),
         window("rank", rank_like),
         window("dense_rank", rank_like),

@@ -38,7 +38,7 @@ use super::eval::{
     Slice, arguments, decimal_array, decimal_value, decimals, exact_decimal, filter_mask, id,
     passes, picks_bytes, replaces, to_view, view_type, width,
 };
-use super::{FrameBound, FrameUnits, WindowFrame, WindowFunctionPlan};
+use super::{FrameBound, FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan};
 use crate::aggregate::{Accumulator, AggInput, AggregateExpr, AggregateFunction};
 use crate::error::{Result, internal};
 
@@ -483,4 +483,168 @@ pub(super) fn cost(a: &AggregateExpr, f: &WindowFunctionPlan, rows: usize) -> Re
         3 * rows * state + rows * 4 + CHUNK * (8 + 2 * state.max(16))
     };
     Ok(frames + inputs + method + width(&out, rows))
+}
+
+/// Column `c` of each slice, strings and binaries as views (gathering
+/// views shares the input's buffers).
+fn sources(slices: &[Slice<'_>], c: usize) -> Result<Vec<ArrayRef>> {
+    slices
+        .iter()
+        .map(|s| {
+            let col = s
+                .batch
+                .columns()
+                .get(c)
+                .ok_or_else(|| internal(format!("window column {c} out of range")))?
+                .slice(s.offset, s.len);
+            match col.data_type() {
+                DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView => to_view(&col),
+                _ => Ok(col),
+            }
+        })
+        .collect()
+}
+
+/// The rows of `input` that count (non-NULL with `ignore_nulls`): `before[i]`
+/// of them precede unit row `i`, and `at[k]` is the `k`-th.
+struct Counting {
+    before: Vec<u32>,
+    at: Vec<u32>,
+}
+
+fn counting(input: &[ArrayRef], n: usize) -> Result<Counting> {
+    let mut before = Vec::with_capacity(n + 1);
+    let mut at = Vec::new();
+    let mut j = 0;
+    for col in input {
+        for i in 0..col.len() {
+            before.push(id(at.len())?);
+            if col.is_valid(i) {
+                at.push(id(j)?);
+            }
+            j += 1;
+        }
+    }
+    before.push(id(at.len())?);
+    Ok(Counting { before, at })
+}
+
+/// Gathers the picked rows: `Some(j)` is unit row `j` of `input`, `None`
+/// the fallback (`Some(i)`: unit row `i` of `fallback`; `None`: NULL).
+fn gather(
+    input: Vec<ArrayRef>,
+    fallback: Option<Vec<ArrayRef>>,
+    picks: &[(Option<u32>, Option<u32>)],
+    data_type: &DataType,
+) -> Result<ArrayRef> {
+    let mut loc: Vec<(usize, usize)> = Vec::new();
+    for (k, c) in input.iter().enumerate() {
+        loc.extend((0..c.len()).map(|i| (k, i)));
+    }
+    let base = input.len();
+    let mut all = input;
+    if let Some(f) = fallback {
+        all.extend(f);
+    }
+    let null_source = all.len();
+    let view = match data_type {
+        DataType::Utf8 | DataType::LargeUtf8 => DataType::Utf8View,
+        DataType::Binary | DataType::LargeBinary => DataType::BinaryView,
+        t => t.clone(),
+    };
+    all.push(arrow_array::new_null_array(&view, 1));
+    let indices: Vec<(usize, usize)> = picks
+        .iter()
+        .map(|&(pick, fallback)| match (pick, fallback) {
+            (Some(j), _) => loc[j as usize],
+            (None, Some(i)) => {
+                let (k, r) = loc[i as usize];
+                (base + k, r)
+            }
+            (None, None) => (null_source, 0),
+        })
+        .collect();
+    let refs: Vec<&dyn Array> = all.iter().map(AsRef::as_ref).collect();
+    arrow_select::interleave::interleave(&refs, &indices).map_err(|e| internal(e.to_string()))
+}
+
+/// `lag`/`lead` (see [`WindowFunction::Offset`]).
+pub(super) fn offset_value(
+    f: &WindowFunctionPlan,
+    slices: &[Slice<'_>],
+    rows: &Rows<'_>,
+) -> Result<ArrayRef> {
+    let WindowFunction::Offset {
+        input,
+        offset,
+        default,
+        ignore_nulls,
+        data_type,
+    } = &f.function
+    else {
+        return Err(internal("lag/lead of another function".to_owned()));
+    };
+    let values = sources(slices, *input)?;
+    let counts = counting(&values, rows.n)?;
+    let mut picks = Vec::with_capacity(rows.n);
+    for i in 0..rows.n {
+        let (ps, pe) = (rows.part)(i);
+        let row = i64::try_from(i).unwrap_or(i64::MAX);
+        let inside = |j: i64| usize::try_from(j).ok().filter(|&j| j >= ps && j < pe);
+        let target = if !*ignore_nulls || *offset == 0 {
+            inside(row.saturating_add(*offset))
+        } else {
+            // The `|offset|`-th counting row after (or before) this one.
+            let k = if *offset > 0 {
+                i64::from(counts.before[i + 1]).saturating_add(*offset - 1)
+            } else {
+                i64::from(counts.before[i]).saturating_add(*offset)
+            };
+            usize::try_from(k)
+                .ok()
+                .and_then(|k| counts.at.get(k))
+                .and_then(|&j| inside(i64::from(j)))
+        };
+        let fallback = default.map(|_| id(i)).transpose()?;
+        picks.push((target.map(id).transpose()?, fallback));
+    }
+    let fallback = default.map(|d| sources(slices, d)).transpose()?;
+    gather(values, fallback, &picks, data_type)
+}
+
+/// `nth_value` (see [`WindowFunction::NthValue`]) over each row's frame.
+pub(super) fn nth_value(
+    f: &WindowFunctionPlan,
+    slices: &[Slice<'_>],
+    rows: &Rows<'_>,
+) -> Result<ArrayRef> {
+    let WindowFunction::NthValue {
+        input,
+        n,
+        ignore_nulls,
+        data_type,
+    } = &f.function
+    else {
+        return Err(internal("nth_value of another function".to_owned()));
+    };
+    let values = sources(slices, *input)?;
+    let counts = counting(&values, rows.n)?;
+    let mut picks = Vec::with_capacity(rows.n);
+    for (s, e) in frames(f.frame, rows)? {
+        let k = n.saturating_sub(1);
+        let j = if *ignore_nulls {
+            usize::try_from(i64::from(counts.before[s as usize]).saturating_add(k))
+                .ok()
+                .and_then(|k| counts.at.get(k).copied())
+        } else {
+            u32::try_from(i64::from(s).saturating_add(k)).ok()
+        };
+        picks.push((j.filter(|&j| j < e), None));
+    }
+    gather(values, None, &picks, data_type)
 }

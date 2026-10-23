@@ -572,12 +572,31 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
             WindowFunction::Ntile(*buckets)
         }
         Function::Aggregate(a) => WindowFunction::Aggregate(aggregate_expr(a)?),
+        Function::OffsetValue(o) => WindowFunction::Offset {
+            input: usize_of(o.input)?,
+            offset: o.offset,
+            default: o.default.map(usize_of).transpose()?,
+            ignore_nulls: o.ignore_nulls,
+            data_type: type_from(&o.data_type)?,
+        },
+        Function::NthValue(o) => {
+            if o.n <= 0 {
+                return Err(corrupt("an nth_value of a row below one"));
+            }
+            WindowFunction::NthValue {
+                input: usize_of(o.input)?,
+                n: o.n,
+                ignore_nulls: o.ignore_nulls,
+                data_type: type_from(&o.data_type)?,
+            }
+        }
     };
     let frame = required(&f.frame, "a window frame")?;
-    let bound = |b: i32| {
+    let bound = |b: i32, offset: i64| {
         Ok(match enum_of!(pb::FrameBound, b, "window frame bound")? {
             pb::FrameBound::UnboundedPreceding => FrameBound::UnboundedPreceding,
             pb::FrameBound::CurrentRow => FrameBound::CurrentRow,
+            pb::FrameBound::Offset => FrameBound::Offset(offset),
             _ => FrameBound::UnboundedFollowing,
         })
     };
@@ -588,8 +607,8 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
                 pb::FrameUnits::Rows => FrameUnits::Rows,
                 _ => FrameUnits::Range,
             },
-            lower: bound(frame.lower)?,
-            upper: bound(frame.upper)?,
+            lower: bound(frame.lower, frame.lower_offset)?,
+            upper: bound(frame.upper, frame.upper_offset)?,
         },
         filter: f.filter.map(usize_of).transpose()?,
         name: f.name.clone(),

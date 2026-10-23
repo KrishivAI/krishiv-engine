@@ -334,7 +334,71 @@ fn reference(
         let n = part.len();
         let rank = 1 + part.iter().filter(|x| key(x.1) < key(r.1)).count();
         let peers_end = part.iter().filter(|x| key(x.1) <= key(r.1)).count();
+        let peers_start = rank - 1;
+        let at = |k: i64| {
+            let i = i64::try_from(pos).unwrap().saturating_add(k);
+            usize::try_from(i.clamp(0, i64::try_from(n).unwrap())).unwrap()
+        };
+        let start = match (frame.units, frame.lower) {
+            (_, FrameBound::UnboundedPreceding) => 0,
+            (FrameUnits::Rows, FrameBound::CurrentRow) => pos,
+            (FrameUnits::Range, FrameBound::CurrentRow) => peers_start,
+            (_, FrameBound::Offset(k)) => at(k),
+            (_, b) => {
+                out.push(format!("<lower {b:?}>"));
+                continue;
+            }
+        };
+        let end = match (frame.units, frame.upper) {
+            (_, FrameBound::UnboundedFollowing) => n,
+            (FrameUnits::Rows, FrameBound::CurrentRow) => pos + 1,
+            (FrameUnits::Range, FrameBound::CurrentRow) => peers_end,
+            (_, FrameBound::Offset(k)) => at(k + 1),
+            (_, b) => {
+                out.push(format!("<upper {b:?}>"));
+                continue;
+            }
+        };
+        let show = |v: Option<i64>| v.map_or_else(|| "null".to_owned(), |v| v.to_string());
         out.push(match f {
+            WindowFunction::Offset {
+                offset,
+                default,
+                ignore_nulls,
+                ..
+            } => {
+                let p = i64::try_from(pos).unwrap();
+                let target = if !*ignore_nulls || *offset == 0 {
+                    usize::try_from(p + offset).ok().filter(|&j| j < n)
+                } else if *offset > 0 {
+                    let after: Vec<usize> = (pos + 1..n).filter(|&j| part[j].3.is_some()).collect();
+                    after.get(usize::try_from(offset - 1).unwrap()).copied()
+                } else {
+                    let before: Vec<usize> =
+                        (0..pos).rev().filter(|&j| part[j].3.is_some()).collect();
+                    before.get(usize::try_from(-offset - 1).unwrap()).copied()
+                };
+                match (target, default) {
+                    (Some(j), _) => show(part[j].3),
+                    // The default is the `id` column.
+                    (None, Some(_)) => r.2.to_string(),
+                    (None, None) => "null".to_owned(),
+                }
+            }
+            WindowFunction::NthValue {
+                n: nth,
+                ignore_nulls,
+                ..
+            } => {
+                let frame_rows = &part[start..end.max(start)];
+                let k = usize::try_from(nth - 1).unwrap();
+                let v = if *ignore_nulls {
+                    frame_rows.iter().filter_map(|x| x.3).nth(k)
+                } else {
+                    frame_rows.get(k).and_then(|x| x.3)
+                };
+                show(v)
+            }
             WindowFunction::RowNumber => (pos + 1).to_string(),
             WindowFunction::Rank => rank.to_string(),
             WindowFunction::DenseRank => {
@@ -357,31 +421,6 @@ fn reference(
             WindowFunction::CumeDist => format!("{:?}", to_f(peers_end) / to_f(n)),
             WindowFunction::Ntile(k) => ntile_spark(n, i64::from(*k))[pos].to_string(),
             WindowFunction::Aggregate(a) => {
-                let peers_start = rank - 1;
-                let at = |k: i64| {
-                    let i = i64::try_from(pos).unwrap().saturating_add(k);
-                    usize::try_from(i.clamp(0, i64::try_from(n).unwrap())).unwrap()
-                };
-                let start = match (frame.units, frame.lower) {
-                    (_, FrameBound::UnboundedPreceding) => 0,
-                    (FrameUnits::Rows, FrameBound::CurrentRow) => pos,
-                    (FrameUnits::Range, FrameBound::CurrentRow) => peers_start,
-                    (_, FrameBound::Offset(k)) => at(k),
-                    (_, b) => {
-                        out.push(format!("<lower {b:?}>"));
-                        continue;
-                    }
-                };
-                let end = match (frame.units, frame.upper) {
-                    (_, FrameBound::UnboundedFollowing) => n,
-                    (FrameUnits::Rows, FrameBound::CurrentRow) => pos + 1,
-                    (FrameUnits::Range, FrameBound::CurrentRow) => peers_end,
-                    (_, FrameBound::Offset(k)) => at(k + 1),
-                    (_, b) => {
-                        out.push(format!("<upper {b:?}>"));
-                        continue;
-                    }
-                };
                 let frame_rows = &part[start..end.max(start)];
                 if a.args == [4] {
                     // The string column: by bytes; first/last by row.
@@ -553,7 +592,53 @@ fn frame_functions() -> Vec<(WindowFunction, WindowFrame)> {
             ),
             empty,
         ),
+        (nth(2, false), WindowFrame::running(FrameUnits::Range)),
+        (nth(1, true), around),
+        (nth(3, true), WindowFrame::whole(FrameUnits::Rows)),
+        (nth(2, false), to_end),
+        (
+            lag_lead(-1, None, false),
+            rows(FrameBound::Offset(-1), FrameBound::Offset(-1)),
+        ),
+        (
+            lag_lead(2, Some(2), false),
+            rows(FrameBound::Offset(2), FrameBound::Offset(2)),
+        ),
+        (
+            lag_lead(-2, Some(2), true),
+            rows(FrameBound::Offset(-2), FrameBound::Offset(-2)),
+        ),
+        (
+            lag_lead(1, None, true),
+            rows(FrameBound::Offset(1), FrameBound::Offset(1)),
+        ),
+        (
+            lag_lead(0, None, true),
+            rows(FrameBound::Offset(0), FrameBound::Offset(0)),
+        ),
     ]
+}
+
+/// `nth_value(v, n)` (column 3).
+fn nth(n: i64, ignore_nulls: bool) -> WindowFunction {
+    WindowFunction::NthValue {
+        input: 3,
+        n,
+        ignore_nulls,
+        data_type: DataType::Int64,
+    }
+}
+
+/// `lead(v, offset, id)` (`lag` for a negative offset; the default is the
+/// `id` column when given).
+fn lag_lead(offset: i64, default: Option<usize>, ignore_nulls: bool) -> WindowFunction {
+    WindowFunction::Offset {
+        input: 3,
+        offset,
+        default,
+        ignore_nulls,
+        data_type: DataType::Int64,
+    }
 }
 
 fn rows_strategy() -> impl Strategy<Value = Vec<Row>> {

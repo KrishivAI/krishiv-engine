@@ -103,6 +103,37 @@ pub enum WindowFunction {
     Ntile(i32),
     /// An aggregate over the frame; its arguments are input columns.
     Aggregate(AggregateExpr),
+    /// `lag`/`lead`: column `input` of the row `offset` rows after the
+    /// current one in its partition (before it when negative); column
+    /// `default` of the current row (NULL without one) when there is no
+    /// such row. With `ignore_nulls`, rows whose input is NULL are not
+    /// counted (an offset of 0 is the current row).
+    Offset {
+        /// The input column.
+        input: usize,
+        /// Rows after the current one (`lead(x, n)`: `n`; `lag(x, n)`:
+        /// `-n`).
+        offset: i64,
+        /// The default column (cast to the input's type).
+        default: Option<usize>,
+        /// `IGNORE NULLS`.
+        ignore_nulls: bool,
+        /// The input's (and the result's) type.
+        data_type: DataType,
+    },
+    /// `nth_value(input, n)`: column `input` of the frame's `n`-th row
+    /// (counting only non-NULL inputs with `ignore_nulls`), NULL if the
+    /// frame has fewer.
+    NthValue {
+        /// The input column.
+        input: usize,
+        /// `n`, above 0.
+        n: i64,
+        /// `IGNORE NULLS`.
+        ignore_nulls: bool,
+        /// The input's (and the result's) type.
+        data_type: DataType,
+    },
 }
 
 /// The units of a [`WindowFrame`].
@@ -198,6 +229,8 @@ crate::physical::data::plan_data!(
         CumeDist,
         Ntile(buckets),
         Aggregate(aggregate),
+        Offset { input, offset, default, ignore_nulls, data_type },
+        NthValue { input, n, ignore_nulls, data_type },
     }
 );
 crate::physical::data::plan_data!(
@@ -269,6 +302,8 @@ impl WindowFunctionPlan {
             WindowFunction::Aggregate(a) => {
                 (a.result_type()?, a.function != AggregateFunction::Count)
             }
+            WindowFunction::Offset { data_type, .. }
+            | WindowFunction::NthValue { data_type, .. } => (data_type.clone(), true),
         })
     }
 
@@ -445,6 +480,24 @@ impl Window {
                 && n <= 0
             {
                 return Err(internal(format!("ntile of {n} buckets")));
+            }
+            match &f.function {
+                WindowFunction::Offset {
+                    input: i, default, ..
+                } => {
+                    column(*i, "input")?;
+                    if let Some(d) = default {
+                        column(*d, "default")?;
+                    }
+                }
+                WindowFunction::NthValue { input: i, n, .. } => {
+                    column(*i, "input")?;
+                    f.shape()?;
+                    if *n <= 0 {
+                        return Err(internal(format!("nth_value of row {n}")));
+                    }
+                }
+                _ => {}
             }
             if let Some(c) = f.filter {
                 column(c, "filter")?;

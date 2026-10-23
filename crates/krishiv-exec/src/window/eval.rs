@@ -213,6 +213,20 @@ fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef
             Arc::new(Int32Array::from(v))
         }
         WindowFunction::Aggregate(a) => aggregate(a, f, u, ansi)?,
+        WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
+            let part = |i: usize| u.parts[u.part_of[i] as usize];
+            let peers = |i: usize| u.peers[u.peer_of[i] as usize];
+            let rows = super::frames::Rows {
+                part: &part,
+                peers: &peers,
+                n: u.rows,
+            };
+            if matches!(f.function, WindowFunction::Offset { .. }) {
+                super::frames::offset_value(f, u.slices, &rows)?
+            } else {
+                super::frames::nth_value(f, u.slices, &rows)?
+            }
+        }
     })
 }
 
@@ -726,6 +740,11 @@ pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -
             | WindowFunction::CumeDist => width(&out, rows),
             // The ranks, then the result.
             WindowFunction::PercentRank => rows * 4 + width(&out, rows),
+            // Frames or partitions, counts and positions, picks, gather
+            // indices, and the result.
+            WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
+                rows * (8 + 8 + 16 + 16) + width(&out, rows).max(rows * 16)
+            }
             WindowFunction::Aggregate(a) if f.shape()? == Shape::Frame => {
                 super::frames::cost(a, f, rows)?
             }

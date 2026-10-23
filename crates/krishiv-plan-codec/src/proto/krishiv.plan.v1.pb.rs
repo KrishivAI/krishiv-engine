@@ -237,7 +237,10 @@ pub struct WindowFunctionPlan {
     pub filter: ::core::option::Option<u64>,
     #[prost(string, tag = "10")]
     pub name: ::prost::alloc::string::String,
-    #[prost(oneof = "window_function_plan::Function", tags = "1, 2, 3, 4, 5, 6, 7")]
+    #[prost(
+        oneof = "window_function_plan::Function",
+        tags = "1, 2, 3, 4, 5, 6, 7, 11, 12"
+    )]
     pub function: ::core::option::Option<window_function_plan::Function>,
 }
 /// Nested message and enum types in `WindowFunctionPlan`.
@@ -259,7 +262,40 @@ pub mod window_function_plan {
         Ntile(i32),
         #[prost(message, tag = "7")]
         Aggregate(super::AggregateExpr),
+        #[prost(message, tag = "11")]
+        OffsetValue(super::OffsetFunction),
+        #[prost(message, tag = "12")]
+        NthValue(super::NthValueFunction),
     }
+}
+/// `lag` / `lead`: input column `input` of the row `offset` rows after the
+/// current one (before it when negative), or column `default`.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OffsetFunction {
+    #[prost(uint64, tag = "1")]
+    pub input: u64,
+    #[prost(sint64, tag = "2")]
+    pub offset: i64,
+    #[prost(uint64, optional, tag = "3")]
+    pub default: ::core::option::Option<u64>,
+    #[prost(bool, tag = "4")]
+    pub ignore_nulls: bool,
+    /// Arrow IPC `Schema` flatbuffer of one field.
+    #[prost(bytes = "vec", tag = "5")]
+    pub data_type: ::prost::alloc::vec::Vec<u8>,
+}
+/// `nth_value`: input column `input` of the frame's `n`-th row.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NthValueFunction {
+    #[prost(uint64, tag = "1")]
+    pub input: u64,
+    #[prost(sint64, tag = "2")]
+    pub n: i64,
+    #[prost(bool, tag = "3")]
+    pub ignore_nulls: bool,
+    /// Arrow IPC `Schema` flatbuffer of one field.
+    #[prost(bytes = "vec", tag = "4")]
+    pub data_type: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WindowFrame {
@@ -269,6 +305,12 @@ pub struct WindowFrame {
     pub lower: i32,
     #[prost(enumeration = "FrameBound", tag = "3")]
     pub upper: i32,
+    /// `FRAME_BOUND_OFFSET` bounds: rows after the current one (before it when
+    /// negative).
+    #[prost(sint64, tag = "4")]
+    pub lower_offset: i64,
+    #[prost(sint64, tag = "5")]
+    pub upper_offset: i64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateNode {
@@ -869,6 +911,7 @@ pub enum FrameBound {
     UnboundedPreceding = 1,
     CurrentRow = 2,
     UnboundedFollowing = 3,
+    Offset = 4,
 }
 impl FrameBound {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -881,6 +924,7 @@ impl FrameBound {
             Self::UnboundedPreceding => "FRAME_BOUND_UNBOUNDED_PRECEDING",
             Self::CurrentRow => "FRAME_BOUND_CURRENT_ROW",
             Self::UnboundedFollowing => "FRAME_BOUND_UNBOUNDED_FOLLOWING",
+            Self::Offset => "FRAME_BOUND_OFFSET",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -890,6 +934,7 @@ impl FrameBound {
             "FRAME_BOUND_UNBOUNDED_PRECEDING" => Some(Self::UnboundedPreceding),
             "FRAME_BOUND_CURRENT_ROW" => Some(Self::CurrentRow),
             "FRAME_BOUND_UNBOUNDED_FOLLOWING" => Some(Self::UnboundedFollowing),
+            "FRAME_BOUND_OFFSET" => Some(Self::Offset),
             _ => None,
         }
     }

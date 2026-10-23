@@ -524,6 +524,6 @@ fn window_goldens_resolve_to_a_fixed_point() {
     }
     // `1 + 1 PRECEDING`: operators do not fold yet.
     assert_eq!(pending, ["range_offset", "frame_folded_bound"]);
-    assert_eq!(resolved, 82);
+    assert_eq!(resolved, 95);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

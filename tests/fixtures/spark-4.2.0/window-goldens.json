@@ -6829,6 +6829,1250 @@
      "8"
     ]
    ]
+  },
+  {
+   "id": "lag_lead",
+   "sql": "SELECT o, v, lag(v) OVER (ORDER BY o, p, v), lead(v) OVER (ORDER BY o, p, v), lag(v, 2) OVER (ORDER BY o, p, v), lead(v, 2, -1) OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 2, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -2 FOLLOWING AND -2 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, 2, -1) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 2 FOLLOWING AND 2 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "5",
+     "20",
+     "2",
+     null
+    ],
+    [
+     "1",
+     "20",
+     "10",
+     null,
+     "5",
+     "7"
+    ],
+    [
+     "2",
+     null,
+     "20",
+     "7",
+     "10",
+     "1"
+    ],
+    [
+     "3",
+     "7",
+     null,
+     "1",
+     "20",
+     "-1"
+    ],
+    [
+     "4",
+     "1",
+     "7",
+     null,
+     null,
+     "-1"
+    ],
+    [
+     null,
+     "2",
+     null,
+     "5",
+     null,
+     "10"
+    ],
+    [
+     null,
+     "5",
+     "2",
+     "10",
+     null,
+     "20"
+    ]
+   ]
+  },
+  {
+   "id": "lag_partitioned_default",
+   "sql": "SELECT p, o, v, lag(v, 1, 0) OVER (PARTITION BY p ORDER BY o, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "p",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, 0) OVER (PARTITION BY p ORDER BY o ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "1",
+     "10",
+     "5"
+    ],
+    [
+     "1",
+     "1",
+     "20",
+     "10"
+    ],
+    [
+     "1",
+     "2",
+     null,
+     "20"
+    ],
+    [
+     "1",
+     null,
+     "5",
+     "0"
+    ],
+    [
+     "2",
+     "3",
+     "7",
+     "0"
+    ],
+    [
+     null,
+     "4",
+     "1",
+     "2"
+    ],
+    [
+     null,
+     null,
+     "2",
+     "0"
+    ]
+   ]
+  },
+  {
+   "id": "lag_negative_and_zero",
+   "sql": "SELECT o, v, lag(v, -1) OVER (ORDER BY o, p, v), lead(v, 0) OVER (ORDER BY o, p, v), lag(v, 0) OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, -1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, 0, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 0 FOLLOWING AND 0 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 0, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 0 FOLLOWING AND 0 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "20",
+     "10",
+     "10"
+    ],
+    [
+     "1",
+     "20",
+     null,
+     "20",
+     "20"
+    ],
+    [
+     "2",
+     null,
+     "7",
+     null,
+     null
+    ],
+    [
+     "3",
+     "7",
+     "1",
+     "7",
+     "7"
+    ],
+    [
+     "4",
+     "1",
+     null,
+     "1",
+     "1"
+    ],
+    [
+     null,
+     "2",
+     "5",
+     "2",
+     "2"
+    ],
+    [
+     null,
+     "5",
+     "10",
+     "5",
+     "5"
+    ]
+   ]
+  },
+  {
+   "id": "lag_ignore_nulls",
+   "sql": "SELECT o, v, lag(v) IGNORE NULLS OVER (ORDER BY o, p, v), lead(v, 1) IGNORE NULLS OVER (ORDER BY o, p, v), lag(v, 2, 99) IGNORE NULLS OVER (ORDER BY o, p, v), lag(v, 1, NULL, true) OVER (ORDER BY o, p, v), lead(v, -2) IGNORE NULLS OVER (ORDER BY o, p, v), lag(v, 0) IGNORE NULLS OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 2, 99) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -2 FOLLOWING AND -2 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, -2, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -2 FOLLOWING AND -2 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 0, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 0 FOLLOWING AND 0 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "5",
+     "20",
+     "2",
+     "5",
+     "2",
+     "10"
+    ],
+    [
+     "1",
+     "20",
+     "10",
+     "7",
+     "5",
+     "10",
+     "5",
+     "20"
+    ],
+    [
+     "2",
+     null,
+     "20",
+     "7",
+     "10",
+     "20",
+     "10",
+     null
+    ],
+    [
+     "3",
+     "7",
+     "20",
+     "1",
+     "10",
+     "20",
+     "10",
+     "7"
+    ],
+    [
+     "4",
+     "1",
+     "7",
+     null,
+     "20",
+     "7",
+     "20",
+     "1"
+    ],
+    [
+     null,
+     "2",
+     null,
+     "5",
+     "99",
+     null,
+     null,
+     "2"
+    ],
+    [
+     null,
+     "5",
+     "2",
+     "10",
+     "99",
+     "2",
+     null,
+     "5"
+    ]
+   ]
+  },
+  {
+   "id": "lag_respect_nulls",
+   "sql": "SELECT o, v, lag(v, 1, 0) RESPECT NULLS OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, 0) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "5"
+    ],
+    [
+     "1",
+     "20",
+     "10"
+    ],
+    [
+     "2",
+     null,
+     "20"
+    ],
+    [
+     "3",
+     "7",
+     null
+    ],
+    [
+     "4",
+     "1",
+     "7"
+    ],
+    [
+     null,
+     "2",
+     "0"
+    ],
+    [
+     null,
+     "5",
+     "2"
+    ]
+   ]
+  },
+  {
+   "id": "lag_strings_decimals",
+   "sql": "SELECT k, s, lag(s, 1, 'z') OVER w, lead(d, 1, 0) OVER w, lag(d) OVER w, lag(d, 1, 7.123) OVER w FROM e WINDOW w AS (PARTITION BY k ORDER BY s)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "lag(s, 1, z) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "lead(d, 1, 0) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)",
+     "type": "decimal(7,2)",
+     "nullable": true
+    },
+    {
+     "name": "lag(d, 1, NULL) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "decimal(7,2)",
+     "nullable": true
+    },
+    {
+     "name": "lag(d, 1, 7.123) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "decimal(7,2)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     null,
+     "3.33",
+     null,
+     null
+    ],
+    [
+     "a",
+     "fig",
+     "apple",
+     "10.25",
+     "20.50",
+     "20.50"
+    ],
+    [
+     "a",
+     "pear",
+     "fig",
+     "0.00",
+     "3.33",
+     "3.33"
+    ],
+    [
+     "a",
+     null,
+     "z",
+     "20.50",
+     null,
+     "7.12"
+    ],
+    [
+     "b",
+     "Kiwi",
+     "z",
+     "99999.99",
+     null,
+     "7.12"
+    ],
+    [
+     "b",
+     "éclair",
+     "kiwi",
+     "0.00",
+     "99999.99",
+     "99999.99"
+    ],
+    [
+     "b",
+     "kiwi",
+     "Kiwi",
+     "0.00",
+     "-0.01",
+     "-0.01"
+    ],
+    [
+     null,
+     "plum",
+     "z",
+     "0.00",
+     null,
+     "7.12"
+    ]
+   ]
+  },
+  {
+   "id": "lag_default_column",
+   "sql": "SELECT o, v, lag(v, 1, o) OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, o) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "5"
+    ],
+    [
+     "1",
+     "20",
+     "10"
+    ],
+    [
+     "2",
+     null,
+     "20"
+    ],
+    [
+     "3",
+     "7",
+     null
+    ],
+    [
+     "4",
+     "1",
+     "7"
+    ],
+    [
+     null,
+     "2",
+     null
+    ],
+    [
+     null,
+     "5",
+     "2"
+    ]
+   ]
+  },
+  {
+   "id": "lag_huge_offsets",
+   "sql": "SELECT o, lag(v, 2147483647) OVER (ORDER BY o, p, v), lead(v, -2147483648) OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 2147483647, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -2147483647 FOLLOWING AND -2147483647 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, -2147483648, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -2147483648 FOLLOWING AND -2147483648 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     null,
+     null
+    ],
+    [
+     "1",
+     null,
+     null
+    ],
+    [
+     "2",
+     null,
+     null
+    ],
+    [
+     "3",
+     null,
+     null
+    ],
+    [
+     "4",
+     null,
+     null
+    ],
+    [
+     null,
+     null,
+     null
+    ],
+    [
+     null,
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "nth_value_frames",
+   "sql": "SELECT o, v, nth_value(v, 2) OVER (ORDER BY o, p, v), nth_value(v, 2) OVER (ORDER BY o, p, v ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), nth_value(v, 1, true) OVER (ORDER BY o, p, v ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING), nth_value(v, 2) IGNORE NULLS OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 2) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 2) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 1) ignore nulls OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 2) ignore nulls OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "5",
+     "5",
+     "5",
+     "5"
+    ],
+    [
+     "1",
+     "20",
+     "5",
+     "5",
+     "10",
+     "5"
+    ],
+    [
+     "2",
+     null,
+     "5",
+     "5",
+     "20",
+     "5"
+    ],
+    [
+     "3",
+     "7",
+     "5",
+     "5",
+     "7",
+     "5"
+    ],
+    [
+     "4",
+     "1",
+     "5",
+     "5",
+     "7",
+     "5"
+    ],
+    [
+     null,
+     "2",
+     null,
+     "5",
+     "2",
+     null
+    ],
+    [
+     null,
+     "5",
+     "5",
+     "5",
+     "2",
+     "5"
+    ]
+   ]
+  },
+  {
+   "id": "nth_value_strings",
+   "sql": "SELECT k, s, nth_value(s, 2) OVER (PARTITION BY k ORDER BY s ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING), nth_value(d, 1, true) OVER (PARTITION BY k ORDER BY s ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM e",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(s, 2) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(d, 1) ignore nulls OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "decimal(7,2)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     "apple",
+     "20.50"
+    ],
+    [
+     "a",
+     "fig",
+     "fig",
+     "3.33"
+    ],
+    [
+     "a",
+     "pear",
+     "pear",
+     "10.25"
+    ],
+    [
+     "a",
+     null,
+     "apple",
+     "20.50"
+    ],
+    [
+     "b",
+     "Kiwi",
+     "kiwi",
+     "-0.01"
+    ],
+    [
+     "b",
+     "éclair",
+     "éclair",
+     "0.00"
+    ],
+    [
+     "b",
+     "kiwi",
+     "kiwi",
+     "99999.99"
+    ],
+    [
+     null,
+     "plum",
+     null,
+     "1.11"
+    ]
+   ]
+  },
+  {
+   "id": "nth_value_offsets",
+   "sql": "SELECT o, nth_value(v, 1.5) OVER (ORDER BY o, p, v), nth_value(v, '2') OVER (ORDER BY o, p, v), nth_value(v, 2L) OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 1.5) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 2) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 2) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     "1",
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     "2",
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     "3",
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     "4",
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     null,
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     null,
+     "2",
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "nth_value_partition_whole",
+   "sql": "SELECT p, o, nth_value(v, 3) OVER (PARTITION BY p ORDER BY o, v RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "p",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 3) OVER (PARTITION BY p ORDER BY o ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "1",
+     "20"
+    ],
+    [
+     "1",
+     "1",
+     "20"
+    ],
+    [
+     "1",
+     "2",
+     "20"
+    ],
+    [
+     "1",
+     null,
+     "20"
+    ],
+    [
+     "2",
+     "3",
+     null
+    ],
+    [
+     null,
+     "4",
+     null
+    ],
+    [
+     null,
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "lag_no_arguments",
+   "sql": "SELECT o, lag() OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(NULL, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "void",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     null
+    ],
+    [
+     "1",
+     null
+    ],
+    [
+     "2",
+     null
+    ],
+    [
+     "3",
+     null
+    ],
+    [
+     "4",
+     null
+    ],
+    [
+     null,
+     null
+    ],
+    [
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "lag_bigint_offset",
+   "sql": "SELECT o, lag(v, 1L) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_decimal_offset",
+   "sql": "SELECT o, lag(v, 1.0) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_smallint_offset",
+   "sql": "SELECT o, lag(v, CAST(1 AS SMALLINT)) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_null_offset",
+   "sql": "SELECT o, lag(v, NULL) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_string_offset",
+   "sql": "SELECT o, lag(v, '1') OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "FAILED_FUNCTION_CALL",
+   "sql_state": "38000",
+   "message_parameters": {
+    "funcName": "`lag`"
+   }
+  },
+  {
+   "id": "lag_column_offset",
+   "sql": "SELECT o, lag(v, o) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"(- o)\"",
+    "inputName": "`offset`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"lag(v, o, NULL)\""
+   }
+  },
+  {
+   "id": "lead_column_offset",
+   "sql": "SELECT o, lead(v, o) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"o\"",
+    "inputName": "`offset`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"lead(v, o, NULL)\""
+   }
+  },
+  {
+   "id": "lag_framed",
+   "sql": "SELECT o, lag(v) OVER (ORDER BY o ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_framed_same",
+   "sql": "SELECT o, lag(v) OVER (ORDER BY o ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_not_ordered",
+   "sql": "SELECT o, lag(v) OVER (PARTITION BY p) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "WINDOW_FUNCTION_FRAME_NOT_ORDERED",
+   "sql_state": "42601",
+   "message_parameters": {
+    "wf_expr": "lag(t.v, 1, NULL)",
+    "wf_name": "lag"
+   }
+  },
+  {
+   "id": "lag_flag_not_boolean",
+   "sql": "SELECT o, lag(v, 1, 2, 3) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_PARAMETER_VALUE.BOOLEAN",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "`lag`",
+    "invalidValue": "\"3\"",
+    "parameter": "`ignoreNulls`"
+   }
+  },
+  {
+   "id": "lag_distinct",
+   "sql": "SELECT o, lag(DISTINCT v) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX",
+   "sql_state": "42000",
+   "message_parameters": {
+    "prettyName": "`lag`",
+    "syntax": "DISTINCT"
+   }
+  },
+  {
+   "id": "lag_without_over",
+   "sql": "SELECT o, lag(v) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "WINDOW_FUNCTION_WITHOUT_OVER_CLAUSE",
+   "sql_state": "42601",
+   "message_parameters": {
+    "funcName": "\"lag(v, 1, NULL)\""
+   }
+  },
+  {
+   "id": "nth_value_not_ordered",
+   "sql": "SELECT o, nth_value(v, 3) OVER (PARTITION BY p) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "WINDOW_FUNCTION_FRAME_NOT_ORDERED",
+   "sql_state": "42601",
+   "message_parameters": {
+    "wf_expr": "nth_value(t.v, 3)",
+    "wf_name": "nth_value"
+   }
+  },
+  {
+   "id": "nth_value_zero",
+   "sql": "SELECT o, nth_value(v, 0) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "currentValue": "0L",
+    "exprName": "offset",
+    "sqlExpr": "\"nth_value(v, 0)\"",
+    "valueRange": "(0, 9223372036854775807]"
+   }
+  },
+  {
+   "id": "nth_value_null",
+   "sql": "SELECT o, nth_value(v, NULL) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "currentValue": "0L",
+    "exprName": "offset",
+    "sqlExpr": "\"nth_value(v, NULL)\"",
+    "valueRange": "(0, 9223372036854775807]"
+   }
+  },
+  {
+   "id": "nth_value_column",
+   "sql": "SELECT o, nth_value(v, o) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"o\"",
+    "inputName": "`offset`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"nth_value(v, o)\""
+   }
+  },
+  {
+   "id": "nth_value_flag_string",
+   "sql": "SELECT o, nth_value(v, 1, 'x') OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_PARAMETER_VALUE.BOOLEAN",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "`nth_value`",
+    "invalidValue": "\"x\"",
+    "parameter": "`ignoreNulls`"
+   }
+  },
+  {
+   "id": "nth_value_one_argument",
+   "sql": "SELECT o, nth_value(v) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "sql_state": "42605",
+   "message_parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "[2, 3]",
+    "functionName": "`nth_value`"
+   }
   }
  ]
 }

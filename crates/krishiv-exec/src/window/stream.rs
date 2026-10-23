@@ -673,6 +673,12 @@ impl Emit {
                         })
                         .collect::<Result<Vec<_>>>()?,
                 )),
+                // Refused before the copy (`spill.rs`).
+                WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
+                    return Err(internal(
+                        "an offset function evaluated from disk".to_owned(),
+                    ));
+                }
                 WindowFunction::Aggregate(_) => match f.shape()? {
                     Shape::Whole => {
                         let v = self.disk.whole[j].as_ref().ok_or_else(|| {

@@ -293,7 +293,7 @@ fn a_window_needs_a_v4_reader() {
 
 #[test]
 fn a_window_plan_survives_the_wire_with_every_field() {
-    for name in ["window_ranking", "window_aggregates"] {
+    for name in ["window_ranking", "window_aggregates", "window_frames"] {
         let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
         assert_eq!(round_trip(&plan), plan, "{name}");
     }

@@ -175,6 +175,8 @@ message WindowFunctionPlan {
     // The bucket count.
     int32 ntile = 6;
     AggregateExpr aggregate = 7;
+    OffsetFunction offset_value = 11;
+    NthValueFunction nth_value = 12;
   }
   WindowFrame frame = 8;
   // A boolean input column an aggregate is restricted to.
@@ -182,10 +184,34 @@ message WindowFunctionPlan {
   string name = 10;
 }
 
+// `lag` / `lead`: input column `input` of the row `offset` rows after the
+// current one (before it when negative), or column `default`.
+message OffsetFunction {
+  uint64 input = 1;
+  sint64 offset = 2;
+  optional uint64 default = 3;
+  bool ignore_nulls = 4;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes data_type = 5;
+}
+
+// `nth_value`: input column `input` of the frame's `n`-th row.
+message NthValueFunction {
+  uint64 input = 1;
+  sint64 n = 2;
+  bool ignore_nulls = 3;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes data_type = 4;
+}
+
 message WindowFrame {
   FrameUnits units = 1;
   FrameBound lower = 2;
   FrameBound upper = 3;
+  // `FRAME_BOUND_OFFSET` bounds: rows after the current one (before it when
+  // negative).
+  sint64 lower_offset = 4;
+  sint64 upper_offset = 5;
 }
 
 enum FrameUnits {
@@ -199,6 +225,7 @@ enum FrameBound {
   FRAME_BOUND_UNBOUNDED_PRECEDING = 1;
   FRAME_BOUND_CURRENT_ROW = 2;
   FRAME_BOUND_UNBOUNDED_FOLLOWING = 3;
+  FRAME_BOUND_OFFSET = 4;
 }
 
 message AggregateNode {
