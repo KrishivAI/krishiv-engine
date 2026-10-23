@@ -217,11 +217,10 @@ fn legacy_nullif_cast(a: &Bound, b: &Bound) -> Option<Option<DataType>> {
 
 /// The literal zero of `t`: what `zeroifnull` meets its argument with (`'0'`
 /// for a legacy `STRING`). `None` for any other type, which a met argument
-/// never has.
+/// never has (it always meets the hidden `INT`, so never stays a narrower
+/// integral type).
 fn zero_literal(t: &DataType, origin: Origin) -> Option<Arc<Expr>> {
     let literal = match t {
-        DataType::Byte => Literal::Byte(0),
-        DataType::Short => Literal::Short(0),
         DataType::Integer => Literal::Integer(0),
         DataType::Long => Literal::Long(0),
         DataType::Float => Literal::Float(0.0),
