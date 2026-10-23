@@ -12,17 +12,21 @@ mkdir "$tmp/bin"
 
 # The fake serves what the real calls would print after `--jq`:
 #   run list     -> FAKE_RUNS_FILE (one `id<TAB>sha<TAB>status` per line)
-#   run artifacts -> 1 when the run id is listed in FAKE_ARTIFACTS_FILE, else 0
+#   run artifacts -> live | expired | nothing, from FAKE_ARTIFACTS_FILE;
+#                    the repository-wide count is its line count
 #   run download -> a file named by FAKE_FILE holding {"run": <id>}
 cat > "$tmp/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
 case "$1 $2" in
   "run list") cat "$FAKE_RUNS_FILE" ;;
+  "api repos/"*"/actions/artifacts?"*) grep -c . "$FAKE_ARTIFACTS_FILE" || true ;;
   "api repos/"*"/artifacts")
     id=${2#repos/*/actions/runs/}
     id=${id%/artifacts}
-    if grep -qx "$id" "$FAKE_ARTIFACTS_FILE"; then echo 1; else echo 0; fi
+    # `ID` is a live artifact, `ID:expired` an expired one; none prints nothing.
+    if grep -qx "$id" "$FAKE_ARTIFACTS_FILE"; then echo live
+    elif grep -qx "$id:expired" "$FAKE_ARTIFACTS_FILE"; then echo expired; fi
     ;;
   "run download")
     id=$3
@@ -68,12 +72,13 @@ p1=$(commit p1)
 git checkout -q -
 m3=$(commit m3)
 git branch -f main "$m3" 2>/dev/null || true
-export BASE_SHA=$m3 HEAD_SHA=$p1
-# A budgets.json the PR rewrote must never be used as the baseline.
+# The PR was measured on top of m2 (the first parent of its merge commit).
+export BASE_SHA=$m3 TARGET_SHA=$m2
+# A budgets.json the PR rewrote must never be used as the baseline: the
+# fallback reads the base commit's file.
 git checkout -q pr
 echo '{"pr": true}' > budgets.json
 git commit -q -am "pr edits budgets.json"
-export HEAD_SHA=$(git rev-parse HEAD)
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 tab=$'\t'
@@ -94,13 +99,13 @@ case_() { # desc want-stdout runs artifacts [extra env...]
   echo "ok: $desc"
 }
 
-# The PR branched at m2 (merge-base of m3 and the PR head): m3's run is newer
-# but is not an ancestor of the target, so it must be skipped.
+# The PR was measured against m2: m3's run is newer but is not an ancestor of
+# the target, so it must be skipped.
 runs="103${tab}${m3}${tab}completed\n102${tab}${m2}${tab}completed\n101${tab}${m1}${tab}completed\n"
-case_ "the run of the merge-base is used, not a newer one" main "$runs" "103\n102\n101\n"
+case_ "the run of the target is used, not a newer one" main "$runs" "103\n102\n101\n"
 [ "$(jq -r .run "$OUT_DIR/baseline.json")" = 102 ] || fail "wrong run downloaded: $(cat "$OUT_DIR/baseline.json")"
 
-case_ "the newest ancestor is used when the merge-base has no run" main \
+case_ "the newest ancestor is used when the target has no run" main \
   "103${tab}${m3}${tab}completed\n101${tab}${m1}${tab}completed\n" "103\n101\n"
 [ "$(jq -r .run "$OUT_DIR/baseline.json")" = 101 ] || fail "wrong run downloaded"
 
@@ -114,18 +119,23 @@ case_ "runs unknown to the checkout are skipped" main \
   "104${tab}0000000000000000000000000000000000000001${tab}completed\n101${tab}${m1}${tab}completed\n" "104\n101\n"
 [ "$(jq -r .run "$OUT_DIR/baseline.json")" = 101 ] || fail "wrong run downloaded"
 
-# Falls back to the committed file of the base, never the PR's copy.
-case_ "no measurement falls back to the base's budgets.json" committed "" ""
+# The committed file is the fallback only while main has never recorded one.
+case_ "no measurement ever falls back to the base's budgets.json" committed "" ""
 grep -q committed "$OUT_DIR/baseline.json" || fail "fallback is not the base's file: $(cat "$OUT_DIR/baseline.json")"
-case_ "only newer runs: fallback" committed "103${tab}${m3}${tab}completed\n" "103\n"
-case_ "nothing in the artifacts: fallback" committed "$runs" ""
+case_ "runs without any artifact fall back" committed "$runs" ""
 case_ "fallback without a budgets file fails" fail "" "" FALLBACK_PATH=nope.json
+# Once main has measurements, a missing one for the target fails closed.
+case_ "only newer measurements: fails closed" fail "103${tab}${m3}${tab}completed\n" "103\n"
+grep -q "no main measurement at or before ${m2:0:12}" "$tmp/stderr" || fail "unclear message: $(cat "$tmp/stderr")"
+case_ "expired measurement: fails with the reason" fail "$runs" "102:expired\n"
+grep -q "has expired" "$tmp/stderr" || fail "unclear message: $(cat "$tmp/stderr")"
+grep -q "merge main" "$tmp/stderr" || fail "no advice: $(cat "$tmp/stderr")"
 
 # Summary notes say which baseline was used.
 summary="$tmp/summary.md"
 rm -f "$summary"
 case_ "summary names the main baseline" main "$runs" "102\n" GITHUB_STEP_SUMMARY="$summary"
-grep -q "measurement of main at ${m2:0:12}, where this PR branched" "$summary" || fail "summary: $(cat "$summary")"
+grep -q "measurement of main at ${m2:0:12}, the commit this was measured against" "$summary" || fail "summary: $(cat "$summary")"
 rm -f "$summary"
 case_ "summary names the older main baseline" main "101${tab}${m1}${tab}completed\n" "101\n" GITHUB_STEP_SUMMARY="$summary"
 grep -q "newest one before ${m2:0:12}" "$summary" || fail "summary: $(cat "$summary")"
@@ -133,8 +143,8 @@ rm -f "$summary"
 case_ "summary warns about the fallback" committed "" "" GITHUB_STEP_SUMMARY="$summary"
 grep -q "can be stale" "$summary" || fail "summary: $(cat "$summary")"
 
-# The merge-base's own run is still going: it is waited for, then used; past
-# the deadline an older ancestor is used instead.
+# The target's own run is still going: it is waited for, then used. Past the
+# deadline the job fails rather than silently using an older measurement.
 pending="102${tab}${m2}${tab}in_progress\n101${tab}${m1}${tab}completed\n"
 printf '%b' "$pending" > "$FAKE_RUNS_FILE"
 printf '101\n' > "$FAKE_ARTIFACTS_FILE"
@@ -143,10 +153,22 @@ got=$(FAKE_FINISH_RUN=102 WAIT_SECS=60 bash "$script" 2>/dev/null)
 [ "$got" = main ] || fail "wait: got '$got'"
 [ "$(jq -r .run "$OUT_DIR/baseline.json")" = 102 ] || fail "wait: did not use the awaited run"
 [ -f "$FAKE_SLEEPS" ] || fail "wait: never slept"
-echo "ok: waits for the merge-base's run"
-case_ "gives up waiting and uses an older ancestor" main "$pending" "101\n"
-[ "$(jq -r .run "$OUT_DIR/baseline.json")" = 101 ] || fail "wrong run downloaded"
+echo "ok: waits for the target's run"
+case_ "gives up waiting and fails" fail "$pending" "101\n"
+grep -q "has not finished" "$tmp/stderr" || fail "unclear message: $(cat "$tmp/stderr")"
 [ ! -f "$FAKE_SLEEPS" ] || fail "WAIT_SECS=0 must not sleep"
+# A finished run without the artifact (nothing measured) is skipped, not awaited.
+case_ "a completed run without the artifact is skipped" main \
+  "102${tab}${m2}${tab}completed\n101${tab}${m1}${tab}completed\n" "101\n"
+
+# The target comes from a file the measurement recorded.
+echo "$m2" > "$tmp/measured-base-sha"
+case_ "target read from a file" main "$runs" "102\n" TARGET_SHA= TARGET_SHA_FILE="$tmp/measured-base-sha"
+[ "$(jq -r .run "$OUT_DIR/baseline.json")" = 102 ] || fail "wrong run downloaded"
+case_ "missing target file fails" fail "$runs" "102\n" TARGET_SHA= TARGET_SHA_FILE="$tmp/none"
+echo "not-a-sha" > "$tmp/bad-sha"
+case_ "malformed target fails" fail "$runs" "102\n" TARGET_SHA= TARGET_SHA_FILE="$tmp/bad-sha"
+case_ "no target fails" fail "$runs" "102\n" TARGET_SHA=
 
 # Inputs are validated.
 case_ "missing input fails" fail "$runs" "102\n" BASE_SHA=

@@ -8,10 +8,11 @@
 //! (`UNSAFE_APPROVED=1`, label `unsafe-reviewed`). The clean build time is
 //! reported but never gated (shared runners are too noisy for a 5% rule).
 //!
-//! CI splits the work in two: `ci.yml` measures (`--measure-only`, uploads
-//! `budgets-current.json`; on every push to main as artifact `budgets-main`)
+//! CI splits the work in two: `ci.yml` measures a pull request (`--measure-only`,
+//! uploads `budgets-current.json`) and `main-measure.yml` every push to main
+//! (artifact `budgets-main`),
 //! and the label-aware gate in `pr-policy.yml` compares a pull request's
-//! measurement with the main measurement it branched from
+//! measurement with the main measurement for the commit it was built on
 //! (`--compare FILE --baseline MAIN_FILE`), so adding an approval label
 //! re-runs only the cheap gate and a PR is gated only on the growth it adds.
 //! Without `--baseline` the baseline is the committed `budgets.json`, a

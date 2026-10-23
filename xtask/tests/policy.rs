@@ -142,14 +142,40 @@ fn ci_policy_wiring() {
     for needle in [
         "  budgets-measure:\n",
         "cargo xtask budgets --build-time --measure-only",
-        "'budgets-main' || 'budgets-current'",
-        "retention-days: ${{ github.event_name == 'push' && 90 || 14 }}",
-        // Pushes to main are measured too, and never cancelled by a later push.
-        "github.event_name == 'pull_request' || github.event_name == 'push'",
-        "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+        "name: budgets-current",
+        // The commit the measurement was built on, for the baseline selection.
+        "git rev-parse HEAD^1 > target/measured-base-sha",
+        // Main is measured by main-measure.yml, so ci.yml builds no wheels there.
+        "github.event_name != 'push'",
     ] {
         assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
     }
+    assert!(
+        ci.contains(
+            "if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'"
+        ),
+        "budgets-measure is for pull requests"
+    );
+    // Main measurement: every commit, never cancelled, 90 days.
+    let main_measure = read(".github/workflows/main-measure.yml");
+    for needle in [
+        "branches: [main]",
+        "group: main-measure-${{ github.sha }}",
+        "cancel-in-progress: false",
+        "cargo xtask budgets --build-time --measure-only",
+        "name: budgets-main",
+        "retention-days: 90",
+        "uses: $/.github/workflows/wheels.yml",
+        "actions: read",
+        // The drift report never fails the run.
+        "continue-on-error: true",
+    ] {
+        assert!(
+            main_measure.contains(needle),
+            "main-measure.yml lacks {needle:?}"
+        );
+    }
+    assert!(!main_measure.contains("pull_request"));
     for label in ["budget-approved", "unsafe-reviewed", "size-approved"] {
         assert!(
             !ci.contains(&format!("approval-label.sh {label}")),
@@ -177,7 +203,7 @@ fn ci_policy_wiring() {
     );
     let select = read(".github/scripts/main-baseline.sh");
     for needle in [
-        "git merge-base \"$BASE_SHA\" \"$HEAD_SHA\"",
+        "TARGET_SHA_FILE",
         "git show \"$BASE_SHA:$fallback_path\"",
         "--event push",
         "--branch \"$branch\"",
@@ -193,6 +219,28 @@ fn ci_policy_wiring() {
         ("wheel-sizes", &policy[wheels_at..]),
     ] {
         assert!(body.contains("fetch-depth: 0"), "{job} needs full history");
+        // The gate runs the base commit's scripts and xtask, never the PR's:
+        // the only checkout is of the base sha, before anything is executed.
+        assert_eq!(
+            body.matches("actions/checkout@").count(),
+            1,
+            "{job} has one checkout"
+        );
+        let checkout = body.find("actions/checkout@").unwrap();
+        let first_run = body.find("run:").unwrap();
+        assert!(checkout < first_run);
+        assert!(
+            body[checkout..first_run].contains("ref: ${{ github.event.pull_request.base.sha }}"),
+            "{job} must check out the base commit, not the pull request"
+        );
+        assert!(
+            !body.contains("head.ref") && !body.contains("refs/pull/"),
+            "{job} must not check out or run pull request code"
+        );
+        assert!(
+            body.contains("TARGET_SHA_FILE"),
+            "{job} selects by the measured base"
+        );
         assert!(body.contains("actions: read"), "{job} needs actions: read");
         assert!(!body.contains("actions: write") && !body.contains("contents: write"));
     }
@@ -216,7 +264,13 @@ fn ci_policy_wiring() {
         "cargo xtask wheel-sizes dist --measure-only",
         "'wheel-sizes-main' || 'wheel-sizes'",
         "retention-days: ${{ github.event_name == 'push' && 90 || 14 }}",
-        "if: github.event_name != 'pull_request' && github.event_name != 'push'",
+        "git rev-parse HEAD^1 > \"$RUNNER_TEMP/wheel-sizes/measured-base-sha\"",
+        // Nightly and manual runs are gated on main's measurement; a push
+        // only reports the drift.
+        "WORKFLOW: main-measure.yml",
+        "git merge-base HEAD origin/main",
+        "continue-on-error: ${{ github.event_name == 'push' }}",
+        "actions: read",
     ] {
         assert!(wheels.contains(needle), "wheels.yml lacks {needle:?}");
     }

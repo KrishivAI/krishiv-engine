@@ -57,7 +57,7 @@ they need user approval; pushes use `git push -u origin p<n>/<branch>`.
 
 ## Layout
 - `crates/` — the workspace (layers below). `xtask/` — repo tooling. `.github/workflows/` — ci, nightly-bench, compat.
-- `deny.toml`, `budgets.json`, `renovate.json` — dependency and size gates. `budgets.json` is a reference record (and the fallback when main has no measurement); the authoritative baseline is the measurement CI makes on every push to main (`budgets-main`, `wheel-sizes-main` artifacts), picked by `.github/scripts/main-baseline.sh`. A PR's own `budgets.json` is never read by the gate.
+- `deny.toml`, `budgets.json`, `renovate.json` — dependency and size gates. `budgets.json` is a reference record (and the fallback when main has no measurement); the authoritative baseline is the measurement CI makes on every push to main (`main-measure.yml`: `budgets-main`, `wheel-sizes-main` artifacts), picked by `.github/scripts/main-baseline.sh`. A PR's own `budgets.json` is never read by the gate.
 - `bench/` (uv harness; baselines in `bench/baselines/`, see `bench/README.md`), `tests/` (`spark-golden/` vendored
   Spark goldens + Krishiv-authored goldens, `fixtures/spark-<ver>/` hash fixtures, `sqllogictest/`, `scripts/`),
   `python/` (maturin package), `ui/` (Svelte source; built assets are committed in `crates/krishiv-ui-assets`).

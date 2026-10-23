@@ -6,13 +6,9 @@ on:
   push:
     branches: [main]
 
-# Pushes to main are neither cancelled nor merged into one another: each
-# commit's run keeps its budget and wheel-size measurements, which pull
-# requests are compared against (pr-policy.yml). A pull request's older run is
-# still cancelled by its next push.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -37,8 +33,8 @@ env:
 # - Label changes do not start this workflow (a relabel would cancel and rebuild
 #   the whole run). Only the label-dependent jobs react to labels, in
 #   pr-policy.yml: `policy` (size cap) and `budgets` (the gate for the
-#   measurement made by `budgets-measure` here, compared with the measurement
-#   this workflow made on main for the commit the PR branched from).
+#   measurement made by `budgets-measure` here, compared with the main
+#   measurement of main-measure.yml).
 # - Never use `pull_request_target` (enforced by `cargo xtask workflow-lint`).
 
 # Every third-party action is pinned to a full commit SHA (enforced by
@@ -466,20 +462,19 @@ jobs:
           CARGO_PROFILE_DEV_OVERFLOW_CHECKS: "false"
         run: cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi --locked
 
-  # Budget measurement (pull requests and pushes to main). This job only
-  # measures and uploads `budgets-current.json`; the label-aware gate
-  # (`budgets` in pr-policy.yml) compares a pull request's measurement with
-  # the one made here on main for the commit it branched from, so a PR is
-  # gated only on the growth it adds. That way adding the `budget-approved` or
-  # `unsafe-reviewed` label re-runs only the cheap gate, not this build. On a
-  # push to main the artifact is named `budgets-main` and kept 90 days. The
-  # job name and artifact names are read by .github/scripts/budgets-measurement.sh
-  # and main-baseline.sh; keep them in sync.
+  # Budget measurement (pull requests only). This job only measures and uploads
+  # `budgets-current.json`; the label-aware gate (`budgets` in pr-policy.yml)
+  # compares it with the measurement main-measure.yml made on main for the
+  # commit the PR was measured against (recorded next to it as
+  # `measured-base-sha`). That way adding the `budget-approved` or
+  # `unsafe-reviewed` label re-runs only the cheap gate, not this build. The
+  # job name and artifact name are read by .github/scripts/budgets-measurement.sh;
+  # keep them in sync.
   budgets-measure:
     needs: changes
-    if: (github.event_name == 'pull_request' || github.event_name == 'push') && needs.changes.outputs.rust == 'true'
+    if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    # The gate in pr-policy.yml waits up to 75 minutes for this job (queueing
+    # The gate in pr-policy.yml waits up to 70 minutes for this job (queueing
     # included); keep this limit below that.
     timeout-minutes: 45
     steps:
@@ -497,11 +492,16 @@ jobs:
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       # --build-time wipes its own target dir, so it measures a clean build.
       - run: cargo xtask budgets --build-time --measure-only
+      # The checkout is the PR's merge with the base branch; its first parent
+      # is the main commit this measurement is to be compared with.
+      - name: Record the main commit measured against
+        run: git rev-parse HEAD^1 > target/measured-base-sha
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ github.event_name == 'push' && 'budgets-main' || 'budgets-current' }}
-          path: target/budgets-current.json
-          retention-days: ${{ github.event_name == 'push' && 90 || 14 }}
+          name: budgets-current
+          path: |
+            target/budgets-current.json
+            target/measured-base-sha
           if-no-files-found: error
 
   # P2-T148: the Python wheels build and import. abi3 (CPython >= 3.11, one
@@ -630,11 +630,13 @@ jobs:
           path: dist/*.whl
 
   # P2-T103: every wheel target (wheels.yml), on PRs that can change them.
+  # Not on a push to main: main-measure.yml builds and measures the wheels there.
   wheels-targets:
     needs: changes
-    if: needs.changes.outputs.python == 'true'
+    if: needs.changes.outputs.python == 'true' && github.event_name != 'push'
     permissions:
       contents: read
+      actions: read
     uses: $/.github/workflows/wheels.yml
 
   # Required-check summary for the `wheels` matrix: a skipped matrix job reports
