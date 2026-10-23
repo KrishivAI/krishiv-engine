@@ -780,13 +780,17 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(21);
                 self.expr(count);
             }
+            PlanNode::Offset { offset, .. } => {
+                self.u8(22);
+                self.expr(offset);
+            }
             PlanNode::Window {
                 exprs,
                 partition_by,
                 order_by,
                 ..
             } => {
-                self.u8(22);
+                self.u8(23);
                 self.exprs(exprs);
                 self.exprs(partition_by);
                 self.orders(order_by);

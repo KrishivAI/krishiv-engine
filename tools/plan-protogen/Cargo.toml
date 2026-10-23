@@ -1,0 +1,18 @@
+# Generates the `krishiv.plan.v1` Rust types from proto/krishiv/plan/v1
+# (ADR 0003, P2-T173). A workspace of its own, like connect-protogen: protox
+# (a pure-Rust protobuf compiler, so no protoc anywhere) and prost-build stay
+# out of the product dependency graph. Run from the repository root:
+#   cargo run --locked --manifest-path tools/plan-protogen/Cargo.toml -- --write
+#   cargo run --locked --manifest-path tools/plan-protogen/Cargo.toml -- --check
+[package]
+name = "plan-protogen"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+prost-build = "0.14.4"
+protox = "0.9"
+
+[workspace]

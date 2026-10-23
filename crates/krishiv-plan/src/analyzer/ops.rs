@@ -7,10 +7,12 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     AmbiguousReference, AssignmentArityMismatch, DatatypeMismatchFilterNotBoolean,
-    FailedToParseTooComplex, GroupByPosAggregate, GroupByPosOutOfRange, InvalidWhereCondition,
-    JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy, OrderByPosOutOfRange,
-    StarGroupByPos, TableOrViewNotFound, UnresolvedUsingColumnForJoin,
-    UnsupportedFeatureLateralColumnAliasInAggregateFunc,
+    FailedToParseTooComplex, GroupByPosAggregate, GroupByPosOutOfRange,
+    InvalidLimitLikeExpressionDataType, InvalidLimitLikeExpressionIsNegative,
+    InvalidLimitLikeExpressionIsNull, InvalidLimitLikeExpressionIsUnfoldable,
+    InvalidWhereCondition, JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy,
+    OrderByPosOutOfRange, StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound,
+    UnresolvedUsingColumnForJoin, UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy,
 };
 
@@ -19,11 +21,11 @@ use super::catalog::quoted;
 use super::coerce::quoted_type;
 use super::exprs::{Bound, Cx, WindowUse, names, pretty, semantic_key};
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
-use super::{AnalysisError, ArgType, TableKind};
+use super::{AnalysisError, ArgType, Constant, TableKind};
 use crate::{
     AttrId, BoundColumn, CteRef, Expr, ExprNode, FunctionCall, FunctionKind, Grouping,
     JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanNode, ReadSource, ResolvedExpr,
-    Scan, SortOrder,
+    ResolvedFunction, Scan, SortOrder,
 };
 
 /// The two attributes of a `USING` column.
@@ -1367,6 +1369,116 @@ impl Resolver<'_> {
         Ok(self.make(origin, node, out, &[j]))
     }
 
+    /// A `LIMIT` (`offset` false) or `OFFSET` over `input`. Kept out of line:
+    /// `resolve` recurses per plan level.
+    #[inline(never)]
+    pub(super) fn limit_node(
+        &mut self,
+        p: &LogicalPlan,
+        input: &Arc<LogicalPlan>,
+        count: &Arc<Expr>,
+        offset: bool,
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let c = self.child(input, env)?;
+        let name = if offset { "offset" } else { "limit" };
+        let expr = self.limit_like(count, name, &c, env)?;
+        // `LIMIT l OFFSET o` is a limit over an offset; Spark bounds `l + o`.
+        if let (
+            false,
+            PlanNode::Offset { offset: below, .. },
+            ExprNode::Literal(Literal::Integer(l)),
+        ) = (offset, &c.plan.node, &expr.node)
+            && let ExprNode::Literal(Literal::Integer(o)) = &below.node
+            && i64::from(*l) + i64::from(*o) > i64::from(i32::MAX)
+        {
+            return Err(AnalysisError::new(
+                SumOfLimitAndOffsetExceedsMaxInt {
+                    limit: l.to_string(),
+                    offset: o.to_string(),
+                },
+                count.origin,
+            ));
+        }
+        let input = Arc::clone(&c.plan);
+        let node = if offset {
+            PlanNode::Offset {
+                input,
+                offset: expr,
+            }
+        } else {
+            PlanNode::Limit { input, limit: expr }
+        };
+        let mut r = self.make(p.origin, node, c.out.to_vec(), &[&c]);
+        r.widen = Some(Arc::new(Widen::Through { child: c }));
+        Ok(r)
+    }
+
+    /// The count of a `LIMIT` or `OFFSET` (`name`), checked as Spark does:
+    /// it must be a constant, an `INT`, not NULL and not negative.
+    pub(super) fn limit_like(
+        &mut self,
+        e: &Arc<Expr>,
+        name: &str,
+        input: &Rel,
+        env: &Arc<Env>,
+    ) -> Result<Arc<Expr>, AnalysisError> {
+        // Columns resolve against the input (so `OFFSET id` is "not
+        // constant", as in Spark, not an unresolved column).
+        let rels = [input];
+        let cx = Self::cx(
+            &input.out,
+            &rels,
+            env,
+            if name == "limit" { "Limit" } else { "Offset" },
+        );
+        let b = self.bind(e, &cx)?;
+        let shown = || format!("\"{}\"", pretty(&b.shown()));
+        if not_constant(&b.expr) {
+            return Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsUnfoldable {
+                    expr: shown(),
+                    name: name.to_owned(),
+                },
+                e.origin,
+            ));
+        }
+        if b.ty.data_type != Some(krishiv_types::DataType::Integer) {
+            return Err(AnalysisError::new(
+                InvalidLimitLikeExpressionDataType {
+                    expr: shown(),
+                    name: name.to_owned(),
+                    data_type: quoted_type(b.ty.data_type.as_ref()),
+                },
+                e.origin,
+            ));
+        }
+        match super::fold::constant(&b.expr, self.ctx.conf.ansi) {
+            Some(Constant::Null) => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsNull {
+                    expr: shown(),
+                    name: name.to_owned(),
+                },
+                e.origin,
+            )),
+            Some(Constant::Integral(v)) if v < 0 => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsNegative {
+                    expr: shown(),
+                    name: name.to_owned(),
+                    v: v.to_string(),
+                },
+                e.origin,
+            )),
+            // `CAST('3' AS INT)` and the like: the planner reads a literal.
+            Some(Constant::Integral(v)) if !matches!(b.expr.node, ExprNode::Literal(_)) => {
+                let v = i32::try_from(v)
+                    .map_err(|_| unsupported("a LIMIT or OFFSET out of range", e.origin))?;
+                Ok(Arc::new(Expr::literal(Literal::Integer(v))))
+            }
+            _ => Ok(b.expr),
+        }
+    }
+
     pub(super) fn sort(
         &mut self,
         p: &LogicalPlan,
@@ -1671,4 +1783,27 @@ fn aggregate_sql(e: &Arc<Expr>, scope: &[Attr]) -> String {
         x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
     }
     found.join(", ")
+}
+
+/// Whether `e` reads a column or calls a non-deterministic function, so it
+/// cannot be folded to a constant.
+fn not_constant(e: &Expr) -> bool {
+    if matches!(
+        &e.node,
+        // A subquery is not foldable, whatever it selects.
+        ExprNode::Subquery { .. }
+            | ExprNode::Resolved(
+                ResolvedExpr::Column(_)
+                    | ResolvedExpr::OuterColumn(_)
+                    | ResolvedExpr::Function(ResolvedFunction {
+                        deterministic: false,
+                        ..
+                    })
+            )
+    ) {
+        return true;
+    }
+    let mut found = false;
+    e.for_each_child(&mut |c| found = found || not_constant(c));
+    found
 }

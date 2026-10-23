@@ -83,6 +83,7 @@ impl Graph {
             PlanNode::Filter { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
+            | PlanNode::Offset { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::ReplicateRows { input, .. } => {
                 let mut need = req.clone();

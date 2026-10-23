@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_common::error::FailedToParseTooComplex;
-use krishiv_common::stack::{STEP, on_big_stack};
+use krishiv_common::stack::on_big_stack;
 
 use super::bind::{Bindings, addr, same, unsupported};
 use super::exprs::{Bound, Cx};
@@ -15,6 +15,18 @@ use crate::{
     AttrId, BoundColumn, Cte, Expr, ExprNode, LogicalPlan, Origin, Plan, PlanId, PlanNode,
     ReadSource,
 };
+
+/// Relations resolved on the caller's stack before hopping to a fresh one.
+///
+/// Each nesting level keeps the frames of `rel`, `rel_on_stack`, `node`,
+/// the operator helper, `bind`, `expr` and `expr_node` alive at once, and
+/// debug and coverage-instrumented builds inflate those frames well past
+/// their release size: 64 levels overflow a 2 MiB stack in debug builds and
+/// abort under `cargo llvm-cov`. Hopping every 16 levels keeps at most 16
+/// levels on the caller's stack; deeper levels run on fresh 64 MiB
+/// segments. The test thread stays at 2 MiB, so deep plans are still proven
+/// to resolve on a small stack.
+const RESOLVE_STEP: usize = 16;
 
 /// An attribute in scope: the column, its qualifier and, for a table
 /// column, the securable it belongs to and its catalog name.
@@ -285,15 +297,15 @@ impl Resolver<'_> {
             .unwrap_or_else(|| Arc::clone(p))
     }
 
-    /// Resolves the relation `root` in `env`, every `STEP` nested calls on
-    /// a fresh stack.
+    /// Resolves the relation `root` in `env`, every [`RESOLVE_STEP`]
+    /// nested calls on a fresh stack.
     pub(super) fn rel(
         &mut self,
         root: &Arc<LogicalPlan>,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         self.depth += 1;
-        let r = if self.depth.is_multiple_of(STEP) {
+        let r = if self.depth.is_multiple_of(RESOLVE_STEP) {
             on_big_stack(|| self.rel_on_stack(root, env))
                 .unwrap_or_else(|| Err(AnalysisError::new(FailedToParseTooComplex {}, root.origin)))
         } else {
@@ -508,6 +520,10 @@ impl Resolver<'_> {
                 op,
                 all,
             } => self.set_op(p, left, right, *op, *all, env),
+            PlanNode::WithColumns { input, columns } => self.with_columns(p, input, columns, env),
+            PlanNode::Limit { input, limit } => self.limit_node(p, input, limit, false, env),
+            PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
+            PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
             PlanNode::Distinct { input } => self.distinct(p, input, env),
             PlanNode::Window {
                 input,
@@ -594,63 +610,6 @@ impl Resolver<'_> {
                 }
                 self.shifted(&c, *offset, Some(Arc::clone(p)))
             }
-            PlanNode::WithColumns { input, columns } => {
-                let c = self.child(input, env)?;
-                let rels = [&c];
-                let mut cx = Self::cx(&c.out, &rels, env, "Project");
-                cx.windows = super::exprs::WindowUse::Allowed;
-                let mut news: Vec<(String, Bound)> = Vec::new();
-                for (name, e) in columns {
-                    news.push((name.clone(), self.bind(e, &cx)?));
-                }
-                let cs = self.ctx.conf.case_sensitive;
-                let mut exprs = Vec::new();
-                let mut taken = HashSet::new();
-                for a in c.out.iter() {
-                    match news.iter().rposition(|(n, _)| same(n, &a.col.name, cs)) {
-                        Some(i) => {
-                            taken.insert(i);
-                            exprs.push(Arc::new(Expr::new(ExprNode::Alias {
-                                expr: Arc::clone(&news[i].1.expr),
-                                name: news[i].0.clone(),
-                            })));
-                        }
-                        None => exprs.push(col_expr(&a.col, Origin::UNKNOWN)),
-                    }
-                }
-                for (i, (name, b)) in news.iter().enumerate() {
-                    let later = news[i + 1..].iter().any(|(n, _)| same(n, name, cs));
-                    if !taken.contains(&i) && !later {
-                        exprs.push(Arc::new(Expr::new(ExprNode::Alias {
-                            expr: Arc::clone(&b.expr),
-                            name: name.clone(),
-                        })));
-                    }
-                }
-                self.project_items(p, &c, &exprs, env)
-            }
-            PlanNode::Limit { input, limit } => {
-                let c = self.child(input, env)?;
-                let cx = Self::cx(&[], &[], env, "Limit");
-                let b = self.bind(limit, &cx)?;
-                if b.ty.data_type != Some(krishiv_types::DataType::Integer) {
-                    return Err(AnalysisError::new(
-                        krishiv_common::error::InvalidLimitLikeExpressionDataType {
-                            expr: format!("\"{}\"", super::exprs::pretty(&b.shown())),
-                            name: "limit".to_owned(),
-                            data_type: super::coerce::quoted_type(b.ty.data_type.as_ref()),
-                        },
-                        limit.origin,
-                    ));
-                }
-                let node = PlanNode::Limit {
-                    input: Arc::clone(&c.plan),
-                    limit: b.expr,
-                };
-                let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
-                r.widen = Some(Arc::new(Widen::Through { child: c }));
-                Ok(r)
-            }
             PlanNode::ReplicateRows { input, count } => {
                 let c = self.child(input, env)?;
                 let rels = [&c];
@@ -671,36 +630,93 @@ impl Resolver<'_> {
                 r.widen = Some(Arc::new(Widen::Through { child: c }));
                 Ok(r)
             }
-            PlanNode::WithCte { input, ctes } => {
-                let mut visible = env.ctes.clone();
-                let mut scope = env.ctes_id;
-                let mut defs = Vec::new();
-                let mut rels = Vec::new();
-                for c in ctes {
-                    let e = self.env(visible.clone(), scope, env.outer.clone());
-                    let r = self.rel(&c.plan, &e)?;
-                    defs.push(Cte {
-                        name: c.name.clone(),
-                        plan: Arc::clone(&r.plan),
-                    });
-                    visible.push((c.name.clone(), r.clone()));
-                    scope = self.ctes_id();
-                    rels.push(r);
-                }
-                let e = self.env(visible, scope, env.outer.clone());
-                let i = self.rel(input, &e)?;
-                let node = PlanNode::WithCte {
-                    input: Arc::clone(&i.plan),
-                    ctes: defs,
-                };
-                let mut kids: Vec<&Rel> = rels.iter().collect();
-                kids.push(&i);
-                let mut r = self.make(o, node, i.out.to_vec(), &kids);
-                r.carriers = Arc::clone(&i.carriers);
-                Ok(r)
-            }
-
             _ => Err(unsupported("a plan shape", o)),
         }
+    }
+
+    /// A `WithColumns` as Spark resolves it: replaced columns keep their
+    /// place, new ones are appended. Out of line: it keeps the recursive
+    /// `node` frame small (deep plans resolve on a small stack).
+    #[inline(never)]
+    fn with_columns(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        columns: &[(String, Arc<Expr>)],
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let c = self.child(input, env)?;
+        let rels = [&c];
+        let mut cx = Self::cx(&c.out, &rels, env, "Project");
+        cx.windows = super::exprs::WindowUse::Allowed;
+        let mut news: Vec<(String, Bound)> = Vec::new();
+        for (name, e) in columns {
+            news.push((name.clone(), self.bind(e, &cx)?));
+        }
+        let cs = self.ctx.conf.case_sensitive;
+        let mut exprs = Vec::new();
+        let mut taken = HashSet::new();
+        for a in c.out.iter() {
+            match news.iter().rposition(|(n, _)| same(n, &a.col.name, cs)) {
+                Some(i) => {
+                    taken.insert(i);
+                    exprs.push(Arc::new(Expr::new(ExprNode::Alias {
+                        expr: Arc::clone(&news[i].1.expr),
+                        name: news[i].0.clone(),
+                    })));
+                }
+                None => exprs.push(col_expr(&a.col, Origin::UNKNOWN)),
+            }
+        }
+        for (i, (name, b)) in news.iter().enumerate() {
+            let later = news[i + 1..].iter().any(|(n, _)| same(n, name, cs));
+            if !taken.contains(&i) && !later {
+                exprs.push(Arc::new(Expr::new(ExprNode::Alias {
+                    expr: Arc::clone(&b.expr),
+                    name: name.clone(),
+                })));
+            }
+        }
+        self.project_items(p, &c, &exprs, env)
+    }
+
+    /// The CTE definitions resolved in turn, then the input over them. Out
+    /// of line: it keeps the recursive `node` frame small (deep plans
+    /// resolve on a small stack).
+    #[inline(never)]
+    fn with_cte(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        ctes: &[Cte],
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let o = p.origin;
+        let mut visible = env.ctes.clone();
+        let mut scope = env.ctes_id;
+        let mut defs = Vec::new();
+        let mut rels = Vec::new();
+        for c in ctes {
+            let e = self.env(visible.clone(), scope, env.outer.clone());
+            let r = self.rel(&c.plan, &e)?;
+            defs.push(Cte {
+                name: c.name.clone(),
+                plan: Arc::clone(&r.plan),
+            });
+            visible.push((c.name.clone(), r.clone()));
+            scope = self.ctes_id();
+            rels.push(r);
+        }
+        let e = self.env(visible, scope, env.outer.clone());
+        let i = self.rel(input, &e)?;
+        let node = PlanNode::WithCte {
+            input: Arc::clone(&i.plan),
+            ctes: defs,
+        };
+        let mut kids: Vec<&Rel> = rels.iter().collect();
+        kids.push(&i);
+        let mut r = self.make(o, node, i.out.to_vec(), &kids);
+        r.carriers = Arc::clone(&i.carriers);
+        Ok(r)
     }
 }

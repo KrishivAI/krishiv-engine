@@ -251,6 +251,7 @@ impl Display for NodeLine<'_> {
                 f.write_str("]")
             }
             PlanNode::Limit { limit, .. } => write!(f, "Limit {}", Text(limit)),
+            PlanNode::Offset { offset, .. } => write!(f, "Offset {}", Text(offset)),
             PlanNode::SubqueryAlias { alias, columns, .. } => {
                 write!(f, "SubqueryAlias {}", Name(std::slice::from_ref(alias)))?;
                 if columns.is_empty() {

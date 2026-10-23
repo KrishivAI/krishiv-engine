@@ -79,7 +79,6 @@ fn reject_organization(q: &Query) -> R<()> {
     for (present, what) in [
         (!q.cluster_by.is_empty(), "CLUSTER BY"),
         (!q.distribute_by.is_empty(), "DISTRIBUTE BY"),
-        (q.offset.is_some(), "OFFSET"),
     ] {
         if present {
             return Err(unsupported(what, q.span));
@@ -399,7 +398,7 @@ impl Lowerer {
         })
     }
 
-    /// `ORDER BY`, `SORT BY` and `LIMIT` of `q` over `plan`.
+    /// `ORDER BY`, `SORT BY`, `OFFSET` and `LIMIT` of `q` over `plan`.
     fn organize(&mut self, mut plan: LogicalPlan, q: &Query) -> R<LogicalPlan> {
         for (items, global) in [(&q.order_by, true), (&q.sort_by, false)] {
             if !items.is_empty() {
@@ -415,6 +414,17 @@ impl Lowerer {
                     span,
                 );
             }
+        }
+        // `LIMIT n OFFSET m` skips `m` rows, then keeps `n`.
+        if let Some(offset) = &q.offset {
+            let offset_expr = arc(self.expr(offset)?);
+            plan = self.node(
+                PlanNode::Offset {
+                    input: arc(plan),
+                    offset: offset_expr,
+                },
+                offset.span,
+            );
         }
         if let Some(limit) = &q.limit
             && let Some(v) = &limit.value

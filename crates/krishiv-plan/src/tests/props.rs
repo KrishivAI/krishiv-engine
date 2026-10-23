@@ -334,7 +334,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 22 };
+        let kinds = if depth == 0 { 4 } else { 23 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -458,7 +458,11 @@ impl Gen<'_> {
                 input: self.input(d),
                 count: Arc::new(self.expr(1)),
             },
-            21 => PlanNode::Window {
+            21 => PlanNode::Offset {
+                input: self.input(d),
+                offset: Arc::new(self.expr(1)),
+            },
+            22 => PlanNode::Window {
                 input: self.input(d),
                 exprs: self.exprs(),
                 partition_by: self.exprs(),
@@ -907,6 +911,7 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             predicate: e,
         }
         | PlanNode::Limit { input, limit: e }
+        | PlanNode::Offset { input, offset: e }
         | PlanNode::ReplicateRows { input, count: e } => m_expr(e, w) || m_plan(input, w),
         PlanNode::SetOp {
             left,
