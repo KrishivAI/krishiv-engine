@@ -704,3 +704,25 @@ def test_type_reprs_and_json_values() -> None:
     assert repr(T.MapType(T.StringType(), T.IntegerType(), False)) == ("MapType(StringType(), IntegerType(), False)")
     assert T.VarcharType(10).jsonValue() == "varchar(10)"
     assert T._parse_datatype_json_string('"char(3)"') == T.CharType(3)
+
+
+def test_create_aware_timestamp_and_no_pandas(spark: SparkSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    aware = datetime.datetime(2020, 1, 1, 12, 0, tzinfo=datetime.UTC)
+    naive = datetime.datetime(2020, 1, 1, 12, 0)
+    assert (
+        spark.createDataFrame([(aware,)], "t timestamp").collect()
+        == spark.createDataFrame([(naive,)], "t timestamp").collect()
+    )
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "pandas":
+            raise ImportError("no pandas here")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    from krishiv.sql.session import _is_pandas
+
+    assert _is_pandas(object()) is False
