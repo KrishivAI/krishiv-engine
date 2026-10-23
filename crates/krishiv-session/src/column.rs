@@ -411,27 +411,21 @@ mod tests {
     #[test]
     fn try_cast_uses_try_mode() {
         let c = Column::from("a").try_cast(DataType::Long);
-        assert!(
-            matches!(
-                &c.expr.node,
-                ExprNode::Cast {
-                    mode: CastMode::Try,
-                    ..
-                }
-            ),
-            "try_cast builds a TRY_CAST, not a plain CAST: {c:?}"
-        );
+        assert!(matches!(
+            &c.expr.node,
+            ExprNode::Cast {
+                mode: CastMode::Try,
+                ..
+            }
+        ));
         let c = Column::from("a").cast(DataType::Long);
-        assert!(
-            matches!(
-                &c.expr.node,
-                ExprNode::Cast {
-                    mode: CastMode::Default,
-                    ..
-                }
-            ),
-            "cast keeps the default (ANSI-pinned) mode: {c:?}"
-        );
+        assert!(matches!(
+            &c.expr.node,
+            ExprNode::Cast {
+                mode: CastMode::Default,
+                ..
+            }
+        ));
     }
 
     #[test]

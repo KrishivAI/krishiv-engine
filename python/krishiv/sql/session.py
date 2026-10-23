@@ -276,14 +276,9 @@ class SparkSession:
             from krishiv.errors import PySparkValueError
 
             raise PySparkValueError(errorClass="CANNOT_INFER_EMPTY_SCHEMA")
-        dicts = []
-        for row in rows:
-            values = _row_values(row, list(names), len(names), Row)
-            dicts.append(dict(zip(names, values, strict=True)))
-        table = pa.Table.from_pylist(dicts)
-        if table.num_columns != len(names) or table.schema.names != list(names):
-            table = table.rename_columns(list(names))
-        return DataFrame(self._native.create_dataframe(table), self)
+        valued = [_row_values(row, list(names), len(names), Row) for row in rows]
+        arrays = [pa.array([v[i] for v in valued]) for i in range(len(names))]
+        return DataFrame(self._native.create_dataframe(pa.table(arrays, names=list(names))), self)
 
     def _explicit_schema(self, schema: Any) -> StructType:
         if isinstance(schema, StructType):

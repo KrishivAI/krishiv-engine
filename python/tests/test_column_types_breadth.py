@@ -633,3 +633,74 @@ def test_new_session(spark: SparkSession) -> None:
         assert other.catalog.tableExists("one") is False
     finally:
         spark.catalog.dropTempView("one")
+
+
+def test_create_pandas_schema_errors(spark: SparkSession) -> None:
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame({"a": [1, 2]})
+    with pytest.raises(errors.PySparkTypeError):
+        spark.createDataFrame(frame, ["a", "b"])
+    with pytest.raises(errors.PySparkTypeError):
+        spark.createDataFrame(frame, [1])
+    with pytest.raises(errors.PySparkValueError, match="CANNOT_INFER_EMPTY_SCHEMA"):
+        spark.createDataFrame([], ["a"])
+    with pytest.raises(errors.PySparkTypeError):
+        spark.createDataFrame([(1, 2)], [1])
+    with pytest.raises(ValueError, match="2 values, schema has 1"):
+        spark.createDataFrame([(1, 2)], ["a"])
+
+
+def test_create_wide_scalars(spark: SparkSession) -> None:
+    assert spark.createDataFrame([(1,)], "a byte").collect() == [Row(1)]
+    assert spark.createDataFrame([(1,)], "a short").collect() == [Row(1)]
+    assert spark.createDataFrame([(1.5,)], "a float").collect() == [Row(1.5)]
+    assert spark.createDataFrame([(1.5,)], "a double").collect() == [Row(1.5)]
+    assert spark.createDataFrame([(None,)], "a void").collect() == [Row(None)]
+    assert spark.createDataFrame(
+        [(datetime.datetime(2020, 1, 1, 12, 0, tzinfo=datetime.UTC),)], "t timestamp_ntz"
+    ).collect() == [Row(datetime.datetime(2020, 1, 1, 12, 0))]
+    assert spark.createDataFrame([(None,)], "t timestamp_ntz").collect() == [Row(None)]
+    with pytest.raises(errors.PySparkTypeError):
+        spark.catalog.tableExists(1)  # ty: ignore[invalid-argument-type]
+
+
+def test_ddl_errors() -> None:
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("`abc")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("a$")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("123")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("char x)")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("char(x)")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("`a`")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("array<int,")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("interval year to day")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("interval day to year")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("interval foo")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("a int b string")
+    with pytest.raises(errors.ParseException):
+        T.DataType.fromDDL("a int NOT")
+    assert T.DataType.fromDDL("a int NOT NULL") == T.StructType([T.StructField("a", T.IntegerType(), False)])
+    assert T.DataType.fromDDL("a int NULL") == T.StructType([T.StructField("a", T.IntegerType(), True)])
+    assert T.DataType.fromDDL("interval year") == T.YearMonthIntervalType(0)
+    assert T.DataType.fromDDL("struct<a:int>") == T.StructType([T.StructField("a", T.IntegerType(), True)])
+
+
+def test_type_reprs_and_json_values() -> None:
+    assert repr(T.DayTimeIntervalType()) == "DayTimeIntervalType(0, 3)"
+    assert repr(T.YearMonthIntervalType(1, 1)) == "YearMonthIntervalType(1, 1)"
+    assert repr(T.ArrayType(T.StringType(), False)) == "ArrayType(StringType(), False)"
+    assert repr(T.MapType(T.StringType(), T.IntegerType(), False)) == ("MapType(StringType(), IntegerType(), False)")
+    assert T.VarcharType(10).jsonValue() == "varchar(10)"
+    assert T._parse_datatype_json_string('"char(3)"') == T.CharType(3)

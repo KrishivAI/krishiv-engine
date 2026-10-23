@@ -621,26 +621,26 @@ def _parse_datatype_string(s: str) -> DataType:
     with ``:`` or a space between name and type)."""
     from krishiv.errors import ParseException
 
-    tokens = _ddl_tokens(s)
+    try:
+        tokens = _ddl_tokens(s)
+    except Exception as e:
+        raise ParseException(f"Syntax error at or near '{e}'") from None
     if not tokens:
         raise ParseException("[PARSE_EMPTY_STATEMENT] Empty DDL string")
     parser = _DdlParser(tokens)
-    first: DataType | None = None
+    # A field list (``a int, ...``), or a single type. Fields are tried
+    # first: a bare type word fails as a field name's type (``interval
+    # day ...`` fails as fields and parses as one type).
     try:
-        # A field list (``a int, ...``), or a single type. Fields are tried
-        # first: a bare type word fails as a field name's type (``interval
-        # day ...`` fails as fields and parses as one type).
         try:
             fields = parser.fields()
             parser.end()
             return StructType(fields)
         except ValueError:
             parser = _DdlParser(tokens)
-        first = parser.data_type()
+        data_type = parser.data_type()
         parser.end()
-        return first
-    except ParseException:
-        raise
+        return data_type
     except Exception as e:
         raise ParseException(f"Syntax error at or near '{e}'") from None
 
@@ -720,8 +720,6 @@ class _DdlParser:
                         raise ValueError(tok2 or "end of input")
                     self.next()
                     nullable = False
-            if not isinstance(data_type, DataType):  # never happens; data_type() raises first
-                raise ValueError(data_type)
             fields.append(StructField(name, data_type, nullable))
             if self.peek() == ",":
                 self.next()
