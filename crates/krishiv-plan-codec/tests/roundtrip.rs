@@ -282,11 +282,10 @@ fn an_offset_limit_needs_a_v3_reader() {
 fn a_window_needs_a_v4_reader() {
     // A `Window` node sets `min_reader_version` to 4: an older reader has
     // no such node. Plans without one stay readable by older readers.
-    assert_eq!(FORMAT_VERSION, 4);
     assert_eq!(message("window_ranking").min_reader_version, 4);
     assert_eq!(message("window_aggregates").min_reader_version, 4);
     for (name, plan) in cases() {
-        if !name.starts_with("window") {
+        if !name.starts_with("window") && !name.starts_with("expand") {
             let m = to_message(&plan).unwrap();
             assert!(m.min_reader_version <= 3, "{name} needs a newer reader");
         }
@@ -334,6 +333,75 @@ fn a_corrupt_window_is_refused() {
             w.functions[5].function = Some(pb::window_function_plan::Function::Ntile(0));
         }),
         "ntile with a bucket count below one",
+    );
+}
+
+#[test]
+fn an_expand_needs_a_v5_reader() {
+    // An `Expand` node (and the `NullOf` item inside it) sets
+    // `min_reader_version` to 5: an older reader has neither. Plans
+    // without one keep the older minimum, and a v4 reader still reads them.
+    assert_eq!(FORMAT_VERSION, 5);
+    for name in ["expand_rollup", "expand_single", "expand_subquery"] {
+        assert_eq!(message(name).min_reader_version, 5, "{name}");
+    }
+    for (name, plan) in cases() {
+        if !name.starts_with("expand") {
+            let m = to_message(&plan).unwrap();
+            assert!(m.min_reader_version <= 4, "{name} needs a newer reader");
+        }
+    }
+}
+
+#[test]
+fn an_expand_plan_survives_the_wire_with_every_field() {
+    for name in ["expand_rollup", "expand_single", "expand_subquery"] {
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+}
+
+#[test]
+fn a_loose_null_of_item_still_needs_a_v5_reader() {
+    let plan = plan_of(PhysNode::Project {
+        input: Box::new(PhysNode::OneRow),
+        layout: Vec::new(),
+        items: vec![krishiv_exec::physical::ProjectItemPlan::NullOf {
+            index: 0,
+            name: "x".to_owned(),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    });
+    assert_eq!(to_message(&plan).unwrap().min_reader_version, 5);
+    assert_eq!(round_trip(&plan), plan);
+}
+
+#[test]
+fn a_corrupt_expand_is_refused() {
+    use pb::node::Kind;
+    let edit = |f: &dyn Fn(&mut pb::ExpandNode)| {
+        let mut m = message("expand_rollup");
+        for node in &mut m.nodes {
+            if let Some(Kind::Expand(e)) = &mut node.kind {
+                f(e);
+            }
+        }
+        m
+    };
+    corrupt(
+        &edit(&|e| e.projections.clear()),
+        "an expand without a projection",
+    );
+    corrupt(
+        &edit(&|e| {
+            e.nullable.pop();
+        }),
+        "do not match the nullability",
+    );
+    corrupt(
+        &edit(&|e| e.projections[0].items[0].kind = None),
+        "a project item kind",
     );
 }
 
