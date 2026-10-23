@@ -40,7 +40,7 @@
 //!   that runs a fragment (design P2-T171, I5). On one worker each exchange
 //!   is lowered into the operators around it ([`instantiate`]).
 
-mod data;
+pub(crate) mod data;
 mod instantiate;
 
 use std::fmt;
@@ -65,6 +65,7 @@ use crate::error::Result;
 use crate::join::JoinType;
 use crate::operators::{FileWriteSink, RowStageSettings, SortKey};
 use crate::planner::ExplainNode;
+use crate::window::WindowPlan;
 
 /// A scan of a plan, numbered by the planner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -227,6 +228,16 @@ pub enum PhysNode {
         keys: Vec<SortKey>,
         /// The row count.
         limit: u64,
+    },
+    /// Window functions over `input`, which is sorted by the plan's
+    /// partitioning, then its ordering: the input's columns, then one per
+    /// function. Its state is one partition at a time: it requires
+    /// [`WindowPlan::required_distribution`] of its input.
+    Window {
+        /// The sorted input.
+        input: Box<PhysNode>,
+        /// Partitioning, ordering and functions.
+        window: WindowPlan,
     },
     /// A hash aggregate.
     Aggregate {
@@ -435,6 +446,7 @@ plan_data!(enum PhysNode {
     ReplicateRows { input, layout, count, subqueries },
     Sort { input, keys },
     TopN { input, keys, limit },
+    Window { input, window },
     Aggregate { input, aggregate },
     HashJoin(join),
     NestedLoopJoin(join),
@@ -483,6 +495,7 @@ impl PhysNode {
             Self::Limit { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
+            | Self::Window { input, .. }
             | Self::Aggregate { input, .. }
             | Self::WriteFiles { input } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
@@ -510,6 +523,7 @@ impl PhysNode {
             Self::Limit { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
+            | Self::Window { input, .. }
             | Self::Aggregate { input, .. }
             | Self::WriteFiles { input } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],

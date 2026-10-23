@@ -105,11 +105,44 @@ fn deny_toml_guards_object_store_coupling() {
     assert!(cargo.contains("object_store = { version = \"=0.14.2\""));
 }
 
+/// The text of the top-level job `name` of a workflow: from its key to the
+/// next job's key (or the end).
+fn job<'a>(workflow: &'a str, name: &str) -> &'a str {
+    let key = format!("\n  {name}:\n");
+    let start = workflow
+        .find(&key)
+        .unwrap_or_else(|| panic!("no job {name:?}"))
+        + 1;
+    let rest = &workflow[start..];
+    let end = rest
+        .match_indices('\n')
+        .map(|(i, _)| i + 1)
+        .find(|&i| {
+            let line = rest[i..].lines().next().unwrap_or_default();
+            line.starts_with("  ") && !line.starts_with("   ") && !line.starts_with("  #")
+        })
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
 #[test]
 fn ci_policy_wiring() {
     let ci = read(".github/workflows/ci.yml");
     for needle in ["cargo xtask changes", "cargo hack check --each-feature"] {
         assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
+    }
+    // The fuzz targets are built by their own job, on every Rust change.
+    let fuzz_build = job(&ci, "fuzz-build");
+    for needle in [
+        "    needs: changes\n",
+        "    if: needs.changes.outputs.rust == 'true'\n",
+        "        run: cargo \"+$NIGHTLY\" fuzz build --target x86_64-unknown-linux-gnu\n",
+    ] {
+        // Whole lines: a deeper-indented step-level `if:` or `run:` must not match.
+        assert!(
+            fuzz_build.lines().any(|line| line == needle.trim_end()),
+            "fuzz-build lacks {needle:?}"
+        );
     }
     // Label-dependent policy lives in its own workflow so label changes never
     // restart (and cancel) the full CI run; the job name is a required check.

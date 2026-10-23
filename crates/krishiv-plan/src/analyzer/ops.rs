@@ -19,7 +19,7 @@ use krishiv_common::error::{
 use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
-use super::exprs::{Bound, Cx, names, pretty, semantic_key};
+use super::exprs::{Bound, Cx, WindowUse, names, pretty, semantic_key};
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, Constant, TableKind};
 use crate::{
@@ -48,13 +48,14 @@ pub(super) fn column_bound(a: &Attr, origin: Origin) -> Bound {
             nullable: a.col.nullable,
         },
         agg: None,
+        win: None,
         outer: None,
         lateral: Vec::new(),
         shown: None,
     }
 }
 
-fn no_qual() -> Arc<[String]> {
+pub(super) fn no_qual() -> Arc<[String]> {
     Arc::from(Vec::new())
 }
 
@@ -248,6 +249,9 @@ impl Resolver<'_> {
         if items.iter().any(|b| b.agg.is_some()) {
             return self.build_aggregate(p.origin, c, Vec::new(), &items, true);
         }
+        if items.iter().any(|b| b.win.is_some()) {
+            return self.window_project(p.origin, c, &items, &[]);
+        }
         Ok(self.lateral_project(p.origin, c, &items, &[]))
     }
 
@@ -276,6 +280,7 @@ impl Resolver<'_> {
             let b = {
                 let mut cx = Self::cx(&c.out, &rels, env, op);
                 cx.lateral = lca.then_some(&lateral[..]);
+                cx.windows = WindowUse::Allowed;
                 self.bind(e, &cx)?
             };
             let b = self.named(b)?;
@@ -420,7 +425,22 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
-        if c.agg.is_some() {
+        // A `HAVING` over an aggregate with windows filters below them
+        // (Spark's `UnresolvedHaving`: it cannot name a window's alias). Only
+        // SQL has a `HAVING`: lowering stamps the filter with the span of
+        // its text, as every node it builds, and a DataFrame filter has a
+        // plan id and no span. A DataFrame filter, and any further filter,
+        // filters the output of the windows (checked against Spark 4.2.0:
+        // `df.filter(col("r") > 1)` over `... rank() OVER (...) AS r` works,
+        // `HAVING r > 1` is UNRESOLVED_COLUMN).
+        if let Some(info) = c.agg.clone()
+            && info.has_windows()
+            && info.having.is_none()
+            && p.origin.sql.is_some()
+        {
+            return self.having_below_windows(p, &info, predicate, env);
+        }
+        if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
             let (bounds, agg, extended) =
                 self.over_agg(&c, std::slice::from_ref(predicate), env, "Filter")?;
             boolean_filter(&bounds[0], p.origin)?;
@@ -492,6 +512,9 @@ impl Resolver<'_> {
         let rels = [c];
         let mut cx = Self::cx(&c.out, &rels, env, op);
         cx.lenient = lenient;
+        if op == "Filter" {
+            cx.windows = WindowUse::Where;
+        }
         // Without the enclosing queries when there is something below.
         let below = Self::below(c);
         let lookup = Self::below_of(c, true);
@@ -536,7 +559,7 @@ impl Resolver<'_> {
         }
         // The retry resolved a name only `below` holds: `missing` is not
         // empty.
-        Ok((bounds, self.widened(c, &missing)))
+        Ok((bounds, self.widened(c, &missing)?))
     }
 
     /// Binds each of `exprs` in `cx`.
@@ -585,7 +608,7 @@ impl Resolver<'_> {
 
     /// `r` outputting `missing` too (attributes [`Self::below`] found),
     /// each relation on the way down adding what the ones above need.
-    fn widened(&self, r: &Rel, missing: &[Attr]) -> Rel {
+    fn widened(&mut self, r: &Rel, missing: &[Attr]) -> Result<Rel, AnalysisError> {
         // Down: each relation, how it widens and what it must add.
         let mut path: Vec<(Rel, Arc<Widen>, Vec<Attr>)> = Vec::new();
         let mut cur = r.clone();
@@ -620,7 +643,7 @@ impl Resolver<'_> {
                             grown.out.push(a.clone());
                         }
                     }
-                    self.aggregate_rel(rel.plan.origin, grown, &need)
+                    self.aggregate_rel(rel.plan.origin, grown, &need)?
                 }
                 Widen::Project { input, exprs } => {
                     let input = built.take().unwrap_or_else(|| input.clone());
@@ -639,7 +662,7 @@ impl Resolver<'_> {
                 }
             });
         }
-        built.unwrap_or_else(|| r.clone())
+        Ok(built.unwrap_or_else(|| r.clone()))
     }
 
     /// Expressions over an aggregate (`HAVING`, `ORDER BY`): names resolve
@@ -648,7 +671,7 @@ impl Resolver<'_> {
     /// compute yet, and grouping attributes it does not output, are added
     /// to it (and passed up through the projections of lateral aliases
     /// above it); the flag says whether its output grew.
-    fn over_agg(
+    pub(super) fn over_agg(
         &mut self,
         agg: &Rel,
         exprs: &[Arc<Expr>],
@@ -662,6 +685,9 @@ impl Resolver<'_> {
         let mut cx = Self::cx(&agg.out, &rels, env, op);
         cx.extra = Some(&info.keys);
         cx.agg_scope = Some(&info.input.out);
+        if op == "Filter" {
+            cx.windows = WindowUse::Having;
+        }
         let mut bounds = Vec::new();
         for e in exprs {
             bounds.push(self.bind(e, &cx)?);
@@ -748,14 +774,20 @@ impl Resolver<'_> {
         if pass.is_empty() {
             return Ok((bounds, agg.clone(), false));
         }
-        let r = self.aggregate_rel(agg.plan.origin, grown, &pass);
+        let r = self.aggregate_rel(agg.plan.origin, grown, &pass)?;
         Ok((bounds, r, true))
     }
 
-    /// The aggregate of `info`, under the projections of its lateral
-    /// aliases if it has any; `pass` (attributes of the aggregate) are
-    /// output after the select items.
-    fn aggregate_rel(&self, origin: Origin, info: AggInfo, pass: &[Attr]) -> Rel {
+    /// The aggregate of `info`, under its `HAVING` (with windows), its
+    /// windows and the projections of its lateral aliases if it has any;
+    /// `pass` (attributes of the aggregate) are output after the select
+    /// items.
+    pub(super) fn aggregate_rel(
+        &mut self,
+        origin: Origin,
+        info: AggInfo,
+        pass: &[Attr],
+    ) -> Result<Rel, AnalysisError> {
         let node = PlanNode::Aggregate {
             input: Arc::clone(&info.input.plan),
             grouping: Grouping::GroupBy(info.grouping.clone()),
@@ -764,14 +796,27 @@ impl Resolver<'_> {
         let mut r = match &info.top {
             None => self.make(origin, node, info.out.clone(), &[&info.input]),
             Some(top) => {
-                let a = self.make(Origin::UNKNOWN, node, info.out.clone(), &[&info.input]);
-                self.lateral_project(origin, &a, top, pass)
+                let mut a = self.make(Origin::UNKNOWN, node, info.out.clone(), &[&info.input]);
+                if let Some(h) = &info.having {
+                    let f = PlanNode::Filter {
+                        input: Arc::clone(&a.plan),
+                        predicate: Arc::clone(h),
+                    };
+                    a = self.make(Origin::UNKNOWN, f, a.out.to_vec(), &[&a]);
+                }
+                if info.has_windows() {
+                    self.window_project(origin, &a, top, pass)?
+                } else {
+                    self.lateral_project(origin, &a, top, pass)
+                }
             }
         };
         let info = Arc::new(info);
+        // A column the select list dropped comes back from the aggregate
+        // (rebuilt with its windows and projections above it).
         r.widen = Some(Arc::new(Widen::Aggregate(Arc::clone(&info))));
         r.agg = Some(info);
-        r
+        Ok(r)
     }
 
     pub(super) fn aggregate(
@@ -822,8 +867,11 @@ impl Resolver<'_> {
                 *slot = Some(self.bind(k, &cx)?);
             }
         }
-        let group = group.into_iter().flatten().collect();
-        self.build_aggregate(p.origin, &c, group, &items, false)
+        let group: Vec<Bound> = group.into_iter().flatten().collect();
+        // No grouping (`HAVING` without `GROUP BY`): Spark's
+        // `MISSING_GROUP_BY` for an ungrouped column.
+        let global = group.is_empty();
+        self.build_aggregate(p.origin, &c, group, &items, global)
     }
 
     /// `GROUP BY n`: the `n`-th select item, unaliased.
@@ -847,6 +895,9 @@ impl Resolver<'_> {
             ));
         };
         let item = &items[i - 1];
+        if item.win.is_some() {
+            return Err(super::windows::misplaced(WindowUse::Other, item, origin));
+        }
         if !item.lateral.is_empty() {
             return Err(AnalysisError::new(
                 UnsupportedFeatureLateralColumnAliasInGroupBy {},
@@ -894,9 +945,11 @@ impl Resolver<'_> {
             .map(|b| (semantic_key(&b.expr, &mut memo), b.ty.clone()))
             .collect();
         let key_set: HashSet<u128> = gkeys.iter().map(|(k, _)| *k).collect();
+        // Items with lateral aliases or windows are computed above the
+        // aggregate, over its output.
         let base: Vec<Bound> = items
             .iter()
-            .filter(|b| b.lateral.is_empty())
+            .filter(|b| b.lateral.is_empty() && b.win.is_none())
             .cloned()
             .collect();
         self.check_aggregation(&base, &key_set, &mut memo, origin, global)?;
@@ -916,9 +969,10 @@ impl Resolver<'_> {
             out: base.iter().map(|b| out_attr(b, &c.out)).collect(),
             keys,
             top: None,
+            having: None,
         };
         if base.len() == items.len() {
-            return Ok(self.aggregate_rel(origin, info, &[]));
+            return self.aggregate_rel(origin, info, &[]);
         }
         for b in items.iter().filter(|b| !b.lateral.is_empty()) {
             in_aggregate_call(b)?;
@@ -926,7 +980,7 @@ impl Resolver<'_> {
         let lateral: HashSet<AttrId> = items.iter().filter_map(|b| alias_id(&b.expr)).collect();
         let mut top = Vec::new();
         for b in items {
-            if b.lateral.is_empty() {
+            if b.lateral.is_empty() && b.win.is_none() {
                 let a = out_attr(b, &c.out);
                 top.push(Bound {
                     expr: col_expr(&a.col, b.expr.origin),
@@ -938,7 +992,7 @@ impl Resolver<'_> {
             top.push(Bound { expr, ..b.clone() });
         }
         info.top = Some(top.into());
-        Ok(self.aggregate_rel(origin, info, &[]))
+        self.aggregate_rel(origin, info, &[])
     }
 
     /// A select item that reads lateral aliases, bound over the
@@ -960,81 +1014,101 @@ impl Resolver<'_> {
         global: bool,
         origin: Origin,
     ) -> Result<Arc<Expr>, AnalysisError> {
-        Arc::clone(&b.expr).transform_down(&mut |x: Arc<Expr>| {
-            if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node
-                && lateral.contains(&c.id)
+        let mut cx = Lift {
+            info,
+            keys,
+            lateral,
+            memo,
+            global,
+            origin,
+        };
+        self.lift_expr(Arc::clone(&b.expr), &mut cx)
+    }
+
+    /// [`Self::lift`] of one node, pre-order. A window's function stays a
+    /// window call (its arguments are lifted), so `sum(sum(x)) OVER w`
+    /// reads the aggregate's `sum(x)`.
+    fn lift_expr(&mut self, x: Arc<Expr>, l: &mut Lift<'_>) -> Result<Arc<Expr>, AnalysisError> {
+        if let ExprNode::Window(_) = &x.node {
+            let mut first = true;
+            return x.map_children(|c| {
+                if std::mem::take(&mut first) {
+                    c.map_children(|a| self.lift_expr(a, l))
+                } else {
+                    self.lift_expr(c, l)
+                }
+            });
+        }
+        if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node
+            && l.lateral.contains(&c.id)
+        {
+            return Ok(x);
+        }
+        let k = semantic_key(&x, l.memo);
+        let ty = match (l.keys.iter().find(|(kk, _)| *kk == k), &x.node) {
+            (Some((_, ty)), _) => ty.clone(),
+            (None, ExprNode::Resolved(ResolvedExpr::Function(f)))
+                if f.kind == FunctionKind::Aggregate =>
             {
-                return Ok(x);
+                ArgType {
+                    data_type: Some(f.data_type.clone()),
+                    nullable: f.nullable,
+                }
             }
-            let k = semantic_key(&x, memo);
-            let ty = match (keys.iter().find(|(kk, _)| *kk == k), &x.node) {
-                (Some((_, ty)), _) => ty.clone(),
-                (None, ExprNode::Resolved(ResolvedExpr::Function(f)))
-                    if f.kind == FunctionKind::Aggregate =>
-                {
-                    ArgType {
-                        data_type: Some(f.data_type.clone()),
-                        nullable: f.nullable,
-                    }
-                }
-                (None, node) => {
-                    return match node {
-                        ExprNode::Resolved(ResolvedExpr::Column(_)) if global => {
-                            Err(AnalysisError::new(MissingGroupBy {}, origin))
-                        }
-                        ExprNode::Resolved(ResolvedExpr::Column(_)) => {
-                            let text = pretty(&x);
-                            Err(AnalysisError::new(
-                                MissingAggregation {
-                                    expression: format!("\"{text}\""),
-                                    expression_any_value: format!("\"any_value({text})\""),
-                                },
-                                Origin::UNKNOWN,
-                            ))
-                        }
-                        _ => Ok(x),
-                    };
-                }
-            };
-            // An attribute of the aggregate computing `x`, added if new.
-            let found = info
-                .aggregates
-                .iter()
-                .zip(&info.out)
-                .find(|(e, _)| semantic_key(e, memo) == k)
-                .map(|(_, a)| a.clone());
-            let key_attr = match &x.node {
-                ExprNode::Resolved(ResolvedExpr::Column(c)) => {
-                    info.keys.iter().find(|a| a.col.id == c.id).cloned()
-                }
-                _ => None,
-            };
-            let a = match (found, key_attr) {
-                (Some(a), _) => a,
-                (None, Some(a)) => {
-                    info.aggregates.push(col_expr(&a.col, Origin::UNKNOWN));
-                    info.out.push(a.clone());
-                    a
-                }
-                (None, None) => {
-                    let output = self.attr(&pretty(&x), &ty);
-                    info.aggregates.push(Arc::new(Expr::new(ExprNode::Resolved(
-                        ResolvedExpr::Alias {
-                            expr: Arc::clone(&x),
-                            output: output.clone(),
-                        },
-                    ))));
-                    let a = Attr {
-                        col: output,
-                        qual: no_qual(),
-                        source: None,
-                    };
-                    info.out.push(a.clone());
-                    a
-                }
-            };
-            Ok(col_expr(&a.col, x.origin))
-        })
+            (None, ExprNode::Resolved(ResolvedExpr::Column(_))) if l.global => {
+                return Err(AnalysisError::new(MissingGroupBy {}, l.origin));
+            }
+            (None, ExprNode::Resolved(ResolvedExpr::Column(_))) => {
+                let text = pretty(&x);
+                return Err(AnalysisError::new(
+                    MissingAggregation {
+                        expression: format!("\"{text}\""),
+                        expression_any_value: format!("\"any_value({text})\""),
+                    },
+                    Origin::UNKNOWN,
+                ));
+            }
+            (None, _) => return x.map_children(|c| self.lift_expr(c, l)),
+        };
+        // An attribute of the aggregate computing `x`, added if new.
+        let info = &mut *l.info;
+        let found = info
+            .aggregates
+            .iter()
+            .zip(&info.out)
+            .find(|(e, _)| semantic_key(e, l.memo) == k)
+            .map(|(_, a)| a.clone());
+        let key_attr = match &x.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                info.keys.iter().find(|a| a.col.id == c.id).cloned()
+            }
+            _ => None,
+        };
+        let a = match (found, key_attr) {
+            (Some(a), _) => a,
+            (None, Some(a)) => {
+                info.aggregates.push(col_expr(&a.col, Origin::UNKNOWN));
+                info.out.push(a.clone());
+                a
+            }
+            (None, None) => {
+                let output = self.attr(&pretty(&x), &ty);
+                info.aggregates.push(Arc::new(Expr::new(ExprNode::Resolved(
+                    ResolvedExpr::Alias {
+                        expr: Arc::clone(&x),
+                        output: output.clone(),
+                    },
+                ))));
+                let a = Attr {
+                    col: output,
+                    qual: no_qual(),
+                    source: None,
+                };
+                info.out.push(a.clone());
+                a
+            }
+        };
+        Ok(col_expr(&a.col, x.origin))
     }
 
     /// Spark's `MISSING_AGGREGATION` / `MISSING_GROUP_BY`: outside
@@ -1443,7 +1517,9 @@ impl Resolver<'_> {
                 .map(|(o, expr)| SortOrder { expr, ..o.clone() })
                 .collect()
         };
-        let (bounds, below, extended) = if c.agg.is_some() {
+        // Over an aggregate with windows, Spark's `ORDER BY` reads the
+        // select list only (nothing resolves through the windows).
+        let (bounds, below, extended) = if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
             self.over_agg(&c, &exprs, env, "Sort")?
         } else {
             // A name the select list outputs twice is looked up below it,
@@ -1531,6 +1607,17 @@ impl Resolver<'_> {
     }
 }
 
+/// The state of [`Resolver::lift`]: the aggregate it reads (and grows),
+/// its grouping keys and the lateral aliases of the select list.
+struct Lift<'a> {
+    info: &'a mut AggInfo,
+    keys: &'a [(u128, ArgType)],
+    lateral: &'a HashSet<AttrId>,
+    memo: &'a mut HashMap<usize, u128>,
+    global: bool,
+    origin: Origin,
+}
+
 /// The attribute a named item outputs; a column keeps its input
 /// attribute's qualifier and source.
 fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
@@ -1567,7 +1654,7 @@ fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
 }
 
 /// Spark's `DATATYPE_MISMATCH.FILTER_NOT_BOOLEAN`.
-fn boolean_filter(b: &Bound, origin: Origin) -> Result<(), AnalysisError> {
+pub(super) fn boolean_filter(b: &Bound, origin: Origin) -> Result<(), AnalysisError> {
     if b.ty.data_type == Some(krishiv_types::DataType::Boolean) {
         return Ok(());
     }
@@ -1612,7 +1699,7 @@ pub(super) fn qualified(e: &Arc<Expr>, scope: &[Attr]) -> Arc<Expr> {
 
 /// `e` with each reference to a lateral alias in `ids` read as Spark names
 /// it: `lateralAliasReference(name)`.
-fn lateral_refs(e: &Arc<Expr>, ids: &[AttrId]) -> Arc<Expr> {
+pub(super) fn lateral_refs(e: &Arc<Expr>, ids: &[AttrId]) -> Arc<Expr> {
     if ids.is_empty() {
         return Arc::clone(e);
     }

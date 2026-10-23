@@ -51,6 +51,7 @@ pub use scan::{
 };
 #[cfg(all(test, not(loom)))]
 use scan::{ScanGlobal, ScanLocal};
+pub(crate) use sort::KeyEncoder;
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};
 pub use union::UnionAlign;
 

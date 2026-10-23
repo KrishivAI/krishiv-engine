@@ -283,6 +283,13 @@ impl Session {
         Self::builder().build()
     }
 
+    /// Bytes the session's memory pool holds now, across its queries: what
+    /// `krishiv.memory.limit` is checked against (for memory measurements).
+    #[must_use]
+    pub fn memory_reserved(&self) -> usize {
+        self.state.memory.reserved()
+    }
+
     /// The runtime configuration.
     ///
     /// ```
