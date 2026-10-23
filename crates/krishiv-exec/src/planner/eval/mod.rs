@@ -275,7 +275,13 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 .collect::<Result<Vec<_>>>()?;
             match &f.id {
                 FunctionId::Builtin(b) => builtin(*b, f, args, input),
-                FunctionId::Registry { name, .. } => func::compile(name, f, args, input, e),
+                FunctionId::Registry { name, .. } => {
+                    if cond::is_conditional(name) {
+                        cond::conditional(name, f, args, input)
+                    } else {
+                        func::compile(name, f, args, input, e)
+                    }
+                }
                 _ => Err(unsupported_expr(e)),
             }
         }
