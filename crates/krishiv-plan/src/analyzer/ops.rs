@@ -806,14 +806,26 @@ impl Resolver<'_> {
                 *slot = Some(self.group_ordinal(n, k.origin, &items, &c)?);
             }
         }
-        let aliases: Vec<(String, Arc<Expr>)> = aggregates
-            .iter()
-            .filter(|_| conf.group_by_aliases)
-            .filter_map(|e| match &e.node {
-                ExprNode::Alias { expr, name } => Some((name.clone(), Arc::clone(expr))),
-                _ => None,
-            })
-            .collect();
+        // Spark resolves the select list first, then ordinals, then the
+        // other keys. A `GROUP BY` may name any select-list alias, explicit
+        // or implicit (`SELECT 1 GROUP BY `1`` groups by the literal): the
+        // aliases are the items' output names over the expressions that
+        // compute them, searched after the input.
+        let aliases: Vec<(String, Arc<Expr>)> = if conf.group_by_aliases {
+            items
+                .iter()
+                .map(|b| {
+                    let name = out_attr(b, &c.out).col.name;
+                    let expr = match &b.expr.node {
+                        ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
+                        _ => Arc::clone(&b.expr),
+                    };
+                    (name, expr)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let rels = [&c];
         for (slot, k) in group.iter_mut().zip(keys) {
             if slot.is_none() {

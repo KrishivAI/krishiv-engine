@@ -1910,3 +1910,86 @@ fn try_arithmetic_casts_its_arguments_in_try_mode() {
     // A TRY cast of a string may be NULL; `try_*` results are nullable anyway.
     assert!(try_add.output[0].nullable);
 }
+
+/// An unused CTE is not resolved: its column errors never fail the query.
+/// Spark's golden `cte` case 50 keeps an unused `cte3` whose projection
+/// over the duplicate-case columns of `cte2` would be ambiguous.
+#[test]
+fn unused_cte_definitions_are_not_resolved() {
+    let ctx = ctx();
+    let valid = LogicalPlan::table(["t"]).project(vec![c("a")]);
+    let ambiguous = LogicalPlan::table(["t"])
+        .join(
+            LogicalPlan::table(["u"]),
+            JoinKind::Inner,
+            JoinCondition::None,
+        )
+        .project(vec![c("a")]);
+    assert_eq!(class(&run(ambiguous.clone(), &ctx)), "AMBIGUOUS_REFERENCE");
+    // The main query reads only the valid definition; the ambiguous one
+    // is never referenced, so the query resolves.
+    let unused = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["good"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "good".to_owned(),
+                plan: Arc::new(valid),
+            },
+            Cte {
+                name: "bad".to_owned(),
+                plan: Arc::new(ambiguous),
+            },
+        ],
+    });
+    let a = run(unused, &ctx).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a"]
+    );
+    // Referencing the bad definition fails.
+    let used = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["bad"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "good".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            },
+            Cte {
+                name: "bad".to_owned(),
+                plan: Arc::new(
+                    LogicalPlan::table(["t"])
+                        .join(
+                            LogicalPlan::table(["u"]),
+                            JoinKind::Inner,
+                            JoinCondition::None,
+                        )
+                        .project(vec![c("a")]),
+                ),
+            },
+        ],
+    });
+    assert_eq!(class(&run(used, &ctx)), "AMBIGUOUS_REFERENCE");
+}
+
+/// `SELECT 1 GROUP BY `1`` groups by the select-list alias `1`, even
+/// though the item has no explicit alias (Spark golden `group-by-alias`
+/// case 11). With `groupByAliases` off the same key is unresolved.
+#[test]
+fn group_by_resolves_implicit_select_aliases() {
+    let plan = LogicalPlan::new(PlanNode::OneRowRelation).aggregate(vec![c("1")], vec![int(1)]);
+    let a = run(plan, &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["1"]
+    );
+    let conf = ResolutionConf {
+        group_by_aliases: false,
+        ..ResolutionConf::default()
+    };
+    let no_alias = context(catalog(), conf);
+    let plan = LogicalPlan::new(PlanNode::OneRowRelation).aggregate(vec![c("1")], vec![int(1)]);
+    assert_eq!(
+        class(&run(plan, &no_alias)),
+        "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"
+    );
+}
