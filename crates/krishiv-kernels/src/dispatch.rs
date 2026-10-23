@@ -277,6 +277,30 @@ mod tests {
         assert!(!Target::X86_64V4.is_available() || Target::X86_64V3.is_available());
     }
 
+    /// Float results compared by value: the same errors, validity and values,
+    /// a NaN equal to any NaN (Miri randomizes NaN payloads), every other
+    /// value bit for bit (so `-0.0` is not `0.0`).
+    #[track_caller]
+    fn same_floats(
+        a: Result<arrow_array::Float64Array, KernelError>,
+        b: Result<arrow_array::Float64Array, KernelError>,
+    ) {
+        use arrow_array::Array;
+        match (a, b) {
+            (Ok(a), Ok(b)) => {
+                assert_eq!(a.nulls(), b.nulls());
+                assert_eq!(a.len(), b.len());
+                for (i, (x, y)) in a.values().iter().zip(b.values().iter()).enumerate() {
+                    assert!(
+                        (x.is_nan() && y.is_nan()) || x.to_bits() == y.to_bits(),
+                        "row {i}: {x} vs {y}"
+                    );
+                }
+            }
+            (a, b) => assert_eq!(a, b),
+        }
+    }
+
     /// `Baseline` computes what every available target computes, for every
     /// operand shape, over several 64-row chunks, errors (with their row and
     /// Spark version) included. `KRISHIV_REQUIRE_TARGETS` (set in CI) makes
@@ -405,22 +429,22 @@ mod tests {
             );
             for (fl, fr) in float_shapes {
                 for op in [ArithOp::Add, ArithOp::Subtract, ArithOp::Multiply] {
-                    assert_eq!(
+                    same_floats(
                         float::binary(op, fl, fr, &ctx),
-                        float::binary(op, fl, fr, &base)
+                        float::binary(op, fl, fr, &base),
                     );
                 }
-                assert_eq!(
+                same_floats(
                     float::divide::<Float64Type, JavaWrap>(fl, fr, &ctx),
-                    float::divide::<Float64Type, JavaWrap>(fl, fr, &base)
+                    float::divide::<Float64Type, JavaWrap>(fl, fr, &base),
                 );
-                assert_eq!(
+                same_floats(
                     float::remainder::<Float64Type, JavaWrap>(fl, fr, &ctx),
-                    float::remainder::<Float64Type, JavaWrap>(fl, fr, &base)
+                    float::remainder::<Float64Type, JavaWrap>(fl, fr, &base),
                 );
-                assert_eq!(
+                same_floats(
                     float::remainder::<Float64Type, AnsiError>(fl, fr, &ctx),
-                    float::remainder::<Float64Type, AnsiError>(fl, fr, &base)
+                    float::remainder::<Float64Type, AnsiError>(fl, fr, &base),
                 );
                 assert_eq!(
                     compare::<Float64Type, Less>(fl, fr, &ctx),
