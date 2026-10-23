@@ -27,12 +27,23 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
   version), session zone, the query start instant (`current_date`, `current_timestamp`, `localtimestamp`), the session user (`current_user`, `user`, `session_user`; family `session`) and `decimalOperations.allowPrecisionLoss`. `round`/`ceil`/`floor` bind
   their scale from a `BindArg::Literal`. Operators, `CAST` and aggregates are not bound here.
 
-- `scalar/regex` (`regexp_replace`): Java patterns are translated to `fancy_regex` by `regex/java.rs` (ASCII `\d\w\s`,
-  Java's `.`/`$`/`^` and line terminators, `\Q..\E`, POSIX `\p{..}`); the replacement is read as `Matcher.appendReplacement`
-  does (errors are `INVALID_REGEXP_REPLACE`). Unsupported Java constructs are `INVALID_PARAMETER_VALUE.PATTERN`.
-  Patterns with back-references or look-around backtrack: one match attempt is capped at `BACKTRACK_LIMIT` steps
-  (`KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED`), a deliberate divergence from the JVM, which has no limit. Add new
-  regex functions to this family.
+- `scalar/regex` (`regexp`, `regexp_like`, `regexp_extract`, `regexp_count`,
+  `regexp_instr`, `regexp_substr`, `regexp_replace`): Java patterns are
+  translated to `fancy_regex` by `regex/java.rs` (ASCII `\d\w\s`, Java's
+  `.`/`$`/`^` and line terminators, `\Q..\E`, POSIX `\p{..}`, possessive
+  quantifiers as atomic groups, inline flags); the replacement is read as
+  `Matcher.appendReplacement` does (errors are `INVALID_REGEXP_REPLACE`).
+  A group index outside `0..=groupCount` is
+  `INVALID_PARAMETER_VALUE.REGEX_GROUP_INDEX`, checked lazily after a
+  match. Unsupported Java constructs, oversized patterns and huge counted
+  repetitions are `INVALID_PARAMETER_VALUE.PATTERN`. Patterns with
+  back-references or look-around backtrack: one match attempt is capped at
+  `BACKTRACK_LIMIT` steps
+  (`KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED`), a deliberate divergence from
+  the JVM, which has no limit. The `split` and `regexp_extract_all` pieces
+  (array results, which the analyzer cannot type yet) are public helpers of
+  the same module, used by the conformance harness. Add new regex functions
+  to this family.
 
 ## Invariants
 - Behaviour keyed by Spark version (3.5, 4.0, 4.1, 4.2), never ad-hoc flags.

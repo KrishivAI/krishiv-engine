@@ -65,6 +65,14 @@ impl KernelError {
         &self.error
     }
 
+    /// Wraps `error` as a kernel failure at `row` (`None` for a failure of
+    /// the whole call, such as an invalid pattern compiled once for every
+    /// row, rather than of one row's data).
+    #[must_use]
+    pub fn with_row(row: Option<usize>, error: KrishivError) -> Self {
+        Self { row, error }
+    }
+
     /// `INTERNAL_ERROR`: a caller broke a kernel precondition.
     pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self {
