@@ -266,6 +266,18 @@ fn err_text(r: crate::Result<(Vec<Batch>, QueryMetrics)>) -> String {
     r.err().map(|e| e.to_string()).unwrap_or_default()
 }
 
+/// One of an aggregate's own `EXPLAIN ANALYZE` counters.
+fn sink_metric(agg: &HashAggregate, name: &str) -> u64 {
+    Sink::extra_metrics(agg)
+        .iter()
+        .filter(|(n, _)| *n == name)
+        .map(|(_, v)| match v {
+            crate::metrics::Metric::Count(n) | crate::metrics::Metric::Max(n) => *n,
+            crate::metrics::Metric::Text(_) => 0,
+        })
+        .sum()
+}
+
 fn extra(m: &QueryMetrics, op: &str, name: &str) -> u64 {
     m.operators
         .values()
@@ -1613,8 +1625,7 @@ proptest! {
         two in any::<bool>(),
         tight in any::<bool>(),
     ) {
-        // Tight, but not below what the row tables need beyond the
-        // default ones (see `row_layout_tight_memory_gap`).
+        // Tight (see `row_layout_tight_memory` for tighter).
         row_case(&data, keys, nkeys, batch, slots, mode, limit, two, tight.then_some(1 << 20))?;
     }
 }
@@ -1989,19 +2000,19 @@ async fn row_layout_nullable_batches_under_a_non_nullable_spec() {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 256,
+        cases: 64,
         rng_seed: proptest::test_runner::RngSeed::Fixed(20_261_020),
         ..ProptestConfig::default()
     })]
-    /// The known gap, pinned: at 768 KiB the row tables run out of memory
-    /// in cases the default tables spill and finish. The final phase keeps
-    /// the driver tables and the merged tables together, and a cleared
-    /// index keeps a row per repeated key (STATUS: T159 final-phase memory;
-    /// fixed when each partition's inputs are released once merged and
-    /// finished tasks are not spilled).
+    /// At 768 KiB the row tables finish wherever the default tables do,
+    /// with partial duplicates from tiny fixed indexes (one row per input
+    /// row at `limit` 1): the final phase frees each driver partition once
+    /// merged and writes finished partitions to the output file instead of
+    /// spilling them, and a batch's scatter uses the idle spill headroom.
+    /// This fixed seed found the final-phase gap (2x memory) and then the
+    /// scatter's transient bytes.
     #[test]
-    #[ignore = "flag-on final phase needs ~2x memory; STATUS: T159 final-phase memory"]
-    fn row_layout_tight_memory_gap(
+    fn row_layout_tight_memory(
         data in proptest::collection::vec(
             (
                 proptest::option::of(any::<i32>()),
@@ -2028,9 +2039,10 @@ proptest! {
     }
 }
 
-/// A spill request during the row tables' parallel merge stops new tasks
-/// and moves what is left to disk; the rows are unchanged and nothing
-/// leaks.
+/// A spill request during the row tables' parallel merge writes the
+/// finished tasks' groups to the output file (final, never merged again)
+/// and the merge goes on; the rest of the result follows them to the file.
+/// The rows are unchanged and nothing leaks.
 #[tokio::test]
 async fn row_merge_spills_on_request() {
     let (s, b) = grouped_input(200_000, 90_000);
@@ -2075,7 +2087,11 @@ async fn row_merge_spills_on_request() {
     };
     let (done, ()) = tokio::join!(agg.finalize(&g, &sink_ctx), request);
     done.unwrap();
-    assert!(agg.metrics().spill_runs > 0);
+    let m = agg.metrics();
+    assert_eq!((m.spill_runs, m.groups), (0, 90_000));
+    assert!(m.spill_files > 0);
+    assert!(sink_metric(&agg, "row_final_flushes") > 0);
+    assert_eq!(sink_metric(&agg, "row_final_spills"), 0);
     let src = ctx(1, "src").with_dependency(Arc::clone(&g));
     let sg = Source::global_state(&*agg, &src).unwrap();
     let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
@@ -2107,6 +2123,7 @@ async fn row_layout_metrics() {
     assert!(extra(&m, "HashAggregate", "row_abandons") > 0);
     assert!(extra(&m, "HashAggregate", "row_final_tasks") > 1);
     assert_eq!(extra(&m, "HashAggregate", "row_final_spills"), 0);
+    assert_eq!(extra(&m, "HashAggregate", "row_final_flushes"), 0);
     assert_eq!(extra(&m, "HashAggregate", "groups"), 90_000);
     assert_eq!(extra(&m, "HashAggregate", "hash_entries"), 90_000);
     let layout = m

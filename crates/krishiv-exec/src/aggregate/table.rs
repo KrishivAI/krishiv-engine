@@ -433,6 +433,16 @@ impl Table {
         }
     }
 
+    /// Bytes [`apply`](Self::apply) needs while it runs, beyond
+    /// [`projected`](Self::projected), and frees before it returns: a row
+    /// table's scatter of the batch over its partitions.
+    pub(crate) fn transient(&self, p: &TablePrepared) -> usize {
+        match (self, p) {
+            (Self::Rows(t), TablePrepared::Rows(p)) => t.transient(p),
+            _ => 0,
+        }
+    }
+
     pub(crate) fn apply(&mut self, p: &TablePrepared) -> Result<()> {
         match (self, p) {
             (Self::Keys(t), TablePrepared::Keys(p)) => t.apply(p),
