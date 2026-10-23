@@ -280,7 +280,7 @@ fn an_offset_limit_needs_a_v3_reader() {
 fn a_window_needs_a_v4_reader() {
     // A `Window` node sets `min_reader_version` to 4: an older reader has
     // no such node. Plans without one stay readable by older readers.
-    assert_eq!(FORMAT_VERSION, 4);
+    assert_eq!(FORMAT_VERSION, 5);
     assert_eq!(message("window_ranking").min_reader_version, 4);
     assert_eq!(message("window_aggregates").min_reader_version, 4);
     for (name, plan) in cases() {
@@ -289,6 +289,27 @@ fn a_window_needs_a_v4_reader() {
             assert!(m.min_reader_version <= 3, "{name} needs a newer reader");
         }
     }
+}
+
+#[test]
+fn a_region_zone_needs_a_v5_reader() {
+    // A region session zone sets `min_reader_version` to 5: a v4 reader
+    // would ignore `zone_name` and read the zone as UTC. Fixed offsets
+    // stay readable by older readers.
+    let (_, plan) = cases().into_iter().find(|(n, _)| n == "filter").unwrap();
+    let mut region = plan.env().clone();
+    region.zone = "America/Los_Angeles".to_owned();
+    let regional = PhysicalPlan::new(
+        plan.root().clone(),
+        Arc::clone(plan.schema()),
+        plan.explain().clone(),
+        region,
+    )
+    .with_warnings(plan.warnings().to_vec());
+    let m = to_message(&regional).unwrap();
+    assert_eq!(m.min_reader_version, 5);
+    assert_eq!(decode(&encode(&regional).unwrap()).unwrap(), regional);
+    assert_eq!(message("filter").min_reader_version, MIN_READER_VERSION);
 }
 
 #[test]

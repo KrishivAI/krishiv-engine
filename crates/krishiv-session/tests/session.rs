@@ -630,6 +630,86 @@ fn sql_error(s: &Session, sql: &str) -> KrishivError {
     block_on(async { s.sql(sql).await?.collect().await }).unwrap_err()
 }
 
+/// The default session time zone is the system local zone, as in Spark:
+/// an explicit zone wins, else `TZ`, else `/etc/localtime`, else `UTC`.
+/// A `CAST(... AS TIMESTAMP)` with no zone set now resolves instead of
+/// failing with `KRISHIV_UNSUPPORTED_FEATURE`.
+#[test]
+fn default_session_time_zone_is_the_system_local_zone() {
+    struct Restore(Option<String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // SAFETY: restores the process-global `TZ` this test changed;
+            // no other thread reads `TZ` through this crate concurrently
+            // with the restore (queries that read it finished before).
+            unsafe {
+                match self.0.take() {
+                    Some(v) => std::env::set_var("TZ", v),
+                    None => std::env::remove_var("TZ"),
+                }
+            }
+        }
+    }
+    let _restore = Restore(std::env::var("TZ").ok());
+    // With `TZ=Asia/Kolkata` (no daylight saving) and nothing set, the
+    // local `10:00` is `04:30` UTC.
+    // SAFETY: the queries below finish before the restore on drop.
+    unsafe {
+        std::env::set_var("TZ", "Asia/Kolkata");
+    }
+    let s = events_session(Session::builder());
+    let micros = row(
+        &s,
+        "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) FROM events LIMIT 1",
+    )[0]
+    .parse::<i64>()
+    .unwrap();
+    assert_eq!(micros, 1_704_083_400_000_000, "TZ=Asia/Kolkata");
+    // An explicit zone is unchanged: `+05:30` agrees with `Asia/Kolkata`.
+    let s = events_session(Session::builder().config("spark.sql.session.timeZone", "+05:30"));
+    let explicit = row(
+        &s,
+        "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) FROM events LIMIT 1",
+    )[0]
+    .parse::<i64>()
+    .unwrap();
+    assert_eq!(explicit, micros);
+    // An invalid `TZ` falls back to the system zone: the same instant as
+    // with `TZ` unset.
+    // SAFETY: each query finishes before the next `TZ` change.
+    unsafe {
+        std::env::set_var("TZ", "Mars/Base");
+    }
+    let s = events_session(Session::builder());
+    let fallback = row(
+        &s,
+        "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) FROM events LIMIT 1",
+    )[0]
+    .parse::<i64>()
+    .unwrap();
+    // SAFETY: the query above finished before this change.
+    unsafe {
+        std::env::remove_var("TZ");
+    }
+    let s = events_session(Session::builder());
+    let system = row(
+        &s,
+        "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) FROM events LIMIT 1",
+    )[0]
+    .parse::<i64>()
+    .unwrap();
+    assert_eq!(fallback, system);
+    // The round trip preserves the local time under the default zone.
+    let s = events_session(Session::builder());
+    assert_eq!(
+        row(
+            &s,
+            "SELECT CAST(CAST('2024-01-01 10:00:00' AS TIMESTAMP) AS STRING) FROM events LIMIT 1"
+        ),
+        ["2024-01-01 10:00:00"]
+    );
+}
+
 /// Spark 4.2: `first`/`last` pick by input order, a NULL counting unless
 /// `ignoreNulls`; `IGNORE NULLS` / `RESPECT NULLS` set the flag.
 #[test]
@@ -754,17 +834,18 @@ fn session_user_and_local_timestamp() {
             "{sql}"
         );
     }
-    // A zone that is not a fixed offset needs the tz database: refused, not
-    // read as UTC.
+    // A region zone now resolves through the tz database: the clock
+    // functions read it like any fixed offset.
     let s =
         events_session(Session::builder().config("spark.sql.session.timeZone", "America/New_York"));
     for sql in [
-        "SELECT localtimestamp() FROM events",
-        "SELECT current_date() FROM events",
+        "SELECT localtimestamp() FROM events LIMIT 1",
+        "SELECT current_date() FROM events LIMIT 1",
     ] {
+        let batches = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
         assert_eq!(
-            sql_error(&s, sql).error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            1,
             "{sql}"
         );
     }

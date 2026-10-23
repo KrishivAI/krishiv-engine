@@ -20,6 +20,7 @@ clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-
 futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv = { path = "../krishiv" }
 krishiv-alloc = { path = "../krishiv-alloc", optional = true }
+krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-memory = { path = "../krishiv-memory", optional = true }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-server = { path = "../krishiv-server", optional = true }

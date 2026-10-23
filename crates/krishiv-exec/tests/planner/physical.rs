@@ -163,7 +163,7 @@ fn instantiation_checks_the_tables_still_match_the_plan() {
 fn env_data() -> ExprEnv {
     ExprEnv {
         ansi: true,
-        zone: Some(0),
+        zone: "UTC".to_owned(),
         query_start_micros: 0,
         user: Arc::from("u"),
     }

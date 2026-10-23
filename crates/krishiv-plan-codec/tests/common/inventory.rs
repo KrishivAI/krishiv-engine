@@ -32,7 +32,7 @@ use krishiv_types::{DataType, DecimalType};
 pub(crate) fn env() -> ExprEnv {
     ExprEnv {
         ansi: true,
-        zone: Some(-28_800),
+        zone: "-08:00".to_owned(),
         query_start_micros: 1_760_000_000_123_456,
         user: Arc::from("analyst"),
     }

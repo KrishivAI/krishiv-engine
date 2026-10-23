@@ -14,7 +14,7 @@ use krishiv::arrow::array::types::{
 };
 use krishiv::arrow::array::{Array, RecordBatch};
 use krishiv::arrow::datatypes::{DataType, TimeUnit};
-use krishiv::{DataFrame, Session};
+use krishiv::{DataFrame, Session, effective_session_zone};
 
 /// Output formats of a result set.
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -116,7 +116,9 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
         futures::executor::block_on(df.create_or_replace_temp_view(name))
             .map_err(|e| format!("--table {name}={path}: {e}"))?;
     }
-    let tz = session_tz_micros(session.conf().get("spark.sql.session.timeZone").as_deref())?;
+    let zone_name =
+        effective_session_zone(session.conf().get("spark.sql.session.timeZone").as_deref());
+    let zone = session_zone(&zone_name)?;
     for (line_offset, stmt) in split_statements(&input) {
         let start = Instant::now();
         let df = futures::executor::block_on(session.sql(&stmt))
@@ -124,7 +126,7 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
         if args.explain_analyze || args.explain_verbose {
             print_explain(&df, args)?;
         } else {
-            print_result(&df, args.format, tz)?;
+            print_result(&df, args.format, zone.as_ref())?;
         }
         if args.timing {
             let _ = writeln!(io::stderr(), "Time: {:.3}s", start.elapsed().as_secs_f64());
@@ -182,7 +184,11 @@ fn caret(stmt: &str, line_offset: usize, error: &krishiv::Error) -> String {
     )
 }
 
-fn print_result(df: &DataFrame, format: Format, tz: i64) -> Result<(), String> {
+fn print_result(
+    df: &DataFrame,
+    format: Format,
+    zone: &dyn krishiv_kernels::cast::TimeZoneRules,
+) -> Result<(), String> {
     let batches = futures::executor::block_on(df.collect()).map_err(|e| e.to_string())?;
     let schema = futures::executor::block_on(df.schema()).map_err(|e| e.to_string())?;
     if let Ok(warnings) = futures::executor::block_on(df.warnings()) {
@@ -199,9 +205,9 @@ fn print_result(df: &DataFrame, format: Format, tz: i64) -> Result<(), String> {
     let mut out = io::BufWriter::new(io::stdout().lock());
     let io_err = |e: io::Error| format!("cannot write output: {e}");
     match format {
-        Format::Table => write_table(&mut out, &names, &batches, tz).map_err(io_err)?,
-        Format::Csv => write_csv(&mut out, &names, &batches, tz).map_err(io_err)?,
-        Format::Json => write_json(&mut out, &names, &numeric, &batches, tz).map_err(io_err)?,
+        Format::Table => write_table(&mut out, &names, &batches, zone).map_err(io_err)?,
+        Format::Csv => write_csv(&mut out, &names, &batches, zone).map_err(io_err)?,
+        Format::Json => write_json(&mut out, &names, &numeric, &batches, zone).map_err(io_err)?,
     }
     out.flush().map_err(io_err)
 }
@@ -210,7 +216,7 @@ fn write_table(
     out: &mut impl Write,
     names: &[String],
     batches: &[RecordBatch],
-    tz: i64,
+    zone: &dyn krishiv_kernels::cast::TimeZoneRules,
 ) -> io::Result<()> {
     let mut rows: Vec<Vec<String>> = Vec::new();
     for b in batches {
@@ -218,7 +224,7 @@ fn write_table(
             rows.push(
                 b.columns()
                     .iter()
-                    .map(|c| cell(c.as_ref(), r, "NULL", tz))
+                    .map(|c| cell(c.as_ref(), r, "NULL", zone))
                     .collect(),
             );
         }
@@ -266,7 +272,7 @@ fn write_csv(
     out: &mut impl Write,
     names: &[String],
     batches: &[RecordBatch],
-    tz: i64,
+    zone: &dyn krishiv_kernels::cast::TimeZoneRules,
 ) -> io::Result<()> {
     let header: Vec<String> = names.iter().map(|n| csv_field(n)).collect();
     writeln!(out, "{}", header.join(","))?;
@@ -280,7 +286,7 @@ fn write_csv(
                     if c.is_null(r) {
                         String::new()
                     } else {
-                        csv_field(&cell(c.as_ref(), r, "", tz))
+                        csv_field(&cell(c.as_ref(), r, "", zone))
                     }
                 })
                 .collect();
@@ -330,7 +336,7 @@ fn write_json(
     names: &[String],
     numeric: &[bool],
     batches: &[RecordBatch],
-    tz: i64,
+    zone: &dyn krishiv_kernels::cast::TimeZoneRules,
 ) -> io::Result<()> {
     for b in batches {
         for r in 0..b.num_rows() {
@@ -345,9 +351,9 @@ fn write_json(
                 if c.is_null(r) {
                     line.push_str("null");
                 } else if numeric[i] || *t == DataType::Boolean {
-                    line.push_str(&cell(c.as_ref(), r, "", tz));
+                    line.push_str(&cell(c.as_ref(), r, "", zone));
                 } else if matches!(t, DataType::Float32 | DataType::Float64) {
-                    let v = cell(c.as_ref(), r, "", tz);
+                    let v = cell(c.as_ref(), r, "", zone);
                     // JSON has no NaN or infinity.
                     if v.parse::<f64>().is_ok_and(f64::is_finite) {
                         line.push_str(&v);
@@ -355,7 +361,7 @@ fn write_json(
                         line.push_str(&json_string(&v));
                     }
                 } else {
-                    line.push_str(&json_string(&cell(c.as_ref(), r, "", tz)));
+                    line.push_str(&json_string(&cell(c.as_ref(), r, "", zone)));
                 }
             }
             line.push('}');
@@ -366,7 +372,12 @@ fn write_json(
 }
 
 /// One value as text; `null` stands in for SQL NULL.
-fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
+fn cell(
+    a: &dyn Array,
+    i: usize,
+    null: &str,
+    zone: &dyn krishiv_kernels::cast::TimeZoneRules,
+) -> String {
     if a.data_type() == &DataType::Null || a.is_null(i) {
         return null.to_owned();
     }
@@ -392,10 +403,15 @@ fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
             .value_as_date(i)
             .map_or_else(String::new, |d| d.to_string()),
         // TIMESTAMP (with a zone) shows in the session zone; TIMESTAMP_NTZ as stored.
-        DataType::Timestamp(TimeUnit::Microsecond, zone) => {
-            let shift = if zone.is_some() { tz } else { 0 };
-            a.as_primitive::<TimestampMicrosecondType>()
-                .value(i)
+        DataType::Timestamp(TimeUnit::Microsecond, carrier) => {
+            let micros = a.as_primitive::<TimestampMicrosecondType>().value(i);
+            let shift = if carrier.is_some() {
+                i64::from(zone.offset_at_utc(micros.div_euclid(1_000_000)))
+                    .saturating_mul(1_000_000)
+            } else {
+                0
+            };
+            micros
                 .checked_add(shift)
                 .and_then(krishiv::arrow::array::temporal_conversions::timestamp_us_to_datetime)
                 .map_or_else(String::new, |d| d.to_string())
@@ -403,7 +419,7 @@ fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
         DataType::List(_) => {
             let inner = a.as_list::<i32>().value(i);
             let items: Vec<String> = (0..inner.len())
-                .map(|j| cell(inner.as_ref(), j, "NULL", tz))
+                .map(|j| cell(inner.as_ref(), j, "NULL", zone))
                 .collect();
             format!("[{}]", items.join(", "))
         }
@@ -412,7 +428,7 @@ fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
             let items: Vec<String> = fields
                 .iter()
                 .zip(s.columns())
-                .map(|(f, c)| format!("{}: {}", f.name(), cell(c.as_ref(), i, "NULL", tz)))
+                .map(|(f, c)| format!("{}: {}", f.name(), cell(c.as_ref(), i, "NULL", zone)))
                 .collect();
             format!("{{{}}}", items.join(", "))
         }
@@ -420,37 +436,19 @@ fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
     }
 }
 
-/// The session time zone as microseconds east of UTC. Only `UTC` and fixed
-/// offsets are known (the engine has no time-zone database yet); unset is
-/// UTC, where Spark would use the local zone.
-fn session_tz_micros(zone: Option<&str>) -> Result<i64, String> {
-    let z = zone.map_or("UTC", str::trim);
-    let offset = z
-        .strip_prefix("UTC")
-        .or_else(|| z.strip_prefix("GMT"))
-        .unwrap_or(z);
-    if offset.is_empty() || offset == "Z" {
-        return Ok(0);
-    }
-    let (sign, rest) = match offset.split_at(1) {
-        ("+", r) => (1, r),
-        ("-", r) => (-1, r),
-        _ => return Err(unsupported_zone(z)),
-    };
-    let mut parts = rest.split(':');
-    let num = |p: Option<&str>| p.map_or(Some(0), |t| t.parse::<i64>().ok());
-    let (h, m, sec) = (num(parts.next()), num(parts.next()), num(parts.next()));
-    match (h, m, sec, parts.next()) {
-        (Some(h @ 0..=18), Some(m @ 0..=59), Some(sec @ 0..=59), None) if !rest.is_empty() => {
-            Ok(sign * (h * 3600 + m * 60 + sec) * 1_000_000)
-        }
-        _ => Err(unsupported_zone(z)),
-    }
-}
-
-fn unsupported_zone(z: &str) -> String {
-    format!(
-        "spark.sql.session.timeZone `{z}` is not supported: only UTC and fixed offsets (+HH:MM)"
+/// The session time zone for display: the effective zone resolved once per
+/// process, as the engine resolves it per query. Unknown regions are an
+/// error, as they are where the engine reads them.
+fn session_zone(
+    name: &str,
+) -> Result<std::sync::Arc<dyn krishiv_kernels::cast::TimeZoneRules>, String> {
+    krishiv_kernels::cast::SessionZone::parse(name).map_or_else(
+        || {
+            Err(format!(
+                "spark.sql.session.timeZone `{name}` is not supported: only UTC, fixed offsets (+HH:MM) and tz database regions"
+            ))
+        },
+        |z| Ok(std::sync::Arc::new(z) as _),
     )
 }
 
@@ -609,11 +607,32 @@ mod tests {
             (arr(NullArray::new(1)), "NULL"),
         ];
         for (a, want) in cases {
-            assert_eq!(cell(a.as_ref(), 0, "NULL", 0), want, "{:?}", a.data_type());
+            assert_eq!(
+                cell(
+                    a.as_ref(),
+                    0,
+                    "NULL",
+                    &krishiv_kernels::cast::FixedOffset(0)
+                ),
+                want,
+                "{:?}",
+                a.data_type()
+            );
         }
         let d = Decimal128Array::from(vec![None::<i128>]);
-        assert_eq!(cell(&d, 0, "-", 0), "-");
-        assert_eq!(cell(&arr(NullArray::new(1)), 0, "-", 0), "-");
+        assert_eq!(
+            cell(&d, 0, "-", &krishiv_kernels::cast::FixedOffset(0)),
+            "-"
+        );
+        assert_eq!(
+            cell(
+                &arr(NullArray::new(1)),
+                0,
+                "-",
+                &krishiv_kernels::cast::FixedOffset(0)
+            ),
+            "-"
+        );
     }
 
     fn batch() -> (Vec<String>, Vec<RecordBatch>) {
@@ -643,21 +662,22 @@ mod tests {
     fn writers_format_nulls_nan_and_widths() {
         let (names, batches) = batch();
         let numeric = [true, false, false, false];
+        let utc = krishiv_kernels::cast::FixedOffset(0);
         let mut o = Vec::new();
-        write_json(&mut o, &names, &numeric, &batches, 0).expect("json");
+        write_json(&mut o, &names, &numeric, &batches, &utc).expect("json");
         let t = String::from_utf8(o).expect("utf-8");
         assert_eq!(
             t,
             "{\"i\":1,\"f\":\"NaN\",\"s\":\"a\\\"b\",\"b\":true}\n{\"i\":null,\"f\":2.5,\"s\":null,\"b\":null}\n"
         );
         let mut o = Vec::new();
-        write_csv(&mut o, &names, &batches, 0).expect("csv");
+        write_csv(&mut o, &names, &batches, &utc).expect("csv");
         assert_eq!(
             String::from_utf8(o).expect("utf-8"),
             "i,f,s,b\n1,NaN,\"a\"\"b\",true\n,2.5,,\n"
         );
         let mut o = Vec::new();
-        write_table(&mut o, &names, &batches, 0).expect("table");
+        write_table(&mut o, &names, &batches, &utc).expect("table");
         let t = String::from_utf8(o).expect("utf-8");
         assert!(t.contains("| NULL | 2.5 | NULL | NULL |"), "{t}");
         assert!(t.ends_with("2 rows\n"), "{t}");
@@ -673,20 +693,25 @@ mod tests {
 
     #[test]
     fn session_zone_parsing_and_timestamp_shift() {
-        assert_eq!(session_tz_micros(None), Ok(0));
-        assert_eq!(session_tz_micros(Some("UTC")), Ok(0));
-        assert_eq!(session_tz_micros(Some("Z")), Ok(0));
-        assert_eq!(session_tz_micros(Some("+05:30")), Ok(19_800_000_000));
-        assert_eq!(session_tz_micros(Some("UTC-08:00")), Ok(-28_800_000_000));
-        assert_eq!(session_tz_micros(Some("-8")), Ok(-28_800_000_000));
-        for bad in ["America/Los_Angeles", "+25:00", "+", "+1:2:3:4", "+aa"] {
-            assert!(session_tz_micros(Some(bad)).is_err(), "{bad}");
+        let offset_at =
+            |name: &str, utc_seconds: i64| session_zone(name).map(|z| z.offset_at_utc(utc_seconds));
+        assert_eq!(offset_at("UTC", 0), Ok(0));
+        assert_eq!(offset_at("Z", 0), Ok(0));
+        assert_eq!(offset_at("+05:30", 0), Ok(19_800));
+        assert_eq!(offset_at("UTC-08:00", 0), Ok(-28_800));
+        assert_eq!(offset_at("-8", 0), Ok(-28_800));
+        assert_eq!(
+            offset_at("America/Los_Angeles", 1_709_210_096),
+            Ok(-8 * 3600)
+        );
+        for bad in ["Mars/Base", "+25:00", "+", "+1:2:3:4", "+aa"] {
+            assert!(session_zone(bad).is_err(), "{bad}");
         }
         let with_zone = TimestampMicrosecondArray::from(vec![1_000_000]).with_timezone("UTC");
         let ntz = TimestampMicrosecondArray::from(vec![1_000_000]);
-        let east = 3_600_000_000;
-        assert_eq!(cell(&with_zone, 0, "", east), "1970-01-01 01:00:01");
-        assert_eq!(cell(&ntz, 0, "", east), "1970-01-01 00:00:01");
+        let east = krishiv_kernels::cast::SessionZone::parse("+01:00").unwrap();
+        assert_eq!(cell(&with_zone, 0, "", &east), "1970-01-01 01:00:01");
+        assert_eq!(cell(&ntz, 0, "", &east), "1970-01-01 00:00:01");
     }
 
     #[test]

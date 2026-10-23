@@ -138,7 +138,7 @@ pub fn from_message(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPla
         .ok_or_else(|| corrupt("no expression environment"))?;
     let env = ExprEnv {
         ansi: env.ansi,
-        zone: env.zone,
+        zone: zone_name(env)?,
         query_start_micros: env.query_start_micros,
         user: Arc::from(env.user.as_str()),
     };
@@ -203,6 +203,27 @@ fn slot(i: u32, len: usize) -> Result<usize> {
 
 fn usize_of(v: u64) -> Result<usize> {
     usize::try_from(v).map_err(|_| corrupt("a count or index out of range"))
+}
+
+/// The session zone name: `zone_name` (v5) when present, else the old
+/// fixed-offset `zone` (`UTC` when absent).
+fn zone_name(env: &pb::ExprEnv) -> Result<String> {
+    if let Some(name) = env.zone_name.clone() {
+        return Ok(name);
+    }
+    Ok(match env.zone {
+        None | Some(0) => "UTC".to_owned(),
+        Some(offset) => {
+            let sign = if offset >= 0 { '+' } else { '-' };
+            let abs = offset.unsigned_abs();
+            let (h, m, s) = (abs / 3600, abs % 3600 / 60, abs % 60);
+            if s == 0 {
+                format!("{sign}{h:02}:{m:02}")
+            } else {
+                format!("{sign}{h:02}:{m:02}:{s:02}")
+            }
+        }
+    })
 }
 
 fn usizes(v: &[u64]) -> Result<Vec<usize>> {

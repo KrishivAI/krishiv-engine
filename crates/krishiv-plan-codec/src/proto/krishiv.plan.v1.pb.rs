@@ -35,12 +35,17 @@ pub struct ExprEnv {
     #[prost(bool, tag = "1")]
     pub ansi: bool,
     /// The session time zone as a fixed offset in seconds, when it is one.
+    /// Written for v4 readers; v5 readers prefer `zone_name`.
     #[prost(sint32, optional, tag = "2")]
     pub zone: ::core::option::Option<i32>,
     #[prost(sint64, tag = "3")]
     pub query_start_micros: i64,
     #[prost(string, tag = "4")]
     pub user: ::prost::alloc::string::String,
+    /// v5: the effective session time zone name (region or offset). A writer
+    /// whose zone is not a fixed offset needs a v5 reader.
+    #[prost(string, optional, tag = "5")]
+    pub zone_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {

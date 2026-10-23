@@ -123,7 +123,7 @@ fn query_results_are_written_committed_and_read_back() {
         ExplainNode::leaf("WriteFiles", ""),
         ExprEnv {
             ansi: true,
-            zone: None,
+            zone: "UTC".to_owned(),
             query_start_micros: 0,
             user: Arc::from("u"),
         },

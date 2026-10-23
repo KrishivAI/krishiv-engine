@@ -167,13 +167,112 @@ impl RuntimeConf {
     }
 }
 
+/// The effective `spark.sql.session.timeZone` for a query: the explicit
+/// config value when set (returned as written, so an unknown region still
+/// fails where it is read, as before), else the `TZ` environment variable
+/// when set and a zone Spark accepts, else the system zone from
+/// `/etc/localtime` when it is a symlink into a zoneinfo database and names
+/// a zone Spark accepts, else `UTC`.
+///
+/// `LOCAL` (any case) maps to the same default resolution, as Spark's
+/// `SET TIME ZONE LOCAL` does. The `TZ` and system zones are validated with
+/// the same parser the execution layer uses, so an invalid `TZ` falls back
+/// to the system zone (or `UTC`), and an unresolvable system zone falls
+/// back to `UTC`.
+///
+/// Resolved once per query, never per row;
+/// every consumer (casts, datetime functions) reads the injected config
+/// value.
+///
+/// ```
+/// # use krishiv_session::effective_session_zone;
+/// assert_eq!(effective_session_zone(Some("+05:30")), "+05:30");
+/// assert_eq!(effective_session_zone(Some("Mars/Base")), "Mars/Base");
+/// ```
+#[must_use]
+pub fn effective_session_zone(explicit: Option<&str>) -> String {
+    let tz = std::env::var("TZ").ok();
+    effective_with(explicit, tz.as_deref(), system_zone_name().as_deref())
+}
+
+/// [`effective_session_zone`] with the environment and system zone as
+/// arguments, so tests need no process-global state.
+fn effective_with(explicit: Option<&str>, tz: Option<&str>, system: Option<&str>) -> String {
+    if let Some(name) = explicit.map(str::trim).filter(|s| !s.is_empty())
+        && !name.eq_ignore_ascii_case("LOCAL")
+    {
+        return name.to_owned();
+    }
+    if let Some(tz) = tz.map(str::trim).filter(|s| !s.is_empty())
+        && krishiv_kernels::cast::SessionZone::parse(tz).is_some()
+    {
+        return tz.to_owned();
+    }
+    if let Some(name) = system.filter(|s| !s.is_empty()) {
+        return name.to_owned();
+    }
+    "UTC".to_owned()
+}
+
+/// The IANA name of `/etc/localtime` when it is a symlink into a zoneinfo
+/// database and names a zone Spark accepts; `None` otherwise (not a
+/// symlink, no zoneinfo component, or unknown to the tz database), in
+/// which case the caller falls back to `UTC`.
+fn system_zone_name() -> Option<String> {
+    let target = std::fs::read_link("/etc/localtime").ok()?;
+    let target = target.to_str()?.to_owned();
+    let pos = target.rfind("zoneinfo/")?;
+    let name = target[pos + "zoneinfo/".len()..].to_owned();
+    krishiv_kernels::cast::SessionZone::parse(&name)
+        .is_some()
+        .then_some(name)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use krishiv_common::config::Config;
 
-    use super::{ConfStore, get};
+    use super::{ConfStore, effective_with, get};
+
+    #[test]
+    fn effective_zone_prefers_explicit_then_tz_then_system_then_utc() {
+        // Explicit wins, returned as written (even an unknown region: the
+        // engine reports it where it is read, as before).
+        assert_eq!(effective_with(Some("+05:30"), None, None), "+05:30");
+        assert_eq!(
+            effective_with(
+                Some("Mars/Base"),
+                Some("Asia/Kolkata"),
+                Some("Europe/Paris")
+            ),
+            "Mars/Base"
+        );
+        // `LOCAL` maps to the default resolution.
+        assert_eq!(
+            effective_with(Some("LOCAL"), Some("Asia/Kolkata"), Some("Europe/Paris")),
+            "Asia/Kolkata"
+        );
+        assert_eq!(effective_with(Some("local"), None, None), "UTC");
+        // `TZ` wins over the system zone when valid.
+        assert_eq!(
+            effective_with(None, Some("Asia/Kolkata"), Some("Europe/Paris")),
+            "Asia/Kolkata"
+        );
+        // An invalid `TZ` falls back to the system zone (or `UTC`).
+        assert_eq!(
+            effective_with(None, Some("Mars/Base"), Some("Europe/Paris")),
+            "Europe/Paris"
+        );
+        assert_eq!(effective_with(None, Some("Mars/Base"), None), "UTC");
+        assert_eq!(
+            effective_with(None, None, Some("Europe/Paris")),
+            "Europe/Paris"
+        );
+        assert_eq!(effective_with(None, None, None), "UTC");
+        assert_eq!(effective_with(None, Some(""), Some("")), "UTC");
+    }
 
     #[test]
     fn a_snapshot_pairs_a_configuration_with_its_own_version() {

@@ -19,7 +19,7 @@ syntax = "proto3";
 package krishiv.plan.v1;
 
 message PhysicalPlan {
-  // The writer's format version (4).
+  // The writer's format version (5).
   uint32 format_version = 1;
   // The oldest reader version that understands every field in use.
   uint32 min_reader_version = 2;
@@ -40,9 +40,13 @@ message PhysicalPlan {
 message ExprEnv {
   bool ansi = 1;
   // The session time zone as a fixed offset in seconds, when it is one.
+  // Written for v4 readers; v5 readers prefer `zone_name`.
   optional sint32 zone = 2;
   sint64 query_start_micros = 3;
   string user = 4;
+  // v5: the effective session time zone name (region or offset). A writer
+  // whose zone is not a fixed offset needs a v5 reader.
+  optional string zone_name = 5;
 }
 
 message ExplainNode {

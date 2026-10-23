@@ -7,7 +7,7 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_schema::DataType as ArrowType;
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar};
-use krishiv_kernels::cast::FixedOffset;
+use krishiv_kernels::cast::{FixedOffset, TimeZoneRules};
 use krishiv_plan::{Expr, ExprNode, ResolvedFunction};
 
 use super::strings::to_view;
@@ -32,24 +32,24 @@ pub(super) fn compile(
         })
         .collect::<Result<Vec<_>>>()?;
     let out = f.data_type.to_arrow();
-    // Only an offset zone is known without the tz database (P2-T021b).
     let zoned = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, Some(_)));
-    let zone = match input.env.zone {
-        Some(offset) => FixedOffset(offset),
+    let zone: Arc<dyn TimeZoneRules> = match &input.env.zone {
+        Some(rules) => Arc::clone(rules),
         None if zoned(&out)
             || bind_args.iter().any(|a| zoned(&a.data_type()))
             || matches!(name, "current_date" | "curdate" | "localtimestamp") =>
         {
-            return Err(unsupported(
-                "functions of timestamps in a session time zone other than a fixed offset",
-            ));
+            return Err(unsupported(&format!(
+                "functions of timestamps in the unknown session time zone `{}`",
+                input.env.zone_name
+            )));
         }
-        None => FixedOffset(0),
+        None => Arc::new(FixedOffset(0)),
     };
     let opts = BindOptions::new()
         .with_ansi(input.env.ansi)
         .with_kernel(input.env.kernels)
-        .with_time_zone(Arc::new(zone))
+        .with_time_zone(zone)
         .with_query_start(input.env.query_start_micros)
         .with_user(Arc::clone(&input.env.user));
     let function = bind_scalar(name, &bind_args, &opts).map_err(|err| {

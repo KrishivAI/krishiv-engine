@@ -15,6 +15,7 @@ workspace = true
 arrow-array.workspace = true
 arrow-buffer.workspace = true
 arrow-schema.workspace = true
+jiff = { workspace = true, features = ["std", "tzdb-bundle-always"] }
 krishiv-common = { path = "../krishiv-common" }
 libm.workspace = true
 md5.workspace = true

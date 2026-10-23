@@ -43,7 +43,7 @@ use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
-use crate::conf::{self, ConfStore, RuntimeConf};
+use crate::conf::{self, ConfStore, RuntimeConf, effective_session_zone};
 use crate::dataframe::{DataFrame, DataFrameReader};
 
 /// The store id of the local file system.
@@ -503,7 +503,29 @@ impl Session {
 
     /// The analysis inputs of one query.
     pub(crate) fn query_env(&self) -> QueryEnv {
-        let (config, conf_version) = self.state.conf.versioned_snapshot();
+        let (snapshot, conf_version) = self.state.conf.versioned_snapshot();
+        // The effective session time zone, resolved once per query (never
+        // per row): the explicit config value, else `TZ`, else the system
+        // zone, else `UTC`. Injected into the query's config snapshot so
+        // every consumer (casts, datetime functions) reads this one value;
+        // the stored session config still shows the value as set.
+        let config = {
+            let explicit = conf::get(&snapshot, "spark.sql.session.timeZone");
+            let needs_default = explicit
+                .as_deref()
+                .is_none_or(|s| s.eq_ignore_ascii_case("LOCAL"));
+            if !needs_default {
+                snapshot
+            } else {
+                let zone = effective_session_zone(explicit.as_deref());
+                let mut next = Config::clone(&snapshot);
+                if next.set("spark.sql.session.timeZone", &zone).is_ok() {
+                    Arc::new(next)
+                } else {
+                    snapshot
+                }
+            }
+        };
         let files = Arc::new(FileReads::new(
             self.state.io.context(),
             self.state.formats.clone(),

@@ -71,6 +71,7 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
             children,
         });
     }
+    let environment = env(&mut e, plan.env());
     Ok(pb::PhysicalPlan {
         format_version: FORMAT_VERSION,
         min_reader_version: e.min_reader,
@@ -80,7 +81,7 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
         explain,
         explain_root: explain_ids[&std::ptr::from_ref(plan.explain())],
         warnings: plan.warnings().to_vec(),
-        env: Some(env(plan.env())),
+        env: Some(environment),
         exprs: e.exprs,
     })
 }
@@ -105,12 +106,19 @@ fn index(n: usize) -> Result<u32> {
     u32::try_from(n).map_err(|_| CodecError::Unsupported("more than 2^32 entries".to_owned()))
 }
 
-fn env(env: &ExprEnv) -> pb::ExprEnv {
+fn env(e: &mut Encoder, env: &ExprEnv) -> pb::ExprEnv {
+    // The old fixed-offset field for v4 readers; v5 readers prefer
+    // `zone_name`. A region zone needs a v5 reader.
+    let fixed = krishiv_kernels::cast::FixedOffset::parse(&env.zone).map(|o| o.0);
+    if fixed.is_none() {
+        e.min_reader = e.min_reader.max(5);
+    }
     pb::ExprEnv {
         ansi: env.ansi,
-        zone: env.zone,
+        zone: fixed,
         query_start_micros: env.query_start_micros,
         user: env.user.to_string(),
+        zone_name: Some(env.zone.clone()),
     }
 }
 

@@ -13,9 +13,9 @@ const MICROS_PER_SECOND: i64 = 1_000_000;
 
 /// The UTC-offset rules of a session time zone (`spark.sql.session.timeZone`).
 ///
-/// Kernels never resolve zone names: the caller supplies the rules
-/// ([`FixedOffset`] covers `UTC` and `+hh:mm` zones; a tz-database
-/// implementation belongs to the session layer).
+/// Time zones come in as [`TimeZoneRules`] (the session zone resolved by the
+/// caller: [`FixedOffset`] for `UTC` and `+hh:mm`, [`SessionZone`] for
+/// region ids through `jiff`'s bundled tz database).
 pub trait TimeZoneRules: Send + Sync + std::fmt::Debug {
     /// The offset east of UTC, in seconds, at the UTC instant `utc_seconds`.
     fn offset_at_utc(&self, utc_seconds: i64) -> i32;
@@ -37,6 +37,193 @@ impl TimeZoneRules for FixedOffset {
     fn offset_for_local(&self, _local_seconds: i64) -> i32 {
         self.0
     }
+}
+
+impl FixedOffset {
+    /// The zone a `spark.sql.session.timeZone` value names, when it is a
+    /// fixed offset: `UTC`, `GMT`, `Z`, `Etc/UTC` or `[UTC|GMT][+-]hh[:mm]`
+    /// (hours up to 18). `None` for region ids, which need the time-zone
+    /// database, and for malformed zones.
+    #[must_use]
+    pub fn parse(zone: &str) -> Option<Self> {
+        let zone = zone.trim();
+        if ["UTC", "GMT", "UT", "Z", "Etc/UTC"].contains(&zone) {
+            return Some(Self(0));
+        }
+        let rest = zone
+            .strip_prefix("UTC")
+            .or_else(|| zone.strip_prefix("GMT"))
+            .unwrap_or(zone);
+        let (sign, hm) = match rest.as_bytes().first()? {
+            b'+' => (1, &rest[1..]),
+            b'-' => (-1, &rest[1..]),
+            _ => return None,
+        };
+        let (h, m) = hm.split_once(':').unwrap_or((hm, "0"));
+        let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
+        ((0..=18).contains(&h) && (0..60).contains(&m)).then(|| Self(sign * (h * 3600 + m * 60)))
+    }
+}
+
+/// A session time zone with full region support (`America/Los_Angeles`),
+/// backed by `jiff`'s bundled tz database behind [`TimeZoneRules`].
+/// Parses the same Spark zone forms as [`FixedOffset`] plus region ids
+/// and Java's short ids; unknown names are `None`.
+#[derive(Debug, Clone)]
+pub struct SessionZone(jiff::tz::TimeZone);
+
+impl SessionZone {
+    /// The zone `name` as Spark's `DateTimeUtils.getZoneId` takes it:
+    /// `Z`, an offset, `UTC`/`GMT`/`UT` with an optional offset, a short
+    /// id or a region name. `None` for unknown names.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        parse_zone(name).map(Self)
+    }
+
+    /// UTC.
+    #[must_use]
+    pub fn utc() -> Self {
+        Self(jiff::tz::TimeZone::UTC)
+    }
+}
+
+impl TimeZoneRules for SessionZone {
+    fn offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        jiff::Timestamp::from_second(utc_seconds)
+            .map(|t| self.0.to_offset(t).seconds())
+            .unwrap_or(0)
+    }
+
+    fn offset_for_local(&self, local_seconds: i64) -> i32 {
+        // The local date-time read as if it were UTC, resolved the way
+        // `java.time.ZonedDateTime.of` does: the earlier offset in an
+        // overlap, forward by the gap's length in a gap.
+        let resolved = jiff::Timestamp::from_second(local_seconds)
+            .map(|t| t.to_zoned(jiff::tz::TimeZone::UTC).datetime())
+            .and_then(|dt| self.0.to_ambiguous_zoned(dt).compatible());
+        resolved
+            .ok()
+            .and_then(|z| i32::try_from(local_seconds.checked_sub(z.timestamp().as_second())?).ok())
+            .unwrap_or(0)
+    }
+}
+
+/// `+h`, `+hh`, `+hh:mm`, `+hhmm`, `+hh:mm:ss` or `+hhmmss` (or with `-`)
+/// as the seconds east of UTC, as Java's `ZoneOffset.of` takes them.
+fn offset_seconds(s: &str) -> Option<i32> {
+    let (sign, rest) = match s.split_at_checked(1)? {
+        ("+", rest) => (1, rest),
+        ("-", rest) => (-1, rest),
+        _ => return None,
+    };
+    let colons = rest.matches(':').count();
+    let bytes = rest.as_bytes();
+    let shaped = colons == 0
+        || (bytes.get(2) == Some(&b':')
+            && (colons == 1 && rest.len() == 5
+                || colons == 2 && rest.len() == 8 && bytes.get(5) == Some(&b':')));
+    let digits: String = rest.chars().filter(|c| *c != ':').collect();
+    if !shaped || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let part = |i: usize| -> Option<i32> { digits.get(i..i + 2)?.parse().ok() };
+    let (h, m, sec) = match digits.len() {
+        1 => (digits.parse().ok()?, 0, 0),
+        2 => (part(0)?, 0, 0),
+        4 => (part(0)?, part(2)?, 0),
+        6 => (part(0)?, part(2)?, part(4)?),
+        _ => return None,
+    };
+    let total = h
+        .saturating_mul(3600)
+        .saturating_add(m.saturating_mul(60))
+        .saturating_add(sec);
+    (m < 60 && sec < 60 && total <= 18 * 3600).then_some(sign * total)
+}
+
+/// Java's `ZoneId.SHORT_IDS`: the three-letter IDs `ZoneId.of` accepts.
+const SHORT_IDS: [(&str, &str); 28] = [
+    ("ACT", "Australia/Darwin"),
+    ("AET", "Australia/Sydney"),
+    ("AGT", "America/Argentina/Buenos_Aires"),
+    ("ART", "Africa/Cairo"),
+    ("AST", "America/Anchorage"),
+    ("BET", "America/Sao_Paulo"),
+    ("BST", "Asia/Dhaka"),
+    ("CAT", "Africa/Harare"),
+    ("CNT", "America/St_Johns"),
+    ("CST", "America/Chicago"),
+    ("CTT", "Asia/Shanghai"),
+    ("EAT", "Africa/Addis_Ababa"),
+    ("ECT", "Europe/Paris"),
+    ("IET", "America/Indiana/Indianapolis"),
+    ("IST", "Asia/Kolkata"),
+    ("JST", "Asia/Tokyo"),
+    ("MIT", "Pacific/Apia"),
+    ("NET", "Asia/Yerevan"),
+    ("NST", "Pacific/Auckland"),
+    ("PLT", "Asia/Karachi"),
+    ("PNT", "America/Phoenix"),
+    ("PRT", "America/Puerto_Rico"),
+    ("PST", "America/Los_Angeles"),
+    ("SST", "Pacific/Guadalcanal"),
+    ("VST", "Asia/Ho_Chi_Minh"),
+    ("EST", "-05:00"),
+    ("MST", "-07:00"),
+    ("HST", "-10:00"),
+];
+
+/// Spark's two `getZoneId` normalizations (`SparkDateTimeUtils`), in order:
+/// `singleHourTz` `(\+|\-)(\d):` → `$10$2:` (`+5:30` is `+05:30`), then
+/// `singleMinuteTz` `(\+|\-)(\d\d):(\d)$` → `$1$2:0$3` (`+10:7` is
+/// `+10:07`). Each replaces the first match only.
+fn pad_hour(name: &str) -> String {
+    let b = name.as_bytes();
+    let hour = (0..b.len().saturating_sub(2))
+        .find(|&i| matches!(b[i], b'+' | b'-') && b[i + 1].is_ascii_digit() && b[i + 2] == b':');
+    let name = match hour {
+        Some(i) => format!("{}0{}", &name[..=i], &name[i + 1..]),
+        None => name.to_owned(),
+    };
+    let b = name.as_bytes();
+    let minute = (0..b.len().saturating_sub(4)).find(|&i| {
+        matches!(b[i], b'+' | b'-')
+            && b[i + 1].is_ascii_digit()
+            && b[i + 2].is_ascii_digit()
+            && b[i + 3] == b':'
+            && b[i + 4].is_ascii_digit()
+            && i + 5 == b.len()
+    });
+    match minute {
+        Some(i) => format!("{}0{}", &name[..i + 4], &name[i + 4..]),
+        None => name,
+    }
+}
+
+/// A zone ID as Spark's `DateTimeUtils.getZoneId` takes it (`ZoneId.of`
+/// with the short IDs): `Z`, an offset, `UTC`/`GMT`/`UT` with an optional
+/// offset, a short ID or a region name.
+fn parse_zone(name: &str) -> Option<jiff::tz::TimeZone> {
+    use jiff::tz::{Offset, TimeZone};
+    let fixed = |secs: i32| Offset::from_seconds(secs).ok().map(TimeZone::fixed);
+    let padded = pad_hour(name);
+    let name = SHORT_IDS
+        .iter()
+        .find(|(short, _)| *short == padded)
+        .map_or(padded.as_str(), |(_, id)| id);
+    if matches!(name, "Z" | "UTC" | "GMT" | "UT") {
+        return Some(TimeZone::UTC);
+    }
+    if let Some(secs) = offset_seconds(name) {
+        return fixed(secs);
+    }
+    for prefix in ["UTC", "GMT", "UT"] {
+        if let Some(secs) = name.strip_prefix(prefix).and_then(offset_seconds) {
+            return fixed(secs);
+        }
+    }
+    TimeZone::get(name).ok()
 }
 
 /// Days since 1970-01-01 of a proleptic Gregorian date, or `None` for an

@@ -6,9 +6,9 @@
 //! `day`, `extract`/`date_part`), `date`/`timestamp` ± interval, and
 //! `current_date`/`current_timestamp`.
 //!
-//! Time zones come in as [`TimeZoneRules`] (the session zone resolved by the
-//! caller, [`FixedOffset`] for `UTC` and `+hh:mm`); this module never sees a
-//! zone name. `current_date` and `current_timestamp` take the query's start
+//! Time zones come in as [`TimeZoneRules`] (the session zone resolved by
+//! the caller: [`FixedOffset`] for `UTC` and `+hh:mm`, [`SessionZone`] for
+//! region ids); this module never sees a zone name. `current_date` and `current_timestamp` take the query's start
 //! instant, so a kernel stays a pure function and one query reads one clock.
 //! Dates are proleptic Gregorian, as in Spark 3+.
 
@@ -22,7 +22,7 @@ use arrow_array::{
 use arrow_buffer::NullBuffer;
 use arrow_schema::DataType;
 
-pub use crate::cast::{FixedOffset, TimeZoneRules};
+pub use crate::cast::{FixedOffset, SessionZone, TimeZoneRules};
 
 use crate::cast::datetime::{
     MICROS_PER_DAY, civil_from_days, days_from_civil, local_to_utc, utc_to_local,

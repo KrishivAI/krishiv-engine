@@ -17,7 +17,7 @@ use crate::physical::{ExprEnv, PhysNode};
 fn env() -> ExprEnv {
     ExprEnv {
         ansi: true,
-        zone: Some(0),
+        zone: "UTC".to_owned(),
         query_start_micros: 0,
         user: Arc::from("u"),
     }

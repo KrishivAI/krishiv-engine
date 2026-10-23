@@ -37,6 +37,7 @@ use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_n
 use arrow_schema::{DataType as ArrowType, SchemaRef};
 use krishiv_common::config::{ANSI_ENABLED, Config, SESSION_TIME_ZONE};
 use krishiv_kernels::KernelCtx;
+use krishiv_kernels::cast::{SessionZone, TimeZoneRules};
 use krishiv_plan::{
     AttrId, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr,
     ResolvedFunction,
@@ -153,9 +154,13 @@ pub(crate) trait PhysExpr: Send + Sync + fmt::Debug {
 pub(crate) struct EvalEnv {
     /// `spark.sql.ansi.enabled`.
     pub(crate) ansi: bool,
-    /// The session time zone as a fixed offset in seconds, when it is one
-    /// (`UTC`, `+hh:mm`); region zones need the tz database (P2-T021b).
-    pub(crate) zone: Option<i32>,
+    /// The effective session time zone name (`spark.sql.session.timeZone`
+    /// as resolved once per query: explicit, else the system zone, else
+    /// `UTC`).
+    pub(crate) zone_name: String,
+    /// The zone's rules, resolved once per query; `None` for a region the
+    /// tz database has no such zone (planning fails where it is read).
+    pub(crate) zone: Option<Arc<dyn TimeZoneRules>>,
     /// The kernels' dispatch target.
     pub(crate) kernels: KernelCtx,
     /// The query's clock (microseconds since the epoch, UTC), read once at
@@ -171,10 +176,11 @@ impl EvalEnv {
             .get(&ANSI_ENABLED)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
-        let zone = config
+        let zone_name = config
             .get(&SESSION_TIME_ZONE)
-            .and_then(|v| v.as_str())
-            .and_then(fixed_offset);
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "UTC".to_owned());
+        let zone = SessionZone::parse(&zone_name).map(|z| Arc::new(z) as Arc<dyn TimeZoneRules>);
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -182,6 +188,7 @@ impl EvalEnv {
             .unwrap_or_default();
         Self {
             ansi,
+            zone_name,
             zone,
             kernels: KernelCtx::new(),
             query_start_micros,
@@ -191,9 +198,11 @@ impl EvalEnv {
 
     /// The environment a plan fixed, with this worker's kernels.
     pub(crate) fn from_plan(env: &ExprEnv) -> Self {
+        let zone = SessionZone::parse(&env.zone).map(|z| Arc::new(z) as Arc<dyn TimeZoneRules>);
         Self {
             ansi: env.ansi,
-            zone: env.zone,
+            zone_name: env.zone.clone(),
+            zone,
             kernels: KernelCtx::new(),
             query_start_micros: env.query_start_micros,
             user: Arc::clone(&env.user),
@@ -204,30 +213,11 @@ impl EvalEnv {
     pub(crate) fn to_plan(&self) -> ExprEnv {
         ExprEnv {
             ansi: self.ansi,
-            zone: self.zone,
+            zone: self.zone_name.clone(),
             query_start_micros: self.query_start_micros,
             user: Arc::clone(&self.user),
         }
     }
-}
-
-/// The offset of `UTC`, `GMT`, `Z` or `[+-]hh:mm`, in seconds.
-fn fixed_offset(zone: &str) -> Option<i32> {
-    if ["UTC", "GMT", "Z", "Etc/UTC"].contains(&zone) {
-        return Some(0);
-    }
-    let rest = zone
-        .strip_prefix("UTC")
-        .or_else(|| zone.strip_prefix("GMT"))
-        .unwrap_or(zone);
-    let (sign, hm) = match rest.as_bytes().first()? {
-        b'+' => (1, &rest[1..]),
-        b'-' => (-1, &rest[1..]),
-        _ => return None,
-    };
-    let (h, m) = hm.split_once(':').unwrap_or((hm, "0"));
-    let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
-    ((0..=18).contains(&h) && (0..60).contains(&m)).then(|| sign * (h * 3600 + m * 60))
 }
 
 /// The input an expression is compiled against.

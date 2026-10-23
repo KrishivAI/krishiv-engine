@@ -150,8 +150,10 @@ pub enum JoinDistribution {
 pub struct ExprEnv {
     /// `spark.sql.ansi.enabled`.
     pub ansi: bool,
-    /// The session time zone as a fixed offset in seconds, when it is one.
-    pub zone: Option<i32>,
+    /// The effective session time zone name (`spark.sql.session.timeZone`
+    /// as resolved once per query: explicit, else the system zone, else
+    /// `UTC`).
+    pub zone: String,
     /// The query's clock (microseconds since the epoch, UTC), read once at
     /// planning: every instantiation sees the same `current_date()`.
     pub query_start_micros: i64,

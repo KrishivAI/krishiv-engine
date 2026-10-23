@@ -51,7 +51,7 @@ mod profile;
 mod session;
 
 pub use column::Column;
-pub use conf::RuntimeConf;
+pub use conf::{RuntimeConf, effective_session_zone};
 pub use dataframe::{
     DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, GroupedData, JoinType,
 };

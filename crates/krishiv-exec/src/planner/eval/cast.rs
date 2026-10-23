@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::DataType as ArrowType;
+use krishiv_kernels::cast::TimeZoneRules;
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
 use krishiv_plan::CastMode;
 use krishiv_types::DataType;
@@ -21,7 +22,7 @@ struct Cast {
     /// The kernels' target: `Utf8` where the result is a `Utf8View` string.
     kernel_to: ArrowType,
     mode: KernelMode,
-    zone: FixedOffset,
+    zone: Arc<dyn TimeZoneRules>,
     nullable: bool,
 }
 
@@ -45,13 +46,15 @@ pub(super) fn compile(
         _ => return Err(internal("a cast mode the analyzer did not pin")),
     };
     let target = to.to_arrow();
-    let zone = match (needs_zone(e.data_type(), &target), input.env.zone) {
-        (_, Some(offset)) => FixedOffset(offset),
-        (false, None) => FixedOffset(0),
+    let needs = needs_zone(e.data_type(), &target);
+    let zone: Arc<dyn TimeZoneRules> = match (needs, &input.env.zone) {
+        (_, Some(rules)) => Arc::clone(rules),
+        (false, None) => Arc::new(FixedOffset(0)),
         (true, None) => {
-            return Err(unsupported(
-                "casts that read a session time zone other than a fixed offset",
-            ));
+            return Err(unsupported(&format!(
+                "casts that read the unknown session time zone `{}`",
+                input.env.zone_name
+            )));
         }
     };
     let kernel_to = match &target {
@@ -86,7 +89,7 @@ impl PhysExpr for Cast {
         let input = from_view(v.array())?;
         let opts = CastOptions {
             mode: self.mode,
-            time_zone: &self.zone,
+            time_zone: self.zone.as_ref(),
         };
         let out = cast(input.as_ref(), &self.kernel_to, &opts)?;
         let out: ArrayRef = match (out.data_type(), &self.to) {
