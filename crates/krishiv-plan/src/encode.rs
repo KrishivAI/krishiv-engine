@@ -791,6 +791,10 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(21);
                 self.expr(count);
             }
+            PlanNode::Offset { offset, .. } => {
+                self.u8(22);
+                self.expr(offset);
+            }
         }
     }
 

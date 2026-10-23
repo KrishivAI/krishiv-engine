@@ -83,6 +83,30 @@ format. The score is `caught / (caught + missed + timeout)` per area, reported i
 `mutation-score` artifact; the floors are in `tests/mutation-floors.json`. To try it on one file:
 `cargo mutants --package krishiv-kernels --file crates/krishiv-kernels/src/hash/murmur3.rs --test-tool nextest`.
 
+## Precheck before you push
+
+`cargo xtask precheck` runs what the required PR checks run, scoped to what your branch changed against the base, and
+prints one table of pass, fail or skipped (with the reason) per check. It exits non-zero on any failure, so a PR
+should pass CI on its first run.
+
+```text
+cargo xtask precheck [--base origin/main] [--fast] [--full] [--memory-cap 12G]
+```
+
+- Rust checks run on the touched crates (tests also on their dependents); a change to `Cargo.toml`, `Cargo.lock`, the
+  toolchain or lint config runs the whole workspace.
+- `--fast` skips coverage and budgets for quick iteration. Budgets also run only when a manifest changed, or with `--full`.
+- `--memory-cap SIZE` puts the heavy steps (clippy, doc, tests, coverage, budgets) under a `systemd-run` memory cap.
+  Putting the whole command under `systemd-run --user --scope -p MemoryMax=...` works too.
+- A tool that is not installed (`cargo-nextest`, `cargo-llvm-cov`, `zizmor`, `typos`, `taplo`, `uv`, ...) is reported as
+  `not installed`, never skipped silently. Full logs are in `target/precheck/<check>.log`.
+- Checks CI runs elsewhere (`hack`, `msrv`, the wheel matrix, `wheel-sizes`, `dependency-review`, CodSpeed, OSV) are
+  not run locally. Python tests of `python/` need the wheel build and run only in CI; `bench/` tests run locally.
+
+The mapping from each required CI check to a precheck step is in `xtask/src/precheck.rs`; a policy test in
+`xtask/tests/precheck.rs` fails when a required check has no mapping. When branch protection gains a required check,
+add it to `REQUIRED_CI_CHECKS` and map it.
+
 ## Python quality
 
 All Python (`python/`, `bench/`, `tests/scripts/`) is checked with the Astral toolchain: ruff (lint and format) and

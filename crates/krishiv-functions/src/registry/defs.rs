@@ -4,8 +4,8 @@
 //! Arity, determinism and availability come from Spark's catalog.
 
 use krishiv_common::error::{
-    InvalidExtractField, KrishivError, LegacyErrorTemp1210, NonFoldableArgument,
-    SecondFunctionArgumentNotInteger,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchValueOutOfRange, InvalidExtractField,
+    KrishivError, LegacyErrorTemp1210, NonFoldableArgument, SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{DataType, DecimalType};
@@ -62,6 +62,41 @@ pub(super) fn typed(t: DataType, c: &CallTypes<'_>) -> Result<ArgType, KrishivEr
 
 pub(super) fn string(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::String, c)
+}
+
+/// `regexp_replace`: Spark checks `position` while typing the call, so it
+/// must be a foldable `INT` in `(0, 2147483647]` (NULL is fine) whatever the
+/// rows hold.
+fn regexp_replace_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if c.args().len() == 4 {
+        let call = || {
+            let args: Vec<String> = (0..4).map(|n| c.sql(n).unwrap_or_default()).collect();
+            format!("\"regexp_replace({})\"", args.join(", "))
+        };
+        match c.constant(3) {
+            Some(Constant::Integral(n)) if *n < 1 => {
+                return Err(DatatypeMismatchValueOutOfRange {
+                    sql_expr: call(),
+                    expr_name: "position".to_owned(),
+                    value_range: "(0, 2147483647]".to_owned(),
+                    current_value: n.to_string(),
+                }
+                .into());
+            }
+            Some(Constant::Error(e)) => return Err(e.clone()),
+            Some(Constant::Integral(_) | Constant::Null) => {}
+            _ => {
+                return Err(DatatypeMismatchNonFoldableInput {
+                    sql_expr: call(),
+                    input_name: "`position`".to_owned(),
+                    input_type: "\"INT\"".to_owned(),
+                    input_expr: format!("\"{}\"", c.sql(3).unwrap_or_default()),
+                }
+                .into());
+            }
+        }
+    }
+    string(c)
 }
 
 pub(super) fn int(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -190,6 +225,16 @@ fn strings() -> Vec<Spec> {
         &["lpad", "rpad"],
         &Inputs::Built(InputBuilder(pad_inputs)),
         first_type,
+    ));
+    out.extend(scalar(
+        &["regexp_replace"],
+        &Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::Integer),
+        ]),
+        regexp_replace_result,
     ));
     out.extend(scalar(
         &["substring", "substr"],

@@ -28,6 +28,7 @@ mod arith;
 mod datetime;
 mod hash;
 mod math;
+mod regex;
 mod session;
 mod string;
 
@@ -277,10 +278,11 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 6] = [
+const FAMILIES: [(&[&str], Binder); 7] = [
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
     (math::NAMES, math::bind),
+    (regex::NAMES, regex::bind),
     (arith::NAMES, arith::bind),
     (hash::NAMES, hash::bind),
     (session::NAMES, session::bind),

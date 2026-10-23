@@ -7,7 +7,7 @@
     "krishiv-alloc": 9,
     "krishiv-cli": 2,
     "krishiv-kernels": 2,
-    "krishiv-python": 114
+    "krishiv-python": 122
   },
   "wheel_bytes": {
     "cp311-abi3-macosx_11_0_arm64": 8164424,

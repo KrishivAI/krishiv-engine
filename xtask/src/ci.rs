@@ -160,13 +160,17 @@ pub fn measure_numstat(raw: &str) -> Result<SizeReport, String> {
 
 /// Whether a PR touching `paths` needs the Rust jobs. Docs-, bench- and
 /// plan-only PRs skip them (P2-T145). CI config, agent config and hooks are
-/// policy-tested by xtask, so they always run the Rust jobs.
+/// policy-tested by xtask, so they always run the Rust jobs. The root
+/// `README.md` runs them too: CI executes its Quickstart (P2-T147).
 #[must_use]
 pub fn rust_relevant<'a>(paths: impl IntoIterator<Item = &'a str>) -> bool {
     paths.into_iter().any(|p| {
         let p = p.trim();
         if p.is_empty() {
             return false;
+        }
+        if p == "README.md" {
+            return true;
         }
         if [".github/", ".claude/", ".githooks/"]
             .iter()

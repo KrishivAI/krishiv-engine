@@ -1,5 +1,5 @@
 {
-  "cases": 9046,
+  "cases": 9206,
   "entries": [
     {
       "id": "abs#23a3b7c1c876/ansi_off",
@@ -8466,6 +8466,174 @@
       "reason": "SELECT radians(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
+      "id": "regexp_replace#074e6419593f/ansi_off",
+      "reason": "SELECT regexp_replace(map('a', 1), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#074e6419593f/ansi_on",
+      "reason": "SELECT regexp_replace(map('a', 1), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#1043ae0b689c/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', INTERVAL '1-2' YEAR TO MONTH, 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#1043ae0b689c/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', INTERVAL '1-2' YEAR TO MONTH, 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#1fb5d29efcc4/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#1fb5d29efcc4/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#418361ef9a49/ansi_off",
+      "reason": "SELECT regexp_replace(INTERVAL '1 02:03:04' DAY TO SECOND, '(\\\\d+)', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#418361ef9a49/ansi_on",
+      "reason": "SELECT regexp_replace(INTERVAL '1 02:03:04' DAY TO SECOND, '(\\\\d+)', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#44c18601c5b8/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#44c18601c5b8/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#4554f98913c4/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', map('a', 1), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#4554f98913c4/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', map('a', 1), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#4ad2258a5586/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_replace#4ad2258a5586/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_replace#4e808b6ab3ea/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#4e808b6ab3ea/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#636de4f3feba/ansi_off",
+      "reason": "SELECT regexp_replace(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', '(\\\\d+)', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_replace#636de4f3feba/ansi_on",
+      "reason": "SELECT regexp_replace(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', '(\\\\d+)', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_replace#69a3284260d7/ansi_off",
+      "reason": "SELECT regexp_replace(named_struct('a', 1, 'b', 'x'), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#69a3284260d7/ansi_on",
+      "reason": "SELECT regexp_replace(named_struct('a', 1, 'b', 'x'), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#77d4f4ba5844/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', named_struct('a', 1, 'b', 'x'), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#77d4f4ba5844/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', named_struct('a', 1, 'b', 'x'), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#780d06e5d806/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_replace#780d06e5d806/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_replace#790472f65a6c/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', array(1, 2), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#790472f65a6c/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', array(1, 2), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#7e9104eeb35d/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#7e9104eeb35d/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#95adbb11f099/ansi_off",
+      "reason": "SELECT regexp_replace(TIMESTAMP'2024-02-29 12:34:56.123456', '(\\\\d+)', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_replace#95adbb11f099/ansi_on",
+      "reason": "SELECT regexp_replace(TIMESTAMP'2024-02-29 12:34:56.123456', '(\\\\d+)', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_replace#99ef1ee4d285/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_replace#99ef1ee4d285/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_replace#d6194fc8a763/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#d6194fc8a763/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#d837237c731c/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', TIMESTAMP'2024-02-29 12:34:56.123456', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_replace#d837237c731c/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', TIMESTAMP'2024-02-29 12:34:56.123456', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_replace#d882b6eb34c6/ansi_off",
+      "reason": "SELECT regexp_replace('100-200', INTERVAL '1 02:03:04' DAY TO SECOND, 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#d882b6eb34c6/ansi_on",
+      "reason": "SELECT regexp_replace('100-200', INTERVAL '1 02:03:04' DAY TO SECOND, 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#fb02919091af/ansi_off",
+      "reason": "SELECT regexp_replace(INTERVAL '1-2' YEAR TO MONTH, '(\\\\d+)', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#fb02919091af/ansi_on",
+      "reason": "SELECT regexp_replace(INTERVAL '1-2' YEAR TO MONTH, '(\\\\d+)', 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_replace#fb71844662a3/ansi_off",
+      "reason": "SELECT regexp_replace(array(1, 2), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_replace#fb71844662a3/ansi_on",
+      "reason": "SELECT regexp_replace(array(1, 2), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
       "id": "replace#19a6746c3d66/ansi_off",
       "reason": "SELECT replace('ABCabc', 'abc', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
     },
@@ -12799,6 +12967,11 @@
       "pass": 36
     },
     {
+      "function": "regexp_replace",
+      "cases": 160,
+      "pass": 118
+    },
+    {
       "cases": 156,
       "function": "replace",
       "pass": 114
@@ -12964,5 +13137,5 @@
       "pass": 36
     }
   ],
-  "pass": 5950
+  "pass": 6068
 }
