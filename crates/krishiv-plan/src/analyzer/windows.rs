@@ -588,7 +588,7 @@ impl Resolver<'_> {
             return Ok(());
         }
         if frame.units == FrameUnits::Range {
-            return Err(unsupported("RANGE window frames with value bounds", origin));
+            return Err(unsupported("window frames with value bounds", origin));
         }
         let shown_frame = shown.frame.clone().unwrap_or_else(|| frame.clone());
         let text = window_text(

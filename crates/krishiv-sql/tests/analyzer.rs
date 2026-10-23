@@ -522,7 +522,8 @@ fn window_goldens_resolve_to_a_fixed_point() {
             failures.push(format!("{sql}: not a fixed point\n{}", again.plan.root()));
         }
     }
-    assert_eq!(pending, ["rows_sliding", "range_offset"]);
-    assert_eq!(resolved, 66);
+    // `1 + 1 PRECEDING`: operators do not fold yet.
+    assert_eq!(pending, ["range_offset", "frame_folded_bound"]);
+    assert_eq!(resolved, 82);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
