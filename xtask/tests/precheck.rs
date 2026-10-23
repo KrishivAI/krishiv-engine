@@ -14,7 +14,7 @@ use xtask::precheck::{
     Action, Changes, EXTERNAL_CI_CHECKS, Mapping, Opts, Outcome, Pkg, REQUIRED_CI_CHECKS, STEP_IDS,
     Scope, Status, Step, cap_prefix, dependents_closure, failed, host_has_x86_64v3,
     kernel_require_targets, mapping, memory_cap_error, parse_packages, plan, render_table,
-    tracked_files_cmd,
+    tracked_files_cmd, tracked_files_cmd_literal,
 };
 
 fn pkg(name: &str, deps: &[&str]) -> Pkg {
@@ -998,4 +998,113 @@ fn text_lint_reads_only_git_tracked_files() {
     );
     assert_eq!(out.status, Status::Pass);
     assert!(!seen.exists(), "the linter must not run with no files");
+}
+
+#[test]
+fn tracked_files_cmd_skips_deleted_tracked_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    std::fs::write(root.join("kept.md"), "ok\n").unwrap();
+    std::fs::write(root.join("gone.md"), "ok\n").unwrap();
+    git(root, &["add", "kept.md", "gone.md"]);
+    git(root, &["commit", "-q", "-m", "base"]);
+    // Deleted without staging: still listed by `git ls-files`, absent on disk.
+    std::fs::remove_file(root.join("gone.md")).unwrap();
+
+    let bin = tempfile::tempdir().unwrap();
+    let tool = bin.path().join("fake-lint");
+    std::fs::write(&tool, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SEEN\"\n").unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let seen = bin.path().join("seen");
+
+    let mut c = tracked_files_cmd("**/*.md", tool.to_str().unwrap(), &[]);
+    c.env.push(("SEEN".into(), seen.to_str().unwrap().into()));
+    let out = run_step(
+        root,
+        &step_of("text-lint", Action::Run(vec![c])),
+        None,
+        bin.path(),
+    );
+    assert_eq!(out.status, Status::Pass, "{}", out.detail);
+    assert_eq!(std::fs::read_to_string(&seen).unwrap(), "kept.md\n");
+
+    // When every match is missing, the linter must not run at all.
+    std::fs::remove_file(root.join("kept.md")).unwrap();
+    std::fs::remove_file(&seen).unwrap();
+    let mut none = tracked_files_cmd("**/*.md", tool.to_str().unwrap(), &[]);
+    none.env
+        .push(("SEEN".into(), seen.to_str().unwrap().into()));
+    let out = run_step(
+        root,
+        &step_of("text-lint", Action::Run(vec![none])),
+        None,
+        bin.path(),
+    );
+    assert_eq!(out.status, Status::Pass);
+    assert!(!seen.exists(), "the linter must not run with no files");
+}
+
+#[test]
+fn markdownlint_paths_are_passed_as_literal_paths() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    std::fs::write(root.join("guide[1].md"), "ok\n").unwrap();
+    git(root, &["add", "guide[1].md"]);
+    git(root, &["commit", "-q", "-m", "base"]);
+
+    let bin = tempfile::tempdir().unwrap();
+    let tool = bin.path().join("fake-lint");
+    std::fs::write(&tool, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SEEN\"\n").unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let seen = bin.path().join("seen");
+
+    let mut c = tracked_files_cmd_literal("**/*.md", tool.to_str().unwrap(), &[]);
+    c.env.push(("SEEN".into(), seen.to_str().unwrap().into()));
+    let out = run_step(
+        root,
+        &step_of("text-lint", Action::Run(vec![c])),
+        None,
+        bin.path(),
+    );
+    assert_eq!(out.status, Status::Pass, "{}", out.detail);
+    assert_eq!(
+        std::fs::read_to_string(&seen).unwrap(),
+        ":guide[1].md\n",
+        "markdownlint needs the `:` literal prefix so glob characters are not expanded"
+    );
+
+    // Both markdownlint invocations (native and docker fallback) use it.
+    let native = plan(&detect(&[]), &opts(&[]), &|b| b == "markdownlint-cli2", "x");
+    let Action::Run(cmds) = &step(&native, "text-lint").action else {
+        panic!()
+    };
+    assert!(
+        cmds.iter()
+            .all(|c| c.args.iter().any(|a| a.contains("printf ':%s"))),
+        "{:?}",
+        cmds[0].args
+    );
+    let docker = plan(&detect(&[]), &opts(&[]), &|b| b == "docker", "x");
+    let Action::Run(cmds) = &step(&docker, "text-lint").action else {
+        panic!()
+    };
+    assert!(
+        cmds.iter()
+            .all(|c| c.args.iter().any(|a| a.contains("printf ':%s"))),
+        "{:?}",
+        cmds[0].args
+    );
+    // Other linters keep bare paths.
+    let typos = plan(&detect(&[]), &opts(&[]), &|b| b == "typos", "x");
+    let Action::Run(cmds) = &step(&typos, "text-lint").action else {
+        panic!()
+    };
+    assert!(
+        cmds.iter()
+            .all(|c| !c.args.iter().any(|a| a.contains("printf ':%s")))
+    );
 }
