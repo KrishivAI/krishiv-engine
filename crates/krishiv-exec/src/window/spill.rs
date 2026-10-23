@@ -355,7 +355,7 @@ impl Window {
         if batch.num_rows() == 0 {
             return Ok(FlushOutput::Continue);
         }
-        match self.append(l, batch.clone())? {
+        match self.append(l, batch.clone(), false)? {
             Ok(()) => {
                 r.asked = false;
                 if Self::complete_rows(l) >= l.batch_rows {

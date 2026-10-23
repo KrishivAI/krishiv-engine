@@ -1803,6 +1803,64 @@ async fn a_frame_over_a_partition_on_disk_is_refused() {
     assert!(e.to_string().contains("larger than memory"), "{e}");
 }
 
+/// The window's metrics count its input once: rows read back in the flush
+/// phase (in memory or copied to a partition's own file) are not counted
+/// again.
+#[tokio::test]
+async fn spilled_rows_are_counted_once() {
+    let rows: Vec<Row> = (0..6_000)
+        .map(|i| {
+            let p = if i < 100 {
+                0
+            } else if i < 5_900 {
+                1
+            } else {
+                2 + i % 5
+            };
+            (Some(p), Some(i), i, Some(i % 17))
+        })
+        .collect();
+    let window = plan(functions(), true);
+    let (_dir, scope) = spill_scope();
+    let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+    let limit = 1 << 30;
+    let (root, ctx) = task(limit);
+    let mut sorted = rows.clone();
+    sorted.sort_by_key(|r| (r.0, r.1));
+    let batches: Vec<Batch> = sorted.chunks(250).map(batch).collect();
+    let spills = Spills {
+        every: 1,
+        slack: Some(96 << 10),
+    };
+    let out = drive_spilling(&op, &ctx, limit, &root, &batches, spills)
+        .await
+        .unwrap();
+    assert_eq!(out.iter().map(Batch::num_rows).sum::<usize>(), 6_000);
+    assert!(
+        op.counters
+            .external
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= 1
+    );
+    let count = |name: &str| {
+        op.extra_metrics()
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, m)| m)
+    };
+    assert!(
+        matches!(count("rows"), Some(crate::metrics::Metric::Count(6_000))),
+        "{:?}",
+        count("rows")
+    );
+    // Partitions 0, 1, then 2..=6.
+    assert!(
+        matches!(count("partitions"), Some(crate::metrics::Metric::Count(7))),
+        "{:?}",
+        count("partitions")
+    );
+}
+
 /// A batch whose first rows wait in the output keeps its bytes reserved
 /// for them when the rest of it spills: they are not the spill's to free
 /// (nor to fund its writer's scratch) until those rows are emitted.
