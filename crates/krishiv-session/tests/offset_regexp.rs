@@ -291,6 +291,35 @@ fn regexp_replace_position_is_checked_before_any_row() {
     );
 }
 
+/// Spark checks a count is foldable before its type, and bounds the sum of
+/// folded counts (error classes and messages from Spark 4.2.0).
+#[test]
+fn limit_like_checks_follow_spark_order() {
+    let s = session();
+    let unfoldable = ErrorClass::InvalidLimitLikeExpressionIsUnfoldable;
+    // A STRING column is not foldable: that, not its type, is the error.
+    let e = fails(
+        &s,
+        "SELECT s FROM (SELECT CAST(id AS STRING) AS s FROM t) LIMIT s",
+    );
+    assert_eq!(e.error_class(), unfoldable, "{e}");
+    assert!(e.to_string().contains("\"s\""), "{e}");
+    // `OFFSET rand()` (Spark: `IS_UNFOLDABLE` with `"_nondeterministic"`)
+    // is pinned in the analyzer's tests: `rand` is not implemented yet.
+    for sql in [
+        "SELECT id FROM t LIMIT 2147483647 OFFSET 1 + 0",
+        "SELECT id FROM t LIMIT 2147483646 + 1 OFFSET 1",
+    ] {
+        let e = fails(&s, sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::SumOfLimitAndOffsetExceedsMaxInt,
+            "{sql}: {e}"
+        );
+        assert!(e.to_string().contains("2147483647"), "{sql}: {e}");
+    }
+}
+
 /// Results and error classes of Spark 4.2.0 (local session, same data) for
 /// the edge cases of `OFFSET`.
 #[test]
