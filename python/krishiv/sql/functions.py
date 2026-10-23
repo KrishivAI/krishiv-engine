@@ -7,8 +7,8 @@ from __future__ import annotations
 from typing import Any
 
 from krishiv import _native
-from krishiv.errors import not_implemented
-from krishiv.sql.column import Column, _literal, _named
+from krishiv.errors import not_expected_type, not_implemented
+from krishiv.sql.column import Column, _literal, _named, _operand
 
 ColumnOrName = Column | str
 
@@ -105,6 +105,30 @@ def greatest(*cols: ColumnOrName) -> Column:
 
 def least(*cols: ColumnOrName) -> Column:
     return _call("least", *cols)
+
+
+def when(condition: Column, value: Any) -> Column:
+    """Starts a ``CASE WHEN condition THEN value`` chain, as
+    ``pyspark.sql.functions.when``. Chain :meth:`Column.when` for more
+    branches and :meth:`Column.otherwise` for the ``ELSE`` value; without
+    ``otherwise`` unmatched rows are NULL.
+
+    Examples
+    --------
+    >>> df = spark.createDataFrame([(2, "Alice"), (5, "Bob")], ["age", "name"])
+    >>> df.select(df.name, when(df.age > 3, 1).otherwise(0)).show()
+    +-----+-------------------------------------+
+    | name|CASE WHEN (age > 3) THEN 1 ELSE 0 END|
+    +-----+-------------------------------------+
+    |Alice|                                    0|
+    |  Bob|                                    1|
+    +-----+-------------------------------------+
+    """
+    from krishiv.sql.column import _WhenColumn
+
+    if not isinstance(condition, Column):
+        raise not_expected_type("condition", "Column", condition)
+    return _WhenColumn([(condition._c, _operand(value))])
 
 
 def asc(col: ColumnOrName) -> Column:

@@ -145,6 +145,14 @@ class PySparkAttributeError(PySparkException, AttributeError):
     pass
 
 
+class PySparkKeyError(PySparkException, KeyError):
+    pass
+
+
+class PySparkIndexError(PySparkException, IndexError):
+    pass
+
+
 class PySparkRuntimeError(PySparkException, RuntimeError):
     pass
 
@@ -213,3 +221,16 @@ def not_expected_type(arg_name: str, expected: str, value: object) -> PySparkTyp
 
 def not_implemented(feature: str) -> PySparkNotImplementedError:
     return PySparkNotImplementedError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": feature})
+
+
+def unsupported_feature(feature: str) -> UnsupportedOperationException:
+    """The engine's unsupported-feature error, as the engine itself raises it
+    (``KRISHIV_UNSUPPORTED_FEATURE``, SQLSTATE ``0A000``): for a PySpark method
+    whose plan the engine cannot build or run yet, where emulating it is out
+    of scope. Raised eagerly, as there is no plan to attach it to."""
+    return UnsupportedOperationException(
+        f"[KRISHIV_UNSUPPORTED_FEATURE] The feature {feature} is not supported by Krishiv yet. SQLSTATE: 0A000",
+        errorClass="KRISHIV_UNSUPPORTED_FEATURE",
+        messageParameters={"feature": feature},
+        sqlState="0A000",
+    )

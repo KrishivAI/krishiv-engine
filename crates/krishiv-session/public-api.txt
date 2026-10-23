@@ -89,6 +89,7 @@ pub fn krishiv_session::Column::lt(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::lt_eq(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::not_eq(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::or(self, impl core::convert::Into<Self>) -> Self
+pub fn krishiv_session::Column::try_cast(self, krishiv_types::data_type::DataType) -> Self
 impl core::clone::Clone for krishiv_session::Column
 pub fn krishiv_session::Column::clone(&self) -> krishiv_session::Column
 impl core::cmp::Eq for krishiv_session::Column

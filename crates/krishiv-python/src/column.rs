@@ -36,6 +36,13 @@ impl PyColumn {
         Ok(Self::wrap(self.inner.clone().cast(data_type)))
     }
 
+    /// `TRY_CAST(self AS to)`, `to` a Spark type string: invalid input
+    /// becomes `NULL`, even under ANSI.
+    fn try_cast(&self, py: Python<'_>, to: &str) -> PyResult<Self> {
+        let data_type = to.parse::<DataType>().map_err(|e| to_py(py, &e))?;
+        Ok(Self::wrap(self.inner.clone().try_cast(data_type)))
+    }
+
     fn add(&self, other: &Self) -> Self {
         Self::wrap(self.inner.clone() + other.inner.clone())
     }

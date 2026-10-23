@@ -45,6 +45,11 @@ impl PySession {
         PyDataFrame::new(self.inner.table(name))
     }
 
+    /// Drops the temporary table or view `name`; whether it existed.
+    fn drop_temp_view(&self, name: &str) -> bool {
+        self.inner.drop_temp_view(name)
+    }
+
     /// The DataFrame reading the files `paths` as `format`, with `options`.
     #[pyo3(signature = (format, paths, options=None))]
     fn read(

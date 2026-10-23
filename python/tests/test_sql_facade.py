@@ -170,8 +170,7 @@ def test_group_by_and_agg(df: DataFrame) -> None:
     ]
     assert df.agg(F.mean("v"), F.count("id")).columns[0].startswith("avg")
     assert df.groupby(["id"]).agg(F.sum(F.coalesce("v", F.lit(0.0))).alias("c")).columns == ["id", "c"]
-    with pytest.raises(errors.PySparkNotImplementedError):
-        df.groupBy("id").agg({"v": "sum"})  # ty: ignore[invalid-argument-type]
+    assert df.groupBy("id").agg({"v": "sum"}).columns == ["id", "sum(v)"]
     with pytest.raises(errors.PySparkTypeError):
         df.groupBy("id").agg("v")  # ty: ignore[invalid-argument-type]
 
