@@ -349,13 +349,24 @@ impl Resolver<'_> {
     }
 
     /// Spark's `checkLimitLikeClause` on a bound `LIMIT` count: it must be
-    /// an `INT`, and a foldable count must be neither NULL nor negative.
+    /// foldable, then an `INT`, and its folded value must be neither NULL
+    /// nor negative. A foldable count that does not fold here (for example
+    /// an overflowing `+`) stays accepted, as before.
     /// Kept out of the resolver's recursive match so its locals do not
     /// grow every frame of a deep plan.
     #[inline(never)]
     fn check_limit(&self, b: &Bound, origin: Origin) -> Result<(), AnalysisError> {
         let expr = || format!("\"{}\"", super::exprs::pretty(&b.shown()));
         let name = "limit".to_owned();
+        if !super::fold::is_foldable(&b.expr) {
+            return Err(AnalysisError::new(
+                krishiv_common::error::InvalidLimitLikeExpressionIsUnfoldable {
+                    expr: expr(),
+                    name,
+                },
+                origin,
+            ));
+        }
         if b.ty.data_type != Some(krishiv_types::DataType::Integer) {
             return Err(AnalysisError::new(
                 krishiv_common::error::InvalidLimitLikeExpressionDataType {

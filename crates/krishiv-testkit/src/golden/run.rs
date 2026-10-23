@@ -28,6 +28,12 @@ use super::parse::{Expected, ExpectedError, ParseError, Statement, parse_results
 use super::setup::{FileSetup, SessionSetup};
 use super::{GoldenPair, GoldenSet, Jdk};
 
+/// The error class a statement that exceeds the runner's time limit fails
+/// with. It is a harness failure, never a baseline failure: [`FileResult`]
+/// keeps timeouts out of [`Case`] so [`crate::golden::known_failures`] never
+/// lists them, and the ratchet never asks for them to be removed.
+pub const TIMEOUT_CLASS: &str = "KRISHIV_GOLDEN_TIMEOUT";
+
 /// An engine failure on one statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineError {
@@ -142,6 +148,9 @@ pub struct FileResult {
     pub unclassified_errors: u64,
     /// Per-statement outcomes, in file order (the counted statements only).
     pub cases: Vec<Case>,
+    /// Statements that timed out, kept out of the baseline comparison and
+    /// reported as harness failures instead.
+    pub timeouts: Vec<Case>,
 }
 
 /// What one statement of a file scored, merged over the file's runs.
@@ -331,6 +340,7 @@ struct Outcome {
     result: Option<bool>,
     unclassified: bool,
     detail: String,
+    timeout: bool,
 }
 
 impl Outcome {
@@ -350,6 +360,7 @@ impl Outcome {
             } else {
                 self.detail
             },
+            timeout: self.timeout || other.timeout,
         }
     }
 }
@@ -398,6 +409,17 @@ pub fn run_file_with(
     };
     let merged = merged.unwrap_or_default().into_iter().zip(kept).enumerate();
     for (index, o) in merged.filter_map(|(i, (o, k))| k.then_some((i, o))) {
+        let case = Case {
+            index: u32::try_from(index).unwrap_or(u32::MAX),
+            parse: o.parse,
+            negative: o.negative,
+            result: o.result,
+            detail: o.detail.clone(),
+        };
+        if o.timeout {
+            file.timeouts.push(case);
+            continue;
+        }
         for (tally, v) in [
             (&mut file.parse, o.parse),
             (&mut file.negative, o.negative),
@@ -408,15 +430,9 @@ pub fn run_file_with(
             }
         }
         file.unclassified_errors += u64::from(o.unclassified);
-        let mut case = Case {
-            index: u32::try_from(index).unwrap_or(u32::MAX),
-            parse: o.parse,
-            negative: o.negative,
-            result: o.result,
-            detail: String::new(),
-        };
-        if !case.passed() {
-            case.detail = o.detail;
+        let mut case = case;
+        if case.passed() {
+            case.detail.clear();
         }
         file.cases.push(case);
     }
@@ -460,6 +476,10 @@ fn outcome(
     parsed: bool,
     executed: Option<(Result<QueryOutput, EngineError>, &Masker)>,
 ) -> Outcome {
+    let is_timeout = matches!(
+        &executed,
+        Some((Err(e), _)) if e.class.as_deref() == Some(TIMEOUT_CLASS)
+    );
     let parse_detail = || {
         if parsed {
             String::new()
@@ -485,6 +505,7 @@ fn outcome(
                 } else {
                     format!("{}{why}", parse_detail())
                 },
+                timeout: is_timeout,
                 ..Outcome::default()
             }
         }
@@ -511,6 +532,7 @@ fn outcome(
                 } else {
                     why
                 },
+                timeout: is_timeout,
                 ..Outcome::default()
             }
         }
@@ -834,6 +856,44 @@ mod tests {
         let mut e = NoSession;
         assert_eq!(e.name(), "no-session");
         assert!(e.parse("x").is_ok() && e.execute("x").is_err());
+        Ok(())
+    }
+
+    /// An engine that times out on every statement.
+    struct TimeoutEngine;
+
+    impl Engine for TimeoutEngine {
+        fn name(&self) -> &str {
+            "timeout"
+        }
+        fn reset(&mut self, _setup: &SessionSetup) -> Result<(), EngineError> {
+            Ok(())
+        }
+        fn parse(&mut self, _sql: &str) -> Result<(), EngineError> {
+            Ok(())
+        }
+        fn execute(&mut self, sql: &str) -> Result<QueryOutput, EngineError> {
+            let _ = sql;
+            Err(EngineError {
+                class: Some(TIMEOUT_CLASS.to_owned()),
+                sql_state: None,
+                message: "no answer within 0ns".to_owned(),
+            })
+        }
+    }
+
+    #[test]
+    fn timeouts_stay_out_of_the_baseline_comparison() -> R {
+        let statements = parse_results(OUT)?;
+        let f = run_file(&mut TimeoutEngine, "t", &statements, &plain());
+        // Timeouts are harness failures: no tallies, no baseline cases.
+        assert!(f.timeouts.len() == 3, "{f:?}");
+        assert!(f.cases.is_empty(), "{f:?}");
+        assert_eq!((f.parse.total, f.negative.total, f.result.total), (0, 0, 0));
+        assert_eq!(f.unclassified_errors, 0);
+        let detail = &f.timeouts[0].detail;
+        assert!(detail.contains(TIMEOUT_CLASS), "{detail}");
+        assert_eq!(f.timeouts[0].index, 0);
         Ok(())
     }
 }

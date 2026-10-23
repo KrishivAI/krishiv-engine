@@ -485,3 +485,58 @@ fn negative_and_null_limits_fail_analysis() {
         "{limit:?}"
     );
 }
+
+/// `LIMIT` folds arithmetic before Spark's checks, and rejects counts that
+/// cannot be evaluated without rows.
+#[test]
+fn limit_folds_arithmetic_and_rejects_unfoldable_counts() {
+    let g = goldens();
+    let err = |sql: &str| {
+        analyze(&g, sql, ResolutionConf::default())
+            .unwrap_err()
+            .error
+    };
+    // `1 - 2` is a foldable negative count, not a passing limit.
+    let e = err("SELECT a FROM t LIMIT 1 - 2");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE"
+    );
+    assert_eq!(e.sql_state(), Some("42K0E"));
+    assert!(e.message().contains("but got -1"), "{}", e.message());
+    // `NULL + 1` stays NULL, and a cast of arithmetic folds through the kernels.
+    let e = err("SELECT a FROM t LIMIT CAST(NULL AS INT) + 1");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL"
+    );
+    let e = err("SELECT a FROM t LIMIT CAST(1 - 2 AS INT)");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE"
+    );
+    assert!(e.message().contains("but got -1"), "{}", e.message());
+    let e = err("SELECT a FROM t LIMIT CAST(CAST(NULL AS INT) + 1 AS INT)");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL"
+    );
+    // Unary minus over a constant folds as well.
+    let e = err("SELECT a FROM t LIMIT -(1)");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE"
+    );
+    let e = err("SELECT a FROM t LIMIT -(CAST(NULL AS INT))");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL"
+    );
+    // A scalar subquery binds but is not foldable.
+    let e = err("SELECT a FROM t LIMIT (SELECT 1)");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE"
+    );
+    assert_eq!(e.sql_state(), Some("42K0E"));
+}

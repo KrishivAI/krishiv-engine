@@ -24,21 +24,118 @@ use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, ca
 use krishiv_types::DataType;
 
 use super::Constant;
-use crate::{CastMode, Expr, ExprNode, Literal};
+use crate::{Builtin, CastMode, Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr};
 
-/// The value of `e` as a constant, when it is a literal or a cast of one.
+/// The value of `e` as a constant, when it is a literal, a cast of one,
+/// or integral `+`/`-`/`*`/unary `-` over constants (what a `LIMIT`
+/// count folds before Spark's `checkLimitLikeClause`).
 pub(super) fn constant(e: &Expr, ansi: bool) -> Option<Constant> {
+    if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node {
+        let op = match &f.id {
+            FunctionId::Builtin(op) => *op,
+            _ => return None,
+        };
+        match (op, f.args.as_slice()) {
+            (Builtin::Add | Builtin::Subtract | Builtin::Multiply, [a, b]) => {
+                return arith(op, a, b, ansi);
+            }
+            (Builtin::Negative, [a]) => return negative(a, ansi),
+            _ => return None,
+        }
+    }
     let folded = match &e.node {
         ExprNode::Literal(Literal::Null(_)) => return Some(Constant::Null),
         ExprNode::Literal(Literal::Boolean(v)) => return Some(Constant::Boolean(*v)),
         ExprNode::Literal(Literal::String(v)) => return Some(Constant::String(v.clone())),
-        ExprNode::Literal(_) | ExprNode::Cast { .. } => fold(e, ansi)?,
+        ExprNode::Literal(_) => fold(e, ansi)?,
+        ExprNode::Cast { expr, to, mode } => match fold(e, ansi) {
+            Some(folded) => folded,
+            None => {
+                // A cast of an arithmetic constant (`CAST(1 - 2 AS INT)`):
+                // fold the inner constant through the cast kernels so
+                // overflow and ANSI/legacy rules match a cast of a literal.
+                match constant(expr, ansi)? {
+                    Constant::Null => return Some(Constant::Null),
+                    Constant::Error(err) => return Some(Constant::Error(err)),
+                    Constant::Integral(v) => {
+                        let inner = Expr::new(ExprNode::Literal(Literal::Long(v)));
+                        let tmp = Expr::new(ExprNode::Cast {
+                            expr: Arc::new(inner),
+                            to: to.clone(),
+                            mode: *mode,
+                        });
+                        fold(&tmp, ansi)?
+                    }
+                    _ => return None,
+                }
+            }
+        },
         _ => return None,
     };
     Some(match folded.and_then(|a| value(&a, ansi)) {
         Ok(c) => c,
         Err(e) => Constant::Error(e),
     })
+}
+
+/// Whether `e` is foldable for Spark's `checkLimitLikeClause`: deterministic
+/// with no input references, so it can be evaluated without rows. Columns,
+/// subqueries and nondeterministic or aggregate calls are not foldable.
+/// Iterative over an explicit stack so deep expressions do not overflow the
+/// call stack (the analyzer resolves deep plans on a small stack).
+pub(super) fn is_foldable(e: &Expr) -> bool {
+    let mut stack = vec![e];
+    while let Some(x) = stack.pop() {
+        match &x.node {
+            ExprNode::Literal(_) => {}
+            ExprNode::Cast { expr, .. }
+            | ExprNode::Alias { expr, .. }
+            | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
+                stack.push(expr);
+            }
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+                if f.kind != FunctionKind::Scalar
+                    || !f.deterministic
+                    || f.filter.is_some()
+                    || f.distinct
+                {
+                    return false;
+                }
+                stack.extend(f.args.iter().map(|a| &**a));
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Integral `+`/`-`/`*` over constants, with NULL propagation. Overflow is
+/// not folded (the expression stays foldable but unevaluated, as before).
+fn arith(op: Builtin, a: &Expr, b: &Expr, ansi: bool) -> Option<Constant> {
+    let (x, y) = match (constant(a, ansi)?, constant(b, ansi)?) {
+        (Constant::Null, _) | (_, Constant::Null) => return Some(Constant::Null),
+        (Constant::Error(e), _) | (_, Constant::Error(e)) => {
+            return Some(Constant::Error(e));
+        }
+        (Constant::Integral(x), Constant::Integral(y)) => (x, y),
+        _ => return None,
+    };
+    let v = match op {
+        Builtin::Add => x.checked_add(y),
+        Builtin::Subtract => x.checked_sub(y),
+        _ => x.checked_mul(y),
+    }?;
+    Some(Constant::Integral(v))
+}
+
+/// Unary `-` over a constant, with NULL propagation.
+fn negative(a: &Expr, ansi: bool) -> Option<Constant> {
+    match constant(a, ansi)? {
+        Constant::Null => Some(Constant::Null),
+        Constant::Error(e) => Some(Constant::Error(e)),
+        Constant::Integral(v) => v.checked_neg().map(Constant::Integral),
+        _ => None,
+    }
 }
 
 /// A folded array as a constant. A fractional value is what the implicit
@@ -343,5 +440,127 @@ mod tests {
         }));
         assert_eq!(constant(&col, ansi), None);
         assert_eq!(constant(&cast_of(col, DataType::Float), ansi), None);
+    }
+
+    fn resolved_arith(op: crate::Builtin, args: Vec<Expr>, data_type: DataType) -> Expr {
+        use crate::{FunctionId, FunctionKind, ResolvedExpr, ResolvedFunction};
+        let f = ResolvedFunction {
+            id: FunctionId::Builtin(op),
+            kind: FunctionKind::Scalar,
+            args: args.into_iter().map(std::sync::Arc::new).collect(),
+            distinct: false,
+            filter: None,
+            data_type,
+            nullable: false,
+            deterministic: true,
+        };
+        Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f)))
+    }
+
+    fn sub(a: Expr, b: Expr) -> Expr {
+        resolved_arith(crate::Builtin::Subtract, vec![a, b], DataType::Integer)
+    }
+
+    /// Integral `+`/`-`/`*`/unary `-` fold, with NULL propagation and error
+    /// passthrough; overflow stays unfoldered as before.
+    #[test]
+    fn arithmetic_constants_fold_for_limit_checks() {
+        use crate::Builtin;
+        let ansi = true;
+        let n = |v: i64| Some(Constant::Integral(v));
+        let one = lit(Literal::Integer(1));
+        let two = lit(Literal::Integer(2));
+        // `1 - 2` is -1, `1 + 2` is 3, `2 * 3` is 6.
+        assert_eq!(constant(&sub(one.clone(), two.clone()), ansi), n(-1));
+        assert!(is_foldable(&sub(one.clone(), two.clone())));
+        let add = resolved_arith(
+            Builtin::Add,
+            vec![one.clone(), two.clone()],
+            DataType::Integer,
+        );
+        assert_eq!(constant(&add, ansi), n(3));
+        let mul = resolved_arith(
+            Builtin::Multiply,
+            vec![two, lit(Literal::Integer(3))],
+            DataType::Integer,
+        );
+        assert_eq!(constant(&mul, ansi), n(6));
+        // `NULL + 1` stays NULL.
+        let null = cast(Literal::Null(None), DataType::Integer);
+        assert_eq!(
+            constant(&sub(null.clone(), one.clone()), ansi),
+            Some(Constant::Null)
+        );
+        assert!(is_foldable(&sub(null, one.clone())));
+        // An error inside stays an error for the reader to raise.
+        let bad = cast(Literal::String("x".to_owned()), DataType::Integer);
+        assert!(matches!(
+            constant(&sub(bad.clone(), one.clone()), ansi),
+            Some(Constant::Error(_))
+        ));
+        assert!(is_foldable(&sub(bad, one.clone())));
+        // Overflow is not folded, but stays foldable.
+        let max = lit(Literal::Long(i64::MAX));
+        let overflow = sub(max, lit(Literal::Integer(-1)));
+        assert_eq!(constant(&overflow, ansi), None);
+        assert!(is_foldable(&overflow));
+        // A non-integral arithmetic result is not a limit constant, but the
+        // count is still foldable.
+        let boolean = resolved_arith(
+            Builtin::Add,
+            vec![lit(Literal::Boolean(true)), one.clone()],
+            DataType::Boolean,
+        );
+        assert_eq!(constant(&boolean, ansi), None);
+        assert!(is_foldable(&boolean));
+        // Unary minus folds as well, including NULL and error passthrough.
+        let neg = resolved_arith(Builtin::Negative, vec![one], DataType::Integer);
+        assert_eq!(constant(&neg, ansi), n(-1));
+        assert!(is_foldable(&neg));
+        let neg_null = resolved_arith(
+            Builtin::Negative,
+            vec![cast(Literal::Null(None), DataType::Integer)],
+            DataType::Integer,
+        );
+        assert_eq!(constant(&neg_null, ansi), Some(Constant::Null));
+        let neg_bad = resolved_arith(
+            Builtin::Negative,
+            vec![cast(Literal::String("x".to_owned()), DataType::Integer)],
+            DataType::Integer,
+        );
+        assert!(matches!(constant(&neg_bad, ansi), Some(Constant::Error(_))));
+        let neg_bool = resolved_arith(
+            Builtin::Negative,
+            vec![lit(Literal::Boolean(true))],
+            DataType::Boolean,
+        );
+        assert_eq!(constant(&neg_bool, ansi), None);
+        assert!(is_foldable(&neg_bool));
+    }
+
+    /// What `LIMIT` accepts as foldable: literals and deterministic scalar
+    /// calls of foldable arguments, nothing with rows or state.
+    #[test]
+    fn limit_foldability_needs_no_rows_or_state() {
+        assert!(is_foldable(&lit(Literal::Integer(1))));
+        assert!(is_foldable(&cast(Literal::Integer(1), DataType::Integer)));
+        let one = lit(Literal::Integer(1));
+        assert!(is_foldable(&sub(one.clone(), one.clone())));
+        let col = Expr::new(ExprNode::Column(crate::ColumnRef {
+            name: vec!["a".to_owned()],
+            plan_id: None,
+        }));
+        assert!(!is_foldable(&col));
+        assert!(!is_foldable(&cast_of(col, DataType::Integer)));
+        // A cast that the kernels do not implement is still foldable when its
+        // input is, but has no constant.
+        let to_string = cast_of(one, DataType::String);
+        assert!(is_foldable(&to_string));
+        assert_eq!(constant(&to_string, true), None);
+        // A cast of a non-numeric literal has no constant either, but stays
+        // foldable.
+        let bool_to_string = cast_of(lit(Literal::Boolean(true)), DataType::String);
+        assert!(is_foldable(&bool_to_string));
+        assert_eq!(constant(&bool_to_string, true), None);
     }
 }

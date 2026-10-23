@@ -182,6 +182,7 @@ mod tests {
                 unclassified_errors: 1,
                 runs: 2,
                 cases: Vec::new(),
+                timeouts: Vec::new(),
             }],
             excluded: vec![SkippedFile {
                 name: "udf/x".into(),

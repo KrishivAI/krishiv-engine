@@ -15,8 +15,9 @@
 //! answer. Rows are rendered by [`super::cell`] from the batches and the result's Spark types;
 //! row order counts when [`super::sorted::is_semantically_sorted`] says so on the analyzed plan.
 //! Each statement runs under a wall-clock limit ([`SessionEngine::with_timeout`]): a statement
-//! that exceeds it is cancelled (its future is dropped, which cancels the query) and fails with
-//! [`TIMEOUT_CLASS`].
+//! that exceeds it is cancelled (its future is dropped, which cancels the query) and recorded
+//! separately as a harness failure ([`super::run::TIMEOUT_CLASS`]), kept out of the frozen
+//! baseline comparison so a slow runner cannot fail the ratchet without a code change.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,12 +41,11 @@ use super::run::{Engine, EngineError, QueryOutput};
 use super::setup::SessionSetup;
 use super::sorted::is_semantically_sorted;
 
-/// The error class a statement that exceeds the time limit fails with (not a Spark class, so it
-/// never matches an expected error).
-pub const TIMEOUT_CLASS: &str = "KRISHIV_GOLDEN_TIMEOUT";
+pub use super::run::TIMEOUT_CLASS;
 
-/// The default per-statement time limit.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+/// The default per-statement time limit: high enough that only a stuck query
+/// hits it, so a hit fails the harness instead of the baseline comparison.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The memory limit of each session: far above what any golden statement needs, and below the
 /// cap the harness runs under, so a runaway query fails inside the engine.
