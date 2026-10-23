@@ -77,6 +77,11 @@ pub struct ParserOptions {
     /// `spark.sql.timestampType = TIMESTAMP_NTZ`: a `TIMESTAMP '...'`
     /// literal without a zone is a `TIMESTAMP_NTZ`.
     pub timestamp_ntz: bool,
+    /// `spark.sql.session.timeZone` as a fixed offset in seconds east of
+    /// UTC (`UTC` is `Some(0)`); `None` for a region id (which needs the
+    /// tz database) or when unset. Typed timestamp literals without a zone
+    /// are evaluated in this zone at analysis time.
+    pub session_offset: Option<i32>,
 }
 
 impl ParserOptions {
@@ -96,8 +101,30 @@ impl ParserOptions {
             legacy_interval: on("spark.sql.legacy.interval.enabled", false),
             timestamp_ntz: conf("spark.sql.timestampType")
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
+            session_offset: conf("spark.sql.session.timeZone").and_then(fixed_offset),
         }
     }
+}
+
+/// The offset of `UTC`, `GMT`, `Z` or `[+-]hh:mm`, in seconds east of UTC;
+/// `None` for region ids (which need the tz database) and malformed zones.
+fn fixed_offset(zone: &str) -> Option<i32> {
+    let zone = zone.trim();
+    if ["UTC", "GMT", "Z", "Etc/UTC"].contains(&zone) {
+        return Some(0);
+    }
+    let rest = zone
+        .strip_prefix("UTC")
+        .or_else(|| zone.strip_prefix("GMT"))
+        .unwrap_or(zone);
+    let (sign, hm) = match rest.as_bytes().first()? {
+        b'+' => (1, &rest[1..]),
+        b'-' => (-1, &rest[1..]),
+        _ => return None,
+    };
+    let (h, m) = hm.split_once(':').unwrap_or((hm, "0"));
+    let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
+    ((0..=18).contains(&h) && (0..60).contains(&m)).then(|| sign * (h * 3600 + m * 60))
 }
 
 /// Parses one query statement, optionally followed by `;`.

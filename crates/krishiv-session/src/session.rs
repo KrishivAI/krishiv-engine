@@ -335,7 +335,7 @@ impl Session {
             Statement::Explain(e) => return self.explain_statement(&e).await,
             _ => return Err(unsupported_statement("statements other than queries")),
         };
-        let plan = krishiv_sql::lower(&q, SourceId(0)).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower(&q, SourceId(0), &env.parser).map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         df.analyzed_in(env).await?;
         Ok(df)
@@ -865,13 +865,15 @@ fn job_uuid() -> String {
 }
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-const PARSER_KEYS: [&str; 6] = [
+const PARSER_KEYS: [&str; 8] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
     "spark.sql.legacy.setopsPrecedence.enabled",
     "spark.sql.parser.escapedStringLiterals",
     "spark.sql.legacy.bangEqualsNot",
+    "spark.sql.timestampType",
+    "spark.sql.session.timeZone",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.

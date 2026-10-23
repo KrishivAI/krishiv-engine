@@ -31,10 +31,10 @@ impl SqlFrontend for Frontend {
         redact_sql(query)
     }
 
-    /// The parser options, one bit each.
+    /// The parser options, one bit each, plus the session offset.
     fn fingerprint(&self) -> u64 {
         let o = self.options;
-        [
+        let bits = [
             o.enforce_reserved_keywords,
             o.double_quoted_identifiers,
             o.legacy_setops_precedence,
@@ -44,6 +44,13 @@ impl SqlFrontend for Frontend {
             o.timestamp_ntz,
         ]
         .iter()
-        .fold(0, |acc, b| acc << 1 | u64::from(*b))
+        .fold(0, |acc, b| acc << 1 | u64::from(*b));
+        // The session offset changes how timestamp literals without a zone
+        // evaluate; `None` (a region zone) is one input.
+        let zone_bits = match o.session_offset {
+            Some(v) => u64::from(u32::from_ne_bytes(v.to_ne_bytes())),
+            None => 0x8000_0000,
+        };
+        bits.wrapping_mul(31).wrapping_add(zone_bits)
     }
 }

@@ -1740,6 +1740,8 @@ version = "0.1.0-alpha"
 name = "krishiv-sql"
 version = "0.1.0-alpha"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
  "codspeed-criterion-compat",
  "insta",
  "krishiv-common",

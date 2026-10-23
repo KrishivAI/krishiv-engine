@@ -228,7 +228,7 @@ fn is_no_break_space(c: char) -> bool {
 
 /// The special values of `DATE` and `TIMESTAMP` literals (`now`,
 /// `epoch`, ...), which depend on the session's clock and zone.
-fn is_special(value: &str) -> bool {
+pub(crate) fn is_special(value: &str) -> bool {
     let v = value.trim().to_ascii_lowercase();
     ["epoch", "now", "today", "yesterday", "tomorrow"].contains(&v.as_str())
 }

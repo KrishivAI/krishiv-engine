@@ -1687,8 +1687,58 @@ fn pretty_literal(v: &Literal) -> String {
         Literal::Float(x) => format!("{x:?}"),
         Literal::Double(x) => format!("{x:?}"),
         Literal::Decimal { .. } => text.trim_end_matches("BD").to_owned(),
+        // Spark's `toPrettySQL` of a timestamp literal, in the session zone.
+        // Lowering evaluates session-independent values (and session ones in
+        // a fixed-offset zone) with the kernels and formats here in UTC;
+        // values without a zone read the same either way, so names match
+        // Spark's for them.
+        Literal::Timestamp(us) => format!("TIMESTAMP '{}'", format_timestamp(*us)),
+        Literal::TimestampNtz(us) => format!("TIMESTAMP_NTZ '{}'", format_timestamp(*us)),
         _ => text,
     }
+}
+
+/// Microseconds since the epoch as `yyyy-MM-dd HH:mm:ss[.fraction]`, the
+/// proleptic Gregorian date (as Spark prints a timestamp literal).
+fn format_timestamp(micros: i64) -> String {
+    const MICROS_PER_DAY: i64 = 86_400_000_000;
+    const MICROS_PER_SECOND: i64 = 1_000_000;
+    let days = micros.div_euclid(MICROS_PER_DAY);
+    let rest = micros.rem_euclid(MICROS_PER_DAY);
+    let (y, m, d) = civil_from_days(days);
+    let sign = if y < 0 { "-" } else { "" };
+    let mut out = format!("{sign}{:04}-{:02}-{:02}", y.unsigned_abs(), m, d);
+    let secs = rest / MICROS_PER_SECOND;
+    let frac = rest % MICROS_PER_SECOND;
+    {
+        use std::fmt::Write as _;
+        let _ = write!(
+            &mut out,
+            " {:02}:{:02}:{:02}",
+            secs / 3600,
+            secs / 60 % 60,
+            secs % 60
+        );
+        if frac != 0 {
+            let digits = format!("{frac:06}");
+            let _ = write!(&mut out, ".{}", digits.trim_end_matches('0'));
+        }
+    }
+    out
+}
+
+/// `(year, month, day)` of a day number (H. Hinnant's `civil_from_days`).
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
 }
 
 /// A semantic key: equal for expressions that compute the same value,

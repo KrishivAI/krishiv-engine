@@ -526,3 +526,72 @@ fn window_goldens_resolve_to_a_fixed_point() {
     assert_eq!(resolved, 66);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Typed datetime literals resolve to Spark's types and names: plain
+/// `TIMESTAMP` follows `spark.sql.timestampType` (and a zone in the value),
+/// and instants without a zone read the session zone. The golden files
+/// (`literals.sql`, `timestamp.sql`, `timestampNTZ/timestamp.sql`,
+/// `datetime-*.sql`) record these names, rows and `INVALID_TYPED_LITERAL`
+/// errors.
+#[test]
+fn typed_timestamp_literals_resolve_like_spark() {
+    let g = goldens();
+    let analyze_with = |sql: &str, timestamp_ntz: bool, offset: Option<i32>| {
+        let options = ParserOptions {
+            timestamp_ntz,
+            session_offset: offset,
+            ..ParserOptions::default()
+        };
+        let plan = parse_and_lower(sql, &options, SourceId(0)).map_err(|e| AnalysisError {
+            error: e.error,
+            origin: krishiv_plan::Origin::UNKNOWN,
+        })?;
+        block_on(DefaultAnalyzer.analyze(&plan, &context(catalog(&g), ResolutionConf::default())))
+    };
+    let utc = Some(0);
+    // Plain `TIMESTAMP` is an instant by default, wall-clock under `TIMESTAMP_NTZ`.
+    let a = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00'", false, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    assert_eq!(a.output[0].name, "TIMESTAMP '2024-01-01 10:00:00'");
+    let a = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00'", true, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp_ntz");
+    assert_eq!(a.output[0].name, "TIMESTAMP_NTZ '2024-01-01 10:00:00'");
+    // ... unless the value names a zone, which stays an instant.
+    let a = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'", true, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    // The session zone moves instants without a zone (`+05:30` is 04:30 UTC).
+    let utc_plan = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00'", false, utc).unwrap();
+    let plus_plan = analyze_with(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00'",
+        false,
+        Some(19_800),
+    )
+    .unwrap();
+    assert_ne!(
+        utc_plan.plan.root().to_string(),
+        plus_plan.plan.root().to_string()
+    );
+    // `TIMESTAMP_LTZ` and `TIMESTAMP_NTZ` keep their types.
+    let a = analyze_with("SELECT TIMESTAMP_LTZ '2024-01-01 10:00:00'", true, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    let a = analyze_with("SELECT TIMESTAMP_NTZ '2024-01-01 10:00:00'", false, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp_ntz");
+    // Spark's golden statements (`literals.sql`, `timestamp.sql`).
+    for (sql, name, ty) in [
+        (
+            "select tImEstAmp '2016-03-11 20:54:00.000'",
+            "TIMESTAMP '2016-03-11 20:54:00'",
+            "timestamp",
+        ),
+        (
+            "select timestamp '2019-01-01\t'",
+            "TIMESTAMP '2019-01-01 00:00:00'",
+            "timestamp",
+        ),
+        ("select dAte '2016-03-12'", "DATE '2016-03-12'", "date"),
+    ] {
+        let a = analyze_with(sql, false, utc).unwrap();
+        assert_eq!(a.output[0].name, name, "{sql}");
+        assert_eq!(a.output[0].data_type.simple_string(), ty, "{sql}");
+    }
+}
