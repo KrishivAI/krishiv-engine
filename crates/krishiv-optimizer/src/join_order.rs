@@ -229,9 +229,17 @@ impl Reorder<'_> {
         if leaves.len() < 2 {
             return self.children(root);
         }
-        let preds = preds.iter().flat_map(common_equalities).collect();
         let ests: Vec<Rc<Est>> = leaves.iter().map(|l| self.est.plan(l)).collect();
-        let graph = Graph::new(&leaves, &ests, preds);
+        let mut graph = Graph::new(&leaves, &ests, preds.clone());
+        if graph.binary_parts() > graph.parts(true) {
+            // Some inputs are joined only by a condition over three or more
+            // of them, so two of them would meet in a cross product. Take
+            // the column equalities every disjunct of such a condition holds
+            // as conditions of their own (TPC-DS q13). Only then: elsewhere
+            // they would add join keys the inputs do not need.
+            let preds = preds.iter().flat_map(common_equalities).collect();
+            graph = Graph::new(&leaves, &ests, preds);
+        }
         if graph.parts(false) < graph.parts(true) {
             // Inputs related only through a conjunct with a subquery: as
             // written they meet in a join on it; re-planned they would meet
@@ -471,6 +479,23 @@ impl Graph {
                 let (a, b) = (find(&mut root, w[0]), find(&mut root, w[1]));
                 root[a] = b;
             }
+        }
+        (0..self.n()).filter(|&x| find(&mut root, x) == x).count()
+    }
+
+    /// The connected parts through join conditions over exactly two inputs.
+    fn binary_parts(&self) -> usize {
+        let mut root: Vec<usize> = (0..self.n()).collect();
+        fn find(root: &mut [usize], mut x: usize) -> usize {
+            while root[x] != x {
+                root[x] = root[root[x]];
+                x = root[x];
+            }
+            x
+        }
+        for p in self.preds.iter().filter(|p| p.edge && p.on.len() == 2) {
+            let (a, b) = (find(&mut root, p.on[0]), find(&mut root, p.on[1]));
+            root[a] = b;
         }
         (0..self.n()).filter(|&x| find(&mut root, x) == x).count()
     }

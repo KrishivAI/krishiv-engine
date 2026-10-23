@@ -586,3 +586,20 @@ fn equalities_every_disjunct_holds_join_their_inputs() {
     // Equalities only some disjuncts hold stay inside the `or`.
     same_rows("SELECT t.a, u.d FROM t, u WHERE (t.a = u.a AND t.b = 'p') OR (t.c = u.a)");
 }
+
+/// TPC-DS q85's shape: an `or` over three inputs that other conditions
+/// already join. Its shared equality is not needed to connect them, so it
+/// stays inside the `or` instead of becoming an extra join key (q85 would
+/// otherwise join its two demographics instances on two string columns).
+#[test]
+fn shared_equalities_stay_in_the_or_when_the_inputs_are_joined() {
+    let sql = "SELECT count(*) FROM lineitem, orders, customer \
+               WHERE l_orderkey = o_orderkey AND o_custkey = c_custkey \
+               AND ((o_orderpriority = c_mktsegment AND l_quantity > 10) \
+                 OR (o_orderpriority = c_mktsegment AND l_quantity < 5))";
+    let plan = support::resolve(sql, &support::ctx());
+    let optimized = optimize_with(&plan, &fixture()).unwrap();
+    let text = optimized.root().to_string();
+    assert_eq!(text.matches("(o_orderpriority#").count(), 2, "{text}");
+    insta::assert_snapshot!(text);
+}
