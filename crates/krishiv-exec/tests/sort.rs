@@ -534,6 +534,26 @@ async fn external_sort_spills_under_an_eighth_of_its_data() {
     eprintln!("external sort: {data} MiB under {budget} MiB in {took:?}: {m:?}");
 }
 
+/// Without keys every row ties: the sort gathers its input into one
+/// stream, in input order with one driver, through spills and merge
+/// passes (a window over all rows sits on it).
+#[tokio::test(start_paused = true)]
+async fn a_sort_without_keys_gathers_its_input_in_order() {
+    let pool = root();
+    let q = query(&pool, ExecConfig::default(), Some(2 << 20));
+    let (_manager, scope) = spill();
+    let sort = Sort::new(table(1, 30)[0].schema(), &[], Some(scope)).unwrap();
+    let sort = Arc::new(sort.with_max_fan_in(2));
+    let out = run(&deterministic(1), plan(table(60_000, 30), &sort), &q)
+        .await
+        .unwrap();
+    let ids = column::<Int64Type>(&out, 1);
+    assert_eq!(ids, (0..60_000).collect::<Vec<i64>>());
+    assert!(sort.metrics().merge_passes > 0, "{:?}", sort.metrics());
+    drop(out);
+    assert_released(&pool);
+}
+
 /// One driver keeps ties in input order through spills and merge passes,
 /// and deterministic mode replays the same order with several drivers.
 #[tokio::test(start_paused = true)]
@@ -655,10 +675,6 @@ async fn edge_cases_and_errors() {
 
     let class = |e: KrishivError| e.error_class();
     let s = b.schema();
-    assert_eq!(
-        class(Sort::new(Arc::clone(&s), &[], None).unwrap_err()),
-        ErrorClass::InternalError
-    );
     let out_of_range = Sort::new(Arc::clone(&s), &[SortKey::asc(9)], None);
     assert_eq!(class(out_of_range.unwrap_err()), ErrorClass::InternalError);
     for (offset, limit) in [(1, TopN::MAX_ROWS), (usize::MAX, 2)] {

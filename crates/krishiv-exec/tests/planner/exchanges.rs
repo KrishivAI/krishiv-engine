@@ -311,3 +311,56 @@ fn exchanges_keep_the_rows() {
     );
     assert_eq!(rows("SHUFFLE_HASH"), broadcast);
 }
+
+/// A window requires its partitions clustered (P2-T055): an exchange by
+/// the partitioning keys below its sort, a single partition without
+/// keys, and none where the input is placed so already.
+#[test]
+fn a_window_requires_its_partitioning() {
+    let env = env();
+    insta::assert_snapshot!(
+        explain(&env, "SELECT a, rank() OVER (PARTITION BY a ORDER BY b) AS r FROM t"),
+        @"
+    Project [a#0, _we0#4 AS r#3]
+    +- Window [_we0], partition=[a#0], order=[b#1 ASC NULLS FIRST]
+       +- Sort [a#0 ASC NULLS FIRST, b#1 ASC NULLS FIRST]
+          +- Exchange hashpartitioning(a#0)
+             +- Scan spark_catalog.default.t [a#0, b#1]
+    "
+    );
+    insta::assert_snapshot!(explain(&env, "SELECT a, sum(b) OVER () AS w FROM t"), @"
+    Project [a#0, _we0#4 AS w#3]
+    +- Window [_we0], partition=[], order=[]
+       +- Sort []
+          +- Exchange SinglePartition
+             +- Scan spark_catalog.default.t [a#0, b#1]
+    ");
+    insta::assert_snapshot!(
+        explain(&env, "SELECT a, row_number() OVER (ORDER BY b) AS w FROM t"),
+        @"
+    Project [a#0, _we0#4 AS w#3]
+    +- Window [_we0], partition=[], order=[b#1 ASC NULLS FIRST]
+       +- Sort [b#1 ASC NULLS FIRST]
+          +- Exchange SinglePartition
+             +- Scan spark_catalog.default.t [a#0, b#1]
+    "
+    );
+    // Grouped by the partitioning key below: already clustered.
+    assert_eq!(
+        exchanges_of(
+            &env,
+            "SELECT a, sum(c) OVER (PARTITION BY a) FROM (SELECT a, count(*) AS c FROM t GROUP BY a)"
+        ),
+        vec!["Exchange hashpartitioning(a#0)".to_owned()]
+    );
+    // Partitioned by a key of the placement and more: still clustered.
+    assert_eq!(
+        exchanges_of(
+            &env,
+            "SELECT a, b, sum(c) OVER (PARTITION BY a, b) FROM \
+             (SELECT a, b, count(*) AS c FROM t GROUP BY a, b)"
+        )
+        .len(),
+        1
+    );
+}
