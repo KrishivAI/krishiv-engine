@@ -1,0 +1,13 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+# row_layout_equals_default: min/max of -0.0 vs 0.0 (merge order), the spill
+# fallback's writer scratch, first/last across spill runs, and a limit below
+# the row tables' sketches.
+cc 7542d02a4fff9fc126bafc252f439413d6797d4fdebf40af2e5344bfc36ae1fc
+cc 56b81a74e2d12a2bc1db117253670e6e23c2e37071f5088250fb33de42f48d45
+cc faf07a9b578ca1ba7049877479f9bada8ccc52cbf5a596504f879c70a02ec834
+cc dec162184755ea6700f7a2638ecd7b0ac68cca4e724255da308a13a0fbb52efa
