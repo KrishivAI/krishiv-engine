@@ -317,7 +317,8 @@ jobs:
           workspaces: tools/connect-protogen
       - run: cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check
 
-  # The generated `krishiv.plan.v1` types match proto/krishiv/plan/v1 (P2-T173).
+  # The generated `krishiv.plan.v1` types match proto/krishiv/plan/v1 (P2-T173),
+  # and every schema element added since ADR 0040 declares its compatibility class.
   # `tools/plan-protogen` is a workspace of its own, like connect-protogen.
   plan-protos:
     needs: changes
@@ -338,6 +339,7 @@ jobs:
         with:
           workspaces: tools/plan-protogen
       - run: cargo run --locked --manifest-path tools/plan-protogen/Cargo.toml -- --check
+      - run: cargo test --locked --manifest-path tools/plan-protogen/Cargo.toml
 
   # The cargo-fuzz targets (`fuzz/`, a workspace of its own) only run nightly,
   # so a change to an API they call would break them unseen. Build all of them
