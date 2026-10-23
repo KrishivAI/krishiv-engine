@@ -649,8 +649,15 @@ impl Lowerer {
             }
             GroupItemKind::GroupingSets(items) => {
                 let mut sets = Vec::new();
-                for item in items {
-                    sets.extend(self.deeper(|l| l.item_sets(item, &mut *written))?);
+                let span = item.span;
+                for inner in items {
+                    sets.extend(self.deeper(|l| l.item_sets(inner, &mut *written))?);
+                    if sets.len() > MAX_GROUPING_SETS {
+                        return Err(unsupported(
+                            &format!("more than {MAX_GROUPING_SETS} grouping sets"),
+                            span,
+                        ));
+                    }
                 }
                 sets
             }

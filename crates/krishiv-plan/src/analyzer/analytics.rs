@@ -673,7 +673,16 @@ impl Resolver<'_> {
         let origin = e.origin;
         match &e.node {
             ExprNode::Resolved(ResolvedExpr::Function(f)) if !has_subquery(&e) => {
-                self.call(f.id.name(), f.args.clone(), env, origin)
+                let call = Arc::new(
+                    Expr::new(ExprNode::Function(FunctionCall {
+                        name: f.id.name().to_owned(),
+                        args: f.args.clone(),
+                        distinct: f.distinct,
+                        filter: f.filter.clone(),
+                    }))
+                    .with_origin(origin),
+                );
+                Ok(self.bind(&call, &Self::cx(&[], &[], env, "Join"))?.expr)
             }
             ExprNode::Resolved(ResolvedExpr::Function(f)) => {
                 // A call over a subquery keeps its type, nullable.
