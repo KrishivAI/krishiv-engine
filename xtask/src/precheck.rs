@@ -607,7 +607,9 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
             "machete",
             "cargo-machete",
             has,
-            vec![Cmd::new("cargo", &["machete"])],
+            // Not `cargo machete`: under `cargo xtask` cargo's CARGO_PKG_* variables are set, and
+            // the cargo-machete shim then treats its own subcommand word as a directory to scan.
+            vec![Cmd::new("cargo-machete", &[])],
         )
     } else {
         skip("machete", "no Cargo.toml/Cargo.lock change")
@@ -715,23 +717,67 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
     steps
 }
 
+/// A command that runs `tool args... <files>` over the git-tracked files matching `pathspec`
+/// (git glob syntax, `""` for all), as CI does on a clean checkout. Untracked files such as a
+/// local virtualenv's vendored READMEs are never linted. Paths come from `git ls-files -z`, so
+/// nothing is split or re-parsed by the shell. Tracked paths absent from the working tree
+/// (a deletion not yet staged) are skipped, so a locally deleted file cannot fail the lint.
+#[must_use]
+pub fn tracked_files_cmd(pathspec: &str, tool: &str, args: &[&str]) -> Cmd {
+    tracked_files_cmd_inner(pathspec, tool, args, false)
+}
+
+/// Same as [`tracked_files_cmd`], but each file is passed as `:path` so
+/// `markdownlint-cli2` treats it as a literal path rather than a glob. Without
+/// this, a tracked name such as `docs/guide[1].md` is expanded as a glob and
+/// may lint the wrong file or none at all.
+#[must_use]
+pub fn tracked_files_cmd_literal(pathspec: &str, tool: &str, args: &[&str]) -> Cmd {
+    tracked_files_cmd_inner(pathspec, tool, args, true)
+}
+
+fn tracked_files_cmd_inner(pathspec: &str, tool: &str, args: &[&str], literal: bool) -> Cmd {
+    let spec = if pathspec.is_empty() {
+        ".".to_owned()
+    } else {
+        format!(":(glob){pathspec}")
+    };
+    // NUL throughout: `git ls-files -z` lists, the loop filters and
+    // (for markdownlint) prefixes `:`, and `xargs -0 -r` appends the files.
+    let script = if literal {
+        r#"set -o pipefail; spec=$1; shift; git ls-files -z -- "$spec" | while IFS= read -r -d '' f; do test -e "$f" || continue; printf ':%s\0' "$f"; done | xargs -0 -r "$@""#
+    } else {
+        r#"set -o pipefail; spec=$1; shift; git ls-files -z -- "$spec" | while IFS= read -r -d '' f; do test -e "$f" || continue; printf '%s\0' "$f"; done | xargs -0 -r "$@""#
+    };
+    let mut cmd = Cmd::new("bash", &["-c", script, "tracked-files"]);
+    cmd.args.push(spec);
+    cmd.args.push(tool.to_owned());
+    cmd.args.extend(args.iter().map(|a| (*a).to_owned()));
+    cmd
+}
+
 fn text_lint(has: &dyn Fn(&str) -> bool) -> Step {
     let mut cmds = Vec::new();
     let mut notes = Vec::new();
     if has("typos") {
-        cmds.push(Cmd::new("typos", &[]));
+        cmds.push(tracked_files_cmd("", "typos", &["--force-exclude"]));
     } else {
         notes.push(format!("typos not installed ({SETUP_HINT})"));
     }
     if has("taplo") {
-        cmds.push(Cmd::new("taplo", &["fmt", "--check"]));
+        cmds.push(tracked_files_cmd("**/*.toml", "taplo", &["fmt", "--check"]));
     } else {
         notes.push(format!("taplo not installed ({SETUP_HINT})"));
     }
     if has("markdownlint-cli2") {
-        cmds.push(Cmd::new("markdownlint-cli2", &["**/*.md"]));
+        cmds.push(tracked_files_cmd_literal(
+            "**/*.md",
+            "markdownlint-cli2",
+            &[],
+        ));
     } else if has("docker") {
-        cmds.push(Cmd::new(
+        cmds.push(tracked_files_cmd_literal(
+            "**/*.md",
             "docker",
             &[
                 "run",
@@ -739,7 +785,6 @@ fn text_lint(has: &dyn Fn(&str) -> bool) -> Step {
                 "-v",
                 "{ROOT}:/workdir",
                 "davidanson/markdownlint-cli2:v0.23.3",
-                "**/*.md",
             ],
         ));
     } else {
