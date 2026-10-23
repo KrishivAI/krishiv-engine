@@ -39,6 +39,9 @@ pub enum Execution {
     /// the conditionals, which evaluate their arguments lazily
     /// (`krishiv_kernels::conditional`).
     Evaluator,
+    /// By the executor's window operator, over a window (`row_number`,
+    /// `rank`, ...); never called without `OVER`.
+    Window,
 }
 
 /// The aggregates the executor implements.

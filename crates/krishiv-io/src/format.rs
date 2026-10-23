@@ -356,6 +356,23 @@ pub trait Decoder: Send {
     /// Bytes pushed and not yet released (the framework reserves them).
     fn buffered_bytes(&self) -> usize;
 
+    /// What the unit being decoded holds beyond
+    /// [`buffered_bytes`](Self::buffered_bytes): the bytes handed from the
+    /// buffer to the unit's reader, decompressed pages and the batch being
+    /// built (the last two estimated); 0 between units. The framework
+    /// reserves it, revocably, through the query's [`ScanGate`](crate::ScanGate).
+    fn working_bytes(&self) -> usize {
+        0
+    }
+
+    /// The decoding part of [`working_bytes`](Self::working_bytes) (pages
+    /// and batch, without the unit's data) of the unit whose data the
+    /// decoder asked for last ([`Step::NeedData`]), so the framework can
+    /// reserve it before the unit is fetched; 0 if unknown.
+    fn next_decode_bytes(&self) -> usize {
+        0
+    }
+
     /// Counters so far.
     fn metrics(&self) -> ScanUnitMetrics;
 }

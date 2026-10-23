@@ -9,7 +9,10 @@
 //! 2. **Spill.** Request spills until the targets cover the shortfall that
 //!    pending releases (memory of already-aborted queries) do not. Victims
 //!    are ranked by how far their query holds memory above its fair share
-//!    (`limit / active queries`), then by spillable bytes; the requester's
+//!    (`limit / active queries`), then by spillable bytes; last-resort
+//!    consumers ([`Spillable::last_resort`](crate::Spillable::last_resort):
+//!    reservations given up while the memory stays in use) come after all
+//!    others; the requester's
 //!    own consumer is never asked, and the other consumers of its driver
 //!    ([`crate::SpillOwner`]) only after every other victim (the driver
 //!    services them while it waits; a caller that does not is given up on
@@ -17,6 +20,8 @@
 //!    is trimmed so its exact freed bytes count, and the request is retried
 //!    on every release. `spillWaitTimeout` bounds the wait for a victim to
 //!    *begin* its spill; a spill in progress is awaited to its end.
+//!    Last-resort victims not reached by then (a pass that freed nothing
+//!    ends the spilling) are asked once more before anything else.
 //! 3. **Abort.** While pending releases cover the shortfall, wait for them
 //!    (no new abort). Otherwise abort the query furthest above its fair
 //!    share. The requester's own query fails the request with
@@ -256,7 +261,7 @@ impl Round {
             let shortfall = need
                 .saturating_sub(binding.available())
                 .saturating_sub(plan.pending);
-            let tickets = self.request_spills(&consumers, &plan, shortfall);
+            let tickets = self.request_spills(&consumers, &plan, shortfall, false);
             if tickets.is_empty() {
                 break;
             }
@@ -267,6 +272,26 @@ impl Round {
             }
             if all.iter().filter_map(SpillTicket::try_get).sum::<usize>() == 0 {
                 break;
+            }
+        }
+
+        // A pass ends when spills freed nothing, which can come before the
+        // last-resort victims were reached: ask them now, before failing or
+        // aborting anything.
+        let (binding, need) = match self.step(slot)? {
+            Step::Short(b, need) => (b, need),
+            s => return Ok(s),
+        };
+        let consumers = self.consumers_within(&binding);
+        let plan = self.plan(&binding, &consumers);
+        let shortfall = need
+            .saturating_sub(binding.available())
+            .saturating_sub(plan.pending);
+        let tickets = self.request_spills(&consumers, &plan, shortfall, true);
+        if !tickets.is_empty() {
+            let deadline = shared.clock.now() + shared.spill_wait_timeout;
+            if let Waited::Step(s) = self.wait(slot, deadline, tickets, true).await? {
+                return Ok(s);
             }
         }
 
@@ -334,24 +359,30 @@ impl Round {
         consumers: &[(Arc<Consumer>, Arc<Node>)],
         plan: &Plan,
         shortfall: usize,
+        last_resort_only: bool,
     ) -> Vec<(SpillTicket, Arc<Consumer>, Arc<Node>)> {
         let me = &self.consumer;
         let mut victims: Vec<_> = consumers
             .iter()
             .filter(|(c, n)| c.id != me.id && !aborted(n))
             .filter_map(|(c, n)| {
-                let spill = c.spillable()?;
+                let spill = c
+                    .spillable()
+                    .filter(|s| !last_resort_only || s.last_resort())?;
                 let bytes = spill.spillable_bytes().min(c.used());
                 let excess = plan.excess(n.group_node().as_ref());
                 // The requester's own driver services requests while it
                 // waits, but has already spilled what `SpillOwner::reserve`
                 // asked of it: its other consumers are asked last.
                 let own = c.owner.is_some() && c.owner == me.owner;
-                (bytes > 0).then(|| (own, excess, bytes, spill, Arc::clone(c), Arc::clone(n)))
+                // Consumers that only give up reservations (memory still in
+                // use) come after every real spill.
+                let rank = (spill.last_resort(), own);
+                (bytes > 0).then(|| (rank, excess, bytes, spill, Arc::clone(c), Arc::clone(n)))
             })
             .collect();
         victims
-            .sort_by_key(|(own, excess, bytes, ..)| (*own, std::cmp::Reverse((*excess, *bytes))));
+            .sort_by_key(|(rank, excess, bytes, ..)| (*rank, std::cmp::Reverse((*excess, *bytes))));
         let mut remaining = shortfall;
         let mut tickets = Vec::new();
         for (_, _, bytes, spill, c, n) in victims {

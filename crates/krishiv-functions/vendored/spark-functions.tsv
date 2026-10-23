@@ -118,7 +118,7 @@ covar_pop	function	3.5	true	aggregate	0010000	2
 covar_samp	function	3.5	true	aggregate	0010000	2
 crc32	function	3.5	true	scalar	0100000	1
 csc	function	3.5	true	scalar	0100000	1
-cume_dist	function	3.5	true	scalar	1000000	0
+cume_dist	function	3.5	true	window	1000000	0
 curdate	function	3.5	true	scalar	1000000	0
 current_catalog	function	3.5	true	scalar	1000000	0
 current_database	function	3.5	true	scalar	1000000	0
@@ -148,7 +148,7 @@ dayofyear	function	3.5	true	scalar	0100000	1
 decimal	function	3.5	true	scalar	0100000	1
 decode	function	3.5	true	scalar	0011111	2
 degrees	function	3.5	true	scalar	0100000	1
-dense_rank	function	3.5	true	scalar	1111111	
+dense_rank	function	3.5	true	window	1111111	
 div	function	3.5	true	scalar	0010000	2
 double	function	3.5	true	scalar	0100000	1
 e	function	3.5	true	scalar	1000000	0
@@ -241,12 +241,12 @@ kll_sketch_to_string_bigint	function	4.1	true	aggregate	0100000	1
 kll_sketch_to_string_double	function	4.1	true	aggregate	0100000	1
 kll_sketch_to_string_float	function	4.1	true	aggregate	0100000	1
 kurtosis	function	3.5	true	aggregate	0100000	1
-lag	function	3.5	true	scalar	1111100	[0, 1, 2, 3, 4]
+lag	function	3.5	true	window	1111100	[0, 1, 2, 3, 4]
 last	function	3.5	true	aggregate	0110000	[1, 2]
 last_day	function	3.5	true	scalar	0100000	1
 last_value	function	3.5	true	aggregate	0110000	[1, 2]
 lcase	function	3.5	true	scalar	0100000	1
-lead	function	3.5	true	scalar	1111100	[0, 1, 2, 3, 4]
+lead	function	3.5	true	window	1111100	[0, 1, 2, 3, 4]
 least	function	3.5	true	scalar	0011111	> 1
 left	function	3.5	true	scalar	0010000	2
 len	function	3.5	true	scalar	0100000	1
@@ -306,8 +306,8 @@ negative	function	3.5	true	scalar	0100000	1
 next_day	function	3.5	true	scalar	0010000	2
 not	function	3.5	true	scalar	0100000	1
 now	function	3.5	true	scalar	1000000	0
-nth_value	function	3.5	true	scalar	0011000	[2, 3]
-ntile	function	3.5	true	scalar	1100000	[0, 1]
+nth_value	function	3.5	true	window	0011000	[2, 3]
+ntile	function	3.5	true	window	1100000	[0, 1]
 nullif	function	3.5	true	scalar	0010000	2
 nullifzero	function	4.0	true	scalar	0100000	1
 nvl	function	3.5	true	scalar	0010000	2
@@ -317,7 +317,7 @@ or	function	3.5	true	scalar	0010000	2
 overlay	function	3.5	true	scalar	0001100	[3, 4]
 parse_json	function	4.0	true	scalar	0100000	1
 parse_url	function	3.5	true	scalar	0011000	[2, 3]
-percent_rank	function	3.5	true	scalar	1111111	
+percent_rank	function	3.5	true	window	1111111	
 percentile	function	3.5	true	aggregate	0011000	[2, 3]
 percentile_approx	function	3.5	true	aggregate	0011000	[2, 3]
 percentile_cont	function	4.0	true	aggregate	0100000	1
@@ -341,7 +341,7 @@ randn	function	3.5	false	scalar	1100000	[0, 1]
 random	function	3.5	false	scalar	1100000	[0, 1]
 randstr	function	4.0	false	scalar	0110000	[1, 2]
 range	table_function	3.5	true	scalar	1111111	
-rank	function	3.5	true	scalar	1111111	
+rank	function	3.5	true	window	1111111	
 reduce	function	3.5	true	scalar	0001100	[3, 4]
 reflect	function	3.5	false	scalar	0011111	> 1
 regexp	function	3.5	true	scalar	0010000	2
@@ -368,7 +368,7 @@ right	function	3.5	true	scalar	0010000	2
 rint	function	3.5	true	scalar	0100000	1
 rlike	function	3.5	true	scalar	0010000	2
 round	function	3.5	true	scalar	0110000	[1, 2]
-row_number	function	3.5	true	scalar	1000000	0
+row_number	function	3.5	true	window	1000000	0
 rpad	function	3.5	true	scalar	0011000	[2, 3]
 rtrim	function	3.5	true	scalar	0110000	[1, 2]
 schema_of_avro	function	4.0	unknown	unknown	0110000	[1, 2]

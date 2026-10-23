@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
 
@@ -336,6 +338,42 @@ jobs:
         with:
           workspaces: tools/plan-protogen
       - run: cargo run --locked --manifest-path tools/plan-protogen/Cargo.toml -- --check
+
+  # The cargo-fuzz targets (`fuzz/`, a workspace of its own) only run nightly,
+  # so a change to an API they call would break them unseen. Build all of them
+  # here; same pinned nightly as fuzz.yml. cargo-fuzz has no --locked; the
+  # committed fuzz/Cargo.lock pins the graph.
+  fuzz-build:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NIGHTLY: nightly-2026-08-12
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned nightly toolchain (cargo-fuzz needs it)
+        run: rustup toolchain install "$NIGHTLY" --profile minimal
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz@0.13.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz
+      - name: Build every fuzz target
+        working-directory: fuzz
+        # cargo-fuzz builds for its own compile-time target unless told
+        # otherwise, and the prebuilt binary taiki-e installs is a static musl
+        # one: its default target is x86_64-unknown-linux-musl, where the
+        # sanitizer cannot link ("sanitizer is incompatible with statically
+        # linked libc"). Name the runner's target.
+        run: cargo "+$NIGHTLY" fuzz build --target x86_64-unknown-linux-gnu
 
   msrv:
     needs: changes

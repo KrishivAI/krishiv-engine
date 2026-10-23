@@ -22,8 +22,7 @@ pub struct SparkFunction {
     /// `Expression.deterministic` of an analyzed call; `None` when no call
     /// analyzed (Spark rejected every probe).
     pub deterministic: Option<bool>,
-    /// The kind of an analyzed call (`None` when unknown; window functions
-    /// are reported as scalar by the probe).
+    /// The kind of an analyzed call (`None` when unknown).
     pub kind: Option<FunctionKind>,
     /// The argument counts Spark's arity check accepts.
     pub arity: Arity,
@@ -62,6 +61,7 @@ fn row(line: &'static str) -> Option<SparkFunction> {
         kind: match kind {
             "scalar" => Some(FunctionKind::Scalar),
             "aggregate" => Some(FunctionKind::Aggregate),
+            "window" => Some(FunctionKind::Window),
             "generator" => Some(FunctionKind::Generator),
             _ => None,
         },
