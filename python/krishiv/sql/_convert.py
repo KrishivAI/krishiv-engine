@@ -6,6 +6,7 @@ pyarrow is imported lazily: the package works without it, and the actions that n
 
 from __future__ import annotations
 
+import base64
 import math
 import re
 import struct
@@ -55,6 +56,43 @@ def _value(value: Any, arrow_type: Any) -> Any:
         return {_value(k, arrow_type.key_type): _value(v, arrow_type.item_type) for k, v in value}
     if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type) or pa.types.is_fixed_size_list(arrow_type):
         return [_value(v, arrow_type.value_type) for v in value]
+    return value
+
+
+# -- JSON ----------------------------------------------------------------------------------------
+
+_JSON_TIME = "%Y-%m-%d %H:%M:%S"
+
+
+def jsonable(value: Any, arrow_type: Any, zone: tzinfo = UTC) -> Any:
+    """``value`` (as pyarrow's ``to_pylist`` gives it, of ``arrow_type``) as ``toJSON`` renders it: plain
+    numbers, strings and booleans, dates as ``YYYY-MM-DD``, instants as the wall-clock time of ``zone``
+    (``YYYY-MM-DD HH:MM:SS[.ffffff]``), decimals as numbers, binary as base64, structs as dicts,
+    lists and maps as lists and dicts."""
+    if value is None:
+        return None
+    import pyarrow as pa
+
+    if pa.types.is_timestamp(arrow_type):
+        if arrow_type.tz is not None:
+            value = value.astimezone(zone).replace(tzinfo=None)
+        text = value.strftime(_JSON_TIME)
+        if value.microsecond:
+            text += f".{value.microsecond:06d}".rstrip("0")
+        return text
+    if pa.types.is_date(arrow_type):
+        return value.isoformat()
+    if pa.types.is_decimal(arrow_type):
+        return float(value)
+    if pa.types.is_binary(arrow_type) or pa.types.is_large_binary(arrow_type):
+        return base64.b64encode(value).decode("ascii")
+    if pa.types.is_struct(arrow_type):
+        fields = [arrow_type.field(i) for i in range(arrow_type.num_fields)]
+        return {f.name: jsonable(value[f.name], f.type, zone) for f in fields}
+    if pa.types.is_map(arrow_type):
+        return {jsonable(k, arrow_type.key_type, zone): jsonable(v, arrow_type.item_type, zone) for k, v in value}
+    if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type) or pa.types.is_fixed_size_list(arrow_type):
+        return [jsonable(v, arrow_type.value_type, zone) for v in value]
     return value
 
 

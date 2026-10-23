@@ -55,6 +55,7 @@ sum = _unary("sum", "The sum of the group.")
 avg = _unary("avg", "The average of the group.")
 min = _unary("min", "The minimum of the group.")
 max = _unary("max", "The maximum of the group.")
+first = _unary("first", "The first value of the group.")
 
 
 def mean(col: ColumnOrName) -> Column:

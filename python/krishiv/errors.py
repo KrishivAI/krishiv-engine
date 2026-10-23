@@ -21,6 +21,9 @@ _TEMPLATES = {
         "Cannot convert column into bool: please use '&' for 'and', '|' for 'or', "
         "'~' for 'not' when building DataFrame boolean expressions."
     ),
+    "DISALLOWED_TYPE_FOR_CONTAINER": (
+        "Argument `<arg_name>`(type: <arg_type>) should only contain a type in [<allowed_types>], got <item_type>"
+    ),
     "UNSUPPORTED_OPERATION": "<operation> is not supported.",
     "VALUE_NOT_ALLOWED": "Value for `<arg_name>` has to be amongst the following values: <allowed_values>.",
     "CANNOT_BE_NONE": "Argument `<arg_name>` cannot be None.",
