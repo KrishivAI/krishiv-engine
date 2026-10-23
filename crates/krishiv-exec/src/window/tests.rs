@@ -526,11 +526,15 @@ fn decimal_rows(values: &[i128], p: u8) -> (SchemaRef, Batch) {
 }
 
 fn task(limit: usize) -> (Arc<TreePool>, TaskContext) {
+    task_with(limit, ExecConfig::default())
+}
+
+fn task_with(limit: usize, config: ExecConfig) -> (Arc<TreePool>, TaskContext) {
     let root = pool(limit);
     let q = QueryContext::new(
         QueryId(7),
         WorkloadClass::Batch,
-        ExecConfig::default(),
+        config,
         root.child("q", Some(limit)),
     );
     let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
@@ -994,20 +998,39 @@ fn windows_require_their_partitioning() {
 
 // Spilling the buffered rows (P2-T055 part 2).
 
-/// A spill directory of its own, deleted with the manager.
-fn spill_scope() -> (krishiv_memory::SpillManager, krishiv_memory::SpillScope) {
+/// A spill directory of its own: the manager deletes what it wrote, and
+/// the guard the directory itself.
+struct SpillDir {
+    manager: Option<krishiv_memory::SpillManager>,
+    dir: std::path::PathBuf,
+}
+
+impl Drop for SpillDir {
+    fn drop(&mut self) {
+        drop(self.manager.take());
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn spill_scope() -> (SpillDir, krishiv_memory::SpillScope) {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target")
         .join(format!("window-unit-{}-{n}", std::process::id()));
     let manager = krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
-        dir,
+        dir: dir.clone(),
         ..krishiv_memory::SpillConfig::default()
     })
     .unwrap();
     let scope = manager.scope().unwrap();
-    (manager, scope)
+    (
+        SpillDir {
+            manager: Some(manager),
+            dir,
+        },
+        scope,
+    )
 }
 
 /// How [`drive_spilling`] spills.
@@ -1136,7 +1159,13 @@ async fn compare_spilling(
     let (_manager, scope) = spill_scope();
     let op = Window::new(schema(), window.clone(), true, Some(scope)).unwrap();
     let limit = 1 << 30;
-    let (root, ctx) = task(limit);
+    // Batches of 4 rows: complete rows reach a batch while rows wait after
+    // a spill, and in the flush phase.
+    let config = ExecConfig {
+        batch_size: 4,
+        ..ExecConfig::default()
+    };
+    let (root, ctx) = task_with(limit, config);
     let got = drive_spilling(&op, &ctx, limit, &root, &sorted, spills)
         .await
         .unwrap();
@@ -1529,4 +1558,29 @@ async fn one_large_partition_spills_through_the_runner() {
             .load(std::sync::atomic::Ordering::Relaxed)
             >= 1
     );
+}
+
+/// The flush phase's headroom refused: the window is failed, and a later
+/// flush fails too instead of finding no rows.
+#[tokio::test(start_paused = true)]
+async fn a_refused_flush_headroom_fails_the_window() {
+    let rows: Vec<Row> = (0..400)
+        .map(|i| (Some(i / 300), Some(i), i, Some(i)))
+        .collect();
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), plan(functions(), true), true, Some(scope)).unwrap();
+    let limit = 1 << 20;
+    let (root, ctx) = task(limit);
+    let mut local = op.local_state(&ctx).unwrap();
+    op.execute(&batch(&rows), &mut local).unwrap();
+    assert!(op.spill(&mut local, 1, &ctx).await.unwrap() > 0);
+    assert!(op.finish(&mut local).unwrap().is_none());
+    let pool = Arc::clone(ctx.query().pool());
+    let mut hog = krishiv_memory::Reservation::new(Arc::clone(&pool), pool.register("hog", None));
+    take_all_but(&mut hog, limit - root.reserved(), 0);
+    let e = op.end_input(&mut local, &ctx).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory, "{e}");
+    let again = op.flush(&mut local, &ctx).await.unwrap_err();
+    assert_eq!(again.error_class(), ErrorClass::UnableToAcquireMemory);
+    drop((hog, local));
 }
