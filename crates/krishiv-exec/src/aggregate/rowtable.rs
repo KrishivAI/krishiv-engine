@@ -671,6 +671,11 @@ impl RowTable {
         for (v, c) in self.parts.iter_mut().zip(p.counts) {
             v.rows.reserve(c * self.stride);
         }
+        // Heaps grow once per batch, as `projected` assumed (not by
+        // doubling per value).
+        for (v, &b) in self.parts.iter_mut().zip(&p.heap_counts) {
+            v.heap.reserve(b);
+        }
         let mut refs = Vec::with_capacity(n);
         let before = self.groups;
         self.reserve_index(n);
@@ -1500,6 +1505,67 @@ mod tests {
         let want = t.projected(&p);
         t.apply(&p).unwrap();
         assert!(t.memory_size() <= want, "{} > {want}", t.memory_size());
+    }
+
+    /// A table grouping by a `Utf8` key (`v` an `Int64`).
+    fn core_str() -> Arc<AggCore> {
+        let s = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Utf8, true),
+            Field::new("v", DataType::Int64, true),
+        ]));
+        let spec = AggregateSpec {
+            input: Arc::clone(&s),
+            group_by: vec![0],
+            aggregates: vec![AggregateExpr::count_star("c")],
+            output: AggregateOutput::Final,
+            ansi: true,
+            spill: None,
+            require_unit_weights: false,
+        };
+        Arc::new(AggCore::new(spec).unwrap())
+    }
+
+    /// Keys of 200 bytes (heap values) for [`core_str`].
+    fn long_keys(core: &AggCore, keys: impl Iterator<Item = i64>) -> Batch {
+        let k: Vec<String> = keys.map(|i| format!("{i:0>200}")).collect();
+        let v = Int64Array::from(vec![1; k.len()]);
+        let k = arrow_array::StringArray::from(k);
+        let cols: Vec<ArrayRef> = vec![Arc::new(k), Arc::new(v)];
+        Batch::new(RecordBatch::try_new(Arc::clone(&core.spec.input), cols).unwrap())
+    }
+
+    /// Long string keys live in the partitions' heaps: the table counts
+    /// them, and the projections of an apply and of a merge bound them.
+    #[test]
+    fn heap_bytes_are_accounted() {
+        let core = core_str();
+        let seed = HashSeed::new(Some(9));
+        for mode in [Mode::Grow, Mode::Fixed { limit: 64 }, Mode::Append] {
+            let mut t = RowTable::new(&core, &seed, mode, true, RADIX_BITS).unwrap();
+            for start in (0..2_000).step_by(500) {
+                apply(&mut t, &long_keys(&core, start..start + 500));
+            }
+            // Every key is new: 2,000 values of 200 bytes in the heaps.
+            assert!(
+                t.memory_size() >= 2_000 * 200,
+                "{mode:?}: {}",
+                t.memory_size()
+            );
+            let mut merged = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+            for p in 0..PARTS {
+                let c = t.merge_chunk(p, 0..t.part_len(p)).unwrap();
+                let want = merged.projected_merge(&c);
+                merged.apply_merge(&t, &c).unwrap();
+                assert!(
+                    merged.memory_size() <= want,
+                    "{} > {want}",
+                    merged.memory_size()
+                );
+            }
+            assert!(merged.memory_size() >= 2_000 * 200);
+            let out = merged.output_batch(&merged.ids(0..merged.len())).unwrap();
+            assert_eq!(out.num_rows(), 2_000);
+        }
     }
 
     /// A seedless 64-bit mix (splitmix64's finalizer) for test hashes.
