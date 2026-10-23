@@ -366,6 +366,15 @@ fn budgets_run_for_manifest_changes_or_full_and_never_with_fast() {
         Action::Run(_)
     ));
 }
+    // The binary is run directly: `cargo machete` under `cargo xtask` scans a directory named
+    // "machete" and exits 2.
+    let planned = make_plan(&manifest, &opts(&[]), true);
+    let Action::Run(cmds) = &step(&planned, "machete").action else {
+        panic!()
+    };
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0].program, "cargo-machete");
+    assert!(cmds[0].args.is_empty(), "{:?}", cmds[0].args);
 
 #[test]
 fn fast_skips_both_coverage_gates() {

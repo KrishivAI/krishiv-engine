@@ -607,7 +607,9 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
             "machete",
             "cargo-machete",
             has,
-            vec![Cmd::new("cargo", &["machete"])],
+            // Not `cargo machete`: under `cargo xtask` cargo's CARGO_PKG_* variables are set, and
+            // the cargo-machete shim then treats its own subcommand word as a directory to scan.
+            vec![Cmd::new("cargo-machete", &[])],
         )
     } else {
         skip("machete", "no Cargo.toml/Cargo.lock change")
