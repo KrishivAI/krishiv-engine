@@ -24,6 +24,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use super::thrift_guard;
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
@@ -98,6 +99,10 @@ fn footer_error(e: impl std::fmt::Display) -> FormatError {
     FormatError::CorruptFooter(e.to_string())
 }
 
+fn guard_error(why: &str) -> FormatError {
+    footer_error(format!("the footer is malformed: {why}"))
+}
+
 /// Reads and checks the footer of `file`.
 pub(crate) async fn read(
     io: &IoContext,
@@ -143,11 +148,39 @@ pub(crate) async fn read(
     let mut decoder = ParquetMetaDataPushDecoder::try_new(file.size)
         .map_err(footer_error)?
         .with_page_index_policy(PageIndexPolicy::Skip);
+    // arrow-rs trusts the element counts of the footer's Thrift lists and
+    // maps, so the whole footer is walked first. The part before the tail,
+    // if any, is the one read the decoder would ask for.
+    let footer_start = file.size - 8 - footer_len;
+    let mut reads = 1;
+    let tail_footer = usize::try_from(footer_start.saturating_sub(tail.start))
+        .ok()
+        .and_then(|skipped| tail.bytes.get(skipped..n - 8))
+        .ok_or_else(|| footer_error("the footer lies outside the tail"))?;
+    if footer_start >= tail.start {
+        thrift_guard::check(tail_footer).map_err(guard_error)?;
+    } else {
+        reads += 1;
+        let missing = footer_start..tail.start;
+        let held = io
+            .get_ranges_held(file, std::slice::from_ref(&missing))
+            .await?;
+        let head = held
+            .first()
+            .filter(|b| b.len() as u64 == tail.start - footer_start)
+            .ok_or_else(|| footer_error("the footer read came back short"))?;
+        let mut whole = Vec::with_capacity(head.len() + tail_footer.len());
+        whole.extend_from_slice(head);
+        whole.extend_from_slice(tail_footer);
+        thrift_guard::check(&whole).map_err(guard_error)?;
+        decoder
+            .push_range(missing, head.clone())
+            .map_err(footer_error)?;
+    }
     decoder
         .push_range(tail.start..file.size, tail.bytes.clone())
         .map_err(footer_error)?;
     drop(tail);
-    let mut reads = 1;
     let meta = loop {
         let step = super::contain("reading the footer", FormatError::CorruptFooter, || {
             decoder.try_decode().map_err(footer_error)
