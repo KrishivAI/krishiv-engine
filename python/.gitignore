@@ -3,6 +3,7 @@ __pycache__/
 *.so
 *.pyd
 .pytest_cache/
+.mypy_cache/
 .venv-*/
 
 # Python coverage data (pytest --cov)

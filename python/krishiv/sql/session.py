@@ -81,7 +81,8 @@ class SparkSession:
         def __get__(self, instance: object, owner: type | None = None) -> SparkSession.Builder:
             return SparkSession.Builder()
 
-    builder: Builder = _BuilderProperty()  # ty: ignore[invalid-assignment]
+    # Typed as Builder (what attribute access gives); the descriptor below provides it.
+    builder: Builder = _BuilderProperty()  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
     def __init__(self, native: _native.Session) -> None:
         self._native = native

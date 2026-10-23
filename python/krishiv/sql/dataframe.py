@@ -53,6 +53,12 @@ _HOW = {
 #: The most rows ``show`` prints, as Spark: ``ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH - 1``.
 _SHOW_MAX = 2**31 - 17
 
+#: The session key of the notebook preview size, as Spark's ``spark.sql.repl.eagerEval.maxNumRows``.
+EAGER_MAX_ROWS_KEY = "spark.sql.repl.eagerEval.maxNumRows"
+
+#: The preview size when the key is unset or not a number, as Spark's default of 20.
+EAGER_DEFAULT_MAX_ROWS = 20
+
 ColumnOrName = Column | str
 ColumnsOrNames = ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...]
 
@@ -62,6 +68,19 @@ def _flatten(cols: tuple[Any, ...]) -> list[Any]:
     if len(cols) == 1 and isinstance(cols[0], list | tuple):
         return list(cols[0])
     return list(cols)
+
+
+def _eager_max_rows(session: SparkSession) -> int:
+    """The notebook preview size: ``spark.sql.repl.eagerEval.maxNumRows`` (default 20). Unset,
+    empty or non-numeric values give the default; negatives give no rows."""
+    raw = session.conf.get(EAGER_MAX_ROWS_KEY, str(EAGER_DEFAULT_MAX_ROWS))
+    if raw is None:
+        return EAGER_DEFAULT_MAX_ROWS
+    try:
+        rows = int(raw.strip())
+    except ValueError:
+        return EAGER_DEFAULT_MAX_ROWS
+    return min(max(rows, 0), _SHOW_MAX)
 
 
 class DataFrame:
@@ -114,6 +133,26 @@ class DataFrame:
     # Transformations.
     def _new(self, native: _native.DataFrame) -> DataFrame:
         return DataFrame(native, self._session)
+
+    def __repr__(self) -> str:
+        """``DataFrame[a: int, b: string]``: the columns with their types, by analysis only
+        (the query does not run)."""
+        fields = ", ".join(f"{name}: {type_}" for name, type_ in self.dtypes)
+        return f"DataFrame[{fields}]"
+
+    def _repr_html_(self) -> str | None:
+        """The first ``spark.sql.repl.eagerEval.maxNumRows`` rows (default 20) as an HTML table,
+        for notebooks: column names and types in the header, HTML-escaped values. Without
+        pyarrow there is no preview, so ``None`` (the notebook falls back to :meth:`__repr__`)."""
+        try:
+            _convert.require_pyarrow("_repr_html_")
+        except ImportError:
+            return None
+        rows = _eager_max_rows(self._session)
+        table = self.limit(rows).toArrow()
+        cells = _convert.table_cells(table, self._session_zone())
+        columns = [(name, type_) for name, type_ in self.dtypes]
+        return _convert.repr_html_string(columns, cells)
 
     def select(self, *cols: ColumnsOrNames) -> DataFrame:
         return self._new(self._df.select([_named(c) for c in _flatten(cols)]))
@@ -168,7 +207,7 @@ class DataFrame:
             return self._new(self._df.join(other._df, how="cross"))
         items = list(on) if isinstance(on, list | tuple) else [on]
         if all(isinstance(i, str) for i in items):
-            return self._new(self._df.join(other._df, using=items, how=kind))
+            return self._new(self._df.join(other._df, using=cast("list[str]", items), how=kind))
         if all(isinstance(i, Column) for i in items):
             condition: Column = reduce(lambda a, b: a & b, cast("list[Column]", items))
             return self._new(self._df.join(other._df, on=condition._c, how=kind))
