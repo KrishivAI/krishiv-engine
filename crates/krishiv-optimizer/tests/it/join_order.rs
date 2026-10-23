@@ -525,6 +525,26 @@ fn literal_equalities_without_a_distinct_count_use_the_default() {
     let only = without_distinct(&["l_returnflag"]);
     assert!(close(rows(eq, &only), lineitem / 3.0));
     // An equality between two columns of one input keeps `1 / ndv`.
+    // `c <=> NULL` is `c IS NULL`: the column's null fraction (none here).
+    // Optimized first: folding makes the coerced NULL a literal.
+    let folded = |sql: &str, stats: &Fixture| {
+        let plan = optimize_with(&support::resolve(sql, &ctx), stats).unwrap();
+        krishiv_optimizer::estimated_rows(plan.root(), stats)
+    };
+    let is_null = folded(
+        "SELECT l_orderkey FROM lineitem WHERE l_returnflag IS NULL",
+        &known,
+    );
+    for sql in [
+        "SELECT l_orderkey FROM lineitem WHERE l_returnflag <=> NULL",
+        "SELECT l_orderkey FROM lineitem WHERE NULL <=> l_returnflag",
+    ] {
+        let (k, f) = (folded(sql, &known), folded(sql, &footers));
+        assert!(
+            close(k, is_null) && close(f, is_null),
+            "{sql}: {k} {f} vs {is_null}"
+        );
+    }
     let cols = "SELECT l_orderkey FROM lineitem WHERE l_commitdate = l_receiptdate";
     assert!(close(rows(cols, &footers), 1.0), "{}", rows(cols, &footers));
 }

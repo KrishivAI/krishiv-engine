@@ -92,19 +92,30 @@ fn a_much_larger_right_input_is_shown_as_the_side_not_to_build() {
 #[test]
 fn null_aware_inner_small_and_hinted_joins_show_no_preference() {
     let env = env();
-    for sql in [
+    for (sql, want) in [
         // `NOT IN` reads whether the whole subquery side holds a NULL.
-        "SELECT a FROM t WHERE a NOT IN (SELECT a FROM big)",
+        (
+            "SELECT a FROM t WHERE a NOT IN (SELECT a FROM big)",
+            "HashJoin NullAwareAnti, [a#0] = [a#3]",
+        ),
         // Inner joins keep the join orderer's choice.
-        "SELECT t.a FROM t JOIN big ON t.a = big.a",
+        (
+            "SELECT t.a FROM t JOIN big ON t.a = big.a",
+            "HashJoin Inner, [a#0] = [a#3], RuntimeFilter #1: a#0 -> spark_catalog.default.t.a",
+        ),
         // A build small enough to broadcast stays.
-        "SELECT a FROM big WHERE EXISTS (SELECT 1 FROM t WHERE big.a = t.a)",
+        (
+            "SELECT a FROM big WHERE EXISTS (SELECT 1 FROM t WHERE big.a = t.a)",
+            "HashJoin LeftSemi, [a#0] = [a#3], \
+             RuntimeFilter #1: a#0 -> spark_catalog.default.big.a (bloom)",
+        ),
         // A hint decides.
-        "SELECT /*+ SHUFFLE_HASH(big) */ t.a FROM t LEFT JOIN big ON t.a = big.a",
+        (
+            "SELECT /*+ SHUFFLE_HASH(big) */ t.a FROM t LEFT JOIN big ON t.a = big.a",
+            "HashJoin LeftOuter, [a#0] = [a#3]",
+        ),
     ] {
-        let js = joins(&env, sql);
-        assert!(!js.is_empty(), "{sql}");
-        assert!(js.iter().all(|j| !j.contains("prefers")), "{sql}: {js:?}");
+        assert_eq!(joins(&env, sql), [want], "{sql}");
     }
 }
 
@@ -132,5 +143,20 @@ fn a_default_estimate_needs_a_larger_ratio() {
             .iter()
             .any(|j| j.contains("prefers RightSemi")),
         "{sql}"
+    );
+}
+
+/// A `WITH` reference reads as a default-sized relation (the estimator
+/// does not look through it), so it is not taken as resting on statistics.
+#[test]
+fn a_cte_reference_is_a_default_estimate() {
+    let env = env();
+    let sql = "WITH c AS (SELECT a FROM big) \
+               SELECT a FROM t WHERE EXISTS (SELECT 1 FROM c WHERE c.a = t.a)";
+    let js = joins(&env, sql);
+    assert_eq!(js.len(), 1, "{js:?}");
+    assert!(
+        js[0].ends_with("prefers RightSemi (probe: 10 rows / 0.0 MiB, statistics; build: 1000000 rows / 11.4 MiB, default)"),
+        "{js:?}"
     );
 }

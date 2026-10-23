@@ -331,6 +331,10 @@ fn column_ndv(e: &Expr, est: &Est) -> Option<f64> {
     column(e, est).map(|c| c.ndv)
 }
 
+fn is_null_literal(e: &Expr) -> bool {
+    matches!(literal(e), Some(Literal::Null(_)))
+}
+
 fn literal(e: &Expr) -> Option<&Literal> {
     match &e.node {
         ExprNode::Literal(l) => Some(l),
@@ -362,6 +366,11 @@ pub(crate) fn selectivity(pred: &Expr, est: &Est) -> f64 {
             x + y - x * y
         }
         (Some((Builtin::Not, [a], _)), _) => 1.0 - selectivity(a, est),
+        // `c <=> NULL` holds exactly where `c` is NULL, as `c IS NULL`.
+        (Some((Builtin::EqNullSafe, [a, b], _)), _) if is_null_literal(a) || is_null_literal(b) => {
+            let c = if is_null_literal(a) { b } else { a };
+            column(c, est).map_or(DEFAULT_SELECTIVITY, |c| c.nulls)
+        }
         (Some((Builtin::Eq | Builtin::EqNullSafe, [a, b], _)), _) => {
             match (column(a, est), column(b, est)) {
                 (Some(x), Some(y)) => 1.0 / x.ndv.max(y.ndv),
