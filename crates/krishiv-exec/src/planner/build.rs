@@ -631,6 +631,23 @@ impl<'a> Planner<'a> {
         krishiv_optimizer::estimated_rows(plan, &stats)
     }
 
+    /// Whether every table `plan` reads reports statistics, so its estimate
+    /// does not rest on default row counts.
+    pub(crate) fn has_statistics(&self, plan: &Arc<LogicalPlan>) -> bool {
+        use krishiv_optimizer::Statistics as _;
+        let stats = super::ProviderStatistics(Arc::clone(&self.cx.tables));
+        let mut stack = vec![plan];
+        while let Some(p) = stack.pop() {
+            if let PlanNode::Scan(scan) = &p.node
+                && stats.table(scan).is_none()
+            {
+                return false;
+            }
+            p.for_each_child(&mut |c| stack.push(c));
+        }
+        true
+    }
+
     fn scan(
         &mut self,
         plan: &Arc<LogicalPlan>,
