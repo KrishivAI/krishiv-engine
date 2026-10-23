@@ -39,7 +39,7 @@ use futures::stream::FuturesUnordered;
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{Reservation, SpillWriter};
 
-use super::super::rowtable::{Mode, RowTable, final_tasks, split_ref};
+use super::super::rowtable::{Mode, RowTable, final_tasks};
 use super::super::table::Table;
 use super::{
     CHUNK, Final, Global, HEADROOM, HashAggregate, Run, Spiller, bump, lend_headroom, reserve_to,
@@ -199,6 +199,8 @@ impl HashAggregate {
         let mut done: Vec<Task> = Vec::new();
         let mut out: Option<SpillWriter> = None;
         let mut spare = spare;
+        // Tasks finished so far (flushed ones included).
+        let mut finished = 0;
         loop {
             let asked = spill.is_some() && lock(&g.inner).spill_asked;
             let mut stalled = false;
@@ -206,6 +208,11 @@ impl HashAggregate {
                 let Some(mut task) = queue.pop_front() else {
                     break;
                 };
+                if self.refused(finished) {
+                    queue.push_front(task);
+                    stalled = running.is_empty();
+                    break;
+                }
                 if task.need > 0 {
                     if task.reservation.try_grow(task.need).is_err() {
                         queue.push_front(task);
@@ -266,7 +273,10 @@ impl HashAggregate {
             };
             let (mut task, stall) = next?;
             match stall {
-                None => done.push(task),
+                None => {
+                    finished += 1;
+                    done.push(task);
+                }
                 Some(missing) => {
                     task.need = missing;
                     queue.push_back(task);
@@ -319,6 +329,20 @@ impl HashAggregate {
             _held: reservations,
         });
         Ok(true)
+    }
+
+    /// Whether a test refuses memory to the next task once `finished`
+    /// tasks finished (`HashAggregate::with_final_stall`; never outside
+    /// tests).
+    fn refused(&self, finished: usize) -> bool {
+        #[cfg(test)]
+        let refused = self.stall_after.is_some_and(|n| finished >= n);
+        #[cfg(not(test))]
+        let refused = {
+            let _ = (self, finished);
+            false
+        };
+        refused
     }
 
     /// The final phase's tasks: each takes its partitions out of every
@@ -431,10 +455,13 @@ impl HashAggregate {
                     // every input row it did not reach.
                     let at = task.at;
                     let all = |_: u32| true;
-                    let keeps: Vec<_> = (0..task.inputs.len())
-                        .map(|i| {
+                    let keeps: Vec<_> = task
+                        .inputs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (input, _))| {
                             move |r: u32| {
-                                let (p, row) = split_ref(r);
+                                let (p, row) = input.split_ref(r);
                                 (i, p, row) >= at
                             }
                         })

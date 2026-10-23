@@ -81,9 +81,52 @@ use crate::rows::{EncodedKeys, Hll, RowLayout};
 pub(crate) const RADIX_BITS: u32 = 4;
 /// Most radix partitions of a table.
 pub(crate) const PARTS: usize = 1 << RADIX_BITS;
-/// Bits of a row reference for the row within its partition.
-const ROW_BITS: u32 = 32 - RADIX_BITS;
-const ROW_MASK: u32 = (1 << ROW_BITS) - 1;
+/// How a table's `u32` row references split into partition and row: the
+/// top `bits` bits are the partition, the rest the row, so a table of one
+/// partition holds up to 2^32 groups as before and a partitioned one up to
+/// 2^(32 - bits) per partition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Refs {
+    bits: u32,
+}
+
+impl Refs {
+    fn new(bits: u32) -> Self {
+        Self {
+            bits: bits.min(RADIX_BITS),
+        }
+    }
+
+    #[inline]
+    fn row_bits(self) -> u32 {
+        32 - self.bits
+    }
+
+    /// The partition of `r`.
+    #[inline]
+    pub(crate) fn part(self, r: u32) -> usize {
+        usize::try_from(u64::from(r) >> self.row_bits()).unwrap_or(usize::MAX)
+    }
+
+    /// The row of `r` within its partition.
+    #[inline]
+    pub(crate) fn row(self, r: u32) -> u32 {
+        r & self.mask()
+    }
+
+    /// The largest row of a partition.
+    #[inline]
+    fn mask(self) -> u32 {
+        u32::try_from((1u64 << self.row_bits()) - 1).unwrap_or(u32::MAX)
+    }
+
+    /// The reference of row `row` of partition `p`.
+    #[inline]
+    fn make(self, p: usize, row: usize) -> u32 {
+        let p = u64::try_from(p).unwrap_or(0) << self.row_bits();
+        u32::try_from(p).unwrap_or(0) | u32::try_from(row).unwrap_or(self.mask())
+    }
+}
 /// Index capacity (slots) of a thread-local table above two threads, and at
 /// most two threads (DuckDB's sink capacities); entries up to 2/3 of it.
 const SINK_SLOTS: usize = 1 << 15;
@@ -226,6 +269,8 @@ pub(crate) struct RowTable {
     stride: usize,
     /// Radix bits: `1 << bits` partitions.
     bits: u32,
+    /// How row references split.
+    refs: Refs,
     parts: Vec<Part>,
     /// Per-partition sketches of the rows' `h` (thread-local tables).
     sketches: Option<Vec<Hll>>,
@@ -267,6 +312,7 @@ impl RowTable {
             gseed: seed.hash(b"krishiv.agg.g"),
             stride: layout.stride(),
             bits,
+            refs: Refs::new(bits),
             parts,
             sketches: local.then(|| (0..nparts).map(|_| Hll::new(PART_HLL_BITS)).collect()),
             index: HashTable::new(),
@@ -421,10 +467,10 @@ impl RowTable {
             Mode::Fixed { limit } => self.index.len().saturating_add(new).min(limit),
             Mode::Grow => self.index.len().saturating_add(new),
         };
-        let (parts, stride, gseed) = (&self.parts, self.stride, self.gseed);
+        let (parts, stride, gseed, refs) = (&self.parts, self.stride, self.gseed, self.refs);
         self.index
             .reserve(len.saturating_sub(self.index.len()), |&r| {
-                fin(word(row_at(parts, stride, r), 0), gseed)
+                fin(word(row_at(parts, stride, refs, r), 0), gseed)
             });
     }
 
@@ -603,7 +649,7 @@ impl RowTable {
             .collect();
         let mut local = Vec::with_capacity(refs.len());
         if let [p] = touched[..] {
-            local.extend(refs.iter().map(|&r| r & ROW_MASK));
+            local.extend(refs.iter().map(|&r| self.refs.row(r)));
             self.fold_part(p, &local, cols, w, fold)
         } else if touched.is_empty() {
             Ok(())
@@ -641,12 +687,12 @@ impl RowTable {
         local.resize(n, 0);
         let mut next = starts.clone();
         for (i, &r) in (0u32..).zip(refs) {
-            let p = (r >> ROW_BITS) as usize;
+            let p = self.refs.part(r);
             let slot = next
                 .get_mut(p)
                 .ok_or_else(|| internal("bad row reference".to_owned()))?;
             order[*slot] = i;
-            local[*slot] = r & ROW_MASK;
+            local[*slot] = self.refs.row(r);
             *slot += 1;
         }
         let idx = UInt32Array::from(order);
@@ -756,6 +802,7 @@ impl RowTable {
             stride,
             gseed,
             bits,
+            refs,
             ..
         } = self;
         let (stride, gseed) = (*stride, *gseed);
@@ -763,12 +810,14 @@ impl RowTable {
         // A lookup first (hashbrown inlines `find`; most rows are hits),
         // then an insert on a miss.
         let found = index
-            .find(g, |&r| same_key(row_at(parts, stride, r), key, stride))
+            .find(g, |&r| {
+                same_key(row_at(parts, stride, *refs, r), key, stride)
+            })
             .copied();
         if let Some(r) = found {
             return Ok(r);
         }
-        let r = push_row(parts, sketches, groups, stride, *bits, key, h)?;
+        let r = push_row(parts, sketches, groups, stride, (*bits, *refs), key, h)?;
         if index.len() >= limit {
             index.clear();
             *unique = false;
@@ -776,7 +825,10 @@ impl RowTable {
                 c.fetch_add(1, Ordering::Relaxed);
             }
         }
-        index.insert_unique(g, r, |&o| fin(word(row_at(parts, stride, o), 0), gseed));
+        let refs = *refs;
+        index.insert_unique(g, r, |&o| {
+            fin(word(row_at(parts, stride, refs, o), 0), gseed)
+        });
         Ok(r)
     }
 
@@ -786,7 +838,7 @@ impl RowTable {
             &mut self.sketches,
             &mut self.groups,
             self.stride,
-            self.bits,
+            (self.bits, self.refs),
             key,
             h,
         )
@@ -800,15 +852,15 @@ impl RowTable {
         for p in 0..self.parts.len() {
             let len = self.part_len(p);
             let (from, to) = (range.start.max(start), range.end.min(start + len));
-            out.extend((from..to).map(|i| ref_of(p, i - start)));
+            out.extend((from..to).map(|i| self.refs.make(p, i - start)));
             start += len;
         }
         out
     }
 
     /// The references of rows `rows` of partition `p`.
-    pub(crate) fn part_ids(p: usize, rows: Range<usize>) -> Vec<u32> {
-        rows.map(|i| ref_of(p, i)).collect()
+    pub(crate) fn part_ids(&self, p: usize, rows: Range<usize>) -> Vec<u32> {
+        rows.map(|i| self.refs.make(p, i)).collect()
     }
 
     /// Row references per spill partition at `level` (by `g`) of the rows
@@ -821,7 +873,7 @@ impl RowTable {
             start += self.part_len(p);
             for (i, row) in part.rows.chunks_exact(self.stride).enumerate().skip(skip) {
                 let g = fin(word(row, 0), self.gseed);
-                out[spill_partition(g, level)].push(ref_of(p, i));
+                out[spill_partition(g, level)].push(self.refs.make(p, i));
             }
         }
         out
@@ -844,7 +896,7 @@ impl RowTable {
     fn rows_of(&self, refs: &[u32]) -> Result<Vec<&[u8]>> {
         refs.iter()
             .map(|&r| {
-                let row = row_at(&self.parts, self.stride, r);
+                let row = row_at(&self.parts, self.stride, self.refs, r);
                 if row.is_empty() {
                     Err(internal(format!("row reference {r:#x} out of range")))
                 } else {
@@ -870,17 +922,17 @@ impl RowTable {
         let mut local = Vec::new();
         let mut rest = refs;
         while let Some(&first) = rest.first() {
-            let p = first >> ROW_BITS;
+            let p = self.refs.part(first);
             let run = rest
                 .iter()
-                .position(|&r| r >> ROW_BITS != p)
+                .position(|&r| self.refs.part(r) != p)
                 .unwrap_or(rest.len());
             let part = self
                 .parts
-                .get(p as usize)
+                .get(p)
                 .ok_or_else(|| internal(format!("row reference {first:#x} out of range")))?;
             local.clear();
-            local.extend(rest[..run].iter().map(|&r| r & ROW_MASK));
+            local.extend(rest[..run].iter().map(|&r| self.refs.row(r)));
             if local
                 .iter()
                 .any(|&i| i as usize >= part.rows.len() / self.stride)
@@ -934,7 +986,7 @@ impl RowTable {
     /// Rows `rows` of partition `p` of this table, with their states, to
     /// merge into another table of the same aggregate.
     pub(crate) fn merge_chunk(&self, p: usize, rows: Range<usize>) -> Result<MergeChunk> {
-        let refs = Self::part_ids(p, rows.clone());
+        let refs = self.part_ids(p, rows.clone());
         let part = self
             .parts
             .get(p)
@@ -944,7 +996,7 @@ impl RowTable {
                 "rows {rows:?} of partition {p} out of range"
             )));
         }
-        let ids: Vec<u32> = refs.iter().map(|&r| r & ROW_MASK).collect();
+        let ids: Vec<u32> = refs.iter().map(|&r| self.refs.row(r)).collect();
         let mut states = Vec::new();
         for a in &part.accs {
             states.extend(a.state(&ids)?);
@@ -1006,7 +1058,7 @@ impl RowTable {
         }
         let mut result = Ok(());
         for &r in &c.refs {
-            let row = row_at(&src.parts, src.stride, r);
+            let row = row_at(&src.parts, src.stride, src.refs, r);
             match self.find_or_insert(row, word(row, 0), usize::MAX) {
                 Ok(id) => refs.push(id),
                 Err(e) => {
@@ -1056,6 +1108,7 @@ impl RowTable {
                     gseed: self.gseed,
                     stride: self.stride,
                     bits: self.bits,
+                    refs: self.refs,
                     parts,
                     sketches: None,
                     index: HashTable::new(),
@@ -1096,27 +1149,21 @@ fn layout(core: &AggCore) -> Result<&RowLayout> {
 
 impl RowTable {
     /// Whether two row references are in one radix partition.
-    pub(crate) fn same_part(a: u32, b: u32) -> bool {
-        a >> ROW_BITS == b >> ROW_BITS
+    pub(crate) fn same_part(&self, a: u32, b: u32) -> bool {
+        self.refs.part(a) == self.refs.part(b)
     }
-}
 
-/// The partition and row of a row reference.
-pub(crate) fn split_ref(r: u32) -> (usize, usize) {
-    ((r >> ROW_BITS) as usize, (r & ROW_MASK) as usize)
-}
-
-#[inline]
-fn ref_of(p: usize, row: usize) -> u32 {
-    let p = u32::try_from(p).unwrap_or(0);
-    (p << ROW_BITS) | u32::try_from(row).unwrap_or(ROW_MASK)
+    /// The partition and row of a row reference.
+    pub(crate) fn split_ref(&self, r: u32) -> (usize, usize) {
+        (self.refs.part(r), self.refs.row(r) as usize)
+    }
 }
 
 /// Row `r` of `parts` (empty if out of range).
 #[inline]
-fn row_at(parts: &[Part], stride: usize, r: u32) -> &[u8] {
-    let p = (r >> ROW_BITS) as usize;
-    let at = (r & ROW_MASK) as usize * stride;
+fn row_at(parts: &[Part], stride: usize, refs: Refs, r: u32) -> &[u8] {
+    let p = refs.part(r);
+    let at = refs.row(r) as usize * stride;
     parts
         .get(p)
         .and_then(|v| v.rows.get(at..at + stride))
@@ -1146,7 +1193,7 @@ fn push_row(
     sketches: &mut Option<Vec<Hll>>,
     groups: &mut usize,
     stride: usize,
-    bits: u32,
+    (bits, refs): (u32, Refs),
     key: &[u8],
     h: u64,
 ) -> Result<u32> {
@@ -1156,9 +1203,10 @@ fn push_row(
         .ok_or_else(|| internal(format!("radix partition {p} out of range")))?
         .rows;
     let row = v.len() / stride;
-    if row > ROW_MASK as usize {
+    if row > refs.mask() as usize {
         return Err(unsupported(format!(
-            "more than 2^{ROW_BITS} groups in one radix partition of an aggregation table"
+            "more than 2^{} groups in one radix partition of an aggregation table",
+            refs.row_bits()
         )));
     }
     let key = key
@@ -1169,7 +1217,7 @@ fn push_row(
         s.add(h);
     }
     *groups += 1;
-    Ok(ref_of(p, row))
+    Ok(refs.make(p, row))
 }
 
 /// The buckets an index allocated (an empty one shares a static control
@@ -1263,9 +1311,10 @@ impl RowTable {
     /// Presizes a merge table's index for `groups` keys (the final phase's
     /// estimate).
     pub(crate) fn presize(&mut self, groups: usize) {
-        let (parts, stride, gseed) = (&self.parts, self.stride, self.gseed);
-        self.index
-            .reserve(groups, |&r| fin(word(row_at(parts, stride, r), 0), gseed));
+        let (parts, stride, gseed, refs) = (&self.parts, self.stride, self.gseed, self.refs);
+        self.index.reserve(groups, |&r| {
+            fin(word(row_at(parts, stride, refs, r), 0), gseed)
+        });
     }
 
     /// [`memory_size`](Self::memory_size) after [`presize`](Self::presize).
@@ -1547,7 +1596,7 @@ mod tests {
         // No rows: empty columns of the right types.
         assert_eq!(many.output_batch(&[]).unwrap().num_rows(), 0);
         // A reference past a partition's rows is an internal error.
-        let bad = ref_of(0, many.part_len(0) + 1);
+        let bad = many.refs.make(0, many.part_len(0) + 1);
         assert!(many.output_batch(&[bad]).is_err());
         assert!(many.merge_chunk(0, 0..many.part_len(0) + 1).is_err());
         // Merging needs the same radix bits.
@@ -1555,6 +1604,24 @@ mod tests {
         let mut grow = RowTable::new(&core, &seed, Mode::Grow, false, 0).unwrap();
         let e = grow.apply_merge(&many, &c).unwrap_err();
         assert!(e.to_string().contains("radix bits"), "{e}");
+    }
+
+    /// Row references split into partition and row by the table's radix
+    /// bits: one partition keeps all 32 bits for rows (2^32 groups).
+    #[test]
+    fn refs_split_by_radix_bits() {
+        let one = Refs::new(0);
+        assert_eq!(
+            (one.mask(), one.part(u32::MAX), one.row(u32::MAX)),
+            (u32::MAX, 0, u32::MAX)
+        );
+        assert_eq!(one.make(0, 5), 5);
+        let many = Refs::new(RADIX_BITS);
+        assert_eq!(many.mask(), (1 << 28) - 1);
+        let r = many.make(PARTS - 1, 7);
+        assert_eq!((many.part(r), many.row(r)), (PARTS - 1, 7));
+        // Never more than RADIX_BITS.
+        assert_eq!(Refs::new(9), many);
     }
 
     /// Partitions split out of a table carry their rows and states; the

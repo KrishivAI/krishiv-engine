@@ -1630,6 +1630,16 @@ proptest! {
     }
 }
 
+/// Cases of `row_layout_tight_memory`: 64 per PR, more where
+/// `KRISHIV_TIGHT_MEMORY_CASES` says (the nightly runs 256).
+fn tight_memory_cases() -> u32 {
+    std::env::var("KRISHIV_TIGHT_MEMORY_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(64)
+}
+
 /// One case of [`row_layout_equals_default`]: `tight` is the memory limit
 /// with a spill scope (`None`: unlimited, unspillable).
 #[expect(clippy::too_many_arguments, reason = "the property's parameters")]
@@ -2000,7 +2010,7 @@ async fn row_layout_nullable_batches_under_a_non_nullable_spec() {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 64,
+        cases: tight_memory_cases(),
         rng_seed: proptest::test_runner::RngSeed::Fixed(20_261_020),
         ..ProptestConfig::default()
     })]
@@ -2146,5 +2156,114 @@ async fn row_layout_metrics() {
             .iter()
             .any(|n| n.starts_with("row_") || n == "table_layout"),
         "{names:?}"
+    );
+}
+
+/// What [`by_hand`] observed.
+struct ByHand {
+    rows: Vec<String>,
+    /// Bytes the query pool held once every driver combined.
+    combined: usize,
+    /// The finalizing consumer's peak bytes.
+    peak: usize,
+}
+
+/// Runs `agg` (row layout on) by hand on one worker: `drivers` drivers
+/// sink `b` in turn and combine, then the aggregate finalizes and is read.
+/// Checks that nothing leaks.
+async fn by_hand(
+    agg: &Arc<HashAggregate>,
+    s: &SchemaRef,
+    b: &[Vec<ArrayRef>],
+    drivers: usize,
+) -> ByHand {
+    let root = pool(1 << 30);
+    let config = ExecConfig {
+        agg_row_layout: true,
+        ..ExecConfig::default()
+    };
+    let q = QueryContext::new(
+        QueryId(6),
+        WorkloadClass::Batch,
+        config,
+        root.child("q", None),
+    );
+    // One worker: the merge runs one task at a time.
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let ctx = |id, name| {
+        let e = Arc::clone(&executor);
+        TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(id), name)
+    };
+    let sink_ctx = ctx(0, "agg");
+    let g = Sink::global_state(&**agg, &sink_ctx).unwrap();
+    for part in b.chunks(b.len().div_ceil(drivers)) {
+        let mut l = Sink::local_state(&**agg, &sink_ctx, &g).unwrap();
+        for cols in part {
+            let batch = Batch::new(RecordBatch::try_new(Arc::clone(s), cols.clone()).unwrap());
+            agg.sink(batch, &mut l, &g).unwrap();
+        }
+        agg.combine(l, &g).unwrap();
+    }
+    let combined = root.reserved();
+    agg.finalize(&g, &sink_ctx).await.unwrap();
+    let peak = sink_ctx.consumer().consumer().peak();
+    let src = ctx(1, "src").with_dependency(Arc::clone(&g));
+    let sg = Source::global_state(&**agg, &src).unwrap();
+    let mut sl = Source::local_state(&**agg, &src, &sg).unwrap();
+    let mut out = Vec::new();
+    while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
+        out.push(b);
+    }
+    drop((sl, sg, src, g, sink_ctx));
+    assert_eq!(root.reserved(), 0);
+    ByHand {
+        rows: rows(&out),
+        combined,
+        peak,
+    }
+}
+
+/// When the final phase runs short of memory it first writes the finished
+/// tasks' groups to the output file; when it runs short again with no
+/// task finished, the rest spills and the disk phase appends to that same
+/// file. Every group comes out once, with its values.
+#[tokio::test]
+async fn row_merge_flushes_then_spills() {
+    let (s, b) = grouped_input(200_000, 90_000);
+    let expected = run_rows(single(&s, &b)).await;
+    let (_m, scope) = spill_dir();
+    let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+    sp.spill = Some(scope);
+    // After the first task, no task gets memory: flush it, then spill.
+    let agg =
+        HashAggregate::with_final_stall(sp, rowtable::Mode::Fixed { limit: 5_000 }, 1).unwrap();
+    let got = by_hand(&agg, &s, &b, 3).await;
+    assert_eq!(got.rows.len(), 90_000);
+    assert_eq!(got.rows, expected);
+    assert!(sink_metric(&agg, "row_final_tasks") > 1);
+    assert_eq!(sink_metric(&agg, "row_final_flushes"), 1);
+    assert_eq!(sink_metric(&agg, "row_final_spills"), 1);
+    let m = agg.metrics();
+    assert!(m.spill_runs > 0);
+    assert_eq!(m.groups, 90_000);
+}
+
+/// The final phase frees each driver partition once merged: with every key
+/// distinct (the merged tables are as large as the inputs), the peak stays
+/// well below holding the inputs and the merged tables together.
+#[tokio::test]
+async fn row_merge_frees_inputs_as_it_merges() {
+    let (s, b) = grouped_input(120_000, 120_000);
+    let expected = run_rows(single(&s, &b)).await;
+    let sp = spec(&s, vec![0], grouped_aggs(&s));
+    let agg = HashAggregate::with_row_mode(sp, rowtable::Mode::Append).unwrap();
+    let got = by_hand(&agg, &s, &b, 3).await;
+    assert_eq!(got.rows, expected);
+    assert!(sink_metric(&agg, "row_final_tasks") > 2);
+    assert!(
+        got.peak < got.combined * 3 / 2,
+        "peak {} vs {} combined",
+        got.peak,
+        got.combined
     );
 }

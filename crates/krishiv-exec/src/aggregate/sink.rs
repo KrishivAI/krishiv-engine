@@ -102,6 +102,10 @@ pub struct HashAggregate {
     /// Overrides the thread-local row tables' index mode (tests force
     /// abandons).
     row_mode: Option<Mode>,
+    /// Tests: once this many final-phase tasks finished, no further task
+    /// gets its memory (forces the flush and spill paths).
+    #[cfg(test)]
+    stall_after: Option<usize>,
 }
 
 impl HashAggregate {
@@ -114,6 +118,8 @@ impl HashAggregate {
             core: Arc::new(AggCore::new(spec)?),
             counters: Arc::default(),
             row_mode: None,
+            #[cfg(test)]
+            stall_after: None,
         }))
     }
 
@@ -126,6 +132,23 @@ impl HashAggregate {
             core: Arc::new(AggCore::new(spec)?),
             counters: Arc::default(),
             row_mode: Some(mode),
+            stall_after: None,
+        }))
+    }
+
+    /// [`with_row_mode`](Self::with_row_mode) whose final phase refuses
+    /// memory to every task after the first `finished` ones finished.
+    #[cfg(test)]
+    pub(crate) fn with_final_stall(
+        spec: AggregateSpec,
+        mode: Mode,
+        finished: usize,
+    ) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self {
+            core: Arc::new(AggCore::new(spec)?),
+            counters: Arc::default(),
+            row_mode: Some(mode),
+            stall_after: Some(finished),
         }))
     }
 
@@ -221,8 +244,7 @@ impl Spiller {
     fn write_run(&self, table: &Table, from: usize, level: u32) -> Result<Run> {
         let parts = table.ids_by_partition(level, from);
         let chunk = spill_chunk(table.memory_size(), table.len());
-        let rows = matches!(table, Table::Rows(_));
-        self.write_parts(parts, chunk, rows, &|ids| table.state_batch(ids))
+        self.write_parts(parts, chunk, table, &|ids| table.state_batch(ids))
     }
 
     /// Writes the rows that each source's filter keeps as one run of
@@ -251,7 +273,7 @@ impl Spiller {
             let mut writer = self.run_writer()?;
             for ((t, _), parts) in sources.iter().zip(&per) {
                 let chunk = spill_chunk(t.memory_size(), t.len());
-                for ids in chunks(&parts[p], chunk, true) {
+                for ids in row_chunks(&parts[p], chunk, t) {
                     self.query.check_cancelled()?;
                     writer
                         .write(&Batch::new(t.state_batch(ids)?))
@@ -265,13 +287,13 @@ impl Spiller {
     }
 
     /// Writes the state batches of the groups of each partition (`parts`,
-    /// in chunks of `chunk`, of one radix partition each for a row table:
-    /// `rows`) as one run.
+    /// in chunks of `chunk`, of one radix partition each for a row table)
+    /// as one run.
     fn write_parts(
         &self,
         parts: Vec<Vec<u32>>,
         chunk: usize,
-        rows: bool,
+        table: &Table,
         state: &dyn Fn(&[u32]) -> Result<RecordBatch>,
     ) -> Result<Run> {
         let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
@@ -280,7 +302,7 @@ impl Spiller {
                 continue;
             }
             let mut writer = self.run_writer()?;
-            for chunk in chunks(&ids, chunk, rows) {
+            for chunk in chunks(&ids, chunk, table) {
                 self.query.check_cancelled()?;
                 writer
                     .write(&Batch::new(state(chunk)?))
@@ -297,7 +319,7 @@ impl Spiller {
         let n = u32::try_from(table.len()).map_err(|_| internal("too many groups".to_owned()))?;
         let ids = table.ids(0..table.len());
         let size = out_chunk(table.memory_size(), table.len(), self.batch_size);
-        for chunk in chunks(&ids, size, matches!(table, Table::Rows(_))) {
+        for chunk in chunks(&ids, size, table) {
             self.query.check_cancelled()?;
             let b = Batch::new(table.output_batch(chunk)?);
             out.write(&b).map_err(KrishivError::from)?;
@@ -316,12 +338,28 @@ fn spill_chunk(memory: usize, groups: usize) -> usize {
     ((HEADROOM - (64 << 10)) / 3 / per_group.max(1)).clamp(16, CHUNK)
 }
 
-/// `ids` in chunks of at most `size`; with `rows` (row-table references),
-/// each chunk within one radix partition, whose states are one
-/// partition's arrays (no concatenation).
-fn chunks(ids: &[u32], size: usize, rows: bool) -> impl Iterator<Item = &[u32]> {
-    let same = move |a: &u32, b: &u32| !rows || RowTable::same_part(*a, *b);
-    ids.chunk_by(same)
+/// Group ids of `table` in chunks of at most `size`; a row table's chunks
+/// stay within one radix partition, whose states are one partition's
+/// arrays (no concatenation).
+fn chunks<'a>(
+    ids: &'a [u32],
+    size: usize,
+    table: &'a Table,
+) -> Box<dyn Iterator<Item = &'a [u32]> + 'a> {
+    match table {
+        Table::Rows(t) => Box::new(row_chunks(ids, size, t)),
+        Table::Keys(_) => Box::new(ids.chunks(size.max(1))),
+    }
+}
+
+/// Row references of `table` in chunks of at most `size`, each within one
+/// radix partition.
+fn row_chunks<'a>(
+    ids: &'a [u32],
+    size: usize,
+    table: &'a RowTable,
+) -> impl Iterator<Item = &'a [u32]> {
+    ids.chunk_by(move |a, b| table.same_part(*a, *b))
         .flat_map(move |run| run.chunks(size.max(1)))
 }
 
