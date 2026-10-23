@@ -287,6 +287,7 @@ impl Decoder {
             },
             Kind::Limit(l) => PhysNode::Limit {
                 input: self.boxed(l.input)?,
+                offset: l.offset,
                 limit: l.limit,
             },
             Kind::ReplicateRows(r) => PhysNode::ReplicateRows {
