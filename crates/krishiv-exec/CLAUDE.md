@@ -11,7 +11,7 @@ Batch execution engine: operators, pipelines, morsel scheduling within a node.
 driver (yields, batch-boundary checks, NeedMemory, spill servicing, stall detector) · `runner.rs` QueryRunner /
 Scheduler (coordinator, first error wins) · `channel.rs` bounded result stream · `executor.rs` Executor seam +
 TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.rs` cursor + finalize countdown ·
-`testing.rs` test operators (also used by benches) · `loom_tests.rs`.
+`testing.rs` test operators (also used by benches) · `output_spill.rs` spill hook of finished breaker output · `loom_tests.rs`.
 `operators/` (P2-T051) stateless operators: `scan.rs` MemoryScan + `ScanPushdown` (pushdowns decided once as an
 immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) ·
 `filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
@@ -45,9 +45,28 @@ worker that runs it; the planner validates nodes with the same builders). `Sched
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted
 only where a requirement is unmet; on one worker instantiation lowers each exchange into the operators around it.
 
+## Key files
+Paths are relative to this crate.
+- `src/operator.rs` Source, Operator and Sink traits; `src/pipeline.rs` `ExecNode` and `PipelineBuilder`
+- `src/driver.rs` the pipeline driver: yields, memory waits, spill servicing, cancellation
+- `src/runner.rs` `QueryRunner` and the scheduler (first error wins)
+- `src/physical/mod.rs` `PhysNode` and `PhysicalPlan` as serializable data; `src/physical/instantiate.rs` builds operators on the worker
+- `src/planner/mod.rs` physical planner (IR to physical plan); `src/planner/runtime_filter.rs` runtime-filter sites
+- `src/operators/mod.rs` stateless operators (scan, filter, project, limit, union)
+- `src/aggregate/mod.rs` hash aggregate; `src/join/mod.rs` hash join (build, probe, grace spill)
+- `src/rows/mod.rs` row-table layout and pages shared by aggregate and join
+- `src/window/mod.rs` window operator and plan types; `src/window/eval.rs` frames, ranking and frame aggregates; `src/planner/window.rs` plans it over sorted input
+- `src/operators/file_scan.rs` and `file_write.rs` file scan and write operators over `krishiv-io`
+
+## Extension points
+- New operator: follow skill `krishiv-operator`; stateless ones go in `src/operators/`, stateful ones next to aggregate or join.
+- New plan node: a `PhysNode` variant in `src/physical/mod.rs` with its builder in `src/physical/instantiate.rs`; the planner validates it with the same builder.
+
 ## Invariants
 - All memory through krishiv-memory reservations; every spill path tested with tiny-memory tests.
 - Only the driver yields, awaits memory, spills or checks cancellation; `execute`/`sink` stay sync and bounded.
+  Exception: a breaker's finished in-memory result, owned by no driver, spills on a task of its own
+  (`output_spill.rs`: aggregate and sort results); the coordinator drops a finalized state after its last reader.
 - At query end (success, error, cancel) the query pool is empty: tests assert it.
 - Cancellation-safe, no blocking in async; metrics feed EXPLAIN ANALYZE.
 - New operators follow skill `krishiv-operator`.
@@ -60,7 +79,7 @@ only where a requirement is unmet; on one worker instantiation lowers each excha
 ## ADRs (in `../krishiv-internal/adr/`)
 0006, 0007, 0011, 0013
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-exec --no-tests=pass` · `cargo clippy -p krishiv-exec --all-targets -- -D warnings` ·
 loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release` (use a separate target dir) ·
 benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators`
