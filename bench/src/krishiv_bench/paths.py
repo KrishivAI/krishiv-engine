@@ -10,8 +10,24 @@ def data_root() -> Path:
     return Path(os.environ.get("KRISHIV_DATA", str(Path.home() / "krishiv-data"))).expanduser()
 
 
+def split_dataset(name: str) -> tuple[str, str | None]:
+    """`base` or `base@<generator version>`: a versioned dataset is never regenerated in place."""
+    base, _, version = name.partition("@")
+    return base, (version or None)
+
+
+def dataset_leaf(sf: str | float | int, version: str | None = None) -> str:
+    return f"sf{fmt_sf(sf)}" + (f"-dbgen-{version}" if version else "")
+
+
 def dataset_dir(name: str, sf: str | float | int) -> Path:
-    return data_root() / name / f"sf{fmt_sf(sf)}"
+    base, version = split_dataset(name)
+    return data_root() / base / dataset_leaf(sf, version)
+
+
+def manifest_stem(name: str, sf: str | float | int) -> str:
+    base, version = split_dataset(name)
+    return f"{base}-{dataset_leaf(sf, version)}"
 
 
 def results_dir() -> Path:
