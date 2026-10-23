@@ -133,6 +133,9 @@ enum Header {
 /// The longest feature id a reader accepts.
 const MAX_FEATURE_ID: usize = 64;
 
+/// The most feature ids a header may list.
+const MAX_FEATURES: usize = 256;
+
 fn header(format_version: u32, min_reader: u32, epoch: u32, ids: &[String]) -> Result<Header> {
     if format_version == 0 {
         return Err(corrupt("no format version"));
@@ -154,6 +157,9 @@ fn header(format_version: u32, min_reader: u32, epoch: u32, ids: &[String]) -> R
             epoch,
             supported: EPOCH,
         });
+    }
+    if ids.len() > MAX_FEATURES {
+        return Err(corrupt("more feature ids than any plan uses"));
     }
     for id in ids {
         let well_formed = id.len() <= MAX_FEATURE_ID

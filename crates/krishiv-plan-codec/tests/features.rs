@@ -177,6 +177,9 @@ fn malformed_headers_are_corrupt() {
         corrupt(&m, "a malformed feature id");
     }
     let mut m = message("window_ranking");
+    m.features = (0..257).map(|i| format!("f{i:04}")).collect();
+    corrupt(&m, "more feature ids than any plan uses");
+    let mut m = message("window_ranking");
     m.features = vec!["window".to_owned(), "window".to_owned()];
     corrupt(&m, "feature ids that are not sorted or repeat");
     let mut m = message("window_ranking");
