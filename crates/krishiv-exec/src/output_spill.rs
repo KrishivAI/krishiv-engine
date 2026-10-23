@@ -35,7 +35,7 @@ use krishiv_memory::{ConsumerHandle, OwnerId, SpillSignal, SpillTicket, Spillabl
 use crate::context::{QueryContext, TaskContext};
 use crate::error::Result;
 use crate::executor::Executor;
-use crate::sync::{Mutex, lock};
+use crate::sync::{Event, Mutex, lock};
 
 /// The spill side of a finished output.
 pub(crate) trait SpillUnread: Send + Sync + 'static {
@@ -53,6 +53,32 @@ pub(crate) fn refused(e: KrishivError) -> Result<usize> {
         Ok(0)
     } else {
         Err(e)
+    }
+}
+
+/// Puts `state` to what `next` makes when dropped before
+/// [`disarm`](Self::disarm): a spill whose future is dropped (its query
+/// cancelled) while it holds the output's state leaves it final, so no
+/// reader waits on a transient state.
+pub(crate) struct Unfinished<'a, S, F: FnMut() -> S>(
+    pub(crate) Option<&'a Mutex<S>>,
+    pub(crate) &'a Event,
+    pub(crate) F,
+);
+
+impl<S, F: FnMut() -> S> Unfinished<'_, S, F> {
+    /// The spill ended: its own result decides the state.
+    pub(crate) fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl<S, F: FnMut() -> S> Drop for Unfinished<'_, S, F> {
+    fn drop(&mut self) {
+        if let Some(state) = self.0.take() {
+            *lock(state) = (self.2)();
+            self.1.notify();
+        }
     }
 }
 

@@ -154,6 +154,11 @@ struct TestSpill {
 
 /// A spill directory for one test.
 fn spill_dir() -> (TestSpill, SpillScope) {
+    spill_dir_capped(SpillConfig::default().max_bytes)
+}
+
+/// [`spill_dir`] holding at most `max_bytes` of spill files.
+fn spill_dir_capped(max_bytes: u64) -> (TestSpill, SpillScope) {
     let dir = tempfile::Builder::new()
         .prefix("krishiv-agg-")
         .tempdir()
@@ -162,6 +167,7 @@ fn spill_dir() -> (TestSpill, SpillScope) {
         // A path inside the temporary directory: the manager creates it
         // private (0700), whatever the umask.
         dir: dir.path().join("spill"),
+        max_bytes,
         ..SpillConfig::default()
     })
     .unwrap();
@@ -2249,9 +2255,25 @@ async fn a_cancel_during_a_result_spill_releases_everything() {
         tokio::task::yield_now().await;
     }
     q.cancel();
+    // What the pool holds the moment the query reports it has ended.
+    let (fq, froot) = (Arc::clone(&q), Arc::clone(&root));
+    let at_end = tokio::spawn(async move {
+        fq.finished().await;
+        froot.reserved()
+    });
+    // The gate stays shut while the query winds down: the query must not
+    // end while the spill job still holds the result's memory. (The wait
+    // is bounded by count; the query ends here only if it does not wait
+    // for the spill.)
+    for _ in 0..200 {
+        if at_end.is_finished() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     gate.open();
-    q.finished().await;
     // Nothing the spill held outlives the query.
+    assert_eq!(at_end.await.unwrap(), 0, "memory left when the query ended");
     assert_eq!(root.reserved(), 0, "memory left after the query");
     assert_eq!(spill.manager.used_bytes(), 0, "spill files left");
     assert!(drained.await.unwrap() < 20_000);
@@ -2259,4 +2281,22 @@ async fn a_cancel_during_a_result_spill_releases_everything() {
         q.error().map(|e| e.error_class()),
         Some(ErrorClass::OperationCanceled)
     );
+}
+
+/// A spill of an aggregate's result that fails (its spill directory is
+/// full) fails the query with that error; nothing is left behind.
+#[tokio::test]
+async fn a_failed_result_spill_fails_the_query() {
+    let (spill, scope) = spill_dir_capped(4096);
+    let o = Opts {
+        slots: 1,
+        limit: 1_800_000,
+        ..Opts::default()
+    };
+    let r = exec_with(unread_plan(20_000, Some(scope)), o, false).await;
+    let e = r
+        .err()
+        .unwrap_or_else(|| unreachable!("the result could not spill"));
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillCapExceeded, "{e}");
+    assert_eq!(spill.manager.used_bytes(), 0, "spill files left");
 }

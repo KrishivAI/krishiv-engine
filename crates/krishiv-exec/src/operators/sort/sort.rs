@@ -18,11 +18,11 @@ use super::keys::{KeyEncoder, SortKey};
 use super::merge::{Merger, SortedBatch, SpillRun, data_bytes, interleave_batches, write_run};
 use super::{BATCH_SLACK_BYTES, SPILL_BATCH_BYTES, SPILL_BUFFER_BYTES, blocking, finalized};
 use crate::context::{QueryContext, TaskContext};
-use crate::error::{Result, internal};
+use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::operators::{global_ref, local_mut};
-use crate::output_spill::{OutputSpill, SpillUnread, refused};
+use crate::output_spill::{OutputSpill, SpillUnread, Unfinished, refused};
 use crate::sync::{Event, Mutex, lock};
 
 /// Default bound on the runs one merge reads at once.
@@ -264,7 +264,9 @@ impl Held {
 
     /// Takes the merge (opening it if needed) and leaves `Busy`; `Err` with
     /// the state found otherwise (`Busy`, `Spilled`, `Done`, `Failed`).
-    fn take(&self) -> Result<std::result::Result<Taken, HeldState>> {
+    /// Only the `reader` takes a spilled run (and leaves `Done`); for a
+    /// spill every other state stays as it was (`Err(Done)`).
+    fn take(&self, reader: bool) -> Result<std::result::Result<Taken, HeldState>> {
         let mut state = lock(&self.state);
         Ok(match mem::replace(&mut *state, HeldState::Busy) {
             HeldState::Buffers(held) => {
@@ -290,10 +292,15 @@ impl Held {
                 Err(HeldState::Failed(e))
             }
             HeldState::Busy => Err(HeldState::Busy),
-            // Done, or the spilled run handed to the reader: done here.
-            found => {
+            // The spilled run handed to the reader: done here.
+            HeldState::Spilled(run) if reader => {
                 *state = HeldState::Done;
-                Err(found)
+                Err(HeldState::Spilled(run))
+            }
+            // Done, or a run the reader has yet to take: nothing to spill.
+            found => {
+                *state = found;
+                Err(HeldState::Done)
             }
         })
     }
@@ -313,7 +320,7 @@ impl SpillUnread for Held {
             };
             let (mut merger, mut held) = loop {
                 let changed = self.changed.listen();
-                match self.take()? {
+                match self.take(false)? {
                     Ok(taken) => break taken,
                     // A reader's step: the merge comes back after it.
                     Err(HeldState::Busy) => changed.await,
@@ -340,6 +347,12 @@ impl SpillUnread for Held {
                 }
             };
             self.set_spillable(0);
+            // Dropped before the spill ends (the query was cancelled): the
+            // merge is gone with the blocking job, so readers fail rather
+            // than wait on `Busy`.
+            let unfinished = Unfinished(Some(&self.state), &self.changed, || {
+                HeldState::Failed(cancelled())
+            });
             let row_bytes = held.iter().map(|b| b.row_bytes).max().unwrap_or(1);
             let rows = spill_rows(row_bytes, self.batch_rows);
             let query = Arc::clone(&self.query);
@@ -354,6 +367,7 @@ impl SpillUnread for Held {
             })
             .await
             .and_then(|(run, _guard)| run);
+            unfinished.disarm();
             self.handle.release_credit();
             match written {
                 Ok(run) => {
@@ -901,6 +915,17 @@ impl Sort {
     }
 }
 
+/// Asks a reader's in-memory result to spill again, as a request made on
+/// stale spillable bytes would (tests).
+#[cfg(test)]
+pub(super) async fn spill_result_again(local: &mut LocalState) -> Result<usize> {
+    let l = local_mut::<SortSource>(local, "Sort")?;
+    let SourceState::Held(held) = &l.state else {
+        return Err(internal("the reader holds no in-memory result".to_owned()));
+    };
+    Arc::clone(held).spill_unread().await
+}
+
 /// One step of an in-memory result's merge: the next batch, or `Err` with
 /// the run its rest was spilled to.
 async fn read_held(
@@ -909,7 +934,7 @@ async fn read_held(
 ) -> Result<std::result::Result<Option<Batch>, SpillRun>> {
     let (mut merger, buffers) = loop {
         let changed = held.changed.listen();
-        match held.take()? {
+        match held.take(true)? {
             Ok(taken) => break taken,
             // A spill of the rest is being written.
             Err(HeldState::Busy) => changed.await,
@@ -930,6 +955,7 @@ async fn read_held(
     let (merger, next) = match step {
         Ok((merger, next)) => (merger, next),
         Err(e) => {
+            held.set_spillable(0);
             held.put(HeldState::Failed(e.clone()));
             return Err(e);
         }

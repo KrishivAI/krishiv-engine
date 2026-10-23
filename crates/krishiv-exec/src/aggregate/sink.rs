@@ -40,11 +40,11 @@ use super::rowtable::{Mode, RowTable};
 use super::table::{AggCore, AggTable, Table};
 use super::{AggregateSpec, unsupported};
 use crate::context::{QueryContext, TaskContext};
-use crate::error::{Result, internal};
+use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
 use crate::hash::{HashSeed, MAX_LEVEL, PARTITIONS, ProbeTotals};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
-use crate::output_spill::{OutputSpill, SpillUnread, refused};
+use crate::output_spill::{OutputSpill, SpillUnread, Unfinished, refused};
 use crate::sync::{Event, Mutex, lock};
 
 mod parallel;
@@ -556,6 +556,15 @@ impl SpillUnread for Output {
                 }
             };
             self.set_spillable(0);
+            // Dropped before the spill ends (the query was cancelled): the
+            // unread chunks went with the blocking job, so readers fail
+            // rather than wait on `Spilling`.
+            let unfinished =
+                Unfinished(
+                    Some(&self.state),
+                    &self.changed,
+                    || Out::Failed(cancelled()),
+                );
             let freed = mem.bytes();
             let s = s.clone();
             // One file per group of the unread chunks, up to the readers'
@@ -592,6 +601,7 @@ impl SpillUnread for Output {
                 Ok((out, guard))
             })
             .await;
+            unfinished.disarm();
             let (next, result) = match written {
                 Ok((Ok(files), _guard)) => (Out::Files { files, active: 0 }, Ok(freed)),
                 Ok((Err((e, mem)), _guard)) => {
