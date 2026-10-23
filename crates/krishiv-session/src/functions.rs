@@ -18,6 +18,30 @@ pub fn col(name: &str) -> Column {
     Column::named(name, None)
 }
 
+/// Parses `text` as a SQL expression (`F.expr`) with the default parser
+/// options and lowers it as `Session::sql` lowers `SELECT` items, so it
+/// resolves against a DataFrame's columns in the analyzer (`*` stays a
+/// star, as in a `SELECT` list).
+///
+/// ```
+/// use krishiv_session::functions::expr;
+/// let total = expr("price * qty").unwrap();
+/// let cheap = expr("price < 10").unwrap();
+/// ```
+///
+/// # Errors
+/// Spark's parse errors (`PARSE_SYNTAX_ERROR`, ...); lowering errors for
+/// constructs the IR lacks (`KRISHIV_UNSUPPORTED_FEATURE`).
+pub fn expr(text: &str) -> Result<Column, krishiv_common::error::KrishivError> {
+    let lowered = krishiv_sql::parse_and_lower_expression(
+        text,
+        &krishiv_sql::ParserOptions::default(),
+        krishiv_plan::SourceId(0),
+    )
+    .map_err(|e| e.error)?;
+    Ok(Column::new(lowered))
+}
+
 /// A literal value.
 ///
 /// ```

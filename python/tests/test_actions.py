@@ -384,10 +384,10 @@ def test_temp_view_of_a_computed_dataframe_is_not_supported_yet(df: DataFrame) -
         df.createOrReplaceTempView("v")
 
 
-def test_string_expressions_are_listed_as_not_implemented(df: DataFrame) -> None:
-    for call in (lambda: df.selectExpr("id + 1"), lambda: df.where("id > 1"), lambda: F.expr("id + 1")):
-        with pytest.raises(errors.PySparkNotImplementedError):
-            call()
+def test_string_expressions_execute(df: DataFrame) -> None:
+    assert [r["id"] for r in df.where("id > 1").orderBy("id").collect()] == [2, 3]
+    assert df.selectExpr("id + 1").count() == 3
+    assert df.filter(F.expr("id > 1")).count() == 2
 
 
 def test_release_does_not_hang_and_the_session_survives(spark: SparkSession, big: Any) -> None:

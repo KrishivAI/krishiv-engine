@@ -953,3 +953,119 @@ fn multipart_identifiers_parse_like_spark() {
     let e = parse_multipart_identifier("", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::ParseEmptyStatement);
 }
+
+/// `parse_expression`: one expression string (`F.expr`, `df.filter("...")`).
+#[test]
+fn expression_strings() {
+    let d = ParserOptions::default();
+    // Valid expressions keep their spans.
+    let e = parse_expression("a + 1", &d).unwrap();
+    assert_eq!(e.span.text("a + 1"), "a + 1");
+    assert!(parse_expression("count(*) OVER (PARTITION BY a ORDER BY b)", &d).is_ok());
+    assert!(parse_expression("*", &d).is_ok());
+    assert!(parse_expression("CASE WHEN a THEN 1 ELSE 0 END", &d).is_ok());
+    // A statement is no expression.
+    let e = parse_expression("SELECT 1", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 0..6);
+    // One trailing token reads as "extra input", as ANTLR drops it.
+    let e = parse_expression("a b", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("error", "'b'".to_owned()),
+            ("hint", ": extra input 'b'".to_owned())
+        ]
+    );
+    assert_eq!(e.span.range(), 2..3);
+    let e = parse_expression("a;", &d).unwrap_err();
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("error", "';'".to_owned()),
+            ("hint", ": extra input ';'".to_owned())
+        ]
+    );
+    assert_eq!(e.span.range(), 1..2);
+    // An unfinished expression ends at the end of the input.
+    let e = parse_expression("a +", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 3..3);
+    // Empty strings are empty statements.
+    for sql in ["", "  "] {
+        assert_eq!(
+            parse_expression(sql, &d).unwrap_err().error.error_class(),
+            ErrorClass::ParseEmptyStatement,
+            "{sql:?}"
+        );
+    }
+    // Post-parse checks run on the expression: an empty `IN ()` is an error.
+    let e = parse_expression("a IN ()", &d).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "INVALID_SQL_SYNTAX.EMPTY_IN_PREDICATE"
+    );
+}
+
+/// `parse_select_items`: the items of one `selectExpr` string.
+#[test]
+fn select_item_strings() {
+    let d = ParserOptions::default();
+    let items = parse_select_items("a, b AS c, t.*", &d).unwrap();
+    assert_eq!(items.len(), 3);
+    assert!(items[1].alias.is_some());
+    assert_eq!(items[2].expr.span.text("a, b AS c, t.*"), "t.*");
+    // An implicit alias, as in a `SELECT` list.
+    let items = parse_select_items("a b", &d).unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(items[0].alias.is_some());
+    assert_eq!(
+        parse_select_items("", &d).unwrap_err().error.error_class(),
+        ErrorClass::ParseEmptyStatement
+    );
+    let e = parse_select_items("a,", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 2..2);
+}
+
+/// Expression strings lower as `SELECT` items do.
+#[test]
+fn expression_strings_lower_like_select_items() {
+    use krishiv_plan::SourceId;
+    let d = ParserOptions::default();
+    let lowered = parse_and_lower_expression("a + 1", &d, SourceId(0)).unwrap();
+    let krishiv_plan::ExprNode::Function(call) = &lowered.node else {
+        panic!("not a call: {lowered:?}");
+    };
+    assert_eq!(call.name, "+");
+    assert_eq!(call.args.len(), 2);
+    let lowered = parse_and_lower_select_items("a, b AS c", &d, SourceId(0)).unwrap();
+    assert_eq!(lowered.len(), 2);
+    let krishiv_plan::ExprNode::Alias { name, .. } = &lowered[1].node else {
+        panic!("not an alias: {:?}", lowered[1]);
+    };
+    assert_eq!(name, "c");
+    // Constructs the IR lacks fail while lowering.
+    let e = parse_and_lower_expression("a[0]", &d, SourceId(0)).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+/// Deep expression strings fail with `FAILED_TO_PARSE_TOO_COMPLEX` at the
+/// whole string instead of overflowing the stack.
+#[test]
+fn expression_depth_is_capped() {
+    let d = ParserOptions::default();
+    let (shallow, deep) = on_small_stack(move || {
+        let shallow = format!("{}1{}", "(".repeat(100), ")".repeat(100));
+        let deep = format!("{}1{}", "(".repeat(5000), ")".repeat(5000));
+        (
+            parse_expression(&shallow, &d).map(drop),
+            parse_expression(&deep, &d),
+        )
+    });
+    assert_eq!(shallow, Ok(()));
+    let e = deep.unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::FailedToParseTooComplex);
+    assert_eq!(e.span.range(), 0..10001);
+}

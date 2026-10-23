@@ -43,6 +43,7 @@ use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
+use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
 
@@ -368,6 +369,32 @@ impl Session {
                 DataFrame::invalid(self.clone(), Arc::new(LogicalPlan::table([name])), e.error)
             }
         }
+    }
+
+    /// Parses `text` as a SQL expression (`F.expr` over this session) with
+    /// this session's parser options and lowers it as [`Session::sql`]
+    /// lowers `SELECT` items, so it resolves against a DataFrame's columns
+    /// in the analyzer.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// let df = session.table("t").select([session.expr("a + 1").unwrap()]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Spark's parse errors (`PARSE_SYNTAX_ERROR`, ...); lowering errors
+    /// for constructs the IR lacks.
+    pub fn expr(&self, text: &str) -> Result<Column, KrishivError> {
+        let lowered =
+            krishiv_sql::parse_and_lower_expression(text, &self.parser_options(), SourceId(0))
+                .map_err(|e| e.error)?;
+        Ok(Column::new(lowered))
+    }
+
+    /// This session's parser options, from its configuration.
+    pub(crate) fn parser_options(&self) -> ParserOptions {
+        parser_options(&self.state.conf.snapshot())
     }
 
     /// Reads files (Spark's `spark.read`).
