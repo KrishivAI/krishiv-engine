@@ -428,8 +428,11 @@ enum Out {
     /// The unread chunks are being written to spill files.
     Spilling,
     /// On disk, in order: each reader takes the next file, so several read
-    /// at once.
-    Files(VecDeque<SpillFile>),
+    /// at once; `active` readers have a file open.
+    Files {
+        files: VecDeque<SpillFile>,
+        active: usize,
+    },
     /// Every chunk was claimed.
     Done,
     /// A spill lost the unread chunks: every reader fails with the error
@@ -440,7 +443,9 @@ enum Out {
 /// What a reader got from [`Output::claim`].
 enum Claim {
     Chunk(Arc<InMemory>, usize),
-    File(SpillFile),
+    /// A file, its reader's frames reserved (`true`) or to be reserved
+    /// through arbitration (`false`: the only reader).
+    File(SpillFile, bool),
     Wait,
     Done,
     Failed(KrishivError),
@@ -463,7 +468,10 @@ struct Output {
 impl Output {
     fn on_disk(file: Option<SpillFile>, executor: Arc<dyn Executor>) -> Self {
         Self {
-            state: Mutex::new(Out::Files(file.into_iter().collect())),
+            state: Mutex::new(Out::Files {
+                files: file.into_iter().collect(),
+                active: 0,
+            }),
             changed: Event::default(),
             spill: None,
             executor,
@@ -478,7 +486,10 @@ impl Output {
         }
     }
 
-    fn claim(&self) -> Claim {
+    /// The next part for a reader that has just read a file to its end
+    /// (`finished`) or has none open; a file's reader frames come from
+    /// `consumer`.
+    fn claim(&self, finished: bool, consumer: &Arc<ConsumerHandle>) -> Claim {
         let mut state = lock(&self.state);
         let (mem, chunk) = match &mut *state {
             Out::Memory { mem, next } => {
@@ -486,7 +497,32 @@ impl Output {
                 (Arc::clone(mem), *next - 1)
             }
             Out::Spilling => return Claim::Wait,
-            Out::Files(files) => return files.pop_front().map_or(Claim::Done, Claim::File),
+            Out::Files { files, active } => {
+                if finished {
+                    *active = active.saturating_sub(1);
+                }
+                let Some(file) = files.pop_front() else {
+                    return Claim::Done;
+                };
+                if *active == 0 {
+                    // The only reader: it may wait for its frames.
+                    *active = 1;
+                    return Claim::File(file, false);
+                }
+                // Another reader only if its frames fit now: a reader that
+                // has a file open reads this one otherwise (it claims the
+                // next file under this lock when it ends), so nothing is
+                // left unread and no reader waits for memory another holds.
+                let need = file.max_read_reservation();
+                let mut frames = consumer.reservation();
+                if frames.try_grow(need).is_err() {
+                    files.push_front(file);
+                    return Claim::Done;
+                }
+                frames.shrink_to_credit(need);
+                *active += 1;
+                return Claim::File(file, true);
+            }
             Out::Done => return Claim::Done,
             Out::Failed(e) => return Claim::Failed(e.clone()),
         };
@@ -557,7 +593,7 @@ impl SpillUnread for Output {
             })
             .await;
             let (next, result) = match written {
-                Ok((Ok(files), _guard)) => (Out::Files(files), Ok(freed)),
+                Ok((Ok(files), _guard)) => (Out::Files { files, active: 0 }, Ok(freed)),
                 Ok((Err((e, mem)), _guard)) => {
                     // The tables are intact: readers go on from memory.
                     self.set_spillable(mem.bytes());
@@ -1365,21 +1401,24 @@ impl Source for HashAggregate {
                 .get()
                 .ok_or_else(|| internal("aggregate read before it finalized".to_owned()))?
                 .out;
-            loop {
-                // An open file first; once read, claim the next one.
-                if l.reader.is_some()
-                    && let Some(b) = read_file(l, None).await?
-                {
-                    return Ok(Some(b));
+            // An open file first; once read, claim the next one.
+            let mut finished = false;
+            if l.reader.is_some() {
+                match read_file(l, None, true).await? {
+                    Some(b) => return Ok(Some(b)),
+                    None => finished = true,
                 }
+            }
+            loop {
                 let changed = out.changed.listen();
-                match out.claim() {
+                match out.claim(std::mem::take(&mut finished), &l.consumer) {
                     Claim::Chunk(mem, chunk) => return mem.batch(chunk).map(Some),
                     Claim::Done => return Ok(None),
                     Claim::Failed(e) => return Err(e),
-                    Claim::File(file) => {
-                        if let Some(b) = read_file(l, Some(file)).await? {
-                            return Ok(Some(b));
+                    Claim::File(file, reserved) => {
+                        match read_file(l, Some(file), reserved).await? {
+                            Some(b) => return Ok(Some(b)),
+                            None => finished = true,
                         }
                     }
                     // A spill of the unread chunks is being written.
@@ -1390,10 +1429,14 @@ impl Source for HashAggregate {
     }
 }
 
-/// Reads the next batch of the output file: `file` (just taken) or the
-/// reader already open.
-async fn read_file(l: &mut SourceLocal, file: Option<SpillFile>) -> Result<Option<Batch>> {
-    if let Some(f) = &file {
+/// Reads the next batch of the output file: `file` (just taken; its
+/// reader's frames `reserved` already, or not) or the reader already open.
+async fn read_file(
+    l: &mut SourceLocal,
+    file: Option<SpillFile>,
+    reserved: bool,
+) -> Result<Option<Batch>> {
+    if let Some(f) = file.as_ref().filter(|_| !reserved) {
         // The reader's frames, reserved through the arbitrator before it
         // opens and cycled through the consumer's credit: a read is never
         // refused.
