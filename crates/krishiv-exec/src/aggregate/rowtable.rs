@@ -67,6 +67,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, UInt32Array};
 use hashbrown::HashTable;
+use hashbrown::hash_table::Entry;
 use krishiv_types::batch::{Batch, Weights};
 
 use super::accumulator::Accumulator;
@@ -314,7 +315,9 @@ impl RowTable {
             bits,
             refs: Refs::new(bits),
             parts,
-            sketches: local.then(|| (0..nparts).map(|_| Hll::new(PART_HLL_BITS)).collect()),
+            // One partition never merges in parallel: no sketches to size tasks.
+            sketches: (local && nparts > 1)
+                .then(|| (0..nparts).map(|_| Hll::new(PART_HLL_BITS)).collect()),
             index: HashTable::new(),
             mode,
             adapt: (local && matches!(mode, Mode::Fixed { .. })).then(|| Adapt {
@@ -647,13 +650,17 @@ impl RowTable {
         let touched: Vec<usize> = (0..self.parts.len())
             .filter(|&p| counts.get(p).is_some_and(|&c| c > 0))
             .collect();
-        let mut local = Vec::with_capacity(refs.len());
         if let [p] = touched[..] {
-            local.extend(refs.iter().map(|&r| self.refs.row(r)));
+            if self.bits == 0 {
+                // One partition: references are rows.
+                return self.fold_part(p, refs, cols, w, fold);
+            }
+            let local: Vec<u32> = refs.iter().map(|&r| self.refs.row(r)).collect();
             self.fold_part(p, &local, cols, w, fold)
         } else if touched.is_empty() {
             Ok(())
         } else {
+            let mut local = Vec::with_capacity(refs.len());
             self.fold_gathered(refs, counts, cols, w, fold, &touched, &mut local)
         }
     }
@@ -805,27 +812,37 @@ impl RowTable {
             refs,
             ..
         } = self;
-        let (stride, gseed) = (*stride, *gseed);
+        let (stride, gseed, refs) = (*stride, *gseed, *refs);
         let g = fin(h, gseed);
-        // A lookup first (hashbrown inlines `find`; most rows are hits),
-        // then an insert on a miss.
-        let found = index
-            .find(g, |&r| {
-                same_key(row_at(parts, stride, *refs, r), key, stride)
-            })
-            .copied();
-        if let Some(r) = found {
+        if index.len() < limit {
+            // One probe sequence: a miss returns the slot for the new key.
+            // The index was reserved for the batch, so it does not grow here.
+            let entry = index.entry(
+                g,
+                |&r| same_key(row_at(parts, stride, refs, r), key, stride),
+                |&o| fin(word(row_at(parts, stride, refs, o), 0), gseed),
+            );
+            return match entry {
+                Entry::Occupied(o) => Ok(*o.get()),
+                Entry::Vacant(v) => {
+                    let r = push_row(parts, sketches, groups, stride, (*bits, refs), key, h)?;
+                    v.insert(r);
+                    Ok(r)
+                }
+            };
+        }
+        // A full fixed index: a hit, or a new row in a cleared index.
+        if let Some(&r) = index.find(g, |&r| {
+            same_key(row_at(parts, stride, refs, r), key, stride)
+        }) {
             return Ok(r);
         }
-        let r = push_row(parts, sketches, groups, stride, (*bits, *refs), key, h)?;
-        if index.len() >= limit {
-            index.clear();
-            *unique = false;
-            if let Some(c) = abandons {
-                c.fetch_add(1, Ordering::Relaxed);
-            }
+        let r = push_row(parts, sketches, groups, stride, (*bits, refs), key, h)?;
+        index.clear();
+        *unique = false;
+        if let Some(c) = abandons {
+            c.fetch_add(1, Ordering::Relaxed);
         }
-        let refs = *refs;
         index.insert_unique(g, r, |&o| {
             fin(word(row_at(parts, stride, refs, o), 0), gseed)
         });
