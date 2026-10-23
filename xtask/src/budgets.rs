@@ -1,16 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `cargo xtask budgets`: dependency, build-time and binary-size budgets.
 //!
-//! Measures are compared with the committed `budgets.json` baseline; growth
-//! of more than [`MAX_GROWTH_PERCENT`] in any metric is a failure unless the
-//! caller opts out (CI sets `BUDGET_APPROVED=1` for `budget-approved` PRs).
-//! Any growth of a crate's unsafe sites needs its own approval
-//! (`UNSAFE_APPROVED=1`, label `unsafe-reviewed`).
+//! Measures are compared with a baseline; growth of more than
+//! [`MAX_GROWTH_PERCENT`] in any gated metric is a failure unless the caller
+//! opts out (CI sets `BUDGET_APPROVED=1` for `budget-approved` PRs). Any
+//! growth of a crate's unsafe sites needs its own approval
+//! (`UNSAFE_APPROVED=1`, label `unsafe-reviewed`). The clean build time is
+//! reported but never gated (shared runners are too noisy for a 5% rule).
 //!
 //! CI splits the work in two: `ci.yml` measures (`--measure-only`, uploads
-//! `budgets-current.json`) and the label-aware gate in `pr-policy.yml`
-//! compares that measurement with the base branch's baseline (`--compare`),
-//! so adding an approval label re-runs only the cheap gate.
+//! `budgets-current.json`; on every push to main as artifact `budgets-main`)
+//! and the label-aware gate in `pr-policy.yml` compares a pull request's
+//! measurement with the main measurement it branched from
+//! (`--compare FILE --baseline MAIN_FILE`), so adding an approval label
+//! re-runs only the cheap gate and a PR is gated only on the growth it adds.
+//! Without `--baseline` the baseline is the committed `budgets.json`, a
+//! reference record that is not updated per merge (the main measurement is
+//! authoritative); the gate falls back to it only when main has no
+//! measurement.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -35,16 +42,23 @@ pub enum Mode {
         /// Also measure a clean `dist`-profile build's wall time.
         build_time: bool,
     },
-    /// Compare an existing measurement file with `budgets.json`.
-    Compare(PathBuf),
+    /// Compare an existing measurement file with a baseline file (the
+    /// committed `budgets.json` when `baseline` is `None`).
+    Compare {
+        /// The measurement (`budgets-current.json`).
+        measured: PathBuf,
+        /// The baseline to compare with, e.g. a measurement of main.
+        baseline: Option<PathBuf>,
+    },
 }
 
 /// Parses the `budgets` flags; `None` on an unknown flag or a conflicting
-/// combination (`--compare` measures nothing, so it takes no other flag).
+/// combination (`--compare` measures nothing, so it takes no other flag
+/// besides `--baseline`, which only `--compare` accepts).
 #[must_use]
 pub fn parse_flags(flags: &[&str]) -> Option<Mode> {
     let (mut build_time, mut measure_only, mut write_baseline) = (false, false, false);
-    let mut compare = None;
+    let (mut compare, mut baseline) = (None, None);
     let mut it = flags.iter();
     while let Some(f) = it.next() {
         match *f {
@@ -52,11 +66,15 @@ pub fn parse_flags(flags: &[&str]) -> Option<Mode> {
             "--measure-only" => measure_only = true,
             "--write-baseline" => write_baseline = true,
             "--compare" => compare = Some(PathBuf::from(it.next()?)),
+            "--baseline" => baseline = Some(PathBuf::from(it.next()?)),
             _ => return None,
         }
     }
+    if baseline.is_some() && compare.is_none() {
+        return None;
+    }
     match (compare, measure_only, write_baseline) {
-        (Some(path), false, false) if !build_time => Some(Mode::Compare(path)),
+        (Some(measured), false, false) if !build_time => Some(Mode::Compare { measured, baseline }),
         (None, false, false) => Some(Mode::Check { build_time }),
         (None, true, false) => Some(Mode::Measure { build_time }),
         (None, false, true) => Some(Mode::WriteBaseline { build_time }),
@@ -223,28 +241,37 @@ impl Comparison {
 /// Compares `now` with `base`. Metrics missing on either side are skipped.
 #[must_use]
 pub fn compare(base: &Budgets, now: &Budgets) -> Comparison {
+    // (name, baseline, current, gated). The build time is wall-clock on a
+    // shared runner: shown, never gated.
     let rows = [
         (
             "transitive crates",
             Some(base.transitive_crates),
             Some(now.transitive_crates),
+            true,
         ),
-        ("dist binary bytes", base.binary_bytes, now.binary_bytes),
+        (
+            "dist binary bytes",
+            base.binary_bytes,
+            now.binary_bytes,
+            true,
+        ),
         (
             "clean build seconds",
             base.clean_build_secs,
             now.clean_build_secs,
+            false,
         ),
     ];
     let mut markdown =
         String::from("| metric | baseline | current | change |\n|---|---|---|---|\n");
     let mut violations = Vec::new();
     let mut unsafe_violations = Vec::new();
-    for (name, b, n) in rows {
+    for (name, b, n, gated) in rows {
         match (b, n) {
             (Some(b), Some(n)) => {
                 let pct = growth_pct(b, n);
-                let flag = if over_budget(b, n) {
+                let flag = if gated && over_budget(b, n) {
                     violations.push(format!(
                         "{name}: {b} -> {n} ({pct:+.1}%) exceeds {MAX_GROWTH_PERCENT}% budget"
                     ));
@@ -346,9 +373,23 @@ mod tests {
         );
         assert_eq!(
             parse_flags(&["--compare", "m.json"]),
-            Some(Mode::Compare(PathBuf::from("m.json")))
+            Some(Mode::Compare {
+                measured: PathBuf::from("m.json"),
+                baseline: None
+            })
+        );
+        assert_eq!(
+            parse_flags(&["--baseline", "main.json", "--compare", "m.json"]),
+            Some(Mode::Compare {
+                measured: PathBuf::from("m.json"),
+                baseline: Some(PathBuf::from("main.json"))
+            })
         );
         for bad in [
+            &["--baseline", "b.json"][..],
+            &["--baseline"],
+            &["--baseline", "b.json", "--build-time"],
+            &["--compare", "m.json", "--baseline"],
             &["--compare"][..],
             &["--compare", "m.json", "--build-time"],
             &["--compare", "m.json", "--measure-only"],
@@ -376,6 +417,20 @@ mod tests {
     fn five_percent_is_allowed_six_is_not() {
         assert!(compare(&b(100, None), &b(105, None)).violations.is_empty());
         assert_eq!(compare(&b(100, None), &b(106, None)).violations.len(), 1);
+    }
+
+    #[test]
+    fn build_time_is_reported_but_never_gated() {
+        let mut base = b(100, None);
+        base.clean_build_secs = Some(100);
+        let mut now = b(100, None);
+        now.clean_build_secs = Some(400);
+        let c = compare(&base, &now);
+        assert!(c.violations.is_empty());
+        assert!(
+            c.markdown
+                .contains("| clean build seconds | 100 | 400 | +300.0% |")
+        );
     }
 
     #[test]

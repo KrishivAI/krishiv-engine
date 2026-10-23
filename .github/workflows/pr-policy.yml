@@ -94,15 +94,18 @@ jobs:
         run: cargo xtask pr-size --base "$BASE_SHA" --head "$HEAD_SHA"
 
   # Budget gate (pull requests only): compares the measurement made by ci.yml's
-  # `budgets-measure` job for this head with the base branch's budgets.json.
+  # `budgets-measure` job for this head with the measurement ci.yml made on
+  # main for the commit the PR branched from (.github/scripts/main-baseline.sh:
+  # the newest main push run at or before the merge-base that has the
+  # `budgets-main` artifact), so a PR is gated only on the growth it adds. Only
+  # when main has no measurement does it fall back to the budgets.json
+  # committed at the base commit, and the job summary says so. The PR's own
+  # budgets.json is never read: a PR must not raise its own baseline.
   # Growth beyond the budget needs `budget-approved`, new unsafe sites need
   # `unsafe-reviewed` (same approval rule as `size-approved`). Adding a label
   # re-runs only this job; it waits for the measurement while CI is still
-  # running. On growth the PR author refreshes the baseline with
-  #   cargo xtask budgets --write-baseline
-  # and commits budgets.json (see the job summary). Compared with the base
-  # branch's baseline, not the PR's: a PR that refreshes budgets.json must not
-  # approve its own growth.
+  # running. Nothing needs recording after a merge: main's next measurement
+  # is the next baseline.
   budgets:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -122,6 +125,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Wait for the CI measurement
         id: measure
         env:
@@ -135,13 +139,20 @@ jobs:
         run: |
           result=$(.github/scripts/budgets-measurement.sh)
           echo "result=$result" >> "$GITHUB_OUTPUT"
-      - name: Use the base branch baseline
+      - name: Select the main baseline
+        id: baseline
         if: steps.measure.outputs.result == 'measured'
         env:
-          BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ARTIFACT: budgets-main
+          FILE: budgets-current.json
+          OUT_DIR: ${{ runner.temp }}/budgets-main
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
-          git show FETCH_HEAD:budgets.json > budgets.json
+          source=$(.github/scripts/main-baseline.sh)
+          echo "source=$source" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         if: steps.measure.outputs.result == 'measured'
         with:
@@ -174,20 +185,22 @@ jobs:
         if: steps.measure.outputs.result == 'measured'
         env:
           MEASURED: ${{ runner.temp }}/budgets/budgets-current.json
-        run: cargo xtask budgets --compare "$MEASURED"
+          BASELINE: ${{ runner.temp }}/budgets-main/baseline.json
+        run: cargo xtask budgets --compare "$MEASURED" --baseline "$BASELINE"
       - name: Nothing measured
         if: steps.measure.outputs.result == 'skipped'
         run: echo "No Rust change in this PR; budgets-measure was skipped." >> "$GITHUB_STEP_SUMMARY"
 
   # Wheel-size gate (pull requests only): compares the sizes measured by the
   # `sizes` job of wheels.yml (called by ci.yml as `wheels-targets`) for this
-  # head with the base branch's budgets.json (`wheel_bytes`). Growth past the
-  # budget, or a wheel without a recorded size, needs `budget-approved` (same
-  # approval rule as `size-approved`). Adding a label re-runs only this job.
-  # The base branch's budgets are used, not the PR's: a PR that refreshes
-  # budgets.json must not approve its own growth. This replaces the gate that
-  # used to run inside wheels.yml, which read the label from the stale event
-  # payload of the CI run.
+  # head with the sizes that job measured on main for the commit the PR
+  # branched from (`wheel-sizes-main`, chosen as for `budgets` above; the
+  # committed budgets.json `wheel_bytes` at the base commit only when main has
+  # none). Growth past the budget, or a wheel without a recorded size, needs
+  # `budget-approved` (same approval rule as `size-approved`). The PR's own
+  # budgets.json is never read. Adding a label re-runs only this job. This
+  # replaces the gate that used to run inside wheels.yml, which read the label
+  # from the stale event payload of the CI run.
   wheel-sizes:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -206,6 +219,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Wait for the wheel measurement
         id: measure
         env:
@@ -220,13 +234,20 @@ jobs:
         run: |
           result=$(.github/scripts/budgets-measurement.sh)
           echo "result=$result" >> "$GITHUB_OUTPUT"
-      - name: Use the base branch budgets
+      - name: Select the main baseline
+        id: baseline
         if: steps.measure.outputs.result == 'measured'
         env:
-          BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ARTIFACT: wheel-sizes-main
+          FILE: wheel-sizes.json
+          OUT_DIR: ${{ runner.temp }}/wheel-sizes-main
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
-          git show FETCH_HEAD:budgets.json > "$RUNNER_TEMP/base-budgets.json"
+          source=$(.github/scripts/main-baseline.sh)
+          echo "source=$source" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         if: steps.measure.outputs.result == 'measured'
         with:
@@ -247,7 +268,14 @@ jobs:
         run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
       - name: Compare with the budgets
         if: steps.measure.outputs.result == 'measured'
-        run: cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" --budgets "$RUNNER_TEMP/base-budgets.json"
+        env:
+          SOURCE: ${{ steps.baseline.outputs.source }}
+        # The main measurement is a plain size map; the committed fallback is
+        # a budgets.json.
+        run: |
+          if [ "$SOURCE" = main ]; then flag=--baseline; else flag=--budgets; fi
+          cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" \
+            "$flag" "$RUNNER_TEMP/wheel-sizes-main/baseline.json"
       - name: Nothing measured
         if: steps.measure.outputs.result == 'skipped'
         run: echo "No Python or packaging change in this PR; the wheels were not built." >> "$GITHUB_STEP_SUMMARY"

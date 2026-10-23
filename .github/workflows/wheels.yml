@@ -20,11 +20,12 @@ name: Wheels
 # Called by ci.yml for pull requests that touch the Python package, the
 # extension crate or the packaging, and by nightly.yml; runnable by hand.
 # The size of every wheel is measured by the `sizes` job (artifact
-# `wheel-sizes`). On a pull request the label-aware gate `wheel-sizes` in
-# pr-policy.yml compares that measurement with the base branch's budgets.json
-# (`wheel_bytes`), so the `budget-approved` label can approve growth after the
-# run (labels do not re-run CI). Elsewhere (nightly, manual runs) `sizes`
-# gates against this commit's budgets.json itself. The job name `sizes`, the
+# `wheel-sizes`; on a push to main `wheel-sizes-main`, kept 90 days). On a pull
+# request the label-aware gate `wheel-sizes` in pr-policy.yml compares that
+# measurement with the one main made for the commit the PR branched from, so
+# the `budget-approved` label can approve growth after the run (labels do not
+# re-run CI). On a push to main `sizes` only measures. Elsewhere (nightly,
+# manual runs) it gates against this commit's budgets.json. The job name `sizes`, the
 # caller's name `wheels-targets` and the artifact name are read by
 # .github/scripts/budgets-measurement.sh; keep them in sync.
 on:
@@ -284,9 +285,12 @@ jobs:
         run: cargo xtask wheel-sizes dist --measure-only "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: wheel-sizes
+          name: ${{ github.event_name == 'push' && 'wheel-sizes-main' || 'wheel-sizes' }}
           path: ${{ runner.temp }}/wheel-sizes/wheel-sizes.json
+          retention-days: ${{ github.event_name == 'push' && 90 || 14 }}
           if-no-files-found: error
+      # Not on a push to main: that measurement is the baseline the pull
+      # requests are compared with, so main does not gate against it.
       - name: Wheel sizes (no pull request)
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.event_name != 'push'
         run: cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json"

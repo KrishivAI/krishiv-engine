@@ -142,7 +142,11 @@ fn ci_policy_wiring() {
     for needle in [
         "  budgets-measure:\n",
         "cargo xtask budgets --build-time --measure-only",
-        "name: budgets-current",
+        "'budgets-main' || 'budgets-current'",
+        "retention-days: ${{ github.event_name == 'push' && 90 || 14 }}",
+        // Pushes to main are measured too, and never cancelled by a later push.
+        "github.event_name == 'pull_request' || github.event_name == 'push'",
+        "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
     ] {
         assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
     }
@@ -155,12 +159,42 @@ fn ci_policy_wiring() {
     for needle in [
         "  budgets:\n",
         ".github/scripts/budgets-measurement.sh",
-        "git show FETCH_HEAD:budgets.json > budgets.json",
+        ".github/scripts/main-baseline.sh",
+        "ARTIFACT: budgets-main",
         "approval-label.sh budget-approved",
         "approval-label.sh unsafe-reviewed",
-        "cargo xtask budgets --compare",
+        "cargo xtask budgets --compare \"$MEASURED\" --baseline \"$BASELINE\"",
     ] {
         assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
+    }
+    // The baseline is main's measurement: the gates never take it from the PR's
+    // checkout (a PR must not raise its own baseline), and the selection reads
+    // the base commit's file only as the fallback.
+    assert!(
+        !policy.contains("cargo xtask budgets --compare \"$MEASURED\"\n")
+            && !policy.contains("git show FETCH_HEAD"),
+        "the budgets gate must compare with an explicit baseline"
+    );
+    let select = read(".github/scripts/main-baseline.sh");
+    for needle in [
+        "git merge-base \"$BASE_SHA\" \"$HEAD_SHA\"",
+        "git show \"$BASE_SHA:$fallback_path\"",
+        "--event push",
+        "--branch \"$branch\"",
+    ] {
+        assert!(select.contains(needle), "main-baseline.sh lacks {needle:?}");
+    }
+    // The selection runs on a full history and with the least privilege that
+    // can list and download artifacts (`actions: read`).
+    let at = |job: &str| policy.find(job).unwrap();
+    let (budgets_at, wheels_at) = (at("  budgets:\n"), at("  wheel-sizes:\n"));
+    for (job, body) in [
+        ("budgets", &policy[budgets_at..wheels_at]),
+        ("wheel-sizes", &policy[wheels_at..]),
+    ] {
+        assert!(body.contains("fetch-depth: 0"), "{job} needs full history");
+        assert!(body.contains("actions: read"), "{job} needs actions: read");
+        assert!(!body.contains("actions: write") && !body.contains("contents: write"));
     }
     // The gate finds the measurement by job and artifact name.
     let fetch = read(".github/scripts/budgets-measurement.sh");
@@ -180,8 +214,9 @@ fn ci_policy_wiring() {
     let wheels = read(".github/workflows/wheels.yml");
     for needle in [
         "cargo xtask wheel-sizes dist --measure-only",
-        "name: wheel-sizes",
-        "if: github.event_name != 'pull_request'",
+        "'wheel-sizes-main' || 'wheel-sizes'",
+        "retention-days: ${{ github.event_name == 'push' && 90 || 14 }}",
+        "if: github.event_name != 'pull_request' && github.event_name != 'push'",
     ] {
         assert!(wheels.contains(needle), "wheels.yml lacks {needle:?}");
     }
@@ -195,7 +230,8 @@ fn ci_policy_wiring() {
         "SKIP_JOB: wheels-targets",
         "approval-label.sh budget-approved",
         "cargo xtask wheel-sizes --compare",
-        "--budgets \"$RUNNER_TEMP/base-budgets.json\"",
+        "ARTIFACT: wheel-sizes-main",
+        "flag=--baseline; else flag=--budgets",
     ] {
         assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
     }
@@ -233,6 +269,18 @@ fn ci_policy_wiring() {
 #[test]
 fn budgets_measurement_script_waits_and_fetches() {
     let script = root().join(".github/scripts/test-budgets-measurement.sh");
+    let out = Command::new("bash").arg(&script).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn main_baseline_script_selects_the_merge_base_measurement() {
+    let script = root().join(".github/scripts/test-main-baseline.sh");
     let out = Command::new("bash").arg(&script).output().unwrap();
     assert!(
         out.status.success(),

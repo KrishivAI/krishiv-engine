@@ -461,7 +461,7 @@ fn budgets_compare_gates_growth_on_the_approval_labels() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("budget-approved"));
     let out = run(&grown, &[("BUDGET_APPROVED", "1")]);
     assert!(out.status.success(), "{out:?}");
-    assert!(String::from_utf8_lossy(&out.stdout).contains("Refresh the baseline"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Nothing to record"));
     let unsafe_grown = measured(&|v| {
         v["unsafe_sites"]["krishiv-new"] = 1.into();
     });
@@ -485,6 +485,166 @@ fn budgets_compare_gates_growth_on_the_approval_labels() {
             .status
             .success()
     );
+}
+
+/// `budgets --compare FILE --baseline MAIN`: the baseline is the given file
+/// (a measurement of main), never the repository's `budgets.json`, so a PR is
+/// gated only on its own growth.
+#[test]
+fn budgets_compare_with_an_explicit_baseline() {
+    let dir = tmp("budgets-baseline");
+    let write = |name: &str, crates: u64, unsafe_krishiv: u64| {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "transitive_crates": crates,
+                "binary_bytes": null,
+                "clean_build_secs": null,
+                "unsafe_sites": {"krishiv-x": unsafe_krishiv},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        path
+    };
+    // The repository's budgets.json is far from these numbers: it must not matter.
+    let main = write("main.json", 1000, 3);
+    let run = |measured: &Path, baseline: &Path, env: &[(&str, &str)]| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        c.args(["budgets", "--compare"])
+            .arg(measured)
+            .arg("--baseline")
+            .arg(baseline)
+            .env_remove("BUDGET_APPROVED")
+            .env_remove("UNSAFE_APPROVED")
+            .env_remove("GITHUB_STEP_SUMMARY");
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        c.output().unwrap()
+    };
+    // Equal to main: passes although budgets.json differs.
+    let out = run(&write("same.json", 1000, 3), &main, &[]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("| transitive crates | 1000 | 1000 |"));
+    // Within 5% passes; 6% fails and names the label.
+    assert!(run(&write("a.json", 1050, 3), &main, &[]).status.success());
+    let out = run(&write("b.json", 1060, 3), &main, &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("budget-approved"));
+    assert!(
+        run(
+            &write("b.json", 1060, 3),
+            &main,
+            &[("BUDGET_APPROVED", "1")]
+        )
+        .status
+        .success()
+    );
+    // Shrinking passes; unsafe growth over main needs its own label.
+    assert!(run(&write("c.json", 900, 3), &main, &[]).status.success());
+    let out = run(
+        &write("d.json", 1000, 4),
+        &main,
+        &[("BUDGET_APPROVED", "1")],
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unsafe-reviewed"));
+    // A missing baseline is an error, never a pass.
+    let out = run(&main, &dir.join("absent.json"), &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
+    // `--baseline` belongs to `--compare` only.
+    assert!(
+        !xtask(&["budgets", "--baseline", main.to_str().unwrap()])
+            .status
+            .success()
+    );
+}
+
+/// `wheel-sizes --compare FILE --baseline MAIN`: another measurement is the
+/// baseline; `--budgets` and `--baseline` are exclusive.
+#[test]
+fn wheel_sizes_compare_with_a_measured_baseline() {
+    let dir = tmp("wheel-sizes-baseline");
+    let write = |name: &str, bytes: u64| {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            format!(r#"{{"cp311-abi3-manylinux_2_28_x86_64": {bytes}}}"#),
+        )
+        .unwrap();
+        path
+    };
+    let main = write("main.json", 1000);
+    let run = |measured: &Path, extra: &[&str], approved: bool| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        c.args(["wheel-sizes", "--compare"])
+            .arg(measured)
+            .args(extra)
+            .env_remove("GITHUB_STEP_SUMMARY")
+            .env_remove("BUDGET_APPROVED");
+        if approved {
+            c.env("BUDGET_APPROVED", "1");
+        }
+        c.output().unwrap()
+    };
+    let base = ["--baseline", main.to_str().unwrap()];
+    assert!(
+        run(&write("same.json", 1000), &base, false)
+            .status
+            .success()
+    );
+    assert!(
+        run(&write("small.json", 1050), &base, false)
+            .status
+            .success()
+    );
+    let out = run(&write("big.json", 1100), &base, false);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("grew from 1000 to 1100"),
+        "{out:?}"
+    );
+    assert!(run(&write("big.json", 1100), &base, true).status.success());
+    // A wheel main has no size for is reported as new, as with budgets.json.
+    std::fs::write(
+        dir.join("other.json"),
+        r#"{"cp311-abi3-macosx_11_0_arm64": 5}"#,
+    )
+    .unwrap();
+    let out = run(&dir.join("other.json"), &base, false);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no recorded size"),
+        "{out:?}"
+    );
+    // Errors: empty or missing baseline, both baseline flags.
+    std::fs::write(dir.join("empty.json"), "{}").unwrap();
+    assert!(
+        !run(
+            &main,
+            &["--baseline", dir.join("empty.json").to_str().unwrap()],
+            false
+        )
+        .status
+        .success()
+    );
+    assert!(
+        !run(
+            &main,
+            &["--baseline", dir.join("none.json").to_str().unwrap()],
+            false
+        )
+        .status
+        .success()
+    );
+    let both = [
+        "--baseline",
+        main.to_str().unwrap(),
+        "--budgets",
+        main.to_str().unwrap(),
+    ];
+    assert!(!run(&main, &both, false).status.success());
 }
 
 /// `budgets` measuring through a fake `cargo` (`$CARGO`): the measurement
