@@ -1,18 +1,49 @@
-# release-plz configuration: DRY RUN ONLY (P0-T27, ADR 0031 hard stop).
+# release-plz configuration for the first release, `0.1.0-alpha` (P2-T147).
 #
-# Nothing here may publish, tag or create a release. Every switch is off, and
-# every crate also carries `publish = false` in its Cargo.toml. Enabling real
-# releases is a deliberate, user-approved change to this file (see RELEASING.md).
-# Allowed command: `release-plz release --dry-run` (and `release-plz update`
-# on a scratch copy to preview changelogs/versions).
+# NOTHING HERE PUBLISHES, TAGS OR RELEASES. Every release switch is off, no
+# workflow runs release-plz, and every crate also carries `publish = false` in
+# its Cargo.toml. A real release is a deliberate, owner-approved change to this
+# file and to those manifests (RELEASING.md); xtask/tests/policy.rs fails CI if
+# any of the switches below is turned on or a publishing path appears.
+#
+# The version: release-plz never invents the first version of a crate that has
+# not been released. It takes the version in Cargo.toml, so `0.1.0-alpha` is
+# `[workspace.package] version` (inherited by every crate; Python gets the
+# PEP 440 form `0.1.0a0`). Later releases are computed from Conventional
+# Commits by `release-plz update`, which only edits files in a local checkout.
+# Allowed commands: `release-plz update` (local changes only) and, with the
+# owner's approval, `release-plz release --dry-run`.
 
 [workspace]
 release = false             # no package is released
 publish = false             # never `cargo publish`
-git_release_enable = false  # no GitHub/Gitea release
+git_release_enable = false  # no GitHub release
 git_tag_enable = false      # no tags
-changelog_update = false    # no CHANGELOG edits yet
+changelog_update = false    # per-crate changelogs stay off; see `krishiv` below
 semver_check = false
 dependencies_update = false
 pr_draft = true
 allow_dirty = false
+
+# One changelog for the workspace, kept under the `krishiv` facade crate's name:
+# the facade is what users install, and the crates below are its internals.
+[[package]]
+name = "krishiv"
+changelog_update = true
+changelog_path = "CHANGELOG.md"
+changelog_include = [
+    "krishiv-common",
+    "krishiv-exec",
+    "krishiv-functions",
+    "krishiv-io",
+    "krishiv-kernels",
+    "krishiv-memory",
+    "krishiv-optimizer",
+    "krishiv-plan",
+    "krishiv-python",
+    "krishiv-server",
+    "krishiv-session",
+    "krishiv-sql",
+    "krishiv-types",
+    "krishiv-ui-assets",
+]

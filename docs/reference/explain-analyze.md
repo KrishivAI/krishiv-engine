@@ -57,6 +57,10 @@ Each plan node is followed by the operators that implement it, one line
 each: role (`source`, `operator`, `sink`), operator id, name and the
 pipelines it runs in. A pipeline breaker (aggregate, sort, the build side
 of a hash join) has a sink in one pipeline and a source in the next.
+An `Exchange` node (`hashpartitioning`, `SinglePartition`,
+`rangepartitioning`) or `BroadcastExchange` marks where rows change
+partitions; on one worker it is carried out by the operators around it,
+so it lists no operators of its own.
 
 | Field | Meaning |
 |---|---|
@@ -68,6 +72,7 @@ of a hash join) has a sink in one pipeline and a source in the next.
 | `spilled` | Spills serviced and the bytes they freed. |
 | `spill files` | Spill files the operator wrote, requested or on its own (a grace join's partitions, an aggregate's or sort's runs), and the bytes written as stored. |
 | `memory:` (header) | The query pool's peak reserved bytes and its limit (`none` when only the process limit applies). |
+| `decode_overcommit_bytes` | A file scan's decode working sets (a Parquet row group's data, pages and batch while it is decoded) that went on without a memory reservation because the pool was full and nothing could be spilled for them; shown only when not zero. |
 | `runtime_filter_*`, `runtime_filters` | Rows a scan's runtime filters tested and dropped, units and splits they pruned, and per filter the form its producer chose (`range`, `small set of N`, `hash set of N`, `bloom N B`). |
 | `hash_entries`, `hash_buckets` (load), `hash_index` | The operator's hash tables: distinct keys, buckets and the index kind (a join's probe side reports the tables its grace phase built after spilling as `grace_hash_entries` and `grace_hash_buckets`) (`swiss`: an open-addressing table of keys; `swiss+chain`: the same with duplicate build rows chained; `row-flat+chain` and `row-salted+chain`: the row-layout join index, flat or salted by size). |
 | `probe_lookups`, `probe_key_compares` (avg), `max_probe_length` | Lookups, the keys compared to answer them (the probe length) and the longest probe. Collected only by `EXPLAIN ANALYZE` (`ExecConfig::detailed_metrics`), and not for the row-layout join index, because they cost a counter per lookup; other runs show `(probe lengths not collected)`. |

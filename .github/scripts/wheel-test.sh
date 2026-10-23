@@ -9,7 +9,9 @@
 # The Arrow consumers the bridge tests use (pyarrow, Polars, DuckDB) are
 # installed from binary wheels only; a target they publish no wheel for (e.g.
 # musllinux) skips those tests with a notice instead of building them from
-# source. The free-threaded flavour checks the GIL stays disabled.
+# source. The free-threaded flavour checks the GIL stays disabled. Before the
+# test suite, the acceptance smoke of P2-T103 runs on every wheel:
+# `import krishiv; krishiv.session().sql("select 1").toArrow()`.
 set -euo pipefail
 python=$1
 dist=$2
@@ -36,6 +38,18 @@ import krishiv
 
 print(krishiv.build_info(), sys.version)
 assert krishiv.build_info()["allocator"] == "mimalloc"
+# The acceptance smoke: a session, a query, an Arrow table. `toArrow` needs
+# pyarrow; a target without a pyarrow wheel (noticed above) runs `count`,
+# which needs no Arrow library.
+df = krishiv.session().sql("select 1")
+try:
+    import pyarrow  # noqa: F401
+except ImportError:
+    print("::notice::no pyarrow on this target; the smoke runs count() instead of toArrow()")
+    assert df.count() == 1
+else:
+    table = df.toArrow()
+    assert table.num_rows == 1 and table.column(0).to_pylist() == [1], table
 if sys.argv[1] == "cp314t":
     # Importing the extension must not re-enable the GIL (the module is
     # declared free-threading safe).

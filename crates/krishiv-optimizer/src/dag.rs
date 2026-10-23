@@ -90,10 +90,12 @@ pub(crate) fn with_input(node: &Arc<LogicalPlan>, input: Arc<LogicalPlan>) -> Ar
         | PlanNode::Aggregate { input: slot, .. }
         | PlanNode::Sort { input: slot, .. }
         | PlanNode::Limit { input: slot, .. }
+        | PlanNode::Offset { input: slot, .. }
         | PlanNode::SubqueryAlias { input: slot, .. }
         | PlanNode::WithCte { input: slot, .. }
         | PlanNode::Shift { input: slot, .. }
         | PlanNode::JoinHint { input: slot, .. }
+        | PlanNode::Window { input: slot, .. }
         | PlanNode::ReplicateRows { input: slot, .. } => *slot = input,
         _ => return Arc::clone(node),
     }

@@ -315,6 +315,64 @@ jobs:
           workspaces: tools/connect-protogen
       - run: cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check
 
+  # The generated `krishiv.plan.v1` types match proto/krishiv/plan/v1 (P2-T173).
+  # `tools/plan-protogen` is a workspace of its own, like connect-protogen.
+  plan-protos:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools/plan-protogen
+      - run: cargo run --locked --manifest-path tools/plan-protogen/Cargo.toml -- --check
+
+  # The cargo-fuzz targets (`fuzz/`, a workspace of its own) only run nightly,
+  # so a change to an API they call would break them unseen. Build all of them
+  # here; same pinned nightly as fuzz.yml. cargo-fuzz has no --locked; the
+  # committed fuzz/Cargo.lock pins the graph.
+  fuzz-build:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NIGHTLY: nightly-2026-08-12
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned nightly toolchain (cargo-fuzz needs it)
+        run: rustup toolchain install "$NIGHTLY" --profile minimal
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz@0.13.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz
+      - name: Build every fuzz target
+        working-directory: fuzz
+        # cargo-fuzz builds for its own compile-time target unless told
+        # otherwise, and the prebuilt binary taiki-e installs is a static musl
+        # one: its default target is x86_64-unknown-linux-musl, where the
+        # sanitizer cannot link ("sanitizer is incompatible with statically
+        # linked libc"). Name the runner's target.
+        run: cargo "+$NIGHTLY" fuzz build --target x86_64-unknown-linux-gnu
+
   msrv:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -358,6 +416,29 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - run: cargo doc --workspace --no-deps --locked
+
+  # P2-T147: `cargo publish --dry-run` for `krishiv` and the workspace crates it
+  # depends on. Nothing is uploaded and the repository stays unpublishable: the
+  # script runs on a scratch copy (see its header and RELEASING.md).
+  release-dry-run:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - run: .github/scripts/publish-dry-run.sh
 
   # P2-T020: Miri on krishiv-kernels (ADR 0029; the crate holds unsafe and
   # SIMD dispatch). P2-T098a: also the Arrow C stream bridge of
@@ -540,6 +621,13 @@ jobs:
           else
             "$RUNNER_TEMP/venv/bin/pytest" "$GITHUB_WORKSPACE/python/tests" -q
           fi
+      # P2-T147: the README's Quickstart, run from a clean venv against the wheel
+      # just built (the commands CI runs are the ones the README shows).
+      - name: Quickstart from the README (clean venv, built wheel)
+        if: matrix.coverage
+        env:
+          PY: ${{ matrix.python }}
+        run: .github/scripts/quickstart-test.sh dist "$PY"
       # Python diff coverage is a merge gate (this job is part of the required
       # `wheels-ok`): at least 90% of the executable lines a PR adds under
       # python/krishiv must run in the pytest run above, counted as coverage.py

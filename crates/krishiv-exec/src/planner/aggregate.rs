@@ -16,6 +16,7 @@ use krishiv_plan::{
 };
 
 use super::build::{Planned, Planner, column_of, internal, list, unsupported};
+use super::properties::Distribution;
 use crate::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
 use crate::error::Result;
 use crate::physical::{AggregatePlan, PhysNode, aggregate_node, aggregate_spec};
@@ -127,6 +128,16 @@ impl Planner<'_> {
             aggregates.push(agg);
             distinct.push(c.f.distinct);
         }
+        // Equal keys must meet in one partition; without keys, every row.
+        let key_attrs: Vec<AttrId> = columns[..k]
+            .iter()
+            .map(|c| input.column_attr(*c))
+            .collect::<Result<_>>()?;
+        let input = if k == 0 {
+            self.require(input, Distribution::Single)?
+        } else {
+            self.require(input, Distribution::Clustered(&key_attrs))?
+        };
         let plan = AggregatePlan {
             group_by: columns[..k].to_vec(),
             aggregates,
@@ -152,6 +163,7 @@ impl Planner<'_> {
         // Grouping keys keep their attributes: a filter on one drops whole
         // groups, which the producer above would drop anyway.
         let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
+        let placement = input.placement.clone().restrict(&layout);
         let agg = Planned {
             node: PhysNode::Aggregate {
                 input: Box::new(input.node),
@@ -161,6 +173,7 @@ impl Planner<'_> {
             layout,
             explain: super::explain::ExplainNode::new("HashAggregate", detail, vec![input.explain]),
             sites,
+            placement,
         };
         // Step 3: the output expressions over keys and results.
         let mut key_ids: HashMap<String, BoundColumn> = HashMap::new();
@@ -253,7 +266,7 @@ fn replace(
 
 /// `Some(true)` for `last`/`last_value`, `Some(false)` for `first`/
 /// `first_value`: the aggregates that pick a row's value.
-fn picks(name: &str) -> Option<bool> {
+pub(super) fn picks(name: &str) -> Option<bool> {
     match name {
         "first" | "first_value" => Some(false),
         "last" | "last_value" => Some(true),
@@ -261,6 +274,6 @@ fn picks(name: &str) -> Option<bool> {
     }
 }
 
-fn non_null_literal(e: &Expr) -> bool {
+pub(super) fn non_null_literal(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Literal(l) if !matches!(l, krishiv_plan::Literal::Null(_)))
 }

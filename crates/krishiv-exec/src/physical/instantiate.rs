@@ -8,6 +8,24 @@
 //! unless the worker's tables changed in between (each scan checks that
 //! its pushed filter is still honoured as planned, and the root's schema
 //! is checked against the plan's).
+//!
+//! # Exchanges on one worker
+//! A worker that runs a whole plan lowers each exchange into the operators
+//! around it, without moving rows (design P2-T171 §5, ADR 0006 update of
+//! 2026-10-19): exchanges are distribution boundaries, and morsel-driven
+//! drivers stay the parallelism within a worker.
+//!
+//! | Partitioning | Lowered into |
+//! |---|---|
+//! | `Hash` below an aggregate | the aggregate's breaker, whose partitions are the hash's |
+//! | `Hash` on both inputs of a join | the build's partitions; the probe needs none, as the build is complete |
+//! | `Broadcast` | the shared, immutable build |
+//! | `Single` | the breaker's combine and merge, or the result stream |
+//! | `Range` | the sort's run merge |
+//! | `RoundRobin` | the drivers' morsels |
+//!
+//! Every one of them is the identity on the rows a worker computes from
+//! the whole input, so an exchange instantiates as its input.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -287,15 +305,32 @@ impl Instantiation<'_> {
             } => self.with_subqueries(input, subqueries, |input, v| {
                 expand_op(input, layout, projections, nullable, v)
             }),
-            PhysNode::Limit { input, limit } => {
+            PhysNode::Limit {
+                input,
+                offset,
+                limit,
+            } => {
                 let input = self.node(input)?;
-                let op = crate::operators::Limit::new(Arc::clone(&input.schema), *limit);
+                let op = crate::operators::Limit::with_offset(
+                    Arc::clone(&input.schema),
+                    *offset,
+                    *limit,
+                );
                 Ok(operator(input, op))
             }
             PhysNode::Sort { input, keys } => {
                 let input = self.node(input)?;
                 let sort = sort_op(&input.schema, keys, self.spill.clone())?;
                 Ok(breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort))
+            }
+            PhysNode::Window { input, window } => {
+                let input = self.node(input)?;
+                let op = crate::window::Window::new(
+                    Arc::clone(&input.schema),
+                    window.clone(),
+                    self.env.ansi,
+                )?;
+                Ok(operator(input, Arc::new(op)))
             }
             PhysNode::TopN { input, keys, limit } => {
                 let input = self.node(input)?;
@@ -365,6 +400,9 @@ impl Instantiation<'_> {
                     }),
                 })
             }
+            // See the module docs: the operators around an exchange
+            // implement it on one worker.
+            PhysNode::Exchange(e) => self.node(&e.input),
         }
     }
 

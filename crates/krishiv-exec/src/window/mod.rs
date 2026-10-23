@@ -1,0 +1,641 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Window functions (P2-T055, ADR 0011): the [`Window`] operator.
+//!
+//! # Plan shape
+//! Sort-based, as in Leis et al. (VLDB 2015, `research/papers.md` A10,
+//! §3.1): the planner sorts the input by the partitioning keys, then the
+//! ordering keys ([`crate::operators::Sort`]: external merge sort, spills
+//! under memory pressure), and puts a [`Window`] over the sorted stream.
+//! The window keeps one partition at a time (plus the rows of the next one
+//! seen so far), so its state is partition-local: an input distributed by
+//! the partitioning keys (`Exchange(Hash(partition keys))` below the sort,
+//! P2-T174) gives the same rows, partition by partition. A window without
+//! partitioning keys needs all rows in one partition (one driver above the
+//! sort, or a single-partition exchange).
+//!
+//! # Boundaries
+//! Partition and peer-group boundaries come from comparing adjacent rows'
+//! keys in the sort's normalized encoding, so they follow Spark's equality
+//! of keys: `NULL` equals `NULL`, every NaN is equal and `-0.0 = 0.0`.
+//!
+//! # Evaluation
+//! Complete partitions (all rows before the start of the last partition
+//! seen; everything once the input ends) are evaluated together, function
+//! by function, over the whole unit:
+//! - `row_number`, `rank`, `dense_rank`, `percent_rank`, `cume_dist` and
+//!   `ntile` from the boundaries (`ntile` as Spark's `NTile`: the first
+//!   `n % k` buckets take one row more);
+//! - an aggregate over `UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING`: one
+//!   fold per batch into one group per partition;
+//! - an aggregate over `UNBOUNDED PRECEDING AND CURRENT ROW`: the cumulative
+//!   algorithm (Leis et al. §4.3.2), one row (`ROWS`) or one peer group
+//!   (`RANGE`) at a time, the state kept after each. Rows are folded one by
+//!   one in partition order, as Spark's frames fold them, so float sums
+//!   round and integer sums overflow exactly as Spark's do. Decimal `sum`
+//!   and `avg` are kept exact (Spark keeps a window's decimal buffer as an
+//!   unbounded `Decimal`) and checked when evaluated: past the result's
+//!   precision the value is `NULL`, or with ANSI
+//!   `NUMERIC_VALUE_OUT_OF_RANGE`.
+//!
+//! Frames with value bounds (sliding frames; removable cumulative and
+//! segment-tree aggregation, Leis et al. §4.3.3-§4.3.4) and the offset
+//! functions are planned with a later part of P2-T055.
+//!
+//! # Memory
+//! Before a batch is taken (`NeedMemory` otherwise) the operator reserves
+//! what it holds for it: its columns, its boundary flags, and what
+//! evaluating its rows holds (row maps, states, outputs; exact for its
+//! rows, partitions and peer groups). String and binary results are views
+//! of the input's buffers, never copies. A batch's reservation is released
+//! when its last output slice is emitted.
+//! The operator does not spill: a partition must fit in memory (the sort
+//! below spills; spilling a partition that does not fit is a later part of
+//! P2-T055).
+//!
+//! # Weights
+//! Window functions are defined for insert-only input: weights other than
+//! 1 are `KRISHIV_UNSUPPORTED_FEATURE` (incremental windows are P4).
+
+mod eval;
+#[cfg(all(test, not(loom)))]
+mod tests;
+
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use arrow_array::{Array, RecordBatch, RecordBatchOptions};
+use arrow_row::OwnedRow;
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use krishiv_memory::{ConsumerHandle, Reservation};
+use krishiv_types::batch::{Batch, Weights};
+
+use crate::aggregate::{AggregateExpr, AggregateFunction};
+use crate::context::TaskContext;
+use crate::error::{Result, internal};
+use crate::operator::{LocalState, Operator, OperatorOutput};
+use crate::operators::{KeyEncoder, SortKey};
+
+/// A window function.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WindowFunction {
+    /// `row_number()`: `int`, 1 for a partition's first row.
+    RowNumber,
+    /// `rank()`: `int`, 1 + the rows before the row's peer group.
+    Rank,
+    /// `dense_rank()`: `int`, 1 + the peer groups before the row's.
+    DenseRank,
+    /// `percent_rank()`: `double`, `(rank - 1) / (rows - 1)`, 0 for one row.
+    PercentRank,
+    /// `cume_dist()`: `double`, the rows up to the end of the row's peer
+    /// group over the partition's rows.
+    CumeDist,
+    /// `ntile(buckets)`: `int`, `buckets > 0`.
+    Ntile(i32),
+    /// An aggregate over the frame; its arguments are input columns.
+    Aggregate(AggregateExpr),
+}
+
+/// The units of a [`WindowFrame`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameUnits {
+    /// `ROWS`.
+    Rows,
+    /// `RANGE`: `CURRENT ROW` includes the row's peers.
+    Range,
+}
+
+/// A bound of a [`WindowFrame`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FrameBound {
+    /// The partition's first row.
+    UnboundedPreceding,
+    /// The current row (with its peers, in `RANGE` units).
+    CurrentRow,
+    /// The partition's last row.
+    UnboundedFollowing,
+}
+
+/// A window frame (Spark's `SpecifiedWindowFrame`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowFrame {
+    /// `ROWS` or `RANGE`.
+    pub units: FrameUnits,
+    /// The start.
+    pub lower: FrameBound,
+    /// The end.
+    pub upper: FrameBound,
+}
+
+impl WindowFrame {
+    /// `units BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING`.
+    #[must_use]
+    pub const fn whole(units: FrameUnits) -> Self {
+        Self {
+            units,
+            lower: FrameBound::UnboundedPreceding,
+            upper: FrameBound::UnboundedFollowing,
+        }
+    }
+
+    /// `units BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
+    #[must_use]
+    pub const fn running(units: FrameUnits) -> Self {
+        Self {
+            units,
+            lower: FrameBound::UnboundedPreceding,
+            upper: FrameBound::CurrentRow,
+        }
+    }
+}
+
+/// One window function of a [`WindowPlan`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowFunctionPlan {
+    /// The function.
+    pub function: WindowFunction,
+    /// Its frame (ranking functions ignore it).
+    pub frame: WindowFrame,
+    /// A boolean input column: an aggregate reads only the rows where it is
+    /// true (`FILTER (WHERE ...)`).
+    pub filter: Option<usize>,
+    /// The output column's name.
+    pub name: String,
+}
+
+/// The window functions over one partitioning and ordering.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowPlan {
+    /// The partitioning columns.
+    pub partition_by: Vec<usize>,
+    /// The ordering within a partition (the input is sorted by the
+    /// partitioning columns, then by these).
+    pub order_by: Vec<SortKey>,
+    /// The functions; each adds one column after the input's.
+    pub functions: Vec<WindowFunctionPlan>,
+}
+
+crate::physical::data::plan_data!(
+    enum WindowFunction {
+        RowNumber,
+        Rank,
+        DenseRank,
+        PercentRank,
+        CumeDist,
+        Ntile(buckets),
+        Aggregate(aggregate),
+    }
+);
+crate::physical::data::plan_data!(
+    enum FrameUnits {
+        Rows,
+        Range,
+    }
+);
+crate::physical::data::plan_data!(
+    enum FrameBound {
+        UnboundedPreceding,
+        CurrentRow,
+        UnboundedFollowing,
+    }
+);
+crate::physical::data::plan_data!(struct WindowFrame { units, lower, upper });
+crate::physical::data::plan_data!(struct WindowFunctionPlan { function, frame, filter, name });
+crate::physical::data::plan_data!(struct WindowPlan { partition_by, order_by, functions });
+
+/// The distribution a window requires of its input: its state is one
+/// partition at a time, so every row of a partition must reach one driver
+/// (plan data, for the exchange pass of P2-T174).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RequiredDistribution {
+    /// No partitioning: all rows in one partition.
+    Single,
+    /// Rows with equal values of these input columns in one partition.
+    Clustered(Vec<usize>),
+}
+
+impl WindowPlan {
+    /// What the window requires of its input's distribution.
+    #[must_use]
+    pub fn required_distribution(&self) -> RequiredDistribution {
+        if self.partition_by.is_empty() {
+            RequiredDistribution::Single
+        } else {
+            RequiredDistribution::Clustered(self.partition_by.clone())
+        }
+    }
+}
+
+/// How an aggregate's frame is evaluated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Shape {
+    /// The whole partition.
+    Whole,
+    /// From the partition's start to the current row.
+    RunningRows,
+    /// From the partition's start to the end of the current peer group.
+    RunningPeers,
+}
+
+impl WindowFunctionPlan {
+    /// The output type and nullability.
+    ///
+    /// # Errors
+    /// The aggregate's typing errors.
+    pub fn output(&self) -> Result<(DataType, bool)> {
+        Ok(match &self.function {
+            WindowFunction::RowNumber
+            | WindowFunction::Rank
+            | WindowFunction::DenseRank
+            | WindowFunction::Ntile(_) => (DataType::Int32, false),
+            WindowFunction::PercentRank | WindowFunction::CumeDist => (DataType::Float64, false),
+            WindowFunction::Aggregate(a) => {
+                (a.result_type()?, a.function != AggregateFunction::Count)
+            }
+        })
+    }
+
+    /// How the frame is evaluated.
+    pub(crate) fn shape(&self) -> Result<Shape> {
+        use FrameBound as B;
+        match (self.frame.units, self.frame.lower, self.frame.upper) {
+            (_, B::UnboundedPreceding, B::UnboundedFollowing) => Ok(Shape::Whole),
+            (FrameUnits::Rows, B::UnboundedPreceding, B::CurrentRow) => Ok(Shape::RunningRows),
+            (FrameUnits::Range, B::UnboundedPreceding, B::CurrentRow) => Ok(Shape::RunningPeers),
+            (units, lower, upper) => Err(crate::aggregate::unsupported(format!(
+                "window frame {units:?} between {lower:?} and {upper:?}"
+            ))),
+        }
+    }
+}
+
+/// Window functions over an input sorted by its partitioning, then its
+/// ordering (see the module docs).
+pub struct Window {
+    input: SchemaRef,
+    schema: SchemaRef,
+    plan: WindowPlan,
+    partition_keys: Option<Arc<KeyEncoder>>,
+    order_keys: Option<Arc<KeyEncoder>>,
+    /// `spark.sql.ansi.enabled`: overflow raises instead of wrapping or
+    /// becoming NULL.
+    ansi: bool,
+    partitions: AtomicU64,
+    rows: AtomicU64,
+}
+
+impl std::fmt::Debug for Window {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Window")
+            .field("plan", &self.plan)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One input batch with rows not emitted yet.
+struct Pending {
+    batch: RecordBatch,
+    /// Rows already emitted.
+    offset: usize,
+    /// Per row: it starts a partition.
+    part_start: Vec<bool>,
+    /// Per row: it starts a peer group (or a partition).
+    peer_start: Vec<bool>,
+    /// The bytes reserved for it.
+    reserved: usize,
+}
+
+struct Local {
+    pending: VecDeque<Pending>,
+    /// Where the last partition seen starts: an index into `pending` and a
+    /// row. Rows before it are complete.
+    last_start: Option<(usize, usize)>,
+    /// The keys of the last row taken, to compare the next batch's first
+    /// row with.
+    prev_partition: Option<OwnedRow>,
+    prev_order: Option<OwnedRow>,
+    /// Evaluated batches waiting to be emitted, each with the bytes its
+    /// emission releases (an input batch's reservation goes with its last
+    /// output slice).
+    out: VecDeque<(Batch, usize)>,
+    reservation: Reservation,
+    /// The input ended.
+    finished: bool,
+    /// Complete rows below this many wait for more (the configured batch
+    /// size).
+    batch_rows: usize,
+}
+
+fn downcast(l: &mut LocalState) -> Result<&mut Local> {
+    l.downcast_mut::<Local>()
+        .ok_or_else(|| internal("wrong local state for Window".to_owned()))
+}
+
+impl Window {
+    /// A window over batches of `input`, sorted by `plan`'s partitioning
+    /// and ordering.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a column outside the input or a filter that is
+    /// not boolean; `KRISHIV_UNSUPPORTED_FEATURE` for a key type the sort
+    /// cannot order, a frame not evaluated yet, or an aggregate of a type
+    /// it does not take.
+    pub fn new(input: SchemaRef, plan: WindowPlan, ansi: bool) -> Result<Self> {
+        let width = input.fields().len();
+        let column = |i: usize, what: &str| {
+            if i < width {
+                Ok(())
+            } else {
+                Err(internal(format!(
+                    "window {what} column {i} is out of range"
+                )))
+            }
+        };
+        let partition: Vec<SortKey> = plan
+            .partition_by
+            .iter()
+            .map(|&c| column(c, "partition").map(|()| SortKey::asc(c)))
+            .collect::<Result<_>>()?;
+        for k in &plan.order_by {
+            column(k.column, "order")?;
+        }
+        let mut fields: Vec<Field> = input.fields().iter().map(|f| f.as_ref().clone()).collect();
+        for f in &plan.functions {
+            if let WindowFunction::Aggregate(a) = &f.function {
+                for &arg in &a.args {
+                    column(arg, "argument")?;
+                }
+                f.shape()?;
+            }
+            if let WindowFunction::Ntile(n) = f.function
+                && n <= 0
+            {
+                return Err(internal(format!("ntile of {n} buckets")));
+            }
+            if let Some(c) = f.filter {
+                column(c, "filter")?;
+                if input.field(c).data_type() != &DataType::Boolean {
+                    return Err(internal("a window filter that is not boolean".to_owned()));
+                }
+            }
+            let (t, nullable) = f.output()?;
+            fields.push(Field::new(&f.name, t, nullable));
+        }
+        let encoder = |keys: &[SortKey]| {
+            (!keys.is_empty())
+                .then(|| KeyEncoder::new(&input, keys))
+                .transpose()
+        };
+        Ok(Self {
+            partition_keys: encoder(&partition)?,
+            order_keys: encoder(&plan.order_by)?,
+            schema: Arc::new(Schema::new(fields)),
+            input,
+            plan,
+            ansi,
+            partitions: AtomicU64::new(0),
+            rows: AtomicU64::new(0),
+        })
+    }
+
+    /// Takes `batch` if the bytes it holds while buffered can be reserved
+    /// (`Err(bytes)` otherwise, nothing changed): its columns, its boundary
+    /// flags against the rows before it, and what evaluating its rows
+    /// holds ([`eval::cost`], exact for its rows, partitions and peer
+    /// groups).
+    fn append(&self, l: &mut Local, batch: RecordBatch) -> Result<Result<(), usize>> {
+        let n = batch.num_rows();
+        let flags = |enc: &Option<Arc<KeyEncoder>>,
+                     prev: &Option<OwnedRow>|
+         -> Result<(Vec<bool>, Option<OwnedRow>)> {
+            let Some(enc) = enc else {
+                return Ok((vec![false; n], None));
+            };
+            let rows = enc.encode(&batch)?;
+            let mut out = Vec::with_capacity(n);
+            for i in 0..n {
+                out.push(match i {
+                    0 => prev.as_ref().is_none_or(|p| p.row() != rows.row(0)),
+                    _ => rows.row(i) != rows.row(i - 1),
+                });
+            }
+            let last = (n > 0).then(|| rows.row(n - 1).owned());
+            Ok((out, last))
+        };
+        let (mut part_start, prev_partition) = flags(&self.partition_keys, &l.prev_partition)?;
+        let (order_start, prev_order) = flags(&self.order_keys, &l.prev_order)?;
+        if l.pending.is_empty()
+            && l.last_start.is_none()
+            && let Some(first) = part_start.first_mut()
+        {
+            // The first row of the input starts a partition.
+            *first = true;
+        }
+        let peer_start: Vec<bool> = part_start
+            .iter()
+            .zip(&order_start)
+            .map(|(p, o)| *p || *o)
+            .collect();
+        let parts = part_start.iter().filter(|&&s| s).count();
+        let peers = peer_start.iter().filter(|&&s| s).count();
+        let cost = batch
+            .get_array_memory_size()
+            .saturating_add(2 * n)
+            .saturating_add(eval::cost(&self.plan, n, parts, peers)?);
+        if l.reservation.try_grow(cost).is_err() {
+            return Ok(Err(cost));
+        }
+        if prev_partition.is_some() {
+            l.prev_partition = prev_partition;
+        }
+        if prev_order.is_some() {
+            l.prev_order = prev_order;
+        }
+        if let Some(i) = part_start.iter().rposition(|&s| s) {
+            l.last_start = Some((l.pending.len(), i));
+            self.partitions.fetch_add(parts as u64, Ordering::Relaxed);
+        }
+        self.rows.fetch_add(n as u64, Ordering::Relaxed);
+        l.pending.push_back(Pending {
+            batch,
+            offset: 0,
+            part_start,
+            peer_start,
+            reserved: cost,
+        });
+        Ok(Ok(()))
+    }
+
+    /// The pending rows that are complete partitions: everything when the
+    /// input ended, else everything before the last partition's start.
+    fn complete_rows(l: &Local) -> usize {
+        let upto = if l.finished {
+            None
+        } else {
+            match l.last_start {
+                Some(at) => Some(at),
+                None => return 0,
+            }
+        };
+        let mut total = 0;
+        for (i, p) in l.pending.iter().enumerate() {
+            match upto {
+                Some((bi, row)) if bi == i => {
+                    total += row.saturating_sub(p.offset);
+                    break;
+                }
+                _ => total += p.batch.num_rows() - p.offset,
+            }
+        }
+        total
+    }
+
+    /// Evaluates the complete rows and queues their output batches.
+    fn flush_complete(&self, l: &mut Local) -> Result<()> {
+        let rows = Self::complete_rows(l);
+        if rows == 0 {
+            return Ok(());
+        }
+        // The slices of pending batches the unit covers.
+        let mut slices = Vec::new();
+        let mut left = rows;
+        for (i, p) in l.pending.iter().enumerate() {
+            if left == 0 {
+                break;
+            }
+            let len = (p.batch.num_rows() - p.offset).min(left);
+            slices.push((i, p.offset, len));
+            left -= len;
+        }
+        let columns = {
+            let unit: Vec<eval::Slice<'_>> = slices
+                .iter()
+                .map(|&(i, offset, len)| eval::Slice {
+                    batch: &l.pending[i].batch,
+                    offset,
+                    len,
+                    part_start: &l.pending[i].part_start[offset..offset + len],
+                    peer_start: &l.pending[i].peer_start[offset..offset + len],
+                })
+                .collect();
+            eval::evaluate(&self.plan, &unit, self.ansi)?
+        };
+        // One output batch per slice: its input columns, then the slice of
+        // each window column.
+        let options = |n: usize| RecordBatchOptions::new().with_row_count(Some(n));
+        let mut at = 0;
+        for &(i, offset, len) in &slices {
+            let p = &l.pending[i];
+            let mut cols: Vec<_> = p
+                .batch
+                .columns()
+                .iter()
+                .map(|c| c.slice(offset, len))
+                .collect();
+            cols.extend(columns.iter().map(|c| c.slice(at, len)));
+            at += len;
+            let batch =
+                RecordBatch::try_new_with_options(Arc::clone(&self.schema), cols, &options(len))
+                    .map_err(|e| internal(format!("window produced an invalid batch: {e}")))?;
+            l.out.push_back((Batch::new(batch), 0));
+        }
+        // Advance past the evaluated rows; a fully evaluated input batch
+        // leaves, its reservation released with its last output slice.
+        let mut dropped = 0;
+        let first_out = l.out.len() - slices.len();
+        for (k, &(i, offset, len)) in slices.iter().enumerate() {
+            let p = &mut l.pending[i - dropped];
+            p.offset = offset + len;
+            if p.offset == p.batch.num_rows() {
+                let gone = l.pending.pop_front().map_or(0, |p| p.reserved);
+                if let Some((_, release)) = l.out.get_mut(first_out + k) {
+                    *release += gone;
+                }
+                dropped += 1;
+            }
+        }
+        if let Some((bi, row)) = l.last_start {
+            l.last_start = bi.checked_sub(dropped).map(|bi| (bi, row));
+        }
+        Ok(())
+    }
+}
+
+impl Window {
+    /// The next evaluated batch, releasing what its emission frees.
+    fn emit(l: &mut Local) -> Option<Batch> {
+        let (b, release) = l.out.pop_front()?;
+        l.reservation.shrink(release);
+        Some(b)
+    }
+}
+
+impl Operator for Window {
+    fn name(&self) -> &'static str {
+        "Window"
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
+        let consumer: Arc<ConsumerHandle> = Arc::clone(ctx.consumer().consumer());
+        Ok(Box::new(Local {
+            pending: VecDeque::new(),
+            last_start: None,
+            prev_partition: None,
+            prev_order: None,
+            out: VecDeque::new(),
+            reservation: consumer.reservation(),
+            finished: false,
+            batch_rows: ctx.query().config().batch_size.max(1),
+        }))
+    }
+
+    fn execute(&self, input: &Batch, l: &mut LocalState) -> Result<OperatorOutput> {
+        let l = downcast(l)?;
+        if let Some(b) = Self::emit(l) {
+            return Ok(OperatorOutput::HaveMoreOutput(b));
+        }
+        if input.num_rows() == 0 {
+            return Ok(OperatorOutput::NeedMoreInput(None));
+        }
+        if !matches!(input.weights(), Weights::Const(1)) {
+            return Err(crate::aggregate::unsupported(
+                "window functions over rows with weights other than 1 (needs incremental \
+                 view maintenance)"
+                    .to_owned(),
+            ));
+        }
+        if input.data().schema().fields().len() != self.input.fields().len() {
+            return Err(internal("window input of the wrong width".to_owned()));
+        }
+        if let Err(bytes) = self.append(l, input.data().clone())? {
+            return Ok(OperatorOutput::NeedMemory { bytes });
+        }
+        if Self::complete_rows(l) >= l.batch_rows {
+            self.flush_complete(l)?;
+        }
+        Ok(OperatorOutput::NeedMoreInput(Self::emit(l)))
+    }
+
+    fn finish(&self, l: &mut LocalState) -> Result<Option<Batch>> {
+        let l = downcast(l)?;
+        if let Some(b) = Self::emit(l) {
+            return Ok(Some(b));
+        }
+        if !std::mem::replace(&mut l.finished, true) {
+            self.flush_complete(l)?;
+        }
+        Ok(Self::emit(l))
+    }
+
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
+        crate::metrics::counts([
+            ("partitions", self.partitions.load(Ordering::Relaxed)),
+            ("rows", self.rows.load(Ordering::Relaxed)),
+        ])
+    }
+}

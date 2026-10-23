@@ -74,9 +74,20 @@ fn tr(e: &Expr, scan: &[BoundColumn], exact: bool) -> Option<PushdownExpr> {
             let ExprNode::Literal(Literal::String(p)) = &p.node else {
                 return None;
             };
+            let plain = |s: &str| !s.is_empty() && !s.contains(['%', '_', '\\']);
+            // `%needle%` with no other wildcard or escape.
+            if let Some(needle) = p.strip_prefix('%').and_then(|s| s.strip_suffix('%'))
+                && plain(needle)
+            {
+                return Some(PushdownExpr::Contains {
+                    column: c,
+                    needle: needle.to_owned(),
+                    collation: krishiv_io::Collation::Utf8Binary,
+                });
+            }
             // `prefix%` with no other wildcard or escape.
             let prefix = p.strip_suffix('%')?;
-            if prefix.is_empty() || prefix.contains(['%', '_', '\\']) {
+            if !plain(prefix) {
                 return None;
             }
             Some(PushdownExpr::StartsWith {
@@ -211,6 +222,50 @@ mod tests {
             args.push(Expr::new(ExprNode::Literal(Literal::Null(None))));
         }
         (call(Builtin::In, args), scan)
+    }
+
+    fn like(pattern: &str) -> Option<PushdownExpr> {
+        let c = BoundColumn {
+            id: AttrId(2),
+            name: "s".to_owned(),
+            data_type: DataType::String,
+            nullable: true,
+        };
+        let e = call(
+            Builtin::Like,
+            vec![
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Column(c.clone()))),
+                Expr::new(ExprNode::Literal(Literal::String(pattern.to_owned()))),
+            ],
+        );
+        translate(&e, &[c])
+    }
+
+    #[test]
+    fn like_patterns_with_one_wildcard_run_are_prefixes_or_substrings() {
+        let utf8 = krishiv_io::Collation::Utf8Binary;
+        assert_eq!(
+            like("%google%"),
+            Some(PushdownExpr::Contains {
+                column: ColumnPath::new("s"),
+                needle: "google".to_owned(),
+                collation: utf8.clone(),
+            })
+        );
+        assert_eq!(
+            like("goo%"),
+            Some(PushdownExpr::StartsWith {
+                column: ColumnPath::new("s"),
+                prefix: "goo".to_owned(),
+                collation: utf8,
+            })
+        );
+        // Other wildcards, escapes, an empty needle or a suffix: not pushed.
+        for p in [
+            "%go_gle%", "%go%gle%", "%go\\%%", "%%", "%", "%google", "go%gle",
+        ] {
+            assert_eq!(like(p), None, "{p}");
+        }
     }
 
     #[test]

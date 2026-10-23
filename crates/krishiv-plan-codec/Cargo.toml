@@ -1,0 +1,31 @@
+[package]
+name = "krishiv-plan-codec"
+description = "The krishiv.plan.v1 codec for physical plans"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+arrow-ipc.workspace = true
+arrow-schema.workspace = true
+krishiv-common = { path = "../krishiv-common" }
+krishiv-exec = { path = "../krishiv-exec" }
+krishiv-io = { path = "../krishiv-io" }
+krishiv-plan = { path = "../krishiv-plan" }
+krishiv-types = { path = "../krishiv-types" }
+prost = { workspace = true, features = ["derive", "std"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+krishiv-optimizer = { path = "../krishiv-optimizer" }
+krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
+krishiv-sql = { path = "../krishiv-sql" }
+object_store = { workspace = true, features = ["fs"] }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

@@ -90,6 +90,7 @@ pub mod rows;
 mod runner;
 mod sync;
 pub mod testing;
+pub mod window;
 
 pub use cancel::CancellationToken;
 pub use context::{

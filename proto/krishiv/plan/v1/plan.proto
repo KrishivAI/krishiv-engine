@@ -1,0 +1,560 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// krishiv.plan.v1: the stable serialized form of a physical plan (ADR 0003,
+// P2-T173; design P2-T171 I1). Compatibility rules (ADR 0026): N reads N-1
+// and N-1 reads N. Fields are only ever added with new numbers; a removed
+// field's number and name are `reserved`; an enum value is never reused. A
+// writer that needs semantics an older reader would silently ignore raises
+// `min_reader_version`, and an older reader rejects the plan.
+//
+// Plans are DAG-flat: nodes, expressions and explain nodes live in tables in
+// post-order and refer to children by table index (always an earlier entry),
+// so neither the encoder nor the decoder recurses, protobuf nesting stays
+// shallow, and expressions shared through `Arc` are stored once.
+//
+// A plan holds references, never live handles or secrets (ADR 0038): a
+// table is its name or its file paths, a credential is a `SecretRef`.
+syntax = "proto3";
+
+package krishiv.plan.v1;
+
+message PhysicalPlan {
+  // The writer's format version (4).
+  uint32 format_version = 1;
+  // The oldest reader version that understands every field in use.
+  uint32 min_reader_version = 2;
+  // Plan nodes in post-order; a node's inputs are earlier entries.
+  repeated Node nodes = 3;
+  uint32 root = 4;
+  // The result schema (Arrow IPC `Schema` flatbuffer).
+  bytes schema = 5;
+  // The printable tree, post-order.
+  repeated ExplainNode explain = 6;
+  uint32 explain_root = 7;
+  repeated string warnings = 8;
+  ExprEnv env = 9;
+  // Expressions in post-order; an expression's inputs are earlier entries.
+  repeated Expr exprs = 10;
+}
+
+message ExprEnv {
+  bool ansi = 1;
+  // The session time zone as a fixed offset in seconds, when it is one.
+  optional sint32 zone = 2;
+  sint64 query_start_micros = 3;
+  string user = 4;
+}
+
+message ExplainNode {
+  string name = 1;
+  string detail = 2;
+  repeated uint32 children = 3;
+}
+
+message Node {
+  oneof kind {
+    ScanNode scan = 1;
+    Empty one_row = 2;
+    FilterNode filter = 3;
+    ProjectNode project = 4;
+    LimitNode limit = 5;
+    ReplicateRowsNode replicate_rows = 6;
+    SortNode sort = 7;
+    TopNNode top_n = 8;
+    AggregateNode aggregate = 9;
+    HashJoinNode hash_join = 10;
+    NestedLoopJoinNode nested_loop_join = 11;
+    UnionNode union = 12;
+    WriteFilesNode write_files = 13;
+    ExchangeNode exchange = 14;
+    // v4: a plan with a window needs a v4 reader.
+    WindowNode window = 15;
+  }
+}
+
+message Empty {}
+
+message FilterNode {
+  uint32 input = 1;
+  repeated uint64 layout = 2;
+  uint32 predicate = 3;
+  repeated SubqueryPlan subqueries = 4;
+}
+
+message ProjectNode {
+  uint32 input = 1;
+  repeated uint64 layout = 2;
+  repeated ProjectItem items = 3;
+  // Present when the output nullability is overridden.
+  optional BoolList nullable = 4;
+  repeated SubqueryPlan subqueries = 5;
+}
+
+message BoolList {
+  repeated bool values = 1;
+}
+
+message ProjectItem {
+  oneof kind {
+    ProjectColumn column = 1;
+    ProjectExpr expr = 2;
+  }
+}
+
+message ProjectColumn {
+  uint64 index = 1;
+  optional string name = 2;
+}
+
+message ProjectExpr {
+  string name = 1;
+  uint32 expr = 2;
+}
+
+message SubqueryPlan {
+  uint64 id = 1;
+  SubqueryValueKind kind = 2;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes data_type = 3;
+  uint32 plan = 4;
+}
+
+enum SubqueryValueKind {
+  SUBQUERY_VALUE_KIND_UNSPECIFIED = 0;
+  SUBQUERY_VALUE_KIND_SCALAR = 1;
+  SUBQUERY_VALUE_KIND_EXISTS = 2;
+}
+
+message LimitNode {
+  uint32 input = 1;
+  uint64 limit = 2;
+  // v3: the number of leading rows to skip. v2 bytes leave this as zero.
+  uint64 offset = 3;
+}
+
+message ReplicateRowsNode {
+  uint32 input = 1;
+  repeated uint64 layout = 2;
+  uint32 count = 3;
+  repeated SubqueryPlan subqueries = 4;
+}
+
+message SortKey {
+  uint64 column = 1;
+  bool descending = 2;
+  bool nulls_first = 3;
+}
+
+message SortNode {
+  uint32 input = 1;
+  repeated SortKey keys = 2;
+}
+
+message TopNNode {
+  uint32 input = 1;
+  repeated SortKey keys = 2;
+  uint64 limit = 3;
+}
+
+// v4: window functions over an input sorted by the partitioning columns,
+// then the ordering.
+message WindowNode {
+  uint32 input = 1;
+  repeated uint64 partition_by = 2;
+  repeated SortKey order_by = 3;
+  repeated WindowFunctionPlan functions = 4;
+}
+
+message WindowFunctionPlan {
+  oneof function {
+    Empty row_number = 1;
+    Empty rank = 2;
+    Empty dense_rank = 3;
+    Empty percent_rank = 4;
+    Empty cume_dist = 5;
+    // The bucket count.
+    int32 ntile = 6;
+    AggregateExpr aggregate = 7;
+  }
+  WindowFrame frame = 8;
+  // A boolean input column an aggregate is restricted to.
+  optional uint64 filter = 9;
+  string name = 10;
+}
+
+message WindowFrame {
+  FrameUnits units = 1;
+  FrameBound lower = 2;
+  FrameBound upper = 3;
+}
+
+enum FrameUnits {
+  FRAME_UNITS_UNSPECIFIED = 0;
+  FRAME_UNITS_ROWS = 1;
+  FRAME_UNITS_RANGE = 2;
+}
+
+enum FrameBound {
+  FRAME_BOUND_UNSPECIFIED = 0;
+  FRAME_BOUND_UNBOUNDED_PRECEDING = 1;
+  FRAME_BOUND_CURRENT_ROW = 2;
+  FRAME_BOUND_UNBOUNDED_FOLLOWING = 3;
+}
+
+message AggregateNode {
+  uint32 input = 1;
+  repeated uint64 group_by = 2;
+  repeated AggregateExpr aggregates = 3;
+  repeated bool distinct = 4;
+  AggregateOutput output = 5;
+}
+
+enum AggregateOutput {
+  AGGREGATE_OUTPUT_UNSPECIFIED = 0;
+  AGGREGATE_OUTPUT_FINAL = 1;
+  AGGREGATE_OUTPUT_PARTIAL = 2;
+}
+
+enum AggregateFunction {
+  AGGREGATE_FUNCTION_UNSPECIFIED = 0;
+  AGGREGATE_FUNCTION_COUNT = 1;
+  AGGREGATE_FUNCTION_SUM = 2;
+  AGGREGATE_FUNCTION_AVG = 3;
+  AGGREGATE_FUNCTION_MIN = 4;
+  AGGREGATE_FUNCTION_MAX = 5;
+  AGGREGATE_FUNCTION_FIRST = 6;
+  AGGREGATE_FUNCTION_LAST = 7;
+}
+
+enum AggregateInput {
+  AGGREGATE_INPUT_UNSPECIFIED = 0;
+  AGGREGATE_INPUT_RAW = 1;
+  AGGREGATE_INPUT_STATE = 2;
+}
+
+message AggregateExpr {
+  AggregateFunction function = 1;
+  // `first` / `last` only.
+  bool ignore_nulls = 2;
+  repeated uint64 args = 3;
+  AggregateInput input = 4;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes arg_type = 5;
+  string name = 6;
+}
+
+enum JoinType {
+  JOIN_TYPE_UNSPECIFIED = 0;
+  JOIN_TYPE_INNER = 1;
+  JOIN_TYPE_LEFT_OUTER = 2;
+  JOIN_TYPE_LEFT_SEMI = 3;
+  JOIN_TYPE_LEFT_ANTI = 4;
+  JOIN_TYPE_NULL_AWARE_ANTI = 5;
+}
+
+message Residual {
+  repeated uint64 layout = 1;
+  repeated uint32 conjuncts = 2;
+}
+
+message HashJoinNode {
+  uint32 probe = 1;
+  uint32 build = 2;
+  JoinType join_type = 3;
+  repeated uint64 probe_keys = 4;
+  repeated uint64 build_keys = 5;
+  repeated bool null_safe = 6;
+  optional Residual residual = 7;
+  repeated JoinFilter runtime_filters = 8;
+  // v2: how matching rows meet in one task. v1 bytes leave this as
+  // `JOIN_DISTRIBUTION_UNSPECIFIED`, which decodes as broadcast.
+  JoinDistribution distribution = 9;
+}
+
+enum JoinDistribution {
+  JOIN_DISTRIBUTION_UNSPECIFIED = 0;
+  JOIN_DISTRIBUTION_BROADCAST = 1;
+  JOIN_DISTRIBUTION_PARTITIONED = 2;
+}
+
+message NestedLoopJoinNode {
+  uint32 probe = 1;
+  uint32 build = 2;
+  JoinType join_type = 3;
+  optional Residual residual = 4;
+}
+
+message JoinFilter {
+  uint64 id = 1;
+  uint64 key = 2;
+  KeyFilterOptions options = 3;
+}
+
+message KeyFilterOptions {
+  uint64 max_values = 1;
+  uint64 exact_max_values = 2;
+  bool bloom = 3;
+  uint64 bloom_max_items = 4;
+  uint64 bloom_max_bytes = 5;
+  double bloom_fpp = 6;
+  double bloom_max_fpp = 7;
+}
+
+message UnionNode {
+  repeated uint32 inputs = 1;
+}
+
+message WriteFilesNode {
+  uint32 input = 1;
+}
+
+// v2: moves rows between partitions.
+message ExchangeNode {
+  uint64 id = 1;
+  uint32 input = 2;
+  Partitioning partitioning = 3;
+}
+
+message Partitioning {
+  oneof kind {
+    HashPartitioning hash = 1;
+    Empty single = 2;
+    Empty broadcast = 3;
+    Empty round_robin = 4;
+    RangePartitioning range = 5;
+  }
+}
+
+message HashPartitioning {
+  repeated uint64 keys = 1;
+}
+
+message RangePartitioning {
+  repeated SortKey keys = 1;
+}
+
+message ScanNode {
+  uint64 id = 1;
+  ReadSource source = 2;
+  repeated BoundColumn output = 3;
+  optional sint64 version = 4;
+  repeated ColumnPath projection = 5;
+  optional ScanFilter filter = 6;
+  repeated ScanRuntimeFilter runtime_filters = 7;
+  RowStageSettings row_stage = 8;
+}
+
+message ColumnPath {
+  repeated string parts = 1;
+}
+
+message ScanFilter {
+  repeated uint64 layout = 1;
+  uint32 predicate = 2;
+  bool exact = 3;
+}
+
+message ScanRuntimeFilter {
+  uint64 id = 1;
+  ColumnPath column = 2;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes key_type = 3;
+}
+
+message RowStageSettings {
+  uint64 min_rows = 1;
+  double max_pass_rate = 2;
+}
+
+message ReadSource {
+  oneof kind {
+    TableSource table = 1;
+    FilesSource files = 2;
+  }
+}
+
+message TableSource {
+  repeated string name = 1;
+  map<string, OptionValue> options = 2;
+}
+
+message FilesSource {
+  string format = 1;
+  repeated OptionValue paths = 2;
+  map<string, OptionValue> options = 3;
+}
+
+// A data source option: plain text or a reference to a secret. An inline
+// secret or a URL carrying credentials is not encodable (ADR 0038).
+message OptionValue {
+  oneof kind {
+    string plain = 1;
+    SecretRef secret = 2;
+  }
+}
+
+message SecretRef {
+  string scope = 1;
+  string key = 2;
+}
+
+message Origin {
+  optional sint64 plan_id = 1;
+  optional SqlSpan sql = 2;
+}
+
+message SqlSpan {
+  uint32 source = 1;
+  uint32 start = 2;
+  uint32 end = 3;
+}
+
+message BoundColumn {
+  uint64 id = 1;
+  string name = 2;
+  DataType data_type = 3;
+  bool nullable = 4;
+}
+
+// A resolved expression.
+message Expr {
+  optional Origin origin = 1;
+  oneof kind {
+    Literal literal = 2;
+    BoundColumn column = 3;
+    BoundColumn outer_column = 4;
+    Function function = 5;
+    Cast cast = 6;
+    AliasExpr alias = 7;
+  }
+}
+
+message AliasExpr {
+  uint32 expr = 1;
+  BoundColumn output = 2;
+}
+
+enum CastMode {
+  CAST_MODE_UNSPECIFIED = 0;
+  CAST_MODE_LEGACY = 1;
+  CAST_MODE_ANSI = 2;
+  CAST_MODE_TRY = 3;
+}
+
+message Cast {
+  uint32 expr = 1;
+  DataType to = 2;
+  CastMode mode = 3;
+}
+
+enum FunctionKind {
+  FUNCTION_KIND_UNSPECIFIED = 0;
+  FUNCTION_KIND_SCALAR = 1;
+  FUNCTION_KIND_AGGREGATE = 2;
+  FUNCTION_KIND_WINDOW = 3;
+  FUNCTION_KIND_GENERATOR = 4;
+}
+
+message Function {
+  // A canonical operator name (`==`, `and`, ...), or a registry function.
+  oneof id {
+    string builtin = 1;
+    RegistryFunction registry = 2;
+  }
+  FunctionKind kind = 3;
+  repeated uint32 args = 4;
+  bool distinct = 5;
+  optional uint32 filter = 6;
+  DataType data_type = 7;
+  bool nullable = 8;
+  bool deterministic = 9;
+}
+
+// A function of the registry, by name and registry id. A worker must run
+// the registry version the coordinator planned with.
+message RegistryFunction {
+  string name = 1;
+  uint32 id = 2;
+}
+
+// A Spark type.
+message DataType {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_NULL = 1;
+    KIND_BOOLEAN = 2;
+    KIND_BYTE = 3;
+    KIND_SHORT = 4;
+    KIND_INTEGER = 5;
+    KIND_LONG = 6;
+    KIND_FLOAT = 7;
+    KIND_DOUBLE = 8;
+    KIND_STRING = 9;
+    KIND_BINARY = 10;
+    KIND_DECIMAL = 11;
+    KIND_DATE = 12;
+    KIND_TIMESTAMP = 13;
+    KIND_TIMESTAMP_NTZ = 14;
+  }
+  Kind kind = 1;
+  // `KIND_DECIMAL` only.
+  uint32 precision = 2;
+  uint32 scale = 3;
+}
+
+enum YearMonthField {
+  YEAR_MONTH_FIELD_UNSPECIFIED = 0;
+  YEAR_MONTH_FIELD_YEAR = 1;
+  YEAR_MONTH_FIELD_MONTH = 2;
+}
+
+enum DayTimeField {
+  DAY_TIME_FIELD_UNSPECIFIED = 0;
+  DAY_TIME_FIELD_DAY = 1;
+  DAY_TIME_FIELD_HOUR = 2;
+  DAY_TIME_FIELD_MINUTE = 3;
+  DAY_TIME_FIELD_SECOND = 4;
+}
+
+message Literal {
+  oneof kind {
+    NullLiteral null = 1;
+    bool boolean = 2;
+    sint32 byte = 3;
+    sint32 short = 4;
+    sint32 integer = 5;
+    sint64 long = 6;
+    float float = 7;
+    double double = 8;
+    DecimalLiteral decimal = 9;
+    string string = 10;
+    bytes binary = 11;
+    sint32 date = 12;
+    sint64 timestamp = 13;
+    sint64 timestamp_ntz = 14;
+    YearMonthLiteral year_month = 15;
+    DayTimeLiteral day_time = 16;
+  }
+}
+
+message NullLiteral {
+  optional DataType data_type = 1;
+}
+
+message DecimalLiteral {
+  // The unscaled value, 16 bytes little-endian two's complement.
+  bytes unscaled = 1;
+  DataType data_type = 2;
+}
+
+message YearMonthLiteral {
+  sint32 months = 1;
+  YearMonthField start = 2;
+  YearMonthField end = 3;
+}
+
+message DayTimeLiteral {
+  sint64 micros = 1;
+  DayTimeField start = 2;
+  DayTimeField end = 3;
+}

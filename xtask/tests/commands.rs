@@ -66,6 +66,33 @@ fn init_repo(name: &str) -> Tmp {
 }
 
 #[test]
+fn setup_installs_all_three_hooks() {
+    let dir = tmp("setup");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    for hook in ["pre-commit", "pre-push", "commit-msg"] {
+        write(&dir, &format!(".githooks/{hook}"), "#!/bin/sh\n");
+    }
+    xtask::policy::run_setup(&dir).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for hook in ["pre-commit", "pre-push", "commit-msg"] {
+            let mode = std::fs::metadata(dir.join(".githooks").join(hook))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert!(mode & 0o111 != 0, "{hook} is not executable");
+        }
+    }
+    let out = Command::new("git")
+        .args(["config", "core.hooksPath"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), ".githooks");
+}
+
+#[test]
 fn workflow_lint_fails_on_pull_request_target() {
     let dir = tmp("wf");
     write(&dir, "bad.yml", "on:\n  pull_request_target:\njobs: {}\n");

@@ -71,6 +71,7 @@
 //! | `PlanNode::Join` | U, R | Q2, Q3, Q5, Q7-Q21 | `join` |
 //! | `PlanNode::Sort` | U, R | Q1-Q5, Q7-Q13, Q15, Q16, Q18, Q20-Q22 | `orderBy`, `sort` |
 //! | `PlanNode::Limit` | U, R | Q2, Q3, Q10, Q18, Q21 | `limit` |
+//! | `PlanNode::Offset` | U, R | - | `offset` |
 //! | `PlanNode::SubqueryAlias` | U, R | Q7-Q9, Q13, Q21, Q22 | `df.alias` |
 //! | `PlanNode::WithCte` | U, R | Q15 | - |
 //! | `PlanNode::CteRef` | R | - | - |
@@ -82,6 +83,7 @@
 //! | `PlanNode::SetOp` | U | - | - |
 //! | `PlanNode::ReplicateRows` | R | - | - |
 //! | `PlanNode::Expand` | R | - | - |
+//! | `PlanNode::Window` | R | - | - |
 //! | `ExprNode::Column` | U | all | `col`, `df["a"]` |
 //! | `ExprNode::Literal` | U, R | all | `lit` |
 //! | `ExprNode::Star` | U | Q1, Q4, Q13, Q21, Q22 | `select("*")` |
@@ -89,15 +91,16 @@
 //! | `ExprNode::Cast` | U, R | Q1, Q3-Q8, Q10, Q12, Q14, Q15, Q20 | `cast` |
 //! | `ExprNode::Alias` | U | Q1, Q3-Q17, Q19, Q21, Q22 | `col.alias` |
 //! | `ExprNode::Subquery` | U, R | Q2, Q4, Q11, Q15-Q18, Q20-Q22 | - |
+//! | `ExprNode::Window` | U, R | - | - |
 //! | `ResolvedExpr::Column` | R | - | - |
 //! | `ResolvedExpr::OuterColumn` | R | - | - |
 //! | `ResolvedExpr::Function` | R | - | - |
 //! | `ResolvedExpr::Alias` | R | - | - |
 //!
 //! Not in v1 (spec 13 §9; added with the features that need them):
-//! `Window`, `Generate`, `Repartition`, `Hint`, `Pivot`, `Command`,
+//! `Generate`, `Repartition`, `Hint`, `Pivot`, `Command`,
 //! `Extension`, `ToDF`, `Offset`, `Deduplicate`, `LocalRelation` and `Range`
-//! relations; lambda, window, extract-value and extension expressions.
+//! relations; lambda, extract-value and extension expressions.
 
 #![forbid(unsafe_code)]
 
@@ -116,8 +119,9 @@ mod walk;
 
 pub use encode::{ENCODING_VERSION, StructuralHash};
 pub use expr::{
-    AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, NullOrdering,
-    ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star, SubqueryKind,
+    AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall,
+    NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star, SubqueryKind,
+    WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
 };
 pub use function::{Builtin, FunctionId, FunctionKind};
 pub use literal::{DayTimeField, Literal, YearMonthField};

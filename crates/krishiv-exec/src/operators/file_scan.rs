@@ -202,10 +202,24 @@ pub struct FileScanMetrics {
     pub rows: u64,
     /// Bytes pushed into decoders.
     pub bytes: u64,
+    /// Bytes of decode working sets taken without a reservation: the pool
+    /// was full and nothing could be spilled for them
+    /// (`krishiv_io::ScanGate`).
+    pub decode_overcommit_bytes: u64,
 }
 
 impl FileScanMetrics {
-    fn add(&mut self, m: &ScanUnitMetrics) {
+    /// The `EXPLAIN ANALYZE` counters: the decode over-commit, when there
+    /// was any.
+    fn extra(&self) -> crate::metrics::ExtraMetrics {
+        if self.decode_overcommit_bytes == 0 {
+            return Vec::new();
+        }
+        crate::metrics::counts([("decode_overcommit_bytes", self.decode_overcommit_bytes)])
+    }
+
+    fn add(&mut self, m: &ScanUnitMetrics, overcommitted: u64) {
+        self.decode_overcommit_bytes += overcommitted;
         self.splits += 1;
         self.units += m.units;
         self.units_pruned += m.units_pruned;
@@ -262,6 +276,8 @@ type MetadataFuture = BoxFuture<'static, krishiv_io::Result<Arc<dyn FileMetadata
 
 struct FileScanLocal {
     consumer: Arc<ConsumerHandle>,
+    /// The query's scan decode gate.
+    gate: Arc<krishiv_io::ScanGate>,
     /// The claimed partition and its next split.
     partition: Option<(usize, usize)>,
     current: Option<Current>,
@@ -368,7 +384,7 @@ impl FileScanSource {
         self.metrics
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .add(&current.stream.metrics());
+            .add(&current.stream.metrics(), current.stream.overcommitted());
     }
 
     /// Starts reading the footer of the file after `next` in `partition`
@@ -433,7 +449,8 @@ impl FileScanSource {
             local.consumer.reservation(),
             self.scan_options,
         )
-        .await?;
+        .await?
+        .with_gate(Arc::clone(&local.gate));
         local.current = Some(Current {
             stream,
             file,
@@ -716,6 +733,7 @@ impl Source for FileScanSource {
         Ok(Box::new(FileScanLocal {
             rows: super::RowStage::new(&g.request.dynamic, &self.mapped, self.runtime.settings()),
             consumer: Arc::clone(ctx.consumer().consumer()),
+            gate: Arc::clone(ctx.query().scan_gate()),
             partition: None,
             current: None,
             ahead: None,
@@ -738,13 +756,35 @@ impl Source for FileScanSource {
     }
 
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
-        self.runtime.extra_metrics()
+        let mut m = self.runtime.extra_metrics();
+        m.extend(
+            self.metrics
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extra(),
+        );
+        m
     }
 }
 
 #[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
+
+    /// The decode over-commit shows in `EXPLAIN ANALYZE` only when there was
+    /// any, summed over the scan's splits.
+    #[test]
+    fn decode_over_commit_is_reported_when_there_was_any() {
+        let mut m = FileScanMetrics::default();
+        m.add(&ScanUnitMetrics::default(), 0);
+        assert!(m.extra().is_empty());
+        m.add(&ScanUnitMetrics::default(), 3);
+        m.add(&ScanUnitMetrics::default(), 4);
+        let extra = m.extra();
+        assert_eq!(extra.len(), 1);
+        assert_eq!(extra[0].0, "decode_overcommit_bytes");
+        assert_eq!(extra[0].1.value(), Some(7));
+    }
 
     #[test]
     fn spark_paths_and_constants() {

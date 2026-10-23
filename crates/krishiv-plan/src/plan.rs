@@ -141,6 +141,14 @@ pub enum PlanNode {
         /// Row count.
         limit: Arc<Expr>,
     },
+    /// `OFFSET n`, skipping the first `n` rows; `n` is a foldable expression or a
+    /// parameter. `LIMIT l OFFSET n` is a [`PlanNode::Limit`] over this node.
+    Offset {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// Number of rows to skip.
+        offset: Arc<Expr>,
+    },
     /// `input AS alias (columns)`, a derived table or `df.alias(...)`.
     SubqueryAlias {
         /// Input.
@@ -232,6 +240,22 @@ pub enum PlanNode {
         /// times on the right appears `min(m, n)` times (intersect) or
         /// `max(m - n, 0)` times (except).
         all: bool,
+    },
+    /// Window functions over `input` (Spark's `Window`): every input row,
+    /// with one column per window expression after the input's. Resolved
+    /// plans only; the analyzer makes one node per distinct partitioning
+    /// and ordering (Spark's `ExtractWindowExpressions`).
+    Window {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The window expressions, each a [`crate::ResolvedExpr::Alias`] of
+        /// an [`crate::ExprNode::Window`] whose partitioning and ordering
+        /// are this node's.
+        exprs: Vec<Arc<Expr>>,
+        /// The partitioning expressions.
+        partition_by: Vec<Arc<Expr>>,
+        /// The ordering within a partition.
+        order_by: Vec<SortOrder>,
     },
     /// Each input row `count` times; a row whose count is NULL or below 1
     /// is dropped (Spark's `Generate(ReplicateRows)` in its rewrite of
@@ -537,6 +561,15 @@ impl LogicalPlan {
         })
     }
 
+    /// `self OFFSET offset`.
+    #[must_use]
+    pub fn offset(self, offset: impl Into<Arc<Expr>>) -> Self {
+        Self::new(PlanNode::Offset {
+            input: Arc::new(self),
+            offset: offset.into(),
+        })
+    }
+
     /// `(self) AS alias`.
     #[must_use]
     pub fn alias(self, alias: impl Into<String>) -> Self {
@@ -562,12 +595,14 @@ impl LogicalPlan {
             | PlanNode::Aggregate { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
+            | PlanNode::Offset { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
+            | PlanNode::Window { input, .. }
             | PlanNode::ReplicateRows { input, .. } => f(input),
             PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
                 f(left);
@@ -594,12 +629,14 @@ impl LogicalPlan {
             | PlanNode::Aggregate { input, .. }
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
+            | PlanNode::Offset { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
+            | PlanNode::Window { input, .. }
             | PlanNode::ReplicateRows { input, .. } => f(input),
             PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
                 f(left);
@@ -638,6 +675,7 @@ impl LogicalPlan {
             PlanNode::WithColumns { columns, .. } => columns.iter().for_each(|(_, e)| f(e)),
             PlanNode::Filter { predicate: e, .. }
             | PlanNode::Limit { limit: e, .. }
+            | PlanNode::Offset { offset: e, .. }
             | PlanNode::ReplicateRows { count: e, .. } => f(e),
             PlanNode::Aggregate {
                 grouping,
@@ -660,6 +698,15 @@ impl LogicalPlan {
             },
             PlanNode::Sort { order, .. } => order.iter().for_each(|o| f(&o.expr)),
             PlanNode::Expand { projections, .. } => projections.iter().flatten().for_each(f),
+            PlanNode::Window {
+                exprs,
+                partition_by,
+                order_by,
+                ..
+            } => {
+                exprs.iter().chain(partition_by).for_each(&mut *f);
+                order_by.iter().for_each(|o| f(&o.expr));
+            }
         }
     }
 
@@ -688,6 +735,7 @@ impl LogicalPlan {
             }
             PlanNode::Filter { predicate: e, .. }
             | PlanNode::Limit { limit: e, .. }
+            | PlanNode::Offset { offset: e, .. }
             | PlanNode::ReplicateRows { count: e, .. } => f(e),
             PlanNode::Aggregate {
                 grouping,
@@ -713,6 +761,15 @@ impl LogicalPlan {
             PlanNode::Expand { projections, .. } => {
                 projections.iter_mut().flatten().for_each(f);
             }
+            PlanNode::Window {
+                exprs,
+                partition_by,
+                order_by,
+                ..
+            } => {
+                exprs.iter_mut().chain(partition_by).for_each(&mut *f);
+                order_by.iter_mut().for_each(|o| f(&mut o.expr));
+            }
         }
     }
 
@@ -732,6 +789,7 @@ impl LogicalPlan {
                 PlanNode::Filter { input, .. }
                 | PlanNode::Sort { input, .. }
                 | PlanNode::Limit { input, .. }
+                | PlanNode::Offset { input, .. }
                 | PlanNode::WithCte { input, .. }
                 | PlanNode::JoinHint { input, .. }
                 | PlanNode::ReplicateRows { input, .. } => p = input,
@@ -796,6 +854,19 @@ impl LogicalPlan {
                             _ => None,
                         })
                         .collect();
+                }
+                PlanNode::Window { input, exprs, .. } => {
+                    let mut out = input.resolved_output()?;
+                    for e in exprs {
+                        match &e.node {
+                            crate::ExprNode::Resolved(crate::ResolvedExpr::Alias {
+                                output,
+                                ..
+                            }) => out.push(output.clone()),
+                            _ => return None,
+                        }
+                    }
+                    return Some(out);
                 }
                 PlanNode::Join {
                     left, right, kind, ..

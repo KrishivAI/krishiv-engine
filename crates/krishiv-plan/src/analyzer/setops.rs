@@ -442,6 +442,7 @@ impl Resolver<'_> {
                     nullable: a.col.nullable,
                 },
                 agg: None,
+                win: None,
                 outer: None,
                 lateral: Vec::new(),
                 shown: None,
