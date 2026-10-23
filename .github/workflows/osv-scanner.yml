@@ -50,7 +50,7 @@ jobs:
   scan-pr-merge-group:
     name: scan-pr
     if: github.event_name == 'merge_group'
-    uses: ./.github/workflows/merge-group-noop.yml
+    uses: $/.github/workflows/merge-group-noop.yml
     permissions: {}
 
   scan:
