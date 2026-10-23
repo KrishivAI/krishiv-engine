@@ -178,6 +178,8 @@ fn ci_policy_wiring() {
         "name: budgets-current",
         // The commit the measurement was built on, for the baseline selection.
         "git rev-parse HEAD^1 > target/measured-base-sha",
+        // HEAD^1 needs the parent: the default depth-1 checkout has none.
+        "fetch-depth: 2",
         // Main is measured by main-measure.yml, so ci.yml builds no wheels there.
         "github.event_name != 'push'",
     ] {
@@ -317,6 +319,7 @@ fn ci_policy_wiring() {
         "'wheel-sizes-main' || 'wheel-sizes'",
         "retention-days: ${{ github.event_name == 'push' && 90 || 14 }}",
         "git rev-parse HEAD^1 > \"$RUNNER_TEMP/wheel-sizes/measured-base-sha\"",
+        "fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}",
         // Nightly and manual runs are gated on main's measurement; a push
         // only reports the drift.
         "WORKFLOW: main-measure.yml",
