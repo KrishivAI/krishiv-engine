@@ -148,12 +148,17 @@ async fn exec_with(
 /// manager removes its session, then the directory itself goes (also when
 /// the test panics).
 struct TestSpill {
-    _manager: SpillManager,
+    manager: SpillManager,
     _dir: tempfile::TempDir,
 }
 
 /// A spill directory for one test.
 fn spill_dir() -> (TestSpill, SpillScope) {
+    spill_dir_capped(SpillConfig::default().max_bytes)
+}
+
+/// [`spill_dir`] holding at most `max_bytes` of spill files.
+fn spill_dir_capped(max_bytes: u64) -> (TestSpill, SpillScope) {
     let dir = tempfile::Builder::new()
         .prefix("krishiv-agg-")
         .tempdir()
@@ -162,17 +167,12 @@ fn spill_dir() -> (TestSpill, SpillScope) {
         // A path inside the temporary directory: the manager creates it
         // private (0700), whatever the umask.
         dir: dir.path().join("spill"),
+        max_bytes,
         ..SpillConfig::default()
     })
     .unwrap();
     let scope = manager.scope().unwrap();
-    (
-        TestSpill {
-            _manager: manager,
-            _dir: dir,
-        },
-        scope,
-    )
+    (TestSpill { manager, _dir: dir }, scope)
 }
 
 fn cell(a: &ArrayRef, i: usize) -> String {
@@ -2130,4 +2130,173 @@ async fn row_layout_metrics() {
             .any(|n| n.starts_with("row_") || n == "table_layout"),
         "{names:?}"
     );
+}
+
+/// The plan of the unread-result tests: `sum(x) group by k` over `groups`
+/// keys, read into a breaker that cannot spill (as a join build or a
+/// result buffer would be in its place).
+fn unread_plan(groups: i64, spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
+    unread_plan_with(groups, spill, None)
+}
+
+/// [`unread_plan`] whose result's spill waits at `gate`.
+fn unread_plan_with(
+    groups: i64,
+    spill: Option<SpillScope>,
+    gate: Option<Arc<crate::testing::BlockingGate>>,
+) -> Arc<dyn ExecNode> {
+    let s = schema(vec![("k", DataType::Int64), ("x", DataType::Int64)]);
+    let batches = (0..groups)
+        .step_by(1024)
+        .map(|start| {
+            let keys: Vec<Option<i64>> = (start..(start + 1024).min(groups)).map(Some).collect();
+            vec![i64s(&keys), i64s(&keys)]
+        })
+        .collect();
+    let mut sp = spec(&s, vec![0], vec![agg(Sum, 1, &s)]);
+    sp.spill = spill;
+    let agg = match gate {
+        Some(gate) => HashAggregate::with_output_gate(sp, gate).unwrap(),
+        None => HashAggregate::new(sp).unwrap(),
+    };
+    Arc::new(crate::testing::Break(
+        AggregateNode::new(scan(&s, batches), agg),
+        crate::testing::Buffer::new(false, None),
+        false,
+    ))
+}
+
+/// An in-memory result is spillable until read. Its reader feeds a
+/// breaker that cannot spill; the memory that breaker needs comes from
+/// spilling the result's unread chunks. Before, the result held its memory
+/// unspillable until the query ended: a limit at which the aggregate fits
+/// failed or passed depending on how much of the result had to coexist
+/// with the reader's state (1.8 MB failed while 1.6 MB, where the aggregate
+/// spilled while building, passed). Now every limit in the range completes,
+/// with each layout and with one or several readers.
+#[tokio::test]
+async fn an_unread_result_spills_for_its_reader() {
+    let (_d, scope) = spill_dir();
+    let groups = 20_000;
+    let free = Opts {
+        slots: 1,
+        ..Opts::default()
+    };
+    let (want, _) = exec_with(unread_plan(groups, None), free, false)
+        .await
+        .unwrap();
+    let want = rows(&want);
+    assert_eq!(want.len(), 20_000);
+    for slots in [1, 3] {
+        for limit in (5..=10).map(|fifth| fifth * 200_000) {
+            for layout in [false, true] {
+                let o = Opts {
+                    slots,
+                    limit,
+                    ..Opts::default()
+                };
+                let plan = unread_plan(groups, Some(scope.clone()));
+                let r = exec_with(plan, o, layout).await;
+                let (got, m) = r.unwrap_or_else(|e| panic!("{slots} slots, {limit} B: {e}"));
+                assert_eq!(rows(&got), want, "{slots} slots, {limit} B");
+                if slots == 1 && limit == 1_800_000 && !layout {
+                    // The aggregate finished in memory; only its result
+                    // was written to disk, by its own consumer.
+                    assert_eq!(extra(&m, "HashAggregate", "spill_runs"), 0);
+                    let written: u64 = m
+                        .operators
+                        .values()
+                        .filter(|e| e.name == "HashAggregate")
+                        .map(|e| e.metrics.spill_write_bytes)
+                        .sum();
+                    assert!(written > 0, "{m:?}");
+                }
+            }
+        }
+    }
+}
+
+/// A query cancelled while its aggregate's result is being spilled ends
+/// only once the spill has let go of the result's memory and its files.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_during_a_result_spill_releases_everything() {
+    let (spill, scope) = spill_dir();
+    let gate = crate::testing::BlockingGate::new();
+    let plan = unread_plan_with(20_000, Some(scope), Some(Arc::clone(&gate)));
+    // Threads of their own: the spill blocks at the gate on the blocking
+    // pool while the query is cancelled.
+    let executor = TokioExecutor::new(&crate::ExecutorConfig {
+        compute_threads: 1,
+        io_threads: 1,
+        blocking_threads: 1,
+    })
+    .unwrap();
+    let runner = QueryRunner::new(executor);
+    let root = pool(1_800_000);
+    let q = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig {
+            seed: Some(7),
+            agg_row_layout: false,
+            ..ExecConfig::default()
+        },
+        root.child("q", Some(1_800_000)),
+    );
+    let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
+    let drained = tokio::spawn(async move {
+        let mut rows = 0;
+        while let Some(b) = stream.next().await {
+            rows += b.map_or(0, |b| b.num_rows());
+        }
+        rows
+    });
+    while !gate.reached() {
+        tokio::task::yield_now().await;
+    }
+    q.cancel();
+    // What the pool holds the moment the query reports it has ended.
+    let (fq, froot) = (Arc::clone(&q), Arc::clone(&root));
+    let at_end = tokio::spawn(async move {
+        fq.finished().await;
+        froot.reserved()
+    });
+    // The gate stays shut while the query winds down: the query must not
+    // end while the spill job still holds the result's memory. (The wait
+    // is bounded by count; the query ends here only if it does not wait
+    // for the spill.)
+    for _ in 0..200 {
+        if at_end.is_finished() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    gate.open();
+    // Nothing the spill held outlives the query.
+    assert_eq!(at_end.await.unwrap(), 0, "memory left when the query ended");
+    assert_eq!(root.reserved(), 0, "memory left after the query");
+    assert_eq!(spill.manager.used_bytes(), 0, "spill files left");
+    assert!(drained.await.unwrap() < 20_000);
+    assert_eq!(
+        q.error().map(|e| e.error_class()),
+        Some(ErrorClass::OperationCanceled)
+    );
+}
+
+/// A spill of an aggregate's result that fails (its spill directory is
+/// full) fails the query with that error; nothing is left behind.
+#[tokio::test]
+async fn a_failed_result_spill_fails_the_query() {
+    let (spill, scope) = spill_dir_capped(4096);
+    let o = Opts {
+        slots: 1,
+        limit: 1_800_000,
+        ..Opts::default()
+    };
+    let r = exec_with(unread_plan(20_000, Some(scope)), o, false).await;
+    let e = r
+        .err()
+        .unwrap_or_else(|| unreachable!("the result could not spill"));
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillCapExceeded, "{e}");
+    assert_eq!(spill.manager.used_bytes(), 0, "spill files left");
 }

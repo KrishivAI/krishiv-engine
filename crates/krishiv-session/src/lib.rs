@@ -43,6 +43,7 @@
 
 mod catalog;
 mod column;
+mod command;
 mod conf;
 mod dataframe;
 mod explain;

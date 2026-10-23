@@ -240,11 +240,14 @@ fn temporary_tables_are_listed_replaced_and_dropped() {
         class(s.register_batches("t", other, vec![batch])),
         ErrorClass::InternalError
     );
-    // A temporary view of anything but a read by path is not supported yet.
+    // A temporary view of a missing table fails with its error.
     let e = block_on(s.table("missing").create_or_replace_temp_view("v"));
     assert_eq!(class(e), ErrorClass::TableOrViewNotFound);
-    let e = block_on(session().table("people").create_or_replace_temp_view("v"));
-    assert_eq!(class(e), ErrorClass::KrishivUnsupportedFeature);
+    // A view over any DataFrame reads through its plan.
+    let s = session();
+    block_on(s.table("people").create_or_replace_temp_view("v")).unwrap();
+    assert_eq!(s.temp_table_names(), ["people", "v"]);
+    assert_eq!(block_on(s.table("v").count()).unwrap(), 3);
 }
 
 /// Writes a Parquet file with `id INT NOT NULL`.
@@ -344,6 +347,34 @@ fn file_views_keep_the_schema_they_were_created_with() {
     // A read by path lists the files again: it sees the new column.
     let read = s.read().parquet([root.as_str()]);
     assert_eq!(names(block_on(read.schema()).unwrap()), ["id", "name"]);
+}
+
+#[test]
+fn views_over_file_views_survive_replacement_and_removal() {
+    // A DataFrame view over a file-backed temporary view snapshots it:
+    // replacing or dropping the file view leaves the snapshot readable.
+    let dir = tempfile::tempdir().unwrap();
+    parquet_file(&dir.path().join("part-0.parquet"));
+    let root = dir.path().to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    block_on(
+        s.read()
+            .parquet([root.as_str()])
+            .create_or_replace_temp_view("fv"),
+    )
+    .unwrap();
+    block_on(s.table("fv").create_or_replace_temp_view("v")).unwrap();
+    let ids_of_v =
+        || ids(&block_on(block_on(s.sql("SELECT * FROM v")).unwrap().collect()).unwrap());
+    assert_eq!(ids_of_v(), [1, 2]);
+    // Replacing the file view with a memory table: the snapshot still
+    // reads the files.
+    let (schema, batch) = people();
+    s.register_batches("fv", schema, vec![batch]).unwrap();
+    assert_eq!(ids_of_v(), [1, 2]);
+    // So does dropping it.
+    assert!(s.drop_temp_view("fv"));
+    assert_eq!(ids_of_v(), [1, 2]);
 }
 
 #[test]

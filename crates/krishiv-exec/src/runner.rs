@@ -237,7 +237,8 @@ impl Drop for Finish {
 
 /// Runs the pipelines in dependency waves. The coordinator owns every
 /// breaker's state: a finalized sink's global state is kept here and handed
-/// to the pipeline that reads it, and all of it is dropped when this
+/// to the pipelines that read it, dropped (with the memory it holds) once
+/// the last of them has ended, and whatever is left is dropped when this
 /// returns, on success, error, cancel or panic alike, so the query's pool is
 /// empty even if the caller still holds the plan.
 async fn run_pipelines(
@@ -254,6 +255,13 @@ async fn run_pipelines(
     let mut todo: Vec<Option<Pipeline>> = pipelines.into_iter().map(Some).collect();
     let mut done = vec![false; todo.len()];
     let mut finalized: HashMap<OperatorId, GlobalState> = HashMap::new();
+    // Pipelines yet to end that read each breaker's state.
+    let mut readers: HashMap<OperatorId, usize> = HashMap::new();
+    for p in todo.iter().flatten() {
+        for input in inputs(p) {
+            *readers.entry(input).or_default() += 1;
+        }
+    }
     while done.iter().any(|d| !d) {
         let ready: Vec<Vec<usize>> = (0..todo.len())
             .filter(|&i| !done[i] && group(i)[0] == i)
@@ -288,11 +296,35 @@ async fn run_pipelines(
         await_drivers(query, &mut handles).await;
         record_extra_metrics(query, &runs);
         query.check_cancelled()?;
-        for run in runs {
+        for run in &runs {
             finalized.insert(run.pipeline.sink.0, Arc::clone(&run.sink_global));
+        }
+        for run in runs {
+            for input in inputs(&run.pipeline) {
+                let left = readers.get_mut(&input).map(|n| {
+                    *n -= 1;
+                    *n
+                });
+                if left == Some(0) {
+                    finalized.remove(&input);
+                }
+            }
         }
     }
     Ok(())
+}
+
+/// The breakers whose finalized state `p` reads, once each.
+fn inputs(p: &Pipeline) -> Vec<OperatorId> {
+    let mut ids: Vec<OperatorId> = p
+        .input
+        .iter()
+        .chain(p.operator_inputs.iter().flatten())
+        .copied()
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 /// Reads the operator-specific counters of each finished pipeline's
