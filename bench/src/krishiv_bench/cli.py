@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
+from . import h2o
 from .adapters import ENGINES
+from .paths import data_root
 from .report import write_report
 from .runner import run_suite
 
@@ -20,18 +23,45 @@ def _set_runner(path: str | None) -> None:
         os.environ["KRISHIV_BENCH_RUNNER"] = path
 
 
+H2O_SUITES = list(h2o.SUITES)
+
+
+def add_h2o_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--size", choices=list(h2o.SIZES), help="db-benchmark data size (h2o-* suites): 1e7 / 1e8 / 1e9 rows"
+    )
+    p.add_argument("--h2o-version", default=h2o.h2o_data.GENERATOR_VERSION, help="generator version directory")
+    p.add_argument("--na", type=int, default=0, help="h2o-*: percent of NAs in the dataset variant")
+    p.add_argument("--sorted", action="store_true", help="h2o-*: the sorted dataset variant")
+    p.add_argument("--k", type=int, default=h2o.DEFAULT_KEYS, help="h2o-groupby: number of id1/id2 groups (K)")
+
+
+def h2o_target(ap: argparse.ArgumentParser, a: argparse.Namespace) -> tuple[Path, str, float]:
+    """(directory, dataset path relative to $KRISHIV_DATA, size in GB) of an h2o-* run."""
+    if not a.size:
+        ap.error(f"--suite {a.suite} needs --size {{{','.join(h2o.SIZES)}}}")
+    try:
+        root = h2o.dataset_root(a.suite, a.size, a.h2o_version, a.k, a.na, a.sorted)
+    except ValueError as e:
+        ap.error(str(e))
+    if getattr(a, "dataset", None):
+        root = root.parent / a.dataset
+    return root, str(root.relative_to(data_root())), h2o.SIZE_GB[a.size]
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="krishiv-bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a suite on an engine, write JSON to $KRISHIV_DATA/results")
     r.add_argument("--engine", required=True, choices=ENGINES)
-    r.add_argument("--suite", default="tpch", choices=["tpch", "tpcds"])
+    r.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", *H2O_SUITES])
+    add_h2o_args(r)
     r.add_argument("--sf", type=float, default=1)
     r.add_argument(
         "--dataset", help="dataset dir name under $KRISHIV_DATA (default per suite; tpch-dbgen = official-answer data)"
     )
-    r.add_argument("--iterations", type=int, default=5)
-    r.add_argument("--warmup", type=int, default=2)
+    r.add_argument("--iterations", type=int, help="timed runs per query (default 5; 3 for h2o-*)")
+    r.add_argument("--warmup", type=int, help="discarded warm-up runs per query (default 2; 1 for h2o-*)")
     r.add_argument("--queries", help="comma list, e.g. q01,q05")
     r.add_argument("--spark-remote", default="sc://127.0.0.1:15002")
     r.add_argument("--duckdb-threads", type=int)
@@ -54,7 +84,8 @@ def main(argv=None) -> None:
         "ab",
         help="build-vs-build A/B: two runner binaries, or one binary with two --conf sets, interleaved ABBA",
     )
-    xb.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    xb.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench", *H2O_SUITES])
+    add_h2o_args(xb)
     xb.add_argument("--sf", type=float, default=10)
     xb.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
     xb.add_argument("--a-runner", required=True, metavar="PATH", help="runner binary of side A (the baseline)")
@@ -72,7 +103,8 @@ def main(argv=None) -> None:
         "reproduce",
         help="reference engines side by side: correctness vs DuckDB, then ours (interleaved) and/or theirs (best of N)",
     )
-    rr.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    rr.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench", *H2O_SUITES])
+    add_h2o_args(rr)
     rr.add_argument("--sf", type=float, default=10)
     rr.add_argument("--dataset", help="dataset dir under $KRISHIV_DATA (default per suite)")
     rr.add_argument(
@@ -91,12 +123,15 @@ def main(argv=None) -> None:
     rr.add_argument("--profile", action="store_true", help="also record Krishiv's per-phase wall times (ours method)")
     rp = sub.add_parser("report", help="Markdown comparison of the newest result per engine")
     rp.add_argument("--suite", default="tpch")
+    add_h2o_args(rp)
     rp.add_argument("--sf", type=float, default=1)
     rp.add_argument("--dataset")
     rp.add_argument("--baseline", default="duckdb")
     rp.add_argument("files", nargs="*", type=Path, help="explicit result JSONs (default: newest per engine)")
     a = ap.parse_args(argv)
     _set_runner(getattr(a, "runner", None))
+    if a.cmd in ("reproduce", "ab") and h2o.is_h2o(a.suite):
+        _, a.dataset, a.sf = h2o_target(ap, a)
     if a.cmd == "reproduce":
         from .reproduce import run_reproduce
 
@@ -156,6 +191,9 @@ def main(argv=None) -> None:
             a.b_sha,
         )
     elif a.cmd == "run":
+        is_h2o = h2o.is_h2o(a.suite)
+        iterations = a.iterations or (3 if is_h2o else 5)
+        warmup = a.warmup if a.warmup is not None else (1 if is_h2o else 2)
         kw = {}
         if a.engine == "spark-connect":
             kw["remote"] = a.spark_remote
@@ -165,12 +203,29 @@ def main(argv=None) -> None:
             kw["memory_limit"] = a.duckdb_memory_limit
             if a.duckdb_threads:
                 kw["threads"] = a.duckdb_threads
+        if is_h2o:
+            root, _, gb = h2o_target(ap, a)
+            f, failed = h2o.run_h2o(
+                a.engine,
+                a.suite,
+                root,
+                gb,
+                iterations,
+                warmup,
+                a.queries.split(",") if a.queries else None,
+                kw,
+                a.timeout or None,
+            )
+            print(f"result: {f}")
+            if failed:
+                sys.exit(f"{failed} question(s) failed the answer-checksum comparison or errored: see {f}")
+            return
         f = run_suite(
             a.engine,
             a.suite,
             a.sf,
-            a.iterations,
-            a.warmup,
+            iterations,
+            warmup,
             a.queries.split(",") if a.queries else None,
             kw,
             a.timeout or None,
@@ -178,6 +233,9 @@ def main(argv=None) -> None:
         )
         print(f"result: {f}")
     else:
+        if h2o.is_h2o(a.suite):
+            root, _, a.sf = h2o_target(ap, a)
+            a.dataset = a.dataset or root.name  # the variant (K, NA %, sorted) is part of the dataset name
         print(f"report: {write_report(a.suite, a.sf, a.baseline, a.files or None, a.dataset)}")
 
 

@@ -101,6 +101,10 @@ def load_queries(suite: str, engine: str, only: list[str] | None = None) -> list
     reason = unsupported_reason(engine, suite)
     if reason:
         raise SystemExit(reason)
+    if suite in ("h2o-groupby", "h2o-join"):  # authored here; the checksum query rides on each Query
+        from . import h2o
+
+        return h2o.load_queries(suite, engine, only)
     if suite == "clickbench":  # licensed CC BY-NC-SA: fetched from a pinned upstream commit, never stored here
         texts = clickbench_queries.load(engine)
         return [Query(q, sql, suite) for q, sql in texts.items() if not only or q in only]
