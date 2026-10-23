@@ -88,6 +88,15 @@ fn offset_skips_then_limit_keeps() {
         ints(&s, "SELECT id FROM t ORDER BY id DESC LIMIT 20 OFFSET 7"),
         [3, 2, 1]
     );
+    // A foldable count folds to a literal the planner reads (Spark 4.2.0:
+    // two rows).
+    assert_eq!(
+        ints(
+            &s,
+            "SELECT id FROM t ORDER BY id LIMIT length('ab') OFFSET 1 + 1"
+        ),
+        [3, 4]
+    );
     // Offset 0 is a no-op; a limit of 0 returns nothing whatever the offset.
     assert_eq!(ints(&s, "SELECT id FROM t ORDER BY id OFFSET 0").len(), 10);
     assert!(ints(&s, "SELECT id FROM t ORDER BY id LIMIT 0 OFFSET 3").is_empty());
