@@ -452,6 +452,53 @@ impl RowLayout {
         !self.views.is_empty()
     }
 
+    /// Bytes of `row`'s values kept in a heap (views longer than inline).
+    pub fn long_bytes(&self, row: &[u8]) -> usize {
+        self.views
+            .iter()
+            .map(|&v| view_len(row, v))
+            .filter(|&len| len > INLINE_MAX)
+            .sum()
+    }
+
+    /// Appends `row` (a row of this layout whose long values are in `heap`)
+    /// to `rows`, and its long values to `dst_heap`, with the appended
+    /// row's views pointing into `dst_heap`: the row moves to another
+    /// table with its own heap.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a row shorter than the stride or a view outside
+    /// `heap` (a corrupt row); nothing is appended then.
+    pub fn push_row(
+        &self,
+        row: &[u8],
+        heap: &[u8],
+        rows: &mut Vec<u8>,
+        dst_heap: &mut Vec<u8>,
+    ) -> Result<()> {
+        let row = row
+            .get(..self.stride)
+            .ok_or_else(|| internal("a key row shorter than the stride".to_owned()))?;
+        let (start, heap_start) = (rows.len(), dst_heap.len());
+        rows.extend_from_slice(row);
+        for &v in &self.views {
+            let len = view_len(row, v);
+            if len <= INLINE_MAX {
+                continue;
+            }
+            let from = usize::try_from(word(row, v + 8)).unwrap_or(usize::MAX);
+            let Some(bytes) = heap.get(from..from.saturating_add(len)) else {
+                rows.truncate(start);
+                dst_heap.truncate(heap_start);
+                return Err(internal("a row view outside its heap".to_owned()));
+            };
+            let at = dst_heap.len() as u64;
+            dst_heap.extend_from_slice(bytes);
+            rows[start + v + 8..start + v + 16].copy_from_slice(&at.to_le_bytes());
+        }
+        Ok(())
+    }
+
     /// Whether row `a` (with heap `a_heap`) has the same key as row `b`
     /// (with heap `b_heap`). Rows must be of this layout.
     #[inline]
@@ -514,6 +561,11 @@ impl EncodedKeys {
     /// The heap long strings of these rows point into.
     pub fn heap(&self) -> &[u8] {
         &self.heap
+    }
+
+    /// Bytes these keys hold (rows, heap and hashes).
+    pub fn bytes(&self) -> usize {
+        self.rows.capacity() + self.heap.capacity() + self.hashes.capacity() * size_of::<u64>()
     }
 
     /// Rows `idx` with self-contained heaps: the row bytes back to back in
@@ -724,7 +776,7 @@ impl EncodedKeys {
             }
             DataType::Utf8View => {
                 let a = array.as_string_view();
-                self.put_views(offset, nulls, strings, |i| a.value(i).as_bytes())
+                self.put_arrow_views(offset, nulls, strings, a.views(), |i| a.value(i).as_bytes())
             }
             DataType::Binary => {
                 let a = array.as_binary::<i32>();
@@ -736,10 +788,47 @@ impl EncodedKeys {
             }
             DataType::BinaryView => {
                 let a = array.as_binary_view();
-                self.put_views(offset, nulls, strings, |i| a.value(i))
+                self.put_arrow_views(offset, nulls, strings, a.views(), |i| a.value(i))
             }
             t => Err(internal(format!("string key expected, got {t}"))),
         }
+    }
+
+    /// [`put_views`](Self::put_views) for Arrow view arrays: a value of at
+    /// most 12 bytes is already a row view (its length, then the bytes
+    /// inline, zero-padded: Arrow validates the padding, and the copy clears
+    /// it again so equal keys always have equal bytes), so it is copied
+    /// without touching the data buffers; longer values go to the heap as
+    /// `put_views` does.
+    fn put_arrow_views<'a>(
+        &mut self,
+        offset: usize,
+        nulls: Option<&NullBuffer>,
+        strings: &foldhash::fast::FixedState,
+        views: &[u128],
+        value: impl Fn(usize) -> &'a [u8],
+    ) -> Result<()> {
+        let stride = self.stride;
+        for (i, &v) in views
+            .iter()
+            .enumerate()
+            .take(self.len)
+            .filter(|&(i, _)| nulls.is_none_or(|n| n.is_valid(i)))
+        {
+            let len = usize::try_from(v & u128::from(u32::MAX)).unwrap_or(usize::MAX);
+            if len > INLINE_MAX {
+                self.put_view(i, offset, strings, value(i))?;
+                continue;
+            }
+            let mut bytes = v.to_le_bytes();
+            bytes[4 + len..].fill(0);
+            if self.hashed {
+                self.hashes[i] = mix(self.hashes[i], strings.hash_one(&bytes[4..4 + len]));
+            }
+            self.rows[i * stride + offset..i * stride + offset + VIEW_BYTES]
+                .copy_from_slice(&bytes);
+        }
+        Ok(())
     }
 
     fn put_views<'a>(
@@ -750,24 +839,35 @@ impl EncodedKeys {
         value: impl Fn(usize) -> &'a [u8],
     ) -> Result<()> {
         for i in (0..self.len).filter(|&i| nulls.is_none_or(|v| v.is_valid(i))) {
-            let bytes = value(i);
-            let len = u32::try_from(bytes.len())
-                .map_err(|_| internal("a key value longer than 4 GiB".to_owned()))?;
-            if self.hashed {
-                self.hashes[i] = mix(self.hashes[i], strings.hash_one(bytes));
-            }
-            let at = self.heap.len();
-            let stride = self.stride;
-            let row = &mut self.rows[i * stride..(i + 1) * stride];
-            let view = &mut row[offset..offset + VIEW_BYTES];
-            view[..4].copy_from_slice(&len.to_le_bytes());
-            if bytes.len() <= INLINE_MAX {
-                view[4..4 + bytes.len()].copy_from_slice(bytes);
-            } else {
-                view[4..8].copy_from_slice(&bytes[..4]);
-                view[8..].copy_from_slice(&(at as u64).to_le_bytes());
-                self.heap.extend_from_slice(bytes);
-            }
+            self.put_view(i, offset, strings, value(i))?;
+        }
+        Ok(())
+    }
+
+    /// Writes value `bytes` as row `i`'s view at `offset`, hashing it.
+    fn put_view(
+        &mut self,
+        i: usize,
+        offset: usize,
+        strings: &foldhash::fast::FixedState,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let len = u32::try_from(bytes.len())
+            .map_err(|_| internal("a key value longer than 4 GiB".to_owned()))?;
+        if self.hashed {
+            self.hashes[i] = mix(self.hashes[i], strings.hash_one(bytes));
+        }
+        let at = self.heap.len();
+        let stride = self.stride;
+        let row = &mut self.rows[i * stride..(i + 1) * stride];
+        let view = &mut row[offset..offset + VIEW_BYTES];
+        view[..4].copy_from_slice(&len.to_le_bytes());
+        if bytes.len() <= INLINE_MAX {
+            view[4..4 + bytes.len()].copy_from_slice(bytes);
+        } else {
+            view[4..8].copy_from_slice(&bytes[..4]);
+            view[8..].copy_from_slice(&(at as u64).to_le_bytes());
+            self.heap.extend_from_slice(bytes);
         }
         Ok(())
     }

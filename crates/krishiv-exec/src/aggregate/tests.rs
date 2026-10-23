@@ -1534,8 +1534,15 @@ fn row_case_batches(data: &[RowCase], keys: i32, batch: usize) -> (SchemaRef, Ve
             let d = Decimal128Array::from_iter(c.iter().map(|r| r.4.map(i128::from)))
                 .with_precision_and_scale(12, 2)
                 .unwrap();
+            // Inline (up to 12 bytes) and heap strings.
             let s = StringViewArray::from_iter(c.iter().map(|r| {
-                r.5.map(|v| format!("value-{:05}-with-a-long-tail", v % 977))
+                r.5.map(|v| {
+                    if v % 3 == 0 {
+                        format!("v{}", v % 977)
+                    } else {
+                        format!("value-{:05}-with-a-long-tail", v % 977)
+                    }
+                })
             }));
             // No -0.0 among the values: `min`/`max` of -0.0 and 0.0 keep
             // whichever comes first, so they depend on the merge order.
@@ -1617,7 +1624,7 @@ proptest! {
             0..4000,
         ),
         keys in 1i32..3000,
-        nkeys in 1usize..=3,
+        nkeys in 1usize..=6,
         batch in 1usize..900,
         slots in 1usize..4,
         mode in 0u8..3,
@@ -1656,7 +1663,16 @@ fn row_case(
 ) -> Result<(), TestCaseError> {
     let (s, batches) = row_case_batches(data, keys, batch);
     let (_m, scope) = spill_dir();
-    let mut sp = spec(&s, (0..nkeys).collect(), row_case_aggs(&s, slots == 1));
+    // Fixed-width keys, then sets with the string column (5).
+    let keys = match nkeys {
+        1 => vec![0],
+        2 => vec![0, 1],
+        3 => vec![0, 1, 2],
+        4 => vec![5],
+        5 => vec![0, 5],
+        _ => vec![5, 1, 2],
+    };
+    let mut sp = spec(&s, keys, row_case_aggs(&s, slots == 1));
     sp.spill = tight.map(|_| scope);
     let plan = |agg: Arc<HashAggregate>, sp: &AggregateSpec| -> Arc<dyn ExecNode> {
         if two {
@@ -1853,9 +1869,11 @@ async fn row_final_phase_parallel_and_spill_fallback() {
     }
 }
 
-/// Every fixed-width key type through the row tables (fixed indexes that
-/// abandon, several drivers, two keys at a time) returns the default
-/// tables' rows, NULL keys included.
+/// Every key type with a row encoding through the row tables (fixed
+/// indexes that abandon, several drivers, up to three keys at a time)
+/// returns the default tables' rows, NULL keys included: fixed widths, and
+/// strings and binaries of every carrier, empty, inline, 12 and 13 bytes
+/// and long (heap), binaries that are not UTF-8.
 #[tokio::test]
 async fn row_layout_key_types_equal_default() {
     use arrow_array::{
@@ -1864,7 +1882,7 @@ async fn row_layout_key_types_equal_default() {
     let n = 5_000usize;
     let i =
         |m: usize| (0..n).map(move |r| (r % 11 != 0).then(|| i64::try_from(r * 7919 % m).unwrap()));
-    let cols: Vec<(&str, ArrayRef)> = vec![
+    let mut cols: Vec<(&str, ArrayRef)> = vec![
         (
             "d128",
             Arc::new(
@@ -1910,8 +1928,55 @@ async fn row_layout_key_types_equal_default() {
             "b",
             Arc::new(BooleanArray::from_iter(i(2).map(|v| v.map(|v| v == 1)))),
         ),
-        ("x", Arc::new(Int64Array::from_iter(i(1_000)))),
     ];
+    // Strings and binaries of every view shape: empty, inline (up to 12
+    // bytes), exactly 12 and 13 bytes, and long; binaries not UTF-8.
+    let text = |m: usize| {
+        i(m).map(|v| {
+            v.map(|v| match v % 5 {
+                0 => String::new(),
+                1 => format!("{v}"),
+                2 => format!("{v:0>12}"),
+                3 => format!("{v:0>13}"),
+                _ => format!("a-long-string-key-{v:0>30}"),
+            })
+        })
+    };
+    let bytes = |m: usize| {
+        text(m).map(|v| {
+            v.map(|v| {
+                let mut b = vec![0xFF_u8, 0x00];
+                b.extend(v.into_bytes());
+                b
+            })
+        })
+    };
+    let strs = |m| text(m).collect::<Vec<_>>();
+    let bins = |m| bytes(m).collect::<Vec<_>>();
+    cols.extend([
+        (
+            "utf8",
+            Arc::new(arrow_array::StringArray::from(strs(200))) as ArrayRef,
+        ),
+        (
+            "large_utf8",
+            Arc::new(arrow_array::LargeStringArray::from(strs(60))),
+        ),
+        ("utf8_view", Arc::new(StringViewArray::from(strs(500)))),
+        (
+            "binary",
+            Arc::new(arrow_array::BinaryArray::from_iter(bins(80))),
+        ),
+        (
+            "binary_view",
+            Arc::new(arrow_array::BinaryViewArray::from_iter(bins(300))),
+        ),
+        (
+            "large_binary",
+            Arc::new(arrow_array::LargeBinaryArray::from_iter(bins(40))),
+        ),
+        ("x", Arc::new(Int64Array::from_iter(i(1_000)))),
+    ]);
     let s: SchemaRef = Arc::new(Schema::new(
         cols.iter()
             .map(|(n, c)| Field::new(*n, c.data_type().clone(), true))
@@ -1946,6 +2011,15 @@ async fn row_layout_key_types_equal_default() {
         vec![6],
         vec![0, 3],
         vec![2, 6],
+        vec![7],
+        vec![8],
+        vec![9],
+        vec![10],
+        vec![11],
+        vec![12],
+        vec![9, 0],
+        vec![7, 6, 11],
+        vec![8, 12, 2],
     ] {
         let sp = spec(&s, keys.clone(), aggs());
         let o = Opts {
@@ -1965,8 +2039,19 @@ async fn row_layout_key_types_equal_default() {
             rowtable::Mode::Append,
         ] {
             let agg = HashAggregate::with_row_mode(sp.clone(), mode).unwrap();
-            let got = exec_with(AggregateNode::new(scan(&s, batches.clone()), agg), o, true).await;
-            assert_eq!(rows(&got.unwrap().0), want, "keys {keys:?} {mode:?}");
+            let (got, m) = exec_with(AggregateNode::new(scan(&s, batches.clone()), agg), o, true)
+                .await
+                .unwrap();
+            assert_eq!(rows(&got), want, "keys {keys:?} {mode:?}");
+            // The row tables ran (no fallback to the default tables).
+            let layout = m
+                .operators
+                .values()
+                .flat_map(|e| e.extra.iter())
+                .any(|(n, v)| {
+                    *n == "table_layout" && *v == crate::metrics::Metric::Text("rows".to_owned())
+                });
+            assert!(layout, "keys {keys:?}: not on the row tables");
         }
     }
 }
@@ -2035,7 +2120,7 @@ proptest! {
             0..4000,
         ),
         keys in 1i32..3000,
-        nkeys in 1usize..=3,
+        nkeys in 1usize..=6,
         batch in 1usize..900,
         slots in 1usize..4,
         mode in 0u8..3,

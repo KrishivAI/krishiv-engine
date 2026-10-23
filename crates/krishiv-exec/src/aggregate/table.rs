@@ -26,8 +26,9 @@ pub(crate) struct AggCore {
     pub(crate) output_schema: SchemaRef,
     /// Each aggregate's columns in the state schema.
     pub(crate) ranges: Vec<Range<usize>>,
-    /// The row layout of the keys, when they are all fixed-width (the
-    /// row tables of `krishiv.exec.agg.rowLayout` need it; others keep
+    /// The row layout of the keys, when every key type has one: fixed
+    /// widths, strings and binaries (the row tables of
+    /// `krishiv.exec.agg.rowLayout` need it; dictionary and nested keys keep
     /// the arrow-row [`KeyTable`]).
     pub(crate) rows: Option<RowLayout>,
 }
@@ -50,8 +51,7 @@ impl AggCore {
         // accepts them), and the row path must do what it does.
         let rows = (!types.is_empty())
             .then(|| RowLayout::new(&types, &vec![true; types.len()]).ok())
-            .flatten()
-            .filter(RowLayout::is_fixed_width);
+            .flatten();
         let state_schema = spec.state_schema()?;
         let output_schema = spec.output_schema()?;
         let mut ranges = Vec::with_capacity(spec.aggregates.len());
