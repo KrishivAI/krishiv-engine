@@ -1215,11 +1215,10 @@ fn create_view_statements() {
         v.span.text("CREATE TEMPORARY VIEW v AS SELECT 1"),
         "CREATE TEMPORARY VIEW v AS SELECT 1"
     );
-    // `TEMP`, `OR REPLACE`, `IF NOT EXISTS` and the column list.
-    let sql =
-        "CREATE OR REPLACE TEMP VIEW IF NOT EXISTS `v` (a COMMENT 'the a', b) AS SELECT 1, 2;";
+    // `TEMP`, `OR REPLACE` and the column list.
+    let sql = "CREATE OR REPLACE TEMP VIEW `v` (a COMMENT 'the a', b) AS SELECT 1, 2;";
     let v = create(sql);
-    assert!(v.or_replace && v.if_not_exists);
+    assert!(v.or_replace && !v.if_not_exists);
     assert_eq!(v.name.value, "v");
     assert_eq!(
         v.columns
@@ -1234,7 +1233,24 @@ fn create_view_statements() {
     assert_eq!(*v.query, ok("SELECT 1, 2"));
     assert_eq!(
         v.span.text(sql),
-        "CREATE OR REPLACE TEMP VIEW IF NOT EXISTS `v` (a COMMENT 'the a', b) AS SELECT 1, 2"
+        "CREATE OR REPLACE TEMP VIEW `v` (a COMMENT 'the a', b) AS SELECT 1, 2"
+    );
+    // `OR REPLACE` with `IF NOT EXISTS` parses and fails with
+    // `CREATE_VIEW_WITH_IF_NOT_EXISTS_AND_REPLACE`, as in Spark, before
+    // the view's query is checked.
+    let e = parse_statement(
+        "CREATE OR REPLACE TEMP VIEW IF NOT EXISTS `v` (a COMMENT 'the a', b) AS SELECT DATE '2020-02-30'",
+        &d,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::CreateViewWithIfNotExistsAndReplace
+    );
+    assert_eq!(e.error.sql_state(), Some("42601"));
+    assert_eq!(
+        e.error.message_parameters(),
+        [("viewName", "`v`".to_owned())]
     );
     // The view's query gets Spark's post-parse checks.
     let e = parse_statement("CREATE TEMP VIEW v AS SELECT DATE '2020-02-30'", &d).unwrap_err();

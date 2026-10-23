@@ -350,6 +350,34 @@ fn file_views_keep_the_schema_they_were_created_with() {
 }
 
 #[test]
+fn views_over_file_views_survive_replacement_and_removal() {
+    // A DataFrame view over a file-backed temporary view snapshots it:
+    // replacing or dropping the file view leaves the snapshot readable.
+    let dir = tempfile::tempdir().unwrap();
+    parquet_file(&dir.path().join("part-0.parquet"));
+    let root = dir.path().to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    block_on(
+        s.read()
+            .parquet([root.as_str()])
+            .create_or_replace_temp_view("fv"),
+    )
+    .unwrap();
+    block_on(s.table("fv").create_or_replace_temp_view("v")).unwrap();
+    let ids_of_v =
+        || ids(&block_on(block_on(s.sql("SELECT * FROM v")).unwrap().collect()).unwrap());
+    assert_eq!(ids_of_v(), [1, 2]);
+    // Replacing the file view with a memory table: the snapshot still
+    // reads the files.
+    let (schema, batch) = people();
+    s.register_batches("fv", schema, vec![batch]).unwrap();
+    assert_eq!(ids_of_v(), [1, 2]);
+    // So does dropping it.
+    assert!(s.drop_temp_view("fv"));
+    assert_eq!(ids_of_v(), [1, 2]);
+}
+
+#[test]
 fn table_names_parse_as_multipart_identifiers() {
     // Spark 4.2.0's `spark.table(name)`: backquotes quote a dot, a doubled
     // backquote is one, and a name that does not parse fails at the first

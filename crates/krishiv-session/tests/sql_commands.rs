@@ -384,6 +384,65 @@ fn create_view_options_replace_errors_and_arity() {
 }
 
 #[test]
+fn create_view_rejects_duplicate_column_names() {
+    // Spark reports a repeated view column with `COLUMN_ALREADY_EXISTS`,
+    // after aliases are applied: both a duplicated alias list and
+    // duplicate output names fail, ignoring case by default.
+    let s = session();
+    let e =
+        block_on(s.sql("CREATE TEMP VIEW v (a, a) AS SELECT id, name FROM people")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::ColumnAlreadyExists);
+    assert_eq!(e.sql_state(), Some("42711"));
+    assert_eq!(e.message_parameters(), [("columnName", "`a`".to_owned())]);
+    assert!(!s.temp_table_names().contains(&"v".to_owned()));
+    let e =
+        block_on(s.sql("CREATE TEMP VIEW w AS SELECT id AS a, name AS a FROM people")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::ColumnAlreadyExists);
+    assert_eq!(e.message_parameters(), [("columnName", "`a`".to_owned())]);
+    assert!(!s.temp_table_names().contains(&"w".to_owned()));
+    // Distinct names create the view.
+    block_on(s.sql("CREATE TEMP VIEW ok (a, b) AS SELECT id, name FROM people")).unwrap();
+    assert_eq!(rows(&s, "SELECT * FROM ok").0, ["a", "b"]);
+    // Case-sensitive sessions distinguish letter case.
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    block_on(s.sql("CREATE TEMP VIEW cs (a, A) AS SELECT id, name FROM people")).unwrap();
+    let e =
+        block_on(s.sql("CREATE TEMP VIEW cs2 (a, a) AS SELECT id, name FROM people")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::ColumnAlreadyExists);
+    s.conf().unset("spark.sql.caseSensitive").unwrap();
+}
+
+#[test]
+fn create_view_with_both_flags_fails_before_the_query_is_checked() {
+    // `OR REPLACE` with `IF NOT EXISTS` fails in the parser, as in Spark,
+    // so the flag error comes before any error in the view's query, and an
+    // `EXPLAIN` of such a statement fails instead of printing plan text.
+    let s = session();
+    let e = block_on(s.sql("CREATE OR REPLACE TEMP VIEW IF NOT EXISTS v AS SELECT 1")).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::CreateViewWithIfNotExistsAndReplace
+    );
+    assert_eq!(e.sql_state(), Some("42601"));
+    let e =
+        block_on(s.sql("CREATE OR REPLACE TEMP VIEW IF NOT EXISTS v AS SELECT DATE '2020-02-30'"))
+            .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::CreateViewWithIfNotExistsAndReplace,
+        "{e}"
+    );
+    let e = block_on(s.sql("EXPLAIN CREATE OR REPLACE TEMP VIEW IF NOT EXISTS v AS SELECT 1"))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::CreateViewWithIfNotExistsAndReplace,
+        "{e}"
+    );
+    assert!(!s.temp_table_names().contains(&"v".to_owned()));
+}
+
+#[test]
 fn drop_view_needs_the_view() {
     let s = session();
     block_on(s.sql("CREATE TEMP VIEW v AS SELECT id FROM people")).unwrap();
@@ -659,25 +718,35 @@ fn cte_bodies_see_preceding_ctes_only() {
 #[test]
 fn explain_runs_commands() {
     let s = session();
-    // `EXPLAIN` of a command prints a plan containing the command.
-    for (sql, fragment) in [
-        ("EXPLAIN SET x=1", "SET x=1"),
-        ("EXPLAIN SET", "SET"),
-        ("EXPLAIN SET -v", "SET -v"),
-        ("EXPLAIN RESET", "RESET"),
-        ("EXPLAIN RESET spark.sql.ansi.enabled", "RESET"),
+    // `EXPLAIN` of a command prints Krishiv's command plan text: the
+    // physical-plan header Spark prints, then the command itself (see
+    // `command_plan`). The text is exact, not a fragment.
+    for (sql, expected) in [
+        ("EXPLAIN SET x=1", "== Physical Plan ==\nSET x=1\n"),
+        ("EXPLAIN SET", "== Physical Plan ==\nSET\n"),
+        ("EXPLAIN SET -v", "== Physical Plan ==\nSET -v\n"),
+        ("EXPLAIN RESET", "== Physical Plan ==\nRESET\n"),
+        (
+            "EXPLAIN RESET spark.sql.ansi.enabled",
+            "== Physical Plan ==\nRESET spark.sql.ansi.enabled\n",
+        ),
         (
             "EXPLAIN CREATE TEMP VIEW v AS SELECT 1",
-            "CREATE TEMPORARY VIEW",
+            "== Physical Plan ==\nCREATE TEMPORARY VIEW `v` AS ...\n",
         ),
-        ("EXPLAIN DROP VIEW v", "DROP VIEW"),
+        (
+            "EXPLAIN DROP VIEW v",
+            "== Physical Plan ==\nDROP VIEW `v`\n",
+        ),
+        (
+            "EXPLAIN SET TIME ZONE 'UTC'",
+            "== Physical Plan ==\nSET TIME ZONE 'UTC'\n",
+        ),
     ] {
         let (_, found) = rows(&s, sql);
         assert_eq!(found.len(), 1, "{sql}");
-        assert!(found[0][0].contains(fragment), "{sql}: {:?}", found[0]);
+        assert_eq!(found[0], [expected.to_owned()], "{sql}");
     }
-    let (_, found) = rows(&s, "EXPLAIN SET TIME ZONE 'UTC'");
-    assert!(found[0][0].contains("SET TIME ZONE"), "{found:?}");
     // `EXPLAIN` of an `EXPLAIN` stays unsupported.
     let e = block_on(s.sql("EXPLAIN EXPLAIN SET x=1")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);

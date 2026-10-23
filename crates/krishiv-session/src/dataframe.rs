@@ -771,19 +771,15 @@ impl DataFrame {
         // a view built from itself reads the old definition, as in Spark.
         // (SQL `CREATE VIEW` keeps the unresolved query instead, so it
         // follows the tables it reads.)
-        let (expanded, pins) = crate::catalog::pin_temp_tables(
+        let (expanded, pins, new_pins) = crate::catalog::pin_temp_tables(
             &self.session.state.catalog,
             analysis.analyzed.plan.root(),
             analysis.env.analysis.conf.case_sensitive,
         )?;
-        self.session.state.catalog.put(
-            name,
-            TempTable::View {
-                plan: expanded,
-                columns,
-                pins,
-            },
-        );
+        self.session
+            .state
+            .catalog
+            .put_view(name, expanded, columns, pins, new_pins);
         Ok(())
     }
 }

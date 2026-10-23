@@ -17,10 +17,10 @@
 //! not a string (an unquoted password value) has its parameters redacted.
 
 use krishiv_common::error::{
-    FailedToParseTooComplex, InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax,
-    InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature,
-    LegacyErrorTemp0053, ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
-    UnclosedBracketedComment,
+    CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, InvalidIdentifier,
+    InvalidResetCommandFormat, InvalidSetSyntax, InvalidStatementOrClause, InvalidTempObjQualifier,
+    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp0053, ParseEmptyStatement,
+    ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
 };
 
 use crate::ast::Span;
@@ -136,6 +136,15 @@ pub(crate) fn invalid_reset_command_format(span: Span) -> ParseError {
 /// `_LEGACY_ERROR_TEMP_0053`: `IF NOT EXISTS` on a temporary view.
 pub(crate) fn temp_view_if_not_exists(span: Span) -> ParseError {
     at(LegacyErrorTemp0053 {}, span)
+}
+
+/// `CREATE_VIEW_WITH_IF_NOT_EXISTS_AND_REPLACE`: `OR REPLACE` with
+/// `IF NOT EXISTS` on a temporary view.
+pub(crate) fn create_view_with_if_not_exists_and_replace(
+    view_name: String,
+    span: Span,
+) -> ParseError {
+    at(CreateViewWithIfNotExistsAndReplace { view_name }, span)
 }
 
 /// `INVALID_TEMP_OBJ_QUALIFIER`: a qualified temporary view name.

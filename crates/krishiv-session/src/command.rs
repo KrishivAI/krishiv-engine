@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use krishiv_common::config::REGISTRY;
 use krishiv_common::error::{
-    CreateViewColumnArityMismatchNotEnoughDataColumns,
+    ColumnAlreadyExists, CreateViewColumnArityMismatchNotEnoughDataColumns,
     CreateViewColumnArityMismatchTooManyDataColumns, CreateViewWithIfNotExistsAndReplace,
     KrishivError, TableOrViewNotFound, TempTableOrViewAlreadyExists,
 };
@@ -206,6 +206,7 @@ impl Session {
             env.analysis.conf.case_sensitive,
         )?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        let case_sensitive = env.analysis.conf.case_sensitive;
         let analysis = df.analyzed_in(env).await?;
         let output: Vec<String> = analysis
             .analyzed
@@ -248,6 +249,15 @@ impl Session {
                 name.clone_into(&mut column.name);
             }
         }
+        // Spark reports a repeated view column with `COLUMN_ALREADY_EXISTS`
+        // (its view path checks field names with
+        // `SchemaUtils.checkColumnNameDuplication`): after the aliases are
+        // applied, so both a duplicated alias list and duplicate output
+        // names fail, ignoring case unless `case_sensitive` (then the
+        // repeated name is reported as written, else in lower case, as in
+        // Spark 4.2 and as [`unique_columns`](crate::session) reports it
+        // for writes).
+        unique_view_columns(&columns, case_sensitive)?;
         self.state.catalog.put(
             &v.name.value,
             TempTable::View {
@@ -357,6 +367,28 @@ fn list(names: &[String]) -> String {
         .map(|n| quote(n))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// A repeated view column, as Spark 4.2 reports it with
+/// `COLUMN_ALREADY_EXISTS`: ignoring case unless `case_sensitive`, then
+/// the repeated name in lower case, mirroring
+/// [`unique_columns`](crate::session) for writes.
+fn unique_view_columns(columns: &[TableColumn], case_sensitive: bool) -> Result<(), KrishivError> {
+    let mut seen = std::collections::HashSet::new();
+    for c in columns {
+        let name = if case_sensitive {
+            c.name.clone()
+        } else {
+            c.name.to_lowercase()
+        };
+        if !seen.insert(name.clone()) {
+            return Err(ColumnAlreadyExists {
+                column_name: format!("`{}`", name.replace('`', "``")),
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// Spark's search path, as analysis reports it for a missing table.

@@ -1500,8 +1500,13 @@ impl<'s> Parser<'s> {
     /// `CREATE [OR REPLACE] TEMPORARY VIEW [IF NOT EXISTS] name
     /// [(column [COMMENT '...'], ...)] AS query` (`TEMP` for `TEMPORARY`).
     /// A qualified name parses and fails with
-    /// `INVALID_TEMP_OBJ_QUALIFIER`; `IF NOT EXISTS` without `OR REPLACE`
-    /// parses and fails with `_LEGACY_ERROR_TEMP_0053`, as in Spark.
+    /// `INVALID_TEMP_OBJ_QUALIFIER`; `OR REPLACE` with `IF NOT EXISTS`
+    /// parses and fails with `CREATE_VIEW_WITH_IF_NOT_EXISTS_AND_REPLACE`,
+    /// and `IF NOT EXISTS` without `OR REPLACE` parses and fails with
+    /// `_LEGACY_ERROR_TEMP_0053`, as in Spark. The flag checks run here, on
+    /// the parsed statement, so they come before the post-parse checks of
+    /// the view's query and before execution (an `EXPLAIN` of such a
+    /// statement fails too).
     fn create_command(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("CREATE")?;
@@ -1550,6 +1555,12 @@ impl<'s> Parser<'s> {
                 "view",
                 object_name.join("."),
                 qualifier.join("."),
+                span,
+            ));
+        }
+        if if_not_exists && or_replace {
+            return Self::fatal(error::create_view_with_if_not_exists_and_replace(
+                quote_ident(&first.value),
                 span,
             ));
         }
