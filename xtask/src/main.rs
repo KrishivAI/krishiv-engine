@@ -20,7 +20,7 @@ use xtask::policy::{self, DiffArgs};
 use xtask::precheck;
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | precheck [--base REF] [--fast] [--full] [--memory-cap SIZE] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse]>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | precheck [--base REF] [--fast] [--full] [--memory-cap SIZE] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -161,8 +161,14 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
     let mode = budgets::parse_flags(flags).ok_or_else(|| USAGE.to_owned())?;
     let root = workspace_root();
     let baseline_path = root.join("budgets.json");
+    let mut baseline_file = baseline_path.clone();
     let now = match &mode {
-        budgets::Mode::Compare(path) => read_budgets(path)?,
+        budgets::Mode::Compare { measured, baseline } => {
+            if let Some(b) = baseline {
+                baseline_file.clone_from(b);
+            }
+            read_budgets(measured)?
+        }
         budgets::Mode::Check { build_time }
         | budgets::Mode::Measure { build_time }
         | budgets::Mode::WriteBaseline { build_time } => {
@@ -193,7 +199,7 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
             now
         }
     };
-    let base = read_budgets(&baseline_path)?;
+    let base = read_budgets(&baseline_file)?;
     let cmp = budgets::compare(&base, &now);
     let summary = format!("## Budgets\n\n{}", cmp.markdown);
     println!("{summary}");
@@ -203,7 +209,7 @@ fn run_budgets(flags: &[&str]) -> Result<(), String> {
         eprintln!("{v}");
     }
     if cmp.verdict(env_flag("BUDGET_APPROVED"), env_flag("UNSAFE_APPROVED"))? {
-        let note = "Growth approved. Refresh the baseline: `cargo xtask budgets --write-baseline` and commit budgets.json.";
+        let note = "Growth approved by the label. Nothing to record: once this merges, the main measurement is the next baseline.";
         println!("{note}");
         append_step_summary(note);
     }
@@ -282,26 +288,49 @@ fn run_wheel_sizes(dir: &Path, flags: &[&str]) -> Result<(), String> {
     gate_wheel_sizes(&base.wheel_bytes.unwrap_or_default(), &measured)
 }
 
-/// `wheel-sizes --compare FILE [--budgets FILE]`: gates the sizes measured by
-/// `--measure-only` (`FILE`) against the recorded budgets.
+/// Reads a `--measure-only` file: wheel key to bytes.
+fn read_wheel_sizes(file: &Path) -> Result<std::collections::BTreeMap<String, u64>, String> {
+    let text = std::fs::read_to_string(file)
+        .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+    let sizes: std::collections::BTreeMap<String, u64> =
+        serde_json::from_str(&text).map_err(|e| format!("bad {}: {e}", file.display()))?;
+    if sizes.is_empty() {
+        return Err(format!("no wheel sizes in {}", file.display()));
+    }
+    Ok(sizes)
+}
+
+/// `wheel-sizes --compare FILE [--budgets FILE | --baseline FILE]`: gates the
+/// sizes measured by `--measure-only` (`FILE`). The baseline is the
+/// `wheel_bytes` of `budgets.json` (or of `--budgets FILE`), or, with
+/// `--baseline FILE`, another `--measure-only` file (CI: the measurement of
+/// main).
 fn run_wheel_sizes_compare(file: &Path, flags: &[&str]) -> Result<(), String> {
-    let mut path = workspace_root().join("budgets.json");
+    let mut budgets_path = workspace_root().join("budgets.json");
+    let mut baseline: Option<PathBuf> = None;
+    let mut budgets_given = false;
     let mut it = flags.iter();
     while let Some(f) = it.next() {
         match *f {
-            "--budgets" => path = PathBuf::from(it.next().ok_or_else(|| USAGE.to_owned())?),
+            "--budgets" => {
+                budgets_path = PathBuf::from(it.next().ok_or_else(|| USAGE.to_owned())?);
+                budgets_given = true;
+            }
+            "--baseline" => {
+                baseline = Some(PathBuf::from(it.next().ok_or_else(|| USAGE.to_owned())?));
+            }
             _ => return Err(USAGE.to_owned()),
         }
     }
-    let text = std::fs::read_to_string(file)
-        .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
-    let measured: std::collections::BTreeMap<String, u64> =
-        serde_json::from_str(&text).map_err(|e| format!("bad {}: {e}", file.display()))?;
-    if measured.is_empty() {
-        return Err(format!("no wheel sizes in {}", file.display()));
+    if budgets_given && baseline.is_some() {
+        return Err(USAGE.to_owned());
     }
-    let base = read_budgets(&path)?;
-    gate_wheel_sizes(&base.wheel_bytes.unwrap_or_default(), &measured)
+    let measured = read_wheel_sizes(file)?;
+    let recorded = match baseline {
+        Some(b) => read_wheel_sizes(&b)?,
+        None => read_budgets(&budgets_path)?.wheel_bytes.unwrap_or_default(),
+    };
+    gate_wheel_sizes(&recorded, &measured)
 }
 
 /// Prints the comparison; a violation fails unless `BUDGET_APPROVED=1`.
@@ -320,7 +349,7 @@ fn gate_wheel_sizes(
         eprintln!("{v}");
     }
     if std::env::var("BUDGET_APPROVED").is_ok_and(|v| v == "1") {
-        let note = "Growth approved. Record the sizes: download the wheels, run `cargo xtask wheel-sizes DIR --write` and commit budgets.json.";
+        let note = "Growth approved by the label. Nothing to record: once this merges, the main measurement is the next baseline.";
         println!("{note}");
         append_step_summary(note);
         Ok(())
