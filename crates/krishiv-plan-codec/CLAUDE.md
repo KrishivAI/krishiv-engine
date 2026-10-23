@@ -19,7 +19,7 @@ enforcement of design P2-T171 invariant I1 (plans are pure data) and the wire fo
   `plan-protogen --check` enforces it against `tools/plan-protogen/baseline.txt`), and `tests/golden/<id>/`.
   New features take legacy level `POST_MIGRATION_READER_VERSION` (6).
 - `format_version` is frozen at 5 and `min_reader_version` is kept for readers that predate features; plans
-  without an `epoch` are such older plans and decode by their content. `tests/golden/v1`-`v4` are frozen and
+  without an `epoch` are such older plans and decode by their content. `tests/golden/v1`-`v5` are frozen and
   decode-only; `base/` and the feature directories are byte-exact against the encoder forever.
 - Function behaviour is not a codec matter: functions travel by name and registry id (registry version).
 - Flat tables with child indices, no recursion in the encoder or decoder; the decoder bounds size, counts and depth

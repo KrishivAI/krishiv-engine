@@ -191,3 +191,25 @@ fn deep_queries_lower_on_a_small_stack_and_long_joins_hit_the_cap() {
         assert!(lower(&dotted).is_ok());
     });
 }
+
+#[test]
+fn nested_grouping_sets_lower_on_a_small_stack() {
+    on_small_stack(|| {
+        // 900 nested `GROUPING SETS (...)`: the parser accepts it (below
+        // `MAX_DEPTH`), and lowering must hop stacks through the recursion.
+        let sql = format!(
+            "SELECT a FROM t GROUP BY {}a{}",
+            "GROUPING SETS (".repeat(900),
+            ")".repeat(900)
+        );
+        assert!(lower(&sql).is_ok(), "nested GROUPING SETS lowers");
+        // A single level nests the same way and keeps its sets.
+        let plan = lower("SELECT a FROM t GROUP BY GROUPING SETS (GROUPING SETS ((a)))")
+            .expect("nested sets lower");
+        assert!(
+            plan.root().to_string().contains("GROUPING SETS"),
+            "keeps grouping sets: {}",
+            plan.root()
+        );
+    });
+}

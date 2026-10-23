@@ -841,3 +841,127 @@ fn replicate_rows_keeps_weights_and_rejects_non_bigint_counts() {
         .unwrap_or_else(|| unreachable!("an error"));
     assert_eq!(err.error_class(), ErrorClass::InternalError);
 }
+
+/// A projection of `schema()`: `a` (or nulls of it), then `s` (or nulls).
+fn expand_projection(null_a: bool, null_s: bool) -> Arc<Project> {
+    let item = |index: usize, name: &str, null: bool| {
+        if null {
+            let nulls = NullOf::new(&schema(), index).unwrap_or_else(|e| unreachable!("{e}"));
+            ProjectItem::expr(name, Arc::new(nulls))
+        } else {
+            ProjectItem::column(index)
+        }
+    };
+    Project::try_new(&schema(), vec![item(0, "a", null_a), item(1, "s", null_s)])
+        .unwrap_or_else(|e| unreachable!("{e}"))
+}
+
+#[test]
+fn expand_streams_one_copy_per_projection_and_keeps_weights() {
+    let (_root, ctx) = ctx();
+    let op = Expand::try_new(vec![
+        expand_projection(false, false),
+        expand_projection(false, true),
+        expand_projection(true, true),
+    ])
+    .unwrap_or_else(|e| unreachable!("{e}"));
+    assert_eq!(op.name(), "Expand");
+    assert_eq!(op.schema(), schema());
+    let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let input = weighted(&[1, 2], &[3, -4]);
+    // One copy per call: `HaveMoreOutput` until the last projection.
+    let mut copies = Vec::new();
+    for _ in 0..2 {
+        let OperatorOutput::HaveMoreOutput(b) = op
+            .execute(&input, &mut local)
+            .unwrap_or_else(|e| unreachable!("{e}"))
+        else {
+            unreachable!("a copy and more to come")
+        };
+        copies.push(b);
+    }
+    copies.extend(out_batch(
+        op.execute(&input, &mut local)
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    ));
+    assert_eq!(copies.len(), 3);
+    assert_eq!(col_a(&copies[0]), [1, 2].map(Some));
+    assert_eq!(col_a(&copies[1]), [1, 2].map(Some));
+    assert_eq!(col_a(&copies[2]), [None, None]);
+    let strings = |b: &Batch| -> Vec<Option<String>> {
+        b.data()
+            .column(1)
+            .as_string::<i32>()
+            .iter()
+            .map(|v| v.map(str::to_owned))
+            .collect()
+    };
+    assert_eq!(
+        strings(&copies[0]),
+        [Some("s1".to_owned()), Some("s2".to_owned())]
+    );
+    assert_eq!(strings(&copies[1]), [None, None]);
+    assert!(copies.iter().all(|b| b.weights() == input.weights()));
+    // The cursor starts again for the next input; an empty batch is skipped.
+    assert!(
+        out_batch(
+            op.execute(&ints(&[]), &mut local)
+                .unwrap_or_else(|e| unreachable!("{e}"))
+        )
+        .is_none()
+    );
+    assert!(matches!(
+        op.execute(&ints(&[7]), &mut local),
+        Ok(OperatorOutput::HaveMoreOutput(_))
+    ));
+}
+
+#[test]
+fn expand_rejects_bad_plans() {
+    let class = |r: Result<Arc<Expand>, KrishivError>| {
+        r.err()
+            .unwrap_or_else(|| unreachable!("an error"))
+            .error_class()
+    };
+    assert_eq!(class(Expand::try_new(vec![])), ErrorClass::InternalError);
+    // A projection that outputs other columns.
+    let narrow = Project::try_new(&schema(), vec![ProjectItem::column(0)])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    assert_eq!(
+        class(Expand::try_new(vec![
+            expand_projection(false, false),
+            narrow
+        ])),
+        ErrorClass::InternalError
+    );
+    let renamed = Project::try_new(
+        &schema(),
+        vec![ProjectItem::aliased(0, "x"), ProjectItem::column(1)],
+    )
+    .unwrap_or_else(|e| unreachable!("{e}"));
+    assert_eq!(
+        class(Expand::try_new(vec![
+            expand_projection(false, false),
+            renamed
+        ])),
+        ErrorClass::InternalError
+    );
+    // Nulls of a column the input has not; and of a batch that lost it.
+    let err = NullOf::new(&schema(), 2)
+        .err()
+        .unwrap_or_else(|| unreachable!("an error"));
+    assert_eq!(err.error_class(), ErrorClass::InternalError);
+    let nulls = NullOf::new(&schema(), 1).unwrap_or_else(|e| unreachable!("{e}"));
+    assert_eq!(nulls.data_type(), DataType::Utf8);
+    assert!(nulls.nullable());
+    let one_column = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)])),
+        vec![Arc::new(Int64Array::from(vec![1_i64]))],
+    )
+    .unwrap_or_else(|e| unreachable!("{e}"));
+    let err = nulls
+        .evaluate(&one_column)
+        .err()
+        .unwrap_or_else(|| unreachable!("an error"));
+    assert_eq!(err.error_class(), ErrorClass::InternalError);
+}

@@ -10,7 +10,7 @@
 //!   today, forever: a plan that does not use a feature encodes the same
 //!   before and after the feature exists, so a change to them is either an
 //!   undeclared feature or an epoch change.
-//! - `v1` to `v4` are the frozen files of the sequential format versions.
+//! - `v1` to `v5` are the frozen files of the sequential format versions.
 //!   They are never written again and must keep decoding to their plans.
 //!
 //! A new feature adds its directory and edits no existing file: run
@@ -160,7 +160,7 @@ fn every_golden_decodes_to_its_plan_and_current_ones_are_exact() {
     }
     assert_eq!(
         legacy,
-        BTreeSet::from([1, 2, 3, 4]),
+        BTreeSet::from([1, 2, 3, 4, 5]),
         "the legacy directories"
     );
 }

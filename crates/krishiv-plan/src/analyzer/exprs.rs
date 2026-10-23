@@ -21,6 +21,7 @@ use krishiv_common::error::{
 use krishiv_types::DataType;
 use twox_hash::XxHash3_128;
 
+use super::analytics::GroupingFn;
 use super::bind::{addr, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
@@ -50,6 +51,10 @@ pub(super) struct Cx<'s> {
     /// Over an aggregate: its input, where aggregate-function arguments
     /// resolve.
     pub(super) agg_scope: Option<&'s [Attr]>,
+    /// Whether `grouping(..)` and `grouping_id(..)` may appear: in the
+    /// select list, `HAVING` and `ORDER BY` of an aggregate over grouping
+    /// sets (see `analytics`).
+    pub(super) grouping: bool,
     /// A name `scope` holds several times is looked up further rather
     /// than ambiguous (Spark's `ORDER BY` over a select list).
     pub(super) lenient: bool,
@@ -223,7 +228,7 @@ fn arg_of(b: &Bound) -> Arg<'_> {
 }
 
 /// Spark's documentation root, as its errors cite it.
-const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
+pub(super) const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
 
 fn column(c: &BoundColumn) -> ArgType {
     arg_type(c.data_type.clone(), c.nullable)
@@ -506,6 +511,9 @@ impl Resolver<'_> {
                     && filter.win.is_some()
                 {
                     return Err(super::windows::window_in_filter(filter, e.origin));
+                }
+                if let Some(which) = GroupingFn::from_name(&f.name) {
+                    return self.grouping_call(which, e, &kids[..n], cx);
                 }
                 if let Some(op) = Builtin::from_name(&f.name) {
                     return self.operator_call(op, e.origin, &kids[..n]);
@@ -1691,6 +1699,29 @@ fn pretty_literal(v: &Literal) -> String {
     }
 }
 
+/// A binary operator whose operands commute (Spark's `Add`, `Multiply`,
+/// `And`, `Or`, `EqualTo` and `EqualNullSafe`).
+fn is_commutative(node: &ExprNode) -> bool {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = node else {
+        return false;
+    };
+    let op = match &f.id {
+        FunctionId::Builtin(b) => Some(*b),
+        FunctionId::Registry { name, .. } => Builtin::from_name(name),
+    };
+    matches!(
+        op,
+        Some(
+            Builtin::Add
+                | Builtin::Multiply
+                | Builtin::And
+                | Builtin::Or
+                | Builtin::Eq
+                | Builtin::EqNullSafe
+        )
+    )
+}
+
 /// A semantic key: equal for expressions that compute the same value,
 /// whatever their origins, column spellings or (top-level) alias.
 pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
@@ -1741,8 +1772,17 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
             other => format!("u{other:?}"),
         }
         .into_bytes();
-        for c in kids {
-            b.extend_from_slice(&memo.get(&addr(c)).copied().unwrap_or(0).to_le_bytes());
+        let mut hashes: Vec<u128> = kids
+            .iter()
+            .map(|c| memo.get(&addr(*c)).copied().unwrap_or(0))
+            .collect();
+        // Spark canonicalizes the operands of a commutative operator into
+        // one order, so `a + b` and `b + a` are the same expression.
+        if hashes.len() == 2 && is_commutative(&x.node) {
+            hashes.sort_unstable();
+        }
+        for h in hashes {
+            b.extend_from_slice(&h.to_le_bytes());
         }
         memo.insert(addr(x), XxHash3_128::oneshot(&b));
     }

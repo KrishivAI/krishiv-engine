@@ -41,6 +41,7 @@ variants!(
     Project,
     Limit,
     ReplicateRows,
+    Expand,
     Sort,
     TopN,
     Window,
@@ -60,6 +61,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Project { .. } => Variant::Project,
         PhysNode::Limit { .. } => Variant::Limit,
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
+        PhysNode::Expand { .. } => Variant::Expand,
         PhysNode::Sort { .. } => Variant::Sort,
         PhysNode::TopN { .. } => Variant::TopN,
         PhysNode::Window { .. } => Variant::Window,
@@ -287,6 +289,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
         let expected = match name.as_str() {
             "limit_offset" => 3,
             "window_ranking" | "window_aggregates" => 4,
+            n if n.starts_with("expand") => 5,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");
@@ -352,6 +355,60 @@ fn a_corrupt_window_is_refused() {
             w.functions[5].function = Some(pb::window_function_plan::Function::Ntile(0));
         }),
         "ntile with a bucket count below one",
+    );
+}
+
+#[test]
+fn an_expand_plan_survives_the_wire_with_every_field() {
+    for name in ["expand_rollup", "expand_single", "expand_subquery"] {
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+}
+
+#[test]
+fn a_loose_null_of_item_still_needs_the_expand_feature() {
+    let plan = plan_of(PhysNode::Project {
+        input: Box::new(PhysNode::OneRow),
+        layout: Vec::new(),
+        items: vec![krishiv_exec::physical::ProjectItemPlan::NullOf {
+            index: 0,
+            name: "x".to_owned(),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    });
+    let m = to_message(&plan).unwrap();
+    assert_eq!(m.min_reader_version, 5);
+    assert_eq!(m.features, ["expand"]);
+    assert_eq!(round_trip(&plan), plan);
+}
+
+#[test]
+fn a_corrupt_expand_is_refused() {
+    use pb::node::Kind;
+    let edit = |f: &dyn Fn(&mut pb::ExpandNode)| {
+        let mut m = message("expand_rollup");
+        for node in &mut m.nodes {
+            if let Some(Kind::Expand(e)) = &mut node.kind {
+                f(e);
+            }
+        }
+        m
+    };
+    corrupt(
+        &edit(&|e| e.projections.clear()),
+        "an expand without a projection",
+    );
+    corrupt(
+        &edit(&|e| {
+            e.nullable.pop();
+        }),
+        "do not match the nullability",
+    );
+    corrupt(
+        &edit(&|e| e.projections[0].items[0].kind = None),
+        "a project item kind",
     );
 }
 

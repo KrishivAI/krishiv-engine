@@ -7,7 +7,7 @@
 //! never needs more than `STEP` frames of the caller's stack.
 
 /// Levels a recursive pass may take on one stack segment.
-pub const STEP: usize = 64;
+pub const STEP: usize = 32;
 
 /// Runs `f` on a new thread with a 64 MiB stack (16 MiB in release
 /// builds), waiting for it; `None` when no thread can be started. A panic

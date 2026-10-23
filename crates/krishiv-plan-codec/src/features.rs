@@ -114,6 +114,7 @@ macro_rules! registry {
 // The registry: one line per feature, kept alphabetically sorted by id.
 // (id, variant, legacy level, kind, meaning)
 registry! {
+    (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
 }
@@ -160,6 +161,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::Node(node) => match node {
             PhysNode::Limit { offset, .. } => (*offset != 0).then_some(Feature::LimitOffset),
             PhysNode::Window { .. } => Some(Feature::Window),
+            PhysNode::Expand { .. } => Some(Feature::Expand),
             PhysNode::Scan(_)
             | PhysNode::OneRow
             | PhysNode::Filter { .. }
@@ -176,6 +178,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         },
         Construct::Item(item) => match item {
             ProjectItemPlan::Column { .. } | ProjectItemPlan::Expr { .. } => None,
+            ProjectItemPlan::NullOf { .. } => Some(Feature::Expand),
         },
         Construct::Join(join) => match join {
             JoinType::Inner
@@ -218,6 +221,10 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
     f(Construct::Node(node));
     match node {
         PhysNode::Project { items, .. } => items.iter().for_each(|i| f(Construct::Item(i))),
+        PhysNode::Expand { projections, .. } => projections
+            .iter()
+            .flatten()
+            .for_each(|i| f(Construct::Item(i))),
         PhysNode::Window { window, .. } => {
             for function in &window.functions {
                 f(Construct::Window(&function.function));

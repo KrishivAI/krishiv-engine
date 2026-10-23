@@ -83,6 +83,11 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         Some(Feature::Window)
     );
     assert_eq!(feature_of(Construct::Node(&PhysNode::OneRow)), None);
+    let null_of = krishiv_exec::physical::ProjectItemPlan::NullOf {
+        index: 0,
+        name: "x".to_owned(),
+    };
+    assert_eq!(feature_of(Construct::Item(&null_of)), Some(Feature::Expand));
     assert_eq!(
         feature_of(Construct::Join(krishiv_exec::JoinType::LeftSemi)),
         None

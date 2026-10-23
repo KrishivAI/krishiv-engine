@@ -35,7 +35,7 @@ message PhysicalPlan {
   uint32 format_version = 1;
   // For readers that predate features: 2 for a plan without features, else
   // the highest legacy level of its features (3 limit_offset, 4 window,
-  // 6 for a feature added after the format version was frozen).
+  // 5 expand, 6 for a feature added after the format version was frozen).
   uint32 min_reader_version = 2;
   // Plan nodes in post-order; a node's inputs are earlier entries.
   repeated Node nodes = 3;
@@ -97,6 +97,8 @@ message Node {
     ExchangeNode exchange = 14;
     // feature: window
     WindowNode window = 15;
+    // feature: expand
+    ExpandNode expand = 16;
   }
 }
 
@@ -126,6 +128,8 @@ message ProjectItem {
   oneof kind {
     ProjectColumn column = 1;
     ProjectExpr expr = 2;
+    // feature: expand (only inside an expand)
+    ProjectNullOf null_of = 3;
   }
 }
 
@@ -137,6 +141,13 @@ message ProjectColumn {
 message ProjectExpr {
   string name = 1;
   uint32 expr = 2;
+}
+
+// feature: expand
+// A column of nulls in the Arrow type of an input column.
+message ProjectNullOf {
+  uint64 index = 1;
+  string name = 2;
 }
 
 message SubqueryPlan {
@@ -166,6 +177,23 @@ message ReplicateRowsNode {
   repeated uint64 layout = 2;
   uint32 count = 3;
   repeated SubqueryPlan subqueries = 4;
+}
+
+// feature: expand
+// Each input row once per projection (ROLLUP, CUBE, GROUPING SETS).
+message ExpandNode {
+  uint32 input = 1;
+  repeated uint64 layout = 2;
+  // The projections: the same output columns, each computed one way.
+  repeated ExpandProjection projections = 3;
+  // Whether each output column is nullable.
+  repeated bool nullable = 4;
+  repeated SubqueryPlan subqueries = 5;
+}
+
+// feature: expand
+message ExpandProjection {
+  repeated ProjectItem items = 1;
 }
 
 message SortKey {

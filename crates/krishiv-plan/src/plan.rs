@@ -267,6 +267,19 @@ pub enum PlanNode {
         /// A `BIGINT` expression over the input: the copies of each row.
         count: Arc<Expr>,
     },
+    /// Each input row once per projection (Spark's `Expand`, the first step
+    /// of `ROLLUP`, `CUBE` and `GROUPING SETS`): row `i` of the output for
+    /// an input row is the row evaluated by `projections[i]`. Resolved
+    /// plans only: the analyzer builds it, with one expression per output
+    /// column in every projection.
+    Expand {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The projections, in output order; at least one.
+        projections: Vec<Vec<Arc<Expr>>>,
+        /// The output attributes, aligned with each projection.
+        output: Vec<BoundColumn>,
+    },
 }
 
 /// The operation of a [`PlanNode::SetOp`].
@@ -588,6 +601,7 @@ impl LogicalPlan {
             | PlanNode::Hint { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
+            | PlanNode::Expand { input, .. }
             | PlanNode::Window { input, .. }
             | PlanNode::ReplicateRows { input, .. } => f(input),
             PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
@@ -621,6 +635,7 @@ impl LogicalPlan {
             | PlanNode::Hint { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
+            | PlanNode::Expand { input, .. }
             | PlanNode::Window { input, .. }
             | PlanNode::ReplicateRows { input, .. } => f(input),
             PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
@@ -682,6 +697,7 @@ impl LogicalPlan {
                 JoinCondition::None | JoinCondition::Using(_) => {}
             },
             PlanNode::Sort { order, .. } => order.iter().for_each(|o| f(&o.expr)),
+            PlanNode::Expand { projections, .. } => projections.iter().flatten().for_each(f),
             PlanNode::Window {
                 exprs,
                 partition_by,
@@ -742,6 +758,9 @@ impl LogicalPlan {
                 JoinCondition::None | JoinCondition::Using(_) => {}
             },
             PlanNode::Sort { order, .. } => order.iter_mut().for_each(|o| f(&mut o.expr)),
+            PlanNode::Expand { projections, .. } => {
+                projections.iter_mut().flatten().for_each(f);
+            }
             PlanNode::Window {
                 exprs,
                 partition_by,
@@ -806,6 +825,7 @@ impl LogicalPlan {
                     );
                 }
                 PlanNode::OneRowRelation => return Some(Vec::new()),
+                PlanNode::Expand { output, .. } => return Some(output.clone()),
                 PlanNode::Scan(s) => return Some(s.output.clone()),
                 PlanNode::CteRef(r) => return Some(r.output.clone()),
                 PlanNode::Shift { input, offset } => {

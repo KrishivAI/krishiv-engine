@@ -9,7 +9,7 @@ pub struct PhysicalPlan {
     pub format_version: u32,
     /// For readers that predate features: 2 for a plan without features, else
     /// the highest legacy level of its features (3 limit_offset, 4 window,
-    /// 6 for a feature added after the format version was frozen).
+    /// 5 expand, 6 for a feature added after the format version was frozen).
     #[prost(uint32, tag = "2")]
     pub min_reader_version: u32,
     /// Plan nodes in post-order; a node's inputs are earlier entries.
@@ -78,7 +78,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -117,6 +117,9 @@ pub mod node {
         /// feature: window
         #[prost(message, tag = "15")]
         Window(super::WindowNode),
+        /// feature: expand
+        #[prost(message, tag = "16")]
+        Expand(super::ExpandNode),
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -153,7 +156,7 @@ pub struct BoolList {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProjectItem {
-    #[prost(oneof = "project_item::Kind", tags = "1, 2")]
+    #[prost(oneof = "project_item::Kind", tags = "1, 2, 3")]
     pub kind: ::core::option::Option<project_item::Kind>,
 }
 /// Nested message and enum types in `ProjectItem`.
@@ -164,6 +167,9 @@ pub mod project_item {
         Column(super::ProjectColumn),
         #[prost(message, tag = "2")]
         Expr(super::ProjectExpr),
+        /// feature: expand (only inside an expand)
+        #[prost(message, tag = "3")]
+        NullOf(super::ProjectNullOf),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -179,6 +185,15 @@ pub struct ProjectExpr {
     pub name: ::prost::alloc::string::String,
     #[prost(uint32, tag = "2")]
     pub expr: u32,
+}
+/// feature: expand
+/// A column of nulls in the Arrow type of an input column.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProjectNullOf {
+    #[prost(uint64, tag = "1")]
+    pub index: u64,
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SubqueryPlan {
@@ -213,6 +228,29 @@ pub struct ReplicateRowsNode {
     pub count: u32,
     #[prost(message, repeated, tag = "4")]
     pub subqueries: ::prost::alloc::vec::Vec<SubqueryPlan>,
+}
+/// feature: expand
+/// Each input row once per projection (ROLLUP, CUBE, GROUPING SETS).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExpandNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
+    /// The projections: the same output columns, each computed one way.
+    #[prost(message, repeated, tag = "3")]
+    pub projections: ::prost::alloc::vec::Vec<ExpandProjection>,
+    /// Whether each output column is nullable.
+    #[prost(bool, repeated, tag = "4")]
+    pub nullable: ::prost::alloc::vec::Vec<bool>,
+    #[prost(message, repeated, tag = "5")]
+    pub subqueries: ::prost::alloc::vec::Vec<SubqueryPlan>,
+}
+/// feature: expand
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExpandProjection {
+    #[prost(message, repeated, tag = "1")]
+    pub items: ::prost::alloc::vec::Vec<ProjectItem>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SortKey {

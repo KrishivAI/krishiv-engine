@@ -234,6 +234,26 @@ impl Encoder {
                 input: self.node_index(input)?,
             }),
             PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
+            PhysNode::Expand {
+                input,
+                layout: l,
+                projections,
+                nullable,
+                subqueries,
+            } => Kind::Expand(pb::ExpandNode {
+                input: self.node_index(input)?,
+                layout: layout(l),
+                projections: projections
+                    .iter()
+                    .map(|items| {
+                        Ok(pb::ExpandProjection {
+                            items: items.iter().map(|i| self.item(i)).collect::<Result<_>>()?,
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+                nullable: nullable.clone(),
+                subqueries: self.subqueries(subqueries)?,
+            }),
         };
         Ok(pb::Node { kind: Some(kind) })
     }
@@ -266,6 +286,10 @@ impl Encoder {
                 ProjectItemPlan::Expr { name, expr } => Kind::Expr(pb::ProjectExpr {
                     name: name.clone(),
                     expr: self.expr(expr)?,
+                }),
+                ProjectItemPlan::NullOf { index, name } => Kind::NullOf(pb::ProjectNullOf {
+                    index: *index as u64,
+                    name: name.clone(),
                 }),
             }),
         })

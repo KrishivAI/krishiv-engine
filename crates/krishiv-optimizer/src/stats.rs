@@ -241,6 +241,110 @@ impl<'a> Estimator<'a> {
             // Each distinct row of an `INTERSECT ALL` / `EXCEPT ALL` count:
             // no count is known, the input's rows bound it from below.
             | PlanNode::ReplicateRows { input, .. } => Est::clone(&self.plan(input)),
+            // Every input row once per projection.
+            PlanNode::Expand {
+                input,
+                projections,
+                output,
+            } => {
+                let est = Est::clone(&self.plan(input));
+                let rows = est.rows * to_f64(u64::try_from(projections.len()).unwrap_or(u64::MAX));
+                let rows = rows.max(1.0);
+                if projections.is_empty()
+                    || output.is_empty()
+                    || projections.iter().any(|p| p.len() != output.len())
+                {
+                    return est.with_rows(rows);
+                }
+                let per = est.rows;
+                let mut cols = HashMap::with_capacity(output.len());
+                for (j, out) in output.iter().enumerate() {
+                    let mut null_rows = 0.0;
+                    let mut col_id: Option<AttrId> = None;
+                    let mut mixed = false;
+                    let mut literals: Vec<&Literal> = Vec::new();
+                    let mut other = false;
+                    for proj in projections.iter() {
+                        let s = strip_alias(&proj[j]);
+                        match &s.node {
+                            ExprNode::Literal(Literal::Null(_)) => null_rows += per,
+                            ExprNode::Literal(l) => {
+                                if col_id.is_some() {
+                                    mixed = true;
+                                }
+                                if !literals.contains(&l) {
+                                    literals.push(l);
+                                }
+                            }
+                            ExprNode::Resolved(
+                                ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c),
+                            ) => match est.cols.get(&c.id) {
+                                Some(col) => {
+                                    null_rows += col.nulls * per;
+                                    match col_id {
+                                        None => col_id = Some(c.id),
+                                        Some(id) if id == c.id => {}
+                                        Some(_) => mixed = true,
+                                    }
+                                    if !literals.is_empty() {
+                                        mixed = true;
+                                    }
+                                }
+                                None => other = true,
+                            },
+                            _ => other = true,
+                        }
+                    }
+                    let nulls = (null_rows / rows).clamp(0.0, 1.0);
+                    let distinct_literals = to_f64(u64::try_from(literals.len()).unwrap_or(u64::MAX));
+                    let ndv = if other {
+                        rows
+                    } else if let Some(id) = col_id {
+                        let base = if mixed {
+                            // Different input columns (or columns plus
+                            // literals): at most their sum.
+                            let mut seen = Vec::new();
+                            let mut sum = 0.0;
+                            for proj in projections.iter() {
+                                let s = strip_alias(&proj[j]);
+                                if let ExprNode::Resolved(
+                                    ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c),
+                                ) = &s.node
+                                    && !seen.contains(&c.id)
+                                {
+                                    seen.push(c.id);
+                                    sum += est.cols.get(&c.id).map(|c| c.ndv).unwrap_or(per);
+                                }
+                            }
+                            sum + distinct_literals
+                        } else if literals.is_empty() {
+                            est.cols.get(&id).map(|c| c.ndv).unwrap_or(per)
+                        } else {
+                            est.cols.get(&id).map(|c| c.ndv).unwrap_or(per) + distinct_literals
+                        };
+                        base.clamp(1.0, rows)
+                    } else if literals.is_empty() {
+                        // Every projection is NULL.
+                        1.0
+                    } else {
+                        distinct_literals.clamp(1.0, rows)
+                    };
+                    let range = if !mixed && !other && literals.is_empty() {
+                        col_id.and_then(|id| est.cols.get(&id).and_then(|c| c.range))
+                    } else {
+                        None
+                    };
+                    cols.insert(
+                        out.id,
+                        Col {
+                            ndv: ndv.clamp(1.0, rows),
+                            nulls,
+                            range,
+                        },
+                    );
+                }
+                Est { rows, cols }
+            }
             PlanNode::Union { inputs, .. } => {
                 let rows = inputs.iter().map(|i| self.plan(i).rows).sum();
                 Est::unknown(rows, ids())
