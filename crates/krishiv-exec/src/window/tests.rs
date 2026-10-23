@@ -200,6 +200,17 @@ async fn run_keys(
     window: &WindowPlan,
     limit: usize,
 ) -> crate::Result<Vec<Batch>> {
+    run_keys_ansi(keys_as, rows, split, window, limit, true).await
+}
+
+async fn run_keys_ansi(
+    keys_as: Keys,
+    rows: &[Row],
+    split: usize,
+    window: &WindowPlan,
+    limit: usize,
+    ansi: bool,
+) -> crate::Result<Vec<Batch>> {
     let s = schema_of(keys_as);
     let batches: Vec<Batch> = rows
         .chunks(split.max(1))
@@ -213,7 +224,7 @@ async fn run_keys(
     keys.extend(window.order_by.iter().copied());
     keys.push(SortKey::asc(2));
     let sort = Arc::new(Sort::new(Arc::clone(&s), &keys, None)?);
-    let op = Arc::new(Window::new(Arc::clone(&s), window.clone(), true, None)?);
+    let op = Arc::new(Window::new(Arc::clone(&s), window.clone(), ansi, None)?);
     let plan: Arc<dyn ExecNode> = Arc::new(OperatorNode {
         input: Arc::new(BreakerNode {
             input: Arc::new(SourceNode(Batches::new(s, batches))),
@@ -346,12 +357,32 @@ fn reference(
             WindowFunction::CumeDist => format!("{:?}", to_f(peers_end) / to_f(n)),
             WindowFunction::Ntile(k) => ntile_spark(n, i64::from(*k))[pos].to_string(),
             WindowFunction::Aggregate(a) => {
+                let peers_start = rank - 1;
+                let at = |k: i64| {
+                    let i = i64::try_from(pos).unwrap().saturating_add(k);
+                    usize::try_from(i.clamp(0, i64::try_from(n).unwrap())).unwrap()
+                };
+                let start = match (frame.units, frame.lower) {
+                    (_, FrameBound::UnboundedPreceding) => 0,
+                    (FrameUnits::Rows, FrameBound::CurrentRow) => pos,
+                    (FrameUnits::Range, FrameBound::CurrentRow) => peers_start,
+                    (_, FrameBound::Offset(k)) => at(k),
+                    (_, b) => {
+                        out.push(format!("<lower {b:?}>"));
+                        continue;
+                    }
+                };
                 let end = match (frame.units, frame.upper) {
                     (_, FrameBound::UnboundedFollowing) => n,
-                    (FrameUnits::Rows, _) => pos + 1,
-                    (FrameUnits::Range, _) => peers_end,
+                    (FrameUnits::Rows, FrameBound::CurrentRow) => pos + 1,
+                    (FrameUnits::Range, FrameBound::CurrentRow) => peers_end,
+                    (_, FrameBound::Offset(k)) => at(k + 1),
+                    (_, b) => {
+                        out.push(format!("<upper {b:?}>"));
+                        continue;
+                    }
                 };
-                let frame_rows = &part[..end];
+                let frame_rows = &part[start..end.max(start)];
                 if a.args == [4] {
                     // The string column: by bytes; first/last by row.
                     let texts: Vec<Option<String>> = frame_rows.iter().map(|x| text(x.3)).collect();
@@ -373,8 +404,27 @@ fn reference(
                 } else {
                     let vals: Vec<i64> = frame_rows.iter().filter_map(|x| x.3).collect();
                     match a.function {
-                        AggregateFunction::Count if a.args.is_empty() => end.to_string(),
+                        AggregateFunction::Count if a.args.is_empty() => {
+                            frame_rows.len().to_string()
+                        }
                         AggregateFunction::Count => vals.len().to_string(),
+                        AggregateFunction::First { ignore_nulls } => {
+                            let mut picked = frame_rows.iter().map(|x| x.3);
+                            let v = if ignore_nulls {
+                                vals.first().copied()
+                            } else {
+                                picked.next().flatten()
+                            };
+                            v.map_or_else(|| "null".to_owned(), |v| v.to_string())
+                        }
+                        AggregateFunction::Last { ignore_nulls } => {
+                            let v = if ignore_nulls {
+                                vals.last().copied()
+                            } else {
+                                frame_rows.last().and_then(|x| x.3)
+                            };
+                            v.map_or_else(|| "null".to_owned(), |v| v.to_string())
+                        }
                         _ if vals.is_empty() => "null".to_owned(),
                         AggregateFunction::Sum => vals.iter().sum::<i64>().to_string(),
                         AggregateFunction::Min => vals.iter().min().unwrap().to_string(),
@@ -388,7 +438,6 @@ fn reference(
                             let s = vals.iter().fold(0.0, |s, v| s + *v as f64);
                             format!("{:?}", s / to_f(vals.len()))
                         }
-                        other => format!("<{other:?}>"),
                     }
                 }
             }
@@ -443,6 +492,70 @@ fn functions() -> Vec<(WindowFunction, WindowFrame)> {
     ]
 }
 
+/// Frames that do not start at the partition's first row or end at the
+/// current row (P2-T055 part 2), over every aggregate shape.
+fn frame_functions() -> Vec<(WindowFunction, WindowFrame)> {
+    use AggregateFunction::{Avg, Count, First, Last, Max, Min, Sum};
+    let rows = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    let around = rows(FrameBound::Offset(-1), FrameBound::Offset(1));
+    let ahead = rows(FrameBound::Offset(2), FrameBound::Offset(3));
+    let before = rows(FrameBound::UnboundedPreceding, FrameBound::Offset(-1));
+    let to_end = rows(FrameBound::Offset(-1), FrameBound::UnboundedFollowing);
+    let rows_rest = rows(FrameBound::CurrentRow, FrameBound::UnboundedFollowing);
+    let range_rest = WindowFrame {
+        units: FrameUnits::Range,
+        lower: FrameBound::CurrentRow,
+        upper: FrameBound::UnboundedFollowing,
+    };
+    let empty = rows(FrameBound::Offset(1), FrameBound::CurrentRow);
+    vec![
+        (agg(Sum, Some(3)), around),
+        (agg(Count, None), ahead),
+        (agg(Count, Some(3)), around),
+        (agg(Min, Some(3)), to_end),
+        (agg(Max, Some(3)), before),
+        (agg(Avg, Some(3)), around),
+        (agg(Sum, Some(3)), range_rest),
+        (agg(Sum, Some(3)), empty),
+        (
+            agg(
+                First {
+                    ignore_nulls: false,
+                },
+                Some(3),
+            ),
+            ahead,
+        ),
+        (agg(Last { ignore_nulls: true }, Some(3)), around),
+        (agg(Max, Some(4)), around),
+        (agg(Min, Some(4)), range_rest),
+        (agg(First { ignore_nulls: true }, Some(4)), to_end),
+        (
+            agg(
+                Last {
+                    ignore_nulls: false,
+                },
+                Some(4),
+            ),
+            before,
+        ),
+        (agg(Last { ignore_nulls: true }, Some(4)), rows_rest),
+        (
+            agg(
+                First {
+                    ignore_nulls: false,
+                },
+                Some(4),
+            ),
+            empty,
+        ),
+    ]
+}
+
 fn rows_strategy() -> impl Strategy<Value = Vec<Row>> {
     let opt = |hi: i64| prop_oneof![1 => Just(None), 4 => (0..hi).prop_map(Some)];
     prop::collection::vec((opt(4), opt(5), opt(100)), 0..60).prop_map(|v| {
@@ -478,6 +591,47 @@ proptest! {
         let columns: Vec<Vec<String>> = functions
             .iter()
             .map(|(f, frame)| reference(kt, &sorted, f, *frame, partitioned))
+            .collect();
+        let want: Vec<String> = sorted
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let cells: Vec<String> = columns.iter().map(|c| c[i].clone()).collect();
+                format!("{}: {}", r.2, cells.join(", "))
+            })
+            .collect();
+        prop_assert_eq!(got, want);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Frames with offsets and frames to the partition's end give the
+    /// naive value over each row's frame, with ANSI on (integer sums in
+    /// order) and off (integer sums through the segment tree).
+    #[test]
+    fn frames_match_a_naive_reference(
+        rows in rows_strategy(),
+        split in 1_usize..9,
+        partitioned in any::<bool>(),
+        ansi in any::<bool>(),
+    ) {
+        let functions = frame_functions();
+        let window = plan(functions.clone(), partitioned);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let out = rt
+            .block_on(run_keys_ansi(Keys::Int, &rows, split, &window, 1 << 30, ansi))
+            .unwrap();
+        let got = outputs(&out, functions.len());
+        let mut sorted = rows;
+        sorted.sort_by_key(|r| {
+            let p = if partitioned { Keys::Int.key(r.0) } else { (false, Vec::new()) };
+            (p, Keys::Int.key(r.1), r.2)
+        });
+        let columns: Vec<Vec<String>> = functions
+            .iter()
+            .map(|(f, frame)| reference(Keys::Int, &sorted, f, *frame, partitioned))
             .collect();
         let want: Vec<String> = sorted
             .iter()
@@ -828,10 +982,11 @@ fn invalid_plans_are_rejected() {
         )),
         internal
     );
+    // RANGE frames with value bounds are a later part of P2-T055.
     let following = WindowFrame {
-        units: FrameUnits::Rows,
-        lower: FrameBound::CurrentRow,
-        upper: FrameBound::UnboundedFollowing,
+        units: FrameUnits::Range,
+        lower: FrameBound::Offset(-1),
+        upper: FrameBound::CurrentRow,
     };
     assert_eq!(
         class(window(
@@ -1583,4 +1738,67 @@ async fn a_refused_flush_headroom_fails_the_window() {
     let again = op.flush(&mut local, &ctx).await.unwrap_err();
     assert_eq!(again.error_class(), ErrorClass::UnableToAcquireMemory);
     drop((hog, local));
+}
+
+/// The reservation for frames with offsets covers their outputs and row
+/// maps (it also holds the frames, the tree and a chunk of scratch).
+#[test]
+fn frame_costs_cover_their_outputs() {
+    for (rows, parts) in [(10_000, 100), (4_096, 4_096)] {
+        for f in frame_functions() {
+            let window = plan(vec![f.clone()], true);
+            let (b, part, peer) = sorted_unit(rows, parts);
+            let n = b.num_rows();
+            let slice = super::eval::Slice {
+                batch: b.data(),
+                offset: 0,
+                len: n,
+                part_start: &part,
+                peer_start: &peer,
+            };
+            let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+            let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
+            let held: usize = out
+                .iter()
+                .map(|c| Array::get_array_memory_size(c.as_ref()))
+                .sum::<usize>()
+                + 8 * n * 2;
+            let cost = super::eval::cost(&window, n, count(&part), count(&peer)).unwrap();
+            assert!(cost >= held, "{f:?}: reserved {cost} < held {held}");
+        }
+    }
+}
+
+/// A frame with offsets over a partition larger than memory is refused
+/// (evaluating it from disk is a later part of P2-T055), never answered
+/// short.
+#[tokio::test]
+async fn a_frame_over_a_partition_on_disk_is_refused() {
+    let rows: Vec<Row> = (0..3_000)
+        .map(|i| (Some(0), Some(i), i, Some(i % 7)))
+        .collect();
+    let around = WindowFrame {
+        units: FrameUnits::Rows,
+        lower: FrameBound::Offset(-1),
+        upper: FrameBound::Offset(1),
+    };
+    let window = plan(vec![(agg(AggregateFunction::Sum, Some(3)), around)], true);
+    let (_dir, scope) = spill_scope();
+    let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+    let limit = 1 << 30;
+    let (root, ctx) = task(limit);
+    let batches: Vec<Batch> = rows.chunks(100).map(batch).collect();
+    let spills = Spills {
+        every: 1,
+        slack: Some(96 << 10),
+    };
+    let e = drive_spilling(&op, &ctx, limit, &root, &batches, spills)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert!(e.to_string().contains("larger than memory"), "{e}");
 }

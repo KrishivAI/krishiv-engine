@@ -241,7 +241,14 @@ fn call(e: &Expr) -> Result<Call<'_>> {
         FrameBound::UnboundedPreceding => Ok(Bound::UnboundedPreceding),
         FrameBound::CurrentRow => Ok(Bound::CurrentRow),
         FrameBound::UnboundedFollowing => Ok(Bound::UnboundedFollowing),
-        _ => Err(unsupported("window frames with value bounds")),
+        // The analyzer leaves a checked offset as an `int` literal.
+        FrameBound::Offset(e) => match &e.node {
+            ExprNode::Literal(krishiv_plan::Literal::Integer(v)) => {
+                Ok(Bound::Offset(i64::from(*v)))
+            }
+            _ => Err(unsupported("window frame bounds that are not int literals")),
+        },
+        _ => Err(unsupported("this window frame bound")),
     };
     let frame = WindowFrame {
         units: match frame.units {

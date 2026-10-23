@@ -386,6 +386,18 @@ impl Window {
     /// The buffered partition and `r.carry` do not fit: copies the
     /// partition to a file of its own and starts evaluating it from there.
     async fn external(&self, l: &mut Local, r: &mut Replay, ctx: &TaskContext) -> Result<()> {
+        // Frames other than whole, running and peer frames are evaluated
+        // from disk with a later part of P2-T055.
+        for f in &self.env.plan.functions {
+            if matches!(f.function, super::WindowFunction::Aggregate(_))
+                && f.shape()? == super::Shape::Frame
+            {
+                return Err(crate::aggregate::unsupported(format!(
+                    "the window frame {:?} over a partition larger than memory",
+                    f.frame
+                )));
+            }
+        }
         let carry = r
             .carry
             .take()

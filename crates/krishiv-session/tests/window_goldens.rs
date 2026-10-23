@@ -24,16 +24,19 @@ use futures::executor::block_on;
 use krishiv_session::Session;
 use serde_json::Value;
 
-/// Cases of a later part of P2-T055 (frames with value bounds, frames
-/// ending past the current row): they fail with
-/// `KRISHIV_UNSUPPORTED_FEATURE` until then.
-const PENDING: [&str; 3] = ["rows_sliding", "range_offset", "rows_current_to_end"];
+/// Cases of a later part of P2-T055 (`RANGE` frames with value bounds):
+/// they fail with `KRISHIV_UNSUPPORTED_FEATURE` until then.
+const PENDING: [&str; 1] = ["range_offset"];
 
 /// Known gaps outside window functions, with the error they give until
 /// fixed: constant arguments fold from literals and casts only, so
-/// `ntile(1 + 1)` is not foldable yet (the analyzer's general constant
-/// folding of operators is separate P2b work).
-const GAPS: [(&str, &str); 1] = [("ntile_folded", "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT")];
+/// `ntile(1 + 1)` and a frame bound `1 + 1 PRECEDING` are not foldable yet
+/// (the analyzer's general constant folding of operators is separate P2b
+/// work).
+const GAPS: [(&str, &str); 2] = [
+    ("ntile_folded", "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"),
+    ("frame_folded_bound", "KRISHIV_UNSUPPORTED_FEATURE"),
+];
 
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))

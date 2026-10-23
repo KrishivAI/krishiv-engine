@@ -37,9 +37,13 @@
 //!   precision the value is `NULL`, or with ANSI
 //!   `NUMERIC_VALUE_OUT_OF_RANGE`.
 //!
-//! Frames with value bounds (sliding frames; removable cumulative and
-//! segment-tree aggregation, Leis et al. §4.3.3-§4.3.4) and the offset
-//! functions are planned with a later part of P2-T055.
+//! - any other frame: `ROWS` frames with offsets and frames to the
+//!   partition's last row (`frames.rs`: segment trees, removable
+//!   cumulative sums, or an in-order fold where the order of additions
+//!   shows, as Spark's frames fold).
+//!
+//! `RANGE` frames with value bounds and the offset functions (`lag`,
+//! `lead`, `nth_value`) are planned with a later part of P2-T055.
 //!
 //! # Memory
 //! Before a batch is taken (`NeedMemory` otherwise) the operator reserves
@@ -57,6 +61,7 @@
 //! 1 are `KRISHIV_UNSUPPORTED_FEATURE` (incremental windows are P4).
 
 mod eval;
+mod frames;
 mod spill;
 mod stream;
 #[cfg(all(test, not(loom)))]
@@ -119,6 +124,10 @@ pub enum FrameBound {
     CurrentRow,
     /// The partition's last row.
     UnboundedFollowing,
+    /// `ROWS` only: the row this many rows after the current one (before
+    /// it when negative: `n PRECEDING` is `-n`), as Spark keeps a frame's
+    /// value bound.
+    Offset(i64),
 }
 
 /// A window frame (Spark's `SpecifiedWindowFrame`).
@@ -202,6 +211,7 @@ crate::physical::data::plan_data!(
         UnboundedPreceding,
         CurrentRow,
         UnboundedFollowing,
+        Offset(offset),
     }
 );
 crate::physical::data::plan_data!(struct WindowFrame { units, lower, upper });
@@ -240,6 +250,8 @@ pub(crate) enum Shape {
     RunningRows,
     /// From the partition's start to the end of the current peer group.
     RunningPeers,
+    /// Any other frame: each row's own range of rows (`frames.rs`).
+    Frame,
 }
 
 impl WindowFunctionPlan {
@@ -267,6 +279,12 @@ impl WindowFunctionPlan {
             (_, B::UnboundedPreceding, B::UnboundedFollowing) => Ok(Shape::Whole),
             (FrameUnits::Rows, B::UnboundedPreceding, B::CurrentRow) => Ok(Shape::RunningRows),
             (FrameUnits::Range, B::UnboundedPreceding, B::CurrentRow) => Ok(Shape::RunningPeers),
+            (FrameUnits::Rows, B::UnboundedPreceding | B::CurrentRow | B::Offset(_), upper)
+                if !matches!(upper, B::UnboundedPreceding) =>
+            {
+                Ok(Shape::Frame)
+            }
+            (FrameUnits::Range, B::CurrentRow, B::UnboundedFollowing) => Ok(Shape::Frame),
             (units, lower, upper) => Err(crate::aggregate::unsupported(format!(
                 "window frame {units:?} between {lower:?} and {upper:?}"
             ))),

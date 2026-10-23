@@ -544,6 +544,10 @@ impl Emit {
                     Shape::Whole => (None, None),
                     Shape::RunningRows => (Some(Fold::new(a, env.ansi)?), None),
                     Shape::RunningPeers => (None, Some(Fold::new(a, env.ansi)?)),
+                    // Refused before the copy (`spill.rs`).
+                    Shape::Frame => {
+                        return Err(internal("a frame evaluated from disk".to_owned()));
+                    }
                 },
                 WindowFunction::CumeDist => {
                     lead = true;
@@ -683,6 +687,9 @@ impl Emit {
                             .as_mut()
                             .ok_or_else(|| internal("a running fold missing".to_owned()))?;
                         fold_batch(env, j, fold, &b, &vec![true; n])?
+                    }
+                    Shape::Frame => {
+                        return Err(internal("a frame evaluated from disk".to_owned()));
                     }
                     Shape::RunningPeers => {
                         let lead = self

@@ -403,6 +403,96 @@ CASES: list[tuple[str, str, dict[str, str]]] = [
 ]
 
 
+# ---- P2-T055 part 2: ROWS frames with offsets, frames to the partition's end ----
+# Every aggregate shape (exact decimals, strings by bytes, doubles) over each frame, ordered totally.
+FRAME_AGGREGATES = (
+    "sum(d) OVER w, avg(d) OVER w, count(s) OVER w, min(s) OVER w, max(s) OVER w, first(s) OVER w,"
+    " last(s, true) OVER w, sum(x) OVER w, min(x) OVER w"
+)
+ROWS_FRAMES = [
+    ("rows_around", "1 PRECEDING", "1 FOLLOWING"),
+    ("rows_ahead", "2 FOLLOWING", "3 FOLLOWING"),
+    ("rows_before", "UNBOUNDED PRECEDING", "1 PRECEDING"),
+    ("rows_to_end", "1 PRECEDING", "UNBOUNDED FOLLOWING"),
+    ("rows_rest", "CURRENT ROW", "UNBOUNDED FOLLOWING"),
+    ("rows_negative_preceding", "-1 PRECEDING", "1 FOLLOWING"),
+    ("rows_empty", "1 FOLLOWING", "CURRENT ROW"),
+    ("rows_huge", "2147483647 PRECEDING", "2147483647 FOLLOWING"),
+]
+CASES += [
+    (
+        case_id,
+        f"SELECT k, s, {FRAME_AGGREGATES} FROM e"
+        f" WINDOW w AS (PARTITION BY k ORDER BY s ROWS BETWEEN {lower} AND {upper})",
+        {},
+    )
+    for case_id, lower, upper in ROWS_FRAMES
+]
+ROWS_1_1 = "ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING"
+CASES += [
+    ("rows_shorthand", "SELECT o, v, sum(v) OVER (ORDER BY o, p, v ROWS 2 PRECEDING) FROM t", {}),
+    (
+        "rows_cast_int",
+        "SELECT o, v, sum(v) OVER (ORDER BY o, p, v ROWS BETWEEN CAST(1 AS INT) PRECEDING AND CURRENT ROW) FROM t",
+        {},
+    ),
+    (
+        "rows_decimal_back",
+        "SELECT i, sum(x) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW),"
+        " avg(x) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM m",
+        NO_ANSI,
+    ),
+    (
+        "rows_decimal_back_ansi",
+        "SELECT i, sum(x) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM m",
+        {},
+    ),
+    ("rows_long_wrap", f"SELECT i, sum(x) OVER (ORDER BY i {ROWS_1_1}) FROM l", NO_ANSI),
+    ("rows_long_ansi", f"SELECT i, sum(x) OVER (ORDER BY i {ROWS_1_1}) FROM l", {}),
+    (
+        "rows_long_ansi_cancels",
+        "SELECT i, sum(x) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM l",
+        {},
+    ),
+    (
+        "rows_doubles",
+        "SELECT i, sum(x) OVER w, avg(x) OVER w, min(x) OVER w, max(x) OVER w FROM f"
+        f" WINDOW w AS (ORDER BY i {ROWS_1_1})",
+        {},
+    ),
+    (
+        "range_rest",
+        "SELECT o, count(*) OVER w, sum(v) OVER w, max(v) OVER w FROM t"
+        " WINDOW w AS (ORDER BY o RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+        {},
+    ),
+    (
+        "range_rest_partitioned",
+        "SELECT p, o, sum(v) OVER (PARTITION BY p ORDER BY o RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM t",
+        {},
+    ),
+]
+FRAME_ERRORS = [
+    ("frame_decimal_bound", "ROWS BETWEEN 1.5 PRECEDING AND CURRENT ROW", "sum(v)"),
+    ("frame_bigint_bound", "ROWS BETWEEN 1L PRECEDING AND CURRENT ROW", "sum(v)"),
+    ("frame_string_bound", "ROWS BETWEEN 'a' PRECEDING AND CURRENT ROW", "sum(v)"),
+    ("frame_smallint_bound", "ROWS BETWEEN CAST(1 AS SMALLINT) PRECEDING AND CURRENT ROW", "sum(v)"),
+    ("frame_upper_bigint", "ROWS BETWEEN 2 FOLLOWING AND 1L FOLLOWING", "sum(v)"),
+    ("frame_wrong_order", "ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING", "sum(v)"),
+    ("frame_wrong_order_2", "ROWS BETWEEN 1 FOLLOWING AND 1 PRECEDING", "sum(v)"),
+    ("frame_wrong_order_distinct", "ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING", "sum(DISTINCT v)"),
+    ("frame_column_bound", "ROWS BETWEEN o PRECEDING AND CURRENT ROW", "sum(v)"),
+]
+CASES += [(case_id, f"SELECT {call} OVER (ORDER BY o {frame}) FROM t", {}) for case_id, frame, call in FRAME_ERRORS]
+CASES += [
+    (
+        "frame_folded_bound",
+        "SELECT sum(v) OVER (ORDER BY o, p, v ROWS BETWEEN 1 + 1 PRECEDING AND CURRENT ROW) FROM t",
+        {},
+    ),
+]
+
+
 def view_sql(name: str, columns: str, rows: list[tuple[str | None, ...]]) -> str:
     cols = [c.strip().split(" ", 1) for c in columns.split(", ")]
 
