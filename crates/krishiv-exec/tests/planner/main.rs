@@ -18,6 +18,7 @@ mod runtime_filters;
 mod semantics;
 mod sum_rewrite;
 mod tpch;
+mod window;
 mod write;
 
 use std::sync::Arc;

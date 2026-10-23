@@ -199,10 +199,34 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
             kind,
             condition,
         } => push_join(plan, left, right, *kind, condition, movable),
+        // A predicate on partitioning columns only keeps or drops whole
+        // partitions: it filters below the window (Spark's
+        // `PushPredicateThroughNonJoin`, when every partitioning
+        // expression is a column).
+        PlanNode::Window {
+            input,
+            partition_by,
+            ..
+        } if partition_by.iter().all(|e| column_id(e).is_some()) => {
+            let keys: Attrs = partition_by.iter().filter_map(|e| column_id(e)).collect();
+            through(plan, input, movable, |p| {
+                let refs = references(p);
+                (!refs.is_empty() && refs.is_subset(&keys) && !has_subquery(p))
+                    .then(|| Arc::clone(p))
+            })
+        }
         _ => (Arc::clone(plan), movable),
     };
     stay.extend(fixed);
     (out, stay)
+}
+
+/// The attribute `e` reads when it is a column.
+fn column_id(e: &Expr) -> Option<AttrId> {
+    match &e.node {
+        krishiv_plan::ExprNode::Resolved(krishiv_plan::ResolvedExpr::Column(c)) => Some(c.id),
+        _ => None,
+    }
 }
 
 /// Moves each predicate `map` accepts below `plan` (onto `input`, rewritten

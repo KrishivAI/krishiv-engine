@@ -55,9 +55,25 @@ pub(super) struct Cx<'s> {
     pub(super) lenient: bool,
     /// Whether names may resolve in enclosing queries.
     pub(super) outer: bool,
+    /// Where window expressions may appear.
+    pub(super) windows: WindowUse,
     pub(super) env: &'s Arc<Env>,
     /// The operator, as Spark names it in errors.
     pub(super) op: &'static str,
+}
+
+/// Where an operator's expressions may hold window expressions, and the
+/// error Spark raises where they may not.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum WindowUse {
+    /// A select list (`Project`, `Aggregate`): windows are extracted.
+    Allowed,
+    /// `WHERE`: `WINDOW_FUNCTION_NOT_ALLOWED_IN_CLAUSE`.
+    Where,
+    /// `HAVING`: `WINDOW_FUNCTION_NOT_ALLOWED_IN_CLAUSE`.
+    Having,
+    /// Anywhere else: `UNSUPPORTED_EXPR_FOR_OPERATOR`.
+    Other,
 }
 
 /// A bound expression.
@@ -65,8 +81,11 @@ pub(super) struct Cx<'s> {
 pub(super) struct Bound {
     pub(super) expr: Arc<Expr>,
     pub(super) ty: ArgType,
-    /// The first aggregate call inside (outside subqueries).
+    /// The first aggregate call inside (outside subqueries), not counting
+    /// window aggregates (`sum(x) OVER w`).
     pub(super) agg: Option<Origin>,
+    /// The first window expression inside (outside subqueries).
+    pub(super) win: Option<Origin>,
     /// The outermost query level referenced, for outer references.
     pub(super) outer: Option<usize>,
     /// The lateral column aliases referenced (their attribute ids).
@@ -239,60 +258,96 @@ pub(super) fn literal_type(v: &Literal) -> Option<DataType> {
     })
 }
 
+/// Where a node is bound: inside an aggregate call's arguments (`agg`),
+/// and whether it is the function of a window expression (`window_fn`:
+/// `sum(x)` in `sum(x) OVER w` is a window aggregate, not an aggregate of
+/// the operator).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Ctx {
+    agg: bool,
+    window_fn: bool,
+}
+
 enum Step {
-    Enter(Arc<Expr>, bool),
-    Exit(Arc<Expr>, bool),
+    Enter(Arc<Expr>, Ctx),
+    Exit(Arc<Expr>, Ctx),
     /// The first expression's result is the second's (a rewritten call).
-    Link(usize, Arc<Expr>, bool),
+    Link(usize, Arc<Expr>, Ctx),
 }
 
 impl Resolver<'_> {
     /// Binds `e` in `cx`, post-order with an explicit stack; a node shared
     /// within the expression is bound once.
     pub(super) fn expr(&mut self, e: &Arc<Expr>, cx: &Cx<'_>) -> Result<Bound, AnalysisError> {
-        let mut done: HashMap<(usize, bool), Bound> = HashMap::new();
+        let mut done: HashMap<(usize, Ctx), Bound> = HashMap::new();
         // Rewritten calls stay alive for the pass: `done` is keyed by
         // address.
         let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
-        let mut stack = vec![Step::Enter(Arc::clone(e), false)];
+        let top = Ctx {
+            agg: false,
+            window_fn: false,
+        };
+        let mut stack = vec![Step::Enter(Arc::clone(e), top)];
         while let Some(step) = stack.pop() {
             match step {
-                Step::Enter(x, in_agg) => {
-                    if done.contains_key(&(addr(&*x), in_agg)) {
+                Step::Enter(x, ctx) => {
+                    if done.contains_key(&(addr(&*x), ctx)) {
                         continue;
                     }
                     if let Some(rewritten) = self.star_args(&x, cx)? {
                         rewritten_calls.push(Arc::clone(&rewritten));
-                        stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), in_agg));
-                        stack.push(Step::Enter(rewritten, in_agg));
+                        stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
+                        stack.push(Step::Enter(rewritten, ctx));
                         continue;
                     }
-                    let inner = in_agg || self.is_aggregate(&x);
-                    stack.push(Step::Exit(Arc::clone(&x), in_agg));
-                    let mut kids = Vec::new();
-                    x.for_each_child(&mut |c| kids.push(Arc::clone(c)));
-                    stack.extend(kids.into_iter().rev().map(|c| Step::Enter(c, inner)));
+                    stack.push(Step::Exit(Arc::clone(&x), ctx));
+                    let kids = self.child_ctx(&x, ctx);
+                    stack.extend(kids.into_iter().rev().map(|(c, k)| Step::Enter(c, k)));
                 }
-                Step::Link(from, to, in_agg) => {
-                    if let Some(b) = done.get(&(addr(&*to), in_agg)).cloned() {
-                        done.insert((from, in_agg), b);
+                Step::Link(from, to, ctx) => {
+                    if let Some(b) = done.get(&(addr(&*to), ctx)).cloned() {
+                        done.insert((from, ctx), b);
                     }
                 }
-                Step::Exit(x, in_agg) => {
-                    let inner = in_agg || self.is_aggregate(&x);
-                    let mut kids = Vec::new();
-                    x.for_each_child(&mut |c| {
-                        if let Some(b) = done.get(&(addr(&**c), inner)) {
-                            kids.push(b.clone());
-                        }
-                    });
-                    let b = self.expr_node(&x, &kids, in_agg, cx)?;
-                    done.insert((addr(&*x), in_agg), b);
+                Step::Exit(x, ctx) => {
+                    let kids: Vec<Bound> = self
+                        .child_ctx(&x, ctx)
+                        .iter()
+                        .filter_map(|(c, k)| done.get(&(addr(&**c), *k)).cloned())
+                        .collect();
+                    let b = self.expr_node(&x, &kids, ctx.agg, ctx.window_fn, cx)?;
+                    done.insert((addr(&*x), ctx), b);
                 }
             }
         }
-        done.remove(&(addr(&**e), false))
+        done.remove(&(addr(&**e), top))
             .ok_or_else(|| unsupported("an expression shape", e.origin))
+    }
+
+    /// The children of `x` (bound in context `ctx`) with their contexts:
+    /// inside an aggregate call's arguments once inside one (a window
+    /// aggregate's arguments are not), the window function of a window
+    /// expression marked.
+    #[inline(never)]
+    fn child_ctx(&self, x: &Expr, ctx: Ctx) -> Vec<(Arc<Expr>, Ctx)> {
+        let agg = ctx.agg || (!ctx.window_fn && self.is_aggregate(x));
+        let mut kids = Vec::new();
+        x.for_each_child(&mut |c| {
+            kids.push((
+                Arc::clone(c),
+                Ctx {
+                    agg,
+                    window_fn: false,
+                },
+            ));
+        });
+        if let ExprNode::Window(_) = &x.node
+            && let Some((_, first)) = kids.first_mut()
+        {
+            // The window function: `for_each_child` visits it first.
+            first.window_fn = true;
+        }
+        kids
     }
 
     fn is_aggregate(&self, e: &Expr) -> bool {
@@ -394,10 +449,12 @@ impl Resolver<'_> {
         e: &Arc<Expr>,
         kids: &[Bound],
         in_agg: bool,
+        window_fn: bool,
         cx: &Cx<'_>,
     ) -> Result<Bound, AnalysisError> {
         let outer = kids.iter().filter_map(|k| k.outer).min();
         let agg = kids.iter().find_map(|k| k.agg);
+        let win = kids.iter().find_map(|k| k.win);
         let mut lateral: Vec<AttrId> = Vec::new();
         for id in kids.iter().flat_map(|k| k.lateral.iter()) {
             if !lateral.contains(id) {
@@ -408,6 +465,7 @@ impl Resolver<'_> {
             expr: Arc::clone(e),
             ty,
             agg,
+            win,
             outer,
             lateral: lateral.clone(),
             shown: None,
@@ -444,6 +502,11 @@ impl Resolver<'_> {
                         e.origin,
                     ));
                 }
+                if let Some(filter) = kids.get(n)
+                    && filter.win.is_some()
+                {
+                    return Err(super::windows::window_in_filter(filter, e.origin));
+                }
                 if let Some(op) = Builtin::from_name(&f.name) {
                     return self.operator_call(op, e.origin, &kids[..n]);
                 }
@@ -466,10 +529,8 @@ impl Resolver<'_> {
                         ));
                     }
                 };
-                if entry.kind == FunctionKind::Aggregate
-                    && let Some(inner) = kids.iter().find_map(|k| k.agg)
-                {
-                    return Err(AnalysisError::new(NestedAggregateFunction {}, inner));
+                if !window_fn {
+                    call_checks(&entry, e, kids, n)?;
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
@@ -487,7 +548,7 @@ impl Resolver<'_> {
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
                 let shown = self.call_shown(&f.name, &expr, kids, &call_kids);
                 Bound {
-                    agg: if entry.kind == FunctionKind::Aggregate {
+                    agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
                         Some(e.origin)
                     } else {
                         agg
@@ -578,6 +639,7 @@ impl Resolver<'_> {
                     })
                 }
             }
+            ExprNode::Window(w) => self.window(e, w, kids, cx)?,
             ExprNode::Resolved(r) => keep(match r {
                 ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) => column(c),
                 ResolvedExpr::Alias { output, .. } => column(output),
@@ -660,7 +722,28 @@ impl Resolver<'_> {
                 .unwrap_or(e.origin);
             AnalysisError::new(err, origin)
         })?;
-        Ok((call_kids, ty))
+        Ok((Self::folded_ntile(entry, &constants, call_kids), ty))
+    }
+
+    /// `ntile`'s bucket count as the literal it folds to (`ntile(1 + 1)`):
+    /// the window operator reads a literal. The rule above checked it is an
+    /// `int` constant.
+    #[inline(never)]
+    fn folded_ntile(
+        entry: &FunctionEntry,
+        constants: &[Option<Constant>],
+        mut kids: Vec<Bound>,
+    ) -> Vec<Bound> {
+        if entry.id.name() == "ntile"
+            && let (Some(Some(Constant::Integral(n))), Some(k)) =
+                (constants.first(), kids.first_mut())
+            && let Ok(n) = i32::try_from(*n)
+        {
+            k.expr = Arc::new(
+                Expr::new(ExprNode::Literal(Literal::Integer(n))).with_origin(k.expr.origin),
+            );
+        }
+        kids
     }
 
     /// The shown form of the call `expr` (see [`shown_call`]); `date_add(d,
@@ -827,6 +910,7 @@ impl Resolver<'_> {
             expr,
             ty: arg_type(typed.data_type, typed.nullable),
             agg: kids.iter().find_map(|k| k.agg),
+            win: kids.iter().find_map(|k| k.win),
             outer: kids.iter().filter_map(|k| k.outer).min(),
             lateral,
         })
@@ -937,6 +1021,7 @@ impl Resolver<'_> {
                 expr: super::ops::col_expr(&a.col, Origin::UNKNOWN),
                 ty: column(&a.col),
                 agg: None,
+                win: None,
                 outer: None,
                 lateral: Vec::new(),
                 shown: None,
@@ -1069,6 +1154,7 @@ impl Resolver<'_> {
             expr: Arc::new(Expr::new(expr).with_origin(origin)),
             ty: column(col),
             agg: None,
+            win: None,
             outer,
             lateral: Vec::new(),
             shown: None,
@@ -1393,6 +1479,36 @@ fn levenshtein(a: &str, b: &str) -> usize {
 /// The longest generated name, in bytes.
 const MAX_NAME: usize = 64 << 10;
 
+/// The checks of a call that is not a window's function, out of line (the
+/// binding frame stays small): a window function needs `OVER`; an
+/// aggregate holds no aggregate and no window. A window aggregate
+/// (`sum(sum(x)) OVER w`) may hold both.
+#[inline(never)]
+fn call_checks(
+    entry: &FunctionEntry,
+    e: &Arc<Expr>,
+    kids: &[Bound],
+    n: usize,
+) -> Result<(), AnalysisError> {
+    if entry.kind == FunctionKind::Window {
+        let shown = with_children(e, kids.iter().map(Bound::shown).collect());
+        return Err(super::windows::without_over(
+            entry.id.name(),
+            &shown,
+            e.origin,
+        ));
+    }
+    if entry.kind == FunctionKind::Aggregate {
+        if let Some(inner) = kids.iter().find_map(|k| k.agg) {
+            return Err(AnalysisError::new(NestedAggregateFunction {}, inner));
+        }
+        if kids[..n].iter().any(|k| k.win.is_some()) {
+            return Err(super::windows::window_in_aggregate(e.origin));
+        }
+    }
+    Ok(())
+}
+
 /// Spark's generated name for an unaliased expression (`toPrettySQL`):
 /// `(a + 1)`, `count(1)`, `CASE WHEN ... END`. Built bottom-up with an
 /// explicit stack, once per distinct node.
@@ -1486,6 +1602,7 @@ fn pretty_node(x: &Expr, k: &[&str]) -> String {
             }
         }
         ExprNode::Star(_) => "*".to_owned(),
+        ExprNode::Window(w) => pretty_window(w, k),
         ExprNode::Function(FunctionCall { name, distinct, .. }) => {
             call(name, Builtin::from_name(name), *distinct, k)
         }
@@ -1501,6 +1618,84 @@ fn pretty_node(x: &Expr, k: &[&str]) -> String {
                 None => text,
             }
         }
+    }
+}
+
+/// `f OVER (...)` as Spark names it: the function (`RANK()`,
+/// `DENSE_RANK()` and `PERCENT_RANK()` upper case, as Spark's `RankLike`
+/// writes them), then the window as `WindowSpecDefinition.sql` writes it.
+/// `k` holds the children's names in [`Expr::for_each_child`] order.
+fn pretty_window(w: &crate::WindowExpr, k: &[&str]) -> String {
+    use crate::{FrameBound, FrameUnits, WindowSpecRef};
+    let function = match &w.function.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.kind == FunctionKind::Window
+                && ["rank", "dense_rank", "percent_rank"].contains(&f.id.name()) =>
+        {
+            format!("{}()", f.id.name().to_uppercase())
+        }
+        _ => k[0].to_owned(),
+    };
+    let spec = match &w.window {
+        WindowSpecRef::Named(name) => return format!("{function} OVER {name}"),
+        WindowSpecRef::Spec(spec) => spec,
+    };
+    let mut parts = Vec::new();
+    let mut rest = k.get(1..).unwrap_or_default().iter();
+    if !spec.partition_by.is_empty() {
+        let names: Vec<&str> = rest
+            .by_ref()
+            .take(spec.partition_by.len())
+            .copied()
+            .collect();
+        parts.push(format!("PARTITION BY {}", names.join(", ")));
+    }
+    if !spec.order_by.is_empty() {
+        let names: Vec<String> = spec
+            .order_by
+            .iter()
+            .zip(rest.by_ref())
+            .map(|(o, n)| format!("{n} {}", order_sql(o)))
+            .collect();
+        parts.push(format!("ORDER BY {}", names.join(", ")));
+    }
+    let Some(f) = &spec.frame else {
+        // An unresolved window, as Spark's errors show one.
+        parts.push("unspecifiedframe$()".to_owned());
+        return format!("{function} OVER ({})", parts.join(" "));
+    };
+    {
+        let bound = |b: &FrameBound, rest: &mut std::slice::Iter<'_, &str>| match b {
+            FrameBound::UnboundedPreceding => "UNBOUNDED PRECEDING".to_owned(),
+            FrameBound::CurrentRow => "CURRENT ROW".to_owned(),
+            FrameBound::UnboundedFollowing => "UNBOUNDED FOLLOWING".to_owned(),
+            FrameBound::Offset(e) => {
+                let own = rest.next().copied().unwrap_or_default();
+                match crate::expr::negated(e) {
+                    Some(n) => format!("{} PRECEDING", pretty(n)),
+                    None => format!("{own} FOLLOWING"),
+                }
+            }
+        };
+        let units = match f.units {
+            FrameUnits::Rows => "ROWS",
+            FrameUnits::Range => "RANGE",
+        };
+        let lower = bound(&f.lower, &mut rest);
+        let upper = bound(&f.upper, &mut rest);
+        parts.push(format!("{units} BETWEEN {lower} AND {upper}"));
+    }
+    format!("{function} OVER ({})", parts.join(" "))
+}
+
+/// `ASC NULLS FIRST` and the like (Spark's `SortOrder.sql` after the key).
+pub(super) const fn order_sql(o: &crate::SortOrder) -> &'static str {
+    use crate::{NullOrdering, SortDirection};
+    match (o.direction, o.nulls) {
+        (SortDirection::Ascending, NullOrdering::NullsFirst) => "ASC NULLS FIRST",
+        (SortDirection::Ascending, NullOrdering::NullsLast) => "ASC NULLS LAST",
+        (SortDirection::Descending, NullOrdering::NullsFirst) => "DESC NULLS FIRST",
+        (SortDirection::Descending, NullOrdering::NullsLast) => "DESC NULLS LAST",
     }
 }
 
@@ -1652,6 +1847,24 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
             ExprNode::Literal(v) => format!("l{v:?}"),
             ExprNode::Cast { to, mode, .. } => format!("x{}:{mode:?}", to.simple_string()),
             ExprNode::Subquery { plan, .. } => format!("s{}", addr(&**plan)),
+            // The children (function, partitioning, ordering, offsets) are
+            // keyed below; the shape says which is which.
+            ExprNode::Window(w) => match &w.window {
+                crate::WindowSpecRef::Named(name) => format!("wn{name}"),
+                crate::WindowSpecRef::Spec(spec) => format!(
+                    "w{}:{:?}:{:?}",
+                    spec.partition_by.len(),
+                    spec.order_by
+                        .iter()
+                        .map(|o| (o.direction, o.nulls))
+                        .collect::<Vec<_>>(),
+                    spec.frame.as_ref().map(|f| (
+                        f.units,
+                        frame_shape(&f.lower),
+                        frame_shape(&f.upper)
+                    )),
+                ),
+            },
             other => format!("u{other:?}"),
         }
         .into_bytes();
@@ -1727,4 +1940,15 @@ fn collect_operands(
         }
     });
     done
+}
+
+/// A frame bound's kind, for [`semantic_key`] (an offset's value is a
+/// child).
+const fn frame_shape(b: &crate::FrameBound) -> u8 {
+    match b {
+        crate::FrameBound::UnboundedPreceding => 0,
+        crate::FrameBound::CurrentRow => 1,
+        crate::FrameBound::UnboundedFollowing => 2,
+        crate::FrameBound::Offset(_) => 3,
+    }
 }

@@ -62,7 +62,7 @@ jobs:
       # cargo-fuzz has no --locked; the committed fuzz/Cargo.lock pins the graph.
       - name: differential (4.5 hours)
         working-directory: crates/krishiv-kernels/fuzz
-        run: cargo "+$NIGHTLY" fuzz run differential -- -max_total_time=16200
+        run: cargo "+$NIGHTLY" fuzz run --target x86_64-unknown-linux-gnu differential -- -max_total_time=16200
       - name: Save the corpus
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -100,7 +100,7 @@ jobs:
       - name: The planted panic is found
         working-directory: fuzz
         run: |
-          if cargo "+$NIGHTLY" fuzz run planted_panic -- -dict=planted.dict -max_total_time=300; then
+          if cargo "+$NIGHTLY" fuzz run --target x86_64-unknown-linux-gnu planted_panic -- -dict=planted.dict -max_total_time=300; then
             echo "::error::the planted panic was not found"
             exit 1
           fi

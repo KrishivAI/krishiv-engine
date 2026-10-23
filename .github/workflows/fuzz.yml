@@ -83,11 +83,13 @@ jobs:
               KRISHIV_FUZZ_SEED_DIR="$PWD/fuzz/corpus/$TARGET" \
                 cargo test -p krishiv-connect --test goldens --locked ;;
           esac
+      # `--target`: the prebuilt cargo-fuzz defaults to a musl target the
+      # sanitizers cannot link for (see the fuzz-build job of ci.yml).
       - name: Fuzz
         working-directory: fuzz
         run: |
           read -ra extra <<< "$FUZZ_ARGS"
-          cargo "+$NIGHTLY" fuzz run "$TARGET" "corpus/$TARGET" -- \
+          cargo "+$NIGHTLY" fuzz run --target x86_64-unknown-linux-gnu "$TARGET" "corpus/$TARGET" -- \
             "-max_total_time=$FUZZ_SECONDS" "${extra[@]}" -timeout=10 -rss_limit_mb=2048
       - name: Triage the reproducers into regression inputs
         if: failure()
@@ -103,7 +105,7 @@ jobs:
       - name: Shrink the corpus
         if: success() && inputs.minimize
         working-directory: fuzz
-        run: cargo "+$NIGHTLY" fuzz cmin "$TARGET" "corpus/$TARGET"
+        run: cargo "+$NIGHTLY" fuzz cmin --target x86_64-unknown-linux-gnu "$TARGET" "corpus/$TARGET"
       - name: Save the corpus
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

@@ -35,7 +35,8 @@ use std::collections::HashSet;
 use krishiv_common::error::{
     DuplicatedCteNames, IncompatibleJoinTypes, InvalidInlineTableNumColumnsMismatch,
     InvalidParameterValueDatetimeUnit, InvalidSqlSyntaxEmptyInPredicate,
-    InvalidSqlSyntaxRepetitiveWindowDefinition, KrishivError, LegacyErrorTemp0035,
+    InvalidSqlSyntaxInvalidWindowReference, InvalidSqlSyntaxRepetitiveWindowDefinition,
+    InvalidSqlSyntaxUnresolvedWindowReference, KrishivError, LegacyErrorTemp0035,
     LegacyErrorTemp0051, LegacyErrorTemp0064, UnsupportedFeatureLateralJoinUsing,
 };
 
@@ -397,6 +398,28 @@ impl Checker<'_> {
                     Span::new(start, end),
                 ));
             }
+        }
+        // A name defined as another name: that one must be a
+        // specification (Spark's `AstBuilder.withWindowClause`).
+        for w in windows {
+            let WindowRef::Named(target) = &w.window else {
+                continue;
+            };
+            let found = windows.iter().find(|d| d.name.value == target.value);
+            let error: KrishivError = match found.map(|d| &d.window) {
+                Some(WindowRef::Spec(_)) => continue,
+                Some(_) => InvalidSqlSyntaxInvalidWindowReference {
+                    window_name: quote(&target.value),
+                }
+                .into(),
+                None => InvalidSqlSyntaxUnresolvedWindowReference {
+                    window_name: quote(&target.value),
+                }
+                .into(),
+            };
+            let start = self.token_before(windows[0].span.start);
+            let end = windows.last().map_or(w.span.end, |l| l.span.end);
+            return Err(at(error, Span::new(start, end)));
         }
         Ok(())
     }

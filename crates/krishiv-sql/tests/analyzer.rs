@@ -683,3 +683,80 @@ fn repeated_correlation_keys_stay_unique() {
     check(a.plan.root());
     assert!(a.plan.root().to_string().contains("Aggregate [a#3], "));
 }
+
+/// The window-function goldens (`tests/fixtures/spark-4.2.0/window-goldens.json`,
+/// generated from a real Spark run) resolve to Spark's output names, types
+/// and nullability over the same schemas, and their resolved plans are a
+/// fixed point. Rows and errors run end to end in `krishiv-session`'s
+/// `window_goldens` test.
+#[test]
+fn window_goldens_resolve_to_a_fixed_point() {
+    let path = root().join("tests/fixtures/spark-4.2.0/window-goldens.json");
+    let g: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut c = MemoryCatalog::new("spark_catalog");
+    for (name, t) in g["tables"].as_object().unwrap() {
+        let columns = t["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| TableColumn {
+                name: f["name"].as_str().unwrap().to_owned(),
+                data_type: krishiv_types::parse_data_type(f["type"].as_str().unwrap()).unwrap(),
+                nullable: f["nullable"].as_bool().unwrap(),
+            })
+            .collect();
+        c = c.with_table(&["default"], name, columns, None);
+    }
+    let mut failures = Vec::new();
+    let mut resolved = 0;
+    let mut pending = Vec::new();
+    for case in g["cases"].as_array().unwrap() {
+        if !case["ok"].as_bool().unwrap() {
+            continue;
+        }
+        let sql = case["sql"].as_str().unwrap();
+        let conf = conf(&case["conf"]);
+        let ctx = context(c.clone(), conf);
+        let plan = parse_and_lower(sql, &ParserOptions::default(), SourceId(0)).unwrap();
+        let a = match block_on(DefaultAnalyzer.analyze(&plan, &ctx)) {
+            Ok(a) => a,
+            // Frames with value bounds are a later part of P2-T055.
+            Err(e) if e.error.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE" => {
+                pending.push(case["id"].as_str().unwrap());
+                continue;
+            }
+            Err(e) => {
+                failures.push(format!("{sql}: {}", e.error));
+                continue;
+            }
+        };
+        resolved += 1;
+        let want = case["output"].as_array().unwrap();
+        let got: Vec<(String, String, bool)> = a
+            .output
+            .iter()
+            .map(|c| (c.name.clone(), c.data_type.simple_string(), c.nullable))
+            .collect();
+        let want: Vec<(String, String, bool)> = want
+            .iter()
+            .map(|w| {
+                (
+                    w["name"].as_str().unwrap().to_owned(),
+                    w["type"].as_str().unwrap().to_owned(),
+                    w["nullable"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        if got != want {
+            failures.push(format!("{sql}: {got:?}\n  Spark {want:?}"));
+        }
+        let again = block_on(DefaultAnalyzer.analyze(&a.plan, &ctx)).unwrap();
+        if !again.plan.structurally_eq(&a.plan) || a.plan.root().resolved_output() != Some(a.output)
+        {
+            failures.push(format!("{sql}: not a fixed point\n{}", again.plan.root()));
+        }
+    }
+    assert_eq!(pending, ["rows_sliding", "range_offset"]);
+    assert_eq!(resolved, 67);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
