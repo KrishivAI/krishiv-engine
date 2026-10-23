@@ -154,9 +154,16 @@ impl Window {
         }
         // The scratch the rows cannot fund comes from the pool now, or the
         // spill is declined rather than failing mid-write.
-        let held = l.pending_bytes();
+        // What the spill frees: a partly emitted front batch's bytes stay
+        // reserved for its first rows waiting in `out` (the last of them
+        // releases them).
+        let shared = match (l.out.is_empty(), l.pending.front()) {
+            (false, Some(p)) if p.offset > 0 => p.reserved,
+            _ => 0,
+        };
+        let freed = l.pending_bytes() - shared;
         let mut topup = ctx.consumer().reservation().for_spill_scratch();
-        let short = SPILL_SCRATCH.saturating_sub(held);
+        let short = SPILL_SCRATCH.saturating_sub(freed);
         if must {
             topup
                 .grow(short)
@@ -167,16 +174,12 @@ impl Window {
         }
         topup.shrink_to_credit(topup.size());
         let mut batches = Vec::with_capacity(l.pending.len());
-        let mut freed = 0;
         for p in l.pending.drain(..) {
             let n = p.batch.num_rows();
             batches.push(Batch::new(p.batch.slice(p.offset, n - p.offset)));
-            match l.out.back_mut() {
-                // Its first rows wait in `out`, sharing its buffers: the
-                // last of them releases its bytes.
-                Some((_, release)) if p.offset > 0 => *release += p.reserved,
-                _ => freed += p.reserved,
-            }
+        }
+        if let Some((_, release)) = l.out.back_mut() {
+            *release += shared;
         }
         l.last_start = None;
         // The bytes become the writer's scratch, as grant credit.
@@ -230,6 +233,10 @@ impl Window {
             ));
         }
         let files = l.spilled.take().unwrap_or_default();
+        // The files are this step's until the flush phase holds them: a
+        // refused or cancelled reservation leaves the window failed, never
+        // a flush phase that finds no rows.
+        l.failed = Some(cancelled());
         let read = files
             .iter()
             .map(SpillFile::max_read_reservation)
@@ -237,10 +244,12 @@ impl Window {
             .unwrap_or(0);
         let base = read + SPILL_SCRATCH;
         let mut headroom = ctx.consumer().reservation();
-        headroom
-            .grow(base)
-            .await
-            .map_err(krishiv_common::error::KrishivError::from)?;
+        if let Err(e) = headroom.grow(base).await {
+            let e = krishiv_common::error::KrishivError::from(e);
+            l.failed = Some(e.clone());
+            return Err(e);
+        }
+        l.failed = None;
         // The rows are read back as a new input.
         l.started = false;
         l.prev_partition = None;
