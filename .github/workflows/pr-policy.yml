@@ -10,6 +10,8 @@ name: PR policy
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
 

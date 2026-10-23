@@ -17,6 +17,9 @@ use krishiv_exec::physical::{
     SubqueryValueKind,
 };
 use krishiv_exec::planner::ExplainNode;
+use krishiv_exec::window::{
+    FrameBound, FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan,
+};
 use krishiv_exec::{RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{
@@ -213,6 +216,64 @@ pub(crate) fn aggregate_exprs() -> Vec<AggregateExpr> {
     ]
 }
 
+fn window_function(function: WindowFunction, frame: WindowFrame, name: &str) -> WindowFunctionPlan {
+    WindowFunctionPlan {
+        function,
+        frame,
+        filter: None,
+        name: name.to_owned(),
+    }
+}
+
+/// Every ranking function, partitioned and ordered.
+pub(crate) fn window_ranking() -> WindowPlan {
+    let frame = WindowFrame::running(FrameUnits::Range);
+    WindowPlan {
+        partition_by: vec![1, 0],
+        order_by: vec![SortKey::asc(0), SortKey::desc(2)],
+        functions: vec![
+            window_function(WindowFunction::RowNumber, frame, "rn"),
+            window_function(WindowFunction::Rank, frame, "rk"),
+            window_function(WindowFunction::DenseRank, frame, "drk"),
+            window_function(WindowFunction::PercentRank, frame, "prk"),
+            window_function(WindowFunction::CumeDist, frame, "cd"),
+            window_function(WindowFunction::Ntile(4), frame, "nt"),
+        ],
+    }
+}
+
+/// Aggregates over every frame the format carries (both units, the whole
+/// partition, the running frame and `CURRENT ROW` at both ends, which the
+/// operator itself refuses), a `FILTER` column and the aggregate input kinds.
+pub(crate) fn window_aggregates() -> WindowPlan {
+    let aggs = aggregate_exprs();
+    let over = |i: usize, frame, name: &str| {
+        window_function(WindowFunction::Aggregate(aggs[i].clone()), frame, name)
+    };
+    let current = |units| WindowFrame {
+        units,
+        lower: FrameBound::CurrentRow,
+        upper: FrameBound::CurrentRow,
+    };
+    WindowPlan {
+        partition_by: Vec::new(),
+        order_by: Vec::new(),
+        functions: vec![
+            over(0, WindowFrame::whole(FrameUnits::Rows), "whole_rows"),
+            over(2, WindowFrame::whole(FrameUnits::Range), "whole_range"),
+            over(3, WindowFrame::running(FrameUnits::Rows), "run_rows"),
+            over(4, WindowFrame::running(FrameUnits::Range), "run_range"),
+            over(5, current(FrameUnits::Rows), "cur_rows"),
+            over(6, current(FrameUnits::Range), "cur_range"),
+            WindowFunctionPlan {
+                filter: Some(3),
+                ..over(7, WindowFrame::whole(FrameUnits::Rows), "filtered")
+            },
+            over(8, WindowFrame::running(FrameUnits::Rows), "merged"),
+        ],
+    }
+}
+
 pub(crate) fn residual() -> Residual {
     Residual {
         layout: vec![AttrId(1), AttrId(2), AttrId(3)],
@@ -347,6 +408,23 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     aggregates: aggregate_exprs(),
                     output: AggregateOutput::Partial,
                 },
+            },
+        ),
+        (
+            "window_ranking",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_ranking(),
+            },
+        ),
+        (
+            "window_aggregates",
+            PhysNode::Window {
+                input: boxed(PhysNode::Sort {
+                    input: boxed(scan()),
+                    keys: vec![SortKey::asc(0), SortKey::desc(1)],
+                }),
+                window: window_aggregates(),
             },
         ),
         (

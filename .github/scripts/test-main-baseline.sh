@@ -21,10 +21,10 @@ set -euo pipefail
 case "$1 $2" in
   "run list") cat "$FAKE_RUNS_FILE" ;;
   "api repos/"*"/actions/artifacts?"*) grep -c . "$FAKE_ARTIFACTS_FILE" || true ;;
-  "api repos/"*"/artifacts")
+  "api repos/"*"/artifacts?"*)
     id=${2#repos/*/actions/runs/}
     id=${id%/artifacts}
-    # `ID` is a live artifact, `ID:expired` an expired one; none prints nothing.
+    id=${id%%/artifacts*}
     if grep -qx "$id" "$FAKE_ARTIFACTS_FILE"; then echo live
     elif grep -qx "$id:expired" "$FAKE_ARTIFACTS_FILE"; then echo expired; fi
     ;;

@@ -95,7 +95,7 @@ git cat-file -e "$target^{commit}" || {
 # live | expired | empty: the state of ARTIFACT in run $1.
 artifact_state() {
   local state
-  state=$(retry gh api "repos/$REPO/actions/runs/$1/artifacts" \
+  state=$(retry gh api "repos/$REPO/actions/runs/$1/artifacts?name=$ARTIFACT&per_page=100" \
     --jq '[.artifacts[] | select(.name == env.ARTIFACT) | if .expired then "expired" else "live" end] | sort | first // ""') || {
     echo "::error::cannot list the artifacts of run $1" >&2
     exit 1

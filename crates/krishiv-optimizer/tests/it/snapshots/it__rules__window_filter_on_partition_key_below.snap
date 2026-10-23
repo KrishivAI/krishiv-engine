@@ -1,0 +1,9 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a FROM (SELECT a, b, rank() OVER (PARTITION BY a ORDER BY c) AS r FROM t) WHERE r = 1 AND a > 0"
+---
+Project [a#0]
++- Filter (_we0#4 == 1)
+   +- Window [rank() OVER (PARTITION BY a#0 ORDER BY c#2 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#4], [a#0], [c#2 ASC NULLS FIRST]
+      +- Filter (a#0 > 0)
+         +- Scan spark_catalog.default.t [a#0, c#2]

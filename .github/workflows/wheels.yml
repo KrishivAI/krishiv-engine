@@ -308,7 +308,7 @@ jobs:
       # merge-base with main.
       - name: Select the main baseline
         id: baseline
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
         continue-on-error: ${{ github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -330,7 +330,7 @@ jobs:
           source=$(.github/scripts/main-baseline.sh)
           echo "source=$source" >> "$GITHUB_OUTPUT"
       - name: Wheel sizes (no pull request)
-        if: github.event_name != 'pull_request' && steps.baseline.outcome == 'success'
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && steps.baseline.outcome == 'success'
         env:
           EVENT: ${{ github.event_name }}
           SOURCE: ${{ steps.baseline.outputs.source }}

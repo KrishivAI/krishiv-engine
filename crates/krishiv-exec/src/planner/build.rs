@@ -363,6 +363,15 @@ impl<'a> Planner<'a> {
                 let input = self.plan(input)?;
                 self.replicate(input, count)
             }
+            PlanNode::Window {
+                input,
+                exprs,
+                partition_by,
+                order_by,
+            } => {
+                let input = self.plan(input)?;
+                self.window(input, exprs, partition_by, order_by)
+            }
             PlanNode::OneRowRelation => Ok(one_row()),
             _ => {
                 let text = p.to_string();
@@ -1200,7 +1209,7 @@ pub(crate) fn list(exprs: &[Arc<Expr>]) -> String {
     )
 }
 
-fn orders(order: &[SortOrder]) -> String {
+pub(crate) fn orders(order: &[SortOrder]) -> String {
     let text = order.iter().map(|o| {
         let dir = match o.direction {
             SortDirection::Ascending => "ASC",

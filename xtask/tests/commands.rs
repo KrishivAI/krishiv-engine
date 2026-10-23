@@ -530,6 +530,9 @@ fn budgets_compare_with_an_explicit_baseline() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("| transitive crates | 1000 | 1000 |"));
     // Within 5% passes; 6% fails and names the label.
     assert!(run(&write("a.json", 1050, 3), &main, &[]).status.success());
+    let out = run(&write("edge.json", 1051, 3), &main, &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("transitive crates: 1000 -> 1051"));
     let out = run(&write("b.json", 1060, 3), &main, &[]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("budget-approved"));
@@ -600,6 +603,9 @@ fn wheel_sizes_compare_with_a_measured_baseline() {
             .status
             .success()
     );
+    let out = run(&write("edge.json", 1051), &base, false);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("grew from 1000 to 1051"));
     let out = run(&write("big.json", 1100), &base, false);
     assert!(!out.status.success());
     assert!(
