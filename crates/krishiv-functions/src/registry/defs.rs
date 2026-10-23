@@ -4,8 +4,9 @@
 //! Arity, determinism and availability come from Spark's catalog.
 
 use krishiv_common::error::{
-    DatatypeMismatchNonFoldableInput, DatatypeMismatchValueOutOfRange, InvalidExtractField,
-    KrishivError, LegacyErrorTemp1210, NonFoldableArgument, SecondFunctionArgumentNotInteger,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
+    DatatypeMismatchValueOutOfRange, InvalidExtractField, KrishivError, LegacyErrorTemp1210,
+    NonFoldableArgument, SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{DataType, DecimalType};
@@ -430,11 +431,97 @@ fn aggregates() -> Vec<Spec> {
     ]
 }
 
+// ---- window functions ----
+
+fn window(name: &'static str, result: Rule) -> Spec {
+    Spec {
+        name,
+        kind: FunctionKind::Window,
+        inputs: Inputs::Any,
+        result,
+        execution: Execution::Window,
+    }
+}
+
+/// `row_number`, `rank`, `dense_rank`, `ntile`: `int`, never NULL.
+fn rank_like(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Integer, false))
+}
+
+/// `percent_rank`, `cume_dist`: `double`, never NULL.
+fn distribution(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Double, false))
+}
+
+/// `ntile(buckets)`: Spark's `NTile.checkInputDataTypes`, in its order: a
+/// foldable argument, of type `int` exactly (no implicit cast), above 0.
+/// `ntile()` is `ntile(1)`.
+fn ntile(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if c.args().is_empty() {
+        return rank_like(c);
+    }
+    let sql = |i: usize| c.sql(i).unwrap_or_default();
+    let call = format!("\"ntile({})\"", sql(0));
+    let Some(value) = c.constant(0) else {
+        return Err(DatatypeMismatchNonFoldableInput {
+            sql_expr: call,
+            input_name: "`buckets`".to_owned(),
+            input_type: "\"INT\"".to_owned(),
+            input_expr: format!("\"{}\"", sql(0)),
+        }
+        .into());
+    };
+    if c.data_type(0) != Some(&DataType::Integer) {
+        return Err(DatatypeMismatchUnexpectedInputType {
+            sql_expr: call,
+            param_index: "first".to_owned(),
+            required_type: "\"INT\"".to_owned(),
+            input_sql: format!("\"{}\"", sql(0)),
+            input_type: c
+                .data_type(0)
+                .map_or_else(|| "\"VOID\"".to_owned(), |t| format!("\"{}\"", t.sql())),
+        }
+        .into());
+    }
+    match value {
+        Constant::Integral(n) if *n > 0 => rank_like(c),
+        Constant::Integral(n) => Err(DatatypeMismatchValueOutOfRange {
+            sql_expr: call,
+            expr_name: "buckets".to_owned(),
+            value_range: format!("(0, {}]", i32::MAX),
+            current_value: n.to_string(),
+        }
+        .into()),
+        Constant::Error(e) => Err(e.clone()),
+        // A NULL `int` (`ntile(CAST(NULL AS INT))`): Spark's check reads
+        // it as 0.
+        _ => Err(DatatypeMismatchValueOutOfRange {
+            sql_expr: call,
+            expr_name: "buckets".to_owned(),
+            value_range: format!("(0, {}]", i32::MAX),
+            current_value: "0".to_owned(),
+        }
+        .into()),
+    }
+}
+
+fn windows() -> Vec<Spec> {
+    vec![
+        window("row_number", rank_like),
+        window("rank", rank_like),
+        window("dense_rank", rank_like),
+        window("percent_rank", distribution),
+        window("cume_dist", distribution),
+        window("ntile", ntile),
+    ]
+}
+
 /// Every implemented function.
 pub(super) fn specs() -> Vec<Spec> {
     let mut out = strings();
     out.extend(datetime());
     out.extend(aggregates());
+    out.extend(windows());
     out.extend(super::conditional::specs());
     out.extend(super::math::specs());
     out.extend(super::hashing::specs());

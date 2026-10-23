@@ -47,10 +47,22 @@ pub(super) struct AggInfo {
     pub(super) out: Vec<Attr>,
     /// The grouping attributes, as attributes of the input.
     pub(super) keys: Vec<Attr>,
-    /// Select items that use lateral column aliases make projections
-    /// above the aggregate: every select item, over the aggregate's output
-    /// (`None` when no item does).
+    /// Select items that use lateral column aliases or windows make
+    /// projections (and window relations) above the aggregate: every
+    /// select item, over the aggregate's output (`None` when no item
+    /// does).
     pub(super) top: Option<Arc<[Bound]>>,
+    /// With windows: the `HAVING` filtering the aggregate below them.
+    pub(super) having: Option<Arc<Expr>>,
+}
+
+impl AggInfo {
+    /// Whether the select list holds windows.
+    pub(super) fn has_windows(&self) -> bool {
+        self.top
+            .as_ref()
+            .is_some_and(|t| t.iter().any(|b| b.win.is_some()))
+    }
 }
 
 /// How a relation gets back columns it dropped: Spark adds the attributes
@@ -460,6 +472,7 @@ impl Resolver<'_> {
             agg_scope: None,
             lenient: false,
             outer: true,
+            windows: super::exprs::WindowUse::Other,
             env,
             op,
         }
@@ -467,8 +480,78 @@ impl Resolver<'_> {
 
     fn node(&mut self, p: &Arc<LogicalPlan>, env: &Arc<Env>) -> Result<Rel, AnalysisError> {
         let o = p.origin;
+        // The arms that recurse into children stay here; the others are
+        // out of line in `leaf_node`, so this frame (on the recursion path
+        // of nested subqueries) stays small.
         match &p.node {
             PlanNode::Read(ReadSource::Table { name, options }) => self.read(p, name, options, env),
+            PlanNode::OneRowRelation => Ok(self.wrap(Arc::clone(p), o.plan_id, Vec::new(), &[])),
+            PlanNode::Project { input, exprs } => self.project(p, input, exprs, env),
+            PlanNode::Filter { input, predicate } => self.filter(p, input, predicate, env),
+            PlanNode::Aggregate {
+                input,
+                grouping,
+                aggregates,
+            } => self.aggregate(p, input, grouping, aggregates, env),
+            PlanNode::Join {
+                left,
+                right,
+                kind,
+                condition,
+            } => self.join(p, left, right, *kind, condition, env),
+            PlanNode::Sort {
+                input,
+                order,
+                global,
+            } => self.sort(p, input, order, *global, env),
+            PlanNode::SubqueryAlias {
+                input,
+                alias,
+                columns,
+            } => self.subquery_alias(p, input, alias, columns, env),
+            PlanNode::Union {
+                inputs,
+                by_name,
+                allow_missing_columns,
+            } => self.union(p, inputs, *by_name, *allow_missing_columns, env),
+            PlanNode::SetOp {
+                left,
+                right,
+                op,
+                all,
+            } => self.set_op(p, left, right, *op, *all, env),
+            PlanNode::WithColumns { input, columns } => self.with_columns(p, input, columns, env),
+            PlanNode::Limit { input, limit } => self.limit_node(p, input, limit, false, env),
+            PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
+            PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
+            PlanNode::Distinct { input } => self.distinct(p, input, env),
+            PlanNode::Window {
+                input,
+                exprs,
+                partition_by,
+                order_by,
+            } => self.window_rel(p, input, exprs, partition_by, order_by, env),
+            PlanNode::Hint {
+                input,
+                name,
+                params,
+            } => self.hint(p, input, name, params, env),
+            // Listed, not wildcarded: a new `PlanNode` variant must be
+            // placed here or in `leaf_node` to compile.
+            PlanNode::Read(ReadSource::Files { .. })
+            | PlanNode::Sql { .. }
+            | PlanNode::Scan(_)
+            | PlanNode::CteRef(_)
+            | PlanNode::Shift { .. }
+            | PlanNode::ReplicateRows { .. }
+            | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
+        }
+    }
+
+    #[inline(never)]
+    fn leaf_node(&mut self, p: &Arc<LogicalPlan>, env: &Arc<Env>) -> Result<Rel, AnalysisError> {
+        let o = p.origin;
+        match &p.node {
             PlanNode::Read(source @ ReadSource::Files { .. }) => {
                 match self.b.files.iter().position(|f| f.source == *source) {
                     Some(i) => Ok(self.files(p, i)),
@@ -483,7 +566,6 @@ impl Resolver<'_> {
                     _ => Err(unsupported("SQL text", o)),
                 }
             }
-            PlanNode::OneRowRelation => Ok(self.wrap(Arc::clone(p), o.plan_id, Vec::new(), &[])),
             PlanNode::Scan(s) => {
                 let name = match &s.source {
                     ReadSource::Table { name, .. } => name.clone(),
@@ -536,43 +618,6 @@ impl Resolver<'_> {
                 }
                 self.shifted(&c, *offset, Some(Arc::clone(p)))
             }
-            PlanNode::Project { input, exprs } => self.project(p, input, exprs, env),
-            PlanNode::WithColumns { input, columns } => self.with_columns(p, input, columns, env),
-            PlanNode::Filter { input, predicate } => self.filter(p, input, predicate, env),
-            PlanNode::Aggregate {
-                input,
-                grouping,
-                aggregates,
-            } => self.aggregate(p, input, grouping, aggregates, env),
-            PlanNode::Join {
-                left,
-                right,
-                kind,
-                condition,
-            } => self.join(p, left, right, *kind, condition, env),
-            PlanNode::Sort {
-                input,
-                order,
-                global,
-            } => self.sort(p, input, order, *global, env),
-            PlanNode::Limit { input, limit } => self.limit_node(p, input, limit, false, env),
-            PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
-            PlanNode::SubqueryAlias {
-                input,
-                alias,
-                columns,
-            } => self.subquery_alias(p, input, alias, columns, env),
-            PlanNode::Union {
-                inputs,
-                by_name,
-                allow_missing_columns,
-            } => self.union(p, inputs, *by_name, *allow_missing_columns, env),
-            PlanNode::SetOp {
-                left,
-                right,
-                op,
-                all,
-            } => self.set_op(p, left, right, *op, *all, env),
             PlanNode::ReplicateRows { input, count } => {
                 let c = self.child(input, env)?;
                 let rels = [&c];
@@ -583,12 +628,6 @@ impl Resolver<'_> {
                 };
                 Ok(self.make(o, node, c.out.to_vec(), &[&c]))
             }
-            PlanNode::Distinct { input } => self.distinct(p, input, env),
-            PlanNode::Hint {
-                input,
-                name,
-                params,
-            } => self.hint(p, input, name, params, env),
             PlanNode::JoinHint { input, strategy } => {
                 let c = self.child(input, env)?;
                 let node = PlanNode::JoinHint {
@@ -599,7 +638,24 @@ impl Resolver<'_> {
                 r.widen = Some(Arc::new(Widen::Through { child: c }));
                 Ok(r)
             }
-            PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
+            // Handled in `node`, which never forwards them.
+            PlanNode::Read(ReadSource::Table { .. })
+            | PlanNode::OneRowRelation
+            | PlanNode::Project { .. }
+            | PlanNode::WithColumns { .. }
+            | PlanNode::Filter { .. }
+            | PlanNode::Aggregate { .. }
+            | PlanNode::Join { .. }
+            | PlanNode::Sort { .. }
+            | PlanNode::Limit { .. }
+            | PlanNode::Offset { .. }
+            | PlanNode::SubqueryAlias { .. }
+            | PlanNode::WithCte { .. }
+            | PlanNode::Hint { .. }
+            | PlanNode::Union { .. }
+            | PlanNode::Distinct { .. }
+            | PlanNode::SetOp { .. }
+            | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
         }
     }
 
@@ -616,7 +672,8 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
         let rels = [&c];
-        let cx = Self::cx(&c.out, &rels, env, "Project");
+        let mut cx = Self::cx(&c.out, &rels, env, "Project");
+        cx.windows = super::exprs::WindowUse::Allowed;
         let mut news: Vec<(String, Bound)> = Vec::new();
         for (name, e) in columns {
             news.push((name.clone(), self.bind(e, &cx)?));
