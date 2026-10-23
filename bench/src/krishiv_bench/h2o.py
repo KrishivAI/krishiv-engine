@@ -16,6 +16,7 @@ from __future__ import annotations
 import concurrent.futures as cf
 import contextlib
 import datetime as dt
+import hashlib
 import json
 import statistics
 from pathlib import Path
@@ -124,15 +125,39 @@ def dataset_provenance(root: Path) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- reference checksums (DuckDB)
+def check_sql_sha(check_sql: str) -> str:
+    """Short digest identifying a checksum query's text (cache key per question)."""
+    return hashlib.sha256(check_sql.encode()).hexdigest()[:16]
+
+
 def reference_checksums(ds: Dataset, queries: list[Query], memory_limit: str = "12GB") -> dict[str, list]:
-    """DuckDB's checksum row per question, cached under ``results/h2o-ref`` keyed by the dataset's content digest."""
+    """DuckDB's checksum row per question, cached under ``results/h2o-ref`` keyed by the dataset's content digest.
+
+    A cached row is reused only when its stored checksum-SQL digest matches the question's current checksum SQL,
+    so editing a question (or its checksum columns) recomputes that question instead of reusing a stale reference.
+    Legacy cache entries without a SQL digest are ignored and rewritten.
+    """
     import duckdb
 
     man = h2o_data.read_manifest(ds.root)
     cache = None
     if man:
         cache = results_dir() / "h2o-ref" / f"{ds.name}-{man['content_sha256'][:16]}-duckdb{duckdb.__version__}.json"
-    have: dict[str, list] = json.loads(cache.read_text()) if cache and cache.exists() else {}
+    want = {q.id: check_sql_sha(q.check_sql or q.sql) for q in queries}
+    stored: dict[str, dict] = {}
+    if cache and cache.exists():
+        raw = json.loads(cache.read_text())
+        if isinstance(raw, dict):
+            for qid, e in raw.items():
+                if (
+                    isinstance(e, dict)
+                    and isinstance(e.get("row"), list)
+                    and isinstance(e.get("check_sql_sha256"), str)
+                ):
+                    stored[qid] = e
+    have: dict[str, list] = {
+        q.id: stored[q.id]["row"] for q in queries if q.id in stored and stored[q.id]["check_sql_sha256"] == want[q.id]
+    }
     missing = [q for q in queries if q.id not in have]
     if missing:
         eng = make_engine("duckdb", memory_limit=memory_limit)
@@ -141,11 +166,12 @@ def reference_checksums(ds: Dataset, queries: list[Query], memory_limit: str = "
             for q in missing:
                 (row,) = eng.run(check_query(q))
                 have[q.id] = list(row)
+                stored[q.id] = {"row": have[q.id], "check_sql_sha256": want[q.id]}
         finally:
             eng.teardown()
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps(have, indent=1, sort_keys=True))
+            cache.write_text(json.dumps(stored, indent=1, sort_keys=True))
     return {q.id: have[q.id] for q in queries}
 
 
@@ -179,7 +205,9 @@ def run_h2o(
     queries = load_queries(suite, engine_name, only)
     if not queries:
         raise SystemExit(f"no question matches {only}")
-    refs = reference_checksums(ds, queries)
+    # The reference is always DuckDB's own question text: an engine override must produce the same
+    # answer, never define the reference (a wrong override would otherwise agree with itself).
+    refs = reference_checksums(ds, load_queries(suite, "duckdb", only))
     eng: Engine = make_engine(engine_name, **(engine_kwargs or {}))
     started = dt.datetime.now(dt.UTC)
     record: dict[str, Any] = {
@@ -315,7 +343,7 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
         "|---|" + "---:|" * (len(engines) + len(others)),
     ]
     ratios: dict[str, list[float]] = {e: [] for e in others}
-    bad = []
+    bad, skipped = [], []
     for q in qids:
         cells, rat = [], []
         per = {e: results[e]["queries"].get(q, {}) for e in engines}
@@ -327,6 +355,8 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
                 if d:
                     why = d.get("error") or d.get("answer_check", {}).get("detail", "failed")
                     bad.append(f"- `{q}` **{e}**: {str(why)[:200]}")
+                else:
+                    skipped.append(f"- `{q}` **{e}**: no result (question skipped or from a different run)")
         b = per[baseline].get("p50_s")
         for e in others:
             x = per[e].get("p50_s")
@@ -344,7 +374,13 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
     lines += ["", "## Correctness", ""]
     if bad:
         lines += ["Questions that failed the checksum comparison or errored (never timed):", "", *bad]
-    else:
+    if skipped:
+        lines += [
+            "Questions with no result for an engine (skipped or from a different run; not verified):",
+            "",
+            *skipped,
+        ]
+    if not bad and not skipped:
         lines.append(f"All {len(qids)} questions: every engine's answer checksum equals the DuckDB reference.")
     return "\n".join(lines) + "\n"
 

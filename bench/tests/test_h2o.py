@@ -226,6 +226,40 @@ def test_reference_checksums_are_cached_by_dataset_digest(tiny: dict[str, Path],
         h2o.reference_checksums(ds, h2o.load_queries("h2o-groupby", "duckdb", ["q01", "q03"]))
 
 
+def test_reference_checksums_use_the_duckdb_question_not_the_engine_override(
+    tiny: dict[str, Path], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """A wrong engine override must fail against the DuckDB reference, not define it."""
+    d = tmp_path / "queries" / "h2o-groupby"
+    (d / "wrapped").mkdir(parents=True)
+    (d / "q01.sql").write_text("SELECT id1, SUM(v1) AS v1 FROM x GROUP BY id1")
+    (d / "wrapped" / "q01.sql").write_text("SELECT id1, SUM(v1) + 1 AS v1 FROM x GROUP BY id1")
+    monkeypatch.setattr(h2o, "queries_dir", lambda suite: tmp_path / "queries" / suite)
+    rec, failed = run_with(monkeypatch, tiny["h2o-groupby"], Wrapped(), ["q01"])
+    assert failed == 1
+    assert "!=" in rec["queries"]["q01"]["answer_check"]["detail"]
+
+
+def test_reference_cache_recomputes_when_the_question_changes(tiny: dict[str, Path]):
+    ds = h2o.resolve_dataset(tiny["h2o-groupby"], 0.5)
+    qs = h2o.load_queries("h2o-groupby", "duckdb", ["q01"])
+    first = h2o.reference_checksums(ds, qs)
+    altered = Query(
+        "q01",
+        "SELECT id1, SUM(v1) + 1 AS v1 FROM x GROUP BY id1",
+        "h2o-groupby",
+        h2o.check_sql("SELECT id1, SUM(v1) + 1 AS v1 FROM x GROUP BY id1", ["v1"]),
+    )
+    eng = make_engine("duckdb", threads=2)
+    eng.setup(ds)
+    try:
+        (expected,) = eng.run(check_query(altered))
+    finally:
+        eng.teardown()
+    assert h2o.reference_checksums(ds, [altered]) == {"q01": list(expected)}
+    assert list(expected) != first["q01"]
+
+
 class Wrapped(DuckDBEngine):
     """A DuckDB engine that misbehaves on chosen questions."""
 
@@ -294,7 +328,19 @@ def test_a_timed_run_with_another_row_count_than_the_checksum_fails(
 def test_a_timeout_cancels_the_engine_and_fails_only_that_question(
     tiny: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ):
-    rec, failed = run_with(monkeypatch, tiny["h2o-groupby"], Wrapped(block={"q01"}), ["q01", "q02"], timeout_s=0.2)
+    # q02 answers from the cached reference, so the test never depends on engine timing: only q01 can time out.
+    ds = h2o.resolve_dataset(tiny["h2o-groupby"], 0.5)
+    refs = h2o.reference_checksums(ds, h2o.load_queries("h2o-groupby", "duckdb", ["q02"]))
+    eng = Wrapped(block={"q01"})
+
+    def fast_run(query):
+        return [tuple(refs["q02"])] if query.id == "q02" else Wrapped.run(eng, query)
+
+    def fast_timed(query):
+        return (int(refs["q02"][0]), 0.001) if query.id == "q02" else Wrapped.timed_run(eng, query)
+
+    eng.run, eng.timed_run = fast_run, fast_timed  # type: ignore[method-assign]
+    rec, failed = run_with(monkeypatch, tiny["h2o-groupby"], eng, ["q01", "q02"], timeout_s=0.2)
     assert failed == 1
     assert "exceeded 0.2s" in rec["queries"]["q01"]["error"]
     assert "p50_s" in rec["queries"]["q02"]
@@ -307,6 +353,33 @@ def test_run_input_validation(tiny: dict[str, Path], tmp_path: Path):
         h2o.run_h2o("duckdb", "h2o-groupby", tmp_path / "missing", 0.5)
     with pytest.raises(SystemExit, match="no question matches"):
         h2o.run_h2o("duckdb", "h2o-groupby", tiny["h2o-groupby"], 0.5, only=["q99"])
+
+
+def test_spark_timed_run_counts_engine_side_without_collecting():
+    from krishiv_bench.adapters import spark_local
+
+    class _DF:
+        def collect(self):  # pragma: no cover - must never be called here
+            raise AssertionError("timed_run must not materialise rows in Python")
+
+        def count(self):
+            return 7
+
+    class _Spark:
+        def __init__(self, seen: list[str]):
+            self.seen = seen
+
+        def sql(self, sql: str):
+            self.seen.append(sql)
+            return _DF()
+
+    for cls in (spark_local.SparkLocalEngine, spark_local.SailEngine):
+        seen: list[str] = []
+        eng = cls(threads=2)
+        eng.spark = _Spark(seen)
+        n, secs = eng.timed_run(Query("q01", "SELECT 1", "h2o-groupby"))
+        assert (n, seen) == (7, ["SELECT 1"])
+        assert secs >= 0
 
 
 def test_duckdb_timed_run_materialises_only_checked_questions(tiny: dict[str, Path]):
@@ -485,6 +558,27 @@ def test_render_lists_failures_and_ratios():
     assert "Geomean krishiv: **0.50x** over 1 questions" in md
     with pytest.raises(SystemExit, match="no results"):
         h2o.render({})
+
+
+def test_render_lists_a_missing_question_as_skipped_not_all_agree():
+    def res(name, p50s):
+        return {
+            "suite": "h2o-groupby",
+            "iterations": 3,
+            "warmup": 1,
+            "dataset": {"name": "G1_1e7_1e2_0_0", "content_sha256": "ab" * 32, "generator": "g"},
+            "engine": {"name": name, "version": "1"},
+            "queries": {q: {"p50_s": t} for q, t in p50s.items()},
+            "_file": f"{name}.json",
+        }
+
+    md = h2o.render(
+        {"duckdb": res("duckdb", {"q01": 0.1, "q02": 0.2}), "krishiv": res("krishiv", {"q01": 0.05})},
+        "duckdb",
+    )
+    assert "| q02 | 200.0 | - | - |" in md
+    assert "no result" in md
+    assert "every engine's answer checksum equals the DuckDB reference" not in md
 
 
 def test_dataset_provenance_without_a_manifest(tmp_path: Path):
