@@ -38,6 +38,16 @@ through the executor (`file_format::drive::ThroughExecutor`, P2-T117b). `file_fo
 until P2-T119 brings the datasets to the nightly box (~1 GB of generated data: `KRISHIV_TPCH_DIR`, see
 `tests/scripts/tpch_parquet_checksums.py`).
 
+## Key files
+Paths are relative to this crate.
+- `src/golden/` the SQLQueryTestSuite runner, report and manifest; `src/file_format/` the `FileFormat` conformance suite
+- `src/kernel_eval/` kernel evaluation for the Spark function matrix; `src/fn_matrix.rs` matrix loader
+- `src/hash_fixture.rs` hash golden fixtures; `src/batch_stream.rs` batch == bounded-stream harness; `src/slt.rs` sqllogictest runner
+- `src/bin/` report binaries; `tests/` the differential and interop suites (e.g. `registry_matrix.rs`, `file_format_mock.rs`, `parquet_interop.rs`)
+
+## Extension points
+- New file format: instantiate `file_format_conformance!` in its own crate; new golden suite: a runner under `src/golden/` plus fixtures under `tests/fixtures/`.
+
 ## Invariants
 - Golden data comes from a real Spark run or the vendored Spark tag, never hand-written (ADR 0008, 0010).
 - Ignored tests name the phase that un-ignores them; do not delete them.
@@ -46,5 +56,5 @@ until P2-T119 brings the datasets to the nightly box (~1 GB of generated data: `
 ## ADRs (in `../krishiv-internal/adr/`)
 0008, 0010, 0015, 0017, 0029
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-testkit --no-tests=pass` · `cargo clippy -p krishiv-testkit --all-targets -- -D warnings`

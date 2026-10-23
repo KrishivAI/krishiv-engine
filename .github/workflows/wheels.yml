@@ -288,5 +288,5 @@ jobs:
           path: ${{ runner.temp }}/wheel-sizes/wheel-sizes.json
           if-no-files-found: error
       - name: Wheel sizes (no pull request)
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
         run: cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json"

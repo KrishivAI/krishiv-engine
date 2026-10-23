@@ -6,6 +6,19 @@
 ## Purpose
 Query optimizer: rule- and cost-based rewrites, including the IVM rewrite pass.
 
+## Key files
+Paths are relative to this crate.
+- `src/lib.rs` rule batches and the `optimize` entry point
+- `src/dag.rs` `dag::Rewriter`, the rewrite-once rule for shared subtrees
+- `src/fold.rs` constant folding; `src/pushdown.rs` predicate pushdown (below a window only on partition keys); `src/prune.rs` column pruning (removes unused window columns)
+- `src/project.rs` projection rules; `src/limit.rs` limit rules
+- `src/restrict.rs` subquery restriction rules
+- `src/join_order.rs` inner-join ordering; `src/stats.rs` `Statistics` it reads
+- `tests/it/rules.rs` per-rule snapshots; `tests/it/join_order.rs` ordering snapshots; `tests/it/support/eval.rs` reference interpreter
+
+## Extension points
+- New rule: a module in `src/`, added to a batch in `src/lib.rs`, with snapshot cases in `tests/it/rules.rs` and a differential check through `tests/it/support/eval.rs`.
+
 ## Invariants
 - Input and output are resolved plans with the same output attributes; the optimised plan is a fixed point.
 - A rule returns its input `Arc` when it changes nothing (that is how a batch detects its fixed point) and
@@ -26,5 +39,5 @@ Query optimizer: rule- and cost-based rewrites, including the IVM rewrite pass.
 ## ADRs (in `../krishiv-internal/adr/`)
 0012, 0017, 0020
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-optimizer --no-tests=pass` · `cargo clippy -p krishiv-optimizer --all-targets -- -D warnings`
