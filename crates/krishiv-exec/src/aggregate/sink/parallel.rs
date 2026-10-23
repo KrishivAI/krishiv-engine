@@ -42,12 +42,12 @@ use krishiv_memory::{Reservation, SpillWriter};
 use super::super::rowtable::{Mode, RowTable, final_tasks};
 use super::super::table::Table;
 use super::{
-    CHUNK, Final, Global, HEADROOM, HashAggregate, Run, Spiller, bump, lend_headroom, reserve_to,
-    shrink_to, tasks_of,
+    CHUNK, Final, Global, HEADROOM, HashAggregate, Output, Run, Spiller, bump, lend_headroom,
+    reserve_to, shrink_to, tasks_of,
 };
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
-use crate::sync::{Mutex, lock};
+use crate::sync::lock;
 
 /// One final-phase task.
 struct Task {
@@ -169,15 +169,8 @@ impl HashAggregate {
             bump(&self.counters.groups, table.len() as u64);
             bump(&self.counters.hash_entries, table.len() as u64);
             bump(&self.counters.hash_buckets, table.buckets() as u64);
-            let batch = ctx.query().config().batch_size.max(1);
-            let chunks = part_chunks(&table, 0, batch);
-            let mut inner = lock(&g.inner);
-            inner.busy = false;
-            let _ = g.done.set(Final::Parts {
-                tables: vec![Table::Rows(table)],
-                chunks,
-                _held: held,
-            });
+            lock(&g.inner).busy = false;
+            self.finish_memory(g, ctx, vec![Table::Rows(table)], held)?;
             return Ok(true);
         }
         let spill = self.spiller(ctx);
@@ -299,35 +292,34 @@ impl HashAggregate {
             inner.busy = false;
             inner.row_merge = false;
             inner.spill_asked = false;
-            let _ = g.done.set(Final::File(Mutex::new(Some(file))));
+            let out = Output::on_disk(Some(file), Arc::clone(ctx.executor()));
+            let _ = g.done.set(Final {
+                out: Arc::new(out),
+                chunks: 1,
+            });
             return Ok(true);
         }
         drop(spare);
-        let batch = ctx.query().config().batch_size.max(1);
         let mut tables = Vec::with_capacity(done.len());
-        let mut chunks = Vec::new();
         let mut reservations = Vec::with_capacity(done.len());
         let mut groups = 0;
         done.sort_by_key(|t| t.parts.start);
-        for (i, task) in done.into_iter().enumerate() {
+        for task in done {
             let n = task.table.len();
             groups += n;
             bump(&self.counters.hash_buckets, task.table.buckets() as u64);
-            chunks.extend(part_chunks(&task.table, i, batch));
             tables.push(Table::Rows(task.table));
             reservations.push(task.reservation);
         }
         bump(&self.counters.groups, groups as u64);
         bump(&self.counters.hash_entries, groups as u64);
-        let mut inner = lock(&g.inner);
-        inner.busy = false;
-        inner.row_merge = false;
-        inner.spill_asked = false;
-        let _ = g.done.set(Final::Parts {
-            tables,
-            chunks,
-            _held: reservations,
-        });
+        {
+            let mut inner = lock(&g.inner);
+            inner.busy = false;
+            inner.row_merge = false;
+            inner.spill_asked = false;
+        }
+        self.finish_memory(g, ctx, tables, reservations)?;
         Ok(true)
     }
 
@@ -486,21 +478,4 @@ impl HashAggregate {
         tasks_of(runs, 0, &mut inner.tasks);
         Ok(())
     }
-}
-
-/// Output chunks of table `i`: positions of at most `batch` rows, each
-/// within one radix partition (whose states are one partition's arrays).
-fn part_chunks(table: &RowTable, i: usize, batch: usize) -> Vec<(usize, Range<usize>)> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    for p in 0..table.part_count() {
-        let end = start + table.part_len(p);
-        out.extend(
-            (start..end)
-                .step_by(batch)
-                .map(|s| (i, s..(s + batch).min(end))),
-        );
-        start = end;
-    }
-    out
 }
