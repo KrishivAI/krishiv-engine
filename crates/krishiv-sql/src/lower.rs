@@ -780,7 +780,10 @@ impl Lowerer {
             }
             ExprKind::Unary(op, inner) => {
                 let name = match op {
-                    UnaryOp::Minus => Builtin::Negative.name(),
+                    // Unary `-` keeps `"-"` so the analyzer sees it apart
+                    // from the function `negative(x)` (Spark's `UnaryMinus`
+                    // with and without its `FUNC_ALIAS`).
+                    UnaryOp::Minus => "-",
                     UnaryOp::Plus => "positive",
                     UnaryOp::BitNot => "~",
                 };

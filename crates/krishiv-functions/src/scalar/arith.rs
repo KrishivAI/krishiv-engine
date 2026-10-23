@@ -31,6 +31,7 @@ use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 pub(super) const NAMES: &[&str] = &[
     "abs",
     "positive",
+    "negative",
     "mod",
     "try_add",
     "try_subtract",
@@ -188,8 +189,8 @@ fn binary(op: Op, try_: bool, types: &[DataType], opts: &BindOptions) -> Option<
     })
 }
 
-/// `abs` of one column.
-fn abs(t: &DataType, opts: &BindOptions) -> Option<Binding> {
+/// `abs` / `negative` of one column.
+fn unary_arith(op: UnaryOp, t: &DataType, opts: &BindOptions) -> Option<Binding> {
     let ctx = opts.kernel;
     let ansi = opts.ansi;
     macro_rules! int {
@@ -197,9 +198,9 @@ fn abs(t: &DataType, opts: &BindOptions) -> Option<Binding> {
             Binding::new(t.clone(), move |x: &Inputs<'_>| {
                 let a = x.array::<$t>(0)?;
                 Ok(Arc::new(if ansi {
-                    integer::unary::<$t, AnsiError>(UnaryOp::Abs, &a, &ctx)?
+                    integer::unary::<$t, AnsiError>(op, &a, &ctx)?
                 } else {
-                    integer::unary::<$t, JavaWrap>(UnaryOp::Abs, &a, &ctx)?
+                    integer::unary::<$t, JavaWrap>(op, &a, &ctx)?
                 }) as ArrayRef)
             })
         };
@@ -209,17 +210,25 @@ fn abs(t: &DataType, opts: &BindOptions) -> Option<Binding> {
         DataType::Int16 => int!(Int16Type),
         DataType::Int32 => int!(Int32Type),
         DataType::Int64 => int!(Int64Type),
-        DataType::Float32 => Binding::new(t.clone(), |x: &Inputs<'_>| {
-            Ok(Arc::new(float::unary(UnaryOp::Abs, &x.array::<Float32Type>(0)?)?) as ArrayRef)
+        DataType::Float32 => Binding::new(t.clone(), move |x: &Inputs<'_>| {
+            Ok(Arc::new(float::unary(op, &x.array::<Float32Type>(0)?)?) as ArrayRef)
         }),
-        DataType::Float64 => Binding::new(t.clone(), |x: &Inputs<'_>| {
-            Ok(Arc::new(float::unary(UnaryOp::Abs, &x.array::<Float64Type>(0)?)?) as ArrayRef)
+        DataType::Float64 => Binding::new(t.clone(), move |x: &Inputs<'_>| {
+            Ok(Arc::new(float::unary(op, &x.array::<Float64Type>(0)?)?) as ArrayRef)
         }),
-        DataType::Decimal128(..) => Binding::new(t.clone(), |x: &Inputs<'_>| {
-            Ok(Arc::new(decimal_unary(UnaryOp::Abs, &x.array::<Decimal128Type>(0)?)?) as ArrayRef)
+        DataType::Decimal128(..) => Binding::new(t.clone(), move |x: &Inputs<'_>| {
+            Ok(Arc::new(decimal_unary(op, &x.array::<Decimal128Type>(0)?)?) as ArrayRef)
         }),
         _ => return None,
     })
+}
+
+fn abs(t: &DataType, opts: &BindOptions) -> Option<Binding> {
+    unary_arith(UnaryOp::Abs, t, opts)
+}
+
+fn negative(t: &DataType, opts: &BindOptions) -> Option<Binding> {
+    unary_arith(UnaryOp::Negate, t, opts)
 }
 
 /// Binds the arithmetic function `name`.
@@ -242,6 +251,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             Some(Binding::new(t.clone(), |x: &Inputs<'_>| x.column(0)))
         }
         ("abs", [t]) => abs(t, opts),
+        ("negative", [t]) => negative(t, opts),
         _ => {
             let (op, try_) = match listed {
                 "mod" => (Op::Rem, false),

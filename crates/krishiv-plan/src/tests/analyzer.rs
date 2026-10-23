@@ -308,7 +308,7 @@ fn plan_id_references_resolve_as_spark_connect_does() {
 
 /// The select list of the generated-names statement of the corpus.
 fn names_query() -> Vec<Expr> {
-    use crate::Builtin::{EqNullSafe, IsNotNull, IsNull, Negative, Remainder, Subtract};
+    use crate::Builtin::{EqNullSafe, IsNotNull, IsNull, Remainder, Subtract};
     let lit = |v: Literal| Expr::from(v);
     let date = lit(Literal::Date(18263));
     let decimal = lit(Literal::Decimal {
@@ -318,7 +318,9 @@ fn names_query() -> Vec<Expr> {
     let op = |b, args| Expr::builtin(b, args);
     vec![
         add(c("a"), int(1)),
-        op(Negative, vec![c("a")]),
+        // Unary `-` lowers as `"-"` (see `builtin_op`): the function
+        // `negative(x)` is a registry function instead.
+        Expr::function("-", vec![c("a")]),
         eq(c("a"), int(1)),
         op(crate::Builtin::Not, vec![eq(c("a"), int(1))]),
         op(crate::Builtin::Not, vec![eq(c("a"), int(1))]),
