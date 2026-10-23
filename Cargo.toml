@@ -153,11 +153,13 @@ reedline = { version = "0.52", default-features = false }
 uuid = { version = "1.28", default-features = false }
 
 # Distribution artifacts (Python wheels, size budget, benchmark runner). `release` stays
-# the fast developer profile. Thin LTO: fat saved ~5% size for ~1.8x clean build time, no measurable speed. panic stays "unwind": the Python bridge catches panics at
-# the FFI boundary with `catch_unwind`.
+# the fast developer profile. Fat LTO: measured 1.7% faster on TPC-H SF10 (paired A/B,
+# 95% CI 0.976-0.997; up to 10% on single queries) and ~5% smaller than thin LTO, for a
+# longer link step. panic stays "unwind": the Python bridge catches panics at the FFI
+# boundary with `catch_unwind`.
 [profile.dist]
 inherits = "release"
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 strip = "symbols"
 panic = "unwind"
@@ -165,10 +167,12 @@ panic = "unwind"
 # Benchmarks (`cargo bench`, `cargo codspeed build`) use the same codegen as the shipped
 # `dist` profile, except strip. With the default 16 codegen units an unrelated module
 # flipped an inlining decision and slowed `aggregate/grouped_sum` by 8-9%; with
-# codegen-units = 1 (the shipped setting) the effect disappears. Keep in step with
-# [profile.dist] (lto, codegen-units, panic).
+# codegen-units = 1 (the shipped setting) the effect disappears. Keep codegen-units in
+# step with [profile.dist]. LTO stays thin here: every benchmark binary is linked
+# separately, and fat LTO pushed the benchmark build past its CI time limit; the
+# benchmarks compare builds made the same way, so the LTO mode does not affect them.
+# Cargo ignores `panic` for bench builds, which always unwind, so it is not set here.
 [profile.bench]
 inherits = "release"
 lto = "thin"
 codegen-units = 1
-panic = "unwind"
