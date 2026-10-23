@@ -14,6 +14,7 @@ use xtask::precheck::{
     Action, Changes, EXTERNAL_CI_CHECKS, Mapping, Opts, Outcome, Pkg, REQUIRED_CI_CHECKS, STEP_IDS,
     Scope, Status, Step, cap_prefix, dependents_closure, failed, host_has_x86_64v3,
     kernel_require_targets, mapping, memory_cap_error, parse_packages, plan, render_table,
+    tracked_files_cmd,
 };
 
 fn pkg(name: &str, deps: &[&str]) -> Pkg {
@@ -365,7 +366,6 @@ fn budgets_run_for_manifest_changes_or_full_and_never_with_fast() {
         step(&make_plan(&manifest, &opts(&[]), true), "machete").action,
         Action::Run(_)
     ));
-}
     // The binary is run directly: `cargo machete` under `cargo xtask` scans a directory named
     // "machete" and exits 2.
     let planned = make_plan(&manifest, &opts(&[]), true);
@@ -375,6 +375,7 @@ fn budgets_run_for_manifest_changes_or_full_and_never_with_fast() {
     assert_eq!(cmds.len(), 1);
     assert_eq!(cmds[0].program, "cargo-machete");
     assert!(cmds[0].args.is_empty(), "{:?}", cmds[0].args);
+}
 
 #[test]
 fn fast_skips_both_coverage_gates() {
@@ -559,7 +560,19 @@ fn text_lint_runs_what_is_installed_and_notes_the_rest() {
     let Action::Run(cmds) = &step(&with_docker, "text-lint").action else {
         panic!()
     };
-    assert_eq!(cmds[0].program, "docker");
+    assert!(
+        cmds[0].args.iter().any(|a| a == "docker"),
+        "{:?}",
+        cmds[0].args
+    );
+    assert!(
+        cmds[0]
+            .args
+            .iter()
+            .any(|a| a.contains("markdownlint-cli2:v")),
+        "{:?}",
+        cmds[0].args
+    );
 }
 
 #[test]
@@ -938,4 +951,51 @@ fn notes_make_a_passing_step_partial() {
 fn on_path_finds_installed_binaries_only() {
     assert!(on_path("sh"));
     assert!(!on_path("definitely-not-a-program-xyz"));
+}
+
+#[test]
+fn text_lint_reads_only_git_tracked_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    std::fs::write(root.join("tracked.md"), "ok\n").unwrap();
+    std::fs::write(root.join("with space.md"), "ok\n").unwrap();
+    std::fs::create_dir_all(root.join(".venv/pkg")).unwrap();
+    std::fs::write(root.join(".venv/pkg/README.md"), "vendored\n").unwrap();
+    git(root, &["add", "tracked.md", "with space.md"]);
+    git(root, &["commit", "-q", "-m", "base"]);
+
+    // A stand-in linter that records the files it was given, one per line.
+    let bin = tempfile::tempdir().unwrap();
+    let tool = bin.path().join("fake-lint");
+    std::fs::write(&tool, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SEEN\"\n").unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let seen = bin.path().join("seen");
+
+    let mut c = tracked_files_cmd("**/*.md", tool.to_str().unwrap(), &["--flag"]);
+    c.env.push(("SEEN".into(), seen.to_str().unwrap().into()));
+    let out = run_step(
+        root,
+        &step_of("text-lint", Action::Run(vec![c])),
+        None,
+        bin.path(),
+    );
+    assert_eq!(out.status, Status::Pass, "{}", out.detail);
+    let got = std::fs::read_to_string(&seen).unwrap();
+    assert_eq!(got, "--flag\ntracked.md\nwith space.md\n");
+
+    // typos and taplo read every tracked file; nothing is passed when none match.
+    let mut none = tracked_files_cmd("**/*.toml", tool.to_str().unwrap(), &[]);
+    none.env
+        .push(("SEEN".into(), seen.to_str().unwrap().into()));
+    std::fs::remove_file(&seen).unwrap();
+    let out = run_step(
+        root,
+        &step_of("text-lint", Action::Run(vec![none])),
+        None,
+        bin.path(),
+    );
+    assert_eq!(out.status, Status::Pass);
+    assert!(!seen.exists(), "the linter must not run with no files");
 }

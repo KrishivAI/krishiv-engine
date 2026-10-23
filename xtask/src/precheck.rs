@@ -717,23 +717,49 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
     steps
 }
 
+/// A command that runs `tool args... <files>` over the git-tracked files matching `pathspec`
+/// (git glob syntax, `""` for all), as CI does on a clean checkout. Untracked files such as a
+/// local virtualenv's vendored READMEs are never linted. Paths come from `git ls-files -z`, so
+/// nothing is split or re-parsed by the shell.
+#[must_use]
+pub fn tracked_files_cmd(pathspec: &str, tool: &str, args: &[&str]) -> Cmd {
+    let spec = if pathspec.is_empty() {
+        ".".to_owned()
+    } else {
+        format!(":(glob){pathspec}")
+    };
+    let mut cmd = Cmd::new(
+        "bash",
+        &[
+            "-c",
+            r#"set -o pipefail; spec=$1; shift; git ls-files -z -- "$spec" | xargs -0 -r "$@""#,
+            "tracked-files",
+        ],
+    );
+    cmd.args.push(spec);
+    cmd.args.push(tool.to_owned());
+    cmd.args.extend(args.iter().map(|a| (*a).to_owned()));
+    cmd
+}
+
 fn text_lint(has: &dyn Fn(&str) -> bool) -> Step {
     let mut cmds = Vec::new();
     let mut notes = Vec::new();
     if has("typos") {
-        cmds.push(Cmd::new("typos", &[]));
+        cmds.push(tracked_files_cmd("", "typos", &["--force-exclude"]));
     } else {
         notes.push(format!("typos not installed ({SETUP_HINT})"));
     }
     if has("taplo") {
-        cmds.push(Cmd::new("taplo", &["fmt", "--check"]));
+        cmds.push(tracked_files_cmd("**/*.toml", "taplo", &["fmt", "--check"]));
     } else {
         notes.push(format!("taplo not installed ({SETUP_HINT})"));
     }
     if has("markdownlint-cli2") {
-        cmds.push(Cmd::new("markdownlint-cli2", &["**/*.md"]));
+        cmds.push(tracked_files_cmd("**/*.md", "markdownlint-cli2", &[]));
     } else if has("docker") {
-        cmds.push(Cmd::new(
+        cmds.push(tracked_files_cmd(
+            "**/*.md",
             "docker",
             &[
                 "run",
@@ -741,7 +767,6 @@ fn text_lint(has: &dyn Fn(&str) -> bool) -> Step {
                 "-v",
                 "{ROOT}:/workdir",
                 "davidanson/markdownlint-cli2:v0.23.3",
-                "**/*.md",
             ],
         ));
     } else {
