@@ -9,7 +9,7 @@ Memory management: pools, reservations, the memory arbitrator and spill accounti
 ## Invariants
 - Every operator allocation is accounted through reservations; pools are empty at query end (tested).
 - Arbitration and OOM paths return typed errors or trigger spill; never panic.
-- Concurrency primitives tested with loom (`src/loom_tests.rs`; `src/sync.rs` swaps in loom's types).
+- Concurrency primitives tested with loom (`src/loom_model.rs`; `src/sync.rs` swaps in loom's types).
 - Arbitration is cooperative: never call into, lock or mutate another task's operator state; no sync lock across an await.
 - `unsafe` allowed; every block has a `// SAFETY:` comment; runs under Miri in CI and nightly ASan/TSan (ADR 0029).
 - Spill files (`spillfile`): a finished `.spill` is complete (temp file + rename; no fsync by design: scratch data, deleted at the
@@ -23,4 +23,4 @@ Memory management: pools, reservations, the memory arbitrator and spill accounti
 
 ## Test
 `cargo nextest run -p krishiv-memory --no-tests=pass` · `cargo clippy -p krishiv-memory --all-targets -- -D warnings` ·
-loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-memory --lib --release` (use a separate target dir)
+loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-memory --lib --release loom_model::` (use a separate target dir)

@@ -161,9 +161,9 @@ jobs:
           fail_ci_if_error: false
 
   # P2-T010: loom models of the memory pool accounting, spill protocol, round
-  # admission and arbitration (`crates/krishiv-memory/src/loom_tests.rs`);
+  # admission and arbitration (`crates/krishiv-memory/src/loom_model.rs`);
   # P2-T050: the executor's morsel cursor, finalize countdown, cancellation
-  # and result channel (`crates/krishiv-exec/src/loom_tests.rs`).
+  # and result channel (`crates/krishiv-exec/src/loom_model.rs`).
   # P2-T163: runtime filter snapshot publication
   # (`crates/krishiv-io/src/runtime_filter/tests.rs`).
   # P2-T103: every wheel target, built and tested (wheels.yml).
@@ -180,6 +180,9 @@ jobs:
     env:
       RUSTC_WRAPPER: "" # `--cfg loom` rebuilds every dependency; not worth caching
       RUSTFLAGS: --cfg loom
+    # Each step selects only the `loom_model` modules: a loom primitive used
+    # outside `loom::model` panics, so ordinary tests must never be selected
+    # (xtask policy test `loom_steps_select_only_loom_models`).
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -191,11 +194,11 @@ jobs:
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: loom models (krishiv-memory)
-        run: cargo test -p krishiv-memory --lib --release --locked
+        run: cargo test -p krishiv-memory --lib --release --locked loom_model::
       - name: loom models (krishiv-exec)
-        run: cargo test -p krishiv-exec --lib --release --locked
+        run: cargo test -p krishiv-exec --lib --release --locked loom_model::
       - name: loom models (krishiv-io runtime filters)
-        run: cargo test -p krishiv-io --lib --release --locked runtime_filter
+        run: cargo test -p krishiv-io --lib --release --locked loom_model::
 
   # cargo-fuzz targets (`fuzz/`), one hour each: the reusable `fuzz.yml`
   # (regression replay, cached corpus, crash triage). The weekly long run is
