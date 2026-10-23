@@ -22,7 +22,7 @@ use crate::error::{Result, internal};
 use crate::executor::Executor;
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::operators::{global_ref, local_mut};
-use crate::output_spill::{OutputSpill, SpillUnread};
+use crate::output_spill::{OutputSpill, SpillUnread, refused};
 use crate::sync::{Event, Mutex, lock};
 
 /// Default bound on the runs one merge reads at once.
@@ -263,8 +263,9 @@ impl Held {
     /// the state found otherwise (`Busy`, `Spilled`, `Done`).
     fn take(&self) -> Result<std::result::Result<Taken, HeldState>> {
         let mut state = lock(&self.state);
-        match mem::replace(&mut *state, HeldState::Busy) {
+        Ok(match mem::replace(&mut *state, HeldState::Busy) {
             HeldState::Buffers(held) => {
+                // An error fails the query (the merge stays taken).
                 let batches = held.iter().flat_map(|b| b.batches.iter().cloned());
                 let merger = Merger::new(
                     Arc::clone(&self.schema),
@@ -272,26 +273,17 @@ impl Held {
                     batches.collect(),
                     &[],
                     &self.handle,
-                );
-                match merger {
-                    Ok(m) => Ok(Ok((Box::new(m), held))),
-                    Err(e) => {
-                        *state = HeldState::Buffers(held);
-                        Err(e)
-                    }
-                }
+                )?;
+                Ok((Box::new(merger), held))
             }
-            HeldState::Merging(m, held) => Ok(Ok((m, held))),
-            HeldState::Spilled(run) => Ok(Err(HeldState::Spilled(run))),
-            other => {
-                let found = match other {
-                    HeldState::Done => HeldState::Done,
-                    _ => HeldState::Busy,
-                };
-                *state = other;
-                Ok(Err(found))
+            HeldState::Merging(m, held) => Ok((m, held)),
+            HeldState::Done => {
+                *state = HeldState::Done;
+                Err(HeldState::Done)
             }
-        }
+            // `Busy` (already set) or a spilled run for the reader.
+            found => Err(found),
+        })
     }
 
     /// Ends a step or a spill: `next` is the new state.
@@ -332,10 +324,7 @@ impl SpillUnread for Held {
                 Err(e) => {
                     self.handle.release_credit();
                     self.put(HeldState::Merging(merger, held));
-                    return match e {
-                        krishiv_memory::SpillError::Memory(_) => Ok(0),
-                        other => Err(other.into()),
-                    };
+                    return refused(e.into());
                 }
             };
             self.set_spillable(0);

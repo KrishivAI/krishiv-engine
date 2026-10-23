@@ -31,8 +31,7 @@ use arrow_select::take::take_record_batch;
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_memory::{
-    ConsumerHandle, Reservation, SpillError, SpillFile, SpillReader, SpillScope, SpillSignal,
-    SpillWriter,
+    ConsumerHandle, Reservation, SpillFile, SpillReader, SpillScope, SpillSignal, SpillWriter,
 };
 use krishiv_types::batch::{Batch, Weights};
 
@@ -44,7 +43,7 @@ use crate::error::{Result, internal};
 use crate::executor::{Executor, run_blocking};
 use crate::hash::{HashSeed, MAX_LEVEL, PARTITIONS, ProbeTotals};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
-use crate::output_spill::{OutputSpill, SpillUnread};
+use crate::output_spill::{OutputSpill, SpillUnread, refused};
 use crate::sync::{Event, Mutex, lock};
 
 mod parallel;
@@ -267,32 +266,16 @@ impl Spiller {
 
     /// Writes chunks `from..` of an in-memory result to one output file
     /// (blocking I/O); the writer's scratch may use the pool's
-    /// spill-scratch floor. `Ok(None)` if the pool refused the scratch.
-    fn write_chunks(&self, mem: &InMemory, from: usize) -> Result<Option<SpillFile>> {
-        let refused = |e: SpillError| match e {
-            SpillError::Memory(_) => Ok(None),
-            other => Err(KrishivError::from(other)),
-        };
+    /// spill-scratch floor.
+    fn write_chunks(&self, mem: &InMemory, from: usize) -> Result<SpillFile> {
         let schema = Arc::clone(&self.core.output_schema);
         let scratch = self.consumer.reservation().for_spill_scratch();
-        let mut w = match self.scope.writer(schema, scratch) {
-            Ok(w) => w,
-            Err(e) => return refused(e),
-        };
+        let mut w = self.scope.writer(schema, scratch)?;
         for chunk in from..mem.chunks.len() {
             self.query.check_cancelled()?;
-            if let Err(e) = w.write(&mem.batch(chunk)?) {
-                return refused(e);
-            }
+            w.write(&mem.batch(chunk)?)?;
         }
-        match w.finish() {
-            Ok(f) => {
-                bump(&self.counters.spill_files, 1);
-                bump(&self.counters.spill_bytes, f.bytes());
-                Ok(Some(f))
-            }
-            Err(e) => refused(e),
-        }
+        self.finish(w)
     }
 
     /// Writes the final output of `table` to `out` (blocking I/O).
@@ -509,21 +492,16 @@ impl SpillUnread for Output {
             let guard = s.query.blocking_started();
             let written = run_blocking(&*self.executor, move || {
                 let _guard = guard;
-                Ok(match s.write_chunks(&mem, from) {
-                    // The tables go here (or with the last reader's clone).
-                    Ok(Some(file)) => Ok(file),
-                    // Nothing was read from the tables: they stay.
-                    Ok(None) => Err((Ok(0), mem)),
-                    Err(e) => Err((Err(e), mem)),
-                })
+                // On success the tables go here (or with the last reader's
+                // clone); a failed write leaves them as they were.
+                Ok(s.write_chunks(&mem, from).map_err(|e| (e, mem)))
             })
             .await;
             let (next, result) = match written {
                 Ok(Ok(file)) => (Out::File(Some(file)), Ok(freed)),
-                Ok(Err((result, mem))) => {
-                    let bytes = mem.bytes();
-                    self.set_spillable(bytes);
-                    (Out::Memory { mem, next: from }, result)
+                Ok(Err((e, mem))) => {
+                    self.set_spillable(mem.bytes());
+                    (Out::Memory { mem, next: from }, refused(e))
                 }
                 Err(e) => (Out::Done, Err(e)),
             };

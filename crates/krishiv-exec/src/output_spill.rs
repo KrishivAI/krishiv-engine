@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
 use futures::future::BoxFuture;
+use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_memory::{ConsumerHandle, OwnerId, SpillSignal, SpillTicket, Spillable};
 
 use crate::context::{QueryContext, TaskContext};
@@ -42,6 +43,17 @@ pub(crate) trait SpillUnread: Send + Sync + 'static {
     /// returns the bytes freed (0 if nothing was left in memory). Runs on
     /// the hook's own task; blocking I/O goes to the blocking pool.
     fn spill_unread(self: Arc<Self>) -> BoxFuture<'static, Result<usize>>;
+}
+
+/// A spill's outcome when its write failed: a refused scratch reservation
+/// frees nothing and is not an error (the arbitrator moves on); any other
+/// error is.
+pub(crate) fn refused(e: KrishivError) -> Result<usize> {
+    if e.error_class() == ErrorClass::UnableToAcquireMemory {
+        Ok(0)
+    } else {
+        Err(e)
+    }
 }
 
 /// The memory consumer of a finished output and its spill hook (see the
@@ -88,23 +100,23 @@ impl OutputSpill {
         if self.running.swap(true, Ordering::AcqRel) {
             return;
         }
-        let Some(me) = self.me.upgrade() else {
-            self.running.store(false, Ordering::Release);
-            return;
-        };
-        let task = async move {
-            loop {
-                me.service().await;
-                me.running.store(false, Ordering::Release);
-                // A request that arrived after the last one completed
-                // starts a new generation: serve it too.
-                if me.signal.spill_requested().is_none() || me.running.swap(true, Ordering::AcqRel)
-                {
-                    return;
-                }
-            }
-        };
-        drop(self.executor.spawn(self.query.class(), Box::pin(task)));
+        // Always alive here: `self` is borrowed from the `Arc`.
+        if let Some(me) = self.me.upgrade() {
+            drop(
+                self.executor
+                    .spawn(self.query.class(), Box::pin(me.serve())),
+            );
+        }
+    }
+
+    async fn serve(self: Arc<Self>) {
+        self.service().await;
+        self.running.store(false, Ordering::Release);
+        // A request that arrived after the last one completed starts a new
+        // generation: serve it too.
+        if self.signal.spill_requested().is_some() {
+            self.start();
+        }
     }
 
     /// Serves the pending request, if any: spills the output's unread part
@@ -151,5 +163,139 @@ impl Spillable for OutputSpill {
 
     fn owner(&self) -> Option<OwnerId> {
         None
+    }
+}
+
+#[cfg(all(test, not(loom)))]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use krishiv_memory::{MemoryConfig, MemoryError, MemoryPool, SpillOwner, TreePool};
+
+    use super::*;
+    use crate::context::{ExecConfig, OperatorId, QueryId};
+    use crate::error::internal;
+    use crate::executor::{TokioExecutor, WorkloadClass};
+
+    /// An output whose spill frees `bytes`, fails, or waits until `gate`
+    /// opens; counts its spills.
+    struct Fake {
+        spills: AtomicUsize,
+        result: Result<usize>,
+        gate: Option<tokio::sync::Notify>,
+    }
+
+    impl SpillUnread for Fake {
+        fn spill_unread(self: Arc<Self>) -> BoxFuture<'static, Result<usize>> {
+            Box::pin(async move {
+                self.spills.fetch_add(1, Ordering::Relaxed);
+                if let Some(gate) = &self.gate {
+                    gate.notified().await;
+                }
+                self.result.clone()
+            })
+        }
+    }
+
+    fn setup(fake: Option<Fake>) -> (Arc<OutputSpill>, Option<Arc<Fake>>, Arc<QueryContext>) {
+        let pool = TreePool::new(&MemoryConfig::default());
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            pool.child("q", None),
+        );
+        let executor = TokioExecutor::deterministic(1).unwrap_or_else(|e| unreachable!("{e}"));
+        let ctx = TaskContext::new(
+            Arc::clone(&query),
+            executor,
+            SpillOwner::new(),
+            OperatorId(1),
+            "output",
+        );
+        let (hook, _consumer) = OutputSpill::register(&ctx, "output");
+        let fake = fake.map(Arc::new);
+        if let Some(f) = &fake {
+            let weak: Weak<dyn SpillUnread> = Arc::downgrade(f) as Weak<Fake>;
+            hook.attach(weak);
+        }
+        hook.set_spillable_bytes(100);
+        (hook, fake, query)
+    }
+
+    fn fake(result: Result<usize>, gated: bool) -> Fake {
+        Fake {
+            spills: AtomicUsize::new(0),
+            result,
+            gate: gated.then(tokio::sync::Notify::new),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn requests_coalesce_into_one_spill() {
+        let (hook, fake, _q) = setup(Some(fake(Ok(100), true)));
+        let fake = fake.unwrap_or_else(|| unreachable!());
+        assert_eq!(hook.spillable_bytes(), 100);
+        assert_eq!(hook.owner(), None);
+        // A zero target asks for nothing.
+        assert_eq!(hook.request_spill(0).await, 0);
+        let first = hook.request_spill(10);
+        assert_eq!(hook.spill_requested(), Some(10));
+        // The second joins the first (the task is running).
+        let second = hook.request_spill(50);
+        while fake.spills.load(Ordering::Relaxed) == 0 {
+            tokio::task::yield_now().await;
+        }
+        fake.gate
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .notify_one();
+        assert_eq!((first.await, second.await), (100, 100));
+        assert_eq!(fake.spills.load(Ordering::Relaxed), 1);
+        assert_eq!(hook.spill_requested(), None);
+    }
+
+    #[test]
+    fn a_refused_scratch_frees_nothing_and_is_no_error() {
+        let refusal = KrishivError::from(MemoryError::Exhausted {
+            requested: 10,
+            available: 0,
+        });
+        assert_eq!(refused(refusal).ok(), Some(0));
+        let other = refused(internal("disk".to_owned())).err();
+        assert_eq!(
+            other.map(|e| e.error_class()),
+            Some(ErrorClass::InternalError)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn without_an_output_a_request_frees_nothing() {
+        let (hook, _, q) = setup(None);
+        assert_eq!(hook.request_spill(10).await, 0);
+        assert!(q.error().is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_spill_fails_the_query() {
+        let (hook, _fake, q) = setup(Some(fake(Err(internal("disk full".to_owned())), false)));
+        assert_eq!(hook.request_spill(10).await, 0);
+        let e = q
+            .error()
+            .unwrap_or_else(|| unreachable!("the query failed"));
+        assert_eq!(e.error_class(), ErrorClass::InternalError);
+        assert!(e.to_string().contains("disk full"), "{e}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancelled_query_stops_a_waiting_spill() {
+        let (hook, fake, q) = setup(Some(fake(Ok(100), true)));
+        let fake = fake.unwrap_or_else(|| unreachable!());
+        let ticket = hook.request_spill(10);
+        while fake.spills.load(Ordering::Relaxed) == 0 {
+            tokio::task::yield_now().await;
+        }
+        q.cancel();
+        assert_eq!(ticket.await, 0);
     }
 }
