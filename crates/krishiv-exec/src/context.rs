@@ -483,6 +483,21 @@ impl TaskContext {
         })
     }
 
+    /// A further consumer of this operator with its own spill hook (not
+    /// this driver's): its spill files count with the operator's.
+    pub(crate) fn register_consumer(
+        &self,
+        name: &str,
+        spill: Arc<dyn krishiv_memory::Spillable>,
+    ) -> Arc<ConsumerHandle> {
+        ConsumerHandle::register_counted(
+            Arc::clone(self.query.pool()),
+            name,
+            Some(spill),
+            self.query.spill_stats(self.op),
+        )
+    }
+
     /// The consumer, if the operator registered one.
     pub(crate) fn registered(&self) -> Option<&MemoryHandle> {
         self.memory.get()

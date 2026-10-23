@@ -2131,3 +2131,74 @@ async fn row_layout_metrics() {
         "{names:?}"
     );
 }
+
+/// The plan of the unread-result tests: `sum(x) group by k` over `groups`
+/// keys, read into a breaker that cannot spill (as a join build or a
+/// result buffer would be in its place).
+fn unread_plan(groups: i64, spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
+    let s = schema(vec![("k", DataType::Int64), ("x", DataType::Int64)]);
+    let batches = (0..groups)
+        .step_by(1024)
+        .map(|start| {
+            let keys: Vec<Option<i64>> = (start..(start + 1024).min(groups)).map(Some).collect();
+            vec![i64s(&keys), i64s(&keys)]
+        })
+        .collect();
+    let mut sp = spec(&s, vec![0], vec![agg(Sum, 1, &s)]);
+    sp.spill = spill;
+    Arc::new(crate::testing::Break(
+        node(scan(&s, batches), sp),
+        crate::testing::Buffer::new(false, None),
+        false,
+    ))
+}
+
+/// An in-memory result is spillable until read. Its reader feeds a
+/// breaker that cannot spill; the memory that breaker needs comes from
+/// spilling the result's unread chunks. Before, the result held its memory
+/// unspillable until the query ended: a limit at which the aggregate fits
+/// failed or passed depending on how much of the result had to coexist
+/// with the reader's state (1.8 MB failed while 1.6 MB, where the aggregate
+/// spilled while building, passed). Now every limit in the range completes,
+/// with each layout and with one or several readers.
+#[tokio::test]
+async fn an_unread_result_spills_for_its_reader() {
+    let (_d, scope) = spill_dir();
+    let groups = 20_000;
+    let free = Opts {
+        slots: 1,
+        ..Opts::default()
+    };
+    let (want, _) = exec_with(unread_plan(groups, None), free, false)
+        .await
+        .unwrap();
+    let want = rows(&want);
+    assert_eq!(want.len(), 20_000);
+    for slots in [1, 3] {
+        for limit in (5..=10).map(|fifth| fifth * 200_000) {
+            for layout in [false, true] {
+                let o = Opts {
+                    slots,
+                    limit,
+                    ..Opts::default()
+                };
+                let plan = unread_plan(groups, Some(scope.clone()));
+                let r = exec_with(plan, o, layout).await;
+                let (got, m) = r.unwrap_or_else(|e| panic!("{slots} slots, {limit} B: {e}"));
+                assert_eq!(rows(&got), want, "{slots} slots, {limit} B");
+                if slots == 1 && limit == 1_800_000 && !layout {
+                    // The aggregate finished in memory; only its result
+                    // was written to disk, by its own consumer.
+                    assert_eq!(extra(&m, "HashAggregate", "spill_runs"), 0);
+                    let written: u64 = m
+                        .operators
+                        .values()
+                        .filter(|e| e.name == "HashAggregate")
+                        .map(|e| e.metrics.spill_write_bytes)
+                        .sum();
+                    assert!(written > 0, "{m:?}");
+                }
+            }
+        }
+    }
+}

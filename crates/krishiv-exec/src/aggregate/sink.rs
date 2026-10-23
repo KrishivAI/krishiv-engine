@@ -17,16 +17,22 @@
 //! `finalize` keeps all of this in the global state between steps and
 //! yields after each, so [`Sink::spill_global`] can free memory at any
 //! await. Whole-table writes run on the blocking pool.
+//!
+//! An in-memory result stays spillable until read: it is charged to a
+//! consumer of its own whose hook writes the chunks no reader has claimed
+//! to an output file ([`crate::output_spill`]), and its tables go once the
+//! last chunk's reader is done with them.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 use arrow_array::{RecordBatch, UInt32Array};
 use arrow_select::take::take_record_batch;
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_memory::{
-    ConsumerHandle, Reservation, SpillFile, SpillReader, SpillScope, SpillSignal, SpillWriter,
+    ConsumerHandle, Reservation, SpillError, SpillFile, SpillReader, SpillScope, SpillSignal,
+    SpillWriter,
 };
 use krishiv_types::batch::{Batch, Weights};
 
@@ -38,7 +44,8 @@ use crate::error::{Result, internal};
 use crate::executor::{Executor, run_blocking};
 use crate::hash::{HashSeed, MAX_LEVEL, PARTITIONS, ProbeTotals};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
-use crate::sync::{Mutex, lock};
+use crate::output_spill::{OutputSpill, SpillUnread};
+use crate::sync::{Event, Mutex, lock};
 
 mod parallel;
 
@@ -258,6 +265,36 @@ impl Spiller {
         Ok(Run(files))
     }
 
+    /// Writes chunks `from..` of an in-memory result to one output file
+    /// (blocking I/O); the writer's scratch may use the pool's
+    /// spill-scratch floor. `Ok(None)` if the pool refused the scratch.
+    fn write_chunks(&self, mem: &InMemory, from: usize) -> Result<Option<SpillFile>> {
+        let refused = |e: SpillError| match e {
+            SpillError::Memory(_) => Ok(None),
+            other => Err(KrishivError::from(other)),
+        };
+        let schema = Arc::clone(&self.core.output_schema);
+        let scratch = self.consumer.reservation().for_spill_scratch();
+        let mut w = match self.scope.writer(schema, scratch) {
+            Ok(w) => w,
+            Err(e) => return refused(e),
+        };
+        for chunk in from..mem.chunks.len() {
+            self.query.check_cancelled()?;
+            if let Err(e) = w.write(&mem.batch(chunk)?) {
+                return refused(e);
+            }
+        }
+        match w.finish() {
+            Ok(f) => {
+                bump(&self.counters.spill_files, 1);
+                bump(&self.counters.spill_bytes, f.bytes());
+                Ok(Some(f))
+            }
+            Err(e) => refused(e),
+        }
+    }
+
     /// Writes the final output of `table` to `out` (blocking I/O).
     fn write_output(&self, table: &Table, out: &mut SpillWriter) -> Result<()> {
         let n = u32::try_from(table.len()).map_err(|_| internal("too many groups".to_owned()))?;
@@ -345,21 +382,156 @@ pub(super) fn row_merge_running(g: &GlobalState) -> bool {
 }
 
 /// The finalized output, read by the source side.
-enum Final {
-    /// In memory; the reservation is held as long as the table.
-    Table {
-        table: Table,
-        _held: Vec<Reservation>,
-    },
-    /// Merged row-table partitions in memory, read in `chunks` (table,
-    /// positions); the reservations are held as long as the tables.
-    Parts {
-        tables: Vec<Table>,
-        chunks: Vec<(usize, std::ops::Range<usize>)>,
-        _held: Vec<Reservation>,
-    },
-    /// On disk; the source takes the file when it starts reading.
-    File(Mutex<Option<SpillFile>>),
+struct Final {
+    out: Arc<Output>,
+    /// Chunks of an in-memory result: the source side's parallelism.
+    chunks: usize,
+}
+
+/// An in-memory result: its tables, read in `chunks` (table, positions),
+/// and the reservations that hold them.
+struct InMemory {
+    tables: Vec<Table>,
+    chunks: Vec<(usize, std::ops::Range<usize>)>,
+    held: Vec<Reservation>,
+}
+
+impl InMemory {
+    fn batch(&self, chunk: usize) -> Result<Batch> {
+        let (t, range) = self
+            .chunks
+            .get(chunk)
+            .ok_or_else(|| internal("aggregate chunk out of range".to_owned()))?;
+        let t = self
+            .tables
+            .get(*t)
+            .ok_or_else(|| internal("aggregate chunk without its table".to_owned()))?;
+        Ok(Batch::new(t.output_batch(&t.ids(range.clone()))?))
+    }
+
+    fn bytes(&self) -> usize {
+        self.held.iter().map(Reservation::size).sum()
+    }
+}
+
+/// Where the source side reads.
+enum Out {
+    /// In memory; chunks `next..` are unread. Readers share the tables,
+    /// which go (with their memory) once the last chunk's reader is done.
+    Memory { mem: Arc<InMemory>, next: usize },
+    /// The unread chunks are being written to a spill file.
+    Spilling,
+    /// On disk; the first reader takes the file.
+    File(Option<SpillFile>),
+    /// Every chunk was claimed.
+    Done,
+}
+
+/// What a reader got from [`Output::claim`].
+enum Claim {
+    Chunk(Arc<InMemory>, usize),
+    File(Option<SpillFile>),
+    Wait,
+    Done,
+}
+
+/// The finalized output with its spill hook: an in-memory result is
+/// spillable until read (see [`crate::output_spill`]).
+struct Output {
+    state: Mutex<Out>,
+    /// Notified when a spill of the unread chunks ends.
+    changed: Event,
+    /// The hook and the writer of the unread chunks (with a spill
+    /// directory only).
+    spill: Option<(Arc<OutputSpill>, Spiller)>,
+    executor: Arc<dyn Executor>,
+}
+
+impl Output {
+    fn on_disk(file: Option<SpillFile>, executor: Arc<dyn Executor>) -> Self {
+        Self {
+            state: Mutex::new(Out::File(file)),
+            changed: Event::default(),
+            spill: None,
+            executor,
+        }
+    }
+
+    fn set_spillable(&self, bytes: usize) {
+        if let Some((hook, _)) = &self.spill {
+            hook.set_spillable_bytes(bytes);
+        }
+    }
+
+    fn claim(&self) -> Claim {
+        let mut state = lock(&self.state);
+        let (mem, chunk) = match &mut *state {
+            Out::Memory { mem, next } => {
+                *next += 1;
+                (Arc::clone(mem), *next - 1)
+            }
+            Out::Spilling => return Claim::Wait,
+            Out::File(f) => return Claim::File(f.take()),
+            Out::Done => return Claim::Done,
+        };
+        if chunk + 1 >= mem.chunks.len() {
+            // The last chunk: the readers' clones are all that is left.
+            *state = Out::Done;
+            self.set_spillable(0);
+        }
+        if chunk < mem.chunks.len() {
+            Claim::Chunk(mem, chunk)
+        } else {
+            Claim::Done
+        }
+    }
+}
+
+impl SpillUnread for Output {
+    fn spill_unread(self: Arc<Self>) -> BoxFuture<'static, Result<usize>> {
+        Box::pin(async move {
+            let Some((_, s)) = &self.spill else {
+                return Ok(0);
+            };
+            let (mem, from) = {
+                let mut state = lock(&self.state);
+                match std::mem::replace(&mut *state, Out::Spilling) {
+                    Out::Memory { mem, next } => (mem, next),
+                    other => {
+                        *state = other;
+                        return Ok(0);
+                    }
+                }
+            };
+            self.set_spillable(0);
+            let freed = mem.bytes();
+            let s = s.clone();
+            let guard = s.query.blocking_started();
+            let written = run_blocking(&*self.executor, move || {
+                let _guard = guard;
+                Ok(match s.write_chunks(&mem, from) {
+                    // The tables go here (or with the last reader's clone).
+                    Ok(Some(file)) => Ok(file),
+                    // Nothing was read from the tables: they stay.
+                    Ok(None) => Err((Ok(0), mem)),
+                    Err(e) => Err((Err(e), mem)),
+                })
+            })
+            .await;
+            let (next, result) = match written {
+                Ok(Ok(file)) => (Out::File(Some(file)), Ok(freed)),
+                Ok(Err((result, mem))) => {
+                    let bytes = mem.bytes();
+                    self.set_spillable(bytes);
+                    (Out::Memory { mem, next: from }, result)
+                }
+                Err(e) => (Out::Done, Err(e)),
+            };
+            *lock(&self.state) = next;
+            self.changed.notify();
+            result
+        })
+    }
 }
 
 struct Global {
@@ -373,8 +545,6 @@ struct Global {
     combined: AtomicUsize,
     inner: Mutex<Inner>,
     done: OnceLock<Final>,
-    /// The next output chunk (source side of an in-memory result).
-    cursor: AtomicUsize,
 }
 
 fn downcast<T: 'static>(state: &mut LocalState) -> Result<&mut T> {
@@ -573,7 +743,7 @@ impl HashAggregate {
             bump(&self.counters.hash_buckets, table.buckets() as u64);
             let mut held = std::mem::take(&mut inner.granted);
             held.push(reservation);
-            let _ = g.done.set(Final::Table { table, _held: held });
+            self.finish_memory(g, ctx, vec![table], held)?;
             return Ok(Step::Done);
         }
         let (dst, rest) = tables.split_at_mut(1);
@@ -615,8 +785,11 @@ impl HashAggregate {
                         }) as Apply)
                     })));
                 }
-                let file = Mutex::new(inner.out_file.take());
-                let _ = g.done.set(Final::File(file));
+                let out = Output::on_disk(inner.out_file.take(), Arc::clone(ctx.executor()));
+                let _ = g.done.set(Final {
+                    out: Arc::new(out),
+                    chunks: 1,
+                });
                 return Ok(Step::Done);
             };
             // Files are taken from the back: reverse them so they merge in
@@ -751,6 +924,68 @@ impl HashAggregate {
         })))
     }
 
+    /// Publishes an in-memory result: `tables` read in chunks of a batch,
+    /// held by `held`.
+    fn finish_memory(
+        &self,
+        g: &Global,
+        ctx: &TaskContext,
+        tables: Vec<Table>,
+        held: Vec<Reservation>,
+    ) -> Result<()> {
+        let batch = ctx.query().config().batch_size.max(1);
+        let mut chunks = Vec::new();
+        for (i, t) in tables.iter().enumerate() {
+            let n = t.len();
+            chunks.extend((0..n).step_by(batch).map(|s| (i, s..(s + batch).min(n))));
+        }
+        self.publish_memory(g, ctx, tables, chunks, held)
+    }
+
+    /// Publishes an in-memory result read in `chunks` (table, positions).
+    /// With a spill directory the result gets a consumer of its own whose
+    /// hook spills the unread chunks on request ([`crate::output_spill`]).
+    fn publish_memory(
+        &self,
+        g: &Global,
+        ctx: &TaskContext,
+        tables: Vec<Table>,
+        chunks: Vec<(usize, std::ops::Range<usize>)>,
+        mut held: Vec<Reservation>,
+    ) -> Result<()> {
+        let spill = match self.spiller(ctx) {
+            Some(mut s) => {
+                let (hook, consumer) = OutputSpill::register(ctx, "HashAggregate output");
+                for r in &mut held {
+                    r.transfer_to(&consumer).map_err(KrishivError::from)?;
+                }
+                s.consumer = consumer;
+                Some((hook, s))
+            }
+            None => None,
+        };
+        let count = chunks.len();
+        let mem = Arc::new(InMemory {
+            tables,
+            chunks,
+            held,
+        });
+        let bytes = mem.bytes();
+        let out = Arc::new(Output {
+            state: Mutex::new(Out::Memory { mem, next: 0 }),
+            changed: Event::default(),
+            spill,
+            executor: Arc::clone(ctx.executor()),
+        });
+        if let Some((hook, _)) = &out.spill {
+            let weak: Weak<dyn SpillUnread> = Arc::downgrade(&out) as Weak<Output>;
+            hook.attach(weak);
+            hook.set_spillable_bytes(bytes);
+        }
+        let _ = g.done.set(Final { out, chunks: count });
+        Ok(())
+    }
+
     async fn run_job(&self, g: &Global, ctx: &TaskContext, job: Job) -> Result<()> {
         let apply = ctx.run_blocking(job).await;
         let mut inner = lock(&g.inner);
@@ -785,7 +1020,6 @@ impl Sink for HashAggregate {
             combined: AtomicUsize::new(0),
             inner: Mutex::new(Inner::default()),
             done: OnceLock::new(),
-            cursor: AtomicUsize::new(0),
         }))
     }
 
@@ -1026,7 +1260,6 @@ pub(super) fn unit_weights(w: &Weights) -> bool {
 struct SourceLocal {
     consumer: Arc<ConsumerHandle>,
     reader: Option<SpillReader>,
-    batch_size: usize,
     query: Arc<QueryContext>,
     executor: Arc<dyn Executor>,
 }
@@ -1049,18 +1282,16 @@ impl Source for HashAggregate {
     }
 
     fn max_parallelism(&self, g: &GlobalState) -> usize {
-        match global(g).ok().and_then(|g| g.done.get()) {
-            Some(Final::Table { table, .. }) => table.len().div_ceil(DEFAULT_CHUNK_ROWS).max(1),
-            Some(Final::Parts { chunks, .. }) => chunks.len().max(1),
-            _ => 1,
-        }
+        global(g)
+            .ok()
+            .and_then(|g| g.done.get())
+            .map_or(1, |f| f.chunks.max(1))
     }
 
     fn local_state(&self, ctx: &TaskContext, _g: &GlobalState) -> Result<LocalState> {
         Ok(Box::new(SourceLocal {
             consumer: Arc::clone(ctx.consumer().consumer()),
             reader: None,
-            batch_size: ctx.query().config().batch_size.max(1),
             query: Arc::clone(ctx.query()),
             executor: Arc::clone(ctx.executor()),
         }))
@@ -1074,74 +1305,62 @@ impl Source for HashAggregate {
         Box::pin(async move {
             let l = downcast::<SourceLocal>(l)?;
             let g = global(g)?;
-            match g.done.get() {
-                Some(Final::Table { table: t, .. }) => {
-                    let start = g.cursor.fetch_add(l.batch_size, AtomicOrdering::Relaxed);
-                    if start >= t.len() {
-                        return Ok(None);
-                    }
-                    let end = (start + l.batch_size).min(t.len());
-                    let ids = t.ids(start..end);
-                    Ok(Some(Batch::new(t.output_batch(&ids)?)))
+            let out = &g
+                .done
+                .get()
+                .ok_or_else(|| internal("aggregate read before it finalized".to_owned()))?
+                .out;
+            if l.reader.is_some() {
+                return read_file(l, None).await;
+            }
+            loop {
+                let changed = out.changed.listen();
+                match out.claim() {
+                    Claim::Chunk(mem, chunk) => return mem.batch(chunk).map(Some),
+                    Claim::File(None) | Claim::Done => return Ok(None),
+                    Claim::File(file) => return read_file(l, file).await,
+                    // A spill of the unread chunks is being written.
+                    Claim::Wait => changed.await,
                 }
-                Some(Final::Parts { tables, chunks, .. }) => {
-                    let i = g.cursor.fetch_add(1, AtomicOrdering::Relaxed);
-                    let Some((t, range)) = chunks.get(i) else {
-                        return Ok(None);
-                    };
-                    let t = tables
-                        .get(*t)
-                        .ok_or_else(|| internal("aggregate chunk without its table".to_owned()))?;
-                    Ok(Some(Batch::new(t.output_batch(&t.ids(range.clone()))?)))
-                }
-                Some(Final::File(file)) => {
-                    let file = if l.reader.is_none() {
-                        match lock(file).take() {
-                            Some(f) => Some(f),
-                            None => return Ok(None),
-                        }
-                    } else {
-                        None
-                    };
-                    if let Some(f) = &file {
-                        // The reader's frames, reserved through the
-                        // arbitrator before it opens and cycled through the
-                        // consumer's credit: a read is never refused.
-                        let need = f.max_read_reservation();
-                        let mut lent = l.consumer.reservation();
-                        lent.grow(need).await.map_err(KrishivError::from)?;
-                        lent.shrink_to_credit(need);
-                    }
-                    let reader = l.reader.take();
-                    let consumer = Arc::clone(&l.consumer);
-                    // File I/O runs on the blocking pool, never on a worker.
-                    let guard = l.query.blocking_started();
-                    let (reader, next) = run_blocking(&*l.executor, move || {
-                        let _guard = guard;
-                        let mut r = match (reader, file) {
-                            (Some(r), _) => r,
-                            (None, Some(f)) => f
-                                .reader(consumer.reservation().releasing_to_credit())
-                                .map_err(KrishivError::from)?,
-                            (None, None) => return Err(internal("no output file".to_owned())),
-                        };
-                        let next = r.next().transpose().map_err(KrishivError::from)?;
-                        Ok((r, next))
-                    })
-                    .await?;
-                    if next.is_some() {
-                        l.reader = Some(reader);
-                    } else {
-                        drop(reader);
-                        l.consumer.release_credit();
-                    }
-                    Ok(next)
-                }
-                None => Err(internal("aggregate read before it finalized".to_owned())),
             }
         })
     }
 }
 
-/// Output rows per source driver claim, for the parallelism estimate.
-const DEFAULT_CHUNK_ROWS: usize = crate::context::DEFAULT_BATCH_SIZE;
+/// Reads the next batch of the output file: `file` (just taken) or the
+/// reader already open.
+async fn read_file(l: &mut SourceLocal, file: Option<SpillFile>) -> Result<Option<Batch>> {
+    if let Some(f) = &file {
+        // The reader's frames, reserved through the arbitrator before it
+        // opens and cycled through the consumer's credit: a read is never
+        // refused.
+        let need = f.max_read_reservation();
+        let mut lent = l.consumer.reservation();
+        lent.grow(need).await.map_err(KrishivError::from)?;
+        lent.shrink_to_credit(need);
+    }
+    let reader = l.reader.take();
+    let consumer = Arc::clone(&l.consumer);
+    // File I/O runs on the blocking pool, never on a worker.
+    let guard = l.query.blocking_started();
+    let (reader, next) = run_blocking(&*l.executor, move || {
+        let _guard = guard;
+        let mut r = match (reader, file) {
+            (Some(r), _) => r,
+            (None, Some(f)) => f
+                .reader(consumer.reservation().releasing_to_credit())
+                .map_err(KrishivError::from)?,
+            (None, None) => return Err(internal("no output file".to_owned())),
+        };
+        let next = r.next().transpose().map_err(KrishivError::from)?;
+        Ok((r, next))
+    })
+    .await?;
+    if next.is_some() {
+        l.reader = Some(reader);
+    } else {
+        drop(reader);
+        l.consumer.release_credit();
+    }
+    Ok(next)
+}
