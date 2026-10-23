@@ -536,7 +536,15 @@ impl Resolver<'_> {
                 name,
                 params,
             } => self.hint(p, input, name, params, env),
-            _ => self.leaf_node(p, env),
+            // Listed, not wildcarded: a new `PlanNode` variant must be
+            // placed here or in `leaf_node` to compile.
+            PlanNode::Read(ReadSource::Files { .. })
+            | PlanNode::Sql { .. }
+            | PlanNode::Scan(_)
+            | PlanNode::CteRef(_)
+            | PlanNode::Shift { .. }
+            | PlanNode::ReplicateRows { .. }
+            | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
         }
     }
 
@@ -630,7 +638,24 @@ impl Resolver<'_> {
                 r.widen = Some(Arc::new(Widen::Through { child: c }));
                 Ok(r)
             }
-            _ => Err(unsupported("a plan shape", o)),
+            // Handled in `node`, which never forwards them.
+            PlanNode::Read(ReadSource::Table { .. })
+            | PlanNode::OneRowRelation
+            | PlanNode::Project { .. }
+            | PlanNode::WithColumns { .. }
+            | PlanNode::Filter { .. }
+            | PlanNode::Aggregate { .. }
+            | PlanNode::Join { .. }
+            | PlanNode::Sort { .. }
+            | PlanNode::Limit { .. }
+            | PlanNode::Offset { .. }
+            | PlanNode::SubqueryAlias { .. }
+            | PlanNode::WithCte { .. }
+            | PlanNode::Hint { .. }
+            | PlanNode::Union { .. }
+            | PlanNode::Distinct { .. }
+            | PlanNode::SetOp { .. }
+            | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
         }
     }
 

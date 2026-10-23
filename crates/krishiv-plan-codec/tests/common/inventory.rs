@@ -242,9 +242,9 @@ pub(crate) fn window_ranking() -> WindowPlan {
     }
 }
 
-/// Aggregates over every frame the operator supports (both units, the
-/// whole partition and the running frame), a bound that is the current
-/// row at both ends, a `FILTER` column and the aggregate input kinds.
+/// Aggregates over every frame the format carries (both units, the whole
+/// partition, the running frame and `CURRENT ROW` at both ends, which the
+/// operator itself refuses), a `FILTER` column and the aggregate input kinds.
 pub(crate) fn window_aggregates() -> WindowPlan {
     let aggs = aggregate_exprs();
     let over = |i: usize, frame, name: &str| {
