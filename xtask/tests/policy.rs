@@ -230,9 +230,11 @@ fn ci_policy_wiring() {
     // checkout (a PR must not raise its own baseline), and the selection reads
     // the base commit's file only as the fallback.
     assert!(
-        !policy.contains("cargo xtask budgets --compare \"$MEASURED\"\n")
-            && !policy.contains("git show FETCH_HEAD"),
-        "the budgets gate must compare with an explicit baseline"
+        !policy.contains("git show FETCH_HEAD")
+            && policy.contains(
+                "if [ \"$MODE\" = main ]; then\n            cargo xtask budgets --compare"
+            ),
+        "the budgets gate must compare with an explicit baseline (legacy base aside)"
     );
     let select = read(".github/scripts/main-baseline.sh");
     for needle in [
@@ -275,6 +277,18 @@ fn ci_policy_wiring() {
             "{job} selects by the measured base"
         );
         assert!(body.contains("actions: read"), "{job} needs actions: read");
+        // Bootstrap: a base without the selection script or `--baseline` is
+        // judged by its own old gate (committed budgets.json), and the
+        // selection is skipped. No rust-cache, so a PR cannot seed the build.
+        assert!(
+            body.contains("id: gate")
+                && body.contains("[ -f .github/scripts/main-baseline.sh ]")
+                && body.contains("grep -qF '\"--baseline\"' xtask/src/budgets.rs")
+                && body.contains("mode=legacy")
+                && body.contains("steps.gate.outputs.mode == 'main'"),
+            "{job} must fall back to the base's own gate when it lacks --baseline"
+        );
+        assert!(!body.contains("rust-cache"), "{job} must not use a cache");
         assert!(!body.contains("actions: write") && !body.contains("contents: write"));
     }
     // The gate finds the measurement by job and artifact name.
@@ -292,6 +306,11 @@ fn ci_policy_wiring() {
     }
     // Wheel sizes: wheels.yml only measures on a pull request (and reads no
     // label); the label-aware gate in pr-policy.yml compares the measurement.
+    let ci = read(".github/workflows/ci.yml");
+    assert!(
+        ci.contains("github.event_name != 'push' && github.event_name != 'merge_group'"),
+        "wheels-targets is skipped on push and in the merge queue"
+    );
     let wheels = read(".github/workflows/wheels.yml");
     for needle in [
         "cargo xtask wheel-sizes dist --measure-only",

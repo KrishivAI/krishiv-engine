@@ -668,10 +668,11 @@ jobs:
           path: dist/*.whl
 
   # P2-T103: every wheel target (wheels.yml), on PRs that can change them.
-  # Not on a push to main: main-measure.yml builds and measures the wheels there.
+  # Not on a push to main (main-measure.yml builds and measures the wheels there)
+  # nor in the merge queue (it rebuilds them after the push); `wheels-ok` passes.
   wheels-targets:
     needs: changes
-    if: needs.changes.outputs.python == 'true' && github.event_name != 'push'
+    if: needs.changes.outputs.python == 'true' && github.event_name != 'push' && github.event_name != 'merge_group'
     permissions:
       contents: read
       actions: read

@@ -137,6 +137,18 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 0
+      # A base that predates the main-measurement design has neither the
+      # selection script nor `--baseline`: it is judged entirely by its own
+      # (old) gate, still without running any pull request code.
+      - name: Choose the gate
+        id: gate
+        run: |
+          if [ -f .github/scripts/main-baseline.sh ] && grep -qF '"--baseline"' xtask/src/budgets.rs; then
+            echo "mode=main" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=legacy" >> "$GITHUB_OUTPUT"
+            echo "The base commit predates the main-measurement gate; compared with its committed budgets.json as before." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Wait for the CI measurement
         id: measure
         env:
@@ -152,7 +164,7 @@ jobs:
           echo "result=$result" >> "$GITHUB_OUTPUT"
       - name: Select the main baseline
         id: baseline
-        if: steps.measure.outputs.result == 'measured'
+        if: steps.measure.outputs.result == 'measured' && steps.gate.outputs.mode == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -169,8 +181,6 @@ jobs:
         if: steps.measure.outputs.result == 'measured'
         with:
           toolchain: 1.99.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.measure.outputs.result == 'measured'
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
         if: steps.measure.outputs.result == 'measured'
       - name: Resolve budget-approved label
@@ -198,7 +208,13 @@ jobs:
         env:
           MEASURED: ${{ runner.temp }}/budgets/budgets-current.json
           BASELINE: ${{ runner.temp }}/budgets-main/baseline.json
-        run: cargo xtask budgets --compare "$MEASURED" --baseline "$BASELINE"
+          MODE: ${{ steps.gate.outputs.mode }}
+        run: |
+          if [ "$MODE" = main ]; then
+            cargo xtask budgets --compare "$MEASURED" --baseline "$BASELINE"
+          else
+            cargo xtask budgets --compare "$MEASURED"
+          fi
       - name: Nothing measured
         if: steps.measure.outputs.result == 'skipped'
         run: echo "No Rust change in this PR; budgets-measure was skipped." >> "$GITHUB_STEP_SUMMARY"
@@ -237,6 +253,18 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
           fetch-depth: 0
+      # A base that predates the main-measurement design has neither the
+      # selection script nor `--baseline`: it is judged entirely by its own
+      # (old) gate, still without running any pull request code.
+      - name: Choose the gate
+        id: gate
+        run: |
+          if [ -f .github/scripts/main-baseline.sh ] && grep -qF '"--baseline"' xtask/src/budgets.rs; then
+            echo "mode=main" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=legacy" >> "$GITHUB_OUTPUT"
+            echo "The base commit predates the main-measurement gate; compared with its committed budgets.json as before." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Wait for the wheel measurement
         id: measure
         env:
@@ -253,7 +281,7 @@ jobs:
           echo "result=$result" >> "$GITHUB_OUTPUT"
       - name: Select the main baseline
         id: baseline
-        if: steps.measure.outputs.result == 'measured'
+        if: steps.measure.outputs.result == 'measured' && steps.gate.outputs.mode == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -270,8 +298,6 @@ jobs:
         if: steps.measure.outputs.result == 'measured'
         with:
           toolchain: 1.99.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.measure.outputs.result == 'measured'
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
         if: steps.measure.outputs.result == 'measured'
       - name: Resolve budget-approved label
@@ -288,9 +314,14 @@ jobs:
         if: steps.measure.outputs.result == 'measured'
         env:
           SOURCE: ${{ steps.baseline.outputs.source }}
+          MODE: ${{ steps.gate.outputs.mode }}
         # The main measurement is a plain size map; the committed fallback is
-        # a budgets.json.
+        # a budgets.json. A legacy base reads its own committed budgets.json.
         run: |
+          if [ "$MODE" = legacy ]; then
+            cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" --budgets budgets.json
+            exit
+          fi
           if [ "$SOURCE" = main ]; then flag=--baseline; else flag=--budgets; fi
           cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" \
             "$flag" "$RUNNER_TEMP/wheel-sizes-main/baseline.json"
