@@ -43,8 +43,7 @@ mod validate;
 pub use error::ParseError;
 pub use frontend::Frontend;
 pub use lower::{
-    lower, lower_expression, lower_select_item, parse_and_lower, parse_and_lower_expression,
-    parse_and_lower_select_items,
+    lower, lower_expression, lower_select_item, parse_and_lower, parse_and_lower_named_expression,
 };
 pub use redact::redact_sql;
 
@@ -170,51 +169,36 @@ pub fn parse_multipart_identifier(
     parser::parse_multipart_identifier(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
-/// Parses one expression, as Spark's `CatalystSqlParser.parseExpression`
-/// does for `F.expr` and `df.filter("...")`: the expression grammar of
-/// [`parse_query`] (spans, the [`MAX_DEPTH`] recursion limit and error
-/// classes); a statement or trailing tokens are a `PARSE_SYNTAX_ERROR`, as
-/// in Spark.
+/// Parses one named expression (`namedExpression`), as Spark's
+/// `CatalystSqlParser.parseExpression` does for `F.expr`,
+/// `df.selectExpr("...")` (once per argument string) and
+/// `df.filter("...")`: one expression with an optional alias, then the end
+/// of the input. The expression grammar is that of [`parse_query`] (spans,
+/// the [`MAX_DEPTH`] recursion limit and error classes); a statement or
+/// trailing tokens are a `PARSE_SYNTAX_ERROR`, as in Spark.
 ///
 /// ```
-/// use krishiv_sql::{parse_expression, ParserOptions};
+/// use krishiv_sql::{ParserOptions, parse_named_expression};
 ///
 /// let d = ParserOptions::default();
-/// let e = parse_expression("a + 1", &d).unwrap();
-/// assert_eq!(e.span.text("a + 1"), "a + 1");
-/// let trailing = parse_expression("a b", &d).unwrap_err();
+/// let item = parse_named_expression("a AS b", &d).unwrap();
+/// assert!(item.alias.is_some());
+/// let trailing = parse_named_expression("a, b", &d).unwrap_err();
 /// assert_eq!(
 ///     trailing.error.to_string(),
-///     "[PARSE_SYNTAX_ERROR] Syntax error at or near 'b': extra input 'b'. SQLSTATE: 42601"
+///     "[PARSE_SYNTAX_ERROR] Syntax error at or near ','. SQLSTATE: 42601"
 /// );
 /// ```
 ///
 /// # Errors
 /// The syntax errors of [`parse_query`] (`PARSE_EMPTY_STATEMENT` for an
 /// empty string), and the errors Spark raises after parsing (invalid
-/// literals and types, ...) for the expression they sit in.
-pub fn parse_expression(sql: &str, options: &ParserOptions) -> Result<ast::Expr, ParseError> {
-    parser::parse_expression(sql, *options).map_err(|e| e.redacted_in(sql))
-}
-
-/// Parses the select items of one `selectExpr` string
-/// (`expr [[AS] alias], ...`), with the expression grammar of
-/// [`parse_query`]: `*` and aliases work as they do in a `SELECT` list.
-///
-/// ```
-/// use krishiv_sql::{parse_select_items, ParserOptions};
-///
-/// let items = parse_select_items("a, b AS c, *", &ParserOptions::default()).unwrap();
-/// assert_eq!(items.len(), 3);
-/// ```
-///
-/// # Errors
-/// As for [`parse_expression`].
-pub fn parse_select_items(
+/// literals and types, ...) for the expression it sits in.
+pub fn parse_named_expression(
     sql: &str,
     options: &ParserOptions,
-) -> Result<Vec<ast::SelectItem>, ParseError> {
-    parser::parse_select_items(sql, *options).map_err(|e| e.redacted_in(sql))
+) -> Result<ast::SelectItem, ParseError> {
+    parser::parse_named_expression(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
 /// Parses a data type string, as Spark's `CatalystSqlParser.parseDataType`

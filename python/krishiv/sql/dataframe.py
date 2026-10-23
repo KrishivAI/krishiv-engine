@@ -119,8 +119,8 @@ class DataFrame:
 
     def selectExpr(self, *expr: str) -> DataFrame:
         """Projects a set of SQL expressions, as ``pyspark.sql.DataFrame.selectExpr``: each string
-        holds one or more comma-separated select items, so ``AS`` aliases and ``*`` work as they do
-        in a ``SELECT`` list (``df.selectExpr("a", "b AS c", "d, e")``)."""
+        holds one expression with an optional alias, so ``AS`` aliases and ``*`` work as they do
+        in a ``SELECT`` list (``df.selectExpr("a", "b AS c")``)."""
         for e in expr:
             if not isinstance(e, str):
                 raise not_expected_type("expr", "str", e)

@@ -386,10 +386,13 @@ impl Session {
     /// Spark's parse errors (`PARSE_SYNTAX_ERROR`, ...); lowering errors
     /// for constructs the IR lacks.
     pub fn expr(&self, text: &str) -> Result<Column, KrishivError> {
-        let lowered =
-            krishiv_sql::parse_and_lower_expression(text, &self.parser_options(), SourceId(0))
-                .map_err(|e| e.error)?;
-        Ok(Column::new(lowered))
+        let lowered = krishiv_sql::parse_and_lower_named_expression(
+            text,
+            &self.parser_options(),
+            SourceId(0),
+        )
+        .map_err(|e| e.error)?;
+        Ok(Column::new((*lowered).clone()))
     }
 
     /// This session's parser options, from its configuration.

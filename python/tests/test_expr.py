@@ -36,13 +36,16 @@ def test_expr_star(df: DataFrame) -> None:
     assert df.select(F.expr("*")).columns == df.columns
 
 
-def test_select_expr_aliases_star_and_multiple_items(df: DataFrame) -> None:
+def test_select_expr_aliases_star_and_single_item(df: DataFrame) -> None:
     out = df.selectExpr("id", "name as n", "v + 1 as w")
     assert out.columns == ["id", "n", "w"]
     assert [r["w"] for r in out.orderBy("id").collect()] == [2.5, 3.5, None]
-    assert df.selectExpr("id, name").columns == ["id", "name"]
+    assert df.selectExpr("id").columns == ["id"]
     assert df.selectExpr("*").columns == df.columns
-    assert df.selectExpr("id AS a, v AS b", "name").columns == ["a", "b", "name"]
+    assert df.selectExpr("id AS a", "v AS b", "name").columns == ["a", "b", "name"]
+    # One expression per string: a comma is trailing input.
+    with pytest.raises(errors.ParseException, match="PARSE_SYNTAX_ERROR"):
+        df.selectExpr("id, name")
 
 
 def test_select_expr_runs_against_data(df: DataFrame) -> None:
@@ -58,6 +61,17 @@ def test_filter_and_where_with_strings(df: DataFrame) -> None:
     assert df.filter("id > 1 AND v IS NOT NULL").count() == 1
 
 
+def test_expr_with_alias(df: DataFrame) -> None:
+    assert df.select(F.expr("id AS b")).columns == ["b"]
+    assert [r["b"] for r in df.select(F.expr("id AS b")).orderBy("b").collect()] == [1, 2, 3]
+    assert df.select(F.expr("id b")).columns == ["b"]
+
+
+def test_filter_with_alias_parses(df: DataFrame) -> None:
+    assert df.filter("id > 0 AS c").count() == 3
+    assert df.where("id > 1 AS c").count() == 2
+
+
 def test_agg_with_expr_aggregates(df: DataFrame) -> None:
     out = df.groupBy("name").agg(F.expr("count(*)").alias("n"), F.expr("sum(id)").alias("s"))
     assert out.columns == ["name", "n", "s"]
@@ -65,6 +79,8 @@ def test_agg_with_expr_aggregates(df: DataFrame) -> None:
     assert by_name == {"a": (1, 1), None: (1, 2), "c": (1, 3)}
     total = df.agg(F.expr("count(*)").alias("n"), F.expr("sum(id)").alias("s")).collect()[0]
     assert (total["n"], total["s"]) == (3, 6)
+    aliased = df.agg(F.expr("count(*) AS n")).collect()[0]
+    assert aliased["n"] == 3
 
 
 def test_expression_parse_errors(df: DataFrame) -> None:
@@ -76,6 +92,10 @@ def test_expression_parse_errors(df: DataFrame) -> None:
         df.filter("id +")
     with pytest.raises(errors.ParseException, match="PARSE_SYNTAX_ERROR"):
         df.where("SELECT 1")
+    with pytest.raises(errors.ParseException, match="PARSE_SYNTAX_ERROR"):
+        df.selectExpr("a, b")
+    with pytest.raises(errors.ParseException, match="PARSE_SYNTAX_ERROR"):
+        F.expr("a, b")
     with pytest.raises(errors.PySparkTypeError):
         F.expr(1)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError):

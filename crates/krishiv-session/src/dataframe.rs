@@ -199,8 +199,8 @@ impl DataFrame {
     }
 
     /// `SELECT` of SQL expression strings (PySpark's `selectExpr`): each
-    /// string holds one or more comma-separated select items
-    /// (`expr [[AS] alias], ...`), so `*` and aliases work as they do in a
+    /// string holds one expression with an optional alias
+    /// (`expr [[AS] alias]`), so `*` and aliases work as they do in a
     /// `SELECT` list. The strings parse with this session's parser options.
     ///
     /// ```
@@ -219,8 +219,8 @@ impl DataFrame {
         let options = self.session.parser_options();
         let mut lowered = Vec::new();
         for text in exprs {
-            lowered.extend(
-                krishiv_sql::parse_and_lower_select_items(text.as_ref(), &options, SourceId(0))
+            lowered.push(
+                krishiv_sql::parse_and_lower_named_expression(text.as_ref(), &options, SourceId(0))
                     .map_err(|e| e.error)?,
             );
         }
@@ -273,7 +273,7 @@ impl DataFrame {
     /// Spark's parse errors (`PARSE_SYNTAX_ERROR`, ...); lowering errors
     /// for constructs the IR lacks.
     pub fn filter_expr(&self, condition: &str) -> Result<Self, KrishivError> {
-        let predicate = krishiv_sql::parse_and_lower_expression(
+        let predicate = krishiv_sql::parse_and_lower_named_expression(
             condition,
             &self.session.parser_options(),
             SourceId(0),
@@ -281,7 +281,7 @@ impl DataFrame {
         .map_err(|e| e.error)?;
         Ok(self.derive(PlanNode::Filter {
             input: Arc::clone(&self.plan),
-            predicate: Arc::new(predicate),
+            predicate,
         }))
     }
 

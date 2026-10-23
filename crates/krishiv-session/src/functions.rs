@@ -21,7 +21,8 @@ pub fn col(name: &str) -> Column {
 /// Parses `text` as a SQL expression (`F.expr`) with the default parser
 /// options and lowers it as `Session::sql` lowers `SELECT` items, so it
 /// resolves against a DataFrame's columns in the analyzer (`*` stays a
-/// star, as in a `SELECT` list).
+/// star, as in a `SELECT` list; an alias stays, as in Spark's
+/// `parseExpression`).
 ///
 /// ```
 /// use krishiv_session::functions::expr;
@@ -33,13 +34,13 @@ pub fn col(name: &str) -> Column {
 /// Spark's parse errors (`PARSE_SYNTAX_ERROR`, ...); lowering errors for
 /// constructs the IR lacks (`KRISHIV_UNSUPPORTED_FEATURE`).
 pub fn expr(text: &str) -> Result<Column, krishiv_common::error::KrishivError> {
-    let lowered = krishiv_sql::parse_and_lower_expression(
+    let lowered = krishiv_sql::parse_and_lower_named_expression(
         text,
         &krishiv_sql::ParserOptions::default(),
         krishiv_plan::SourceId(0),
     )
     .map_err(|e| e.error)?;
-    Ok(Column::new(lowered))
+    Ok(Column::new((*lowered).clone()))
 }
 
 /// A literal value.

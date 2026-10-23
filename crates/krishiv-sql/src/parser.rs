@@ -227,49 +227,32 @@ pub(crate) fn parse_multipart_identifier(
     parse_with::<MultipartIdentifierRule>(src, opts)
 }
 
-/// Parses one expression (`expression`), as Spark's `parseExpression` does
-/// for `F.expr`: a statement or trailing tokens are a syntax error.
-pub(crate) fn parse_expression(src: &str, opts: ParserOptions) -> Result<Expr, ParseError> {
-    parse_with::<ExpressionRule>(src, opts)
-}
-
-/// Parses the comma-separated select items of one `selectExpr` string
-/// (`expr [[AS] alias], ...`), so `*` and aliases work as they do in a
-/// `SELECT` list.
-pub(crate) fn parse_select_items(
+/// Parses one named expression (`namedExpression`), as Spark's
+/// `CatalystSqlParser.parseExpression` does for `F.expr`,
+/// `df.selectExpr("...")` (once per argument string) and
+/// `df.filter("...")`: one expression with an optional alias, then the end
+/// of the input. The expression grammar is that of [`parse_query`]
+/// (spans, the [`MAX_DEPTH`] recursion limit and error classes); a
+/// statement or trailing tokens are a `PARSE_SYNTAX_ERROR`, as in Spark.
+pub(crate) fn parse_named_expression(
     src: &str,
     opts: ParserOptions,
-) -> Result<Vec<SelectItem>, ParseError> {
-    parse_with::<SelectItemsRule>(src, opts)
+) -> Result<SelectItem, ParseError> {
+    parse_with::<NamedExpressionRule>(src, opts)
 }
 
-/// [`Parser::single_expression`].
-struct ExpressionRule;
+/// [`Parser::single_named_expression`].
+struct NamedExpressionRule;
 
-impl TopRule for ExpressionRule {
-    type Out = Expr;
-    /// One expression and the end of the input.
-    fn parse(p: &mut Parser<'_>) -> PR<Expr> {
-        p.single_expression()
+impl TopRule for NamedExpressionRule {
+    type Out = SelectItem;
+    /// One named expression and the end of the input.
+    fn parse(p: &mut Parser<'_>) -> PR<SelectItem> {
+        p.single_named_expression()
     }
 
     fn validate(out: &Self::Out, src: &str, opts: ParserOptions) -> Result<(), ParseError> {
-        validate::expression(out, src, opts)
-    }
-}
-
-/// [`Parser::single_select_items`].
-struct SelectItemsRule;
-
-impl TopRule for SelectItemsRule {
-    type Out = Vec<SelectItem>;
-    /// Select items and the end of the input.
-    fn parse(p: &mut Parser<'_>) -> PR<Vec<SelectItem>> {
-        p.single_select_items()
-    }
-
-    fn validate(out: &Self::Out, src: &str, opts: ParserOptions) -> Result<(), ParseError> {
-        validate::select_items(out, src, opts)
+        validate::expression(&out.expr, src, opts)
     }
 }
 
@@ -1057,31 +1040,18 @@ impl<'s> Parser<'s> {
         Ok(name)
     }
 
-    /// One `expression` and the end of the input: a statement or trailing
-    /// tokens are a syntax error, as in Spark's `parseExpression` (one
-    /// extraneous token reads as "extra input", as ANTLR drops it).
-    fn single_expression(&mut self) -> PR<Expr> {
-        let e = self.expr()?;
+    /// One `namedExpression` and the end of the input: one expression with
+    /// an optional alias, as in Spark's `parseExpression` (one extraneous
+    /// token reads as "extra input", as ANTLR drops it).
+    fn single_named_expression(&mut self) -> PR<SelectItem> {
+        let item = self.select_item()?;
         if self.pos < self.toks.len() {
             if self.pos + 1 == self.toks.len() {
                 self.extra = Some(self.pos);
             }
             return self.fail();
         }
-        Ok(e)
-    }
-
-    /// `select_item, ...` and the end of the input: the select items of one
-    /// `selectExpr` string.
-    fn single_select_items(&mut self) -> PR<Vec<SelectItem>> {
-        let items = self.comma_sep(Self::select_item)?;
-        if self.pos < self.toks.len() {
-            if self.pos + 1 == self.toks.len() {
-                self.extra = Some(self.pos);
-            }
-            return self.fail();
-        }
-        Ok(items)
+        Ok(item)
     }
 
     fn ident_list(&mut self) -> PR<Vec<Ident>> {

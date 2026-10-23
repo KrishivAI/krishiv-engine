@@ -38,7 +38,7 @@ use crate::ast::{
     WindowSpec,
 };
 use crate::validate::literal::{self, Number, TypedKind};
-use crate::{ParseError, ParserOptions, parse_expression, parse_query, parse_select_items};
+use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
 
 type R<T> = Result<T, ParseError>;
 
@@ -101,43 +101,19 @@ pub fn lower_select_item(item: &SelectItem, source: SourceId) -> R<Arc<IrExpr>> 
     l.select_item(item)
 }
 
-/// Parses and lowers one expression string (`F.expr`); spans index
-/// `source`.
+/// Parses and lowers one named-expression string (`F.expr`,
+/// `selectExpr` once per argument string, `filter`/`where` strings); spans
+/// index `source`.
 ///
 /// # Errors
 /// A [`ParseError`]: the parser's, or a lowering error with its span.
-pub fn parse_and_lower_expression(
+pub fn parse_and_lower_named_expression(
     sql: &str,
     options: &ParserOptions,
     source: SourceId,
-) -> R<IrExpr> {
-    lower_expression(&parse_expression(sql, options)?, source).map_err(|e| e.redacted_in(sql))
-}
-
-/// Parses and lowers the select items of one `selectExpr` string
-/// (`expr [[AS] alias], ...`); spans index `source`.
-///
-/// # Errors
-/// A [`ParseError`]: the parser's, or a lowering error with its span.
-pub fn parse_and_lower_select_items(
-    sql: &str,
-    options: &ParserOptions,
-    source: SourceId,
-) -> R<Vec<Arc<IrExpr>>> {
-    let items = parse_select_items(sql, options)?;
-    let root = items
-        .iter()
-        .fold(None, |span: Option<Span>, item| {
-            Some(span.map_or(item.span, |s| s.to(item.span)))
-        })
-        .unwrap_or(Span::new(0, sql.len()));
-    let mut l = Lowerer {
-        source,
-        depth: 0,
-        root,
-        windows: Vec::new(),
-    };
-    items.iter().map(|item| l.select_item(item)).collect()
+) -> R<Arc<IrExpr>> {
+    lower_select_item(&parse_named_expression(sql, options)?, source)
+        .map_err(|e| e.redacted_in(sql))
 }
 
 fn err(e: impl Into<KrishivError>, span: Span) -> ParseError {

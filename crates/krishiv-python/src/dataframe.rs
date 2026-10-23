@@ -97,7 +97,7 @@ impl PyDataFrame {
     }
 
     /// `SELECT` of SQL expression strings (PySpark's `selectExpr`): each
-    /// string holds one or more comma-separated select items, parsed with
+    /// string holds one expression with an optional alias, parsed with
     /// the session's parser options. Parse errors fail here; resolution
     /// errors fail at the first action.
     fn select_expr(&self, py: Python<'_>, exprs: Vec<String>) -> PyResult<Self> {
