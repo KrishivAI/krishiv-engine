@@ -1584,3 +1584,123 @@ async fn a_refused_flush_headroom_fails_the_window() {
     assert_eq!(again.error_class(), ErrorClass::UnableToAcquireMemory);
     drop((hog, local));
 }
+
+/// The window's metrics count its input once: rows read back in the flush
+/// phase (in memory or copied to a partition's own file) are not counted
+/// again.
+#[tokio::test]
+async fn spilled_rows_are_counted_once() {
+    let rows: Vec<Row> = (0..6_000)
+        .map(|i| {
+            let p = if i < 100 {
+                0
+            } else if i < 5_900 {
+                1
+            } else {
+                2 + i % 5
+            };
+            (Some(p), Some(i), i, Some(i % 17))
+        })
+        .collect();
+    let window = plan(functions(), true);
+    let (_dir, scope) = spill_scope();
+    let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+    let limit = 1 << 30;
+    let (root, ctx) = task(limit);
+    let mut sorted = rows.clone();
+    sorted.sort_by_key(|r| (r.0, r.1));
+    let batches: Vec<Batch> = sorted.chunks(250).map(batch).collect();
+    let spills = Spills {
+        every: 1,
+        slack: Some(96 << 10),
+    };
+    let out = drive_spilling(&op, &ctx, limit, &root, &batches, spills)
+        .await
+        .unwrap();
+    assert_eq!(out.iter().map(Batch::num_rows).sum::<usize>(), 6_000);
+    assert!(
+        op.counters
+            .external
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= 1
+    );
+    let count = |name: &str| {
+        op.extra_metrics()
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, m)| m)
+    };
+    assert!(
+        matches!(count("rows"), Some(crate::metrics::Metric::Count(6_000))),
+        "{:?}",
+        count("rows")
+    );
+    // Partitions 0, 1, then 2..=6.
+    assert!(
+        matches!(count("partitions"), Some(crate::metrics::Metric::Count(7))),
+        "{:?}",
+        count("partitions")
+    );
+}
+
+/// A batch whose first rows wait in the output keeps its bytes reserved
+/// for them when the rest of it spills: they are not the spill's to free
+/// (nor to fund its writer's scratch) until those rows are emitted.
+#[tokio::test]
+async fn bytes_of_rows_waiting_in_the_output_stay_reserved_through_a_spill() {
+    // `a`: 8 rows of partition 0. `b`: 2 more rows of partition 0, then a
+    // large partition 1, so `b`'s first rows are evaluated while the rest
+    // of it stays buffered.
+    let a: Vec<Row> = (0..8).map(|i| (Some(0), Some(i), i, Some(i))).collect();
+    let b: Vec<Row> = (8..20_000)
+        .map(|i| (Some(i64::from(i >= 10)), Some(i), i, Some(i)))
+        .collect();
+    let (_dir, scope) = spill_scope();
+    let window = plan(
+        vec![(
+            WindowFunction::RowNumber,
+            WindowFrame::running(FrameUnits::Rows),
+        )],
+        true,
+    );
+    let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+    let limit = 64 << 20;
+    let config = ExecConfig {
+        batch_size: 4,
+        ..ExecConfig::default()
+    };
+    let (root, ctx) = task_with(limit, config);
+    let mut local = op.local_state(&ctx).unwrap();
+    let mut out = 0;
+    let b = batch(&b);
+    for input in [batch(&a), b.clone()] {
+        match op.execute(&input, &mut local).unwrap() {
+            OperatorOutput::NeedMoreInput(o) => out += o.map_or(0, |o| o.num_rows()),
+            other => panic!("{other:?}"),
+        }
+    }
+    // `a`'s rows went out; `b`'s first two wait in the output.
+    assert_eq!(out, 8);
+    // The buffered rows are all of `b`, whose bytes its waiting rows hold:
+    // the spill writes them but frees nothing yet.
+    assert_eq!(op.spill(&mut local, 1, &ctx).await.unwrap(), 0);
+    let held = b.data().get_array_memory_size();
+    assert!(root.reserved() >= held, "{} < {held}", root.reserved());
+    let waiting = op.finish(&mut local).unwrap().unwrap();
+    assert_eq!(waiting.num_rows(), 2);
+    assert!(root.reserved() < held, "released with its last rows");
+    out += waiting.num_rows();
+    assert!(op.finish(&mut local).unwrap().is_none());
+    op.end_input(&mut local, &ctx).await.unwrap();
+    loop {
+        match op.flush(&mut local, &ctx).await.unwrap() {
+            crate::operator::FlushOutput::Batch(b) => out += b.num_rows(),
+            crate::operator::FlushOutput::Done => break,
+            _ => {}
+        }
+    }
+    assert_eq!(out, 20_000);
+    drop(local);
+    ctx.consumer().consumer().release_credit();
+    assert_eq!(root.reserved(), 0);
+}

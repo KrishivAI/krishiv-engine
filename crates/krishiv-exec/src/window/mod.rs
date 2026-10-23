@@ -462,8 +462,9 @@ impl Window {
     /// (`Err(bytes)` otherwise, nothing changed): its columns, its boundary
     /// flags against the rows before it, and what evaluating its rows
     /// holds ([`eval::cost`], exact for its rows, partitions and peer
-    /// groups).
-    fn append(&self, l: &mut Local, batch: RecordBatch) -> Result<Result<(), usize>> {
+    /// groups). `ingest`: the rows are the operator's input (counted in its
+    /// metrics), not spilled rows read back in the flush phase.
+    fn append(&self, l: &mut Local, batch: RecordBatch, ingest: bool) -> Result<Result<(), usize>> {
         let n = batch.num_rows();
         let flags = |enc: &Option<Arc<KeyEncoder>>,
                      prev: &Option<OwnedRow>|
@@ -514,9 +515,11 @@ impl Window {
         }
         if let Some(i) = part_start.iter().rposition(|&s| s) {
             l.last_start = Some((l.pending.len(), i));
-            self.partitions.fetch_add(parts as u64, Ordering::Relaxed);
         }
-        self.rows.fetch_add(n as u64, Ordering::Relaxed);
+        if ingest {
+            self.partitions.fetch_add(parts as u64, Ordering::Relaxed);
+            self.rows.fetch_add(n as u64, Ordering::Relaxed);
+        }
         l.pending.push_back(Pending {
             batch,
             offset: 0,
@@ -682,7 +685,7 @@ impl Operator for Window {
         if input.data().schema().fields().len() != self.env.input.fields().len() {
             return Err(internal("window input of the wrong width".to_owned()));
         }
-        if let Err(bytes) = self.append(l, input.data().clone())? {
+        if let Err(bytes) = self.append(l, input.data().clone(), true)? {
             return Ok(OperatorOutput::NeedMemory { bytes });
         }
         // After a spill, rows wait for the flush phase: the spilled ones
