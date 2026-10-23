@@ -5,9 +5,12 @@
 //! Every driver's [`RowTable`] holds its groups in radix partitions of the
 //! seedless row hash `h`, each partition with its own rows and states,
 //! with partial duplicates where its fixed index was cleared. The final
-//! phase is "read partition `p` from every producer" (P2-T171 §5.1, I8):
-//! one task per range of partitions ([`final_tasks`], sized from the merged
-//! per-partition sketches) takes that range out of every driver table
+//! phase is "read partition `p` from every producer" (P2-T171 §5.1, I8).
+//! Driver tables that stayed narrow (one partition) while another widened
+//! are widened first, so all share the radix partitions; when none
+//! widened, one task merges them all. Then one task per range of
+//! partitions ([`final_tasks`], sized from the merged per-partition
+//! sketches) takes that range out of every driver table
 //! ([`RowTable::split_parts`], with its share of the driver's reservation)
 //! and merges it, in table order, into its own growing table, presized
 //! from the sketches. Tasks share nothing: each owns its inputs, its table
@@ -135,7 +138,7 @@ impl HashAggregate {
     /// phase merges everything) or when memory ran out and what was left
     /// was spilled; the step machine then continues with the disk phase.
     pub(super) async fn finalize_rows(&self, g: &Global, ctx: &TaskContext) -> Result<bool> {
-        let (mut inputs, held) = {
+        let (mut inputs, mut held) = {
             let mut inner = lock(&g.inner);
             if !inner.runs.is_empty() || inner.disk {
                 return Ok(false);
@@ -174,6 +177,14 @@ impl HashAggregate {
             return Ok(true);
         }
         let spill = self.spiller(ctx);
+        let refuse = self.refused(0);
+        if !Self::widen_inputs(&mut inputs, &mut held, spill.is_some(), refuse).await? {
+            // No memory to widen the narrow tables: everything goes to disk.
+            if let Some(s) = &spill {
+                self.spill_inputs(g, ctx, s, inputs, held).await?;
+            }
+            return Ok(false);
+        }
         lock(&g.inner).row_merge = spill.is_some();
         let (mut queue, spare) = self.final_queue(g, ctx, inputs, held, spill.is_some())?;
         bump(&self.counters.row_final_tasks, queue.len() as u64);
@@ -337,6 +348,72 @@ impl HashAggregate {
         refused
     }
 
+    /// Widens the driver tables that stayed narrow (below the widening
+    /// size) when another one widened, so every input has the same radix
+    /// partitions; tables that all stayed narrow merge in one task. Each
+    /// widening first reserves the copy it makes. When that is refused,
+    /// with a spill directory (`spill`) this returns `false` (the caller
+    /// spills the inputs); without one it waits for the memory. `refuse`
+    /// (a test hook) refuses every reservation.
+    async fn widen_inputs(
+        inputs: &mut [RowTable],
+        held: &mut [Reservation],
+        spill: bool,
+        refuse: bool,
+    ) -> Result<bool> {
+        let wide = inputs.iter().map(RowTable::part_count).max().unwrap_or(1);
+        for (t, r) in inputs.iter_mut().zip(held.iter_mut()) {
+            if t.part_count() == wide {
+                continue;
+            }
+            let before = r.size();
+            let extra = t.widen_bytes();
+            if refuse || r.try_grow(extra).is_err() {
+                if spill {
+                    return Ok(false);
+                }
+                r.grow(extra).await.map_err(KrishivError::from)?;
+            }
+            t.widen()?;
+            if t.part_count() != wide {
+                return Err(internal(
+                    "driver tables of different radix partitions".to_owned(),
+                ));
+            }
+            shrink_to(r, before.max(t.memory_size()));
+        }
+        Ok(true)
+    }
+
+    /// Writes every driver table as a spill run (on the blocking pool) and
+    /// hands the runs to the disk phase.
+    async fn spill_inputs(
+        &self,
+        g: &Global,
+        ctx: &TaskContext,
+        s: &Spiller,
+        inputs: Vec<RowTable>,
+        held: Vec<Reservation>,
+    ) -> Result<()> {
+        bump(&self.counters.row_final_spills, 1);
+        let s = s.clone();
+        let runs = ctx
+            .run_blocking(move || {
+                let mut runs = Vec::with_capacity(inputs.len());
+                for (t, mut r) in inputs.into_iter().zip(held) {
+                    lend_headroom(&mut r);
+                    runs.push(s.write_run(&Table::Rows(t), 0, 0)?);
+                }
+                Ok(runs)
+            })
+            .await?;
+        let mut inner = lock(&g.inner);
+        inner.busy = false;
+        inner.disk = true;
+        tasks_of(runs, 0, &mut inner.tasks);
+        Ok(())
+    }
+
     /// The final phase's tasks: each takes its partitions out of every
     /// driver table with that share of the driver's reservation. What the
     /// drivers keep (their indexes) is freed, but for spill headroom kept
@@ -353,7 +430,10 @@ impl HashAggregate {
             let refs: Vec<&RowTable> = inputs.iter().collect();
             final_tasks(&refs)
         };
-        let bits = g.row_bits;
+        // The inputs' radix width (one partition when none widened).
+        let bits = inputs
+            .first()
+            .map_or(0, |t| t.part_count().trailing_zeros());
         let ranges: Vec<Range<usize>> = plan.iter().map(|t| t.parts.clone()).collect();
         let mut per_task: Vec<Vec<(RowTable, Reservation)>> = ranges
             .iter()

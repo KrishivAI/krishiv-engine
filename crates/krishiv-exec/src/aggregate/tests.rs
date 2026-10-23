@@ -2521,3 +2521,32 @@ async fn a_failed_result_spill_fails_the_query() {
     assert_eq!(e.error_class(), ErrorClass::KrishivSpillCapExceeded, "{e}");
     assert_eq!(spill.manager.used_bytes(), 0, "spill files left");
 }
+
+/// A thread-local table widens to its radix partitions once large, and the
+/// final phase widens the tables that stayed narrow before it merges, so
+/// a driver with many groups and one with few merge to the same result.
+/// When the final phase cannot reserve that widening, every driver table
+/// spills and the disk phase merges them.
+#[tokio::test]
+async fn narrow_and_wide_tables_merge() {
+    let (s, mut b) = grouped_input(1_000, 1_000);
+    let (_, small) = grouped_input(40, 10);
+    b.extend(small);
+    let expected = run_rows(single(&s, &b)).await;
+    let mode = rowtable::Mode::Fixed { limit: 5_000 };
+    // One driver per batch: 1,000 groups (widens at 64) and 10 (narrow).
+    let sp = spec(&s, vec![0], grouped_aggs(&s));
+    let agg = HashAggregate::with_row_mode(sp, mode).unwrap();
+    let got = by_hand(&agg, &s, &b, 2).await;
+    assert_eq!(got.rows, expected);
+    assert_eq!(sink_metric(&agg, "row_final_spills"), 0);
+    // The widening of the narrow table is refused: spill and merge on disk.
+    let (_m, scope) = spill_dir();
+    let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+    sp.spill = Some(scope);
+    let agg = HashAggregate::with_final_stall(sp, mode, 0).unwrap();
+    let got = by_hand(&agg, &s, &b, 2).await;
+    assert_eq!(got.rows, expected);
+    assert_eq!(sink_metric(&agg, "row_final_spills"), 1);
+    assert!(agg.metrics().spill_runs >= 2);
+}

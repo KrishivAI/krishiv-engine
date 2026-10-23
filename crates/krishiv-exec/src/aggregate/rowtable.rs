@@ -59,7 +59,16 @@
 //! partitions, the argument columns are gathered once in partition order
 //! (a stable counting sort, so each group still sees its rows in input
 //! order) and each partition folds a zero-copy slice. A table with one
-//! partition (one thread, no final merge) never gathers.
+//! partition never gathers.
+//!
+//! # Width
+//! A thread-local table starts with **one partition** and widens to its
+//! radix partitions at [`WIDEN_GROUPS`] groups ([`RowTable::widen`]: rows,
+//! long key bytes and states are spread by `h`, in row order), so a
+//! low-cardinality aggregate never pays the per-partition fold (DuckDB's
+//! thread-local tables also start small and repartition as they grow).
+//! Widening is a cost choice: a table that cannot reserve the copy stays
+//! narrow. One thread never widens (nothing merges in parallel).
 //!
 //! # Memory
 //! [`projected`](RowTable::projected) bounds the bytes after an apply
@@ -206,6 +215,12 @@ fn word(row: &[u8], at: usize) -> u64 {
         .map_or(0, u64::from_le_bytes)
 }
 
+/// Groups at which a narrow thread-local table widens to its radix
+/// partitions (the final phase's groups per task): below it the table
+/// design does not matter (P2-T159 step 0) and one partition saves the
+/// per-partition fold.
+pub(crate) const WIDEN_GROUPS: usize = 32_768;
+
 /// Rows from which a thread-local table keeps per-partition sketches: a
 /// smaller table's row count is its own estimate, and 16 sketches would
 /// cost more than its rows under a tight memory limit.
@@ -302,6 +317,12 @@ pub(crate) struct RowTable {
     /// Whether the table keeps sketches once large enough (a thread-local
     /// table with several partitions).
     sketching: bool,
+    /// A thread-local table (sketches, adaptation, widening).
+    local: bool,
+    /// Radix bits a narrow table widens to at `widen_at` groups (none when
+    /// equal to `bits`).
+    widen_to: u32,
+    widen_at: usize,
     index: HashTable<u32>,
     mode: Mode,
     adapt: Option<Adapt>,
@@ -346,6 +367,9 @@ impl RowTable {
             parts,
             sketches: None,
             sketching: local && nparts > 1,
+            local,
+            widen_to: bits,
+            widen_at: WIDEN_GROUPS,
             index: HashTable::new(),
             mode,
             adapt: (local && matches!(mode, Mode::Fixed { .. })).then(|| Adapt {
@@ -370,6 +394,102 @@ impl RowTable {
     pub(crate) fn with_abandons(mut self, counter: Arc<AtomicU64>) -> Self {
         self.abandons = Some(counter);
         self
+    }
+
+    /// Widens the table to `bits` radix partitions once it holds `at`
+    /// groups (see [`widen`](Self::widen)).
+    pub(crate) fn widening(mut self, bits: u32, at: usize) -> Self {
+        self.widen_to = bits.min(RADIX_BITS).max(self.bits);
+        self.widen_at = at;
+        self
+    }
+
+    /// Whether the table is due to widen ([`widen`](Self::widen)): the
+    /// caller widens it when it can reserve
+    /// [`widen_bytes`](Self::widen_bytes); a table that cannot stays narrow
+    /// (only a cost choice) and is asked again later.
+    pub(crate) fn wants_widen(&self) -> bool {
+        self.widen_to > self.bits && self.groups >= self.widen_at
+    }
+
+    /// Spreads the rows (with their long key bytes) and states over
+    /// `1 << widen_to` radix partitions of `h`, in row order, so each
+    /// group's states are unchanged. A growing index is rebuilt over the
+    /// new rows; a fixed one is cleared (as when full: later rows of its
+    /// keys become partial duplicates); append mode has none. Partition
+    /// sketches start from the rows.
+    pub(crate) fn widen(&mut self) -> Result<()> {
+        if self.widen_to <= self.bits {
+            return Ok(());
+        }
+        let (bits, refs) = (self.widen_to, Refs::new(self.widen_to));
+        let stride = self.stride;
+        let nparts = 1usize << bits;
+        let old = std::mem::take(&mut self.parts);
+        let mut parts = (0..nparts)
+            .map(|_| {
+                Ok(Part {
+                    rows: Vec::new(),
+                    heap: Vec::new(),
+                    accs: new_accs(&self.core)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for part in &old {
+            let mut ids: Vec<Vec<u32>> = vec![Vec::new(); nparts];
+            for (i, row) in (0u32..).zip(part.rows.chunks_exact(stride)) {
+                let p = part_of(word(row, 0), bits);
+                ids[p].push(i);
+                let dst = &mut parts[p];
+                match &self.views {
+                    Some(l) => l.push_row(row, &part.heap, &mut dst.rows, &mut dst.heap)?,
+                    None => dst.rows.extend_from_slice(row),
+                }
+            }
+            for (dst, ids) in parts.iter_mut().zip(&ids) {
+                if ids.is_empty() {
+                    continue;
+                }
+                let start = dst.rows.len() / stride - ids.len();
+                let to: Vec<u32> = (start..start + ids.len())
+                    .map(|r| u32::try_from(r).unwrap_or(u32::MAX))
+                    .collect();
+                for (acc, from) in dst.accs.iter_mut().zip(&part.accs) {
+                    acc.resize(start + ids.len());
+                    acc.merge(&to, &from.state(ids)?)?;
+                }
+            }
+        }
+        drop(old);
+        self.parts = parts;
+        self.bits = bits;
+        self.refs = refs;
+        self.sketching = self.local;
+        self.index = HashTable::new();
+        match self.mode {
+            Mode::Grow => {
+                let (gseed, all) = (self.gseed, self.ids(0..self.groups));
+                self.index.reserve(all.len(), |_| 0);
+                for r in all {
+                    let g = fin(word(row_at(&self.parts, stride, refs, r), 0), gseed);
+                    let parts = &self.parts;
+                    self.index.insert_unique(g, r, |&o| {
+                        fin(word(row_at(parts, stride, refs, o), 0), gseed)
+                    });
+                }
+            }
+            Mode::Fixed { .. } => self.unique &= self.groups == 0,
+            Mode::Append => {}
+        }
+        self.start_sketches(0);
+        Ok(())
+    }
+
+    /// Bytes [`widen`](Self::widen) needs beyond the table's: the copy of
+    /// its rows and states it holds while it runs (at most the table's
+    /// bytes), and the sketches it starts.
+    pub(crate) fn widen_bytes(&self) -> usize {
+        self.memory_size() + (1usize << self.widen_to) * Hll::new(PART_HLL_BITS).bytes()
     }
 
     /// Buckets of the index (its capacity).
@@ -1226,6 +1346,9 @@ impl RowTable {
                     parts,
                     sketches: None,
                     sketching: false,
+                    local: false,
+                    widen_to: self.bits,
+                    widen_at: usize::MAX,
                     index: HashTable::new(),
                     mode: Mode::Append,
                     adapt: None,
@@ -1777,6 +1900,45 @@ mod tests {
             (SKETCH_ROWS + 100..=(SKETCH_ROWS + 100) * 12 / 10).contains(&groups),
             "{groups}"
         );
+    }
+
+    /// Widening spreads a narrow table's rows, long key bytes and states
+    /// over the radix partitions without changing any group: a growing
+    /// index still finds every key, a fixed one is cleared, and sketches
+    /// start.
+    #[test]
+    fn widening_keeps_every_group() {
+        let core = core();
+        let seed = HashSeed::new(Some(8));
+        for mode in [Mode::Grow, Mode::Fixed { limit: 5_000 }, Mode::Append] {
+            let mut t = RowTable::new(&core, &seed, mode, true, 0)
+                .unwrap()
+                .widening(RADIX_BITS, 4_000);
+            let mut narrow = RowTable::new(&core, &seed, mode, true, 0).unwrap();
+            for tb in [&mut t, &mut narrow] {
+                apply(tb, &batch(&core, (0..6_000).map(|i| i % 4_500)));
+            }
+            assert!(t.wants_widen() && !narrow.wants_widen());
+            let all = |t: &RowTable| sorted(&t.output_batch(&t.ids(0..t.len())).unwrap());
+            let want = all(&t);
+            let bytes = t.memory_size();
+            t.widen().unwrap();
+            assert_eq!((t.part_count(), t.wants_widen()), (PARTS, false));
+            assert_eq!(all(&t), want, "{mode:?}");
+            assert!(t.memory_size() <= bytes + t.widen_bytes(), "{mode:?}");
+            assert!(t.sketches().is_some());
+            let groups = t.len();
+            apply(&mut t, &batch(&core, 0..4_500));
+            match mode {
+                // Every key is found again: no new rows, still unique.
+                Mode::Grow => assert_eq!((t.len(), t.is_unique()), (groups, true)),
+                _ => assert!(t.len() > groups && !t.is_unique(), "{mode:?}"),
+            }
+            // Widening an already wide table changes nothing.
+            let n = t.len();
+            t.widen().unwrap();
+            assert_eq!(t.len(), n);
+        }
     }
 
     /// Row references split into partition and row by the table's radix

@@ -389,6 +389,19 @@ pub(crate) enum TablePrepared {
 }
 
 impl Table {
+    /// Widens a narrow row table that is due to, if `reserve` grants the
+    /// bytes it needs while it runs (returned to the caller after); a
+    /// table that cannot stays narrow. No-op for other tables.
+    pub(crate) fn widen_if(&mut self, reserve: impl FnOnce(usize) -> bool) -> Result<()> {
+        if let Self::Rows(t) = self
+            && t.wants_widen()
+            && reserve(t.widen_bytes())
+        {
+            t.widen()?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn not_worth_spilling(&self) -> bool {
         match self {
             Self::Keys(t) => t.not_worth_spilling(),
