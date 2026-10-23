@@ -760,3 +760,65 @@ fn window_goldens_resolve_to_a_fixed_point() {
     assert_eq!(resolved, 67);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Foldable expressions the analyzer evaluates for typing: casts to string
+/// and date, datetime functions of literals and function-form `concat`.
+/// Spark folds them at analysis time, so a `LIMIT`, a legacy day count and
+/// a `round` scale read them; only what Spark itself calls not foldable (a
+/// column, a nondeterministic call) stays `IS_UNFOLDABLE`.
+#[test]
+fn foldable_limits_day_counts_and_scales_match_spark() {
+    let g = goldens();
+    let ansi = ResolutionConf::default();
+    let legacy = conf(&serde_json::json!({ "spark.sql.ansi.enabled": "false" }));
+    // A `LIMIT` over a foldable expression resolves, whatever the analyzer
+    // evaluates it to (Spark returns rows for both).
+    for sql in [
+        "SELECT * FROM t LIMIT length(CAST(12 AS STRING))",
+        "SELECT * FROM t LIMIT year(DATE'2024-01-01') - 2020",
+        "SELECT * FROM t LIMIT length(concat('a', 'b'))",
+    ] {
+        assert!(
+            analyze(&g, sql, ansi).is_ok(),
+            "{sql}: Spark returns rows, the analyzer must resolve it"
+        );
+    }
+    // A column in a `LIMIT` is what Spark calls not foldable.
+    let err = analyze(&g, "SELECT * FROM t LIMIT a", ansi).unwrap_err();
+    assert_eq!(
+        err.error.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE"
+    );
+    // Foldable but beyond what the folder evaluates: Spark folds them, so
+    // they resolve here and the downstream folders read them
+    // (`current_date` is deterministic to Spark, so foldable, but the
+    // folder has no query clock; `md5` is deterministic too, but outside
+    // the folder's pure families).
+    for sql in [
+        "SELECT * FROM t LIMIT year(current_date)",
+        "SELECT * FROM t LIMIT length(md5('a'))",
+    ] {
+        assert!(
+            analyze(&g, sql, ansi).is_ok(),
+            "{sql}: Spark folds it, so it must resolve"
+        );
+    }
+    // The legacy day count reads through a cast to string, shown as the
+    // integer Spark's `StringLiteralCoercion` folds it to.
+    let a = analyze(&g, "SELECT date_add(dt, CAST(1 AS STRING)) FROM n", legacy)
+        .expect("Spark folds the legacy day count");
+    assert_eq!(a.output[0].name, "date_add(dt, 1)");
+    assert_eq!(a.output[0].data_type.simple_string(), "date");
+    // `round` reads its scale through function-form `concat`.
+    let a = analyze(&g, "SELECT round(dc, length(concat('a','b'))) FROM n", ansi)
+        .expect("Spark folds the round scale");
+    assert_eq!(a.output[0].data_type.simple_string(), "decimal(11,2)");
+    // A `concat` argument that needs its own cast folds through it too.
+    let a = analyze(
+        &g,
+        "SELECT round(dc, length(concat('a', CAST(1 AS STRING)))) FROM n",
+        ansi,
+    )
+    .expect("Spark folds the round scale through the cast");
+    assert_eq!(a.output[0].data_type.simple_string(), "decimal(11,2)");
+}

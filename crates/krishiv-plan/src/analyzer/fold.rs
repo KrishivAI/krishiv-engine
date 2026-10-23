@@ -5,12 +5,23 @@
 //! Spark folds a foldable argument before it types the call, so
 //! `round(x, CAST(1.5 AS FLOAT))` has scale 1 and so does
 //! `round(x, 0.5 + 0.5)`. Foldable here means what Spark's `foldable` means
-//! for the expressions this folder evaluates: literals; casts of foldable
-//! values; `+ - * / % div` and unary `-`; comparisons, `AND`/`OR`/`NOT`,
-//! `IS [NOT] NULL`; `CASE`/`if`/`coalesce`; `concat`; and the deterministic
-//! string, math and arithmetic functions (`abs`, `length`, `upper`, ...) of
-//! foldable arguments. Anything else (a column, a nondeterministic call, a
-//! datetime function, which reads the session time zone) is not a constant.
+//! for the expressions this folder evaluates: literals (dates included);
+//! casts of foldable values to a number, a string or a date; `+ - * / % div`
+//! and unary `-`; comparisons, `AND`/`OR`/`NOT`, `IS [NOT] NULL`;
+//! `CASE`/`if`/`coalesce`; `concat`; the deterministic string, math and
+//! arithmetic functions (`abs`, `length`, `upper`, ...) of foldable
+//! arguments; and the day and field datetime functions (`date_add`, `year`,
+//! `extract`, ...) of foldable date arguments. Anything else (a column, a
+//! nondeterministic call, a datetime function over a timestamp, which reads
+//! the session time zone, or the clock and session functions, which read
+//! the query start or the user) is not a constant.
+//!
+//! A folded date has no [`Constant`]: it is not a value the typing rules
+//! read, so it stays unfolded to them (not an error), while the calls that
+//! read a folded date (`year`, `date_add`, a `LIMIT` over one) still
+//! evaluate. Datetime functions over timestamps stay unfolded too: the
+//! folder has no session time zone, so a timestamp result could differ from
+//! the executor's.
 //!
 //! Evaluation runs through the same kernels the executor uses (so overflow,
 //! division by zero, malformed input and ANSI/legacy behaviour are the
@@ -25,8 +36,8 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Int8Type, Int16Type, Int32Type, Int64Type};
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array,
-    Int16Array, Int32Array, Int64Array, StringArray, new_null_array,
+    Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
+    Int8Array, Int16Array, Int32Array, Int64Array, StringArray, new_null_array,
 };
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::{ErrorClass, KrishivError};
@@ -98,7 +109,10 @@ pub(super) const fn is_literal(e: &Expr) -> bool {
     matches!(e.node, ExprNode::Literal(_))
 }
 
-/// The value of `e` as a constant, when it is foldable.
+/// The value of `e` as a constant, when it is foldable. A folded date (or
+/// timestamp, which never folds here) has no [`Constant`]: it is not a
+/// value the typing rules read, so it is not a constant rather than an
+/// error, while the calls evaluated from it still fold.
 pub(super) fn constant(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Option<Constant> {
     match &e.node {
         ExprNode::Literal(Literal::Null(_)) => return Some(Constant::Null),
@@ -107,7 +121,29 @@ pub(super) fn constant(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Option<Con
         _ => {}
     }
     let folded = fold(e, conf, memo)?;
-    Some(match folded.and_then(|a| value(&a, conf.ansi)) {
+    let array = match folded {
+        Err(e) => return Some(Constant::Error(e)),
+        Ok(a) => a,
+    };
+    if array.null_count() > 0 || array.data_type() == &ArrowType::Null {
+        return Some(Constant::Null);
+    }
+    if !matches!(
+        array.data_type(),
+        ArrowType::Null
+            | ArrowType::Boolean
+            | ArrowType::Int8
+            | ArrowType::Int16
+            | ArrowType::Int32
+            | ArrowType::Int64
+            | ArrowType::Utf8
+            | ArrowType::Float32
+            | ArrowType::Float64
+            | ArrowType::Decimal128(..)
+    ) {
+        return None;
+    }
+    Some(match value(&array, conf.ansi) {
         Ok(c) => c,
         Err(e) => Constant::Error(e),
     })
@@ -202,14 +238,16 @@ fn fold_on_stack(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Folded {
 
 fn fold_cast(expr: &Arc<Expr>, to: &DataType, m: CastMode, conf: Conf, memo: &mut Memo) -> Folded {
     let inner = match fold(expr, conf, memo)? {
-        Ok(a) => a,
+        // The executor reads strings through their `Utf8` carrier too.
+        Ok(a) => normalized(a),
         Err(e) => return Some(Err(e)),
     };
     // A NULL of any type casts to a NULL of the target type.
     if inner.null_count() > 0 || inner.data_type() == &ArrowType::Null {
         return Some(Ok(new_null_array(&to.to_arrow(), 1)));
     }
-    // The kernels' targets: numbers (a string or a date is not folded).
+    // The kernels' targets: numbers, strings and dates (no timestamp: it
+    // reads the session time zone, so a cast to one stays unfolded).
     if !matches!(
         to,
         DataType::Byte
@@ -219,6 +257,8 @@ fn fold_cast(expr: &Arc<Expr>, to: &DataType, m: CastMode, conf: Conf, memo: &mu
             | DataType::Float
             | DataType::Double
             | DataType::Decimal(_)
+            | DataType::String
+            | DataType::Date
     ) {
         return None;
     }
@@ -228,9 +268,17 @@ fn fold_cast(expr: &Arc<Expr>, to: &DataType, m: CastMode, conf: Conf, memo: &mu
         CastMode::Ansi => KernelMode::Ansi,
         _ => mode(conf.ansi),
     };
+    // The kernels' string carrier is `Utf8`: what the executor maps
+    // `Utf8View` to around the same call. The result stays `Utf8`, which
+    // the value reader and the function bindings both take as a string.
+    let target = to.to_arrow();
+    let kernel_target = match &target {
+        ArrowType::Utf8View => ArrowType::Utf8,
+        _ => target,
+    };
     match cast(
         inner.as_ref(),
-        &to.to_arrow(),
+        &kernel_target,
         &options(kernel_mode, &FixedOffset(0)),
     ) {
         Ok(a) => Some(Ok(a)),
@@ -364,6 +412,30 @@ fn when(f: &ResolvedFunction, kids: Vec<Result<ArrayRef, KrishivError>>) -> Fold
     }
 }
 
+/// The datetime functions the folder evaluates: the day arithmetic, the
+/// field functions and `extract`/`date_part`. Their results over dates
+/// never read the session time zone; over timestamps they do, so those
+/// stay unfolded (checked at the call). The clock and session functions
+/// (`current_date`, `current_timestamp`, `localtimestamp`, `current_user`,
+/// ...) read the query start or the user and never fold here: the folder
+/// has neither, so Spark's foldable call stays unfolded for the executor.
+fn is_foldable_datetime(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "date_add"
+            | "dateadd"
+            | "date_sub"
+            | "datediff"
+            | "date_diff"
+            | "year"
+            | "month"
+            | "day"
+            | "dayofmonth"
+            | "extract"
+            | "date_part"
+    )
+}
+
 fn registry(
     name: &str,
     f: &ResolvedFunction,
@@ -391,13 +463,23 @@ fn registry(
         }
         _ => {}
     }
-    if !is_argument_pure(name) {
+    if !is_argument_pure(name) && !is_foldable_datetime(name) {
         return None;
     }
     let args = match values(kids) {
         Ok(a) => a,
         Err(e) => return Some(Err(e)),
     };
+    // The folder has no session time zone, so a datetime function over a
+    // timestamp does not fold here (dates never read the zone). It stays
+    // unfolded, for the executor to evaluate once.
+    if is_foldable_datetime(name)
+        && args
+            .iter()
+            .any(|a| matches!(a.data_type(), ArrowType::Timestamp(..)))
+    {
+        return None;
+    }
     let opts = BindOptions::new()
         .with_kernel(conf.kernel)
         .with_ansi(conf.ansi)
@@ -454,6 +536,7 @@ fn literal(l: &Literal) -> Option<ArrayRef> {
                 .ok()?,
         ),
         Literal::String(v) => Arc::new(StringArray::from(vec![v.as_str()])),
+        Literal::Date(v) => Arc::new(Date32Array::from(vec![*v])),
         _ => return None,
     })
 }
@@ -624,6 +707,58 @@ mod tests {
         assert_eq!(
             constant(&cast(Literal::Integer(300), DataType::Byte), false),
             Some(Constant::Integral(44))
+        );
+    }
+
+    /// Casts to `STRING` and `DATE` fold through the cast kernels: a number
+    /// or a date has a string, a well-formed string has a date. A folded
+    /// date is not a value the typing rules read, but the calls reading it
+    /// still fold.
+    #[test]
+    fn casts_to_string_and_date_fold() {
+        assert_eq!(
+            constant(&cast(Literal::Date(0), DataType::String), true),
+            string("1970-01-01")
+        );
+        assert_eq!(
+            constant(
+                &cast(Literal::String("2024-01-01".to_owned()), DataType::Date),
+                true
+            ),
+            None
+        );
+        assert_eq!(
+            constant(
+                &named(
+                    "year",
+                    vec![cast(
+                        Literal::String("2024-01-01".to_owned()),
+                        DataType::Date
+                    )],
+                    DataType::Integer
+                ),
+                true
+            ),
+            Some(Constant::Integral(2024))
+        );
+        assert_eq!(
+            constant(
+                &named(
+                    "length",
+                    vec![cast(Literal::Integer(12), DataType::String)],
+                    DataType::Integer
+                ),
+                true
+            ),
+            Some(Constant::Integral(2))
+        );
+        // Malformed input fails as the cast kernels fail it.
+        assert_eq!(
+            class(constant(
+                &cast(Literal::String("x".to_owned()), DataType::Date),
+                true
+            )),
+            Some(ErrorClass::CastInvalidInput)
         );
     }
 
@@ -957,10 +1092,26 @@ mod tests {
         );
         let cmp = op(Builtin::Lt, vec![text("a"), text("b")], DataType::Boolean);
         assert_eq!(constant(&cmp, true), Some(Constant::Boolean(true)));
-        // The cast kernels give no string of a number: not folded.
+        // Casts to a string fold through the cast kernels, so `concat` of
+        // mixed literals folds too.
         assert_eq!(
             constant(&cast(Literal::Integer(12), DataType::String), true),
-            None
+            string("12")
+        );
+        let mixed = |parts: Vec<Expr>| op(Builtin::Concat, parts, DataType::String);
+        assert_eq!(
+            constant(
+                &named(
+                    "length",
+                    vec![mixed(vec![
+                        text("a"),
+                        cast(Literal::Integer(1), DataType::String)
+                    ])],
+                    DataType::Integer
+                ),
+                true
+            ),
+            Some(Constant::Integral(2))
         );
         // Deterministic string, math and arithmetic functions.
         assert_eq!(
@@ -973,12 +1124,56 @@ mod tests {
         );
         let abs = named("abs", vec![int(-2)], DataType::Integer);
         assert_eq!(constant(&abs, true), Some(Constant::Integral(2)));
-        // Datetime, session and unknown functions are not evaluated.
+        // The day and field datetime functions fold over dates; a folded
+        // date has no constant (the typing rules do not read dates), so
+        // `date_add` of literals is still not a constant, while `year` of
+        // one is. Clock, session and unknown functions never fold.
         let date = lit(Literal::Date(0));
         assert_eq!(
             constant(&named("date_add", vec![date, int(1)], DataType::Date), true),
             None
         );
+        assert_eq!(
+            constant(
+                &named("year", vec![lit(Literal::Date(0))], DataType::Integer),
+                true
+            ),
+            Some(Constant::Integral(1970))
+        );
+        assert_eq!(
+            constant(
+                &named(
+                    "datediff",
+                    vec![lit(Literal::Date(1)), lit(Literal::Date(0))],
+                    DataType::Integer
+                ),
+                true
+            ),
+            Some(Constant::Integral(1))
+        );
+        // Over timestamps the same functions read the session time zone,
+        // which the folder has not: they stay unfolded.
+        assert_eq!(
+            constant(
+                &named(
+                    "year",
+                    vec![cast(
+                        Literal::String("2024-01-01".to_owned()),
+                        DataType::Timestamp
+                    )],
+                    DataType::Integer
+                ),
+                true
+            ),
+            None
+        );
+        for clock in ["current_date", "current_timestamp", "localtimestamp"] {
+            assert_eq!(
+                constant(&named(clock, vec![], DataType::Date), true),
+                None,
+                "{clock}"
+            );
+        }
         assert_eq!(
             constant(&named("nosuchfn", vec![int(1)], DataType::Integer), true),
             None

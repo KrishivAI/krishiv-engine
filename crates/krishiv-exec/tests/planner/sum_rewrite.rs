@@ -318,3 +318,28 @@ fn per_row_overflow_is_kept() {
         assert_eq!(optimized, original, "{sql}");
     }
 }
+
+/// The per-row check covers narrow additions too: `ti + 1Y` stays a
+/// `TINYINT`, so with `ti = 127` the row overflows, and `si + 1S` stays a
+/// `SMALLINT`, so with `si = 32767` it does. Without the rewrite's
+/// per-row guard both would rewrite to `SUM(x) + c * COUNT(x)` and return
+/// `128` and `32768`.
+#[test]
+fn narrow_per_row_overflow_is_kept() {
+    let rows: Vec<Row> = vec![(Some(0), Some(i8::MAX), Some(i16::MAX), None, None)];
+    // Spark 4.2.0: `BINARY_ARITHMETIC_OVERFLOW` under ANSI, a wrap without.
+    for (sql, wrapped) in [
+        ("SELECT SUM(ti + 1Y) FROM s", "-128"),
+        ("SELECT SUM(si + 1S) FROM s", "-32768"),
+    ] {
+        let ansi = db(&rows, 1, true);
+        let (original, optimized, text) = ansi.both(sql);
+        assert!(!text.contains("count("), "{sql}\n{text}");
+        assert_eq!(original, Err(ErrorClass::BinaryArithmeticOverflow), "{sql}");
+        assert_eq!(optimized, original, "{sql}");
+        let legacy = db(&rows, 1, false);
+        let (original, optimized, _) = legacy.both(sql);
+        assert_eq!(original, Ok(vec![wrapped.to_owned()]), "{sql}");
+        assert_eq!(optimized, original, "{sql}");
+    }
+}

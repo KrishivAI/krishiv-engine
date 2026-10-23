@@ -457,11 +457,15 @@ impl Resolver<'_> {
         }
     }
 
-    /// Spark's checks of a `LIMIT` or `OFFSET` (`name`) value: it must fold
-    /// (`IS_UNFOLDABLE`), to a value that is not NULL and not negative
+    /// Spark's checks of a `LIMIT` or `OFFSET` (`name`) value: it must be
+    /// foldable (`IS_UNFOLDABLE` when it is not: a column, a nondeterministic
+    /// call, a subquery), to a value that is not NULL and not negative
     /// (cited at the expression, `at`); what folding raises (`2147483647 + 1`
     /// under ANSI) is raised as is. `unfoldable` reports the first check
-    /// without folding. The folded value, when it is an integral.
+    /// without folding. A foldable expression this folder cannot evaluate
+    /// (a cast or call the kernels lack here) is not an error: it passes
+    /// through for the executor to evaluate once at run time, as before.
+    /// The folded value, when it is an integral.
     #[inline(never)]
     pub(super) fn check_limit(
         &self,
@@ -504,7 +508,8 @@ impl Resolver<'_> {
         match folded {
             // An attribute carries no position of its own: Spark cites the
             // input there, the expression otherwise.
-            None => Err(AnalysisError::new(
+            // Not foldable to Spark either: `IS_UNFOLDABLE` without folding.
+            None if unfoldable => Err(AnalysisError::new(
                 InvalidLimitLikeExpressionIsUnfoldable { expr: text, name },
                 if matches!(
                     b.expr.node,
@@ -529,7 +534,10 @@ impl Resolver<'_> {
                 at,
             )),
             Some(super::Constant::Integral(v)) => Ok(Some(v)),
-            Some(_) => Ok(None),
+            // Foldable, but not evaluated here (or not an integral): pass
+            // the expression through for the downstream folders and the
+            // executor to read at run time.
+            None | Some(_) => Ok(None),
         }
     }
 

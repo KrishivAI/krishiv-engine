@@ -143,6 +143,24 @@ fn conditions_that_keep_the_sum_as_it_is() {
         ("SELECT SUM(i + 1) FROM s", "an int column can overflow"),
         ("SELECT SUM(i - 1) FROM s", "an int column can overflow"),
         ("SELECT SUM(l + 1) FROM s", "a bigint column can overflow"),
+        // A `TINYINT` stays a `TINYINT`: `127 + 1Y` overflows per row, as
+        // `32767 + 1S` does for a `SMALLINT`.
+        (
+            "SELECT SUM(ti + 1Y) FROM s",
+            "a tinyint addition can overflow per row",
+        ),
+        (
+            "SELECT SUM(ti - -1Y) FROM s",
+            "a tinyint addition can overflow per row",
+        ),
+        (
+            "SELECT SUM(1Y - ti) FROM s",
+            "a tinyint subtraction can overflow per row",
+        ),
+        (
+            "SELECT SUM(si + 1S) FROM s",
+            "a smallint addition can overflow per row",
+        ),
         (
             "SELECT SUM(si + 65537) FROM s",
             "the constant is past the bound",
