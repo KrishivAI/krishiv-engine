@@ -709,3 +709,35 @@ async fn cancelling_a_spilling_sort_releases_everything() {
     assert_released(&root);
     assert_eq!(manager.used_bytes(), 0, "the spill files are gone");
 }
+
+/// A sort's in-memory result is spillable until read. Its reader feeds a
+/// breaker that cannot spill; the memory that breaker needs comes from
+/// writing the rest of the merge to disk, and the reader goes on from the
+/// file. Before, the buffers stayed in memory until the merge ended and
+/// these limits failed.
+#[tokio::test(start_paused = true)]
+async fn an_unread_result_spills_the_rest_of_its_merge() {
+    let rows = 20_000;
+    for limit in (57..=67).step_by(2).map(|i| i * 32 * KIB) {
+        let root = root();
+        let q = query(&root, ExecConfig::default(), Some(limit));
+        let (manager, scope) = spill();
+        let sort = Sort::new(table(1, 16)[0].schema(), &[SortKey::asc(0)], Some(scope)).unwrap();
+        let sort = Arc::new(sort);
+        let reader = krishiv_exec::testing::Buffer::new(false, None);
+        let p = Arc::new(Break(plan(table(rows, 16), &sort), reader, true));
+        let out = run(&deterministic(1), p, &q)
+            .await
+            .unwrap_or_else(|e| panic!("{limit} B: {e}"));
+        check_sorted(rows, &out, true);
+        let m = sort.metrics();
+        // Sorted in memory; the one run is the rest of the merge.
+        assert_eq!(m.final_fan_in, 1, "{limit} B: {m:?}");
+        assert!(
+            m.runs_spilled == 1 && m.spilled_bytes > 0,
+            "{limit} B: {m:?}"
+        );
+        assert_released(&root);
+        assert_eq!(manager.used_bytes(), 0);
+    }
+}
