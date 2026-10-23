@@ -65,6 +65,11 @@ impl KernelError {
         &self.error
     }
 
+    /// A registry error at `row` (`None` for analysis-time failures).
+    pub(crate) fn at(row: Option<usize>, error: KrishivError) -> Self {
+        Self { row, error }
+    }
+
     /// `INTERNAL_ERROR`: a caller broke a kernel precondition.
     pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self {

@@ -351,6 +351,10 @@ pub enum Inputs {
         /// Compare the argument with `0`.
         zero: bool,
     },
+    /// Like the null-safe `<=>` operator: the arguments must be comparable
+    /// (`DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES` otherwise) and are cast
+    /// to their common type (`equal_null`).
+    NullSafeEqual,
     /// The arguments of the arithmetic operator `op`: the implicit casts of
     /// `a op b` (`mod`, `try_add`, ...).
     Operator(Operator),
@@ -373,6 +377,7 @@ impl Inputs {
             | Self::Leading(_)
             | Self::CommonWithZero
             | Self::Comparable { .. }
+            | Self::NullSafeEqual
             | Self::Operator(_)
             | Self::TryOperator(_) => None,
             Self::Expects(types) => Some(types.clone()),

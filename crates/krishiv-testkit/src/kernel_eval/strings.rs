@@ -42,6 +42,22 @@ pub(super) enum StrFn {
     Split(Option<String>),
     /// `NOT`.
     Not,
+    /// `hex(x)`.
+    Hex,
+    /// `unhex(x)` (invalid input is NULL).
+    Unhex,
+    /// `to_number` / `try_to_number`: `None` for a NULL format (an
+    /// all-NULL result of `decimal(10,0)`).
+    ToNumber {
+        /// The format, as written.
+        format: Option<String>,
+        /// The pattern's decimal precision and scale.
+        precision: u8,
+        /// The pattern's decimal scale.
+        scale: i8,
+        /// Whether a mismatch is NULL (`try_to_number`).
+        try_: bool,
+    },
 }
 
 /// `array<string>`, the type of `split`.
@@ -55,7 +71,7 @@ pub(super) fn string_list() -> DataType {
 
 impl Binder<'_> {
     /// A type Spark converts to string implicitly.
-    fn to_string_node(self, n: Node) -> Result<Node, Skip> {
+    pub(super) fn to_string_node(self, n: Node) -> Result<Node, Skip> {
         match n.ty() {
             DataType::Utf8 => Ok(n),
             DataType::Null => Ok(self.implicit(n, &DataType::Utf8)),
@@ -78,7 +94,7 @@ impl Binder<'_> {
         self.to_string_node(self.bind(e)?)
     }
 
-    fn int_arg(self, e: &ast::Expr) -> Result<Node, Skip> {
+    pub(super) fn int_arg(self, e: &ast::Expr) -> Result<Node, Skip> {
         let n = self.bind(e)?;
         match n.ty() {
             DataType::Int32 => Ok(n),
@@ -245,6 +261,63 @@ impl Binder<'_> {
                 self.like(args[0], args[1], &escape)
             }
             "split" => self.split(args),
+            "hex" => {
+                arity(args.len() == 1)?;
+                let n = self.bind(args[0])?;
+                let n = match n.ty() {
+                    DataType::Int64 | DataType::Binary | DataType::Utf8 => n,
+                    DataType::Null
+                    | DataType::Int8
+                    | DataType::Int16
+                    | DataType::Int32
+                    | DataType::Float32
+                    | DataType::Float64
+                    | DataType::Decimal128(..) => self.implicit(n, &DataType::Int64),
+                    DataType::Boolean | DataType::Date32 | DataType::Timestamp(..) => {
+                        self.implicit(n, &DataType::Utf8)
+                    }
+                    t => return Err(format!("analysis: hex of {}", simple_string(&t))),
+                };
+                Ok(Self::call(StrFn::Hex, vec![n], DataType::Utf8))
+            }
+            "unhex" => {
+                arity(args.len() == 1)?;
+                Ok(Self::call(
+                    StrFn::Unhex,
+                    vec![self.str_arg(args[0])?],
+                    DataType::Binary,
+                ))
+            }
+            "to_number" | "try_to_number" => {
+                arity(args.len() == 2)?;
+                let value = self.to_string_node(self.bind(args[0])?)?;
+                let format = self.fold_string(args[1])?;
+                let (precision, scale) = match format.as_deref() {
+                    None => (10, 0),
+                    Some(pattern) => {
+                        let parsed = krishiv_kernels::number_format::parse_format(pattern);
+                        parsed
+                            .validate(pattern)
+                            .map_err(|e| format!("analysis: to_number format {e}"))?;
+                        let (p, s) = parsed.decimal_type();
+                        (
+                            u8::try_from(p)
+                                .map_err(|_| "analysis: to_number precision".to_owned())?,
+                            i8::try_from(s).map_err(|_| "analysis: to_number scale".to_owned())?,
+                        )
+                    }
+                };
+                Ok(Self::call(
+                    StrFn::ToNumber {
+                        format,
+                        precision,
+                        scale,
+                        try_: name == "try_to_number",
+                    },
+                    vec![value],
+                    DataType::Decimal128(precision, scale),
+                ))
+            }
             _ => Err(NOT_A_STRING_FUNCTION.to_owned()),
         }
     }
@@ -451,7 +524,120 @@ impl Evaluator<'_> {
                 let x = v[0].as_boolean();
                 std::sync::Arc::new(BooleanArray::new(!x.values(), x.nulls().cloned()))
             }
+            StrFn::Hex => std::sync::Arc::new(hex(&v[0])?),
+            StrFn::Unhex => std::sync::Arc::new(unhex(&v[0])?),
+            StrFn::ToNumber {
+                format,
+                precision,
+                scale,
+                try_,
+            } => std::sync::Arc::new(to_number(
+                &v[0],
+                format.as_deref(),
+                *precision,
+                *scale,
+                *try_,
+            )?),
         };
         Ok(out)
     }
+}
+
+/// `hex(x)` of a `bigint`, binary or string column.
+fn hex(a: &ArrayRef) -> Result<ArrayRef, EvalError> {
+    use krishiv_kernels::number_format::{hex_bytes, hex_long};
+    Ok(match a.data_type() {
+        DataType::Int64 => {
+            let a = a.as_primitive::<arrow_array::types::Int64Type>();
+            let owned: Vec<Option<String>> = a.iter().map(|v| v.map(hex_long)).collect();
+            let refs: Vec<Option<&str>> = owned.iter().map(|o| o.as_deref()).collect();
+            std::sync::Arc::new(arrow_array::StringArray::from(refs))
+        }
+        DataType::Binary => {
+            let a = a.as_binary::<i32>();
+            let owned: Vec<Option<String>> = a.iter().map(|b| b.map(hex_bytes)).collect();
+            let refs: Vec<Option<&str>> = owned.iter().map(|o| o.as_deref()).collect();
+            std::sync::Arc::new(arrow_array::StringArray::from(refs))
+        }
+        DataType::Utf8 => {
+            let a = a.as_string::<i32>();
+            let owned: Vec<Option<String>> = a
+                .iter()
+                .map(|s| s.map(|s| hex_bytes(s.as_bytes())))
+                .collect();
+            let refs: Vec<Option<&str>> = owned.iter().map(|o| o.as_deref()).collect();
+            std::sync::Arc::new(arrow_array::StringArray::from(refs))
+        }
+        t => return Err(EvalError::other(format!("hex of {t}"))),
+    })
+}
+
+/// `unhex(x)`: invalid input is NULL.
+fn unhex(a: &ArrayRef) -> Result<ArrayRef, EvalError> {
+    let a = a.as_string::<i32>();
+    let parts: Vec<Option<Vec<u8>>> = a
+        .iter()
+        .map(|s| s.and_then(krishiv_kernels::number_format::unhex_text))
+        .collect();
+    let refs: Vec<Option<&[u8]>> = parts.iter().map(|p| p.as_deref()).collect();
+    Ok(std::sync::Arc::new(arrow_array::BinaryArray::from(refs)))
+}
+
+/// `to_number` / `try_to_number` of a string column and a literal format.
+fn to_number(
+    a: &ArrayRef,
+    format: Option<&str>,
+    precision: u8,
+    scale: i8,
+    try_: bool,
+) -> Result<ArrayRef, EvalError> {
+    let a = a.as_string::<i32>();
+    let number = match format {
+        None => None,
+        Some(pattern) => {
+            let number = krishiv_kernels::number_format::parse_format(pattern);
+            number
+                .validate(pattern)
+                .map_err(|e| EvalError::other(e.to_string()))?;
+            Some(number)
+        }
+    };
+    let unscaled_at = u32::try_from(scale.max(0)).unwrap_or(0);
+    let mut unscaled = Vec::with_capacity(a.len());
+    let Some(number) = number.as_ref() else {
+        // A NULL format: every row is NULL.
+        unscaled.resize(a.len(), None);
+        return arrow_array::Decimal128Array::from(unscaled)
+            .with_precision_and_scale(precision, scale)
+            .map(|a| std::sync::Arc::new(a) as ArrayRef)
+            .map_err(|e| EvalError::other(e.to_string()));
+    };
+    for i in 0..a.len() {
+        if a.is_null(i) {
+            unscaled.push(None);
+            continue;
+        }
+        let input = a.value(i);
+        match number.parse_input(input) {
+            Ok(parsed) => match parsed.unscaled(unscaled_at) {
+                Ok(v) => unscaled.push(Some(v)),
+                Err(_) if try_ => unscaled.push(None),
+                Err(f) => {
+                    return Err(f
+                        .mismatch(Some(i), "\"STRING\"", input, format.unwrap_or_default())
+                        .into());
+                }
+            },
+            Err(_) if try_ => unscaled.push(None),
+            Err(f) => {
+                return Err(f
+                    .mismatch(Some(i), "\"STRING\"", input, format.unwrap_or_default())
+                    .into());
+            }
+        }
+    }
+    arrow_array::Decimal128Array::from(unscaled)
+        .with_precision_and_scale(precision, scale)
+        .map(|a| std::sync::Arc::new(a) as ArrayRef)
+        .map_err(|e| EvalError::other(e.to_string()))
 }

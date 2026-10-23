@@ -13,11 +13,14 @@
 //! [`Lookup::KnownUnsupported`] in profiles that have it, and
 //! [`Lookup::NotFound`] in older ones (as for an unknown name).
 
+mod bitwise;
 mod catalog;
 mod conditional;
 mod defs;
 mod hashing;
 mod math;
+mod number;
+mod predicate;
 
 use std::collections::HashMap;
 use std::fmt;

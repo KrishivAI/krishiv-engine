@@ -184,6 +184,13 @@ pub const FUNCTIONS: &[&str] = &[
     "least",
     "pi",
     "e",
+    // P2-T037: number conversions.
+    "bin",
+    "conv",
+    "hex",
+    "unhex",
+    "to_number",
+    "try_to_number",
 ];
 
 /// The outcome of one cell.

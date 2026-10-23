@@ -49,6 +49,7 @@ pub mod float;
 pub mod hash;
 pub mod integer;
 pub mod math;
+pub mod number_format;
 pub mod ops;
 pub mod policy;
 pub mod reference;
