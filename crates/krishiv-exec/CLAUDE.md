@@ -11,7 +11,7 @@ Batch execution engine: operators, pipelines, morsel scheduling within a node.
 driver (yields, batch-boundary checks, NeedMemory, spill servicing, stall detector) · `runner.rs` QueryRunner /
 Scheduler (coordinator, first error wins) · `channel.rs` bounded result stream · `executor.rs` Executor seam +
 TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.rs` cursor + finalize countdown ·
-`testing.rs` test operators (also used by benches) · `loom_tests.rs`.
+`testing.rs` test operators (also used by benches) · `output_spill.rs` spill hook of finished breaker output · `loom_tests.rs`.
 `operators/` (P2-T051) stateless operators: `scan.rs` MemoryScan + `ScanPushdown` (pushdowns decided once as an
 immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) ·
 `filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
@@ -48,6 +48,8 @@ only where a requirement is unmet; on one worker instantiation lowers each excha
 ## Invariants
 - All memory through krishiv-memory reservations; every spill path tested with tiny-memory tests.
 - Only the driver yields, awaits memory, spills or checks cancellation; `execute`/`sink` stay sync and bounded.
+  Exception: a breaker's finished in-memory result, owned by no driver, spills on a task of its own
+  (`output_spill.rs`: aggregate and sort results); the coordinator drops a finalized state after its last reader.
 - At query end (success, error, cancel) the query pool is empty: tests assert it.
 - Cancellation-safe, no blocking in async; metrics feed EXPLAIN ANALYZE.
 - New operators follow skill `krishiv-operator`.
