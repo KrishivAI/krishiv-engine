@@ -267,11 +267,14 @@ fn regexp_replace_position_is_checked_before_any_row() {
         one("SELECT regexp_replace(CAST(NULL AS STRING), 'a', 'b', CAST(NULL AS INT))"),
         None
     );
-    // Known divergence: Spark folds `1 + 1`; the analyzer only folds
-    // literals and casts of them (as for the scale of `round`).
+    // A foldable position folds, as in Spark 4.2.0: `1 + 1` is 2.
     assert_eq!(
-        fails(&s, "SELECT regexp_replace('a', 'a', 'b', 1 + 1)").error_class(),
-        ErrorClass::DatatypeMismatchNonFoldableInput
+        one("SELECT regexp_replace('a', 'a', 'b', 1 + 1)").as_deref(),
+        Some("a")
+    );
+    assert_eq!(
+        one("SELECT regexp_replace('abc', 'b', 'x', 1 + 1)").as_deref(),
+        Some("axc")
     );
     assert_eq!(
         one("SELECT regexp_replace('abc', 'b', 'x', CAST(2 AS BIGINT))").as_deref(),
