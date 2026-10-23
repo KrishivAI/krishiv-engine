@@ -400,7 +400,7 @@ impl Graph {
                     .collect()
             })
             .collect();
-        let mut kept = Vec::new();
+        let mut joins = Vec::new();
         for (p, r) in preds.into_iter().zip(&refs) {
             let mut on: Vec<usize> = r
                 .iter()
@@ -418,6 +418,24 @@ impl Graph {
                 }));
                 continue;
             }
+            joins.push((p, on));
+        }
+        // A filtered input keeps at most as many distinct values of a column
+        // as it keeps rows, as the estimate of a filter does: a join with a
+        // filtered input then counts the distinct keys that input keeps
+        // (containment), not its whole table's. Without it, a dimension
+        // filtered to a year (365 of 73,049 dates) joined to a fact table
+        // holding five years of dates was estimated 40x too small, which
+        // made the fact side look like the smaller input to build.
+        for (i, ids) in attrs.iter().enumerate() {
+            for id in ids {
+                if let Some(c) = all.cols.get_mut(id) {
+                    c.ndv = c.ndv.min(rows[i]);
+                }
+            }
+        }
+        let mut kept = Vec::new();
+        for (p, on) in joins {
             let sel = conditional(&p, selectivity(&p, &all), &on, &attrs, |i| &ests[order[i]]);
             let edge = !has_subquery(&p);
             kept.push(Pred {

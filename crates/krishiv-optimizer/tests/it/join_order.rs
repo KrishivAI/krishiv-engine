@@ -317,6 +317,56 @@ const TPCDS_SF1: &[(&str, u64, &[Column])] = &[
             ("ca_country", "string", f64::NAN, f64::NAN, 1_525, None),
         ],
     ),
+    // Footer statistics as Parquet gives them (TPC-DS SF1): row counts and
+    // bounds; distinct counts only from integral bounds (`max - min + 1`,
+    // at most the non-null rows), none for strings.
+    (
+        "catalog_sales",
+        1_441_548,
+        &[
+            (
+                "cs_sold_date_sk",
+                "bigint",
+                2_450_815.0,
+                2_452_648.0,
+                7_191,
+                Some(1_834),
+            ),
+            (
+                "cs_bill_cdemo_sk",
+                "bigint",
+                5.0,
+                1_920_765.0,
+                7_183,
+                Some(1_434_365),
+            ),
+        ],
+    ),
+    (
+        "date_dim",
+        73_049,
+        &[
+            (
+                "d_date_sk",
+                "bigint",
+                2_415_022.0,
+                2_488_070.0,
+                0,
+                Some(73_049),
+            ),
+            ("d_year", "bigint", 1_900.0, 2_100.0, 0, Some(201)),
+        ],
+    ),
+    (
+        "customer_demographics",
+        1_920_800,
+        &[
+            ("cd_demo_sk", "bigint", 1.0, 1_920_800.0, 0, Some(1_920_800)),
+            ("cd_gender", "string", f64::NAN, f64::NAN, 0, None),
+            ("cd_marital_status", "string", f64::NAN, f64::NAN, 0, None),
+            ("cd_education_status", "string", f64::NAN, f64::NAN, 0, None),
+        ],
+    ),
 ];
 
 #[derive(Debug)]
@@ -477,4 +527,31 @@ fn literal_equalities_without_a_distinct_count_use_the_default() {
     // An equality between two columns of one input keeps `1 / ndv`.
     let cols = "SELECT l_orderkey FROM lineitem WHERE l_commitdate = l_receiptdate";
     assert!(close(rows(cols, &footers), 1.0), "{}", rows(cols, &footers));
+}
+
+/// TPC-DS q26's shape: a fact table joined to a dimension filtered to one
+/// year and to one filtered by three string equalities. A join with a
+/// filtered input counts the distinct keys the filter keeps (at most its
+/// rows), so the year of dates joins about a fifth of the fact rows (the
+/// fact holds five years), not 1/200 of them as the whole 73,049-date
+/// domain would say. The demographics join, the more selective one, then
+/// comes first and the fact table stays the larger (probe) input of every
+/// join, so each dimension's build can filter the fact scan.
+#[test]
+fn filtered_dimensions_count_the_keys_they_keep() {
+    let sql = "SELECT count(*) FROM catalog_sales, customer_demographics, date_dim \
+               WHERE cs_sold_date_sk = d_date_sk AND cs_bill_cdemo_sk = cd_demo_sk \
+               AND cd_gender = 'M' AND cd_marital_status = 'S' \
+               AND cd_education_status = 'College' AND d_year = 2000";
+    let plan = support::resolve(sql, &tpcds_ctx());
+    let optimized = optimize_with(&plan, &TpcdsFooters).unwrap();
+    let text = optimized.root().to_string();
+    let line = |needle: &str| {
+        text.lines()
+            .position(|l| l.contains("Join Inner") && l.contains(needle))
+            .unwrap_or_else(|| panic!("no join on {needle}:\n{text}"))
+    };
+    // The date join is above (printed before) the demographics join.
+    assert!(line("d_date_sk") < line("cd_demo_sk"), "{text}");
+    insta::assert_snapshot!(text);
 }
