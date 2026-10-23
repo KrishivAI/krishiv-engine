@@ -1627,3 +1627,26 @@ fn frame_bytes_of_nested_columns_with_a_sliced_view_child() {
         file.bytes()
     );
 }
+
+/// Ids never repeat inside a process, however many threads ask in the same
+/// nanosecond (a repeat made concurrent starts collide on the probe file).
+#[test]
+fn ids_are_unique_across_threads() {
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+    let threads: Vec<_> = (0..16)
+        .map(|_| {
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                (0..2000).map(|_| super::dir::new_id(0)).collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    let all: Vec<String> = threads
+        .into_iter()
+        .flat_map(|t| t.join().unwrap())
+        .collect();
+    let unique: std::collections::HashSet<&String> = all.iter().collect();
+    assert_eq!(unique.len(), all.len());
+    assert!(all.iter().all(|id| super::dir::valid_id(id)));
+}
