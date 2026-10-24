@@ -2712,14 +2712,15 @@ fn inline_table_of_unknown_column_is_unresolved() {
 fn inline_table_of_many_rows_resolves() {
     let ctx = ctx();
     let rows: Vec<Vec<Expr>> = (0..10_000).map(|i| vec![int(i), s("v")]).collect();
-    let started = Instant::now();
     let r = run(inline_table(rows, &["a", "b"]), &ctx);
     assert_eq!(summary(&r), serde_json::json!([["a", false], ["b", false]]));
-    assert!(
-        started.elapsed() < Duration::from_secs(30),
-        "10k-row inline table took {:?}",
-        started.elapsed()
-    );
+    let a = r.unwrap();
+    assert!(a.plan.root().is_resolved());
+    assert!(!has_inline_table(a.plan.root()));
+    let PlanNode::Union { inputs, .. } = &a.plan.root().node else {
+        panic!("one n-ary union:\n{}", a.plan.root());
+    };
+    assert_eq!(inputs.len(), 10_000);
 }
 
 /// A hand-built row of the wrong width fails rather than NULL-fills or
