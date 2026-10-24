@@ -1910,3 +1910,18 @@ fn try_arithmetic_casts_its_arguments_in_try_mode() {
     // A TRY cast of a string may be NULL; `try_*` results are nullable anyway.
     assert!(try_add.output[0].nullable);
 }
+
+/// A conditional with `FILTER` names the filter once: the shown call takes
+/// only the function's own arguments, not the filter child.
+#[test]
+fn conditional_with_filter_names_the_filter_once() {
+    let ctx = ctx();
+    let call = Expr::new(ExprNode::Function(crate::FunctionCall {
+        name: "nvl".to_owned(),
+        args: vec![Arc::new(c("a")), Arc::new(int(1))],
+        distinct: false,
+        filter: Some(Arc::new(eq(c("b"), s("x")))),
+    }));
+    let a = run(LogicalPlan::table(["t"]).project(vec![call]), &ctx).unwrap();
+    assert_eq!(a.output[0].name, "nvl(a, 1) FILTER (WHERE (b = x))");
+}

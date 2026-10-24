@@ -209,8 +209,9 @@ pub(super) fn coalesce(
 pub(super) struct NullIf {
     value: Arc<dyn PhysExpr>,
     other: Arc<dyn PhysExpr>,
-    /// `value` to `other`'s type, for the comparison only.
-    cast: CastParts,
+    /// `value` to `other`'s type, for the comparison only; `None` when the
+    /// types already match (no copy).
+    cast: Option<CastParts>,
     kernels: KernelCtx,
     out: ArrowType,
 }
@@ -231,12 +232,18 @@ pub(super) fn null_if(
     } else {
         CastMode::Legacy
     };
-    let cast = parts(
-        value.data_type(),
-        other.data_type().clone(),
-        mode,
-        input.env,
-    )?;
+    // Same-typed comparisons need no cast: `apply` would copy the column
+    // (twice for `Utf8View`).
+    let cast = if value.data_type() == other.data_type() {
+        None
+    } else {
+        Some(parts(
+            value.data_type(),
+            other.data_type().clone(),
+            mode,
+            input.env,
+        )?)
+    };
     Ok(Arc::new(NullIf {
         value,
         other,
@@ -271,8 +278,10 @@ impl PhysExpr for NullIf {
             a_full.data_type() == &ArrowType::Null || b_full.data_type() == &ArrowType::Null;
         let ab = if null_side {
             Arc::clone(&a_full)
+        } else if let Some(cast) = &self.cast {
+            apply(cast, &a_full)?
         } else {
-            apply(&self.cast, &a_full)?
+            Arc::clone(&a_full)
         };
         let eq = if null_side {
             BooleanArray::new_null(n)

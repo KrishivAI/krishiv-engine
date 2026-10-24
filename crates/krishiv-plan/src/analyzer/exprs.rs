@@ -954,7 +954,7 @@ impl Resolver<'_> {
             ResolvedFunction {
                 id: entry.id.clone(),
                 kind: entry.kind,
-                args: kids.iter().map(Bound::shown).collect(),
+                args: kids[..n].iter().map(Bound::shown).collect(),
                 distinct: f.distinct,
                 filter: kids.get(n).map(Bound::shown),
                 data_type: ty.data_type.clone().unwrap_or(DataType::Null),
@@ -1164,7 +1164,8 @@ impl Resolver<'_> {
         }
     }
 
-    /// `(values) IN (subquery)`: the values and the subquery's columns, each    /// pair cast to the type it meets at (the subquery under a projection
+    /// `(values) IN (subquery)`: the values and the subquery's columns, each
+    /// pair cast to the type it meets at (the subquery under a projection
     /// that casts). Returns the values and the subquery plan.
     fn in_subquery(
         &mut self,
