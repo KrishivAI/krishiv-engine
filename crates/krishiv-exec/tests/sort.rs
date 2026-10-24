@@ -821,7 +821,7 @@ async fn hash_buckets_keep_each_key_together_and_in_order() {
         let sort = bucketed_sort(30, Some(scope));
         let reader = Arc::new(Break(
             plan_unordered(table(rows, 30), &sort),
-            krishiv_exec::testing::Buffer::new(true, None),
+            krishiv_exec::testing::Buffer::new(false, None),
             false,
         ));
         let out = run(&deterministic(drivers), reader, &q)
@@ -850,6 +850,90 @@ async fn hash_buckets_keep_each_key_together_and_in_order() {
         drop(out);
         assert_released(&root);
         assert_eq!(manager.used_bytes(), 0, "every spill file is gone");
+    }
+}
+
+/// Readers of a spilled bucketed result merge buckets in parallel while
+/// the pool has memory to spare, and fall back to fewer readers when it
+/// has not: a non-spillable reader downstream holding nearly the whole
+/// limit gets the memory one reader of an unbucketed sort leaves it.
+#[tokio::test(start_paused = true)]
+async fn bucket_readers_fit_the_memory_of_one() {
+    let rows = 30_000;
+    // (downstream buffer, its memory spillable): none, the output streams
+    // out of the pool.
+    for downstream in [None, Some(false)] {
+        let root = root();
+        let config = ExecConfig {
+            batch_size: 512,
+            morsel_rows: 2048,
+            ..ExecConfig::default()
+        };
+        let q = query(&root, config, Some(2 << 20));
+        let (manager, scope) = spill();
+        let sort = bucketed_sort(30, Some(scope));
+        let p = plan_unordered(table(rows, 30), &sort);
+        let p: Arc<dyn ExecNode> = match downstream {
+            None => p,
+            Some(spillable) => Arc::new(Break(
+                p,
+                krishiv_exec::testing::Buffer::new(spillable, None),
+                false,
+            )),
+        };
+        let out = run(&deterministic(4), p, &q)
+            .await
+            .unwrap_or_else(|e| panic!("{downstream:?}: {e}"));
+        check_grouped(rows, &out);
+        let m = sort.metrics();
+        assert!(m.runs_spilled > 0, "{m:?}");
+        if downstream.is_none() {
+            assert!(m.merge_readers > 1, "parallel with memory to spare: {m:?}");
+        } else {
+            assert!(m.merge_readers >= 1, "{m:?}");
+        }
+        drop(out);
+        assert_released(&root);
+        assert_eq!(manager.used_bytes(), 0);
+    }
+}
+
+/// The same on threads: readers claiming, giving back and waiting race for
+/// real, and every bucket is still read once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bucket_readers_race_on_threads() {
+    let rows = 30_000;
+    let runner = QueryRunner::new(
+        TokioExecutor::new(&ExecutorConfig {
+            compute_threads: 4,
+            io_threads: 1,
+            blocking_threads: 4,
+        })
+        .unwrap(),
+    );
+    for spillable in [None, Some(false), None, Some(false)] {
+        let root = root();
+        let config = ExecConfig {
+            batch_size: 512,
+            morsel_rows: 2048,
+            ..ExecConfig::default()
+        };
+        let q = query(&root, config, Some(2 << 20));
+        let (manager, scope) = spill();
+        let sort = bucketed_sort(30, Some(scope));
+        let p = plan_unordered(table(rows, 30), &sort);
+        let p: Arc<dyn ExecNode> = match spillable {
+            None => p,
+            Some(s) => Arc::new(Break(p, krishiv_exec::testing::Buffer::new(s, None), false)),
+        };
+        let out = run(&runner, p, &q)
+            .await
+            .unwrap_or_else(|e| panic!("{spillable:?}: {e}"));
+        check_grouped(rows, &out);
+        assert!(sort.metrics().runs_spilled > 0);
+        drop(out);
+        assert_released(&root);
+        assert_eq!(manager.used_bytes(), 0);
     }
 }
 

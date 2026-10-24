@@ -13,7 +13,9 @@
 //! holds whole partitions in sort order, which is all a window reads; the
 //! order across buckets is not kept. Without hash keys, or with
 //! `krishiv.exec.sort.hashBuckets` off, there is one bucket and one reader,
-//! and the output is totally ordered.
+//! and the output is totally ordered. Readers of a spilled result merge in
+//! parallel only with memory to spare (see `Readers`): at a tight limit
+//! they need no more than one reader does.
 
 use std::future::Future;
 use std::mem;
@@ -79,6 +81,9 @@ pub struct SortMetrics {
     pub final_fan_in: u64,
     /// Hash buckets the rows were split into (1: none).
     pub buckets: u64,
+    /// Most spilled buckets merged at once by the readers (0: nothing
+    /// spilled).
+    pub merge_readers: u64,
     /// Rows a window group limit dropped from the sorted batches.
     pub rows_pruned: u64,
 }
@@ -91,6 +96,7 @@ struct Counters {
     passes: AtomicU64,
     fan_in: AtomicU64,
     buckets: AtomicU64,
+    readers: AtomicU64,
     pruned: AtomicU64,
 }
 
@@ -330,6 +336,7 @@ impl Sort {
             merge_passes: c.passes.load(Ordering::Relaxed),
             final_fan_in: c.fan_in.load(Ordering::Relaxed),
             buckets: c.buckets.load(Ordering::Relaxed),
+            merge_readers: c.readers.load(Ordering::Relaxed),
             rows_pruned: c.pruned.load(Ordering::Relaxed),
         }
     }
@@ -810,15 +817,146 @@ struct SortShared {
     parts: Vec<Part>,
     /// The in-memory result, read by every reader.
     held: Option<Arc<Held>>,
-    /// The spilled result: each bucket's runs, claimed by the readers.
-    spilled: Vec<Vec<SpillRun>>,
 }
 
 struct SortGlobal {
     shared: Mutex<SortShared>,
+    /// The spilled result's buckets and their readers.
+    readers: Arc<Readers>,
     /// The query's bucketing (none: one bucket).
     bucketing: Option<Arc<Bucketing>>,
     buckets: usize,
+}
+
+/// The readers of a spilled result: the buckets left to merge, and the
+/// readers merging one. Each reader's merge reserves its runs' frames from
+/// the pool. A reader alone waits for them with arbitration, as the one
+/// reader of an unbucketed sort does; the others take only memory the
+/// pool has free (leaving half of a limited pool to the operators above),
+/// else give their bucket back and wait for a merge to end. So a result
+/// one reader can merge never fails for its parallel readers: at a tight
+/// limit fewer of them merge at once, down to one at a time.
+#[derive(Default)]
+struct Readers {
+    state: Mutex<ReadersState>,
+    /// A merge ended, the lone reader has its memory, or no reader holds
+    /// a bucket any more: waiting readers claim again.
+    changed: Event,
+}
+
+#[derive(Default)]
+struct ReadersState {
+    /// Each bucket's runs, claimed from the end.
+    spilled: Vec<Vec<SpillRun>>,
+    /// Readers holding a bucket (reserving or merging it).
+    active: usize,
+    /// Readers merging a bucket.
+    merging: usize,
+    /// The lone reader is waiting for its merge's memory: the others wait
+    /// rather than take memory it waits for.
+    reserving: bool,
+}
+
+/// A reader's claim on the spilled result.
+enum Claim {
+    /// No bucket is left to claim.
+    Done,
+    /// The lone reader is reserving: try again once it has.
+    Wait,
+    /// A bucket's runs to merge, and the reader's slot.
+    Bucket(Vec<SpillRun>, ReaderSlot),
+}
+
+impl Readers {
+    fn claim(self: &Arc<Self>) -> Claim {
+        let mut s = lock(&self.state);
+        if s.reserving {
+            return Claim::Wait;
+        }
+        let Some(runs) = s.spilled.pop() else {
+            return Claim::Done;
+        };
+        let alone = s.active == 0;
+        s.active += 1;
+        s.reserving = alone;
+        Claim::Bucket(
+            runs,
+            ReaderSlot {
+                readers: Arc::clone(self),
+                alone,
+                counted: true,
+                merging: false,
+            },
+        )
+    }
+}
+
+/// A reader holding a bucket of a spilled result (see [`Readers`]): gone
+/// (dropped, also on error and cancel) once its merge ends, which lets
+/// waiting readers try again.
+struct ReaderSlot {
+    readers: Arc<Readers>,
+    /// No other reader held a bucket when this one claimed it: its merge
+    /// waits for memory with arbitration.
+    alone: bool,
+    /// Still counted in [`ReadersState::active`].
+    counted: bool,
+    /// Counted in [`ReadersState::merging`].
+    merging: bool,
+}
+
+impl ReaderSlot {
+    /// The merge has its memory and starts. Returns the readers merging.
+    fn merging(&mut self) -> usize {
+        self.merging = true;
+        let mut s = lock(&self.readers.state);
+        s.merging += 1;
+        s.merging
+    }
+
+    /// The lone reader has its merge's memory: the others may try again.
+    fn reserved(&self) {
+        if self.alone {
+            lock(&self.readers.state).reserving = false;
+            self.readers.changed.notify();
+        }
+    }
+
+    /// Gives `runs` back unmerged (the pool refused their memory). Wakes the
+    /// waiting readers when no reader holds a bucket any more, so one of
+    /// them claims it alone.
+    fn give_back(mut self, runs: Vec<SpillRun>) {
+        let idle = {
+            let mut s = lock(&self.readers.state);
+            s.spilled.push(runs);
+            s.active = s.active.saturating_sub(1);
+            s.active == 0
+        };
+        self.counted = false;
+        if idle {
+            self.readers.changed.notify();
+        }
+    }
+}
+
+impl Drop for ReaderSlot {
+    fn drop(&mut self) {
+        if !self.counted {
+            return;
+        }
+        {
+            let mut s = lock(&self.readers.state);
+            s.active = s.active.saturating_sub(1);
+            if self.merging {
+                s.merging = s.merging.saturating_sub(1);
+            }
+            // Only a lone reader reserves, and no other claims meanwhile.
+            if self.alone {
+                s.reserving = false;
+            }
+        }
+        self.readers.changed.notify();
+    }
 }
 
 impl Sort {
@@ -1035,6 +1173,22 @@ pub(super) async fn merge_budget(
     handle: &Arc<ConsumerHandle>,
     writing: bool,
 ) -> Result<(Reservation, usize)> {
+    let mut fan_in = max_fan_in.min(runs.len());
+    let mut budget = handle.reservation();
+    loop {
+        match budget
+            .grow(merge_need(runs, fan_in, batch_rows, writing))
+            .await
+        {
+            Ok(()) => return Ok((budget, fan_in)),
+            Err(_) if writing && fan_in > 2 => fan_in = (fan_in / 2).max(2),
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// The memory to merge `fan_in` of `runs` at once (see [`merge_budget`]).
+fn merge_need(runs: &[SpillRun], fan_in: usize, batch_rows: usize, writing: bool) -> usize {
     let per_run = runs.iter().map(SpillRun::merge_bytes).max().unwrap_or(0);
     let row_bytes = runs.iter().map(|r| r.row_bytes).max().unwrap_or(1);
     let out = if writing {
@@ -1042,23 +1196,14 @@ pub(super) async fn merge_budget(
     } else {
         row_bytes.saturating_mul(batch_rows)
     };
-    let mut fan_in = max_fan_in.min(runs.len());
-    let mut budget = handle.reservation();
-    loop {
-        // The merger's per-source `slot`/`stamp` metadata (see
-        // [`super::merge::metadata_bytes`]): small next to the frames, but
-        // reserved with them so the merge never grows past its budget.
-        let meta = super::merge::metadata_bytes(fan_in);
-        let need = per_run
-            .saturating_mul(fan_in)
-            .saturating_add(out)
-            .saturating_add(meta);
-        match budget.grow(need).await {
-            Ok(()) => return Ok((budget, fan_in)),
-            Err(_) if writing && fan_in > 2 => fan_in = (fan_in / 2).max(2),
-            Err(e) => return Err(e.into()),
-        }
-    }
+    // The merger's per-source `slot`/`stamp` metadata (see
+    // [`super::merge::metadata_bytes`]): small next to the frames, but
+    // reserved with them so the merge never grows past its budget.
+    let meta = super::merge::metadata_bytes(fan_in);
+    per_run
+        .saturating_mul(fan_in)
+        .saturating_add(out)
+        .saturating_add(meta)
 }
 
 impl Sink for Sort {
@@ -1083,6 +1228,7 @@ impl Sink for Sort {
             .store(buckets as u64, Ordering::Relaxed);
         Ok(Arc::new(SortGlobal {
             shared: Mutex::default(),
+            readers: Arc::default(),
             bucketing,
             buckets,
         }))
@@ -1241,7 +1387,7 @@ impl Sink for Sort {
             spilled.retain(|runs| !runs.is_empty());
             // Readers claim from the end: the first bucket first.
             spilled.reverse();
-            lock(&g.shared).spilled = spilled;
+            lock(&g.readers.state).spilled = spilled;
             Ok(())
         })
     }
@@ -1342,6 +1488,9 @@ struct SortSource {
 struct Merging {
     merger: Box<Merger>,
     budget: Reservation,
+    /// A spilled bucket's reader slot (none: the rest of an in-memory
+    /// bucket), dropped after the budget.
+    slot: Option<ReaderSlot>,
 }
 
 /// Where a reader goes once a merge of spilled runs ends.
@@ -1430,22 +1579,45 @@ impl Source for Sort {
                             }
                             Step::Done => l.state = SourceState::Held(held, None),
                             Step::Run(run) => {
-                                let merging = self.open_runs(l, vec![run]).await?;
+                                let merging = self.open_runs(l, vec![run], None).await?;
+                                let merging = merging.map_err(|_| {
+                                    internal("a waiting merge was refused memory".to_owned())
+                                })?;
                                 l.state = SourceState::Merging(merging, After::Held(held));
                             }
                         }
                     }
                     SourceState::Spilled => {
-                        let runs = lock(&g.shared).spilled.pop();
-                        if let Some(runs) = runs {
-                            let merging = self.open_runs(l, runs).await?;
-                            l.state = SourceState::Merging(merging, After::Spilled);
+                        // Listen before claiming, so a merge ending in
+                        // between is not missed.
+                        let changed = g.readers.changed.listen();
+                        match g.readers.claim() {
+                            Claim::Done => {}
+                            Claim::Wait => {
+                                changed.await;
+                                l.state = SourceState::Spilled;
+                            }
+                            Claim::Bucket(runs, slot) => {
+                                match self.open_runs(l, runs, Some(slot)).await? {
+                                    Ok(merging) => {
+                                        l.state = SourceState::Merging(merging, After::Spilled);
+                                    }
+                                    // Other readers hold the memory: one
+                                    // fewer reader until a merge ends.
+                                    Err((runs, slot)) => {
+                                        slot.give_back(runs);
+                                        changed.await;
+                                        l.state = SourceState::Spilled;
+                                    }
+                                }
+                            }
                         }
                     }
                     SourceState::Merging(
                         Merging {
                             mut merger,
                             mut budget,
+                            slot,
                         },
                         after,
                     ) => {
@@ -1461,12 +1633,21 @@ impl Source for Sort {
                         // next step.
                         let (merger, next) = lending(&mut budget, &l.handle, 0, step).await?;
                         if let Some(batch) = next {
-                            l.state = SourceState::Merging(Merging { merger, budget }, after);
+                            l.state = SourceState::Merging(
+                                Merging {
+                                    merger,
+                                    budget,
+                                    slot,
+                                },
+                                after,
+                            );
                             return Ok(Some(batch));
                         }
-                        // Spilled runs' last frames went back as credit.
+                        // Spilled runs' last frames went back as credit;
+                        // then waiting readers may take the memory.
                         drop((merger, budget));
                         l.handle.release_credit();
+                        drop(slot);
                         l.state = match after {
                             After::Held(held) => SourceState::Held(held, None),
                             After::Spilled => SourceState::Spilled,
@@ -1480,13 +1661,46 @@ impl Source for Sort {
 }
 
 impl Sort {
-    /// Opens the final merge of spilled `runs`.
-    async fn open_runs(&self, l: &SortSource, runs: Vec<SpillRun>) -> Result<Merging> {
+    /// Opens the final merge of spilled `runs`. A reader `slot` not alone
+    /// takes only free memory: refused, it gets the runs and slot back.
+    async fn open_runs(
+        &self,
+        l: &SortSource,
+        runs: Vec<SpillRun>,
+        slot: Option<ReaderSlot>,
+    ) -> Result<std::result::Result<Merging, (Vec<SpillRun>, ReaderSlot)>> {
         let (schema, encoder) = (Arc::clone(&self.schema), Arc::clone(&self.encoder));
         let handle = Arc::clone(&l.handle);
-        let mut budget = merge_budget(&runs, runs.len(), l.batch_rows, &handle, false)
-            .await?
-            .0;
+        let (mut budget, slot) = match slot {
+            Some(slot) if !slot.alone => {
+                let mut budget = handle.reservation();
+                let need = merge_need(&runs, runs.len(), l.batch_rows, false);
+                // Only memory to spare: half the pool stays for the
+                // operators above, whose memory is not reclaimed from a
+                // merge in progress.
+                let pool = handle.pool();
+                let spare = pool
+                    .limit()
+                    .is_none_or(|limit| pool.reserved().saturating_add(need) <= limit / 2);
+                if !spare || budget.try_grow(need).is_err() {
+                    return Ok(Err((runs, slot)));
+                }
+                (budget, Some(slot))
+            }
+            slot => {
+                let budget = merge_budget(&runs, runs.len(), l.batch_rows, &handle, false).await;
+                // The lone reader's wait is over (also on error).
+                if let Some(slot) = &slot {
+                    slot.reserved();
+                }
+                (budget?.0, slot)
+            }
+        };
+        let mut slot = slot;
+        if let Some(slot) = &mut slot {
+            let merging = slot.merging() as u64;
+            self.counters.readers.fetch_max(merging, Ordering::Relaxed);
+        }
         self.counters
             .fan_in
             .fetch_max(runs.len() as u64, Ordering::Relaxed);
@@ -1494,10 +1708,11 @@ impl Sort {
             Merger::new(schema, encoder, Vec::new(), &runs, &handle)
         });
         let merger = lending(&mut budget, &l.handle, 0, open).await?;
-        Ok(Merging {
+        Ok(Ok(Merging {
             merger: Box::new(merger),
             budget,
-        })
+            slot,
+        }))
     }
 }
 
