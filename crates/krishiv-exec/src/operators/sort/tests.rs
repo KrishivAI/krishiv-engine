@@ -72,11 +72,11 @@ fn floats_order_as_in_spark() {
         assert_eq!(rows.row(0), rows.row(5));
         assert!(rows.row(0) > rows.row(3));
         assert_eq!(rows.row(1), rows.row(2));
-        let sorted = SortedBatch::new(batch.clone(), &keys).unwrap();
+        let sorted = SortedBatch::new(batch.clone(), &keys, None).unwrap();
         // Ties stay in row order.
         assert_eq!(sorted.order, [4, 6, 1, 2, 3, 0, 5]);
         let desc = KeyEncoder::new(&schema, &[SortKey::desc(column)]).unwrap();
-        let sorted = SortedBatch::new(batch.clone(), &desc).unwrap();
+        let sorted = SortedBatch::new(batch.clone(), &desc, None).unwrap();
         assert_eq!(sorted.order, [0, 5, 3, 1, 2, 6, 4]);
     }
 }
@@ -91,7 +91,10 @@ fn decimals_and_binaries_order_as_in_spark() {
     let batch = Batch::new(RecordBatch::try_from_iter([("d", d), ("b", b)]).unwrap());
     for (column, order) in [(0, [4, 1, 3, 0, 2]), (1, [2, 3, 4, 1, 0])] {
         let keys = KeyEncoder::new(&batch.schema(), &[SortKey::asc(column)]).unwrap();
-        assert_eq!(SortedBatch::new(batch.clone(), &keys).unwrap().order, order);
+        assert_eq!(
+            SortedBatch::new(batch.clone(), &keys, None).unwrap().order,
+            order
+        );
     }
 }
 
@@ -105,7 +108,7 @@ fn the_merge_breaks_ties_by_run_order() {
         batch,
     ]
     .into_iter()
-    .map(|b| Arc::new(SortedBatch::new(b, &keys).unwrap()))
+    .map(|b| Arc::new(SortedBatch::new(b, &keys, None).unwrap()))
     .collect();
     let root = TreePool::new(&MemoryConfig::default());
     let handle = ConsumerHandle::register(root.child("q", None), "sort", None);
@@ -132,7 +135,7 @@ fn a_merged_batch_reads_only_the_batches_it_uses() {
         .map(|(start, w)| {
             let b = batch.slice(start, 3).unwrap();
             let b = Batch::with_weights(b.data().clone(), w).unwrap();
-            Arc::new(SortedBatch::new(b, &keys).unwrap())
+            Arc::new(SortedBatch::new(b, &keys, None).unwrap())
         })
         .collect();
     let root = TreePool::new(&MemoryConfig::default());
@@ -526,4 +529,17 @@ async fn merge_budget_covers_per_source_metadata() {
     assert_eq!(root.reserved(), 0);
     drop(manager);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn bucket_counts_follow_the_drivers() {
+    use super::sort::bucket_bits;
+    assert_eq!(bucket_bits(0), 0);
+    assert_eq!(bucket_bits(1), 0);
+    // At least eight buckets, four per driver, at most 4096.
+    assert_eq!(bucket_bits(2), 3);
+    assert_eq!(bucket_bits(4), 4);
+    assert_eq!(bucket_bits(12), 6);
+    assert_eq!(bucket_bits(5000), 12);
+    assert_eq!(bucket_bits(usize::MAX), 12);
 }

@@ -1712,3 +1712,98 @@ async fn bytes_of_rows_waiting_in_the_output_stay_reserved_through_a_spill() {
     ctx.consumer().consumer().release_credit();
     assert_eq!(root.reserved(), 0);
 }
+
+/// [`run_keys`] over a sort bucketed by the partitioning keys, read by four
+/// drivers: each driver's window sees whole partitions, in order.
+async fn run_bucketed(
+    keys_as: Keys,
+    rows: &[Row],
+    split: usize,
+    window: &WindowPlan,
+) -> crate::Result<Vec<Batch>> {
+    let s = schema_of(keys_as);
+    let batches: Vec<Batch> = rows
+        .chunks(split.max(1))
+        .map(|c| batch_of(keys_as, c))
+        .collect();
+    let mut keys: Vec<SortKey> = window
+        .partition_by
+        .iter()
+        .map(|&c| SortKey::asc(c))
+        .collect();
+    keys.extend(window.order_by.iter().copied());
+    keys.push(SortKey::asc(2));
+    let sort = Sort::new(Arc::clone(&s), &keys, None)?.with_hash_buckets(&window.partition_by)?;
+    let sort = Arc::new(sort);
+    let op = Arc::new(Window::new(Arc::clone(&s), window.clone(), true, None)?);
+    let plan: Arc<dyn ExecNode> = Arc::new(OperatorNode {
+        input: Arc::new(BreakerNode {
+            input: Arc::new(SourceNode(Batches::new(s, batches))),
+            sink: Arc::clone(&sort) as Arc<dyn crate::Sink>,
+            source: Arc::clone(&sort) as Arc<dyn crate::Source>,
+            ordered: false,
+        }),
+        op,
+    });
+    let runner = QueryRunner::new(TokioExecutor::deterministic(4)?);
+    let root = pool(1 << 30);
+    let config = ExecConfig {
+        batch_size: 4,
+        ..ExecConfig::default()
+    };
+    let q = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        config,
+        root.child("q", Some(1 << 30)),
+    );
+    let result = async {
+        let mut stream = runner.execute(plan, Arc::clone(&q)).await?;
+        let mut out = Vec::new();
+        while let Some(b) = stream.next().await {
+            out.push(b?);
+        }
+        Ok(out)
+    }
+    .await;
+    drop(q);
+    assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+    assert_eq!(sort.metrics().buckets, 16);
+    result
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    /// Every function over a bucketed sort (partitions split among four
+    /// drivers) gives the naive value of every row.
+    #[test]
+    fn bucketed_windows_match_the_naive_reference(
+        rows in rows_strategy(),
+        split in 1_usize..9,
+        kt in prop_oneof![Just(Keys::Int), Just(Keys::Float), Just(Keys::Decimal), Just(Keys::Text)],
+    ) {
+        let functions = functions();
+        let window = plan(functions.clone(), true);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let out = rt.block_on(run_bucketed(kt, &rows, split, &window)).unwrap();
+        let mut got = outputs(&out, functions.len());
+        got.sort();
+        let mut sorted = rows;
+        sorted.sort_by_key(|r| (kt.key(r.0), kt.key(r.1), r.2));
+        let columns: Vec<Vec<String>> = functions
+            .iter()
+            .map(|(f, frame)| reference(kt, &sorted, f, *frame, true))
+            .collect();
+        let mut want: Vec<String> = sorted
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let cells: Vec<String> = columns.iter().map(|c| c[i].clone()).collect();
+                format!("{}: {}", r.2, cells.join(", "))
+            })
+            .collect();
+        want.sort();
+        prop_assert_eq!(got, want);
+    }
+}

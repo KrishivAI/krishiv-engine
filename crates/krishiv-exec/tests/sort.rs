@@ -763,3 +763,127 @@ async fn an_unread_result_spills_the_rest_of_its_merge() {
         assert_eq!(manager.used_bytes(), 0);
     }
 }
+
+// ------------------------------------------------------------ hash buckets
+
+/// Checks a bucketed sort of `rows` rows of [`table`] by `k, i` (buckets by
+/// `k`), read by several drivers into one buffer: every row once, each
+/// key's rows in `i` order (the drivers' batches interleave, so a key's
+/// rows need not be adjacent here; the window tests check that).
+fn check_grouped(rows: u64, out: &[Batch]) {
+    let (k, i) = (column::<Int64Type>(out, 0), column::<Int64Type>(out, 1));
+    assert_eq!(k.len() as u64, rows);
+    let mut seen = vec![false; k.len()];
+    let mut last = std::collections::HashMap::new();
+    for r in 0..k.len() {
+        let row = i[r] as usize;
+        assert!(!std::mem::replace(&mut seen[row], true), "row {row} twice");
+        assert_eq!(k[r], key(rows, row as u64), "row {row} kept its key");
+        if let Some(prev) = last.insert(k[r], i[r]) {
+            assert!(prev < i[r], "order within key {} at {r}", k[r]);
+        }
+    }
+}
+
+/// A sort by `k, i` bucketed by `k` over `spill` (with fan-in 2).
+fn bucketed_sort(pad: usize, scope: Option<SpillScope>) -> Arc<Sort> {
+    let schema = table(1, pad)[0].schema();
+    let sort = Sort::new(schema, &[SortKey::asc(0), SortKey::asc(1)], scope)
+        .unwrap()
+        .with_max_fan_in(2)
+        .with_hash_buckets(&[0])
+        .unwrap();
+    assert!(sort.bucketed());
+    Arc::new(sort)
+}
+
+/// Bucketed sorts keep each key's rows together and in order, in memory
+/// and spilled, read by several drivers; one bucket per driver count of
+/// one, or with `krishiv.exec.sort.hashBuckets` off, keeps the total order.
+#[tokio::test(start_paused = true)]
+async fn hash_buckets_keep_each_key_together_and_in_order() {
+    let rows = 30_000;
+    for (limit, drivers, on) in [
+        (None, 4, true),
+        (Some(2 << 20), 4, true),
+        (None, 1, true),
+        (Some(2 << 20), 4, false),
+    ] {
+        let root = root();
+        let config = ExecConfig {
+            batch_size: 512,
+            morsel_rows: 2048,
+            sort_hash_buckets: on,
+            ..ExecConfig::default()
+        };
+        let q = query(&root, config, limit);
+        let (manager, scope) = spill();
+        let sort = bucketed_sort(30, Some(scope));
+        let reader = Arc::new(Break(
+            plan_unordered(table(rows, 30), &sort),
+            krishiv_exec::testing::Buffer::new(true, None),
+            false,
+        ));
+        let out = run(&deterministic(drivers), reader, &q)
+            .await
+            .unwrap_or_else(|e| panic!("{limit:?} {drivers} {on}: {e}"));
+        let m = sort.metrics();
+        let want = if on && drivers > 1 { 16 } else { 1 };
+        assert_eq!(m.buckets, want, "{limit:?} {drivers}: {m:?}");
+        if want == 1 {
+            check_sorted(rows, &out, true);
+        } else {
+            check_grouped(rows, &out);
+        }
+        assert_eq!(m.runs_spilled > 0, limit.is_some(), "{limit:?}: {m:?}");
+        drop(out);
+        assert_released(&root);
+        assert_eq!(manager.used_bytes(), 0, "every spill file is gone");
+    }
+}
+
+/// Scan `input` into `breaker`, read by as many drivers as it allows.
+fn plan_unordered<B: Breaker + 'static>(input: Vec<Batch>, breaker: &Arc<B>) -> Arc<dyn ExecNode> {
+    let schema = Source::schema(&**breaker);
+    let scan = Arc::new(Scan(Arc::new(MemoryScan::try_new(schema, input).unwrap())));
+    Arc::new(Break(scan, Arc::clone(breaker), false))
+}
+
+/// An in-memory bucketed result spills the rest of every bucket's merge
+/// when a reader downstream holds memory, and the readers continue from
+/// the runs.
+#[tokio::test(start_paused = true)]
+async fn an_unread_bucketed_result_spills_each_bucket() {
+    let rows = 20_000;
+    let mut spilled = 0;
+    for limit in (57..=73).step_by(4).map(|i| i * 32 * KIB) {
+        let root = root();
+        let config = ExecConfig {
+            batch_size: 256,
+            ..ExecConfig::default()
+        };
+        let q = query(&root, config, Some(limit));
+        let (manager, scope) = spill();
+        let sort = bucketed_sort(16, Some(scope));
+        let reader = krishiv_exec::testing::Buffer::new(false, None);
+        let p = Arc::new(Break(plan_unordered(table(rows, 16), &sort), reader, false));
+        let out = run(&deterministic(4), p, &q)
+            .await
+            .unwrap_or_else(|e| panic!("{limit} B: {e}"));
+        check_grouped(rows, &out);
+        spilled += sort.metrics().runs_spilled;
+        drop(out);
+        assert_released(&root);
+        assert_eq!(manager.used_bytes(), 0);
+    }
+    assert!(spilled > 0, "some limit spilled the result");
+}
+
+#[test]
+fn hash_buckets_need_keys() {
+    let schema = table(1, 4)[0].schema();
+    let sort = Sort::new(schema, &[SortKey::asc(0)], None).unwrap();
+    let err = sort.with_hash_buckets(&[]).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InternalError);
+    assert!(err.to_string().contains("without keys"), "{err}");
+}

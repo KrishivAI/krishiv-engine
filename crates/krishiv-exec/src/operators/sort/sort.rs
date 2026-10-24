@@ -2,6 +2,18 @@
 //! The `ORDER BY` breaker: buffer and sort per batch, spill sorted runs
 //! under memory pressure, merge them in `finalize` down to a bounded fan-in,
 //! and stream the final k-way merge from its source side.
+//!
+//! # Hash buckets
+//! A sort below a window over a hash exchange (`Sort` over
+//! `Exchange(Hash(keys))`, instantiated on one worker) splits its rows into
+//! buckets by the hash of those keys ([`Sort::with_hash_buckets`], design
+//! P2-T055 4a): each sorted batch is sorted bucket by bucket, a spill
+//! writes one run per bucket, and the source merges each bucket on its own,
+//! the buckets claimed by as many drivers as there are buckets. A bucket
+//! holds whole partitions in sort order, which is all a window reads; the
+//! order across buckets is not kept. Without hash keys, or with
+//! `krishiv.exec.sort.hashBuckets` off, there is one bucket and one reader,
+//! and the output is totally ordered.
 
 use std::future::Future;
 use std::mem;
@@ -15,7 +27,9 @@ use krishiv_memory::{ConsumerHandle, MemoryError, Reservation, SpillScope, Spill
 use krishiv_types::batch::Batch;
 
 use super::keys::{KeyEncoder, SortKey};
-use super::merge::{Merger, SortedBatch, SpillRun, data_bytes, interleave_batches, write_run};
+use super::merge::{
+    Bucketing, Merger, SortedBatch, SpillRun, data_bytes, interleave_batches, write_run,
+};
 use super::{BATCH_SLACK_BYTES, SPILL_BATCH_BYTES, SPILL_BUFFER_BYTES, blocking, finalized};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
@@ -28,21 +42,42 @@ use crate::sync::{Event, Mutex, lock};
 /// Default bound on the runs one merge reads at once.
 pub const DEFAULT_MAX_MERGE_FAN_IN: usize = 64;
 
+/// Fewest bucket bits of a bucketed sort (8 buckets).
+const MIN_BUCKET_BITS: u32 = 3;
+/// Most bucket bits (4096 buckets, the key groups of design P2-T171).
+const MAX_BUCKET_BITS: u32 = 12;
+
+/// Bucket bits for `drivers` drivers: at least four buckets per driver, so
+/// that buckets of different sizes still keep every driver busy; none for
+/// one driver.
+pub(crate) fn bucket_bits(drivers: usize) -> u32 {
+    if drivers <= 1 {
+        return 0;
+    }
+    drivers
+        .saturating_mul(4)
+        .checked_next_power_of_two()
+        .map_or(MAX_BUCKET_BITS, usize::trailing_zeros)
+        .clamp(MIN_BUCKET_BITS, MAX_BUCKET_BITS)
+}
+
 /// Counters of one sort for `EXPLAIN ANALYZE`, next to the driver's
 /// [`OperatorMetrics`](crate::OperatorMetrics) of its sink and source sides.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SortMetrics {
     /// Rows sunk (and sorted).
     pub rows_sorted: u64,
-    /// Sorted runs written to spill files by spills.
+    /// Sorted runs written to spill files by spills (one per bucket).
     pub runs_spilled: u64,
     /// Bytes written to spill files, merge passes included.
     pub spilled_bytes: u64,
     /// Merge passes before the final merge: levels of intermediate merges,
     /// each rewriting up to the fan-in's runs into one.
     pub merge_passes: u64,
-    /// Runs read at once by the final merge.
+    /// Runs read at once by the final merge (of the widest bucket).
     pub final_fan_in: u64,
+    /// Hash buckets the rows were split into (1: none).
+    pub buckets: u64,
 }
 
 #[derive(Debug, Default)]
@@ -52,10 +87,12 @@ struct Counters {
     bytes: AtomicU64,
     passes: AtomicU64,
     fan_in: AtomicU64,
+    buckets: AtomicU64,
 }
 
 /// `ORDER BY` as a pipeline breaker: the sink side of one pipeline and the
-/// source side of the next (one driver, so the order holds).
+/// source side of the next (one driver, so the order holds; one per bucket
+/// with hash buckets).
 ///
 /// Spark's order: NULLS FIRST for ASC and LAST for DESC by default, every
 /// NaN equal and above all values, `-0.0 = 0.0`, strings by bytes. Stable
@@ -69,6 +106,8 @@ pub struct Sort {
     spill: Option<SpillScope>,
     max_fan_in: usize,
     counters: Arc<Counters>,
+    /// The keys to bucket by ([`Sort::with_hash_buckets`]).
+    bucket_keys: Option<Arc<KeyEncoder>>,
 }
 
 impl Sort {
@@ -88,6 +127,7 @@ impl Sort {
             spill,
             max_fan_in: DEFAULT_MAX_MERGE_FAN_IN,
             counters: Arc::default(),
+            bucket_keys: None,
         })
     }
 
@@ -99,6 +139,31 @@ impl Sort {
         self
     }
 
+    /// Splits the rows into buckets by the hash of `columns` (a hash
+    /// exchange's keys below the sort), which are sorted, spilled and
+    /// merged on their own, the buckets read by several drivers (see the
+    /// module docs): rows with equal `columns` come out together and in
+    /// order, but the order across them is not kept. Whether a query
+    /// buckets is `krishiv.exec.sort.hashBuckets`; one driver never does.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` without columns or for one out of range;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a type the sort cannot order.
+    pub fn with_hash_buckets(mut self, columns: &[usize]) -> Result<Self> {
+        if columns.is_empty() {
+            return Err(internal("hash buckets without keys".to_owned()));
+        }
+        let keys: Vec<SortKey> = columns.iter().map(|&c| SortKey::asc(c)).collect();
+        self.bucket_keys = Some(KeyEncoder::new(&self.schema, &keys)?);
+        Ok(self)
+    }
+
+    /// Whether the sort may split its rows into hash buckets (its output
+    /// is then ordered within each bucket only).
+    pub fn bucketed(&self) -> bool {
+        self.bucket_keys.is_some()
+    }
+
     /// The counters so far.
     pub fn metrics(&self) -> SortMetrics {
         let c = &self.counters;
@@ -108,6 +173,7 @@ impl Sort {
             spilled_bytes: c.bytes.load(Ordering::Relaxed),
             merge_passes: c.passes.load(Ordering::Relaxed),
             final_fan_in: c.fan_in.load(Ordering::Relaxed),
+            buckets: c.buckets.load(Ordering::Relaxed),
         }
     }
 }
@@ -199,32 +265,32 @@ fn headroom(row_bytes: usize, batch_rows: usize) -> usize {
         .saturating_add(SPILL_BUFFER_BYTES)
 }
 
+/// One spill of a buffer: a sorted run per bucket (`None` for a bucket
+/// without rows).
+type Runs = Vec<Option<SpillRun>>;
+
 struct SortLocal {
     buffer: Buffer,
-    runs: Vec<SpillRun>,
+    runs: Vec<Runs>,
     signal: Arc<SpillSignal>,
     batch_rows: usize,
+    bucketing: Option<Arc<Bucketing>>,
 }
 
 /// A combined driver's state, in combine order.
 #[derive(Debug)]
 enum Part {
-    Run(SpillRun),
+    Run(Runs),
     Buffer(Buffer),
 }
 
-/// What `finalize` leaves for the source side.
-enum Output {
-    Memory(Arc<Held>),
-    Spilled(Vec<SpillRun>),
-}
-
 /// An in-memory result, spillable until read (see
-/// [`crate::output_spill`]): the buffers, then the source side's merge of
-/// them between its steps. A spill writes the rest of the merge as one run.
+/// [`crate::output_spill`]): the buffers, and per bucket its merge between
+/// the reader's steps. A spill writes the rest of each bucket's merge as a
+/// run of its own.
 struct Held {
     state: Mutex<HeldState>,
-    /// Notified when a reader's step or a spill gives the merge back.
+    /// Notified when a reader's step or a spill gives a merge back.
     changed: Event,
     /// The hook and the scope a spill writes to (with a spill scope only).
     spill: Option<(Arc<OutputSpill>, SpillScope)>,
@@ -238,23 +304,67 @@ struct Held {
     batch_rows: usize,
 }
 
-enum HeldState {
+struct HeldState {
+    /// The buffered batches the in-memory buckets read, and the buffers
+    /// accounting them: dropped once no bucket reads them.
+    batches: Arc<[Arc<SortedBatch>]>,
+    buffers: Vec<Buffer>,
+    buckets: Vec<Bucket>,
+    /// The next bucket a reader claims.
+    next: usize,
+    /// A spill waits for the steps in progress or writes: readers wait.
+    spilling: bool,
+    /// The merge was lost (a failed spill or step): every reader fails
+    /// with the error, never with a short result.
+    failed: Option<KrishivError>,
+}
+
+/// One bucket of a [`Held`] result.
+enum Bucket {
     /// Not opened yet.
-    Buffers(Vec<Buffer>),
-    /// The merge between the reader's steps, with what it merges.
-    Merging(Box<Merger>, Vec<Buffer>),
+    Unread,
+    /// The merge between the reader's steps.
+    Merging(Box<Merger>),
     /// A reader's step or a spill holds the merge.
     Busy,
     /// The rest of the merge, spilled: the reader takes the run.
-    Spilled(Option<SpillRun>),
+    Spilled(SpillRun),
     Done,
-    /// The merge was lost (a failed spill or step): every reader fails
-    /// with the error, never with a short result.
-    Failed(KrishivError),
 }
 
-/// The merge and the buffers it reads, taken out of a [`Held`].
-type Taken = (Box<Merger>, Vec<Buffer>);
+impl HeldState {
+    fn failed(e: KrishivError) -> Self {
+        Self {
+            batches: Arc::new([]),
+            buffers: Vec::new(),
+            buckets: Vec::new(),
+            next: 0,
+            spilling: false,
+            failed: Some(e),
+        }
+    }
+
+    /// Whether an in-memory bucket still reads the buffers.
+    fn reads_buffers(&self) -> bool {
+        self.buckets
+            .iter()
+            .any(|b| matches!(b, Bucket::Unread | Bucket::Merging(_) | Bucket::Busy))
+    }
+}
+
+/// What a reader's next step on its bucket is.
+enum Take {
+    /// Open the merge of the bucket of these batches.
+    Open(Arc<[Arc<SortedBatch>]>),
+    /// Continue the merge.
+    Merge(Box<Merger>),
+    /// Read the rest from this run.
+    Run(SpillRun),
+    /// A spill holds the result: wait for it.
+    Wait,
+    /// The bucket is read.
+    Done,
+}
 
 impl Held {
     fn set_spillable(&self, bytes: usize) {
@@ -263,55 +373,79 @@ impl Held {
         }
     }
 
-    /// Takes the merge (opening it if needed) and leaves `Busy`; `Err` with
-    /// the state found otherwise (`Busy`, `Spilled`, `Done`, `Failed`).
-    /// Only the `reader` takes a spilled run (and leaves `Done`); for a
-    /// spill every other state stays as it was (`Err(Done)`).
-    fn take(&self, reader: bool) -> Result<std::result::Result<Taken, HeldState>> {
-        let mut state = lock(&self.state);
-        Ok(match mem::replace(&mut *state, HeldState::Busy) {
-            HeldState::Buffers(held) => {
-                let batches = held.iter().flat_map(|b| b.batches.iter().cloned());
-                let merger = Merger::new(
-                    Arc::clone(&self.schema),
-                    Arc::clone(&self.encoder),
-                    batches.collect(),
-                    &[],
-                    &self.handle,
-                );
-                match merger {
-                    Ok(m) => Ok((Box::new(m), held)),
-                    Err(e) => {
-                        *state = HeldState::Failed(e.clone());
-                        return Err(e);
-                    }
-                }
+    /// The next bucket for a reader, if any is left.
+    fn claim(&self) -> Option<usize> {
+        let mut s = lock(&self.state);
+        if s.failed.is_some() || s.next >= s.buckets.len() {
+            return None;
+        }
+        s.next += 1;
+        Some(s.next - 1)
+    }
+
+    /// A reader's next step on bucket `b` (leaving it `Busy` for a merge).
+    fn take(&self, b: usize) -> Result<Take> {
+        let mut s = lock(&self.state);
+        if let Some(e) = &s.failed {
+            return Err(e.clone());
+        }
+        if s.spilling {
+            return Ok(Take::Wait);
+        }
+        let batches = Arc::clone(&s.batches);
+        let Some(bucket) = s.buckets.get_mut(b) else {
+            return Err(internal(format!("sort bucket {b} out of range")));
+        };
+        Ok(match mem::replace(bucket, Bucket::Busy) {
+            Bucket::Unread => Take::Open(batches),
+            Bucket::Merging(m) => Take::Merge(m),
+            Bucket::Spilled(run) => {
+                *bucket = Bucket::Done;
+                Take::Run(run)
             }
-            HeldState::Merging(m, held) => Ok((m, held)),
-            HeldState::Failed(e) => {
-                *state = HeldState::Failed(e.clone());
-                Err(HeldState::Failed(e))
-            }
-            HeldState::Busy => Err(HeldState::Busy),
-            // The spilled run handed to the reader: done here.
-            HeldState::Spilled(run) if reader => {
-                *state = HeldState::Done;
-                Err(HeldState::Spilled(run))
-            }
-            // Done, or a run the reader has yet to take: nothing to spill.
-            found => {
-                *state = found;
-                Err(HeldState::Done)
+            // A spill holds it.
+            Bucket::Busy => Take::Wait,
+            Bucket::Done => {
+                *bucket = Bucket::Done;
+                Take::Done
             }
         })
     }
 
-    /// Ends a step or a spill: `next` is the new state.
-    fn put(&self, next: HeldState) {
-        *lock(&self.state) = next;
+    /// Ends a step on bucket `b`: `next` is its new state. The buffers go
+    /// once no bucket reads them.
+    fn put(&self, b: usize, next: Bucket) {
+        let freed = {
+            let mut s = lock(&self.state);
+            if let Some(bucket) = s.buckets.get_mut(b) {
+                *bucket = next;
+            }
+            if s.reads_buffers() {
+                None
+            } else {
+                let batches = mem::replace(&mut s.batches, Arc::new([]));
+                Some((batches, mem::take(&mut s.buffers)))
+            }
+        };
+        if let Some(freed) = freed {
+            self.set_spillable(0);
+            drop(freed);
+        }
+        self.changed.notify();
+    }
+
+    /// Fails every reader with `e`; the buffers and merges go.
+    fn fail(&self, e: KrishivError) {
+        let old = mem::replace(&mut *lock(&self.state), HeldState::failed(e));
+        self.set_spillable(0);
+        drop(old);
         self.changed.notify();
     }
 }
+
+/// A bucket's merge taken by a spill, to write: the merge, or `None` to
+/// open it.
+type Unwritten = (usize, Option<Box<Merger>>);
 
 impl SpillUnread for Held {
     fn spill_unread(self: Arc<Self>) -> BoxFuture<'static, Result<usize>> {
@@ -319,21 +453,43 @@ impl SpillUnread for Held {
             let Some((_, scope)) = &self.spill else {
                 return Ok(0);
             };
-            let (mut merger, mut held) = loop {
+            // Readers stop taking steps; wait for the steps in progress.
+            let mut mine = false;
+            let (work, batches, mut buffers) = loop {
                 let changed = self.changed.listen();
-                match self.take(false)? {
-                    Ok(taken) => break taken,
-                    // A reader's step: the merge comes back after it.
-                    Err(HeldState::Busy) => changed.await,
-                    Err(_) => return Ok(0),
+                {
+                    let mut s = lock(&self.state);
+                    if s.failed.is_some() || (s.spilling && !mine) || !s.reads_buffers() {
+                        if mine {
+                            s.spilling = false;
+                            drop(s);
+                            self.changed.notify();
+                        }
+                        return Ok(0);
+                    }
+                    s.spilling = true;
+                    mine = true;
+                    if !s.buckets.iter().any(|b| matches!(b, Bucket::Busy)) {
+                        let mut work: Vec<Unwritten> = Vec::new();
+                        for (i, b) in s.buckets.iter_mut().enumerate() {
+                            match mem::replace(b, Bucket::Busy) {
+                                Bucket::Unread => work.push((i, None)),
+                                Bucket::Merging(m) => work.push((i, Some(m))),
+                                other => *b = other,
+                            }
+                        }
+                        let batches = Arc::clone(&s.batches);
+                        break (work, batches, mem::take(&mut s.buffers));
+                    }
                 }
+                changed.await;
             };
-            // The buffers' headroom is lent to the writer's scratch (as
+            // The buffers' headroom is lent to the writers' scratch (as
             // grant credit, so no other consumer takes it meanwhile). The
-            // writer first: if its scratch is refused, nothing was merged
-            // yet and the merge goes back as it was.
+            // first writer first: if its scratch is refused, nothing was
+            // merged yet and every merge goes back as it was.
             let mut freed = 0;
-            for b in &mut held {
+            for b in &mut buffers {
                 let lent = b.headroom.size();
                 freed += lent + b.reservation.size();
                 b.headroom.shrink_to_credit(lent);
@@ -343,46 +499,68 @@ impl SpillUnread for Held {
                 Ok(w) => w,
                 Err(e) => {
                     self.handle.release_credit();
-                    self.put(HeldState::Merging(merger, held));
+                    self.give_back(work, buffers);
                     return refused(e.into());
                 }
             };
             self.set_spillable(0);
             // Dropped before the spill ends (the query was cancelled): the
-            // merge is gone with the blocking job, so readers fail rather
+            // merges are gone with the blocking job, so readers fail rather
             // than wait on `Busy`.
             let unfinished = Unfinished(Some(&self.state), &self.changed, || {
-                HeldState::Failed(cancelled())
+                HeldState::failed(cancelled())
             });
-            let row_bytes = held.iter().map(|b| b.row_bytes).max().unwrap_or(1);
+            let row_bytes = buffers.iter().map(|b| b.row_bytes).max().unwrap_or(1);
             let rows = spill_rows(row_bytes, self.batch_rows);
             let query = Arc::clone(&self.query);
             let guard = self.query.blocking_started();
+            let (schema, encoder) = (Arc::clone(&self.schema), Arc::clone(&self.encoder));
+            let (handle, scope) = (Arc::clone(&self.handle), scope.clone());
             let written = run_blocking(&*self.executor, move || {
-                let run = write_rest(&mut merger, writer, rows, &query);
-                // The merged batches go with the merge, whatever happened;
-                // the guard travels with the run (a file), so the query
-                // does not end before it is dropped.
-                drop((merger, held));
-                Ok((run, guard))
+                let out = write_buckets(
+                    work, &batches, writer, &scope, &schema, &encoder, &handle, rows, &query,
+                );
+                // The guard travels with the runs (files), so the query
+                // does not end before they are dropped.
+                Ok((out, guard))
             })
             .await
-            .and_then(|(run, _guard)| run);
+            .and_then(|(out, _guard)| out);
             unfinished.disarm();
             self.handle.release_credit();
             match written {
-                Ok(run) => {
-                    self.counters.runs.fetch_add(1, Ordering::Relaxed);
-                    let bytes = run.file.bytes();
-                    self.counters.bytes.fetch_add(bytes, Ordering::Relaxed);
-                    self.put(HeldState::Spilled(Some(run)));
-                    Ok(freed)
+                Ok((runs, rest)) => {
+                    for (_, run) in &runs {
+                        self.counters.runs.fetch_add(1, Ordering::Relaxed);
+                        let bytes = run.file.bytes();
+                        self.counters.bytes.fetch_add(bytes, Ordering::Relaxed);
+                    }
+                    let all = rest.is_empty();
+                    {
+                        let mut s = lock(&self.state);
+                        for (b, run) in runs {
+                            if let Some(bucket) = s.buckets.get_mut(b) {
+                                *bucket = Bucket::Spilled(run);
+                            }
+                        }
+                    }
+                    if all {
+                        // Every merge is on disk: the buffers go.
+                        drop(buffers);
+                        self.give_back(Vec::new(), Vec::new());
+                        Ok(freed)
+                    } else {
+                        // The pool refused a later writer's scratch: the
+                        // other buckets stay in memory, with the buffers.
+                        self.give_back(rest, buffers);
+                        Ok(0)
+                    }
                 }
                 Err(e) => {
                     // Rows already merged are lost: fail the query before
-                    // the reader can see the state, and the reader too.
+                    // the readers can see the state, and the readers too.
                     self.query.fail(e.clone());
-                    self.put(HeldState::Failed(e.clone()));
+                    self.fail(e.clone());
                     Err(e)
                 }
             }
@@ -390,43 +568,134 @@ impl SpillUnread for Held {
     }
 }
 
-#[derive(Default)]
-struct SortShared {
-    parts: Vec<Part>,
-    output: Option<Output>,
+impl Held {
+    /// Ends a spill: the merges in `work` and `buffers` go back, readers
+    /// continue.
+    fn give_back(&self, work: Vec<Unwritten>, buffers: Vec<Buffer>) {
+        let bytes: usize = buffers.iter().map(|b| b.reservation.size()).sum();
+        {
+            let mut s = lock(&self.state);
+            for (b, merger) in work {
+                if let Some(bucket) = s.buckets.get_mut(b) {
+                    *bucket = merger.map_or(Bucket::Unread, Bucket::Merging);
+                }
+            }
+            s.buffers.extend(buffers);
+            s.spilling = false;
+            if !s.reads_buffers() {
+                s.batches = Arc::new([]);
+            }
+        }
+        self.set_spillable(bytes);
+        self.changed.notify();
+    }
+}
+
+/// The runs a spill wrote (by bucket) and the merges it left in memory.
+type Written = (Vec<(usize, SpillRun)>, Vec<Unwritten>);
+
+/// Writes the rest of each bucket's merge in `work` as a run of its own
+/// (blocking I/O): `writer` for the first, a new one for each next. Returns
+/// the runs and, when the pool refused a later writer's scratch, the
+/// merges not written.
+#[expect(clippy::too_many_arguments, reason = "one blocking job's inputs")]
+fn write_buckets(
+    work: Vec<Unwritten>,
+    batches: &[Arc<SortedBatch>],
+    writer: krishiv_memory::SpillWriter,
+    scope: &SpillScope,
+    schema: &SchemaRef,
+    encoder: &Arc<KeyEncoder>,
+    handle: &Arc<ConsumerHandle>,
+    rows: usize,
+    query: &QueryContext,
+) -> Result<Written> {
+    let mut runs = Vec::with_capacity(work.len());
+    let mut first = Some(writer);
+    let mut work = work.into_iter();
+    while let Some((b, merger)) = work.next() {
+        let writer = match first.take() {
+            Some(w) => w,
+            None => {
+                match scope.writer(Arc::clone(schema), handle.reservation().for_spill_scratch()) {
+                    Ok(w) => w,
+                    Err(krishiv_memory::SpillError::Memory(_)) => {
+                        let mut rest = vec![(b, merger)];
+                        rest.extend(work);
+                        return Ok((runs, rest));
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        };
+        let mut merger = match merger {
+            Some(m) => m,
+            None => Box::new(Merger::bucket(
+                Arc::clone(schema),
+                Arc::clone(encoder),
+                batches,
+                b,
+                handle,
+            )?),
+        };
+        runs.push((b, write_rest(&mut merger, writer, rows, query)?));
+    }
+    Ok((runs, Vec::new()))
 }
 
 #[derive(Default)]
-struct SortGlobal(Mutex<SortShared>);
+struct SortShared {
+    parts: Vec<Part>,
+    /// The in-memory result, read by every reader.
+    held: Option<Arc<Held>>,
+    /// The spilled result: each bucket's runs, claimed by the readers.
+    spilled: Vec<Vec<SpillRun>>,
+}
+
+struct SortGlobal {
+    shared: Mutex<SortShared>,
+    /// The query's bucketing (none: one bucket).
+    bucketing: Option<Arc<Bucketing>>,
+    buckets: usize,
+}
 
 impl Sort {
-    /// Spills `buffer` (not empty) as one sorted run on the blocking pool.
-    /// Returns the run and empties the buffer, or `Ok(Err(_))` and keeps it
-    /// when the pool refused the writer's scratch memory.
+    /// Spills `buffer` (not empty) as one sorted run per bucket on the
+    /// blocking pool. Returns the runs and empties the buffer, or
+    /// `Ok(Err(_))` and keeps it when the pool refused the writer's scratch
+    /// memory.
     async fn spill_buffer(
         &self,
         buffer: &mut Buffer,
+        buckets: usize,
         batch_rows: usize,
         ctx: &TaskContext,
-    ) -> Result<Result<SpillRun, MemoryError>> {
+    ) -> Result<Result<Runs, MemoryError>> {
         let target = headroom(buffer.row_bytes, batch_rows);
         let rows = spill_rows(buffer.row_bytes, batch_rows);
         let (batches, handle) = (buffer.batches.clone(), Arc::clone(&buffer.handle));
-        let written = self.write(batches, Vec::new(), rows, &handle, ctx);
-        let run = match lending_for_write(&mut buffer.headroom, &handle, target, written).await? {
-            Ok(run) => run,
+        let written = self.write_buffer(batches, buckets, rows, &handle, ctx);
+        let runs = match lending_for_write(&mut buffer.headroom, &handle, target, written).await? {
+            Ok(runs) => runs,
             Err(refused) => return Ok(Err(refused)),
         };
         buffer.batches.clear();
         let freed = buffer.reservation.size();
         buffer.reservation.shrink(freed);
-        self.counters.runs.fetch_add(1, Ordering::Relaxed);
-        Ok(Ok(run))
+        let written = runs.iter().flatten().count() as u64;
+        self.counters.runs.fetch_add(written, Ordering::Relaxed);
+        Ok(Ok(runs))
     }
 
-    /// The in-memory result of `buffers`, charged to a consumer of its own
-    /// whose hook spills the rest of it (with a spill scope).
-    fn held(&self, mut buffers: Vec<Buffer>, ctx: &TaskContext) -> Result<Arc<Held>> {
+    /// The in-memory result of `buffers` in `buckets` buckets, charged to
+    /// a consumer of its own whose hook spills the rest of it (with a
+    /// spill scope).
+    fn held(
+        &self,
+        mut buffers: Vec<Buffer>,
+        buckets: usize,
+        ctx: &TaskContext,
+    ) -> Result<Arc<Held>> {
         let (hook, handle) = match &self.spill {
             Some(scope) => {
                 let (hook, handle) = OutputSpill::register(ctx, "Sort output");
@@ -440,8 +709,19 @@ impl Sort {
             None => (None, Arc::clone(ctx.consumer().consumer())),
         };
         let bytes = buffers.iter().map(|b| b.reservation.size()).sum();
+        let batches: Arc<[Arc<SortedBatch>]> = buffers
+            .iter()
+            .flat_map(|b| b.batches.iter().cloned())
+            .collect();
         let held = Arc::new(Held {
-            state: Mutex::new(HeldState::Buffers(buffers)),
+            state: Mutex::new(HeldState {
+                batches,
+                buffers,
+                buckets: (0..buckets).map(|_| Bucket::Unread).collect(),
+                next: 0,
+                spilling: false,
+                failed: None,
+            }),
             changed: Event::default(),
             spill: hook,
             schema: Arc::clone(&self.schema),
@@ -460,12 +740,58 @@ impl Sort {
         Ok(held)
     }
 
-    /// Merges `memory` and `spilled` runs into one new spill file of
-    /// batches of `rows` rows, on the blocking pool; scratch memory comes
-    /// from `handle` (credit first). `Ok(Err(_))` if the pool refused it.
-    async fn write(
+    /// Merges each bucket of `memory` into a new spill file of batches of
+    /// `rows` rows, on the blocking pool; scratch memory comes from
+    /// `handle` (credit first). `Ok(Err(_))` if the pool refused it, with
+    /// nothing written.
+    async fn write_buffer(
         &self,
         memory: Vec<Arc<SortedBatch>>,
+        buckets: usize,
+        rows: usize,
+        handle: &Arc<ConsumerHandle>,
+        ctx: &TaskContext,
+    ) -> Result<Result<Runs, MemoryError>> {
+        let scope = self.spill.clone();
+        let scope = scope.ok_or_else(|| internal("a sort spilled without a scope".to_owned()))?;
+        let (schema, encoder) = (Arc::clone(&self.schema), Arc::clone(&self.encoder));
+        let (h, query) = (Arc::clone(handle), Arc::clone(ctx.query()));
+        let written = ctx
+            .run_blocking(move || {
+                let mut runs: Runs = Vec::with_capacity(buckets);
+                for b in 0..buckets {
+                    if memory.iter().all(|s| s.bucket(b).is_empty()) {
+                        runs.push(None);
+                        continue;
+                    }
+                    let mut merger =
+                        Merger::bucket(Arc::clone(&schema), Arc::clone(&encoder), &memory, b, &h)?;
+                    let scratch = h.reservation().releasing_to_credit().for_spill_scratch();
+                    match write_run(&mut merger, &scope, scratch, rows, &query)? {
+                        Ok(run) => runs.push(Some(run)),
+                        // Refused: the runs written go (their files with
+                        // them) and the buffer stays.
+                        Err(refused) => return Ok(Err(refused)),
+                    }
+                }
+                Ok(Ok(runs))
+            })
+            .await?;
+        if let Ok(runs) = &written {
+            for run in runs.iter().flatten() {
+                self.counters
+                    .bytes
+                    .fetch_add(run.file.bytes(), Ordering::Relaxed);
+            }
+        }
+        Ok(written)
+    }
+
+    /// Merges `spilled` runs into one new spill file of batches of `rows`
+    /// rows, on the blocking pool; scratch memory comes from `handle`
+    /// (credit first). `Ok(Err(_))` if the pool refused it.
+    async fn write(
+        &self,
         spilled: Vec<SpillRun>,
         rows: usize,
         handle: &Arc<ConsumerHandle>,
@@ -477,7 +803,7 @@ impl Sort {
         let (h, query) = (Arc::clone(handle), Arc::clone(ctx.query()));
         let written = ctx
             .run_blocking(move || {
-                let mut merger = Merger::new(schema, encoder, memory, &spilled, &h)?;
+                let mut merger = Merger::new(schema, encoder, Vec::new(), &spilled, &h)?;
                 let scratch = h.reservation().releasing_to_credit().for_spill_scratch();
                 write_run(&mut merger, &scope, scratch, rows, &query)
             })
@@ -520,7 +846,7 @@ impl Sort {
                 let group: Vec<SpillRun> = level.by_ref().take(take).collect();
                 let row_bytes = group.iter().map(|r| r.row_bytes).max().unwrap_or(1);
                 let rows = spill_rows(row_bytes, batch_rows);
-                let merged = self.write(Vec::new(), group, rows, &handle, ctx);
+                let merged = self.write(group, rows, &handle, ctx);
                 let run = lending_for_write(&mut budget, &handle, target, merged).await?;
                 runs.push(run.map_err(KrishivError::from)?);
             }
@@ -578,17 +904,37 @@ impl Sink for Sort {
         "Sort"
     }
 
-    fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
-        Ok(Arc::new(SortGlobal::default()))
+    fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
+        let bits = if ctx.query().config().sort_hash_buckets {
+            bucket_bits(ctx.executor().parallelism())
+        } else {
+            0
+        };
+        let bucketing = self
+            .bucket_keys
+            .as_ref()
+            .filter(|_| bits > 0)
+            .map(|keys| Arc::new(Bucketing::new(Arc::clone(keys), bits)));
+        let buckets = bucketing.as_ref().map_or(1, |b| b.buckets());
+        self.counters
+            .buckets
+            .store(buckets as u64, Ordering::Relaxed);
+        Ok(Arc::new(SortGlobal {
+            shared: Mutex::default(),
+            bucketing,
+            buckets,
+        }))
     }
 
-    fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
+    fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
+        let g = global_ref::<SortGlobal>(global, "Sort")?;
         let memory = ctx.consumer();
         Ok(Box::new(SortLocal {
             buffer: Buffer::new(memory.consumer()),
             runs: Vec::new(),
             signal: Arc::clone(memory.signal()),
             batch_rows: ctx.query().config().batch_size.max(1),
+            bucketing: g.bucketing.clone(),
         }))
     }
 
@@ -613,7 +959,7 @@ impl Sink for Sort {
         } else {
             input
         };
-        let sorted = SortedBatch::new(input, &self.encoder)?;
+        let sorted = SortedBatch::new(input, &self.encoder, l.bucketing.as_deref())?;
         let bytes = sorted.bytes();
         let extra = if self.spill.is_some() {
             headroom(row_bytes, l.batch_rows).saturating_sub(l.buffer.headroom.size())
@@ -649,7 +995,7 @@ impl Sink for Sort {
             signal,
             ..
         } = *l;
-        let mut shared = lock(&g.0);
+        let mut shared = lock(&g.shared);
         shared.parts.extend(runs.into_iter().map(Part::Run));
         if !buffer.batches.is_empty() {
             shared.parts.push(Part::Buffer(buffer));
@@ -669,7 +1015,7 @@ impl Sink for Sort {
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let g = global_ref::<SortGlobal>(global, "Sort")?;
-            let parts = mem::take(&mut lock(&g.0).parts);
+            let parts = mem::take(&mut lock(&g.shared).parts);
             ctx.consumer().signal().set_spillable_bytes(0);
             let batch_rows = ctx.query().config().batch_size.max(1);
             if !parts.iter().any(|p| matches!(p, Part::Run(_))) {
@@ -688,31 +1034,43 @@ impl Sink for Sort {
                         Part::Run(_) => None,
                     })
                     .collect();
-                let held = self.held(buffers, ctx)?;
-                lock(&g.0).output = Some(Output::Memory(held));
+                let held = self.held(buffers, g.buckets, ctx)?;
+                lock(&g.shared).held = Some(held);
                 return Ok(());
             }
             // External: spill what is still buffered, so the output phase
-            // holds only the merge's frames.
-            let mut runs = Vec::with_capacity(parts.len());
+            // holds only the merges' frames.
+            let mut spilled: Vec<Vec<SpillRun>> = (0..g.buckets).map(|_| Vec::new()).collect();
             for part in parts {
-                match part {
-                    Part::Run(r) => runs.push(r),
+                let runs = match part {
+                    Part::Run(r) => r,
                     Part::Buffer(mut b) => {
-                        let mut run = self.spill_buffer(&mut b, batch_rows, ctx).await?;
-                        if run.is_err() {
+                        let mut runs = self
+                            .spill_buffer(&mut b, g.buckets, batch_rows, ctx)
+                            .await?;
+                        if runs.is_err() {
                             // The scratch outgrew the headroom: widen it,
                             // with arbitration this time, and try again.
                             let more = headroom(b.row_bytes, batch_rows);
                             b.headroom.grow(more).await?;
-                            run = self.spill_buffer(&mut b, batch_rows, ctx).await?;
+                            runs = self
+                                .spill_buffer(&mut b, g.buckets, batch_rows, ctx)
+                                .await?;
                         }
-                        runs.push(run?);
+                        runs?
                     }
+                };
+                for (bucket, run) in spilled.iter_mut().zip(runs) {
+                    bucket.extend(run);
                 }
             }
-            self.reduce(&mut runs, batch_rows, ctx).await?;
-            lock(&g.0).output = Some(Output::Spilled(runs));
+            for runs in &mut spilled {
+                self.reduce(runs, batch_rows, ctx).await?;
+            }
+            spilled.retain(|runs| !runs.is_empty());
+            // Readers claim from the end: the first bucket first.
+            spilled.reverse();
+            lock(&g.shared).spilled = spilled;
             Ok(())
         })
     }
@@ -729,11 +1087,15 @@ impl Sink for Sort {
             if l.buffer.batches.is_empty() || self.spill.is_none() {
                 return Ok(0);
             }
-            let Ok(run) = self.spill_buffer(&mut l.buffer, l.batch_rows, ctx).await? else {
+            let buckets = l.bucketing.as_ref().map_or(1, |b| b.buckets());
+            let Ok(runs) = self
+                .spill_buffer(&mut l.buffer, buckets, l.batch_rows, ctx)
+                .await?
+            else {
                 // Refused scratch memory: nothing freed this time.
                 return Ok(0);
             };
-            l.runs.push(run);
+            l.runs.push(runs);
             l.signal.set_spillable_bytes(0);
             Ok(before)
         })
@@ -752,18 +1114,18 @@ impl Sink for Sort {
             }
             // Out of the lock while spilling; `finalize` is not polled
             // meanwhile, and an error fails the query (the parts go).
-            let mut parts = mem::take(&mut lock(&g.0).parts);
+            let mut parts = mem::take(&mut lock(&g.shared).parts);
             let batch_rows = ctx.query().config().batch_size.max(1);
             let mut freed = 0;
             for part in &mut parts {
                 let Part::Buffer(b) = part else { continue };
                 let before = b.reservation.size();
-                if let Ok(run) = self.spill_buffer(b, batch_rows, ctx).await? {
+                if let Ok(runs) = self.spill_buffer(b, g.buckets, batch_rows, ctx).await? {
                     freed += before;
-                    *part = Part::Run(run);
+                    *part = Part::Run(runs);
                 }
             }
-            let mut shared = lock(&g.0);
+            let mut shared = lock(&g.shared);
             parts.append(&mut shared.parts);
             shared.parts = parts;
             ctx.consumer()
@@ -794,20 +1156,37 @@ struct SortSource {
     batch_rows: usize,
 }
 
-/// The final merge, holding what it merges: the buffers' reservations (in
-/// memory) or the budget for the runs' frames (spilled).
+/// A merge of spilled runs, holding the budget for the runs' frames.
 struct Merging {
     merger: Box<Merger>,
-    held: Vec<Buffer>,
     budget: Reservation,
+}
+
+/// Where a reader goes once a merge of spilled runs ends.
+enum After {
+    /// Back to the in-memory result's buckets.
+    Held(Arc<Held>),
+    /// To the next spilled bucket.
+    Spilled,
 }
 
 enum SourceState {
     Start,
-    /// Reading an in-memory result through its shared state.
-    Held(Arc<Held>),
-    Merging(Merging),
+    /// Reading an in-memory result's buckets: the one claimed, if any.
+    Held(Arc<Held>, Option<usize>),
+    Merging(Merging, After),
+    /// Claiming the spilled buckets.
+    Spilled,
     Done,
+}
+
+/// One step of reading a bucket of an in-memory result.
+enum Step {
+    Batch(Batch),
+    /// The bucket is read.
+    Done,
+    /// The rest was spilled: merge it from disk.
+    Run(SpillRun),
 }
 
 impl Source for Sort {
@@ -823,8 +1202,8 @@ impl Source for Sort {
         finalized::<SortGlobal>(ctx, "Sort")
     }
 
-    fn max_parallelism(&self, _global: &GlobalState) -> usize {
-        1
+    fn max_parallelism(&self, global: &GlobalState) -> usize {
+        global_ref::<SortGlobal>(global, "Sort").map_or(1, |g| g.buckets)
     }
 
     fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
@@ -844,65 +1223,79 @@ impl Source for Sort {
     ) -> BoxFuture<'a, Result<Option<Batch>>> {
         Box::pin(async move {
             let l = local_mut::<SortSource>(local, "Sort")?;
-            if matches!(l.state, SourceState::Start) {
-                l.state = self.start(l, global).await?;
-            }
-            if let SourceState::Held(held) = &l.state {
-                let held = Arc::clone(held);
-                match read_held(l, &held).await? {
-                    Ok(next) => return Ok(next),
-                    // The rest was spilled: merge it from disk.
-                    Err(run) => l.state = self.open_runs(l, vec![run]).await?,
+            let g = global_ref::<SortGlobal>(global, "Sort")?;
+            loop {
+                match mem::replace(&mut l.state, SourceState::Done) {
+                    SourceState::Start => {
+                        let held = lock(&g.shared).held.clone();
+                        l.state = match held {
+                            Some(held) => SourceState::Held(held, None),
+                            None => SourceState::Spilled,
+                        };
+                    }
+                    SourceState::Held(held, bucket) => {
+                        let Some(b) = bucket.or_else(|| held.claim()) else {
+                            continue;
+                        };
+                        match read_bucket(l, &held, b).await? {
+                            Step::Batch(batch) => {
+                                l.state = SourceState::Held(held, Some(b));
+                                return Ok(Some(batch));
+                            }
+                            Step::Done => l.state = SourceState::Held(held, None),
+                            Step::Run(run) => {
+                                let merging = self.open_runs(l, vec![run]).await?;
+                                l.state = SourceState::Merging(merging, After::Held(held));
+                            }
+                        }
+                    }
+                    SourceState::Spilled => {
+                        let runs = lock(&g.shared).spilled.pop();
+                        if let Some(runs) = runs {
+                            let merging = self.open_runs(l, runs).await?;
+                            l.state = SourceState::Merging(merging, After::Spilled);
+                        }
+                    }
+                    SourceState::Merging(
+                        Merging {
+                            mut merger,
+                            mut budget,
+                        },
+                        after,
+                    ) => {
+                        // Each output batch on the blocking pool: a wide
+                        // merge over ~1 ms, or reading spilled runs.
+                        let rows = l.batch_rows;
+                        let step = blocking(&l.query, &l.executor, move || {
+                            let next = merger.next(rows)?;
+                            Ok((merger, next))
+                        });
+                        // No top-up: the merger keeps the frames it drew,
+                        // and frames it frees come back as credit for the
+                        // next step.
+                        let (merger, next) = lending(&mut budget, &l.handle, 0, step).await?;
+                        if let Some(batch) = next {
+                            l.state = SourceState::Merging(Merging { merger, budget }, after);
+                            return Ok(Some(batch));
+                        }
+                        // Spilled runs' last frames went back as credit.
+                        drop((merger, budget));
+                        l.handle.release_credit();
+                        l.state = match after {
+                            After::Held(held) => SourceState::Held(held, None),
+                            After::Spilled => SourceState::Spilled,
+                        };
+                    }
+                    SourceState::Done => return Ok(None),
                 }
             }
-            let SourceState::Merging(Merging {
-                mut merger,
-                held,
-                mut budget,
-            }) = mem::replace(&mut l.state, SourceState::Done)
-            else {
-                return Ok(None);
-            };
-            // Each output batch on the blocking pool: a wide merge over
-            // ~1 ms, or reading spilled runs.
-            let rows = l.batch_rows;
-            let step = blocking(&l.query, &l.executor, move || {
-                let next = merger.next(rows)?;
-                Ok((merger, next))
-            });
-            // No top-up: the merger keeps the frames it drew, and frames it
-            // frees come back as credit for the next step.
-            let (merger, next) = lending(&mut budget, &l.handle, 0, step).await?;
-            if next.is_some() {
-                l.state = SourceState::Merging(Merging {
-                    merger,
-                    held,
-                    budget,
-                });
-            } else {
-                // Spilled runs' last frames went back as credit.
-                drop((merger, held, budget));
-                l.handle.release_credit();
-            }
-            Ok(next)
         })
     }
 }
 
 impl Sort {
-    /// Takes `finalize`'s output and opens the final merge.
-    async fn start(&self, l: &SortSource, global: &GlobalState) -> Result<SourceState> {
-        let g = global_ref::<SortGlobal>(global, "Sort")?;
-        let output = lock(&g.0).output.take();
-        match output {
-            None => Ok(SourceState::Done),
-            Some(Output::Memory(held)) => Ok(SourceState::Held(held)),
-            Some(Output::Spilled(runs)) => self.open_runs(l, runs).await,
-        }
-    }
-
     /// Opens the final merge of spilled `runs`.
-    async fn open_runs(&self, l: &SortSource, runs: Vec<SpillRun>) -> Result<SourceState> {
+    async fn open_runs(&self, l: &SortSource, runs: Vec<SpillRun>) -> Result<Merging> {
         let (schema, encoder) = (Arc::clone(&self.schema), Arc::clone(&self.encoder));
         let handle = Arc::clone(&l.handle);
         let mut budget = merge_budget(&runs, runs.len(), l.batch_rows, &handle, false)
@@ -910,16 +1303,15 @@ impl Sort {
             .0;
         self.counters
             .fan_in
-            .store(runs.len() as u64, Ordering::Relaxed);
+            .fetch_max(runs.len() as u64, Ordering::Relaxed);
         let open = blocking(&l.query, &l.executor, move || {
             Merger::new(schema, encoder, Vec::new(), &runs, &handle)
         });
         let merger = lending(&mut budget, &l.handle, 0, open).await?;
-        Ok(SourceState::Merging(Merging {
+        Ok(Merging {
             merger: Box::new(merger),
-            held: Vec::new(),
             budget,
-        }))
+        })
     }
 }
 
@@ -928,63 +1320,57 @@ impl Sort {
 #[cfg(test)]
 pub(super) async fn spill_result_again(local: &mut LocalState) -> Result<usize> {
     let l = local_mut::<SortSource>(local, "Sort")?;
-    let SourceState::Held(held) = &l.state else {
+    let SourceState::Held(held, _) = &l.state else {
         return Err(internal("the reader holds no in-memory result".to_owned()));
     };
     Arc::clone(held).spill_unread().await
 }
 
-/// One step of an in-memory result's merge: the next batch, or `Err` with
-/// the run its rest was spilled to.
-async fn read_held(
-    l: &mut SortSource,
-    held: &Arc<Held>,
-) -> Result<std::result::Result<Option<Batch>, SpillRun>> {
-    let (mut merger, buffers) = loop {
+/// One step of reading bucket `b` of an in-memory result: the next batch,
+/// the end of the bucket, or the run its rest was spilled to.
+async fn read_bucket(l: &SortSource, held: &Arc<Held>, b: usize) -> Result<Step> {
+    let (merger, batches) = loop {
         let changed = held.changed.listen();
-        match held.take(true)? {
-            Ok(taken) => break taken,
-            // A spill of the rest is being written.
-            Err(HeldState::Busy) => changed.await,
-            Err(HeldState::Spilled(Some(run))) => return Ok(Err(run)),
-            Err(HeldState::Failed(e)) => return Err(e),
-            Err(_) => {
-                l.state = SourceState::Done;
-                return Ok(Ok(None));
-            }
+        match held.take(b)? {
+            Take::Open(batches) => break (None, Some(batches)),
+            Take::Merge(m) => break (Some(m), None),
+            Take::Run(run) => return Ok(Step::Run(run)),
+            Take::Done => return Ok(Step::Done),
+            // A spill holds the result.
+            Take::Wait => changed.await,
         }
     };
     let rows = l.batch_rows;
+    let (schema, encoder, handle) = (
+        Arc::clone(&held.schema),
+        Arc::clone(&held.encoder),
+        Arc::clone(&held.handle),
+    );
     let step = blocking(&l.query, &l.executor, move || {
+        let merger = match (merger, batches) {
+            (Some(m), _) => m,
+            (None, batches) => {
+                let batches = batches.unwrap_or_else(|| Arc::new([]));
+                Box::new(Merger::bucket(schema, encoder, &batches, b, &handle)?)
+            }
+        };
+        let mut merger = merger;
         let next = merger.next(rows);
         Ok((merger, next))
     })
     .await;
-    let (merger, next) = match step {
-        Ok((merger, next)) => (merger, next),
-        Err(e) => {
-            held.set_spillable(0);
-            held.put(HeldState::Failed(e.clone()));
-            return Err(e);
+    match step {
+        Ok((merger, Ok(Some(batch)))) => {
+            held.put(b, Bucket::Merging(merger));
+            Ok(Step::Batch(batch))
         }
-    };
-    match next {
-        Ok(Some(batch)) => {
-            held.put(HeldState::Merging(merger, buffers));
-            Ok(Ok(Some(batch)))
+        Ok((merger, Ok(None))) => {
+            drop(merger);
+            held.put(b, Bucket::Done);
+            Ok(Step::Done)
         }
-        Ok(None) => {
-            // Read to the end: the buffers go.
-            held.set_spillable(0);
-            drop((merger, buffers));
-            held.put(HeldState::Done);
-            l.state = SourceState::Done;
-            Ok(Ok(None))
-        }
-        Err(e) => {
-            held.set_spillable(0);
-            drop((merger, buffers));
-            held.put(HeldState::Failed(e.clone()));
+        Ok((_, Err(e))) | Err(e) => {
+            held.fail(e.clone());
             Err(e)
         }
     }
