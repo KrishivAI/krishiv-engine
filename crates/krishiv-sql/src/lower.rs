@@ -458,14 +458,7 @@ impl Lowerer {
                 let plan = self.inline_table(&v.rows, v.alias.as_ref(), v.span)?;
                 match &v.alias {
                     None => plan,
-                    Some(a) => self.node(
-                        PlanNode::SubqueryAlias {
-                            input: arc(plan),
-                            alias: a.name.value.clone(),
-                            columns: a.columns.iter().map(|c| c.value.clone()).collect(),
-                        },
-                        v.span,
-                    ),
+                    Some(a) => self.with_alias(plan, a, v.span),
                 }
             }
         })
@@ -913,20 +906,25 @@ impl Lowerer {
         };
         Ok(match &tf.alias {
             None => plan,
-            Some(a) => self.node(
-                PlanNode::SubqueryAlias {
-                    input: arc(plan),
-                    // `AS (columns)` names no table: a generated name, as
-                    // for no alias at all.
-                    alias: a.name.as_ref().map_or_else(
-                        || "__auto_generated_subquery_name".to_owned(),
-                        |n| n.value.clone(),
-                    ),
-                    columns: a.columns.iter().map(|c| c.value.clone()).collect(),
-                },
-                tf.span,
-            ),
+            Some(a) => self.with_alias(plan, a, tf.span),
         })
+    }
+
+    /// `plan` under the `SubqueryAlias` of `a` (the one wrapper both the
+    /// query-body and table-factor paths use). `AS (columns)` names no
+    /// table: a generated name, as for no alias at all.
+    fn with_alias(&mut self, plan: LogicalPlan, a: &TableAlias, span: Span) -> LogicalPlan {
+        self.node(
+            PlanNode::SubqueryAlias {
+                input: arc(plan),
+                alias: a.name.as_ref().map_or_else(
+                    || "__auto_generated_subquery_name".to_owned(),
+                    |n| n.value.clone(),
+                ),
+                columns: a.columns.iter().map(|c| c.value.clone()).collect(),
+            },
+            span,
+        )
     }
 
     /// `VALUES rows [AS alias(columns)]` at `span`: an unresolved

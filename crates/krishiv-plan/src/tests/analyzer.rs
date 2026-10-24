@@ -2596,13 +2596,12 @@ fn inline_table_of_incompatible_types_fails() {
     );
 }
 
-/// A column reference, an unknown routine, an aggregate and a
-/// nondeterministic call cannot be evaluated in an inline table.
+/// An aggregate, a nondeterministic call, a window and a subquery cannot
+/// be evaluated in an inline table.
 #[test]
 fn inline_table_of_unevaluable_expressions_fails() {
     let ctx = ctx();
     for (cell, expr) in [
-        (c("x"), "\"x\""),
         (f("count", vec![int(1)]), "\"count(1)\""),
         (f("rand", vec![int(5)]), "\"rand(5)\""),
     ] {
@@ -2671,7 +2670,7 @@ fn inline_table_of_clock_calls_resolves() {
 }
 
 /// Degenerate hand-built tables (the parser rejects these): no rows is an
-/// error, and a short row reads NULL for its missing values.
+/// error.
 #[test]
 fn inline_table_edge_cases() {
     let ctx = ctx();
@@ -2683,11 +2682,6 @@ fn inline_table_edge_cases() {
         &ctx,
     );
     assert_eq!(class(&r), "KRISHIV_UNSUPPORTED_FEATURE");
-    let r = run(inline_table(vec![vec![int(1)], vec![]], &["a"]), &ctx);
-    assert_eq!(summary(&r), serde_json::json!([["a", true]]));
-    let a = r.unwrap();
-    assert_eq!(datatypes(&a), [DataType::Integer]);
-    assert!(!has_inline_table(a.plan.root()));
     // Rewriting an inline table's expressions visits every cell (and an
     // unchanged rewrite shares the plan).
     let p = Arc::new(inline_table(vec![vec![int(1)]], &["a"]));
@@ -2697,8 +2691,49 @@ fn inline_table_edge_cases() {
     assert!(Arc::ptr_eq(&p, &q));
 }
 
-/// A DataFrame reference (`df["a"]`) names a column no input has, so it
-/// cannot be evaluated either.
+/// A column name resolves against nothing in an inline table: it is
+/// `UNRESOLVED_COLUMN`, as in Spark (not `CANNOT_EVALUATE_...`), also
+/// inside a larger expression.
+#[test]
+fn inline_table_of_unknown_column_is_unresolved() {
+    let ctx = ctx();
+    for cell in [c("x"), add(c("x"), int(1))] {
+        let r = run(inline_table(vec![vec![int(0)], vec![cell]], &["a"]), &ctx);
+        assert_eq!(
+            summary(&r),
+            serde_json::json!(["UNRESOLVED_COLUMN.WITHOUT_SUGGESTION", {"objectName": "`x`"}])
+        );
+    }
+}
+
+/// A large inline table analyzes in time linear in its rows: ten thousand
+/// rows become one n-ary union, not a deep tree.
+#[test]
+fn inline_table_of_many_rows_resolves() {
+    let ctx = ctx();
+    let rows: Vec<Vec<Expr>> = (0..10_000).map(|i| vec![int(i), s("v")]).collect();
+    let started = Instant::now();
+    let r = run(inline_table(rows, &["a", "b"]), &ctx);
+    assert_eq!(summary(&r), serde_json::json!([["a", false], ["b", false]]));
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "10k-row inline table took {:?}",
+        started.elapsed()
+    );
+}
+
+/// A hand-built row of the wrong width fails rather than NULL-fills or
+/// truncates (the parser rejects these).
+#[test]
+fn inline_table_of_ragged_rows_fails() {
+    let ctx = ctx();
+    for rows in [vec![vec![int(1)], vec![]], vec![vec![int(1), int(2)]]] {
+        let r = run(inline_table(rows, &["a"]), &ctx);
+        assert_eq!(class(&r), "KRISHIV_UNSUPPORTED_FEATURE");
+    }
+}
+
+/// A DataFrame reference (`df["a"]`) names a column no input has.
 #[test]
 fn inline_table_of_dataframe_reference_fails() {
     let ctx = ctx();
@@ -2710,8 +2745,8 @@ fn inline_table_of_dataframe_reference_fails() {
     assert_eq!(
         summary(&r),
         serde_json::json!([
-            "INVALID_INLINE_TABLE.CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE",
-            {"expr": "\"a\""}
+            "CANNOT_RESOLVE_DATAFRAME_COLUMN",
+            {"name": "\"a\""}
         ])
     );
 }

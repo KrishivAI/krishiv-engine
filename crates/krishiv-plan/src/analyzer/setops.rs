@@ -25,7 +25,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    ColumnAlreadyExists, ErrorClass, IncompatibleColumnType,
+    ColumnAlreadyExists, IncompatibleColumnType,
     InvalidInlineTableCannotEvaluateExpressionInInlineTable,
     InvalidInlineTableIncompatibleTypesInInlineTable, KrishivInvalidPartitionNumber,
     LegacyErrorTemp1047, LegacyErrorTemp1048, NumColumnsMismatch, UnresolvedColumnAmongFieldNames,
@@ -123,6 +123,11 @@ impl Resolver<'_> {
         }
         let mut bound: Vec<Vec<Bound>> = Vec::with_capacity(rows.len());
         for row in rows {
+            // The parser rejects rows of another width; a hand-built plan
+            // with one fails rather than NULL-fills or truncates.
+            if row.len() != columns.len() {
+                return Err(unsupported("an inline table row of the wrong width", o));
+            }
             let mut cells = Vec::with_capacity(row.len());
             for cell in row {
                 self.check_inline_cell(cell)?;
@@ -135,13 +140,10 @@ impl Resolver<'_> {
                 // No enclosing query is visible: a column reference is not
                 // resolvable here.
                 cx.outer = false;
-                let b = match self.bind(cell, &cx) {
-                    Ok(b) => b,
-                    Err(e) if is_missing_column(&e) => {
-                        return Err(cannot_evaluate(cell, self.ctx.conf.session_zone));
-                    }
-                    Err(e) => return Err(e),
-                };
+                // An unknown name is `UNRESOLVED_COLUMN`, as in Spark: only
+                // an expression that resolves but cannot be folded is
+                // `CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE`.
+                let b = self.bind(cell, &cx)?;
                 self.check_inline_bound(&b)?;
                 cells.push(b);
             }
@@ -178,15 +180,8 @@ impl Resolver<'_> {
             let mut exprs = Vec::with_capacity(width);
             let mut out = Vec::with_capacity(width);
             for (c, name) in columns.iter().enumerate() {
-                // A hand-built plan may hold a short row (the parser
-                // rejects those): a missing value reads NULL.
-                let missing;
-                let b = match row.get(c) {
-                    Some(b) => b,
-                    None => {
-                        missing = inline_null();
-                        &missing
-                    }
+                let Some(b) = row.get(c) else {
+                    return Err(unsupported("an inline table row of the wrong width", o));
                 };
                 let ty = &types[c];
                 let cast =
@@ -831,18 +826,6 @@ fn arg(t: Option<&DataType>) -> Arg<'_> {
     }
 }
 
-/// Whether binding failed only because the expression names a column:
-/// with no input in scope, that is not an unresolvable reference but an
-/// expression an inline table cannot evaluate.
-fn is_missing_column(e: &AnalysisError) -> bool {
-    matches!(
-        e.error.error_class(),
-        ErrorClass::UnresolvedColumnWithSuggestion
-            | ErrorClass::UnresolvedColumnWithoutSuggestion
-            | ErrorClass::CannotResolveDataframeColumn
-    )
-}
-
 /// `INVALID_INLINE_TABLE.CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE` for
 /// `e`, shown as Spark shows it, at its origin.
 fn cannot_evaluate(e: &Expr, zone: Option<i32>) -> AnalysisError {
@@ -852,23 +835,6 @@ fn cannot_evaluate(e: &Expr, zone: Option<i32>) -> AnalysisError {
         },
         e.origin,
     )
-}
-
-/// An untyped NULL, for a hand-built row shorter than its columns (the
-/// parser rejects those).
-fn inline_null() -> Bound {
-    Bound {
-        expr: Arc::new(Expr::new(ExprNode::Literal(Literal::Null(None)))),
-        ty: ArgType {
-            data_type: None,
-            nullable: true,
-        },
-        agg: None,
-        win: None,
-        outer: None,
-        lateral: Vec::new(),
-        shown: None,
-    }
 }
 
 /// A `BIGINT` literal.

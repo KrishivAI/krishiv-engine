@@ -393,6 +393,21 @@ fn inline_tables_report_spark_errors() {
             ),
         ]
     );
+    // An unknown name is an unresolved column (as Spark), not an
+    // expression that cannot be evaluated.
+    for sql in [
+        "select * from values (x)",
+        "select * from values (1), (x + 1)",
+        "select * from values (t.x)",
+    ] {
+        let e = fails(&s, sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::UnresolvedColumnWithoutSuggestion,
+            "{sql}"
+        );
+        assert_eq!(e.sql_state(), Some("42703"), "{sql}");
+    }
     // An aggregate cannot be evaluated.
     let e = fails(
         &s,
