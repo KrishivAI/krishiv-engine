@@ -955,10 +955,10 @@ fn golden_split() {
         pieces(Some("a,b"), ",", -1),
         Some(vec!["a".to_owned(), "b".to_owned()])
     );
-    // `limit == 0` drops trailing empty pieces; `limit < 0` keeps them.
+    // `limit <= 0` keeps trailing empty pieces (Spark maps `0` to `-1`).
     assert_eq!(
         pieces(Some("a,b,"), ",", 0),
-        Some(vec!["a".to_owned(), "b".to_owned()])
+        Some(vec!["a".to_owned(), "b".to_owned(), "".to_owned()])
     );
     assert_eq!(
         pieces(Some("a,b,"), ",", -1),
@@ -967,7 +967,12 @@ fn golden_split() {
     // A leading empty match splits nothing.
     assert_eq!(
         pieces(Some("axb"), "x*", 0),
-        Some(vec!["a".to_owned(), "".to_owned(), "b".to_owned()])
+        Some(vec![
+            "a".to_owned(),
+            "".to_owned(),
+            "b".to_owned(),
+            "".to_owned()
+        ])
     );
     // An invalid pattern names `split`.
     let input = arrow_array::StringArray::from(vec![Some("a,b")]);
@@ -1080,10 +1085,10 @@ fn rejected_constructs() {
         let g = crate::scalar::tests::bind(f, &[&cols[0], &cols[1]]);
         let args = cols.map(crate::scalar::Arg::Array);
         let err = g.invoke(&args, 1).unwrap_err();
-        assert!(
-            err.message().contains(&format!("`{f}`")),
-            "{f}: {}",
-            err.message()
+        assert_eq!(
+            err.message(),
+            format!("The value of parameter(s) `regexp` in `{f}` is invalid: '('."),
+            "{f}"
         );
     }
 }

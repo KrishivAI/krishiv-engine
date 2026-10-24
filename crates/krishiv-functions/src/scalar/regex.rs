@@ -83,7 +83,11 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             && matches!(types[2], DataType::Int8 | DataType::Int16 | DataType::Int32));
     let binding = match (listed, types.len()) {
         ("regexp" | "regexp_like", 2) if strings(2) => {
-            Binding::new(DataType::Boolean, |x: &Inputs<'_>| find(x))
+            let function: &'static str = match listed {
+                "regexp" => "`regexp`",
+                _ => "`regexp_like`",
+            };
+            Binding::new(DataType::Boolean, move |x: &Inputs<'_>| find(x, function))
         }
         ("regexp_extract", 2 | 3) if indexed => {
             let with_idx = types.len() == 3;
@@ -282,8 +286,7 @@ fn idx_at(p: &Option<Prim<Int32Type>>, row: usize) -> Option<i32> {
 }
 
 /// `regexp` / `regexp_like`: Java `find`, true on any match.
-fn find(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
-    const FUNCTION: &str = "`regexp_like`";
+fn find(x: &Inputs<'_>, function: &'static str) -> Result<ArrayRef, KrishivError> {
     let strings = x.strings(0)?;
     let patterns = x.str(1)?;
     let mut cache = Cache::default();
@@ -296,7 +299,7 @@ fn find(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
             out.push(None);
             continue;
         };
-        let compiled = cache.compiled(pattern, FUNCTION)?;
+        let compiled = cache.compiled(pattern, function)?;
         out.push(Some(find_at(compiled, source, 0)?.is_some()));
     }
     Ok(Arc::new(BooleanArray::from(out)) as ArrayRef)
@@ -440,9 +443,9 @@ fn substr(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
 }
 
 /// Spark `split` around the matches of `compiled` in `s` (Java
-/// `Pattern.split` semantics): at most `limit` pieces when `limit > 0`
-/// (the last holds the rest), otherwise as many as there are; `limit == 0`
-/// drops trailing empty pieces.
+/// `Pattern.split` semantics, with Spark's `limit == 0` mapped to `-1`):
+/// at most `limit` pieces when `limit > 0` (the last holds the rest),
+/// otherwise as many as there are, keeping trailing empty pieces.
 fn split_pattern(compiled: &Compiled, s: &str, limit: i32) -> Result<Vec<String>, KrishivError> {
     let spans = find_all(compiled, s)?;
     let limited = limit > 0;
@@ -468,11 +471,6 @@ fn split_pattern(compiled: &Compiled, s: &str, limit: i32) -> Result<Vec<String>
     }
     if !limited || parts.len() < cap {
         parts.push(s[index..].to_owned());
-    }
-    if limit == 0 {
-        while parts.last().is_some_and(String::is_empty) {
-            parts.pop();
-        }
     }
     Ok(parts)
 }
