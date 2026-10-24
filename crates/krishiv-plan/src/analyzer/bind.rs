@@ -227,6 +227,10 @@ fn check_function(ctx: &AnalysisContext, name: &str, origin: Origin) -> Result<(
     if crate::Builtin::from_name(name).is_some() {
         return Ok(());
     }
+    // `grouping` and `grouping_id` are the analyzer's too (grouping sets).
+    if super::analytics::GroupingFn::from_name(name).is_some() {
+        return Ok(());
+    }
     match ctx
         .functions
         .lookup(std::slice::from_ref(&name.to_owned()), ctx.profile)

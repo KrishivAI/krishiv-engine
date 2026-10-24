@@ -21,9 +21,9 @@ SELECT a FROM t LATERAL VIEW explode(b) x AS y
 SELECT row_number() OVER (ORDER BY a) FROM t
   => Project [row_number() OVER (ORDER BY a ASC NULLS FIRST)] | +- Read t | 
 SELECT a FROM t GROUP BY ROLLUP (a)
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature ROLLUP, CUBE and GROUPING SETS is not supported by Krishiv yet. SQLSTATE: 0A000 @ 25..35
+  => Aggregate [a] GROUPING SETS ((a), ()), [a] | +- Read t | 
 SELECT a FROM t GROUP BY a WITH CUBE
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature ROLLUP, CUBE and GROUPING SETS is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..36
+  => Aggregate CUBE [a], [a] | +- Read t | 
 SELECT * FROM t NATURAL JOIN u
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature NATURAL JOIN is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..30
 SELECT * FROM t, LATERAL (SELECT a)

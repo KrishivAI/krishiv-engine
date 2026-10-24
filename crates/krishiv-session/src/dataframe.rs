@@ -313,9 +313,73 @@ impl DataFrame {
     /// ```
     #[must_use]
     pub fn group_by(&self, keys: impl IntoIterator<Item = impl Into<Column>>) -> GroupedData {
+        self.grouped(keys, Sets::GroupBy)
+    }
+
+    /// Groups rows by `keys` and by each prefix of them, down to the grand
+    /// total, for [`GroupedData::agg`] (PySpark's `rollup`): a key a row is
+    /// rolled up over reads `NULL`.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::{col, sum};
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.table("t").rollup([col("a"), col("b")]).agg([sum(col("v"))]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn rollup(&self, keys: impl IntoIterator<Item = impl Into<Column>>) -> GroupedData {
+        self.grouped(keys, Sets::Rollup)
+    }
+
+    /// Groups rows by every subset of `keys`, for [`GroupedData::agg`]
+    /// (PySpark's `cube`): a key a row is rolled up over reads `NULL`.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::{col, sum};
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.table("t").cube([col("a"), col("b")]).agg([sum(col("v"))]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn cube(&self, keys: impl IntoIterator<Item = impl Into<Column>>) -> GroupedData {
+        self.grouped(keys, Sets::Cube)
+    }
+
+    /// Groups rows by each of `sets` (grouping expressions among `keys`),
+    /// for [`GroupedData::agg`] (PySpark's `groupingSets`): the output has
+    /// the columns of `keys`, `NULL` where a set does not group by them.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::{col, sum};
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s
+    ///     .table("t")
+    ///     .grouping_sets([vec![col("a")], vec![col("b")], vec![]], [col("a"), col("b")])
+    ///     .agg([sum(col("v"))]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn grouping_sets(
+        &self,
+        sets: impl IntoIterator<Item = impl IntoIterator<Item = Column>>,
+        keys: impl IntoIterator<Item = impl Into<Column>>,
+    ) -> GroupedData {
+        let sets = sets
+            .into_iter()
+            .map(|set| set.into_iter().map(|c| c.expr).collect())
+            .collect();
+        self.grouped(keys, Sets::Explicit(sets))
+    }
+
+    fn grouped(
+        &self,
+        keys: impl IntoIterator<Item = impl Into<Column>>,
+        sets: Sets,
+    ) -> GroupedData {
         GroupedData {
             df: self.clone(),
             keys: keys.into_iter().map(|k| k.into().expr).collect(),
+            sets,
         }
     }
 
@@ -852,11 +916,26 @@ impl DataFrame {
     }
 }
 
-/// Rows grouped by keys ([`DataFrame::group_by`]).
+/// Which groups of its keys a [`GroupedData`] aggregates.
+#[derive(Debug, Clone)]
+enum Sets {
+    /// All the keys together.
+    GroupBy,
+    /// Each prefix of the keys.
+    Rollup,
+    /// Each subset of the keys.
+    Cube,
+    /// These sets.
+    Explicit(Vec<Vec<Expr>>),
+}
+
+/// Rows grouped by keys ([`DataFrame::group_by`], [`DataFrame::rollup`],
+/// [`DataFrame::cube`], [`DataFrame::grouping_sets`]).
 #[derive(Debug, Clone)]
 pub struct GroupedData {
     df: DataFrame,
     keys: Vec<Expr>,
+    sets: Sets,
 }
 
 impl GroupedData {
@@ -874,9 +953,21 @@ impl GroupedData {
         let keys: Vec<Arc<Expr>> = self.keys.iter().cloned().map(Arc::new).collect();
         let mut output = keys.clone();
         output.extend(aggregates.into_iter().map(|c| Arc::new(c.expr)));
+        let grouping = match &self.sets {
+            Sets::GroupBy => Grouping::GroupBy(keys),
+            Sets::Rollup => Grouping::Rollup(keys),
+            Sets::Cube => Grouping::Cube(keys),
+            Sets::Explicit(sets) => Grouping::GroupingSets {
+                exprs: keys,
+                sets: sets
+                    .iter()
+                    .map(|set| set.iter().cloned().map(Arc::new).collect())
+                    .collect(),
+            },
+        };
         self.df.derive(PlanNode::Aggregate {
             input: Arc::clone(&self.df.plan),
-            grouping: Grouping::GroupBy(keys),
+            grouping,
             aggregates: output,
         })
     }

@@ -15,6 +15,7 @@ use krishiv_common::error::{
     UnsupportedFeatureLateralColumnAliasInGroupBy,
 };
 
+use super::analytics::Analytics;
 use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
@@ -260,7 +261,7 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let items = self.select_items(c, exprs, env, "Aggregate")?;
         if items.iter().any(|b| b.agg.is_some()) {
-            return self.build_aggregate(p.origin, c, Vec::new(), &items, true);
+            return self.build_aggregate(p.origin, c, Vec::new(), &items, true, None);
         }
         if items.iter().any(|b| b.win.is_some()) {
             return self.window_project(p.origin, c, &items, &[]);
@@ -278,6 +279,20 @@ impl Resolver<'_> {
         env: &Arc<Env>,
         op: &'static str,
     ) -> Result<Vec<Bound>, AnalysisError> {
+        self.select_items_in(c, exprs, env, op, None)
+    }
+
+    /// [`Self::select_items`] of an aggregate over grouping sets, which
+    /// may call `grouping` and `grouping_id` and name `grouping__id`
+    /// (`extra`, searched after the input).
+    pub(super) fn select_items_in(
+        &mut self,
+        c: &Rel,
+        exprs: &[Arc<Expr>],
+        env: &Arc<Env>,
+        op: &'static str,
+        extra: Option<&[Attr]>,
+    ) -> Result<Vec<Bound>, AnalysisError> {
         let rels = [c];
         let mut items = Vec::new();
         let mut lateral: Vec<Attr> = Vec::new();
@@ -293,6 +308,8 @@ impl Resolver<'_> {
             let b = {
                 let mut cx = Self::cx(&c.out, &rels, env, op);
                 cx.lateral = lca.then_some(&lateral[..]);
+                cx.extra = extra;
+                cx.grouping = extra.is_some();
                 cx.windows = WindowUse::Allowed;
                 self.bind(e, &cx)?
             };
@@ -737,6 +754,7 @@ impl Resolver<'_> {
         let mut cx = Self::cx(&agg.out, &rels, env, op);
         cx.extra = Some(&info.keys);
         cx.agg_scope = Some(&info.input.out);
+        cx.grouping = info.analytics.is_some();
         if op == "Filter" {
             cx.windows = WindowUse::Having;
         }
@@ -782,6 +800,12 @@ impl Resolver<'_> {
                     bounds.push(self.bind(&sub, &cx).map_err(|_| err)?);
                 }
                 Err(err) => return Err(err),
+            }
+        }
+        if let Some(an) = &info.analytics {
+            for b in &mut bounds {
+                an.check_late_call(&b.expr)?;
+                b.expr = self.resolve_grouping(&b.expr, an, env)?;
             }
         }
         for b in &mut bounds {
@@ -958,8 +982,14 @@ impl Resolver<'_> {
         info: AggInfo,
         pass: &[Attr],
     ) -> Result<Rel, AnalysisError> {
+        // Over grouping sets, the aggregate reads their expansion; the
+        // attributes it defines are part of the aggregate's id span.
+        let (input, defined) = match info.analytics.as_deref().and_then(|a| a.expand.as_ref()) {
+            Some(e) => (Arc::clone(&e.plan), e.ids),
+            None => (Arc::clone(&info.input.plan), None),
+        };
         let node = PlanNode::Aggregate {
-            input: Arc::clone(&info.input.plan),
+            input,
             grouping: Grouping::GroupBy(info.grouping.clone()),
             aggregates: info.aggregates.clone(),
         };
@@ -981,6 +1011,7 @@ impl Resolver<'_> {
                 }
             }
         };
+        r.ids = super::resolve::hull(r.ids, defined);
         let info = Arc::new(info);
         // A column the select list dropped comes back from the aggregate
         // (rebuilt with its windows and projections above it).
@@ -998,27 +1029,57 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let Grouping::GroupBy(keys) = grouping else {
-            return Err(unsupported("ROLLUP, CUBE and GROUPING SETS", p.origin));
+            return self.grouping_sets(p, input, grouping, aggregates, env);
         };
         let c = self.child(input, env)?;
-        let conf = self.ctx.conf;
-        let ordinal = |k: &Expr| match &k.node {
-            ExprNode::Literal(Literal::Integer(n)) if conf.group_by_ordinal => Some(*n),
-            _ => None,
-        };
-        let star = aggregates
-            .iter()
-            .any(|e| matches!(e.node, ExprNode::Star(_)));
-        if star && keys.iter().any(|k| ordinal(k).is_some()) {
-            return Err(AnalysisError::new(StarGroupByPos {}, Origin::UNKNOWN));
-        }
+        self.check_star_ordinals(keys, aggregates)?;
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
+        let group = self.group_keys(&c, keys, &items, env)?;
+        // No grouping (`HAVING` without `GROUP BY`): Spark's
+        // `MISSING_GROUP_BY` for an ungrouped column.
+        let global = group.is_empty();
+        self.build_aggregate(p.origin, &c, group, &items, global, None)
+    }
+
+    /// `SELECT *` with `GROUP BY n` is an error (Spark's
+    /// `STAR_GROUP_BY_POS`).
+    pub(super) fn check_star_ordinals(
+        &self,
+        keys: &[Arc<Expr>],
+        aggregates: &[Arc<Expr>],
+    ) -> Result<(), AnalysisError> {
+        let star = aggregates
+            .iter()
+            .any(|e| matches!(e.node, ExprNode::Star(_)));
+        if star && keys.iter().any(|k| self.ordinal(k).is_some()) {
+            return Err(AnalysisError::new(StarGroupByPos {}, Origin::UNKNOWN));
+        }
+        Ok(())
+    }
+
+    /// `GROUP BY n` with ordinals on: `n`.
+    fn ordinal(&self, k: &Expr) -> Option<i32> {
+        match &k.node {
+            ExprNode::Literal(Literal::Integer(n)) if self.ctx.conf.group_by_ordinal => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// The grouping expressions `keys` over `c`: an ordinal names a select
+    /// item, other names may be select-list aliases.
+    pub(super) fn group_keys(
+        &mut self,
+        c: &Rel,
+        keys: &[Arc<Expr>],
+        items: &[Bound],
+        env: &Arc<Env>,
+    ) -> Result<Vec<Bound>, AnalysisError> {
         let mut group: Vec<Option<Bound>> = vec![None; keys.len()];
         for (slot, k) in group.iter_mut().zip(keys) {
-            if let Some(n) = ordinal(k) {
-                *slot = Some(self.group_ordinal(n, k.origin, &items, &c)?);
+            if let Some(n) = self.ordinal(k) {
+                *slot = Some(self.group_ordinal(n, k.origin, items, c)?);
             }
         }
         // Spark resolves the select list first, then ordinals, then the
@@ -1026,7 +1087,7 @@ impl Resolver<'_> {
         // or implicit (`SELECT 1 GROUP BY `1`` groups by the literal): the
         // aliases are the items' output names over the expressions that
         // compute them, searched after the input.
-        let aliases: Vec<(String, Arc<Expr>)> = if conf.group_by_aliases {
+        let aliases: Vec<(String, Arc<Expr>)> = if self.ctx.conf.group_by_aliases {
             items
                 .iter()
                 .map(|b| {
@@ -1041,7 +1102,7 @@ impl Resolver<'_> {
         } else {
             Vec::new()
         };
-        let rels = [&c];
+        let rels = [c];
         for (slot, k) in group.iter_mut().zip(keys) {
             if slot.is_none() {
                 let mut cx = Self::cx(&c.out, &rels, env, "Aggregate");
@@ -1050,11 +1111,8 @@ impl Resolver<'_> {
             }
         }
         let group: Vec<Bound> = group.into_iter().flatten().collect();
-        self.check_grouping(&group, &items)?;
-        // No grouping (`HAVING` without `GROUP BY`): Spark's
-        // `MISSING_GROUP_BY` for an ungrouped column.
-        let global = group.is_empty();
-        self.build_aggregate(p.origin, &c, group, &items, global)
+        self.check_grouping(&group, items)?;
+        Ok(group)
     }
 
     /// Spark's `GROUP_BY_AGGREGATE` and
@@ -1155,6 +1213,7 @@ impl Resolver<'_> {
         group: Vec<Bound>,
         items: &[Bound],
         global: bool,
+        analytics: Option<Arc<Analytics>>,
     ) -> Result<Rel, AnalysisError> {
         let mut memo = HashMap::new();
         let gkeys: Vec<(u128, ArgType)> = group
@@ -1170,22 +1229,37 @@ impl Resolver<'_> {
             .cloned()
             .collect();
         self.check_aggregation(&base, &key_set, &mut memo, origin, global)?;
-        let keys: Vec<Attr> = group
-            .iter()
-            .filter_map(|b| match &b.expr.node {
-                ExprNode::Resolved(ResolvedExpr::Column(col)) => {
-                    c.out.iter().find(|a| a.col.id == col.id).cloned()
-                }
-                _ => None,
-            })
-            .collect();
+        // Over grouping sets, the grouping attributes are the expansion's.
+        let (keys, scope): (Vec<Attr>, Vec<Attr>) = match &analytics {
+            Some(a) => (
+                a.keys(),
+                c.out
+                    .iter()
+                    .chain(a.exprs.iter().map(|g| &g.attr))
+                    .cloned()
+                    .collect(),
+            ),
+            None => (
+                group
+                    .iter()
+                    .filter_map(|b| match &b.expr.node {
+                        ExprNode::Resolved(ResolvedExpr::Column(col)) => {
+                            c.out.iter().find(|a| a.col.id == col.id).cloned()
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                c.out.to_vec(),
+            ),
+        };
         let mut info = AggInfo {
             input: c.clone(),
             grouping: group.into_iter().map(|b| b.expr).collect(),
             aggregates: base.iter().map(|b| Arc::clone(&b.expr)).collect(),
-            out: base.iter().map(|b| out_attr(b, &c.out)).collect(),
+            out: base.iter().map(|b| out_attr(b, &scope)).collect(),
             keys,
             top: None,
+            analytics,
             having: None,
         };
         if base.len() == items.len() {
@@ -1198,7 +1272,7 @@ impl Resolver<'_> {
         let mut top = Vec::new();
         for b in items {
             if b.lateral.is_empty() && b.win.is_none() {
-                let a = out_attr(b, &c.out);
+                let a = out_attr(b, &scope);
                 top.push(Bound {
                     expr: col_expr(&a.col, b.expr.origin),
                     ..b.clone()
@@ -1715,6 +1789,11 @@ impl Resolver<'_> {
                 .map(|(o, expr)| SortOrder { expr, ..o.clone() })
                 .collect()
         };
+        // Over no grouping sets, `ORDER BY grouping(..)` is rejected before
+        // its argument resolves (`HAVING` reports the argument first).
+        if c.agg.as_ref().is_none_or(|a| a.analytics.is_none()) {
+            super::analytics::reject_grouping_calls(&exprs)?;
+        }
         // Over an aggregate with windows, Spark's `ORDER BY` reads the
         // select list only (nothing resolves through the windows).
         let (bounds, below, extended) = if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {

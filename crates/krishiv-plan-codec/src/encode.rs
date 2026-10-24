@@ -243,6 +243,30 @@ impl Encoder {
                 input: self.node_index(input)?,
             }),
             PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
+            PhysNode::Expand {
+                input,
+                layout: l,
+                projections,
+                nullable,
+                subqueries,
+            } => {
+                // An older reader has no `Expand` node to read.
+                self.min_reader = self.min_reader.max(5);
+                Kind::Expand(pb::ExpandNode {
+                    input: self.node_index(input)?,
+                    layout: layout(l),
+                    projections: projections
+                        .iter()
+                        .map(|items| {
+                            Ok(pb::ExpandProjection {
+                                items: items.iter().map(|i| self.item(i)).collect::<Result<_>>()?,
+                            })
+                        })
+                        .collect::<Result<_>>()?,
+                    nullable: nullable.clone(),
+                    subqueries: self.subqueries(subqueries)?,
+                })
+            }
         };
         Ok(pb::Node { kind: Some(kind) })
     }
@@ -276,6 +300,14 @@ impl Encoder {
                     name: name.clone(),
                     expr: self.expr(expr)?,
                 }),
+                ProjectItemPlan::NullOf { index, name } => {
+                    // An older reader has no such item to read.
+                    self.min_reader = self.min_reader.max(5);
+                    Kind::NullOf(pb::ProjectNullOf {
+                        index: *index as u64,
+                        name: name.clone(),
+                    })
+                }
             }),
         })
     }
