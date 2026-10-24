@@ -559,11 +559,13 @@ Query {
                                                 ),
                                                 alias: Some(
                                                     TableAlias {
-                                                        name: Ident {
-                                                            value: "h",
-                                                            quoted: false,
-                                                            span: 133..134,
-                                                        },
+                                                        name: Some(
+                                                            Ident {
+                                                                value: "h",
+                                                                quoted: false,
+                                                                span: 133..134,
+                                                            },
+                                                        ),
                                                         columns: [],
                                                         span: 133..134,
                                                     },
@@ -711,11 +713,13 @@ Query {
                                     ),
                                     alias: Some(
                                         TableAlias {
-                                            name: Ident {
-                                                value: "s",
-                                                quoted: false,
-                                                span: 41..42,
-                                            },
+                                            name: Some(
+                                                Ident {
+                                                    value: "s",
+                                                    quoted: false,
+                                                    span: 41..42,
+                                                },
+                                            ),
                                             columns: [
                                                 Ident {
                                                     value: "b",
@@ -789,11 +793,13 @@ Query {
                                     ),
                                     alias: Some(
                                         TableAlias {
-                                            name: Ident {
-                                                value: "j",
-                                                quoted: false,
-                                                span: 62..63,
-                                            },
+                                            name: Some(
+                                                Ident {
+                                                    value: "j",
+                                                    quoted: false,
+                                                    span: 62..63,
+                                                },
+                                            ),
                                             columns: [],
                                             span: 59..63,
                                         },
@@ -842,11 +848,13 @@ Query {
                                     ),
                                     alias: Some(
                                         TableAlias {
-                                            name: Ident {
-                                                value: "v",
-                                                quoted: false,
-                                                span: 76..77,
-                                            },
+                                            name: Some(
+                                                Ident {
+                                                    value: "v",
+                                                    quoted: false,
+                                                    span: 76..77,
+                                                },
+                                            ),
                                             columns: [],
                                             span: 76..77,
                                         },
@@ -959,11 +967,13 @@ Query {
                                     },
                                     alias: Some(
                                         TableAlias {
-                                            name: Ident {
-                                                value: "r",
-                                                quoted: false,
-                                                span: 34..35,
-                                            },
+                                            name: Some(
+                                                Ident {
+                                                    value: "r",
+                                                    quoted: false,
+                                                    span: 34..35,
+                                                },
+                                            ),
                                             columns: [],
                                             span: 34..35,
                                         },
@@ -1097,11 +1107,13 @@ Query {
                                     ),
                                     alias: Some(
                                         TableAlias {
-                                            name: Ident {
-                                                value: "u",
-                                                quoted: false,
-                                                span: 67..68,
-                                            },
+                                            name: Some(
+                                                Ident {
+                                                    value: "u",
+                                                    quoted: false,
+                                                    span: 67..68,
+                                                },
+                                            ),
                                             columns: [],
                                             span: 67..68,
                                         },
@@ -2189,11 +2201,13 @@ Query {
                                     },
                                     alias: Some(
                                         TableAlias {
-                                            name: Ident {
-                                                value: "t",
-                                                quoted: false,
-                                                span: 19..20,
-                                            },
+                                            name: Some(
+                                                Ident {
+                                                    value: "t",
+                                                    quoted: false,
+                                                    span: 19..20,
+                                                },
+                                            ),
                                             columns: [],
                                             span: 19..20,
                                         },
@@ -2245,11 +2259,13 @@ Query {
                                     },
                                     alias: Some(
                                         TableAlias {
-                                            name: Ident {
-                                                value: "AS",
-                                                quoted: false,
-                                                span: 32..34,
-                                            },
+                                            name: Some(
+                                                Ident {
+                                                    value: "AS",
+                                                    quoted: false,
+                                                    span: 32..34,
+                                                },
+                                            ),
                                             columns: [],
                                             span: 32..34,
                                         },
@@ -2278,11 +2294,13 @@ Query {
                                     },
                                     alias: Some(
                                         TableAlias {
-                                            name: Ident {
-                                                value: "WHERE",
-                                                quoted: false,
-                                                span: 38..43,
-                                            },
+                                            name: Some(
+                                                Ident {
+                                                    value: "WHERE",
+                                                    quoted: false,
+                                                    span: 38..43,
+                                                },
+                                            ),
                                             columns: [],
                                             span: 38..43,
                                         },
