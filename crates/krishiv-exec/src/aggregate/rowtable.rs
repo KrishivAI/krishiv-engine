@@ -508,23 +508,30 @@ impl RowTable {
 
     /// Bytes of the gathered argument columns of a fold touching several
     /// partitions, `counts` rows each: one partition's at a time, so the
-    /// largest partition's share of the columns.
+    /// largest partition's share of the fixed-width columns, and the full
+    /// columns without a primitive width (their values are not spread
+    /// evenly: a partition with few rows can gather most of their bytes).
     fn gather_bytes(&self, cols: &[ArrayRef], fold: Fold, w: &Weights, counts: &[usize]) -> usize {
         let used = self.used(cols.len(), fold);
-        let cols: usize = cols
-            .iter()
-            .zip(&used)
-            .filter(|(_, u)| **u)
-            .map(|(c, _)| c.get_array_memory_size())
-            .sum();
-        let all = cols
-            + match w {
-                Weights::Column(c) => c.get_array_memory_size(),
-                Weights::Const(_) => 0,
-            };
+        let (mut fixed, mut varied) = (0usize, 0usize);
+        for (c, u) in cols.iter().zip(&used) {
+            if !u {
+                continue;
+            }
+            if c.data_type().primitive_width().is_some() {
+                fixed += c.get_array_memory_size();
+            } else {
+                varied += c.get_array_memory_size();
+            }
+        }
+        // Weights are `Int64`: one value per row, so a proportional share.
+        fixed += match w {
+            Weights::Column(c) => c.get_array_memory_size(),
+            Weights::Const(_) => 0,
+        };
         let rows: usize = counts.iter().sum();
         let most = counts.iter().copied().max().unwrap_or(0);
-        all.saturating_mul(most).div_ceil(rows.max(1))
+        varied + fixed.saturating_mul(most).div_ceil(rows.max(1))
     }
 
     /// [`memory_size`](Self::memory_size) after [`apply`](Self::apply)ing
@@ -1326,7 +1333,7 @@ impl RowTable {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::Int64Array;
+    use arrow_array::{Int64Array, StringArray};
     use arrow_schema::{DataType, Field, Schema};
 
     use super::*;
@@ -1622,6 +1629,65 @@ mod tests {
         assert_eq!((many.part(r), many.row(r)), (PARTS - 1, 7));
         // Never more than RADIX_BITS.
         assert_eq!(Refs::new(9), many);
+    }
+
+    /// A partition with few rows can hold most of a variable-width
+    /// argument column's bytes, so the gather bound charges the full
+    /// column for types without a primitive width.
+    #[test]
+    fn gather_bytes_covers_skewed_var_width() {
+        let s = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, true),
+            Field::new("v", DataType::Utf8, true),
+        ]));
+        let spec = AggregateSpec {
+            input: Arc::clone(&s),
+            group_by: vec![0],
+            aggregates: vec![AggregateExpr::new(
+                AggregateFunction::Min,
+                1,
+                DataType::Utf8,
+                "m",
+            )],
+            output: AggregateOutput::Final,
+            ansi: true,
+            spill: None,
+            require_unit_weights: false,
+        };
+        let core = Arc::new(AggCore::new(spec).unwrap());
+        let seed = HashSeed::new(Some(6));
+        let t = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+        // Exact-capacity values: a grown `Vec` can leave slack in the
+        // values buffer, which would hide the skew.
+        let mut values = Vec::with_capacity(4103);
+        values.extend(std::iter::repeat_n(b'x', 4096));
+        values.extend(std::iter::repeat_n(b'y', 7));
+        let mut offsets = Vec::with_capacity(9);
+        offsets.push(0i32);
+        offsets.push(4096);
+        for i in 1..=7 {
+            offsets.push(4096 + i);
+        }
+        let strings: ArrayRef = Arc::new(StringArray::new(
+            arrow_buffer::OffsetBuffer::new(offsets.into()),
+            arrow_buffer::Buffer::from_vec(values),
+            None,
+        ));
+        let keys: ArrayRef = Arc::new(Int64Array::from(vec![0; 8]));
+        let cols = vec![keys, Arc::clone(&strings)];
+        let mut counts = vec![0; PARTS];
+        counts[0] = 1;
+        counts[1] = 7;
+        let got = t.gather_bytes(&cols, Fold::Raw, &Weights::Const(1), &counts);
+        let take = |idx: &[u32]| {
+            arrow_select::take::take(strings.as_ref(), &UInt32Array::from(idx.to_vec()), None)
+                .unwrap()
+                .get_array_memory_size()
+        };
+        let small = take(&[0]);
+        let large = take(&[1, 2, 3, 4, 5, 6, 7]);
+        assert!(got >= small, "{got} < {small}");
+        assert!(got >= large, "{got} < {large}");
     }
 
     /// Partitions split out of a table carry their rows and states; the
