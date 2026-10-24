@@ -61,7 +61,7 @@ def test_manifest_records_what_is_needed_to_reproduce(tiny: Path):
 def test_verify_notices_a_changed_file(tiny: Path, tmp_path: Path):
     copy = md.generate(TINY, tmp_path)
     assert h2o_data.verify(copy) == []
-    duckdb.execute(
+    duckdb.connect().execute(
         f"COPY (SELECT * REPLACE (v1 + 1 AS v1) FROM read_parquet('{copy / 'fact.parquet'}')) "
         f"TO '{tmp_path / 'edited.parquet'}' (FORMAT parquet)"
     )
@@ -122,7 +122,7 @@ def test_match_rate_follows_the_requested_share(tiny: Path, pct: int):
         f"SELECT COUNT(*) FROM read_parquet('{tiny / 'fact.parquet'}') f "
         f"JOIN read_parquet('{tiny / 'build_1e3.parquet'}') b ON f.{md.col_ji(1_000, pct)} = b.k"
     )
-    (n,) = duckdb.execute(q).fetchone()  # ty: ignore[not-iterable]
+    (n,) = duckdb.connect().execute(q).fetchone()  # ty: ignore[not-iterable]
     # each probe row matches with probability pct/100 (binomial, sd 0.4% of the rows at worst)
     assert abs(n - TINY.rows * pct / 100) < 0.02 * TINY.rows
 
