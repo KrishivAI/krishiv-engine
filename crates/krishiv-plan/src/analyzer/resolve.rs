@@ -497,7 +497,10 @@ impl Resolver<'_> {
         let text = if nondeterministic {
             "\"_nondeterministic\"".to_owned()
         } else {
-            format!("\"{}\"", super::exprs::pretty(&b.shown()))
+            format!(
+                "\"{}\"",
+                super::exprs::pretty(&b.shown(), self.ctx.conf.session_zone)
+            )
         };
         let name = name.to_owned();
         let folded = if unfoldable {

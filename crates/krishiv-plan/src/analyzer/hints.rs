@@ -250,7 +250,7 @@ fn shown(e: &Expr) -> String {
     match &e.node {
         ExprNode::Column(c) => c.name.join("."),
         ExprNode::Literal(Literal::String(s)) => format!("'{s}'"),
-        _ => pretty(e),
+        _ => pretty(e, None),
     }
 }
 
@@ -263,7 +263,7 @@ fn bad_parameter(e: &Expr) -> AnalysisError {
     };
     AnalysisError::new(
         LegacyErrorTemp1046 {
-            unsupported: format!("\"{}\"", pretty(e)),
+            unsupported: format!("\"{}\"", pretty(e, None)),
             class: format!("class {class}"),
         },
         e.origin,

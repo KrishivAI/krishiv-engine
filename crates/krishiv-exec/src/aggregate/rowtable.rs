@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Row-layout aggregation tables (P2-T159, `krishiv.exec.agg.rowLayout`).
 //!
-//! A [`RowTable`] keeps its groups' keys as fixed-width [`RowLayout`] rows,
+//! A [`RowTable`] keeps its groups' keys as fixed-stride [`RowLayout`] rows,
 //! one row per group, in up to [`PARTS`] radix partitions chosen by the top
 //! bits of the row hash. Each partition owns its rows and its aggregates'
 //! states (the same [`Accumulator`]s as the default path): a group's id in
@@ -9,8 +9,14 @@
 //! a row is only its key,
 //!
 //! ```text
-//! | h u64 | key validity | keys ... |
+//! | h u64 | key validity | views 16 B ... | fixed keys ... |
 //! ```
+//!
+//! A string or binary key is a 16-byte view: its length, then the bytes
+//! inline (up to 12), or a 4-byte prefix and the offset of the bytes in the
+//! partition's heap. Equal keys have equal bytes but for the heap offset,
+//! so fixed-width keys compare as words and views compare their length and
+//! prefix word first, then the inline word or the heap bytes.
 //!
 //! and a partition is self-contained: the final phase moves partitions
 //! between tables and frees each one once it is merged (P2-T171 I2: state
@@ -53,7 +59,16 @@
 //! partitions, the argument columns are gathered once in partition order
 //! (a stable counting sort, so each group still sees its rows in input
 //! order) and each partition folds a zero-copy slice. A table with one
-//! partition (one thread, no final merge) never gathers.
+//! partition never gathers.
+//!
+//! # Width
+//! A thread-local table starts with **one partition** and widens to its
+//! radix partitions at [`WIDEN_GROUPS`] groups ([`RowTable::widen`]: rows,
+//! long key bytes and states are spread by `h`, in row order), so a
+//! low-cardinality aggregate never pays the per-partition fold (DuckDB's
+//! thread-local tables also start small and repartition as they grow).
+//! Widening is a cost choice: a table that cannot reserve the copy stays
+//! narrow. One thread never widens (nothing merges in parallel).
 //!
 //! # Memory
 //! [`projected`](RowTable::projected) bounds the bytes after an apply
@@ -200,6 +215,17 @@ fn word(row: &[u8], at: usize) -> u64 {
         .map_or(0, u64::from_le_bytes)
 }
 
+/// Groups at which a narrow thread-local table widens to its radix
+/// partitions (the final phase's groups per task): below it the table
+/// design does not matter (P2-T159 step 0) and one partition saves the
+/// per-partition fold.
+pub(crate) const WIDEN_GROUPS: usize = 32_768;
+
+/// Rows from which a thread-local table keeps per-partition sketches: a
+/// smaller table's row count is its own estimate, and 16 sketches would
+/// cost more than its rows under a tight memory limit.
+const SKETCH_ROWS: usize = 4096;
+
 /// Register bits of the per-partition sketches.
 const PART_HLL_BITS: u32 = 10;
 /// Register bits of a fixed index's input sample.
@@ -220,6 +246,9 @@ pub(crate) struct RowPrepared {
     keys: EncodedKeys,
     /// Rows per radix partition (bounds each partition's growth).
     counts: [usize; PARTS],
+    /// Long key bytes per radix partition (bounds each heap's growth;
+    /// empty without string or binary keys).
+    heap_counts: Vec<usize>,
     cols: Vec<ArrayRef>,
     weights: Weights,
     states: bool,
@@ -233,6 +262,8 @@ pub(crate) struct MergeChunk {
     refs: Vec<u32>,
     /// Their states, in the state layout (every aggregate's columns).
     states: Vec<ArrayRef>,
+    /// Their long key bytes.
+    heap: usize,
 }
 
 /// One radix partition: its rows and its groups' states (group `i` is row
@@ -241,12 +272,17 @@ pub(crate) struct MergeChunk {
 #[derive(Debug, Default)]
 struct Part {
     rows: Vec<u8>,
+    /// The bytes of the rows' long string and binary keys (views longer
+    /// than inline point here). Append-only: a group's key never changes.
+    heap: Vec<u8>,
     accs: Vec<Accumulator>,
 }
 
 impl Part {
     fn bytes(&self) -> usize {
-        self.rows.capacity() + self.accs.iter().map(Accumulator::size).sum::<usize>()
+        self.rows.capacity()
+            + self.heap.capacity()
+            + self.accs.iter().map(Accumulator::size).sum::<usize>()
     }
 }
 
@@ -271,9 +307,22 @@ pub(crate) struct RowTable {
     bits: u32,
     /// How row references split.
     refs: Refs,
+    /// The key layout when it has string or binary views (their compare
+    /// and copy need it); `None` for fixed-width keys.
+    views: Option<RowLayout>,
     parts: Vec<Part>,
-    /// Per-partition sketches of the rows' `h` (thread-local tables).
+    /// Per-partition sketches of the rows' `h` (thread-local tables, from
+    /// [`SKETCH_ROWS`] rows).
     sketches: Option<Vec<Hll>>,
+    /// Whether the table keeps sketches once large enough (a thread-local
+    /// table with several partitions).
+    sketching: bool,
+    /// A thread-local table (sketches, adaptation, widening).
+    local: bool,
+    /// Radix bits a narrow table widens to at `widen_at` groups (none when
+    /// equal to `bits`).
+    widen_to: u32,
+    widen_at: usize,
     index: HashTable<u32>,
     mode: Mode,
     adapt: Option<Adapt>,
@@ -303,6 +352,7 @@ impl RowTable {
             .map(|_| {
                 Ok(Part {
                     rows: Vec::new(),
+                    heap: Vec::new(),
                     accs: new_accs(core)?,
                 })
             })
@@ -313,8 +363,13 @@ impl RowTable {
             stride: layout.stride(),
             bits,
             refs: Refs::new(bits),
+            views: layout.has_views().then(|| layout.clone()),
             parts,
-            sketches: local.then(|| (0..nparts).map(|_| Hll::new(PART_HLL_BITS)).collect()),
+            sketches: None,
+            sketching: local && nparts > 1,
+            local,
+            widen_to: bits,
+            widen_at: WIDEN_GROUPS,
             index: HashTable::new(),
             mode,
             adapt: (local && matches!(mode, Mode::Fixed { .. })).then(|| Adapt {
@@ -339,6 +394,128 @@ impl RowTable {
     pub(crate) fn with_abandons(mut self, counter: Arc<AtomicU64>) -> Self {
         self.abandons = Some(counter);
         self
+    }
+
+    /// Widens the table to `bits` radix partitions once it holds `at`
+    /// groups (see [`widen`](Self::widen)).
+    pub(crate) fn widening(mut self, bits: u32, at: usize) -> Self {
+        self.widen_to = bits.min(RADIX_BITS).max(self.bits);
+        self.widen_at = at;
+        self
+    }
+
+    /// Whether the table is due to widen ([`widen`](Self::widen)): the
+    /// caller widens it when it can reserve
+    /// [`widen_bytes`](Self::widen_bytes); a table that cannot stays narrow
+    /// (only a cost choice) and is asked again later.
+    pub(crate) fn wants_widen(&self) -> bool {
+        self.widen_to > self.bits && self.groups >= self.widen_at
+    }
+
+    /// Spreads the rows (with their long key bytes) and states over
+    /// `1 << widen_to` radix partitions of `h`, in row order, so each
+    /// group's states are unchanged. A growing index is rebuilt over the
+    /// new rows; a fixed one is cleared (as when full: later rows of its
+    /// keys become partial duplicates); append mode has none. Partition
+    /// sketches start from the rows.
+    pub(crate) fn widen(&mut self) -> Result<()> {
+        if self.widen_to <= self.bits {
+            return Ok(());
+        }
+        let (bits, refs) = (self.widen_to, Refs::new(self.widen_to));
+        let stride = self.stride;
+        let nparts = 1usize << bits;
+        let old = std::mem::take(&mut self.parts);
+        let mut parts = (0..nparts)
+            .map(|_| {
+                Ok(Part {
+                    rows: Vec::new(),
+                    heap: Vec::new(),
+                    accs: new_accs(&self.core)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for part in &old {
+            // Rows per new partition first, so each grows once and exactly
+            // (no doubling slack: widening runs under a memory limit too).
+            let mut ids: Vec<Vec<u32>> = vec![Vec::new(); nparts];
+            let mut heap = vec![0; nparts];
+            for (i, row) in (0u32..).zip(part.rows.chunks_exact(stride)) {
+                let p = part_of(word(row, 0), bits);
+                ids[p].push(i);
+                if let Some(l) = &self.views {
+                    heap[p] += l.long_bytes(row);
+                }
+            }
+            for ((dst, ids), &bytes) in parts.iter_mut().zip(&ids).zip(&heap) {
+                if ids.is_empty() {
+                    continue;
+                }
+                dst.rows.reserve_exact(ids.len() * stride);
+                dst.heap.reserve_exact(bytes);
+                for &i in ids {
+                    let at = i as usize * stride;
+                    let row = part
+                        .rows
+                        .get(at..at + stride)
+                        .ok_or_else(|| internal("a row outside its partition".to_owned()))?;
+                    match &self.views {
+                        Some(l) => l.push_row(row, &part.heap, &mut dst.rows, &mut dst.heap)?,
+                        None => dst.rows.extend_from_slice(row),
+                    }
+                }
+                let start = dst.rows.len() / stride - ids.len();
+                let to: Vec<u32> = (start..start + ids.len())
+                    .map(|r| u32::try_from(r).unwrap_or(u32::MAX))
+                    .collect();
+                for (acc, from) in dst.accs.iter_mut().zip(&part.accs) {
+                    acc.resize(start + ids.len());
+                    acc.merge(&to, &from.state(ids)?)?;
+                }
+            }
+        }
+        drop(old);
+        self.parts = parts;
+        self.bits = bits;
+        self.refs = refs;
+        self.sketching = self.local;
+        self.index = HashTable::new();
+        match self.mode {
+            Mode::Grow => {
+                let (gseed, all) = (self.gseed, self.ids(0..self.groups));
+                self.index.reserve(all.len(), |_| 0);
+                for r in all {
+                    let g = fin(word(row_at(&self.parts, stride, refs, r), 0), gseed);
+                    let parts = &self.parts;
+                    self.index.insert_unique(g, r, |&o| {
+                        fin(word(row_at(parts, stride, refs, o), 0), gseed)
+                    });
+                }
+            }
+            Mode::Fixed { .. } => self.unique &= self.groups == 0,
+            Mode::Append => {}
+        }
+        self.start_sketches(0);
+        Ok(())
+    }
+
+    /// Bytes [`widen`](Self::widen) needs beyond the table's while it
+    /// runs: the copy of its rows and states (at most the table's bytes),
+    /// the state arrays of one new partition at a time (at most the
+    /// states' bytes, twice for validity and offsets), the row lists and
+    /// references (two `u32` per group, plus per-partition list headers),
+    /// and the sketches it starts.
+    pub(crate) fn widen_bytes(&self) -> usize {
+        let nparts = 1usize << self.widen_to;
+        let accs: usize = self
+            .parts
+            .iter()
+            .flat_map(|p| &p.accs)
+            .map(Accumulator::size)
+            .sum();
+        let lists = 2 * self.groups * size_of::<u32>()
+            + nparts * (2 * size_of::<Vec<u32>>() + size_of::<usize>());
+        self.memory_size() + 2 * accs + lists + nparts * Hll::new(PART_HLL_BITS).bytes()
     }
 
     /// Buckets of the index (its capacity).
@@ -387,6 +564,42 @@ impl RowTable {
             + self.adapt.as_ref().map_or(0, |a| a.sketch.bytes())
     }
 
+    /// Whether an apply of `n` more rows starts the sketches.
+    fn starts_sketches(&self, n: usize) -> bool {
+        self.sketching && self.sketches.is_none() && self.groups + n >= SKETCH_ROWS
+    }
+
+    /// [`sketch_bytes`](Self::sketch_bytes) after an apply of `n` rows.
+    fn projected_sketch_bytes(&self, n: usize) -> usize {
+        let new = if self.starts_sketches(n) {
+            self.parts.len() * Hll::new(PART_HLL_BITS).bytes()
+        } else {
+            0
+        };
+        self.sketch_bytes() + new
+    }
+
+    /// Starts the per-partition sketches from the rows so far, if an apply
+    /// of `n` rows reaches [`SKETCH_ROWS`].
+    fn start_sketches(&mut self, n: usize) {
+        if !self.starts_sketches(n) {
+            return;
+        }
+        let stride = self.stride;
+        let sketches = self
+            .parts
+            .iter()
+            .map(|part| {
+                let mut h = Hll::new(PART_HLL_BITS);
+                part.rows
+                    .chunks_exact(stride)
+                    .for_each(|row| h.add(word(row, 0)));
+                h
+            })
+            .collect();
+        self.sketches = Some(sketches);
+    }
+
     /// Encodes the keys of a batch (`states`: in the state layout).
     pub(crate) fn prepare(&self, b: &Batch, states: bool) -> Result<RowPrepared> {
         let cols = b.data().columns();
@@ -409,12 +622,31 @@ impl RowTable {
         // Seed 0: `h` is seedless (Appendix C).
         let keys = layout(&self.core)?.encode(&keys, 0)?;
         let mut counts = [0; PARTS];
-        for &h in keys.hashes() {
-            counts[part_of(h, self.bits)] += 1;
+        let mut heap_counts = Vec::new();
+        // One partition (a narrow table) needs no per-row pass: all rows,
+        // and all the batch heap's bytes (only long values go there), are
+        // its; a batch without long values adds no heap bytes anywhere.
+        if self.bits == 0 {
+            counts[0] = keys.len();
+        } else {
+            for &h in keys.hashes() {
+                counts[part_of(h, self.bits)] += 1;
+            }
+        }
+        if let Some(l) = &self.views {
+            heap_counts = vec![0; PARTS];
+            if self.bits == 0 {
+                heap_counts[0] = keys.heap().len();
+            } else if !keys.heap().is_empty() {
+                for (i, &h) in keys.hashes().iter().enumerate() {
+                    heap_counts[part_of(h, self.bits)] += l.long_bytes(keys.row(i));
+                }
+            }
         }
         Ok(RowPrepared {
             keys,
             counts,
+            heap_counts,
             cols: cols.to_vec(),
             weights: b.weights().clone(),
             states,
@@ -541,12 +773,16 @@ impl RowTable {
         let rows: usize = self
             .parts
             .iter()
-            .zip(p.counts)
-            .map(|(v, c)| grown(&v.rows, c * self.stride))
+            .zip(
+                p.counts
+                    .iter()
+                    .zip(p.heap_counts.iter().chain(std::iter::repeat(&0))),
+            )
+            .map(|(v, (c, &b))| grown(&v.rows, c * self.stride) + grown(&v.heap, b))
             .sum();
         rows + self.index_bytes(self.next_mode(), n)
             + self.projected_accs(&p.counts, &p.cols, Self::fold_of(p))
-            + self.sketch_bytes()
+            + self.projected_sketch_bytes(n)
     }
 
     /// Bytes [`apply`](Self::apply)ing `p` needs while it runs and frees
@@ -558,7 +794,7 @@ impl RowTable {
         } else {
             0
         };
-        Self::scratch(p.keys.len()) + gather
+        Self::scratch(p.keys.len()) + gather + p.keys.bytes()
     }
 
     fn fold_of(p: &RowPrepared) -> Fold {
@@ -589,6 +825,7 @@ impl RowTable {
     pub(crate) fn apply(&mut self, p: &RowPrepared) -> Result<()> {
         let n = p.keys.len();
         self.switch(self.next_mode());
+        self.start_sketches(n);
         if let Some(a) = self.adapt.as_mut() {
             a.rows += n;
             for &h in p.keys.hashes().iter().filter(|&&h| h & 7 == 0) {
@@ -597,6 +834,11 @@ impl RowTable {
         }
         for (v, c) in self.parts.iter_mut().zip(p.counts) {
             v.rows.reserve(c * self.stride);
+        }
+        // Heaps grow once per batch, as `projected` assumed (not by
+        // doubling per value).
+        for (v, &b) in self.parts.iter_mut().zip(&p.heap_counts) {
+            v.heap.reserve(b);
         }
         let mut refs = Vec::with_capacity(n);
         let before = self.groups;
@@ -772,33 +1014,49 @@ impl RowTable {
 
     /// The row of each row of `keys`, inserting new groups.
     fn lookup(&mut self, keys: &EncodedKeys, refs: &mut Vec<u32>) -> Result<()> {
-        let hashes = keys.hashes();
+        let (hashes, heap) = (keys.hashes(), keys.heap());
         match self.mode {
             Mode::Append => {
                 self.unique &= keys.is_empty();
                 for (k, &h) in hashes.iter().enumerate() {
-                    refs.push(self.push(keys.row(k), h)?);
+                    refs.push(self.push(keys.row(k), heap, h)?);
                 }
             }
-            Mode::Fixed { limit } => {
-                for (k, &h) in hashes.iter().enumerate() {
-                    refs.push(self.find_or_insert(keys.row(k), h, limit)?);
-                }
+            Mode::Fixed { limit } => self.probe_all(keys, refs, limit)?,
+            Mode::Grow => self.probe_all(keys, refs, usize::MAX)?,
+        }
+        Ok(())
+    }
+
+    /// [`find_or_insert`](Self::find_or_insert) for every row of `keys`, in
+    /// one loop per key shape: the probe's compare of fixed-width keys has
+    /// no view branch, so it stays small enough to inline.
+    fn probe_all(&mut self, keys: &EncodedKeys, refs: &mut Vec<u32>, limit: usize) -> Result<()> {
+        let (hashes, heap) = (keys.hashes(), keys.heap());
+        if self.views.is_some() {
+            for (k, &h) in hashes.iter().enumerate() {
+                refs.push(self.find_or_insert::<true>(keys.row(k), heap, h, limit)?);
             }
-            Mode::Grow => {
-                for (k, &h) in hashes.iter().enumerate() {
-                    refs.push(self.find_or_insert(keys.row(k), h, usize::MAX)?);
-                }
+        } else {
+            for (k, &h) in hashes.iter().enumerate() {
+                refs.push(self.find_or_insert::<false>(keys.row(k), heap, h, limit)?);
             }
         }
         Ok(())
     }
 
-    /// The row of key row `key` (with hash `h`), inserting it if new; an
-    /// index holding `limit` keys is cleared before it takes another (the
-    /// rows stay: a key seen again gets a new row).
+    /// The row of key row `key` (with hash `h`; its long values in
+    /// `key_heap`), inserting it if new; an index holding `limit` keys is
+    /// cleared before it takes another (the rows stay: a key seen again
+    /// gets a new row). `VIEWS`: the layout has string or binary views.
     #[inline(always)]
-    fn find_or_insert(&mut self, key: &[u8], h: u64, limit: usize) -> Result<u32> {
+    fn find_or_insert<const VIEWS: bool>(
+        &mut self,
+        key: &[u8],
+        key_heap: &[u8],
+        h: u64,
+        limit: usize,
+    ) -> Result<u32> {
         let Self {
             parts,
             sketches,
@@ -810,6 +1068,7 @@ impl RowTable {
             gseed,
             bits,
             refs,
+            views,
             ..
         } = self;
         let (stride, gseed) = (*stride, *gseed);
@@ -817,14 +1076,19 @@ impl RowTable {
         // A lookup first (hashbrown inlines `find`; most rows are hits),
         // then an insert on a miss.
         let found = index
-            .find(g, |&r| {
-                same_key(row_at(parts, stride, *refs, r), key, stride)
+            .find(g, |&r| match views {
+                Some(l) if VIEWS => {
+                    let (row, heap) = row_heap_at(parts, stride, *refs, r);
+                    !row.is_empty() && l.eq(row, heap, key, key_heap)
+                }
+                _ => same_key(row_at(parts, stride, *refs, r), key, stride),
             })
             .copied();
         if let Some(r) = found {
             return Ok(r);
         }
-        let r = push_row(parts, sketches, groups, stride, (*bits, *refs), key, h)?;
+        let shape = (stride, *bits, *refs, views.as_ref());
+        let r = push_row(parts, sketches, groups, shape, (key, key_heap), h)?;
         if index.len() >= limit {
             index.clear();
             *unique = false;
@@ -839,14 +1103,13 @@ impl RowTable {
         Ok(r)
     }
 
-    fn push(&mut self, key: &[u8], h: u64) -> Result<u32> {
+    fn push(&mut self, key: &[u8], key_heap: &[u8], h: u64) -> Result<u32> {
         push_row(
             &mut self.parts,
             &mut self.sketches,
             &mut self.groups,
-            self.stride,
-            (self.bits, self.refs),
-            key,
+            (self.stride, self.bits, self.refs, self.views.as_ref()),
+            (key, key_heap),
             h,
         )
     }
@@ -914,7 +1177,24 @@ impl RowTable {
     }
 
     fn key_columns(&self, refs: &[u32]) -> Result<Vec<ArrayRef>> {
-        layout(&self.core)?.decode(&self.rows_of(refs)?)
+        let rows = self.rows_of(refs)?;
+        match &self.views {
+            None => layout(&self.core)?.decode(&rows),
+            Some(l) => {
+                let with_heaps: Vec<(&[u8], &[u8])> = refs
+                    .iter()
+                    .zip(rows)
+                    .map(|(&r, row)| {
+                        let heap = self
+                            .parts
+                            .get(self.refs.part(r))
+                            .map_or(&[][..], |p| p.heap.as_slice());
+                        (row, heap)
+                    })
+                    .collect();
+                l.decode_rows(&with_heaps)
+            }
+        }
     }
 
     /// `f` of each partition's accumulators and its groups among `refs`
@@ -1008,32 +1288,48 @@ impl RowTable {
         for a in &part.accs {
             states.extend(a.state(&ids)?);
         }
+        let heap = match &self.views {
+            Some(l) => refs
+                .iter()
+                .map(|&r| l.long_bytes(row_at(&self.parts, self.stride, self.refs, r)))
+                .sum(),
+            None => 0,
+        };
         Ok(MergeChunk {
             part: p,
             refs,
             states,
+            heap,
         })
     }
 
     /// [`memory_size`](Self::memory_size) after
     /// [`apply_merge`](Self::apply_merge) of `c` from `src`, plus the
     /// merge's scratch (an upper bound for the merge to reserve).
+    /// The partition of this (merge) table that chunk `c` lands in: its
+    /// own partition, or the only one of a table with one partition (which
+    /// merges any input, whatever its width).
+    fn merge_part(&self, c: &MergeChunk) -> usize {
+        if self.bits == 0 { 0 } else { c.part }
+    }
+
     pub(crate) fn projected_merge(&self, c: &MergeChunk) -> usize {
         let n = c.refs.len();
+        let part = self.merge_part(c);
         let rows: usize = self
             .parts
             .iter()
             .enumerate()
             .map(|(p, v)| {
-                if p == c.part {
-                    grown(&v.rows, n * self.stride)
+                if p == part {
+                    grown(&v.rows, n * self.stride) + grown(&v.heap, c.heap)
                 } else {
-                    v.rows.capacity()
+                    v.rows.capacity() + v.heap.capacity()
                 }
             })
             .sum();
         let mut new = vec![0; self.parts.len()];
-        if let Some(x) = new.get_mut(c.part) {
+        if let Some(x) = new.get_mut(part) {
             *x = n;
         }
         let k = self.core.spec.group_by.len();
@@ -1053,20 +1349,27 @@ impl RowTable {
                 "merging into a table that is not growing".to_owned(),
             ));
         }
-        if self.bits != src.bits {
+        if self.bits != 0 && self.bits != src.bits {
             return Err(internal(
                 "merging tables of different radix bits".to_owned(),
             ));
         }
+        let part = self.merge_part(c);
         let mut refs = Vec::with_capacity(c.refs.len());
         self.reserve_index(c.refs.len());
-        if let Some(v) = self.parts.get_mut(c.part) {
+        if let Some(v) = self.parts.get_mut(part) {
             v.rows.reserve(c.refs.len() * self.stride);
+            v.heap.reserve(c.heap);
         }
         let mut result = Ok(());
         for &r in &c.refs {
-            let row = row_at(&src.parts, src.stride, src.refs, r);
-            match self.find_or_insert(row, word(row, 0), usize::MAX) {
+            let (row, heap) = row_heap_at(&src.parts, src.stride, src.refs, r);
+            let found = if self.views.is_some() {
+                self.find_or_insert::<true>(row, heap, word(row, 0), usize::MAX)
+            } else {
+                self.find_or_insert::<false>(row, heap, word(row, 0), usize::MAX)
+            };
+            match found {
                 Ok(id) => refs.push(id),
                 Err(e) => {
                     result = Err(e);
@@ -1075,7 +1378,7 @@ impl RowTable {
             }
         }
         let mut counts = vec![0; self.parts.len()];
-        if let Some(x) = counts.get_mut(c.part) {
+        if let Some(x) = counts.get_mut(part) {
             *x = refs.len();
         }
         let k = self.core.spec.group_by.len();
@@ -1097,6 +1400,7 @@ impl RowTable {
     pub(crate) fn split_parts(&mut self, ranges: &[Range<usize>]) -> Vec<Self> {
         self.index = HashTable::new();
         self.sketches = None;
+        self.sketching = false;
         self.adapt = None;
         ranges
             .iter()
@@ -1116,8 +1420,13 @@ impl RowTable {
                     stride: self.stride,
                     bits: self.bits,
                     refs: self.refs,
+                    views: self.views.clone(),
                     parts,
                     sketches: None,
+                    sketching: false,
+                    local: false,
+                    widen_to: self.bits,
+                    widen_at: usize::MAX,
                     index: HashTable::new(),
                     mode: Mode::Append,
                     adapt: None,
@@ -1166,6 +1475,17 @@ impl RowTable {
     }
 }
 
+/// Row `r` of `parts` and its partition's heap (both empty if out of
+/// range).
+#[inline(always)]
+fn row_heap_at(parts: &[Part], stride: usize, refs: Refs, r: u32) -> (&[u8], &[u8]) {
+    let at = refs.row(r) as usize * stride;
+    parts
+        .get(refs.part(r))
+        .and_then(|v| Some((v.rows.get(at..at + stride)?, v.heap.as_slice())))
+        .unwrap_or_default()
+}
+
 /// Row `r` of `parts` (empty if out of range).
 #[inline]
 fn row_at(parts: &[Part], stride: usize, refs: Refs, r: u32) -> &[u8] {
@@ -1193,33 +1513,38 @@ fn same_key(row: &[u8], key: &[u8], stride: usize) -> bool {
     }
 }
 
-/// Appends a row for key row `key` (hash `h`).
+/// Appends a row for key row `key` (hash `h`; its long values in
+/// `key_heap`, copied to the partition's heap). `shape` is the table's
+/// stride, radix bits, reference split and view layout.
 #[inline]
 fn push_row(
     parts: &mut [Part],
     sketches: &mut Option<Vec<Hll>>,
     groups: &mut usize,
-    stride: usize,
-    (bits, refs): (u32, Refs),
-    key: &[u8],
+    (stride, bits, refs, views): (usize, u32, Refs, Option<&RowLayout>),
+    (key, key_heap): (&[u8], &[u8]),
     h: u64,
 ) -> Result<u32> {
     let p = part_of(h, bits);
-    let v = &mut parts
+    let part = parts
         .get_mut(p)
-        .ok_or_else(|| internal(format!("radix partition {p} out of range")))?
-        .rows;
-    let row = v.len() / stride;
+        .ok_or_else(|| internal(format!("radix partition {p} out of range")))?;
+    let row = part.rows.len() / stride;
     if row > refs.mask() as usize {
         return Err(unsupported(format!(
             "more than 2^{} groups in one radix partition of an aggregation table",
             refs.row_bits()
         )));
     }
-    let key = key
-        .get(..stride)
-        .ok_or_else(|| internal("a key row shorter than the stride".to_owned()))?;
-    v.extend_from_slice(key);
+    match views {
+        Some(l) => l.push_row(key, key_heap, &mut part.rows, &mut part.heap)?,
+        None => {
+            let key = key
+                .get(..stride)
+                .ok_or_else(|| internal("a key row shorter than the stride".to_owned()))?;
+            part.rows.extend_from_slice(key);
+        }
+    }
     if let Some(s) = sketches.as_mut().and_then(|s| s.get_mut(p)) {
         s.add(h);
     }
@@ -1274,12 +1599,16 @@ pub(crate) fn final_tasks(tables: &[&RowTable]) -> Vec<FinalTask> {
     let mut est = Vec::with_capacity(nparts);
     for p in 0..nparts {
         let rows: usize = tables.iter().map(|t| t.part_len(p)).sum();
+        // Tables without sketches (small ones) count their rows.
         let mut sketch = Hll::new(PART_HLL_BITS);
-        let mut sketched = false;
-        for s in tables.iter().filter_map(|t| t.sketches()) {
-            if let Some(s) = s.get(p) {
-                sketch.merge(s);
-                sketched = true;
+        let (mut sketched, mut unsketched) = (false, 0);
+        for t in tables {
+            match t.sketches().and_then(|s| s.get(p)) {
+                Some(s) => {
+                    sketch.merge(s);
+                    sketched = true;
+                }
+                None => unsketched += t.part_len(p),
             }
         }
         #[expect(
@@ -1288,7 +1617,7 @@ pub(crate) fn final_tasks(tables: &[&RowTable]) -> Vec<FinalTask> {
             reason = "a non-negative estimate, capped by the row count"
         )]
         let groups = if sketched {
-            ((sketch.estimate() * 1.1) as usize + 16).min(rows)
+            ((sketch.estimate() * 1.1) as usize + 16 + unsketched).min(rows)
         } else {
             rows
         };
@@ -1372,6 +1701,67 @@ mod tests {
         let want = t.projected(&p);
         t.apply(&p).unwrap();
         assert!(t.memory_size() <= want, "{} > {want}", t.memory_size());
+    }
+
+    /// A table grouping by a `Utf8` key (`v` an `Int64`).
+    fn core_str() -> Arc<AggCore> {
+        let s = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Utf8, true),
+            Field::new("v", DataType::Int64, true),
+        ]));
+        let spec = AggregateSpec {
+            input: Arc::clone(&s),
+            group_by: vec![0],
+            aggregates: vec![AggregateExpr::count_star("c")],
+            output: AggregateOutput::Final,
+            ansi: true,
+            spill: None,
+            require_unit_weights: false,
+        };
+        Arc::new(AggCore::new(spec).unwrap())
+    }
+
+    /// Keys of 200 bytes (heap values) for [`core_str`].
+    fn long_keys(core: &AggCore, keys: impl Iterator<Item = i64>) -> Batch {
+        let k: Vec<String> = keys.map(|i| format!("{i:0>200}")).collect();
+        let v = Int64Array::from(vec![1; k.len()]);
+        let k = arrow_array::StringArray::from(k);
+        let cols: Vec<ArrayRef> = vec![Arc::new(k), Arc::new(v)];
+        Batch::new(RecordBatch::try_new(Arc::clone(&core.spec.input), cols).unwrap())
+    }
+
+    /// Long string keys live in the partitions' heaps: the table counts
+    /// them, and the projections of an apply and of a merge bound them.
+    #[test]
+    fn heap_bytes_are_accounted() {
+        let core = core_str();
+        let seed = HashSeed::new(Some(9));
+        for mode in [Mode::Grow, Mode::Fixed { limit: 64 }, Mode::Append] {
+            let mut t = RowTable::new(&core, &seed, mode, true, RADIX_BITS).unwrap();
+            for start in (0..2_000).step_by(500) {
+                apply(&mut t, &long_keys(&core, start..start + 500));
+            }
+            // Every key is new: 2,000 values of 200 bytes in the heaps.
+            assert!(
+                t.memory_size() >= 2_000 * 200,
+                "{mode:?}: {}",
+                t.memory_size()
+            );
+            let mut merged = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+            for p in 0..PARTS {
+                let c = t.merge_chunk(p, 0..t.part_len(p)).unwrap();
+                let want = merged.projected_merge(&c);
+                merged.apply_merge(&t, &c).unwrap();
+                assert!(
+                    merged.memory_size() <= want,
+                    "{} > {want}",
+                    merged.memory_size()
+                );
+            }
+            assert!(merged.memory_size() >= 2_000 * 200);
+            let out = merged.output_batch(&merged.ids(0..merged.len())).unwrap();
+            assert_eq!(out.num_rows(), 2_000);
+        }
     }
 
     /// A seedless 64-bit mix (splitmix64's finalizer) for test hashes.
@@ -1606,11 +1996,110 @@ mod tests {
         let bad = many.refs.make(0, many.part_len(0) + 1);
         assert!(many.output_batch(&[bad]).is_err());
         assert!(many.merge_chunk(0, 0..many.part_len(0) + 1).is_err());
-        // Merging needs the same radix bits.
-        let c = many.merge_chunk(0, 0..1).unwrap();
+        // A one-partition table merges every partition of a wider one
+        // (the final phase's merge of inputs of mixed widths)...
         let mut grow = RowTable::new(&core, &seed, Mode::Grow, false, 0).unwrap();
-        let e = grow.apply_merge(&many, &c).unwrap_err();
+        for p in 0..PARTS {
+            let c = many.merge_chunk(p, 0..many.part_len(p)).unwrap();
+            assert!(grow.projected_merge(&c) >= grow.memory_size());
+            grow.apply_merge(&many, &c).unwrap();
+        }
+        assert_eq!(sorted(&all(&grow)), sorted(&all(&one)));
+        // ... but a partitioned one needs the same radix bits.
+        let c = many.merge_chunk(0, 0..1).unwrap();
+        let mut two = RowTable::new(&core, &seed, Mode::Grow, false, 1).unwrap();
+        let e = two.apply_merge(&many, &c).unwrap_err();
         assert!(e.to_string().contains("radix bits"), "{e}");
+    }
+
+    /// A thread-local table starts its partition sketches at
+    /// `SKETCH_ROWS` rows, from the rows it already has: smaller tables
+    /// hold none (their row counts are the final phase's estimate).
+    #[test]
+    fn sketches_start_with_enough_rows() {
+        let core = core();
+        let seed = HashSeed::new(Some(6));
+        let mut t = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS).unwrap();
+        apply(&mut t, &batch(&core, 0..1_000));
+        assert!(t.sketches().is_none());
+        let before = t.memory_size();
+        let n = i64::try_from(SKETCH_ROWS).unwrap();
+        apply(&mut t, &batch(&core, 1_000..n));
+        assert!(t.memory_size() > before);
+        let s = t.sketches().expect("sketches from SKETCH_ROWS rows");
+        let mut all = Hll::new(PART_HLL_BITS);
+        s.iter().for_each(|h| all.merge(h));
+        #[expect(clippy::cast_precision_loss, reason = "test counts")]
+        let rows = SKETCH_ROWS as f64;
+        assert!(
+            (all.estimate() - rows).abs() < rows * 0.1,
+            "{}",
+            all.estimate()
+        );
+        // One partition, or a merge table: never.
+        let mut one = RowTable::new(&core, &seed, Mode::Grow, true, 0).unwrap();
+        apply(&mut one, &batch(&core, 0..n));
+        assert!(one.sketches().is_none());
+        // A small table among sketched ones counts its rows.
+        let mut small = RowTable::new(&core, &seed, Mode::Grow, true, RADIX_BITS).unwrap();
+        apply(&mut small, &batch(&core, n..n + 100));
+        let groups: usize = final_tasks(&[&t, &small]).iter().map(|f| f.groups).sum();
+        assert!(
+            (SKETCH_ROWS + 100..=(SKETCH_ROWS + 100) * 12 / 10).contains(&groups),
+            "{groups}"
+        );
+    }
+
+    /// Widening spreads a narrow table's rows, long key bytes and states
+    /// over the radix partitions without changing any group: a growing
+    /// index still finds every key, a fixed one is cleared, and sketches
+    /// start.
+    #[test]
+    fn widening_keeps_every_group() {
+        let core = core();
+        let seed = HashSeed::new(Some(8));
+        for mode in [Mode::Grow, Mode::Fixed { limit: 5_000 }, Mode::Append] {
+            let mut t = RowTable::new(&core, &seed, mode, true, 0)
+                .unwrap()
+                .widening(RADIX_BITS, 4_000);
+            let mut narrow = RowTable::new(&core, &seed, mode, true, 0).unwrap();
+            for tb in [&mut t, &mut narrow] {
+                apply(tb, &batch(&core, (0..6_000).map(|i| i % 4_500)));
+            }
+            assert!(t.wants_widen() && !narrow.wants_widen());
+            let all = |t: &RowTable| sorted(&t.output_batch(&t.ids(0..t.len())).unwrap());
+            let want = all(&t);
+            let bytes = t.memory_size();
+            // The reservation covers the copy, the state arrays and the
+            // row lists the widening holds while it runs.
+            let accs: usize = t
+                .parts
+                .iter()
+                .flat_map(|p| &p.accs)
+                .map(Accumulator::size)
+                .sum();
+            let lists = 2 * t.len() * size_of::<u32>();
+            assert!(t.widen_bytes() >= bytes + 2 * accs + lists);
+            t.widen().unwrap();
+            assert_eq!((t.part_count(), t.wants_widen()), (PARTS, false));
+            assert_eq!(all(&t), want, "{mode:?}");
+            // The copy grows each partition once, exactly: no more bytes
+            // than before but for the sketches it starts.
+            let sketches = PARTS * Hll::new(PART_HLL_BITS).bytes();
+            assert!(t.memory_size() <= bytes + sketches, "{mode:?}");
+            assert!(t.sketches().is_some());
+            let groups = t.len();
+            apply(&mut t, &batch(&core, 0..4_500));
+            match mode {
+                // Every key is found again: no new rows, still unique.
+                Mode::Grow => assert_eq!((t.len(), t.is_unique()), (groups, true)),
+                _ => assert!(t.len() > groups && !t.is_unique(), "{mode:?}"),
+            }
+            // Widening an already wide table changes nothing.
+            let n = t.len();
+            t.widen().unwrap();
+            assert_eq!(t.len(), n);
+        }
     }
 
     /// Row references split into partition and row by the table's radix
