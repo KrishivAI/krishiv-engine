@@ -104,6 +104,15 @@ pub(super) fn int(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Integer, c)
 }
 
+fn boolean(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Boolean, c)
+}
+
+/// `regexp_substr`: Spark marks it nullable whatever its arguments.
+fn always_null(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::String, true))
+}
+
 /// `startswith`/`endswith`/`contains`: the binary predicates may be null
 /// whatever their arguments (Spark's `BinaryPredicate` is a nullable
 /// static invocation).
@@ -236,6 +245,39 @@ fn strings() -> Vec<Spec> {
             exact(DataType::Integer),
         ]),
         regexp_replace_result,
+    ));
+    out.extend(scalar(
+        &["regexp", "regexp_like"],
+        &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
+        boolean,
+    ));
+    out.extend(scalar(
+        &["regexp_extract"],
+        &Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::Integer),
+        ]),
+        string,
+    ));
+    out.extend(scalar(
+        &["regexp_substr"],
+        &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
+        always_null,
+    ));
+    out.extend(scalar(
+        &["regexp_count"],
+        &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
+        int,
+    ));
+    out.extend(scalar(
+        &["regexp_instr"],
+        &Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::Integer),
+        ]),
+        int,
     ));
     out.extend(scalar(
         &["substring", "substr"],
