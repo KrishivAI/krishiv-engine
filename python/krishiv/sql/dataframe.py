@@ -16,7 +16,6 @@ from krishiv.errors import (
     PySparkTypeError,
     PySparkValueError,
     not_expected_type,
-    not_implemented,
 )
 from krishiv.sql import _convert
 from krishiv.sql.column import Column, _named
@@ -157,12 +156,21 @@ class DataFrame:
     def select(self, *cols: ColumnsOrNames) -> DataFrame:
         return self._new(self._df.select([_named(c) for c in _flatten(cols)]))
 
-    def selectExpr(self, *expr: str) -> DataFrame:
-        raise not_implemented("selectExpr (SQL expression strings)")
+    def selectExpr(self, *expr: str | list[str]) -> DataFrame:
+        """Projects a set of SQL expressions, as ``pyspark.sql.DataFrame.selectExpr``: each string
+        holds one expression with an optional alias, so ``AS`` aliases and ``*`` work as they do
+        in a ``SELECT`` list (``df.selectExpr("a", "b AS c")``)."""
+        exprs = _flatten(expr)
+        for e in exprs:
+            if not isinstance(e, str):
+                raise not_expected_type("expr", "str", e)
+        return self._new(self._df.select_expr(list(exprs)))
 
     def filter(self, condition: Column | str) -> DataFrame:
+        """Rows where ``condition`` is true; a string parses as a SQL expression, as PySpark's
+        ``filter``."""
         if isinstance(condition, str):
-            raise not_implemented("filter/where with a SQL expression string")
+            return self._new(self._df.filter_expr(condition))
         if not isinstance(condition, Column):
             raise not_expected_type("condition", "Column or str", condition)
         return self._new(self._df.filter(condition._c))

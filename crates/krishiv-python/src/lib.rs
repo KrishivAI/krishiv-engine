@@ -39,5 +39,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(column::call, m)?)?;
     m.add_function(wrap_pyfunction!(column::count_all, m)?)?;
     m.add_function(wrap_pyfunction!(column::count_distinct_of, m)?)?;
+    m.add_function(wrap_pyfunction!(column::expression, m)?)?;
     Ok(())
 }

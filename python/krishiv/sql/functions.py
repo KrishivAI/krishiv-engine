@@ -8,10 +8,14 @@ from collections.abc import Callable
 from typing import Any
 
 from krishiv import _native
-from krishiv.errors import not_implemented
+from krishiv.errors import not_expected_type
 from krishiv.sql.column import Column, _literal, _named
 
 ColumnOrName = Column | str
+
+#: The builtin ``str``, kept under its own name: :func:`expr` names its
+#: parameter ``str`` (as PySpark does), which shadows the builtin there.
+_str = str
 
 
 def col(col: str) -> Column:
@@ -29,7 +33,11 @@ def lit(col: Any) -> Column:
 
 
 def expr(str: str) -> Column:
-    raise not_implemented("expr (SQL expression strings)")
+    """Parses the expression string into the column that it represents, as ``pyspark.sql.functions.expr``
+    (names resolve against the DataFrame's columns when the query is analyzed)."""
+    if not isinstance(str, _str):
+        raise not_expected_type("str", "str", str)
+    return Column(_native.expr(str))
 
 
 def _call(name: str, *cols: Any) -> Column:

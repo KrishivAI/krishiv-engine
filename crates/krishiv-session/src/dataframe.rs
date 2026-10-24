@@ -19,7 +19,7 @@ use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{AnalyzedPlan, TableColumn};
 use krishiv_plan::{
     Expr, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode,
-    ReadSource,
+    ReadSource, SourceId,
 };
 
 use crate::catalog::TempTable;
@@ -198,6 +198,38 @@ impl DataFrame {
         })
     }
 
+    /// `SELECT` of SQL expression strings (PySpark's `selectExpr`): each
+    /// string holds one expression with an optional alias
+    /// (`expr [[AS] alias]`), so `*` and aliases work as they do in a
+    /// `SELECT` list. The strings parse with this session's parser options.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.table("t").select_expr(["a", "b AS second"]).unwrap();
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Spark's parse errors (`PARSE_SYNTAX_ERROR`, ...); lowering errors
+    /// for constructs the IR lacks.
+    pub fn select_expr(
+        &self,
+        exprs: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Self, KrishivError> {
+        let options = self.session.parser_options();
+        let mut lowered = Vec::new();
+        for text in exprs {
+            lowered.push(
+                krishiv_sql::parse_and_lower_named_expression(text.as_ref(), &options, SourceId(0))
+                    .map_err(|e| e.error)?,
+            );
+        }
+        Ok(self.derive(PlanNode::Project {
+            input: Arc::clone(&self.plan),
+            exprs: lowered,
+        }))
+    }
+
     /// Rows where `condition` is true (PySpark's `filter`).
     ///
     /// ```
@@ -225,6 +257,32 @@ impl DataFrame {
     #[must_use]
     pub fn where_(&self, condition: Column) -> Self {
         self.filter(condition)
+    }
+
+    /// Rows where the SQL expression `condition` is true (PySpark's
+    /// `filter(str)` and `where(str)`). The string parses with this
+    /// session's parser options.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.table("t").filter_expr("a IS NOT NULL").unwrap();
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Spark's parse errors (`PARSE_SYNTAX_ERROR`, ...); lowering errors
+    /// for constructs the IR lacks.
+    pub fn filter_expr(&self, condition: &str) -> Result<Self, KrishivError> {
+        let predicate = krishiv_sql::parse_and_lower_named_expression(
+            condition,
+            &self.session.parser_options(),
+            SourceId(0),
+        )
+        .map_err(|e| e.error)?;
+        Ok(self.derive(PlanNode::Filter {
+            input: Arc::clone(&self.plan),
+            predicate,
+        }))
     }
 
     /// This DataFrame with the column `name` added, or replaced
