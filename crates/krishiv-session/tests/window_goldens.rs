@@ -24,10 +24,20 @@ use futures::executor::block_on;
 use krishiv_session::Session;
 use serde_json::Value;
 
-/// Cases of a later part of P2-T055 (frames with value bounds, frames
-/// ending past the current row): they fail with
-/// `KRISHIV_UNSUPPORTED_FEATURE` until then.
-const PENDING: [&str; 3] = ["rows_sliding", "range_offset", "rows_current_to_end"];
+/// Cases of a later part of P2-T055 (`RANGE` frames with value bounds):
+/// they fail with `KRISHIV_UNSUPPORTED_FEATURE` until then.
+const PENDING: [&str; 1] = ["range_offset"];
+
+/// Known gaps outside window functions, with the error they give until
+/// fixed. The fixture's tables are temporary views in Spark, which
+/// qualifies their columns by the view's name (`t.v`); this session
+/// registers them as tables of the session catalog
+/// (`spark_catalog.default.t.v`), so an error that prints a qualified
+/// column differs in the qualifier only.
+const GAPS: [(&str, &str); 2] = [
+    ("lag_not_ordered", "WINDOW_FUNCTION_FRAME_NOT_ORDERED"),
+    ("nth_value_not_ordered", "WINDOW_FUNCTION_FRAME_NOT_ORDERED"),
+];
 
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -121,7 +131,8 @@ fn session(g: &Value) -> Session {
 
 /// A result value as the fixture writes it, by Spark type `t`.
 fn text(a: &ArrayRef, i: usize) -> Value {
-    if a.is_null(i) {
+    // A `VOID` column is all NULL (its nulls are logical, not in a bitmap).
+    if a.is_null(i) || a.data_type() == &DataType::Null {
         return Value::Null;
     }
     let s = match a.data_type() {
@@ -225,6 +236,15 @@ fn check(s: &Session, tables: &[&str], case: &Value) -> String {
         conf.unset(k).unwrap();
     }
     let id = case["id"].as_str().unwrap();
+    if let Some((_, class)) = GAPS.iter().find(|(g, _)| *g == id) {
+        match result {
+            Err(e) if e.error_class().name() == *class => {}
+            other => {
+                let _ = writeln!(out, "{id}: known gap changed (update GAPS): {other:?}");
+            }
+        }
+        return out;
+    }
     if PENDING.contains(&id) {
         match result {
             Err(e) if e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE" => {}
@@ -351,6 +371,12 @@ fn window_functions_match_spark() {
     for class in [
         "DATATYPE_MISMATCH.RANGE_FRAME_WITHOUT_ORDER",
         "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_INVALID_BOUND",
+        "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE",
+        "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_WRONG_COMPARISON",
+        "INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX",
+        "FAILED_FUNCTION_CALL",
+        "INVALID_PARAMETER_VALUE.BOOLEAN",
+        "_LEGACY_ERROR_TEMP_1035",
         "DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE",
         "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
         "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",

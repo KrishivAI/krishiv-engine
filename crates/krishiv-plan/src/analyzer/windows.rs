@@ -36,9 +36,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    DatatypeMismatchRangeFrameWithoutOrder, DatatypeMismatchSpecifiedWindowFrameInvalidBound,
-    DistinctWindowFunctionUnsupported, InvalidAggregateFilterContainsWindowFunction, KrishivError,
-    LegacyErrorTemp1031, LegacyErrorTemp1036, MissingWindowSpecification,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchRangeFrameWithoutOrder,
+    DatatypeMismatchSpecifiedWindowFrameInvalidBound,
+    DatatypeMismatchSpecifiedWindowFrameUnacceptedType,
+    DatatypeMismatchSpecifiedWindowFrameWrongComparison, DistinctWindowFunctionUnsupported,
+    FailedFunctionCall, InvalidAggregateFilterContainsWindowFunction,
+    InvalidSqlSyntaxFunctionWithUnsupportedSyntax, KrishivError, LegacyErrorTemp1031,
+    LegacyErrorTemp1035, LegacyErrorTemp1036, MissingWindowSpecification,
     UnsupportedExprForOperator, UnsupportedExprForWindow,
     UnsupportedFeatureLateralColumnAliasInWindow, WindowFunctionFrameNotOrdered,
     WindowFunctionNotAllowedInClause, WindowFunctionWithoutOverClause,
@@ -48,7 +52,7 @@ use super::bind::unsupported;
 use super::exprs::{Bound, Cx, WindowUse, pretty, semantic_key};
 use super::ops::col_expr;
 use super::resolve::{Attr, Rel, Resolver};
-use super::{AnalysisError, ArgType};
+use super::{AnalysisError, ArgType, Constant};
 use crate::{
     Expr, ExprNode, FrameBound, FrameUnits, FunctionKind, Literal, Origin, PlanNode, ResolvedExpr,
     ResolvedFunction, SortOrder, WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
@@ -169,6 +173,41 @@ fn bound_sql(b: &FrameBound) -> String {
         },
     };
     format!("\"{text}\"")
+}
+
+/// Whether `f` is a frame `lag`/`lead` makes: `ROWS BETWEEN k FOLLOWING
+/// AND k FOLLOWING` with `k` an `int` literal (what the user writes is a
+/// negation for `PRECEDING`, and never this frame for these functions).
+fn is_offset_frame(f: &WindowFrame) -> bool {
+    let literal = |b: &FrameBound| matches!(b, FrameBound::Offset(e) if matches!(e.node, ExprNode::Literal(Literal::Integer(_))));
+    f.units == FrameUnits::Rows && literal(&f.lower) && f.lower == f.upper
+}
+
+/// Whether a `lag`/`lead` offset is an `INT` literal (or a cast to `INT`).
+fn offset_type(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Literal(Literal::Integer(_)) => true,
+        ExprNode::Cast { to, .. } => *to == krishiv_types::DataType::Integer,
+        _ => false,
+    }
+}
+
+fn is_null_literal(e: &Expr) -> bool {
+    matches!(e.node, ExprNode::Literal(Literal::Null(_)))
+}
+
+/// The value of a frame offset: a constant, or the negation of one (`n
+/// PRECEDING`).
+fn offset_value(e: &Arc<Expr>, fold: &dyn Fn(&Arc<Expr>) -> Option<Constant>) -> Option<Constant> {
+    match crate::expr::negated(e) {
+        Some(x) => match offset_value(x, fold)? {
+            Constant::Integral(v) => {
+                Some(v.checked_neg().map_or(Constant::Null, Constant::Integral))
+            }
+            other => Some(other),
+        },
+        None => fold(e),
+    }
 }
 
 /// Spark's text of `function OVER (spec)`, as its errors quote it.
@@ -397,12 +436,23 @@ impl Resolver<'_> {
                 ));
             }
         };
+        // A window function (not an aggregate) takes no DISTINCT: Spark's
+        // function lookup refuses it.
+        if call.kind == FunctionKind::Window && call.distinct {
+            return Err(AnalysisError::new(
+                InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                    pretty_name: format!("`{}`", call.id.name()),
+                    syntax: "DISTINCT".to_owned(),
+                },
+                e.origin,
+            ));
+        }
         let mut bound = shown_of(rest.iter().map(|k| Arc::clone(&k.expr)).collect());
         let mut shown = shown_of(rest.iter().map(Bound::shown).collect());
         let name = call.id.name();
         // A window function's own arguments: Spark replaces a rank's by the
         // ordering, `ntile()` is `ntile(1)`.
-        let (function_expr, function_shown) = if call.kind == FunctionKind::Window {
+        let (mut function_expr, function_shown) = if call.kind == FunctionKind::Window {
             let args = if RANK_LIKE.contains(&name) {
                 Some(Vec::new())
             } else if name == "ntile" && call.args.is_empty() {
@@ -433,11 +483,49 @@ impl Resolver<'_> {
                 return Err(AnalysisError::new(
                     WindowFunctionFrameNotOrdered {
                         wf_name: name.to_owned(),
-                        wf_expr: window_function_sql(name, &function_shown),
+                        wf_expr: window_function_sql(
+                            name,
+                            &super::ops::qualified(&function_shown, cx.scope),
+                        ),
                     },
                     e.origin,
                 ));
             }
+            if matches!(name, "lag" | "lead") {
+                let frame = self.offset_frame(&call, &function_shown, bound.frame.as_ref(), e)?;
+                function_expr = frame.1;
+                bound.frame = Some(frame.0.clone());
+                shown.frame = Some(frame.0);
+            }
+            // `nth_value`'s offset (checked by its typing) as an `int`
+            // literal for the planner.
+            let offset = call
+                .args
+                .get(1)
+                .and_then(|o| self.fold(o, self.ctx.conf.ansi));
+            let offset = match offset {
+                Some(Constant::Integral(v) | Constant::Fractional(v)) => Some(v),
+                Some(Constant::String(t)) => t.trim().parse::<i64>().ok(),
+                _ => None,
+            };
+            if name == "nth_value"
+                && let Some(v) = offset
+                && let Ok(v) = i32::try_from(v)
+            {
+                let mut args = call.args.clone();
+                args[1] = Arc::new(Expr::literal(Literal::Integer(v)));
+                function_expr = Arc::new(
+                    Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                        ResolvedFunction {
+                            args,
+                            ..call.clone()
+                        },
+                    )))
+                    .with_origin(function.expr.origin),
+                );
+            }
+        }
+        if call.kind == FunctionKind::Window && !matches!(name, "lag" | "lead" | "nth_value") {
             let required = WindowFrame::running(if name == "cume_dist" {
                 FrameUnits::Range
             } else {
@@ -497,6 +585,9 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        if !matches!(name, "lag" | "lead") {
+            self.frame_bounds(&mut bound, &shown, rest, spec, &function_shown, e.origin)?;
+        }
         let unbounded = matches!(
             (&frame.lower, &frame.upper),
             (
@@ -523,11 +614,6 @@ impl Resolver<'_> {
                 },
                 e.origin,
             ));
-        }
-        if matches!(frame.lower, FrameBound::Offset(_))
-            || matches!(frame.upper, FrameBound::Offset(_))
-        {
-            return Err(unsupported("window frames with value bounds", e.origin));
         }
         let rebuilt = |function: Arc<Expr>, spec: WindowSpec| {
             Arc::new(
@@ -557,6 +643,225 @@ impl Resolver<'_> {
             return Err(misplaced(cx.windows, &b, e.origin));
         }
         Ok(b)
+    }
+
+    /// `lag`/`lead`'s frame, `ROWS BETWEEN k FOLLOWING AND k FOLLOWING` (`k`
+    /// the offset, negated for `lag`), and its call with the default cast to
+    /// the input's type. Spark's checks: no frame of the user's
+    /// (`_LEGACY_ERROR_TEMP_1035`), the offset foldable
+    /// (`DATATYPE_MISMATCH.NON_FOLDABLE_INPUT`, shown as the frame bound)
+    /// and an `INT` (a string fails the call, `FAILED_FUNCTION_CALL`; any
+    /// other type, or NULL, makes a frame Spark refuses as the user's).
+    fn offset_frame(
+        &self,
+        call: &ResolvedFunction,
+        shown: &Arc<Expr>,
+        framed: Option<&WindowFrame>,
+        e: &Arc<Expr>,
+    ) -> Result<(WindowFrame, Arc<Expr>), AnalysisError> {
+        let name = call.id.name();
+        let refuse = || {
+            AnalysisError::new(
+                LegacyErrorTemp1035 {
+                    pretty_name: name.to_owned(),
+                },
+                e.origin,
+            )
+        };
+        // A frame of the user's is refused; the frame this made (an
+        // analyzed plan analyzed again) is kept.
+        if framed.is_some_and(|f| !is_offset_frame(f)) {
+            return Err(refuse());
+        }
+        let [input, offset, default, rest @ ..] = &call.args[..] else {
+            return Err(unsupported(
+                "lag and lead without their offset and default",
+                e.origin,
+            ));
+        };
+        let value = match self.fold(offset, self.ctx.conf.ansi) {
+            None => {
+                let text = pretty(offset, self.ctx.conf.session_zone);
+                return Err(AnalysisError::new(
+                    DatatypeMismatchNonFoldableInput {
+                        sql_expr: format!("\"{}\"", pretty(shown, self.ctx.conf.session_zone)),
+                        input_name: "`offset`".to_owned(),
+                        input_type: "\"INT\"".to_owned(),
+                        input_expr: if name == "lag" {
+                            format!("\"(- {text})\"")
+                        } else {
+                            format!("\"{text}\"")
+                        },
+                    },
+                    e.origin,
+                ));
+            }
+            Some(_) if matches!(offset.node, ExprNode::Literal(Literal::String(_))) => {
+                return Err(AnalysisError::new(
+                    FailedFunctionCall {
+                        func_name: format!("`{name}`"),
+                    },
+                    e.origin,
+                ));
+            }
+            Some(Constant::Integral(v)) if offset_type(offset) => v,
+            Some(Constant::Error(err)) => return Err(AnalysisError::new(err, e.origin)),
+            Some(_) => return Err(refuse()),
+        };
+        let k = if name == "lag" {
+            value.checked_neg()
+        } else {
+            Some(value)
+        };
+        let k = k.and_then(|k| i32::try_from(k).ok()).ok_or_else(refuse)?;
+        let bound = || FrameBound::Offset(Arc::new(Expr::literal(Literal::Integer(k))));
+        let frame = WindowFrame {
+            units: FrameUnits::Rows,
+            lower: bound(),
+            upper: bound(),
+        };
+        if framed.is_some_and(|f| *f != frame) {
+            return Err(refuse());
+        }
+        // The default as a value of the input's type (an implicit cast).
+        let mut args = vec![Arc::clone(input), Arc::clone(offset)];
+        let to = call.data_type.clone();
+        let default = if is_null_literal(default) || to == krishiv_types::DataType::Null {
+            Arc::new(Expr::literal(Literal::Null(Some(to))))
+        } else {
+            Arc::new(
+                Expr::new(ExprNode::Cast {
+                    expr: Arc::clone(default),
+                    to,
+                    mode: if self.ctx.conf.ansi {
+                        crate::CastMode::Ansi
+                    } else {
+                        crate::CastMode::Legacy
+                    },
+                })
+                .with_origin(default.origin),
+            )
+        };
+        args.push(default);
+        args.extend(rest.iter().cloned());
+        let f = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    args,
+                    ..call.clone()
+                },
+            )))
+            .with_origin(e.origin),
+        );
+        Ok((frame, f))
+    }
+
+    /// Spark's checks of a frame's value bounds (`SpecifiedWindowFrame`, in
+    /// its order): each bound an `INT`
+    /// (`SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE`), the lower not above the
+    /// upper (`SPECIFIED_WINDOW_FRAME_WRONG_COMPARISON`). The bound
+    /// window's offsets become signed `int` literals (negative: rows
+    /// before). `RANGE` frames with value bounds are not supported yet.
+    fn frame_bounds(
+        &self,
+        bound: &mut WindowSpec,
+        shown: &WindowSpec,
+        rest: &[Bound],
+        spec: &WindowSpec,
+        function: &Arc<Expr>,
+        origin: Origin,
+    ) -> Result<(), AnalysisError> {
+        let Some(frame) = bound.frame.as_mut() else {
+            return Ok(());
+        };
+        let offset = |b: &FrameBound| matches!(b, FrameBound::Offset(_));
+        if !offset(&frame.lower) && !offset(&frame.upper) {
+            return Ok(());
+        }
+        if frame.units == FrameUnits::Range {
+            return Err(unsupported("window frames with value bounds", origin));
+        }
+        let shown_frame = shown.frame.clone().unwrap_or_else(|| frame.clone());
+        let text = window_text(
+            function,
+            &WindowSpec {
+                partition_by: Vec::new(),
+                order_by: Vec::new(),
+                frame: Some(shown_frame),
+            },
+        );
+        let sql_expr = format!(
+            "\"{}\"",
+            text.split_once(" OVER (")
+                .map_or(String::new(), |(_, f)| f.trim_end_matches(')').to_owned())
+        );
+        // The bounds' expressions follow the partitioning and ordering.
+        let mut kids = rest
+            .iter()
+            .skip(spec.partition_by.len() + spec.order_by.len());
+        let mut values = [None, None];
+        for (k, (b, location)) in [(&frame.lower, "lower"), (&frame.upper, "upper")]
+            .into_iter()
+            .enumerate()
+        {
+            let FrameBound::Offset(x) = b else { continue };
+            let ty = kids.next().and_then(|kid| kid.ty.data_type.clone());
+            if ty != Some(krishiv_types::DataType::Integer) {
+                return Err(AnalysisError::new(
+                    DatatypeMismatchSpecifiedWindowFrameUnacceptedType {
+                        sql_expr,
+                        location: location.to_owned(),
+                        expr_type: ty
+                            .map_or_else(|| "\"VOID\"".to_owned(), |t| format!("\"{}\"", t.sql())),
+                        expected_type: "\"INT\"".to_owned(),
+                    },
+                    origin,
+                ));
+            }
+            values[k] = Some(x);
+        }
+        let mut ints = [None, None];
+        for (k, x) in values.iter().enumerate() {
+            let Some(x) = x else { continue };
+            ints[k] = Some(
+                match offset_value(x, &|c| self.fold(c, self.ctx.conf.ansi)) {
+                    Some(Constant::Integral(v)) => v,
+                    Some(Constant::Error(e)) => return Err(AnalysisError::new(e, origin)),
+                    Some(Constant::Null) => {
+                        return Err(unsupported("a NULL window frame bound", origin));
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            "window frame bounds other than literals and casts of literals",
+                            origin,
+                        ));
+                    }
+                },
+            );
+        }
+        let at = |b: &FrameBound, v: Option<i64>| match b {
+            FrameBound::CurrentRow => Some(0),
+            _ => v,
+        };
+        if let (Some(l), Some(u)) = (at(&frame.lower, ints[0]), at(&frame.upper, ints[1]))
+            && offset(&frame.lower)
+            && offset(&frame.upper)
+            && l > u
+        {
+            return Err(AnalysisError::new(
+                DatatypeMismatchSpecifiedWindowFrameWrongComparison {
+                    sql_expr,
+                    comparison: "less than or equal".to_owned(),
+                },
+                origin,
+            ));
+        }
+        for (b, v) in [(&mut frame.lower, ints[0]), (&mut frame.upper, ints[1])] {
+            if let Some(v) = v.and_then(|v| i32::try_from(v).ok()) {
+                *b = FrameBound::Offset(Arc::new(Expr::literal(Literal::Integer(v))));
+            }
+        }
+        Ok(())
     }
 
     /// The windows `exprs` (expressions over `base`) hold, computed over
