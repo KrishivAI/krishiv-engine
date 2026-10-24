@@ -141,8 +141,35 @@ fn engine_raised_set_of_this_repo_is_a_small_subset_of_the_catalog() {
     let catalog = parse_error_classes(&json).unwrap();
     assert!(catalog.len() > 1_900, "full Spark 4.2.0 catalog is loaded");
     let in_use = raised(&catalog, &collect_engine(root));
-    // The scanner counts what the engine raises, not the whole catalog. The
-    // set grows as the engine raises more of Spark's classes (193 of 1,930
-    // with the window frame checks), so the bound is a quarter, not a tenth.
+    // A detector that matched the whole catalog (the bug this guards
+    // against) would far exceed this bound; the engine's raised set grows
+    // with each function family (193 of the 1,929 classes after the bitwise
+    // and number-format functions), so the bound is a quarter, not a tenth.
     assert!(in_use.len() < catalog.len() / 4, "{}", in_use.len());
+    // The comment and test filter removes real references in this repo:
+    // the same sources read whole name strictly more classes.
+    let mut raw = Vec::new();
+    let mut dirs = vec![root.join("crates")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && path.components().any(|c| c.as_os_str() == "src")
+            {
+                raw.push(std::fs::read_to_string(&path).unwrap());
+            }
+        }
+    }
+    let in_raw = |c: &ClassEntry| raised(std::slice::from_ref(c), &raw).len() == 1;
+    assert!(
+        in_use.iter().all(in_raw),
+        "engine text is a subset of the raw sources"
+    );
+    let filtered_out = catalog
+        .iter()
+        .find(|c| !in_use.contains(c) && in_raw(c))
+        .map(|c| c.name.clone());
+    assert!(filtered_out.is_some(), "the filter drops no reference");
 }

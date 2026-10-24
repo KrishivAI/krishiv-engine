@@ -6,7 +6,7 @@
 //! protocol model was checked to fail with a planted bug (Relaxed
 //! countdown; check-before-listen in the wait loop, in `blocking_done` and
 //! in `Barrier::wait`; `drop_receiver` not waking senders).
-//! `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release`.
+//! `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release loom_model::`.
 
 use std::sync::Arc;
 

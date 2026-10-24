@@ -27,6 +27,22 @@ pub struct Expr {
     pub origin: Origin,
 }
 
+/// The kind of an unresolved typed datetime literal (`TIMESTAMP '...'`),
+/// as the parser wrote it. The analyzer resolves it to a [`Literal`]
+/// with the session's time zone and timestamp type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TypedLiteralKind {
+    /// `DATE '...'`.
+    Date,
+    /// `TIMESTAMP '...'`.
+    Timestamp,
+    /// `TIMESTAMP_NTZ '...'`.
+    TimestampNtz,
+    /// `TIMESTAMP_LTZ '...'`.
+    TimestampLtz,
+}
+
 /// The expression node kinds.
 ///
 /// Operators are [`ExprNode::Function`] calls with canonical names (see
@@ -39,6 +55,14 @@ pub enum ExprNode {
     Column(ColumnRef),
     /// A literal value.
     Literal(Literal),
+    /// An unresolved typed datetime literal: the type keyword and the raw
+    /// string, as written. The analyzer lowers it to a [`Literal`].
+    TypedLiteral {
+        /// Which type keyword was written.
+        kind: TypedLiteralKind,
+        /// The raw string, as written.
+        value: String,
+    },
     /// An unresolved `*` or `t.*`.
     Star(Star),
     /// An unresolved function call, operators included.
@@ -445,6 +469,7 @@ impl Expr {
         match &self.node {
             ExprNode::Column(_)
             | ExprNode::Literal(_)
+            | ExprNode::TypedLiteral { .. }
             | ExprNode::Star(_)
             | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {}
             ExprNode::Function(FunctionCall { args, filter, .. })
@@ -484,6 +509,7 @@ impl Expr {
         match &mut self.node {
             ExprNode::Column(_)
             | ExprNode::Literal(_)
+            | ExprNode::TypedLiteral { .. }
             | ExprNode::Star(_)
             | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {}
             ExprNode::Function(FunctionCall { args, filter, .. })

@@ -10,12 +10,15 @@
     reason = "test helpers sit outside #[test] fns; the TPC-H runs print their timings"
 )]
 
+mod conditionals;
 mod exchanges;
+mod folding;
 mod hints;
 mod listing;
 mod physical;
 mod runtime_filters;
 mod semantics;
+mod sum_rewrite;
 mod tpch;
 mod window;
 mod write;
@@ -399,17 +402,16 @@ fn a_self_join_instance_reads_shifted_ids() {
 #[test]
 fn unsupported_and_inconsistent_plans_fail_clearly() {
     let env = env();
-    for sql in [
-        "SELECT x.a FROM t AS x FULL OUTER JOIN t AS y ON x.a = y.a",
-        "SELECT coalesce(a, 1) FROM t",
-    ] {
-        let e = env.plan(sql).unwrap_err();
-        assert_eq!(
-            e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{sql}: {e}"
-        );
-    }
+    // `FULL OUTER JOIN` planning is still unsupported; `coalesce` (which a
+    // full join's analyzer lowering uses) binds since the conditional
+    // functions do (see `conditionals`).
+    let sql = "SELECT x.a FROM t AS x FULL OUTER JOIN t AS y ON x.a = y.a";
+    let e = env.plan(sql).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{sql}: {e}"
+    );
     // An unresolved plan.
     let unresolved = Plan::try_new(LogicalPlan::table(["t"])).unwrap();
     let e = DefaultPlanner.plan(&unresolved, &env.cx()).unwrap_err();

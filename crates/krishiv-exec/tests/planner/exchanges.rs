@@ -353,15 +353,15 @@ fn a_window_requires_its_partitioning() {
         ),
         vec!["Exchange hashpartitioning(a#0)".to_owned()]
     );
-    // Grouped by the same keys: clustered already.
+    // Grouped by the same keys: clustered already, so only the
+    // aggregate's exchange remains.
     assert_eq!(
         exchanges_of(
             &env,
             "SELECT a, b, sum(c) OVER (PARTITION BY a, b) FROM \
              (SELECT a, b, count(*) AS c FROM t GROUP BY a, b)"
-        )
-        .len(),
-        1
+        ),
+        vec!["Exchange hashpartitioning(a#0, b#1)".to_owned()]
     );
     // Placed by a subset of the partitioning keys (`a` of `a, b`): rows
     // with equal `a, b` share a partition, so no exchange.
@@ -374,12 +374,17 @@ fn a_window_requires_its_partitioning() {
         vec!["Exchange hashpartitioning(a#0)".to_owned()]
     );
     // Placed by more keys than the partitioning (`a, b` for `a`): rows with
-    // equal `a` may be apart, so the window exchanges by `a`.
-    let more = exchanges_of(
-        &env,
-        "SELECT a, sum(c) OVER (PARTITION BY a) FROM \
-         (SELECT a, b, count(*) AS c FROM t GROUP BY a, b)",
+    // equal `a` may be apart, so the window exchanges by `a` above the
+    // aggregate's exchange.
+    assert_eq!(
+        exchanges_of(
+            &env,
+            "SELECT a, sum(c) OVER (PARTITION BY a) FROM \
+             (SELECT a, b, count(*) AS c FROM t GROUP BY a, b)",
+        ),
+        vec![
+            "Exchange hashpartitioning(a#0)".to_owned(),
+            "Exchange hashpartitioning(a#0, b#1)".to_owned(),
+        ]
     );
-    assert_eq!(more.len(), 2, "{more:?}");
-    assert_eq!(more[0], "Exchange hashpartitioning(a#0)");
 }

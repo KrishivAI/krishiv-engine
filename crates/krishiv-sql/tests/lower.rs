@@ -191,3 +191,60 @@ fn deep_queries_lower_on_a_small_stack_and_long_joins_hit_the_cap() {
         assert!(lower(&dotted).is_ok());
     });
 }
+
+#[test]
+fn nested_grouping_sets_lower_on_a_small_stack() {
+    on_small_stack(|| {
+        // 900 nested `GROUPING SETS (...)`: the parser accepts it (below
+        // `MAX_DEPTH`), and lowering must hop stacks through the recursion.
+        let sql = format!(
+            "SELECT a FROM t GROUP BY {}a{}",
+            "GROUPING SETS (".repeat(900),
+            ")".repeat(900)
+        );
+        // One set `((a))`: every level unwraps to the single inner set.
+        let expected = "Aggregate [a] GROUPING SETS ((a)), [a]\n+- Read t\n";
+        assert_eq!(
+            lower(&sql)
+                .expect("nested GROUPING SETS lowers")
+                .root()
+                .to_string(),
+            expected
+        );
+        // A single level nests the same way and keeps its sets.
+        assert_eq!(
+            lower("SELECT a FROM t GROUP BY GROUPING SETS (GROUPING SETS ((a)))")
+                .expect("nested sets lower")
+                .root()
+                .to_string(),
+            expected
+        );
+    });
+}
+
+#[test]
+fn nested_grouping_sets_cap_counts_inside_the_loop() {
+    // Two 16-element cubes hold 65,536 sets each: the union passes the
+    // 65,536 cap on the second item, at the outer `GROUPING SETS`, before
+    // the cross-product check runs.
+    let a: Vec<String> = (0..16).map(|i| format!("a{i}")).collect();
+    let b: Vec<String> = (0..16).map(|i| format!("b{i}")).collect();
+    let sql = format!(
+        "SELECT a FROM t GROUP BY GROUPING SETS (CUBE ({}), CUBE ({}))",
+        a.join(", "),
+        b.join(", ")
+    );
+    let e = lower(&sql).expect_err("two 16-cubes exceed the grouping-sets cap");
+    assert!(
+        e.error
+            .to_string()
+            .contains("more than 65536 grouping sets"),
+        "cap message, got {}",
+        e.error
+    );
+    assert_eq!(
+        e.span.start,
+        sql.find("GROUPING SETS").expect("the item"),
+        "the cap cites the GROUPING SETS item, not GROUP BY"
+    );
+}

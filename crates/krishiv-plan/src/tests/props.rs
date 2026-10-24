@@ -334,7 +334,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 23 };
+        let kinds = if depth == 0 { 4 } else { 24 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -467,6 +467,11 @@ impl Gen<'_> {
                 exprs: self.exprs(),
                 partition_by: self.exprs(),
                 order_by: self.orders(2),
+            },
+            23 => PlanNode::Expand {
+                input: self.input(d),
+                projections: self.many(1, 2, Gen::exprs),
+                output: self.many(0, 2, Gen::bound),
             },
             _ => PlanNode::WithCte {
                 input: self.input(d),
@@ -673,6 +678,7 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
     match &mut e.node {
         ExprNode::Column(ColumnRef { name, .. }) => m_strings(name, w),
         ExprNode::Literal(v) => m_literal(v, w),
+        ExprNode::TypedLiteral { value, .. } => m_string(value, w),
         ExprNode::Star(Star { qualifier, .. }) => m_strings(qualifier, w),
         ExprNode::Function(FunctionCall {
             name,
@@ -913,6 +919,25 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
         | PlanNode::Limit { input, limit: e }
         | PlanNode::Offset { input, offset: e }
         | PlanNode::ReplicateRows { input, count: e } => m_expr(e, w) || m_plan(input, w),
+        PlanNode::Expand {
+            input,
+            projections,
+            output,
+        } => {
+            site!(w, projections.push(Vec::new()));
+            site!(
+                w,
+                output.push(output.first().cloned().unwrap_or(BoundColumn {
+                    id: AttrId(0),
+                    name: "x".to_owned(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                }))
+            );
+            projections.iter_mut().any(|p| m_exprs(p, w))
+                || output.iter_mut().any(|c| m_bound(c, w))
+                || m_plan(input, w)
+        }
         PlanNode::SetOp {
             left,
             right,

@@ -83,6 +83,12 @@ pub(crate) fn columns(columns: &[StructField]) -> R {
     columns.iter().try_for_each(|c| data_type(&c.data_type))
 }
 
+/// Checks one named-expression string (`F.expr`, `selectExpr` once per
+/// argument string, `filter`/`where` strings); `sql` is its text.
+pub(crate) fn expression(e: &Expr, sql: &str, opts: ParserOptions) -> R {
+    Checker { sql, opts }.expr(e)
+}
+
 /// Functions whose first argument is a `datetimeUnit`: a string there is
 /// an error (`TIMESTAMPADD('DAY', ...)`).
 const UNIT_FUNCTIONS: &[&str] = &[

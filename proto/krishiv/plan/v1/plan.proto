@@ -19,7 +19,7 @@ syntax = "proto3";
 package krishiv.plan.v1;
 
 message PhysicalPlan {
-  // The writer's format version (4).
+  // The writer's format version (5).
   uint32 format_version = 1;
   // The oldest reader version that understands every field in use.
   uint32 min_reader_version = 2;
@@ -69,6 +69,9 @@ message Node {
     ExchangeNode exchange = 14;
     // v4: a plan with a window needs a v4 reader.
     WindowNode window = 15;
+    // v5: a plan with an expand (ROLLUP, CUBE, GROUPING SETS) needs a v5
+    // reader.
+    ExpandNode expand = 16;
   }
 }
 
@@ -98,6 +101,8 @@ message ProjectItem {
   oneof kind {
     ProjectColumn column = 1;
     ProjectExpr expr = 2;
+    // v5: only inside an expand; a plan holding one needs a v5 reader.
+    ProjectNullOf null_of = 3;
   }
 }
 
@@ -109,6 +114,12 @@ message ProjectColumn {
 message ProjectExpr {
   string name = 1;
   uint32 expr = 2;
+}
+
+// v5: a column of nulls in the Arrow type of an input column.
+message ProjectNullOf {
+  uint64 index = 1;
+  string name = 2;
 }
 
 message SubqueryPlan {
@@ -137,6 +148,21 @@ message ReplicateRowsNode {
   repeated uint64 layout = 2;
   uint32 count = 3;
   repeated SubqueryPlan subqueries = 4;
+}
+
+// v5: each input row once per projection (ROLLUP, CUBE, GROUPING SETS).
+message ExpandNode {
+  uint32 input = 1;
+  repeated uint64 layout = 2;
+  // The projections: the same output columns, each computed one way.
+  repeated ExpandProjection projections = 3;
+  // Whether each output column is nullable.
+  repeated bool nullable = 4;
+  repeated SubqueryPlan subqueries = 5;
+}
+
+message ExpandProjection {
+  repeated ProjectItem items = 1;
 }
 
 message SortKey {

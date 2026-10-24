@@ -70,7 +70,7 @@ pub(super) fn window_function_sql(name: &str, shown: &Expr) -> String {
     if RANK_LIKE.contains(&name) {
         format!("{}()", name.to_uppercase())
     } else {
-        pretty(shown)
+        pretty(shown, None)
     }
 }
 
@@ -91,10 +91,10 @@ pub(super) fn window_in_aggregate(origin: Origin) -> AnalysisError {
 
 /// `INVALID_AGGREGATE_FILTER.CONTAINS_WINDOW_FUNCTION` for `filter`.
 pub(super) fn window_in_filter(filter: &Bound, origin: Origin) -> AnalysisError {
-    let window = first_window(&filter.shown()).map_or_else(String::new, |w| pretty(&w));
+    let window = first_window(&filter.shown()).map_or_else(String::new, |w| pretty(&w, None));
     AnalysisError::new(
         InvalidAggregateFilterContainsWindowFunction {
-            filter_expr: format!("\"{}\"", pretty(&filter.shown())),
+            filter_expr: format!("\"{}\"", pretty(&filter.shown(), None)),
             window_expr: format!("\"{window}\""),
         },
         origin,
@@ -114,7 +114,7 @@ pub(super) fn misplaced(use_: WindowUse, b: &Bound, origin: Origin) -> AnalysisE
         WindowUse::Where => clause("WHERE"),
         WindowUse::Having => clause("HAVING"),
         WindowUse::Allowed | WindowUse::Other => {
-            let window = first_window(&b.shown()).map_or_else(String::new, |w| pretty(&w));
+            let window = first_window(&b.shown()).map_or_else(String::new, |w| pretty(&w, None));
             UnsupportedExprForOperator {
                 invalid_expr_sqls: format!("\"{window}\""),
             }
@@ -146,8 +146,8 @@ fn frame_string(f: &WindowFrame) -> String {
         FrameBound::CurrentRow => "currentrow$()".to_owned(),
         FrameBound::UnboundedFollowing => "unboundedfollowing$()".to_owned(),
         FrameBound::Offset(e) => match crate::expr::negated(e) {
-            Some(n) => format!("-{}", pretty(n)),
-            None => pretty(e),
+            Some(n) => format!("-{}", pretty(n, None)),
+            None => pretty(e, None),
         },
     };
     let units = match f.units {
@@ -168,8 +168,8 @@ fn bound_sql(b: &FrameBound) -> String {
         FrameBound::CurrentRow => "CURRENT ROW".to_owned(),
         FrameBound::UnboundedFollowing => "UNBOUNDED FOLLOWING".to_owned(),
         FrameBound::Offset(e) => match crate::expr::negated(e) {
-            Some(n) => format!("{} PRECEDING", pretty(n)),
-            None => format!("{} FOLLOWING", pretty(e)),
+            Some(n) => format!("{} PRECEDING", pretty(n, None)),
+            None => format!("{} FOLLOWING", pretty(e, None)),
         },
     };
     format!("\"{text}\"")
@@ -198,24 +198,27 @@ fn is_null_literal(e: &Expr) -> bool {
 
 /// The value of a frame offset: a constant, or the negation of one (`n
 /// PRECEDING`).
-fn offset_value(e: &Expr, ansi: bool) -> Option<Constant> {
+fn offset_value(e: &Arc<Expr>, fold: &dyn Fn(&Arc<Expr>) -> Option<Constant>) -> Option<Constant> {
     match crate::expr::negated(e) {
-        Some(x) => match offset_value(x, ansi)? {
+        Some(x) => match offset_value(x, fold)? {
             Constant::Integral(v) => {
                 Some(v.checked_neg().map_or(Constant::Null, Constant::Integral))
             }
             other => Some(other),
         },
-        None => super::fold::constant(e, ansi),
+        None => fold(e),
     }
 }
 
 /// Spark's text of `function OVER (spec)`, as its errors quote it.
 fn window_text(function: &Arc<Expr>, spec: &WindowSpec) -> String {
-    pretty(&Expr::new(ExprNode::Window(WindowExpr {
-        function: Arc::clone(function),
-        window: WindowSpecRef::Spec(spec.clone()),
-    })))
+    pretty(
+        &Expr::new(ExprNode::Window(WindowExpr {
+            function: Arc::clone(function),
+            window: WindowSpecRef::Spec(spec.clone()),
+        })),
+        None,
+    )
 }
 
 impl Resolver<'_> {
@@ -400,13 +403,16 @@ impl Resolver<'_> {
                 .map_or_else(String::new, |a| a.col.name.clone());
             let shown = shown_of(rest.iter().map(Bound::shown).collect());
             let ids: Vec<crate::AttrId> = kids.iter().flat_map(|k| k.lateral.clone()).collect();
-            let text = pretty(&super::ops::lateral_refs(
-                &Arc::new(Expr::new(ExprNode::Window(WindowExpr {
-                    function: function.shown(),
-                    window: WindowSpecRef::Spec(shown),
-                }))),
-                &ids,
-            ));
+            let text = pretty(
+                &super::ops::lateral_refs(
+                    &Arc::new(Expr::new(ExprNode::Window(WindowExpr {
+                        function: function.shown(),
+                        window: WindowSpecRef::Spec(shown),
+                    }))),
+                    &ids,
+                ),
+                None,
+            );
             return Err(AnalysisError::new(
                 UnsupportedFeatureLateralColumnAliasInWindow {
                     lca: format!("`{lca}`"),
@@ -424,7 +430,7 @@ impl Resolver<'_> {
             _ => {
                 return Err(AnalysisError::new(
                     UnsupportedExprForWindow {
-                        sql_expr: format!("\"{}\"", pretty(&function.shown())),
+                        sql_expr: format!("\"{}\"", pretty(&function.shown(), None)),
                     },
                     e.origin,
                 ));
@@ -496,7 +502,7 @@ impl Resolver<'_> {
             let offset = call
                 .args
                 .get(1)
-                .and_then(|o| super::fold::constant(o, self.ctx.conf.ansi));
+                .and_then(|o| self.fold(o, self.ctx.conf.ansi));
             let offset = match offset {
                 Some(Constant::Integral(v) | Constant::Fractional(v)) => Some(v),
                 Some(Constant::String(t)) => t.trim().parse::<i64>().ok(),
@@ -673,12 +679,12 @@ impl Resolver<'_> {
                 e.origin,
             ));
         };
-        let value = match super::fold::constant(offset, self.ctx.conf.ansi) {
+        let value = match self.fold(offset, self.ctx.conf.ansi) {
             None => {
-                let text = pretty(offset);
+                let text = pretty(offset, self.ctx.conf.session_zone);
                 return Err(AnalysisError::new(
                     DatatypeMismatchNonFoldableInput {
-                        sql_expr: format!("\"{}\"", pretty(shown)),
+                        sql_expr: format!("\"{}\"", pretty(shown, self.ctx.conf.session_zone)),
                         input_name: "`offset`".to_owned(),
                         input_type: "\"INT\"".to_owned(),
                         input_expr: if name == "lag" {
@@ -817,19 +823,21 @@ impl Resolver<'_> {
         let mut ints = [None, None];
         for (k, x) in values.iter().enumerate() {
             let Some(x) = x else { continue };
-            ints[k] = Some(match offset_value(x, self.ctx.conf.ansi) {
-                Some(Constant::Integral(v)) => v,
-                Some(Constant::Error(e)) => return Err(AnalysisError::new(e, origin)),
-                Some(Constant::Null) => {
-                    return Err(unsupported("a NULL window frame bound", origin));
-                }
-                _ => {
-                    return Err(unsupported(
-                        "window frame bounds other than literals and casts of literals",
-                        origin,
-                    ));
-                }
-            });
+            ints[k] = Some(
+                match offset_value(x, &|c| self.fold(c, self.ctx.conf.ansi)) {
+                    Some(Constant::Integral(v)) => v,
+                    Some(Constant::Error(e)) => return Err(AnalysisError::new(e, origin)),
+                    Some(Constant::Null) => {
+                        return Err(unsupported("a NULL window frame bound", origin));
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            "window frame bounds other than literals and casts of literals",
+                            origin,
+                        ));
+                    }
+                },
+            );
         }
         let at = |b: &FrameBound, v: Option<i64>| match b {
             FrameBound::CurrentRow => Some(0),

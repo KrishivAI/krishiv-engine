@@ -27,6 +27,8 @@ class Query:
     id: str  # "q01"
     sql: str
     suite: str
+    # Checksum query for result sets too large to ship back (``h2o-*``): one row, the answer's row count first.
+    check_sql: str | None = None
 
 
 @dataclass
@@ -35,6 +37,16 @@ class Measure:
     baseline_rss_bytes: int | None = None  # process RSS just before the run
     cpu_seconds: float | None = None
     spill_bytes: int | None = None
+
+
+def check_query(query: Query) -> Query:
+    """The query whose rows decide correctness: the checksum query when the question has one, else the question."""
+    return Query(query.id, query.check_sql, query.suite) if query.check_sql else query
+
+
+def result_rows(query: Query, rows: list[tuple]) -> int:
+    """Row count of the question's answer given the rows of ``check_query(query)``."""
+    return int(rows[0][0]) if query.check_sql else len(rows)
 
 
 def table_path(dataset: Dataset, table: str) -> str:

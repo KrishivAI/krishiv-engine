@@ -1158,3 +1158,105 @@ fn decimal_quotients_round_before_they_are_summed() {
         ["11694972e-6"]
     );
 }
+
+/// Typed datetime literals resolve in the analyzer with the session zone:
+/// the default session (no `spark.sql.session.timeZone`) reads plain
+/// `TIMESTAMP '...'` as UTC, and output names render in the session zone.
+#[test]
+fn typed_timestamp_literals_use_the_session_zone() {
+    use arrow_array::types::TimestampMicrosecondType;
+    // The default session works: `2024-01-01 10:00:00` is 10:00 UTC.
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "TIMESTAMP '2024-01-01 10:00:00'");
+    let batches = block_on(
+        block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(batches[0].num_rows(), 1);
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        1_704_103_200_000_000
+    );
+    // A non-UTC session zone moves instants without a zone, and names
+    // render in that zone, not in UTC.
+    let s = Session::builder()
+        .config("spark.sql.session.timeZone", "+05:30")
+        .build()
+        .unwrap();
+    let df = block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "TIMESTAMP '2024-01-01 10:00:00'");
+    let batches = block_on(
+        block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        1_704_083_400_000_000
+    );
+    // An explicit zone ignores the session zone for the value, but the
+    // name still renders in it: 10:00 UTC is 15:30 in +05:30.
+    let df = block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00+00:00'")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "TIMESTAMP '2024-01-01 15:30:00'");
+}
+
+#[test]
+fn expression_strings_select_filter_and_resolve() {
+    use krishiv_session::functions::expr;
+    let s = session();
+    // `select_expr`: one expression per string, with aliases and `*`.
+    let df = s.table("people").select_expr(["id", "name AS n"]).unwrap();
+    assert_eq!(block_on(df.schema()).unwrap().field(1).name(), "n");
+    assert_eq!(
+        ids(&block_on(df.order_by(["id"]).collect()).unwrap()),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        block_on(s.table("people").select_expr(["*"]).unwrap().schema())
+            .unwrap()
+            .fields()
+            .len(),
+        2
+    );
+    // `filter_expr`: a string predicate.
+    let df = s.table("people").filter_expr("id > 1").unwrap();
+    assert_eq!(
+        ids(&block_on(df.order_by(["id"]).collect()).unwrap()),
+        [2, 3]
+    );
+    // `Session::expr` and `functions::expr` resolve against the frame.
+    let df = s.table("people").select([s.expr("id + 1").unwrap()]);
+    assert_eq!(
+        ids(&block_on(df.order_by(["id"]).collect()).unwrap()),
+        [2, 3, 4]
+    );
+    let df = s.table("people").select([expr("id + 1").unwrap()]);
+    assert_eq!(block_on(df.count()).unwrap(), 3);
+    // Parse errors surface with Spark's class.
+    assert_eq!(
+        class(s.table("people").select_expr(["id +"])),
+        ErrorClass::ParseSyntaxError
+    );
+    assert_eq!(
+        class(s.table("people").filter_expr("id +").map(drop)),
+        ErrorClass::ParseSyntaxError
+    );
+    assert_eq!(
+        class(s.expr("id +").map(drop)),
+        ErrorClass::ParseSyntaxError
+    );
+    assert_eq!(class(expr("id +").map(drop)), ErrorClass::ParseSyntaxError);
+}

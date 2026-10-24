@@ -266,6 +266,18 @@ fn err_text(r: crate::Result<(Vec<Batch>, QueryMetrics)>) -> String {
     r.err().map(|e| e.to_string()).unwrap_or_default()
 }
 
+/// One of an aggregate's own `EXPLAIN ANALYZE` counters.
+fn sink_metric(agg: &HashAggregate, name: &str) -> u64 {
+    Sink::extra_metrics(agg)
+        .iter()
+        .filter(|(n, _)| *n == name)
+        .map(|(_, v)| match v {
+            crate::metrics::Metric::Count(n) | crate::metrics::Metric::Max(n) => *n,
+            crate::metrics::Metric::Text(_) => 0,
+        })
+        .sum()
+}
+
 fn extra(m: &QueryMetrics, op: &str, name: &str) -> u64 {
     m.operators
         .values()
@@ -1522,8 +1534,15 @@ fn row_case_batches(data: &[RowCase], keys: i32, batch: usize) -> (SchemaRef, Ve
             let d = Decimal128Array::from_iter(c.iter().map(|r| r.4.map(i128::from)))
                 .with_precision_and_scale(12, 2)
                 .unwrap();
+            // Inline (up to 12 bytes) and heap strings.
             let s = StringViewArray::from_iter(c.iter().map(|r| {
-                r.5.map(|v| format!("value-{:05}-with-a-long-tail", v % 977))
+                r.5.map(|v| {
+                    if v % 3 == 0 {
+                        format!("v{}", v % 977)
+                    } else {
+                        format!("value-{:05}-with-a-long-tail", v % 977)
+                    }
+                })
             }));
             // No -0.0 among the values: `min`/`max` of -0.0 and 0.0 keep
             // whichever comes first, so they depend on the merge order.
@@ -1605,7 +1624,7 @@ proptest! {
             0..4000,
         ),
         keys in 1i32..3000,
-        nkeys in 1usize..=3,
+        nkeys in 1usize..=6,
         batch in 1usize..900,
         slots in 1usize..4,
         mode in 0u8..3,
@@ -1613,10 +1632,19 @@ proptest! {
         two in any::<bool>(),
         tight in any::<bool>(),
     ) {
-        // Tight, but not below what the row tables need beyond the
-        // default ones (see `row_layout_tight_memory_gap`).
+        // Tight (see `row_layout_tight_memory` for tighter).
         row_case(&data, keys, nkeys, batch, slots, mode, limit, two, tight.then_some(1 << 20))?;
     }
+}
+
+/// Cases of `row_layout_tight_memory`: 64 per PR, more where
+/// `KRISHIV_TIGHT_MEMORY_CASES` says (the nightly runs 256).
+fn tight_memory_cases() -> u32 {
+    std::env::var("KRISHIV_TIGHT_MEMORY_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(64)
 }
 
 /// One case of [`row_layout_equals_default`]: `tight` is the memory limit
@@ -1635,7 +1663,16 @@ fn row_case(
 ) -> Result<(), TestCaseError> {
     let (s, batches) = row_case_batches(data, keys, batch);
     let (_m, scope) = spill_dir();
-    let mut sp = spec(&s, (0..nkeys).collect(), row_case_aggs(&s, slots == 1));
+    // Fixed-width keys, then sets with the string column (5).
+    let keys = match nkeys {
+        1 => vec![0],
+        2 => vec![0, 1],
+        3 => vec![0, 1, 2],
+        4 => vec![5],
+        5 => vec![0, 5],
+        _ => vec![5, 1, 2],
+    };
+    let mut sp = spec(&s, keys, row_case_aggs(&s, slots == 1));
     sp.spill = tight.map(|_| scope);
     let plan = |agg: Arc<HashAggregate>, sp: &AggregateSpec| -> Arc<dyn ExecNode> {
         if two {
@@ -1832,9 +1869,11 @@ async fn row_final_phase_parallel_and_spill_fallback() {
     }
 }
 
-/// Every fixed-width key type through the row tables (fixed indexes that
-/// abandon, several drivers, two keys at a time) returns the default
-/// tables' rows, NULL keys included.
+/// Every key type with a row encoding through the row tables (fixed
+/// indexes that abandon, several drivers, up to three keys at a time)
+/// returns the default tables' rows, NULL keys included: fixed widths, and
+/// strings and binaries of every carrier, empty, inline, 12 and 13 bytes
+/// and long (heap), binaries that are not UTF-8.
 #[tokio::test]
 async fn row_layout_key_types_equal_default() {
     use arrow_array::{
@@ -1843,7 +1882,7 @@ async fn row_layout_key_types_equal_default() {
     let n = 5_000usize;
     let i =
         |m: usize| (0..n).map(move |r| (r % 11 != 0).then(|| i64::try_from(r * 7919 % m).unwrap()));
-    let cols: Vec<(&str, ArrayRef)> = vec![
+    let mut cols: Vec<(&str, ArrayRef)> = vec![
         (
             "d128",
             Arc::new(
@@ -1889,8 +1928,55 @@ async fn row_layout_key_types_equal_default() {
             "b",
             Arc::new(BooleanArray::from_iter(i(2).map(|v| v.map(|v| v == 1)))),
         ),
-        ("x", Arc::new(Int64Array::from_iter(i(1_000)))),
     ];
+    // Strings and binaries of every view shape: empty, inline (up to 12
+    // bytes), exactly 12 and 13 bytes, and long; binaries not UTF-8.
+    let text = |m: usize| {
+        i(m).map(|v| {
+            v.map(|v| match v % 5 {
+                0 => String::new(),
+                1 => format!("{v}"),
+                2 => format!("{v:0>12}"),
+                3 => format!("{v:0>13}"),
+                _ => format!("a-long-string-key-{v:0>30}"),
+            })
+        })
+    };
+    let bytes = |m: usize| {
+        text(m).map(|v| {
+            v.map(|v| {
+                let mut b = vec![0xFF_u8, 0x00];
+                b.extend(v.into_bytes());
+                b
+            })
+        })
+    };
+    let strs = |m| text(m).collect::<Vec<_>>();
+    let bins = |m| bytes(m).collect::<Vec<_>>();
+    cols.extend([
+        (
+            "utf8",
+            Arc::new(arrow_array::StringArray::from(strs(200))) as ArrayRef,
+        ),
+        (
+            "large_utf8",
+            Arc::new(arrow_array::LargeStringArray::from(strs(60))),
+        ),
+        ("utf8_view", Arc::new(StringViewArray::from(strs(500)))),
+        (
+            "binary",
+            Arc::new(arrow_array::BinaryArray::from_iter(bins(80))),
+        ),
+        (
+            "binary_view",
+            Arc::new(arrow_array::BinaryViewArray::from_iter(bins(300))),
+        ),
+        (
+            "large_binary",
+            Arc::new(arrow_array::LargeBinaryArray::from_iter(bins(40))),
+        ),
+        ("x", Arc::new(Int64Array::from_iter(i(1_000)))),
+    ]);
     let s: SchemaRef = Arc::new(Schema::new(
         cols.iter()
             .map(|(n, c)| Field::new(*n, c.data_type().clone(), true))
@@ -1925,6 +2011,15 @@ async fn row_layout_key_types_equal_default() {
         vec![6],
         vec![0, 3],
         vec![2, 6],
+        vec![7],
+        vec![8],
+        vec![9],
+        vec![10],
+        vec![11],
+        vec![12],
+        vec![9, 0],
+        vec![7, 6, 11],
+        vec![8, 12, 2],
     ] {
         let sp = spec(&s, keys.clone(), aggs());
         let o = Opts {
@@ -1944,8 +2039,19 @@ async fn row_layout_key_types_equal_default() {
             rowtable::Mode::Append,
         ] {
             let agg = HashAggregate::with_row_mode(sp.clone(), mode).unwrap();
-            let got = exec_with(AggregateNode::new(scan(&s, batches.clone()), agg), o, true).await;
-            assert_eq!(rows(&got.unwrap().0), want, "keys {keys:?} {mode:?}");
+            let (got, m) = exec_with(AggregateNode::new(scan(&s, batches.clone()), agg), o, true)
+                .await
+                .unwrap();
+            assert_eq!(rows(&got), want, "keys {keys:?} {mode:?}");
+            // The row tables ran (no fallback to the default tables).
+            let layout = m
+                .operators
+                .values()
+                .flat_map(|e| e.extra.iter())
+                .any(|(n, v)| {
+                    *n == "table_layout" && *v == crate::metrics::Metric::Text("rows".to_owned())
+                });
+            assert!(layout, "keys {keys:?}: not on the row tables");
         }
     }
 }
@@ -1989,19 +2095,19 @@ async fn row_layout_nullable_batches_under_a_non_nullable_spec() {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 256,
+        cases: tight_memory_cases(),
         rng_seed: proptest::test_runner::RngSeed::Fixed(20_261_020),
         ..ProptestConfig::default()
     })]
-    /// The known gap, pinned: at 768 KiB the row tables run out of memory
-    /// in cases the default tables spill and finish. The final phase keeps
-    /// the driver tables and the merged tables together, and a cleared
-    /// index keeps a row per repeated key (STATUS: T159 final-phase memory;
-    /// fixed when each partition's inputs are released once merged and
-    /// finished tasks are not spilled).
+    /// At 768 KiB the row tables finish wherever the default tables do,
+    /// with partial duplicates from tiny fixed indexes (one row per input
+    /// row at `limit` 1): the final phase frees each driver partition once
+    /// merged and writes finished partitions to the output file instead of
+    /// spilling them, and a batch's scatter uses the idle spill headroom.
+    /// This fixed seed found the final-phase gap (2x memory) and then the
+    /// scatter's transient bytes.
     #[test]
-    #[ignore = "flag-on final phase needs ~2x memory; STATUS: T159 final-phase memory"]
-    fn row_layout_tight_memory_gap(
+    fn row_layout_tight_memory(
         data in proptest::collection::vec(
             (
                 proptest::option::of(any::<i32>()),
@@ -2014,7 +2120,7 @@ proptest! {
             0..4000,
         ),
         keys in 1i32..3000,
-        nkeys in 1usize..=3,
+        nkeys in 1usize..=6,
         batch in 1usize..900,
         slots in 1usize..4,
         mode in 0u8..3,
@@ -2028,9 +2134,10 @@ proptest! {
     }
 }
 
-/// A spill request during the row tables' parallel merge stops new tasks
-/// and moves what is left to disk; the rows are unchanged and nothing
-/// leaks.
+/// A spill request during the row tables' parallel merge writes the
+/// finished tasks' groups to the output file (final, never merged again)
+/// and the merge goes on; the rest of the result follows them to the file.
+/// The rows are unchanged and nothing leaks.
 #[tokio::test]
 async fn row_merge_spills_on_request() {
     let (s, b) = grouped_input(200_000, 90_000);
@@ -2075,7 +2182,11 @@ async fn row_merge_spills_on_request() {
     };
     let (done, ()) = tokio::join!(agg.finalize(&g, &sink_ctx), request);
     done.unwrap();
-    assert!(agg.metrics().spill_runs > 0);
+    let m = agg.metrics();
+    assert_eq!((m.spill_runs, m.groups), (0, 90_000));
+    assert!(m.spill_files > 0);
+    assert!(sink_metric(&agg, "row_final_flushes") > 0);
+    assert_eq!(sink_metric(&agg, "row_final_spills"), 0);
     let src = ctx(1, "src").with_dependency(Arc::clone(&g));
     let sg = Source::global_state(&*agg, &src).unwrap();
     let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
@@ -2107,6 +2218,7 @@ async fn row_layout_metrics() {
     assert!(extra(&m, "HashAggregate", "row_abandons") > 0);
     assert!(extra(&m, "HashAggregate", "row_final_tasks") > 1);
     assert_eq!(extra(&m, "HashAggregate", "row_final_spills"), 0);
+    assert_eq!(extra(&m, "HashAggregate", "row_final_flushes"), 0);
     assert_eq!(extra(&m, "HashAggregate", "groups"), 90_000);
     assert_eq!(extra(&m, "HashAggregate", "hash_entries"), 90_000);
     let layout = m
@@ -2129,6 +2241,115 @@ async fn row_layout_metrics() {
             .iter()
             .any(|n| n.starts_with("row_") || n == "table_layout"),
         "{names:?}"
+    );
+}
+
+/// What [`by_hand`] observed.
+struct ByHand {
+    rows: Vec<String>,
+    /// Bytes the query pool held once every driver combined.
+    combined: usize,
+    /// The finalizing consumer's peak bytes.
+    peak: usize,
+}
+
+/// Runs `agg` (row layout on) by hand on one worker: `drivers` drivers
+/// sink `b` in turn and combine, then the aggregate finalizes and is read.
+/// Checks that nothing leaks.
+async fn by_hand(
+    agg: &Arc<HashAggregate>,
+    s: &SchemaRef,
+    b: &[Vec<ArrayRef>],
+    drivers: usize,
+) -> ByHand {
+    let root = pool(1 << 30);
+    let config = ExecConfig {
+        agg_row_layout: true,
+        ..ExecConfig::default()
+    };
+    let q = QueryContext::new(
+        QueryId(6),
+        WorkloadClass::Batch,
+        config,
+        root.child("q", None),
+    );
+    // One worker: the merge runs one task at a time.
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let ctx = |id, name| {
+        let e = Arc::clone(&executor);
+        TaskContext::new(Arc::clone(&q), e, SpillOwner::new(), OperatorId(id), name)
+    };
+    let sink_ctx = ctx(0, "agg");
+    let g = Sink::global_state(&**agg, &sink_ctx).unwrap();
+    for part in b.chunks(b.len().div_ceil(drivers)) {
+        let mut l = Sink::local_state(&**agg, &sink_ctx, &g).unwrap();
+        for cols in part {
+            let batch = Batch::new(RecordBatch::try_new(Arc::clone(s), cols.clone()).unwrap());
+            agg.sink(batch, &mut l, &g).unwrap();
+        }
+        agg.combine(l, &g).unwrap();
+    }
+    let combined = root.reserved();
+    agg.finalize(&g, &sink_ctx).await.unwrap();
+    let peak = sink_ctx.consumer().consumer().peak();
+    let src = ctx(1, "src").with_dependency(Arc::clone(&g));
+    let sg = Source::global_state(&**agg, &src).unwrap();
+    let mut sl = Source::local_state(&**agg, &src, &sg).unwrap();
+    let mut out = Vec::new();
+    while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
+        out.push(b);
+    }
+    drop((sl, sg, src, g, sink_ctx));
+    assert_eq!(root.reserved(), 0);
+    ByHand {
+        rows: rows(&out),
+        combined,
+        peak,
+    }
+}
+
+/// When the final phase runs short of memory it first writes the finished
+/// tasks' groups to the output file; when it runs short again with no
+/// task finished, the rest spills and the disk phase appends to that same
+/// file. Every group comes out once, with its values.
+#[tokio::test]
+async fn row_merge_flushes_then_spills() {
+    let (s, b) = grouped_input(200_000, 90_000);
+    let expected = run_rows(single(&s, &b)).await;
+    let (_m, scope) = spill_dir();
+    let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+    sp.spill = Some(scope);
+    // After the first task, no task gets memory: flush it, then spill.
+    let agg =
+        HashAggregate::with_final_stall(sp, rowtable::Mode::Fixed { limit: 5_000 }, 1).unwrap();
+    let got = by_hand(&agg, &s, &b, 3).await;
+    assert_eq!(got.rows.len(), 90_000);
+    assert_eq!(got.rows, expected);
+    assert!(sink_metric(&agg, "row_final_tasks") > 1);
+    assert_eq!(sink_metric(&agg, "row_final_flushes"), 1);
+    assert_eq!(sink_metric(&agg, "row_final_spills"), 1);
+    let m = agg.metrics();
+    assert!(m.spill_runs > 0);
+    assert_eq!(m.groups, 90_000);
+}
+
+/// The final phase frees each driver partition once merged: with every key
+/// distinct (the merged tables are as large as the inputs), the peak stays
+/// well below holding the inputs and the merged tables together.
+#[tokio::test]
+async fn row_merge_frees_inputs_as_it_merges() {
+    let (s, b) = grouped_input(120_000, 120_000);
+    let expected = run_rows(single(&s, &b)).await;
+    let sp = spec(&s, vec![0], grouped_aggs(&s));
+    let agg = HashAggregate::with_row_mode(sp, rowtable::Mode::Append).unwrap();
+    let got = by_hand(&agg, &s, &b, 3).await;
+    assert_eq!(got.rows, expected);
+    assert!(sink_metric(&agg, "row_final_tasks") > 2);
+    assert!(
+        got.peak < got.combined * 3 / 2,
+        "peak {} vs {} combined",
+        got.peak,
+        got.combined
     );
 }
 
@@ -2299,4 +2520,60 @@ async fn a_failed_result_spill_fails_the_query() {
         .unwrap_or_else(|| unreachable!("the result could not spill"));
     assert_eq!(e.error_class(), ErrorClass::KrishivSpillCapExceeded, "{e}");
     assert_eq!(spill.manager.used_bytes(), 0, "spill files left");
+}
+
+/// A thread-local table widens to its radix partitions once large, and the
+/// final phase widens the tables that stayed narrow before it merges, so
+/// a driver with many groups and one with few merge to the same result.
+/// When the final phase cannot reserve that widening, every driver table
+/// spills and the disk phase merges them.
+#[tokio::test]
+async fn narrow_and_wide_tables_merge() {
+    let (s, mut b) = grouped_input(1_000, 1_000);
+    let (_, small) = grouped_input(40, 10);
+    b.extend(small);
+    let expected = run_rows(single(&s, &b)).await;
+    let mode = rowtable::Mode::Fixed { limit: 5_000 };
+    // One driver per batch: 1,000 groups (widens at 64) and 10 (narrow).
+    let sp = spec(&s, vec![0], grouped_aggs(&s));
+    let agg = HashAggregate::with_row_mode(sp, mode).unwrap();
+    let got = by_hand(&agg, &s, &b, 2).await;
+    assert_eq!(got.rows, expected);
+    assert_eq!(sink_metric(&agg, "row_final_spills"), 0);
+    // The widening of the narrow table is refused: spill and merge on disk.
+    let (_m, scope) = spill_dir();
+    let mut sp = spec(&s, vec![0], grouped_aggs(&s));
+    sp.spill = Some(scope);
+    let agg = HashAggregate::with_final_stall(sp, mode, 0).unwrap();
+    let got = by_hand(&agg, &s, &b, 2).await;
+    assert_eq!(got.rows, expected);
+    assert_eq!(sink_metric(&agg, "row_final_spills"), 1);
+    assert!(agg.metrics().spill_runs >= 2);
+}
+
+/// Without a spill directory, a narrow table that cannot reserve its
+/// widening stays narrow (waiting for that memory could wait forever: at
+/// a tight limit nothing else frees it), and one task with one partition
+/// merges every partition of every table instead of one task per range.
+#[tokio::test]
+async fn a_refused_widening_merges_in_one_task() {
+    let (s, mut b) = grouped_input(80_000, 70_000);
+    let (_, small) = grouped_input(40, 10);
+    b.extend(small);
+    let expected = run_rows(single(&s, &b)).await;
+    // A fixed index (radix partitions at one thread too) that never fills.
+    let mode = rowtable::Mode::Fixed { limit: 100_000 };
+    // Widened: the 70,000 groups merge in several tasks.
+    let agg = HashAggregate::with_row_mode(spec(&s, vec![0], grouped_aggs(&s)), mode).unwrap();
+    let got = by_hand(&agg, &s, &b, 81).await;
+    assert_eq!(got.rows, expected);
+    assert!(sink_metric(&agg, "row_final_tasks") > 1);
+    // Refused (and no spill directory): one task. (A stall after
+    // `usize::MAX` tasks refuses only the widening.)
+    let sp = spec(&s, vec![0], grouped_aggs(&s));
+    let agg = HashAggregate::with_final_stall(sp, mode, usize::MAX).unwrap();
+    let got = by_hand(&agg, &s, &b, 81).await;
+    assert_eq!(got.rows, expected);
+    assert_eq!(sink_metric(&agg, "row_final_tasks"), 1);
+    assert_eq!(sink_metric(&agg, "row_final_spills"), 0);
 }

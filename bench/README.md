@@ -4,7 +4,7 @@ Python (uv) harness that runs query suites against engine adapters and records J
 Datasets and results live **outside the repo** in `$KRISHIV_DATA` (default `~/krishiv-data`):
 
 ```
-$KRISHIV_DATA/tpch/sf1/*.parquet   tpcds/sf1/   clickbench/   nexmark/   zipf/
+$KRISHIV_DATA/tpch/sf1/*.parquet   tpcds/sf1/   clickbench/   nexmark/   zipf/   memcap/v1/<rows>/
 $KRISHIV_DATA/manifests/*.sha256   (sha256sum -c compatible, relative paths)
 $KRISHIV_DATA/results/*.json       report_<suite>_sf<N>.md
 ```
@@ -62,6 +62,61 @@ returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket
 - Adding Flink etc.: subclass `Engine`, register in `adapters/__init__.py`.
 Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (TPC-H ClickHouse only; ClickBench is fetched and adapted in code).
 
+## Memory-capped data engineering (`--suite memcap`)
+Four data-engineering queries over a seeded synthetic star schema, each run in a fresh process under a hard memory cap.
+```bash
+uv run krishiv-datasets memcap --rows 10m 50m 150m     # -> $KRISHIV_DATA/memcap/v1/<rows>/ + manifests/memcap-v1-<rows>.sha256
+uv run krishiv-bench reproduce --suite memcap --rows 150m --cap 4.5g --engines krishiv,duckdb,polars,spark --reps 3
+uv run krishiv-bench reproduce --suite memcap --rows 150m --cap 4.5g --engines krishiv,duckdb --engine-memory 1g   # spill
+uv run krishiv-bench run --engine duckdb --suite memcap --rows 10m --queries q3      # one engine (spark-local is accepted as spark)
+uv run krishiv-bench report --suite memcap --rows 150m                                # -> $KRISHIV_DATA/results/report_memcap_150m.md
+```
+* **Data**: `sales` fact (`--rows` 10m/50m/150m; 5M-row part files, snappy, about 3.2 GB at 150m) and a 50,000-row `products` dimension; about 10 orders per customer.
+  Fixed seed (`20261019`, one RNG stream per 5M-row chunk). `digest.json` in the dataset directory records the seed, the chunking, versions and sha256 content digests of the
+  logical rows (independent of the Parquet encoder); the file digests are in the manifest. A dataset directory is never regenerated in place: a generator change is a new version directory (`v2`).
+* **Queries** (`memcap_queries.py`): `q1_filter_agg` (filter on timestamp and status, group by store and status), `q2_join_agg` (fact-dimension join, group by category and brand),
+  `q3_window_latest` (latest order per customer, `ROW_NUMBER()`), `q4_highcard_agg` (group by customer, about 15M groups at 150m). One SQL text for DuckDB, Krishiv and Spark (Krishiv spells the q1 timestamp literal as a cast to `TIMESTAMP_NTZ`, `sql_for`); Polars runs the same logic as expressions.
+* **Runs**: `systemd-run --user --scope -p MemoryMax=<cap> -p MemorySwapMax=0` around one `memcap_child` process per (engine, query), 8 threads, so the kernel kills the whole tree above the cap.
+  Engine memory settings (`--engine-memory`, default `3g`): DuckDB `memory_limit`, Krishiv `--memory-limit`, Spark `spark.driver.memory`; Polars has none. The result is written as Parquet inside the timed span.
+  A run is `finished`, `killed` (the scope's `oom_kill` counter moved, or SIGKILL with the scope within 5% of the cap), `timeout` or `failed`; only finished runs are timed.
+  Recorded per run: wall time (process start to exit, so it includes imports and session start, and the scope's start), the highest resident set of the tree (sampled every 10 ms from the scope's `memory.stat`:
+  anonymous + mapped file + shared pages), the scope's `memory.peak` (`peak_cgroup_bytes`; what the cap acts on, includes reclaimable page cache), and the peak size of the engine's scratch directory as `spill_bytes`
+  (DuckDB temp directory, Krishiv `krishiv.spill.dir`, Spark local dir; none for Polars). The scope disappears with its last process, so a kill is read from the last poll; the SIGKILL-near-cap rule covers a missed event.
+* **Correctness before timing**: per query every engine first runs once untimed (validation); DuckDB's result is the reference (it runs first, even when it is not a reported engine) and each result is
+  checksummed with DuckDB (row count, integer sums exactly, float sums within 1e-9 relative). An engine whose result differs is never timed on that query (verdict `mismatch`); an engine that could not
+  produce a validated result keeps `unverified` until a later finished run is checked. Then `--reps` repetitions (default 3) with the engine order rotated per repetition.
+* **Output**: `$KRISHIV_DATA/results/<ts>_memcap_<rows>_<cap>_<engine memory>.json` (machine, git, dataset digests, every run, per-engine summary); `report` gives, per query and engine, the median wall time of
+  finished runs, finished n/N, median peak memory (`>cap (killed)` when none finished), spill and the verdict. The newest result per (engine, engine memory) is shown. The run holds `$KRISHIV_DATA/.bench.lock`.
+* Needs systemd user scopes with the memory controller (Linux, cgroup v2), Java 21 for Spark and the `dist` runner for Krishiv (see Adapters). Run 50m/150m on the benchmark server.
+
+### Provenance and licence
+The schema, seed, generator and the four queries are taken from the public MIT-licensed repository `engine-bench` by Firat Celik (https://github.com/firfircelik/engine-bench: `gen_data.py`, `queries.py`),
+adapted here (output layout, content digests, versioned directory, checksums). The licence notice that goes with that use:
+
+```
+MIT License
+
+Copyright (c) 2026 Firat Celik
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash
 RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner
@@ -97,6 +152,34 @@ both sides run once and their rows must match (type-aware, as `abba`); a mismatc
 `--reps` blocks of A B B A. The table and `$KRISHIV_DATA/results/<ts>_ab_<suite>_sf<N>.json` hold the per-query medians, B/A ratio with a
 bootstrap 95% CI, the spread of each side ((max - min) / median), the geomean and the load. The JSON records per side the runner path,
 `--conf` list, `--a-sha`/`--b-sha` and the runner's `--build-info` (stored as `null` for runners that predate it).
+
+## Groupby and join suites (`h2o-groupby`, `h2o-join`)
+The 10 groupby and 5 join questions of the open-source `db-benchmark` project (MPL-2.0, <https://github.com/duckdblabs/db-benchmark>),
+written here as portable SQL in `queries/h2o-groupby/` and `queries/h2o-join/` (our own text; only the question definitions and the
+checksum idea come from upstream). The data generator is a Python reimplementation of the upstream R `groupby-datagen.R` /
+`join-datagen.R` distributions (schemas, key cardinalities, 90 % common keys for the joins, value-level NAs, sorted variant); it is
+deterministic (fixed seed 108, per-chunk RNG streams) but not byte-identical to the R output.
+```bash
+# 0.5 GB = 1e7 rows, 5 GB = 1e8, 50 GB = 1e9; --na 5 and --sorted give the NA and sorted variants; --k sets the groupby K
+uv run krishiv-datasets h2o-groupby --size 5gb          # -> $KRISHIV_DATA/h2o/v1/G1_1e8_1e2_0_0/x.parquet
+uv run krishiv-datasets h2o-join --size 5gb             # -> $KRISHIV_DATA/h2o/v1/J1_1e8_NA_0_0/{x,small,medium,big}.parquet
+uv run krishiv-datasets h2o-verify "$KRISHIV_DATA/h2o/v1/G1_1e8_1e2_0_0"   # recompute the checksums against MANIFEST.json
+uv run krishiv-bench run --engine duckdb --suite h2o-groupby --size 5gb       # also: krishiv, polars, datafusion
+uv run krishiv-bench reproduce --suite h2o-join --size 5gb --methods ours --engines krishiv,duckdb,polars
+uv run krishiv-bench ab --suite h2o-groupby --size 0.5gb --a-runner $A --b-runner $B
+uv run krishiv-bench report --suite h2o-groupby --size 5gb
+```
+* Datasets are immutable: `--h2o-version` names the output directory and an existing dataset is never overwritten. `MANIFEST.json` records the
+  parameters, library versions, a per-column content digest (independent of Parquet encoding), the Parquet file hashes and one dataset digest, which
+  result files copy. A different NumPy version can change the stream, so the digest is the identity to compare. Join generation keeps the key
+  arrays in memory (about 3 GB at 1e8 rows, about 35 GB at 1e9); groupby is chunked.
+* Answer checksums first. Each question has a checksum query (the answer's row count and the sums of its checked columns, the benchmark's `chk`).
+  Every engine runs it once before any timing and the row must equal DuckDB's (sums within the usual 1e-6 relative tolerance); a mismatch marks the
+  question failed, it is never timed, and `run` exits non-zero. Timed runs materialise the answer inside the engine and count rows, so large
+  answers are never converted to Python objects.
+* `run` defaults to 3 timed + 1 warm-up runs; the result JSON (`<ts>_<engine>_<dataset>_sf<GB>.json`) holds the checksums, reference checksums,
+  timings and the dataset digest. `reproduce` and `ab` use the same checksum comparison before their interleaved timing (`abba` supports the TPC suites
+  and ClickBench only).
 
 ## Reference engines, two methods (`reproduce`, P2-T156)
 ```bash
@@ -158,7 +241,7 @@ The report never prints "all agree" if any check was skipped: skipped checks are
 * **ClickBench** (ClickHouse/ClickBench, licensed **CC BY-NC-SA 4.0**): the query texts are **fetched, not redistributed**. They are not in this repository.
   On first use the harness downloads two files from the pinned upstream commit `0e10b8434eef001b43156b860a4e2e3665a35d51`
   (`duckdb-parquet/queries.sql` for every engine but ClickHouse, `clickhouse/queries.sql` for ClickHouse), checks their SHA-256 (pinned in
-  `clickbench_queries.py`) and caches them under `$KRISHIV_DATA/clickbench/queries/<commit>/`, as the dataset is downloaded to `$KRISHIV_DATA/clickbench`.
+  `clickbench_queries.py`) and caches them under `$KRISHIV_DATA/cache/clickbench-queries/<commit>/`, outside the dataset directory `$KRISHIV_DATA/clickbench`.
   A download whose hash differs from the pin is rejected and never cached. The harness adapts the text at run time (`clickbench_queries.adapt`), without storing
   a modified copy: `STRLEN(x)` becomes `length(x)`; date-string bounds on `EventDate` become day numbers and `extract(minute FROM EventTime)` /
   `DATE_TRUNC('minute', EventTime)` become integer arithmetic (the raw Parquet columns are a day count and epoch seconds, read without a view); and

@@ -2,7 +2,7 @@
 
 The ClickBench queries are licensed CC BY-NC-SA 4.0 (ClickHouse/ClickBench), so this repository does not contain or
 redistribute them. ``load`` downloads the two upstream files this harness uses from a pinned commit, checks their
-SHA-256, and caches them under ``$KRISHIV_DATA/clickbench/queries/<commit>/`` (like the dataset itself):
+SHA-256, and caches them under ``$KRISHIV_DATA/cache/clickbench-queries/<commit>/``, outside the dataset directory:
 
 * ``duckdb-parquet/queries.sql``: used for every engine except ClickHouse;
 * ``clickhouse/queries.sql``: used for ClickHouse.
@@ -95,7 +95,9 @@ def _verified(data: bytes, expected: str, what: str) -> bytes:
 
 
 def cache_dir(commit: str = COMMIT) -> Path:
-    return data_root() / "clickbench" / "queries" / commit[:12]
+    """Kept beside the dataset directory, never inside it: an engine that registers every entry of the dataset
+    directory (the Krishiv runner does) would otherwise see the cache as a table."""
+    return data_root() / "cache" / "clickbench-queries" / commit[:12]
 
 
 def fetch_file(

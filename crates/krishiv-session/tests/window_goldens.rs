@@ -29,18 +29,12 @@ use serde_json::Value;
 const PENDING: [&str; 1] = ["range_offset"];
 
 /// Known gaps outside window functions, with the error they give until
-/// fixed: constant arguments fold from literals and casts only, so
-/// `ntile(1 + 1)` and a frame bound `1 + 1 PRECEDING` are not foldable yet
-/// (the analyzer's general constant folding of operators is separate P2b
-/// work).
-///
-/// The fixture's tables are temporary views in Spark, which qualifies their
-/// columns by the view's name (`t.v`); this session registers them as
-/// tables of the session catalog (`spark_catalog.default.t.v`), so an
-/// error that prints a qualified column differs in the qualifier only.
-const GAPS: [(&str, &str); 4] = [
-    ("ntile_folded", "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"),
-    ("frame_folded_bound", "KRISHIV_UNSUPPORTED_FEATURE"),
+/// fixed. The fixture's tables are temporary views in Spark, which
+/// qualifies their columns by the view's name (`t.v`); this session
+/// registers them as tables of the session catalog
+/// (`spark_catalog.default.t.v`), so an error that prints a qualified
+/// column differs in the qualifier only.
+const GAPS: [(&str, &str); 2] = [
     ("lag_not_ordered", "WINDOW_FUNCTION_FRAME_NOT_ORDERED"),
     ("nth_value_not_ordered", "WINDOW_FUNCTION_FRAME_NOT_ORDERED"),
 ];
