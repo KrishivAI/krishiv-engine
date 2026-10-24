@@ -68,11 +68,11 @@ impl<T> FromIterator<Result<T>> for Exact<T> {
     }
 }
 
-fn id(i: usize) -> Result<u32> {
+pub(super) fn id(i: usize) -> Result<u32> {
     u32::try_from(i).map_err(|_| too_large())
 }
 
-fn too_large() -> krishiv_common::error::KrishivError {
+pub(super) fn too_large() -> krishiv_common::error::KrishivError {
     KrishivUnsupportedFeature {
         feature: "window evaluation over more than 2^32 - 1 rows at once".to_owned(),
     }
@@ -217,7 +217,7 @@ fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef
 }
 
 /// `count` as a double (Spark divides counts as doubles).
-fn count_f64(count: usize) -> f64 {
+pub(super) fn count_f64(count: usize) -> f64 {
     #[expect(
         clippy::cast_precision_loss,
         reason = "Spark divides row counts as doubles"
@@ -257,7 +257,7 @@ pub(super) fn ntile(r: usize, rows: usize, k: i32) -> Option<i32> {
 
 /// The argument columns of `a` over slice `s`, and whether each row of the
 /// slice passes `filter`.
-fn arguments(a: &AggregateExpr, s: &Slice<'_>) -> Result<Vec<ArrayRef>> {
+pub(super) fn arguments(a: &AggregateExpr, s: &Slice<'_>) -> Result<Vec<ArrayRef>> {
     a.args
         .iter()
         .map(|&c| {
@@ -270,7 +270,7 @@ fn arguments(a: &AggregateExpr, s: &Slice<'_>) -> Result<Vec<ArrayRef>> {
         .collect()
 }
 
-fn filter_mask(f: &WindowFunctionPlan, s: &Slice<'_>) -> Result<Option<BooleanArray>> {
+pub(super) fn filter_mask(f: &WindowFunctionPlan, s: &Slice<'_>) -> Result<Option<BooleanArray>> {
     let Some(c) = f.filter else {
         return Ok(None);
     };
@@ -283,7 +283,7 @@ fn filter_mask(f: &WindowFunctionPlan, s: &Slice<'_>) -> Result<Option<BooleanAr
 }
 
 /// Whether row `i` of a filter mask passes (`true`, not NULL).
-fn passes(mask: Option<&BooleanArray>, i: usize) -> bool {
+pub(super) fn passes(mask: Option<&BooleanArray>, i: usize) -> bool {
     mask.is_none_or(|m| m.is_valid(i) && m.value(i))
 }
 
@@ -294,11 +294,7 @@ fn aggregate(
     ansi: bool,
 ) -> Result<ArrayRef> {
     let shape = f.shape()?;
-    let decimal = matches!(
-        a.arg_type,
-        DataType::Decimal64(..) | DataType::Decimal128(..)
-    );
-    if decimal && matches!(a.function, AggregateFunction::Sum | AggregateFunction::Avg) {
+    if exact_decimal(a) {
         return decimal_aggregate(a, f, shape, u, ansi);
     }
     if picks_bytes(a) {
@@ -408,13 +404,13 @@ fn aggregate(
 }
 
 /// `values[indices[i]]` for each row.
-fn take(values: &ArrayRef, indices: &[u32]) -> Result<ArrayRef> {
+pub(super) fn take(values: &ArrayRef, indices: &[u32]) -> Result<ArrayRef> {
     let idx = UInt32Array::from(indices.to_vec());
     arrow_select::take::take(values.as_ref(), &idx, None).map_err(|e| internal(e.to_string()))
 }
 
 /// The unscaled values of a decimal column, in `i128`.
-fn decimals(col: &ArrayRef) -> Result<Vec<Option<i128>>> {
+pub(super) fn decimals(col: &ArrayRef) -> Result<Vec<Option<i128>>> {
     Ok(match col.data_type() {
         DataType::Decimal64(..) => col
             .as_primitive::<Decimal64Type>()
@@ -435,14 +431,6 @@ fn decimal_aggregate(
     u: &Unit<'_>,
     ansi: bool,
 ) -> Result<ArrayRef> {
-    let result = a.result_type()?;
-    let (DataType::Decimal64(p, s) | DataType::Decimal128(p, s)) = result else {
-        return Err(internal("decimal window aggregate type".to_owned()));
-    };
-    let (DataType::Decimal64(_, in_scale) | DataType::Decimal128(_, in_scale)) = a.arg_type else {
-        return Err(internal("decimal window aggregate input".to_owned()));
-    };
-    let avg = a.function == AggregateFunction::Avg;
     // The state after each segment: (exact sum, rows summed). Sized exactly
     // (what `cost` reserves): one state per segment.
     let segments = match shape {
@@ -494,21 +482,45 @@ fn decimal_aggregate(
     }
     let mut out: Vec<Option<i128>> = Vec::with_capacity(states.len());
     for &(sum, count) in &states {
-        out.push(if count == 0 {
-            None
-        } else if avg {
-            match avg_decimal_wide(sum, in_scale, count, p, s) {
-                (Some(v), _) => Some(v),
-                (None, text) if ansi => {
-                    return Err(crate::aggregate::out_of_range(text, p, s));
-                }
-                (None, _) => None,
-            }
-        } else {
-            wide_sum_value(Some(sum), p, s, ansi)?
-        });
+        out.push(decimal_value(a, sum, count, ansi)?);
     }
-    let values: ArrayRef = match result {
+    take(&decimal_array(a, out)?, &seg_of)
+}
+
+/// The value of a decimal `sum` or `avg` whose exact state is `sum` over
+/// `count` rows: `NULL` without rows or past the result's precision (with
+/// ANSI, `NUMERIC_VALUE_OUT_OF_RANGE`).
+pub(super) fn decimal_value(
+    a: &AggregateExpr,
+    sum: i256,
+    count: i64,
+    ansi: bool,
+) -> Result<Option<i128>> {
+    let (DataType::Decimal64(p, s) | DataType::Decimal128(p, s)) = a.result_type()? else {
+        return Err(internal("decimal window aggregate type".to_owned()));
+    };
+    let (DataType::Decimal64(_, in_scale) | DataType::Decimal128(_, in_scale)) = a.arg_type else {
+        return Err(internal("decimal window aggregate input".to_owned()));
+    };
+    Ok(if count == 0 {
+        None
+    } else if a.function == AggregateFunction::Avg {
+        match avg_decimal_wide(sum, in_scale, count, p, s) {
+            (Some(v), _) => Some(v),
+            (None, text) if ansi => {
+                return Err(crate::aggregate::out_of_range(text, p, s));
+            }
+            (None, _) => None,
+        }
+    } else {
+        wide_sum_value(Some(sum), p, s, ansi)?
+    })
+}
+
+/// Decimal values of `a`'s result type.
+pub(super) fn decimal_array(a: &AggregateExpr, out: Vec<Option<i128>>) -> Result<ArrayRef> {
+    let result = a.result_type()?;
+    Ok(match result {
         DataType::Decimal64(..) => {
             let v: Vec<Option<i64>> = out
                 .into_iter()
@@ -518,8 +530,16 @@ fn decimal_aggregate(
             Arc::new(PrimitiveArray::<Decimal64Type>::from(v).with_data_type(result))
         }
         _ => Arc::new(PrimitiveArray::<Decimal128Type>::from(out).with_data_type(result)),
-    };
-    take(&values, &seg_of)
+    })
+}
+
+/// Whether `a` is a decimal `sum` or `avg` (kept exact, see the module
+/// docs of [`super`]).
+pub(super) fn exact_decimal(a: &AggregateExpr) -> bool {
+    matches!(
+        a.arg_type,
+        DataType::Decimal64(..) | DataType::Decimal128(..)
+    ) && matches!(a.function, AggregateFunction::Sum | AggregateFunction::Avg)
 }
 
 /// Whether `t` is a string or binary type.
@@ -537,7 +557,7 @@ fn is_bytes(t: &DataType) -> bool {
 
 /// Whether `a` picks one row's string or binary value (`min`, `max`,
 /// `first`, `last`): evaluated by [`byte_values`], without copying values.
-fn picks_bytes(a: &AggregateExpr) -> bool {
+pub(super) fn picks_bytes(a: &AggregateExpr) -> bool {
     use AggregateFunction as F;
     is_bytes(&a.arg_type)
         && matches!(
@@ -547,7 +567,7 @@ fn picks_bytes(a: &AggregateExpr) -> bool {
 }
 
 /// The view type a string or binary argument is read as.
-fn view_type(t: &DataType) -> DataType {
+pub(super) fn view_type(t: &DataType) -> DataType {
     match t {
         DataType::Binary | DataType::BinaryView | DataType::LargeBinary => DataType::BinaryView,
         _ => DataType::Utf8View,
@@ -556,7 +576,7 @@ fn view_type(t: &DataType) -> DataType {
 
 /// A string or binary column as views of its own buffers (arrow-array
 /// builds them without copying values when the offsets fit `u32`).
-fn to_view(col: &ArrayRef) -> Result<ArrayRef> {
+pub(super) fn to_view(col: &ArrayRef) -> Result<ArrayRef> {
     use arrow_array::{BinaryViewArray, StringViewArray};
     Ok(match col.data_type() {
         DataType::Utf8View | DataType::BinaryView => Arc::clone(col),
@@ -592,7 +612,6 @@ fn byte_values(
     shape: Shape,
     u: &Unit<'_>,
 ) -> Result<ArrayRef> {
-    use AggregateFunction as F;
     let view = view_type(&a.arg_type);
     let mut sources: Vec<ArrayRef> = Vec::with_capacity(u.slices.len() + 1);
     for sl in u.slices {
@@ -623,38 +642,10 @@ fn byte_values(
             }
             if passes(mask.as_ref(), i) {
                 let valid = sources[k].is_valid(i);
-                state = match a.function {
-                    F::Min | F::Max if !valid => state,
-                    F::Min | F::Max => match state {
-                        Some((sk, si)) => {
-                            let order = value(k, i).cmp(value(sk, si));
-                            let better = if a.function == F::Max {
-                                order.is_gt()
-                            } else {
-                                order.is_lt()
-                            };
-                            if better { Some((k, i)) } else { state }
-                        }
-                        None => Some((k, i)),
-                    },
-                    F::First { ignore_nulls } => {
-                        if state.is_some() || (ignore_nulls && !valid) {
-                            state
-                        } else {
-                            Some((k, i))
-                        }
-                    }
-                    F::Last { ignore_nulls } => {
-                        if ignore_nulls && !valid {
-                            state
-                        } else {
-                            Some((k, i))
-                        }
-                    }
-                    other => {
-                        return Err(internal(format!("{other:?} of strings by row")));
-                    }
-                };
+                let picked = state.map(|(sk, si)| sources[sk].is_valid(si).then(|| value(sk, si)));
+                if replaces(a.function, picked, valid, || value(k, i))? {
+                    state = Some((k, i));
+                }
             }
             if row + 1 == segment(shape, u, row).0 {
                 chosen.push(state.unwrap_or((null_source, 0)));
@@ -667,6 +658,36 @@ fn byte_values(
         .collect();
     let refs: Vec<&dyn Array> = sources.iter().map(AsRef::as_ref).collect();
     arrow_select::interleave::interleave(&refs, &indices).map_err(|e| internal(e.to_string()))
+}
+
+/// Whether a row (`valid`, its bytes `value`) replaces the value a
+/// `min`/`max`/`first`/`last` of strings or binaries picked so far
+/// (`picked`: `None` before any row, `Some(None)` for a picked NULL);
+/// Spark compares by bytes.
+pub(super) fn replaces<'v>(
+    function: AggregateFunction,
+    picked: Option<Option<&'v [u8]>>,
+    valid: bool,
+    value: impl FnOnce() -> &'v [u8],
+) -> Result<bool> {
+    use AggregateFunction as F;
+    Ok(match function {
+        F::Min | F::Max if !valid => false,
+        F::Min | F::Max => match picked.flatten() {
+            Some(old) => {
+                let order = value().cmp(old);
+                if function == F::Max {
+                    order.is_gt()
+                } else {
+                    order.is_lt()
+                }
+            }
+            None => true,
+        },
+        F::First { ignore_nulls } => picked.is_none() && (valid || !ignore_nulls),
+        F::Last { ignore_nulls } => valid || !ignore_nulls,
+        other => return Err(internal(format!("{other:?} of strings by row"))),
+    })
 }
 
 /// Bytes an array of `rows` values of `t` takes (validity included).
@@ -700,14 +721,9 @@ pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -
                     Shape::RunningRows => rows,
                     Shape::RunningPeers => peers,
                 };
-                let decimal = matches!(
-                    a.arg_type,
-                    DataType::Decimal64(..) | DataType::Decimal128(..)
-                );
                 // The gathered output and its indices.
                 let gathered = width(&out, rows) + rows * 4;
-                if decimal && matches!(a.function, AggregateFunction::Sum | AggregateFunction::Avg)
-                {
+                if exact_decimal(a) {
                     // States, the segment of each row, the values.
                     segments * size_of::<(i256, i64)>()
                         + rows * 4
