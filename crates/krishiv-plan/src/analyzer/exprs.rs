@@ -854,11 +854,10 @@ impl Resolver<'_> {
                 let mut owned: Vec<Bound>;
                 let (kids, n) = if entry.id.name() == "assert_true" && n == 1 {
                     owned = kids.to_vec();
-                    owned.insert(1, assert_message(
-                        &owned[0],
-                        e.origin,
-                        self.ctx.conf.session_zone,
-                    ));
+                    owned.insert(
+                        1,
+                        assert_message(&owned[0], e.origin, self.ctx.conf.session_zone),
+                    );
                     (&owned[..], 2)
                 } else {
                     (kids, n)
