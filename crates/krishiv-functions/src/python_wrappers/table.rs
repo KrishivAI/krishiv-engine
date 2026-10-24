@@ -17,8 +17,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>>", "operator"),
     ("if", "no PySpark function"),
     ("mod", "no PySpark function"),
-    ("mean", "PySpark's `mean` sends `avg`"),
-    ("pow", "PySpark's `pow` sends `power`"),
+    (
+        "mean",
+        "an alias of `avg`; the exported `mean` is a row that sends `avg`",
+    ),
+    (
+        "pow",
+        "an alias of `power`; the exported `pow` is a row that sends `power`",
+    ),
 ];
 
 /// Registry names whose wrapper is written by hand in `functions.py`.

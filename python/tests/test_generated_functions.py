@@ -8,8 +8,6 @@ import ast
 import datetime
 import inspect
 import math
-import shutil
-import subprocess
 import warnings
 from pathlib import Path
 from typing import Any
@@ -41,8 +39,7 @@ REGISTRY_NAME = {
 }
 #: Spark's `trim(chars, str)`: PySpark's `(col, trim)` is sent reversed.
 REVERSED = {"ltrim", "rtrim", "trim"}
-HAND_WRITTEN = {"asc", "call_function", "col", "column", "concat", "count", "countDistinct", "count_distinct"}
-HAND_WRITTEN |= {"desc", "expr", "lit", "log", "when"}
+HAND_WRITTEN = set(F._HAND_WRITTEN)
 #: Parameters that only take some values.
 CHECKED_VALUES = {("sha2", "numBits"): 256}
 
@@ -71,13 +68,18 @@ def _all_of(path: Path) -> list[str]:
     raise AssertionError(f"no __all__ in {path}")
 
 
-def test_generated_files_match_the_registry() -> None:
-    root = PYTHON_DIR.parent
-    if shutil.which("cargo") is None or not (root / "Cargo.toml").is_file():
-        pytest.skip("needs cargo and the source tree")
-    cmd = ["cargo", "run", "--quiet", "-p", "krishiv-functions", "--bin", "gen-python-functions", "--", "--check"]
-    done = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=1800, check=False)
-    assert done.returncode == 0, done.stderr
+def test_the_export_list_has_one_source() -> None:
+    """``F.__all__`` is the generated names plus the hand-written ones, in no other list: the three lists (the
+    generated module, ``functions.py`` and PySpark's signatures) cannot drift apart without a failure here."""
+    assert list(F.__all__) == [*G.__all__, *F._HAND_WRITTEN]
+    assert len(set(F.__all__)) == len(F.__all__)
+    assert set(F._HAND_WRITTEN).isdisjoint(G.__all__)
+    for name in F._HAND_WRITTEN:
+        assert getattr(F, name).__module__ == F.__name__, name
+    for name in G.__all__:
+        assert getattr(F, name) is getattr(G, name), name
+    # PySpark's side: a name Krishiv exports and PySpark lacks, or the reverse, is a failure.
+    assert set(PYSPARK_SIGNATURES) | {"column"} == set(F.__all__)
 
 
 def test_names_and_parameters_are_pysparks() -> None:
@@ -215,6 +217,11 @@ def test_argument_checks(recorded: None) -> None:
         F.lpad("s", 5, [1])  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError, match="col1"):
         F.atan2(None, "b")  # ty: ignore[invalid-argument-type]
+    # PySpark's `ColumnOrName | int` takes an int as a literal and resolves anything else as a column.
+    with pytest.raises(errors.PySparkTypeError, match="days"):
+        F.date_add("d", 1.5)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(errors.PySparkTypeError, match="len"):
+        F.substring("s", 1, 2.0)  # ty: ignore[invalid-argument-type]
 
 
 def test_deprecated_names_warn_and_still_work(recorded: None) -> None:

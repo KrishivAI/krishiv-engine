@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Parameter names and defaults of the ``pyspark.sql.functions`` functions Krishiv exports.
 
-Read from ``python/pyspark/sql/functions/builtin.py`` of Apache Spark 4.0.0 (4.1.0 and 4.2.0 declare
-the same for these names); annotations are dropped. ``*name`` is a variadic parameter.
+A hand-kept copy of ``inspect.signature`` of ``pyspark.sql.functions.<name>`` (pyspark 4.0.0 source, checked
+against pyspark-client 4.2.0: 4.1.0 and 4.2.0 declare the same for these names); annotations are dropped.
+``*name`` is a variadic parameter. It is the independent record of PySpark's side: ``test_generated_functions``
+fails when it disagrees with ``F.__all__`` or with the exported signatures, so a function added to the registry
+is caught here until its PySpark signature is added too.
 """
 
 PYSPARK_SIGNATURES = {

@@ -17,6 +17,7 @@ __all__ = [
     "_call",
     "_cols",
     "_deprecated",
+    "_int_or_col",
     "_lit",
     "_named",
     "_num_or_col",
@@ -33,8 +34,17 @@ def _call(name: str, *args: _native.Column) -> Column:
 
 
 def _num_or_col(value: Any, arg: str) -> _native.Column:
-    """A Column or column name; a number is a literal (``atan2(1.0, "x")``)."""
+    """A Column or column name; an ``int`` or ``float`` is a literal (``atan2(1.0, "x")``), for the parameters
+    PySpark annotates ``ColumnOrName | float``."""
     if isinstance(value, int | float) and not isinstance(value, bool):
+        return _literal(value)
+    return _named(value, arg)
+
+
+def _int_or_col(value: Any, arg: str) -> _native.Column:
+    """A Column or column name; an ``int`` is a literal (``date_add("d", 1)``) and a ``float`` is not (it is
+    neither a Column nor a name), for the parameters PySpark annotates ``ColumnOrName | int``."""
+    if isinstance(value, int) and not isinstance(value, bool):
         return _literal(value)
     return _named(value, arg)
 

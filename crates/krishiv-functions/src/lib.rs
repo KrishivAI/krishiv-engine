@@ -8,14 +8,14 @@
 //!   scalar function's name and argument types into a
 //!   [`scalar::ScalarFunction`] over the `krishiv-kernels` kernels, which
 //!   the physical planner calls once per batch.
-//! - [`python_wrappers`]: generates the Python `pyspark.sql.functions` wrappers of the registry.
 //!
 //! Aggregates are executed by `krishiv-exec`; the canonical operators and
 //! `CAST` by the expression evaluator.
 
 #![forbid(unsafe_code)]
 
-pub mod python_wrappers;
+#[cfg(test)]
+mod python_wrappers;
 pub mod registry;
 pub mod scalar;
 pub mod signature;

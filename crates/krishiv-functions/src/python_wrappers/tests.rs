@@ -6,7 +6,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::{
-    Generated, generate, generate_for_registry, natural_cmp, out_of_date, parse_params, table, wrap,
+    Generated, PY_PATH, PYI_PATH, generate, generate_for_registry, natural_cmp, out_of_date,
+    parse_params, table, wrap,
 };
 
 /// The names in `table::NOT_EXPORTED` and `HANDWRITTEN` need no row; this is the registry in miniature.
@@ -196,12 +197,28 @@ fn the_registry_is_fully_accounted_for_and_the_table_is_not_stale() {
     assert!(g.names.len() > 150, "{}", g.names.len());
 }
 
+/// The checked-in files are the registry's output. With `KRISHIV_REGENERATE_PYTHON` set the test writes them
+/// instead (the generated files are never edited by hand).
 #[test]
 fn the_checked_in_wrappers_match_the_registry() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    if std::env::var_os("KRISHIV_REGENERATE_PYTHON").is_some() {
+        let g = generate_for_registry().expect("generates");
+        for (path, text) in [(PY_PATH, g.py), (PYI_PATH, g.pyi)] {
+            std::fs::write(root.join(path), text).expect("writes the generated file");
+        }
+        return;
+    }
     let stale = out_of_date(&root).expect("generates");
     assert!(
         stale.is_empty(),
-        "{stale:?} out of date: run `cargo run -p krishiv-functions --bin gen-python-functions`"
+        "{stale:?} out of date: run `KRISHIV_REGENERATE_PYTHON=1 cargo test -p krishiv-functions python_wrappers`"
     );
+}
+
+#[test]
+fn an_int_parameter_takes_only_an_int_as_a_literal() {
+    let g = generated_for(&["date_add", "atan2"]);
+    assert!(g.py.contains("_int_or_col(days, \"days\")"), "{}", g.py);
+    assert!(g.py.contains("_num_or_col(col1, \"col1\")"), "{}", g.py);
 }
