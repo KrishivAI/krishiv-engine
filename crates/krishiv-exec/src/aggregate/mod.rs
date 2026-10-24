@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Hash aggregation (ADR 0011): `count`, `sum`, `avg`, `min`, `max` with
-//! Spark 4.2 result types, in two phases, with spill and `DISTINCT`.
+//! Hash aggregation (ADR 0011): `count`, `sum`, `avg`, `min`, `max`,
+//! `first`, `last`, `any_value`, `max_by`, `min_by` with Spark 4.2 result
+//! types, in two phases, with spill and `DISTINCT`. `count_if` and the
+//! boolean aggregates are `count` and `min`/`max` over a rewritten argument
+//! (the physical planner).
 //!
 //! # Operators
 //! - [`HashAggregate`] is a pipeline breaker. Each driver aggregates into
@@ -49,9 +52,10 @@
 //! # Weights
 //! Rows carry Z-set weights ([`Weights`](krishiv_types::batch::Weights)):
 //! `count` adds the weight, `sum` adds `value × weight`, `avg` divides the
-//! weighted sum by the weighted count. `min`/`max` need retractions to be
-//! maintained incrementally (P4 IVM), so they and `DISTINCT` reject any weight
-//! other than 1 with `KRISHIV_UNSUPPORTED_FEATURE`. Output rows have weight 1;
+//! weighted sum by the weighted count. `min`/`max`, `first`, `last`,
+//! `any_value`, `max_by` and `min_by` need retractions to be maintained
+//! incrementally (P4 IVM), so they and `DISTINCT` reject any weight other
+//! than 1 with `KRISHIV_UNSUPPORTED_FEATURE`. Output rows have weight 1;
 //! a group exists once it received a row.
 
 mod accumulator;
@@ -66,7 +70,7 @@ mod tests;
 
 use std::sync::Arc;
 
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use krishiv_common::error::{
     ArithmeticOverflow, KrishivError, KrishivUnsupportedFeature,
     NumericValueOutOfRangeWithSuggestion,
@@ -112,6 +116,19 @@ pub enum AggregateFunction {
         /// `last(x, true)` / `IGNORE NULLS`: the last non-NULL value.
         ignore_nulls: bool,
     },
+    /// `any_value(x)`: some row's value of the group; here the first row's,
+    /// as `first` (a legal choice); NULL for no value. The input type.
+    AnyValue {
+        /// `any_value(x, true)` / `IGNORE NULLS`: the first non-NULL value.
+        ignore_nulls: bool,
+    },
+    /// `max_by(x, y)`: `x` of the row with the largest non-NULL `y` (Spark
+    /// ordering), the first such row on a tie; rows with a NULL `y` are
+    /// ignored and a NULL `x` is a result. NULL for no row. The type of
+    /// `x`. Built with [`AggregateExpr::by`].
+    MaxBy,
+    /// `min_by(x, y)`, as `max_by` for the smallest `y`.
+    MinBy,
 }
 
 /// Where an aggregate's arguments come from.
@@ -142,7 +159,9 @@ pub struct AggregateExpr {
     /// Where the arguments come from.
     pub input: AggInput,
     /// The type of the raw argument (`count` ignores it). Fixed by the
-    /// planner; state columns derive from it.
+    /// planner; state columns derive from it. For `max_by`/`min_by`, a
+    /// struct of the value's type then the ordering key's (see
+    /// [`AggregateExpr::by`]).
     pub arg_type: DataType,
     /// The output column name.
     pub name: String,
@@ -161,6 +180,27 @@ impl AggregateExpr {
             args: vec![arg],
             input: AggInput::Raw,
             arg_type,
+            name: name.into(),
+        }
+    }
+
+    /// `max_by(x, y)` / `min_by(x, y)` of columns `value` and `key`, of
+    /// types `value_type` and `key_type`. Both must be types `min`/`max`
+    /// take.
+    pub fn by(
+        function: AggregateFunction,
+        (value, key): (usize, usize),
+        (value_type, key_type): (DataType, DataType),
+        name: impl Into<String>,
+    ) -> Self {
+        Self {
+            function,
+            args: vec![value, key],
+            input: AggInput::Raw,
+            arg_type: DataType::Struct(Fields::from(vec![
+                Field::new("value", value_type, true),
+                Field::new("key", key_type, true),
+            ])),
             name: name.into(),
         }
     }
@@ -207,11 +247,24 @@ impl AggregateExpr {
             (F::Avg, DataType::Decimal64(p, s) | DataType::Decimal128(p, s)) if *s >= 0 => {
                 decimal_on(t, (*p + 4).min(38), s.saturating_add(4).min(38))
             }
-            (F::Min | F::Max | F::First { .. } | F::Last { .. }, t)
+            (F::Min | F::Max | F::First { .. } | F::Last { .. } | F::AnyValue { .. }, t)
                 if accumulator::min_max_supported(t) =>
             {
                 t.clone()
             }
+            (F::MaxBy | F::MinBy, _) => match self.by_types() {
+                Some((v, k))
+                    if accumulator::min_max_supported(v) && accumulator::min_max_supported(k) =>
+                {
+                    v.clone()
+                }
+                _ => {
+                    return Err(unsupported(format!(
+                        "{:?} of {}",
+                        self.function, self.arg_type
+                    )));
+                }
+            },
             (f, t) => return Err(unsupported(format!("{f:?} of {t}"))),
         })
     }
@@ -237,11 +290,28 @@ impl AggregateExpr {
             ],
             (F::Min | F::Max, _) => vec![Field::new(n("value"), out, true)],
             // Whether a row was taken: a NULL value is a value.
-            (F::First { .. } | F::Last { .. }, _) => vec![
+            (F::First { .. } | F::Last { .. } | F::AnyValue { .. }, _) => vec![
                 Field::new(n("value"), out, true),
                 Field::new(n("valueSet"), DataType::Boolean, false),
             ],
+            // The key is NULL until a row with a key was taken: it says
+            // whether the value (which may be NULL) counts.
+            (F::MaxBy | F::MinBy, _) => {
+                let key = self.by_types().map_or(DataType::Null, |(_, k)| k.clone());
+                vec![
+                    Field::new(n("value"), out, true),
+                    Field::new(n("key"), key, true),
+                ]
+            }
         })
+    }
+
+    /// The value and ordering key types of a `max_by`/`min_by`.
+    fn by_types(&self) -> Option<(&DataType, &DataType)> {
+        match &self.arg_type {
+            DataType::Struct(f) if f.len() == 2 => Some((f[0].data_type(), f[1].data_type())),
+            _ => None,
+        }
     }
 
     /// The type `avg` sums in: `double`, or `sum`'s decimal type.

@@ -2445,7 +2445,7 @@ fn call(
         // Spark's name of `first(x, ignoreNulls)` leaves the flag out.
         _ if k.len() == 2
             && matches!(k[1], "true" | "false")
-            && ["first", "last", "first_value", "last_value"]
+            && ["first", "last", "first_value", "last_value", "any_value"]
                 .iter()
                 .any(|n| name.eq_ignore_ascii_case(n)) =>
         {

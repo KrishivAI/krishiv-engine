@@ -1284,7 +1284,7 @@ impl Lowerer {
 /// The aggregates that take `IGNORE NULLS` / `RESPECT NULLS` (as their
 /// `ignoreNulls` argument).
 fn takes_null_treatment(name: &str) -> bool {
-    ["first", "last", "first_value", "last_value"]
+    ["first", "last", "first_value", "last_value", "any_value"]
         .iter()
         .any(|n| name.eq_ignore_ascii_case(n))
 }

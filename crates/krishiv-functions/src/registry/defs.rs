@@ -5,8 +5,8 @@
 
 use krishiv_common::error::{
     DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
-    DatatypeMismatchValueOutOfRange, InvalidExtractField, KrishivError, LegacyErrorTemp1210,
-    NonFoldableArgument, SecondFunctionArgumentNotInteger,
+    DatatypeMismatchValueOutOfRange, InvalidExtractField, KrishivError, KrishivUnsupportedFeature,
+    LegacyErrorTemp1210, NonFoldableArgument, SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{DataType, DecimalType};
@@ -457,8 +457,32 @@ fn last(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     pick(c, "last")
 }
 
+fn any_value(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    pick(c, "any_value")
+}
+
+/// `bool_and`, `bool_or` and their aliases: `boolean`, NULL for no non-NULL
+/// input.
+fn nullable_boolean(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Boolean, true))
+}
+
+/// `max_by(x, y)`, `min_by(x, y)`: the type of `x`. The three-argument
+/// form (`max_by(x, y, k)`) returns an array of up to `k` values, which
+/// this engine has no type for yet.
+fn by(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if c.args().len() > 2 {
+        return Err(KrishivUnsupportedFeature {
+            feature: "max_by and min_by with a third argument (they return an array)".to_owned(),
+        }
+        .into());
+    }
+    min_max(c)
+}
+
 fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
+    let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
     vec![
         aggregate("count", Inputs::Any, count, Aggregate::Count),
         aggregate("sum", numeric(), sum, Aggregate::Sum),
@@ -470,6 +494,16 @@ fn aggregates() -> Vec<Spec> {
         aggregate("first_value", Inputs::Any, first, Aggregate::First),
         aggregate("last", Inputs::Any, last, Aggregate::Last),
         aggregate("last_value", Inputs::Any, last, Aggregate::Last),
+        aggregate("any_value", Inputs::Any, any_value, Aggregate::AnyValue),
+        // Spark runs these as `count`, `min` and `max` of a rewritten argument.
+        aggregate("count_if", boolean_arg(), count, Aggregate::Count),
+        aggregate("bool_and", boolean_arg(), nullable_boolean, Aggregate::Min),
+        aggregate("every", boolean_arg(), nullable_boolean, Aggregate::Min),
+        aggregate("bool_or", boolean_arg(), nullable_boolean, Aggregate::Max),
+        aggregate("some", boolean_arg(), nullable_boolean, Aggregate::Max),
+        aggregate("any", boolean_arg(), nullable_boolean, Aggregate::Max),
+        aggregate("max_by", Inputs::Any, by, Aggregate::MaxBy),
+        aggregate("min_by", Inputs::Any, by, Aggregate::MinBy),
     ]
 }
 

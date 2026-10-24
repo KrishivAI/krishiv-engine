@@ -556,13 +556,14 @@ fn is_bytes(t: &DataType) -> bool {
 }
 
 /// Whether `a` picks one row's string or binary value (`min`, `max`,
-/// `first`, `last`): evaluated by [`byte_values`], without copying values.
+/// `first`, `last`, `any_value`): evaluated by [`byte_values`], without
+/// copying values.
 pub(super) fn picks_bytes(a: &AggregateExpr) -> bool {
     use AggregateFunction as F;
     is_bytes(&a.arg_type)
         && matches!(
             a.function,
-            F::Min | F::Max | F::First { .. } | F::Last { .. }
+            F::Min | F::Max | F::First { .. } | F::Last { .. } | F::AnyValue { .. }
         )
 }
 
@@ -603,9 +604,9 @@ fn segment(shape: Shape, u: &Unit<'_>, row: usize) -> (usize, usize) {
     }
 }
 
-/// `min`/`max`/`first`/`last` of string or binary values over a frame:
-/// the row each frame picks, then the picked values gathered as views of
-/// the input's buffers (no value is copied; Spark compares by bytes).
+/// `min`/`max`/`first`/`last`/`any_value` of string or binary values over a
+/// frame: the row each frame picks, then the picked values gathered as views
+/// of the input's buffers (no value is copied; Spark compares by bytes).
 fn byte_values(
     a: &AggregateExpr,
     f: &WindowFunctionPlan,
@@ -661,8 +662,8 @@ fn byte_values(
 }
 
 /// Whether a row (`valid`, its bytes `value`) replaces the value a
-/// `min`/`max`/`first`/`last` of strings or binaries picked so far
-/// (`picked`: `None` before any row, `Some(None)` for a picked NULL);
+/// `min`/`max`/`first`/`last`/`any_value` of strings or binaries picked so
+/// far (`picked`: `None` before any row, `Some(None)` for a picked NULL);
 /// Spark compares by bytes.
 pub(super) fn replaces<'v>(
     function: AggregateFunction,
@@ -684,7 +685,9 @@ pub(super) fn replaces<'v>(
             }
             None => true,
         },
-        F::First { ignore_nulls } => picked.is_none() && (valid || !ignore_nulls),
+        F::First { ignore_nulls } | F::AnyValue { ignore_nulls } => {
+            picked.is_none() && (valid || !ignore_nulls)
+        }
         F::Last { ignore_nulls } => valid || !ignore_nulls,
         other => return Err(internal(format!("{other:?} of strings by row"))),
     })

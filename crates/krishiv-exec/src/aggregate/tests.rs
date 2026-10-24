@@ -1461,6 +1461,8 @@ async fn first_and_last_pick_rows_in_input_order() {
     );
 }
 
+mod simple;
+
 #[test]
 fn first_and_last_types_and_states() {
     use AggregateFunction::{First, Last};
