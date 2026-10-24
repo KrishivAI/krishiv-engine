@@ -150,6 +150,16 @@ impl SortedBatch {
     }
 }
 
+/// The first 16 bytes of a key row, big-endian (zero-padded), as
+/// [`prefix`]: a sort merge compares many rows of one partition, whose
+/// first 8 bytes are mostly the partitioning key.
+fn wide_prefix(row: &[u8]) -> u128 {
+    let mut bytes = [0u8; 16];
+    let n = row.len().min(16);
+    bytes[..n].copy_from_slice(&row[..n]);
+    u128::from_be_bytes(bytes)
+}
+
 /// The first 8 bytes of a key row, big-endian (zero-padded): comparing
 /// prefixes orders rows as their bytes do, up to prefix ties.
 fn prefix(row: &[u8]) -> u64 {
@@ -285,8 +295,8 @@ pub(crate) fn metadata_bytes(sources: usize) -> usize {
     sources.saturating_mul(size_of::<u64>().saturating_add(size_of::<u32>()))
 }
 
-/// Bytes per row of a sort merge's keyed rows (prefix, slice, row).
-const KEYED_ROW_BYTES: usize = size_of::<(u64, u32, u32)>();
+/// Bytes per row of a sort merge's keyed rows (16-byte prefix, slice, row).
+const KEYED_ROW_BYTES: usize = size_of::<(u128, u32, u32)>();
 /// Bytes per row of a sort merge's output order.
 const ORDER_ROW_BYTES: usize = size_of::<(u32, u32)>();
 
@@ -328,7 +338,7 @@ struct SortedRows {
 /// In-memory slices above which a bucket's merge sorts its rows instead of
 /// running a loser tree: with many small slices each tree step is a chain
 /// of cache misses, while one sort of the rows' key prefixes stays in
-/// cache (most comparisons end at the 8-byte prefix).
+/// cache (most comparisons end at a 16-byte prefix).
 const SORT_MIN_SLICES: usize = 64;
 
 impl Merger {
@@ -391,13 +401,13 @@ impl Merger {
     ) -> Result<Self> {
         let too_many = || internal("a sort merge of more than u32::MAX rows".to_owned());
         let rows: usize = memory.iter().map(|(_, r)| r.len()).sum();
-        let mut keyed: Vec<(u64, u32, u32)> = Vec::with_capacity(rows);
+        let mut keyed: Vec<(u128, u32, u32)> = Vec::with_capacity(rows);
         for (i, (s, range)) in memory.iter().enumerate() {
             let i = u32::try_from(i).map_err(|_| too_many())?;
             keyed.extend(
                 s.order[range.clone()]
                     .iter()
-                    .map(|&r| (prefix(s.rows.row(r as usize).data()), i, r)),
+                    .map(|&r| (wide_prefix(s.rows.row(r as usize).data()), i, r)),
             );
         }
         // Ties in a slice keep its order (its own ties are in row order),
