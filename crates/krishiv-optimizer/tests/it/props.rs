@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use krishiv_optimizer::optimize;
+use krishiv_optimizer::{optimize, optimize_with};
 use krishiv_plan::{
     AttrId, Builtin, Expr, ExprNode, FunctionId, Grouping, JoinCondition, JoinKind, LogicalPlan,
     PlanNode, ResolvedExpr,
@@ -487,8 +487,8 @@ fn restriction_after_join_ordering_reaches_a_fixed_point() {
                ORDER BY c0, c1 LIMIT 4";
     let ctx = support::ctx();
     let plan = support::resolve(sql, &ctx);
-    let optimized = optimize(&plan).unwrap();
-    let again = optimize(&optimized).unwrap();
+    let optimized = optimize_with(&plan, &support::AllDistinct).unwrap();
+    let again = optimize_with(&optimized, &support::AllDistinct).unwrap();
     assert!(
         again.structurally_eq(&optimized),
         "not a fixed point:\n{}\n{}",

@@ -1124,6 +1124,14 @@ pub enum JoinType {
     LeftSemi = 3,
     LeftAnti = 4,
     NullAwareAnti = 5,
+    /// Joins that build their preserved side and return its rows by their
+    /// matches.
+    /// feature: join_build_preserved
+    RightSemi = 6,
+    /// feature: join_build_preserved
+    RightAnti = 7,
+    /// feature: join_build_preserved
+    RightOuter = 8,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1138,6 +1146,9 @@ impl JoinType {
             Self::LeftSemi => "JOIN_TYPE_LEFT_SEMI",
             Self::LeftAnti => "JOIN_TYPE_LEFT_ANTI",
             Self::NullAwareAnti => "JOIN_TYPE_NULL_AWARE_ANTI",
+            Self::RightSemi => "JOIN_TYPE_RIGHT_SEMI",
+            Self::RightAnti => "JOIN_TYPE_RIGHT_ANTI",
+            Self::RightOuter => "JOIN_TYPE_RIGHT_OUTER",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1149,6 +1160,9 @@ impl JoinType {
             "JOIN_TYPE_LEFT_SEMI" => Some(Self::LeftSemi),
             "JOIN_TYPE_LEFT_ANTI" => Some(Self::LeftAnti),
             "JOIN_TYPE_NULL_AWARE_ANTI" => Some(Self::NullAwareAnti),
+            "JOIN_TYPE_RIGHT_SEMI" => Some(Self::RightSemi),
+            "JOIN_TYPE_RIGHT_ANTI" => Some(Self::RightAnti),
+            "JOIN_TYPE_RIGHT_OUTER" => Some(Self::RightOuter),
             _ => None,
         }
     }

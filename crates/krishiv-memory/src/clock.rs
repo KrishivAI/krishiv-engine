@@ -315,30 +315,76 @@ mod tests {
         }
     }
 
+    /// Held by a test to keep a gated timer thread from starting.
+    static GATE: Mutex<()> = Mutex::new(());
+
+    /// A timer thread that serves sleeps only once [`GATE`] is free.
+    fn gated_spawn(run: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+        spawn_thread(Box::new(move || {
+            drop(GATE.lock().unwrap_or_else(PoisonError::into_inner));
+            run();
+        }))
+    }
+
+    /// Sends its sleep's id and the time it was woken.
+    struct Recorder {
+        id: u64,
+        woken: Mutex<mpsc::Sender<(u64, Instant)>>,
+    }
+
+    impl Wake for Recorder {
+        fn wake(self: Arc<Self>) {
+            let tx = self.woken.lock().unwrap_or_else(PoisonError::into_inner);
+            // A closed channel means the test already failed elsewhere.
+            tx.send((self.id, Instant::now())).ok();
+        }
+    }
+
+    /// Sleeps registered out of order are woken in deadline order and
+    /// never before their deadline. The timer starts only once every
+    /// deadline has passed, so the order does not depend on how the
+    /// machine schedules the timer or the waiting threads.
     #[test]
     fn sleeps_complete_in_deadline_order_and_not_early() {
-        let clock = SystemClock::new();
+        let gate = GATE.lock().unwrap_or_else(PoisonError::into_inner);
+        let clock = SystemClock::with_spawn(gated_spawn);
+        let timer = clock.timer().unwrap();
         let start = clock.now();
         let (tx, rx) = mpsc::channel();
-        let threads: Vec<_> = [60u64, 10, 30]
+        let entries: Vec<Entry> = [60u64, 10, 30]
             .into_iter()
             .map(|ms| {
-                let deadline = start + Duration::from_millis(ms);
-                let sleep = clock.sleep_until(deadline).unwrap();
-                let tx = tx.clone();
-                std::thread::spawn(move || {
-                    block_on(sleep);
-                    assert!(Instant::now() >= deadline);
-                    tx.send(ms).unwrap();
-                })
+                let entry = Entry::default();
+                entry.lock().unwrap().waker = Some(Waker::from(Arc::new(Recorder {
+                    id: ms,
+                    woken: Mutex::new(tx.clone()),
+                })));
+                timer.register(start + Duration::from_millis(ms), &entry);
+                entry
             })
             .collect();
-        drop(clock); // pending sleeps keep the timer running
-        for t in threads {
-            t.join().unwrap();
-        }
         drop(tx);
-        assert_eq!(rx.iter().collect::<Vec<_>>(), [10, 30, 60]);
+        let last = start + Duration::from_millis(60);
+        while Instant::now() < last {
+            std::thread::sleep(last.saturating_duration_since(Instant::now()));
+        }
+        drop(gate);
+        // Bounded, so a sleep the timer never wakes fails the test instead of
+        // hanging it (each waker holds a sender, so the channel stays open).
+        let woken: Vec<(u64, Instant)> = (0..3)
+            .map(|_| {
+                rx.recv_timeout(Duration::from_secs(60))
+                    .expect("a sleep was never woken")
+            })
+            .collect();
+        assert_eq!(woken.iter().map(|w| w.0).collect::<Vec<_>>(), [10, 30, 60]);
+        for (ms, at) in woken {
+            assert!(
+                at >= start + Duration::from_millis(ms),
+                "{ms} ms woken early"
+            );
+        }
+        assert!(entries.iter().all(|e| e.lock().unwrap().fired));
     }
 
     #[test]

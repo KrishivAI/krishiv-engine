@@ -317,6 +317,56 @@ const TPCDS_SF1: &[(&str, u64, &[Column])] = &[
             ("ca_country", "string", f64::NAN, f64::NAN, 1_525, None),
         ],
     ),
+    // Footer statistics as Parquet gives them (TPC-DS SF1): row counts and
+    // bounds; distinct counts only from integral bounds (`max - min + 1`,
+    // at most the non-null rows), none for strings.
+    (
+        "catalog_sales",
+        1_441_548,
+        &[
+            (
+                "cs_sold_date_sk",
+                "bigint",
+                2_450_815.0,
+                2_452_648.0,
+                7_191,
+                Some(1_834),
+            ),
+            (
+                "cs_bill_cdemo_sk",
+                "bigint",
+                5.0,
+                1_920_765.0,
+                7_183,
+                Some(1_434_365),
+            ),
+        ],
+    ),
+    (
+        "date_dim",
+        73_049,
+        &[
+            (
+                "d_date_sk",
+                "bigint",
+                2_415_022.0,
+                2_488_070.0,
+                0,
+                Some(73_049),
+            ),
+            ("d_year", "bigint", 1_900.0, 2_100.0, 0, Some(201)),
+        ],
+    ),
+    (
+        "customer_demographics",
+        1_920_800,
+        &[
+            ("cd_demo_sk", "bigint", 1.0, 1_920_800.0, 0, Some(1_920_800)),
+            ("cd_gender", "string", f64::NAN, f64::NAN, 0, None),
+            ("cd_marital_status", "string", f64::NAN, f64::NAN, 0, None),
+            ("cd_education_status", "string", f64::NAN, f64::NAN, 0, None),
+        ],
+    ),
 ];
 
 #[derive(Debug)]
@@ -423,4 +473,177 @@ fn implied_filters_of_on_conditions_keep_the_rows() {
     same_rows(
         "SELECT t.a, u.d FROM t LEFT JOIN u ON (t.b = 'x' AND u.d = 'y') OR (t.b = 'z' AND u.a > 2)",
     );
+}
+
+/// The fixture's statistics without distinct counts for the columns
+/// `keep` does not name, as Parquet footers give them (footers carry no
+/// distinct counts).
+fn without_distinct(keep: &[&str]) -> Fixture {
+    let mut f = fixture();
+    for t in f.0.values_mut() {
+        for (name, c) in &mut t.columns {
+            if !keep.contains(&name.as_str()) {
+                c.distinct = None;
+            }
+        }
+    }
+    f
+}
+
+/// `col = literal` and `col IN (...)` read the column's distinct count
+/// when one is known; without one the selectivity is the default, not
+/// `1 / rows` (which would estimate a single matching row for
+/// `l_returnflag = 'R'` and make 60M rows look like the smallest input).
+#[test]
+fn literal_equalities_without_a_distinct_count_use_the_default() {
+    let ctx = support::ctx();
+    let rows = |sql: &str, stats: &Fixture| {
+        krishiv_optimizer::estimated_rows(support::resolve(sql, &ctx).root(), stats)
+    };
+    let known = fixture();
+    let footers = without_distinct(&[]);
+    let lineitem = 59_986_052.0;
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * b;
+    let eq = "SELECT l_orderkey FROM lineitem WHERE l_returnflag = 'R'";
+    assert!(
+        close(rows(eq, &known), lineitem / 3.0),
+        "{}",
+        rows(eq, &known)
+    );
+    assert!(
+        close(rows(eq, &footers), lineitem * 0.2),
+        "{}",
+        rows(eq, &footers)
+    );
+    // The literal on the left reads the same.
+    let flipped = "SELECT l_orderkey FROM lineitem WHERE 'R' = l_returnflag";
+    assert!(close(rows(flipped, &footers), lineitem * 0.2));
+    let within = "SELECT l_orderkey FROM lineitem WHERE l_shipmode IN ('MAIL', 'SHIP')";
+    assert!(close(rows(within, &known), lineitem * 2.0 / 7.0));
+    assert!(close(rows(within, &footers), lineitem * 0.2));
+    // A distinct count from statistics still counts without the others.
+    let only = without_distinct(&["l_returnflag"]);
+    assert!(close(rows(eq, &only), lineitem / 3.0));
+    // An equality between two columns of one input keeps `1 / ndv`.
+    // `c <=> NULL` is `c IS NULL`: the column's null fraction (none here).
+    // Optimized first: folding makes the coerced NULL a literal.
+    let folded = |sql: &str, stats: &Fixture| {
+        let plan = optimize_with(&support::resolve(sql, &ctx), stats).unwrap();
+        krishiv_optimizer::estimated_rows(plan.root(), stats)
+    };
+    let is_null = folded(
+        "SELECT l_orderkey FROM lineitem WHERE l_returnflag IS NULL",
+        &known,
+    );
+    for sql in [
+        "SELECT l_orderkey FROM lineitem WHERE l_returnflag <=> NULL",
+        "SELECT l_orderkey FROM lineitem WHERE NULL <=> l_returnflag",
+    ] {
+        let (k, f) = (folded(sql, &known), folded(sql, &footers));
+        assert!(
+            close(k, is_null) && close(f, is_null),
+            "{sql}: {k} {f} vs {is_null}"
+        );
+    }
+    let cols = "SELECT l_orderkey FROM lineitem WHERE l_commitdate = l_receiptdate";
+    assert!(close(rows(cols, &footers), 1.0), "{}", rows(cols, &footers));
+}
+
+/// TPC-DS q26's shape: a fact table joined to a dimension filtered to one
+/// year and to one filtered by three string equalities. A join with a
+/// filtered input counts the distinct keys the filter keeps (at most its
+/// rows), so the year of dates joins about a fifth of the fact rows (the
+/// fact holds five years), not 1/200 of them as the whole 73,049-date
+/// domain would say. The demographics join, the more selective one, then
+/// comes first and the fact table stays the larger (probe) input of every
+/// join, so each dimension's build can filter the fact scan.
+#[test]
+fn filtered_dimensions_count_the_keys_they_keep() {
+    let sql = "SELECT count(*) FROM catalog_sales, customer_demographics, date_dim \
+               WHERE cs_sold_date_sk = d_date_sk AND cs_bill_cdemo_sk = cd_demo_sk \
+               AND cd_gender = 'M' AND cd_marital_status = 'S' \
+               AND cd_education_status = 'College' AND d_year = 2000";
+    let plan = support::resolve(sql, &tpcds_ctx());
+    let optimized = optimize_with(&plan, &TpcdsFooters).unwrap();
+    let text = optimized.root().to_string();
+    let line = |needle: &str| {
+        text.lines()
+            .position(|l| l.contains("Join Inner") && l.contains(needle))
+            .unwrap_or_else(|| panic!("no join on {needle}:\n{text}"))
+    };
+    // The date join is above (printed before) the demographics join.
+    assert!(line("d_date_sk") < line("cd_demo_sk"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+/// TPC-DS q13's shape: one `or` over three inputs whose disjuncts all hold
+/// the same key equalities. The equalities are join conditions of their
+/// own, so the inputs meet in equi-joins; as one condition over all three
+/// inputs they could only meet in a cross product (q13 crossed a filtered
+/// customer_demographics with the fact side).
+#[test]
+fn equalities_every_disjunct_holds_join_their_inputs() {
+    let sql = "SELECT count(*) FROM lineitem, orders, customer \
+               WHERE (l_orderkey = o_orderkey AND o_custkey = c_custkey \
+                      AND l_quantity > 10 AND c_acctbal > 0) \
+                  OR (l_orderkey = o_orderkey AND o_custkey = c_custkey \
+                      AND l_quantity < 5 AND o_totalprice > 100)";
+    let plan = support::resolve(sql, &support::ctx());
+    let optimized = optimize_with(&plan, &fixture()).unwrap();
+    no_cross_product(optimized.root(), sql);
+    insta::assert_snapshot!(optimized.root().to_string());
+    // The same rows, and a disjunct of only shared equalities leaves just
+    // the equalities.
+    same_rows(
+        "SELECT t.a, u.d, x.b FROM t, u, t x \
+         WHERE (t.a = u.a AND u.a = x.a AND t.b = 'p') OR (t.a = u.a AND u.a = x.a AND x.c > 1)",
+    );
+    let only = same_rows(
+        "SELECT t.a, u.d, x.b FROM t, u, t x \
+         WHERE (t.a = u.a AND u.a = x.a) OR (t.a = u.a AND u.a = x.a AND x.c > 1)",
+    );
+    assert!(!only.root().to_string().contains(" or "), "{}", only.root());
+    // Equalities only some disjuncts hold stay inside the `or`.
+    same_rows("SELECT t.a, u.d FROM t, u WHERE (t.a = u.a AND t.b = 'p') OR (t.c = u.a)");
+}
+
+/// TPC-DS q85's shape: an `or` over three inputs that other conditions
+/// already join. Its shared equality is not needed to connect them, so it
+/// stays inside the `or` instead of becoming an extra join key (q85 would
+/// otherwise join its two demographics instances on two string columns).
+#[test]
+fn shared_equalities_stay_in_the_or_when_the_inputs_are_joined() {
+    let sql = "SELECT count(*) FROM lineitem, orders, customer \
+               WHERE l_orderkey = o_orderkey AND o_custkey = c_custkey \
+               AND ((o_orderpriority = c_mktsegment AND l_quantity > 10) \
+                 OR (o_orderpriority = c_mktsegment AND l_quantity < 5))";
+    let plan = support::resolve(sql, &support::ctx());
+    let optimized = optimize_with(&plan, &fixture()).unwrap();
+    let text = optimized.root().to_string();
+    assert_eq!(text.matches("(o_orderpriority#").count(), 2, "{text}");
+    insta::assert_snapshot!(text);
+}
+
+/// A grouping-set column passed through `Expand` keeps whether its
+/// distinct count comes from statistics, so `col = literal` above a
+/// `ROLLUP` reads the count when the statistics have one and the default
+/// otherwise.
+#[test]
+fn expanded_columns_keep_whether_their_distinct_count_is_known() {
+    let ctx = support::ctx();
+    let rows = |sql: &str, stats: &Fixture| {
+        krishiv_optimizer::estimated_rows(support::resolve(sql, &ctx).root(), stats)
+    };
+    let all = "SELECT * FROM (SELECT l_returnflag, l_orderkey FROM lineitem \
+               GROUP BY ROLLUP (l_returnflag, l_orderkey))";
+    let eq = "SELECT * FROM (SELECT l_returnflag, l_orderkey FROM lineitem \
+              GROUP BY ROLLUP (l_returnflag, l_orderkey)) WHERE l_returnflag = 'R'";
+    let (known, footers) = (fixture(), without_distinct(&[]));
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * b;
+    // Three return flags in the statistics: a third of the rows.
+    let k = rows(eq, &known) / rows(all, &known);
+    assert!(close(k, 1.0 / 3.0), "{k}");
+    // No distinct count: the default selectivity.
+    let f = rows(eq, &footers) / rows(all, &footers);
+    assert!(close(f, krishiv_optimizer::DEFAULT_SELECTIVITY), "{f}");
 }

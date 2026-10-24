@@ -32,6 +32,7 @@ mod explain;
 mod file_table;
 mod join;
 pub(crate) mod nodes;
+mod orient;
 mod properties;
 pub(crate) mod pushdown;
 mod runtime_filter;
