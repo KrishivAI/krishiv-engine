@@ -734,6 +734,7 @@ fn explain_statements() {
     let explain = |sql: &str| match parse_statement(sql, &d).unwrap() {
         Statement::Explain(e) => e,
         Statement::Query(_) => panic!("{sql} is a query"),
+        other => panic!("{sql} is {other:?}"),
     };
     for (sql, mode) in [
         ("EXPLAIN SELECT 1", ExplainMode::Simple),
@@ -952,4 +953,601 @@ fn multipart_identifiers_parse_like_spark() {
     }
     let e = parse_multipart_identifier("", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::ParseEmptyStatement);
+}
+
+/// Typed datetime literals lower to an unresolved node (the type keyword
+/// and the raw string), with no time zone involved: the analyzer resolves
+/// them with the session zone.
+#[test]
+fn typed_datetime_literals_lower_unresolved() {
+    use crate::ast::{ExprKind, SetExprKind};
+    use krishiv_plan::SourceId;
+
+    // Each kind keeps its keyword and raw string, with the literal's span,
+    // and lowers without a time zone.
+    for (sql, keyword) in [
+        ("SELECT DATE '2016-03-12'", "DATE"),
+        ("SELECT TIMESTAMP '2024-01-01 10:00:00'", "TIMESTAMP"),
+        (
+            "SELECT TIMESTAMP_NTZ '2024-01-01 10:00:00'",
+            "TIMESTAMP_NTZ",
+        ),
+        (
+            "SELECT TIMESTAMP_LTZ '2024-01-01 10:00:00'",
+            "TIMESTAMP_LTZ",
+        ),
+    ] {
+        let q = crate::parse_query(sql, &ParserOptions::default()).unwrap();
+        let SetExprKind::Select(s) = q.body.kind else {
+            panic!("{sql} is not a select");
+        };
+        let ExprKind::Literal(crate::ast::Literal::Typed { type_name, value }) =
+            s.projection[0].expr.kind.clone()
+        else {
+            panic!("{sql} is not a typed literal");
+        };
+        assert_eq!(type_name.value.to_ascii_uppercase(), keyword, "{sql}");
+        assert!(!value.is_empty(), "{sql}");
+        assert_eq!(s.projection[0].expr.span.range(), 7..sql.len(), "{sql}");
+        // Lowering succeeds with the default options (no zone) and keeps
+        // the raw text: the plan holds a `TypedLiteral`, never micros.
+        let plan = crate::parse_and_lower(sql, &ParserOptions::default(), SourceId(0)).unwrap();
+        let text = plan.root().to_string();
+        assert!(text.contains(&format!("{keyword} '")), "{sql}: {text}");
+    }
+    // The wall-clock text is preserved exactly, including an explicit zone.
+    let q = parser::parse_query_unchecked(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'",
+        ParserOptions::default(),
+    )
+    .unwrap();
+    let SetExprKind::Select(s) = q.body.kind else {
+        panic!("not a select");
+    };
+    let ExprKind::Literal(crate::ast::Literal::Typed { value, .. }) =
+        s.projection[0].expr.kind.clone()
+    else {
+        panic!("not a typed literal");
+    };
+    assert_eq!(value, "2024-01-01 10:00:00+05:30");
+    let plan = crate::parse_and_lower(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00'",
+        &ParserOptions::default(),
+        SourceId(0),
+    )
+    .unwrap();
+    let text = plan.root().to_string();
+    assert!(text.contains("TIMESTAMP '2024-01-01 10:00:00'"), "{text}");
+    assert!(!text.contains("1704103200000000"), "{text}");
+}
+
+/// `parse_named_expression`: one named expression (`F.expr`,
+/// `selectExpr` once per argument string, `filter`/`where` strings).
+#[test]
+fn expression_strings() {
+    use super::ast::Alias;
+    let d = ParserOptions::default();
+    // One expression with an optional alias keeps its spans.
+    let item = parse_named_expression("a + 1", &d).unwrap();
+    assert_eq!(item.expr.span.text("a + 1"), "a + 1");
+    assert!(item.alias.is_none());
+    assert!(parse_named_expression("count(*) OVER (PARTITION BY a ORDER BY b)", &d).is_ok());
+    assert!(parse_named_expression("*", &d).is_ok());
+    assert!(parse_named_expression("CASE WHEN a THEN 1 ELSE 0 END", &d).is_ok());
+    // Explicit and implicit aliases parse, as in Spark's `parseExpression`.
+    for sql in ["a AS b", "a b", "count(*) AS n", "a > 0 AS c", "v + 1 as w"] {
+        let item = parse_named_expression(sql, &d).unwrap_or_else(|e| panic!("{sql}: {}", e.error));
+        assert!(item.alias.is_some(), "{sql}");
+        if sql == "a b" {
+            let Alias::Name(name) = item.alias.as_ref().unwrap() else {
+                panic!("not a name: {:?}", item.alias);
+            };
+            assert_eq!(name.value, "b");
+        }
+    }
+    assert!(parse_named_expression("t.*", &d).unwrap().alias.is_none());
+    // A statement is no expression.
+    let e = parse_named_expression("SELECT 1", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 0..6);
+    // Each argument string is one expression: a comma is trailing input.
+    let e = parse_named_expression("a, b", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(
+        e.error.message_parameters(),
+        [("error", "','".to_owned()), ("hint", String::new())]
+    );
+    assert_eq!(e.span.range(), 1..2);
+    let e = parse_named_expression("a;", &d).unwrap_err();
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("error", "';'".to_owned()),
+            ("hint", ": extra input ';'".to_owned())
+        ]
+    );
+    assert_eq!(e.span.range(), 1..2);
+    // An unterminated quote with text after it is several tokens to Spark,
+    // so no "extra input" hint (as for statements: `SELECT a 'bc` has none,
+    // `SELECT a '` keeps it for the lone quote).
+    let e = parse_named_expression("a 'bc", &d).unwrap_err();
+    assert_eq!(
+        e.error.message_parameters(),
+        [("error", "'''".to_owned()), ("hint", String::new())]
+    );
+    assert_eq!(e.span.range(), 2..3);
+    let e = parse_named_expression("a '", &d).unwrap_err();
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("error", "'''".to_owned()),
+            ("hint", ": extra input '''".to_owned())
+        ]
+    );
+    assert_eq!(e.span.range(), 2..3);
+    // An unfinished expression ends at the end of the input.
+    let e = parse_named_expression("a +", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 3..3);
+    // Empty strings are empty statements.
+    for sql in ["", "  "] {
+        assert_eq!(
+            parse_named_expression(sql, &d)
+                .unwrap_err()
+                .error
+                .error_class(),
+            ErrorClass::ParseEmptyStatement,
+            "{sql:?}"
+        );
+    }
+    // Post-parse checks run on the expression: an empty `IN ()` is an error.
+    let e = parse_named_expression("a IN ()", &d).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "INVALID_SQL_SYNTAX.EMPTY_IN_PREDICATE"
+    );
+}
+
+/// Expression strings lower as `SELECT` items do.
+#[test]
+fn expression_strings_lower_like_select_items() {
+    use krishiv_plan::SourceId;
+    let d = ParserOptions::default();
+    let lowered = parse_and_lower_named_expression("a + 1", &d, SourceId(0)).unwrap();
+    let krishiv_plan::ExprNode::Function(call) = &lowered.node else {
+        panic!("not a call: {lowered:?}");
+    };
+    assert_eq!(call.name, "+");
+    assert_eq!(call.args.len(), 2);
+    let lowered = parse_and_lower_named_expression("b AS c", &d, SourceId(0)).unwrap();
+    let krishiv_plan::ExprNode::Alias { name, .. } = &lowered.node else {
+        panic!("not an alias: {lowered:?}");
+    };
+    assert_eq!(name, "c");
+    // Constructs the IR lacks fail while lowering.
+    let e = parse_and_lower_named_expression("a[0]", &d, SourceId(0)).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+/// `lower_expression` lowers one parsed expression as `SELECT` items lower
+/// it, and `lower_select_item` keeps its alias.
+#[test]
+fn lower_expression_and_select_item() {
+    use super::lower::{lower_expression, lower_select_item};
+    use krishiv_plan::SourceId;
+    let d = ParserOptions::default();
+    let item = parse_named_expression("a + 1", &d).unwrap();
+    let lowered = lower_expression(&item.expr, SourceId(0)).unwrap();
+    let krishiv_plan::ExprNode::Function(call) = &lowered.node else {
+        panic!("not a call: {lowered:?}");
+    };
+    assert_eq!(call.name, "+");
+    let item = parse_named_expression("b AS c", &d).unwrap();
+    let lowered = lower_select_item(&item, SourceId(0)).unwrap();
+    let krishiv_plan::ExprNode::Alias { name, .. } = &lowered.node else {
+        panic!("not an alias: {lowered:?}");
+    };
+    assert_eq!(name, "c");
+}
+
+/// Deep expression strings fail with `FAILED_TO_PARSE_TOO_COMPLEX` at the
+/// whole string instead of overflowing the stack. The cap is exact: one
+/// nested level per parenthesis, so `MAX_DEPTH - 1` pairs parse and one
+/// more fails with the full-input span.
+#[test]
+fn expression_depth_is_capped() {
+    let d = ParserOptions::default();
+    let (shallow, deep) = on_small_stack(move || {
+        let shallow = format!(
+            "{}1{}",
+            "(".repeat(MAX_DEPTH - 1),
+            ")".repeat(MAX_DEPTH - 1)
+        );
+        let deep = format!("{}1{}", "(".repeat(MAX_DEPTH), ")".repeat(MAX_DEPTH));
+        (
+            parse_named_expression(&shallow, &d).map(drop),
+            parse_named_expression(&deep, &d),
+        )
+    });
+    assert_eq!(shallow, Ok(()));
+    let e = deep.unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::FailedToParseTooComplex);
+    assert_eq!(e.span.range(), 0..2 * MAX_DEPTH + 1);
+}
+
+/// `SET` statements: every form, with spans and decoded keys/values.
+#[test]
+fn set_statements() {
+    use ast::{SetKind, Statement};
+    let d = ParserOptions::default();
+    let set = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::Set(s) => s,
+        other => panic!("{sql} is {other:?}"),
+    };
+    // `SET` lists every explicitly set key; a trailing `;` is not part
+    // of the span.
+    for sql in ["SET", "SET;", "SET ; ;", "set"] {
+        let s = set(sql);
+        assert!(matches!(s.kind, SetKind::All), "{sql}");
+        assert_eq!(
+            s.span.text(sql),
+            sql.trim_end_matches([';', ' ', '\t']),
+            "{sql}"
+        );
+    }
+    // `SET -v`.
+    for sql in ["SET -v", "SET -v;", "set -V"] {
+        let s = set(sql);
+        assert!(matches!(s.kind, SetKind::Verbose), "{sql}");
+    }
+    // `SET key`: the key is the trimmed rest of the statement.
+    let s = set("SET spark.sql.ansi.enabled");
+    let SetKind::Show { key, key_span } = &s.kind else {
+        panic!("{:?}", s.kind)
+    };
+    assert_eq!(key, "spark.sql.ansi.enabled");
+    assert_eq!(
+        key_span.text("SET spark.sql.ansi.enabled"),
+        "spark.sql.ansi.enabled"
+    );
+    assert_eq!(
+        s.span.text("SET spark.sql.ansi.enabled"),
+        "SET spark.sql.ansi.enabled"
+    );
+    // A trailing `;` ends the key without joining it.
+    let s = set("SET my.key;");
+    let SetKind::Show { key, .. } = &s.kind else {
+        panic!("{:?}", s.kind)
+    };
+    assert_eq!(key, "my.key");
+    assert_eq!(s.span.text("SET my.key;"), "SET my.key");
+    // `SET key = value`, with and without spaces: the value is the raw
+    // rest, trimmed.
+    let s = set("SET a=1");
+    let SetKind::Assign {
+        key,
+        key_span,
+        value,
+        value_span,
+    } = &s.kind
+    else {
+        panic!("{:?}", s.kind)
+    };
+    assert_eq!((key.as_str(), value.as_str()), ("a", "1"));
+    assert_eq!(key_span.text("SET a=1"), "a");
+    assert_eq!(value_span.text("SET a=1"), "1");
+    let sql = "SET my.key = a=b=c ;";
+    let s = set(sql);
+    let SetKind::Assign {
+        key,
+        value,
+        value_span,
+        ..
+    } = &s.kind
+    else {
+        panic!("{:?}", s.kind)
+    };
+    assert_eq!((key.as_str(), value.as_str()), ("my.key", "a=b=c"));
+    assert_eq!(value_span.text(sql), "a=b=c");
+    assert_eq!(s.span.text(sql), "SET my.key = a=b=c");
+    // Quoted keys and values: only backquotes are special, as in Spark.
+    for (sql, key, value) in [
+        ("SET `my.key` = 1", "my.key", "1"),
+        ("SET `a``b` = `x``y`", "a`b", "x`y"),
+        ("SET k = 'a;b'", "k", "'a;b'"),
+        ("SET `k` = 'v'", "k", "'v'"),
+    ] {
+        let s = set(sql);
+        match &s.kind {
+            SetKind::Assign {
+                key: k, value: v, ..
+            } => assert_eq!((k.as_str(), v.as_str()), (key, value), "{sql}"),
+            SetKind::Show { key: k, .. } => assert_eq!((k.as_str(), ""), (key, value), "{sql}"),
+            kind => panic!("{sql} is {kind:?}"),
+        }
+    }
+    // A backquoted key with no `=` is a lookup.
+    let s = set("SET `a=b`");
+    let SetKind::Show { key, .. } = &s.kind else {
+        panic!("{:?}", s.kind)
+    };
+    assert_eq!(key, "a=b");
+    // Double-quoted keys are syntax errors; single-quoted keys fail the
+    // key check (asserted in `set_errors_follow_spark`).
+    for sql in ["SET \"k\" = \"v\"", "SET \"k\""] {
+        assert_eq!(
+            parse_statement(sql, &d).unwrap_err().error.error_class(),
+            ErrorClass::ParseSyntaxError,
+            "{sql}"
+        );
+    }
+    // `SET TIME ZONE ...`.
+    let s = set("SET TIME ZONE 'UTC'");
+    let SetKind::TimeZone { zone, .. } = &s.kind else {
+        panic!("{:?}", s.kind)
+    };
+    assert_eq!(zone, &ast::TimeZone::Named("UTC".to_owned()));
+    let s = set("set time zone local");
+    let SetKind::TimeZone { zone, .. } = &s.kind else {
+        panic!("{:?}", s.kind)
+    };
+    assert_eq!(zone, &ast::TimeZone::Local);
+    // `parse_query` takes queries only.
+    assert_eq!(
+        err("SET a = 1", &d).error.error_class(),
+        ErrorClass::ParseSyntaxError
+    );
+    // A query is a statement too; `SET` is still a name elsewhere.
+    assert!(matches!(
+        parse_statement("SELECT set FROM set", &d),
+        Ok(Statement::Query(_))
+    ));
+}
+
+/// `SET` errors, positions and precedence as Spark 4.2 raises them.
+#[test]
+fn set_errors_follow_spark() {
+    let d = ParserOptions::default();
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    // Anything but `SET`, `SET -v`, a plain key or `key = value` is
+    // `INVALID_SET_SYNTAX`.
+    for sql in [
+        "SET a b",
+        "SET -x",
+        "SET = 1",
+        "SET -v x",
+        "SET -v x y",
+        "SET 'k'=1",
+        "SET 'k'",
+    ] {
+        let e = fail(sql);
+        assert_eq!(e.error.error_class(), ErrorClass::InvalidSetSyntax, "{sql}");
+        assert_eq!(e.error.sql_state(), Some("42000"), "{sql}");
+    }
+    assert!(
+        fail("SET a b")
+            .error
+            .to_string()
+            .contains("Expected format is 'SET'"),
+    );
+    // An empty key fails at the `=`.
+    let e = fail("SET = 1");
+    assert_eq!(e.span.range(), 0..3);
+    // An unterminated quote fails at the quote.
+    let e = fail("SET x = 'abc");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 8..9);
+    let e = fail("SET 'abc = 1");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 4..5);
+    // A quote later in a bare key fails at the quote too.
+    let e = fail("SET k'x = 1");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 5..6);
+    // An `INTERVAL` time zone is a supported grammar form the engine does
+    // not implement.
+    let e = fail("SET TIME ZONE INTERVAL '1' DAY");
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(e.error.to_string().contains("INTERVAL"), "{e:?}");
+    // A missing zone is a syntax error.
+    let e = fail("SET TIME ZONE");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // Anything after the value's `;` is extra input, as for queries.
+    let e = fail("SET x = 1; SELECT 2");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(
+        e.error.to_string(),
+        "[PARSE_SYNTAX_ERROR] Syntax error at or near 'SELECT': extra input 'SELECT'. \
+         SQLSTATE: 42601"
+    );
+    assert_eq!(e.span.range(), 11..17);
+    // Under `EXPLAIN`, a command is the explained statement.
+    let ast::Statement::Explain(e) = parse_statement("EXPLAIN SET x = 1", &d).unwrap() else {
+        panic!("not an EXPLAIN")
+    };
+    let ast::Statement::Set(_) = *e.statement else {
+        panic!("not a SET")
+    };
+}
+
+/// `RESET` statements and their errors.
+#[test]
+fn reset_statements() {
+    use ast::Statement;
+    let d = ParserOptions::default();
+    let reset = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::Reset(r) => r,
+        other => panic!("{sql} is {other:?}"),
+    };
+    for sql in ["RESET", "RESET;", "reset"] {
+        let r = reset(sql);
+        assert_eq!(r.key, None, "{sql}");
+        assert_eq!(r.key_span, None, "{sql}");
+    }
+    let sql = "RESET spark.sql.ansi.enabled;";
+    let r = reset(sql);
+    assert_eq!(r.key.as_deref(), Some("spark.sql.ansi.enabled"));
+    assert_eq!(r.key_span.unwrap().text(sql), "spark.sql.ansi.enabled");
+    assert_eq!(r.span.text(sql), "RESET spark.sql.ansi.enabled");
+    let r = reset("RESET `my key`");
+    assert_eq!(r.key.as_deref(), Some("my key"));
+    // Anything but one plain key is `INVALID_RESET_COMMAND_FORMAT`.
+    for sql in ["RESET a b", "RESET a=b", "RESET 'k'", "RESET \"k\""] {
+        let e = parse_statement(sql, &d).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidResetCommandFormat,
+            "{sql}"
+        );
+        assert_eq!(e.error.sql_state(), Some("42000"), "{sql}");
+    }
+    assert!(
+        parse_statement("RESET a b", &d)
+            .unwrap_err()
+            .error
+            .to_string()
+            .contains("Expected format is 'RESET'"),
+    );
+    // An unterminated quote fails at the quote.
+    let e = parse_statement("RESET 'abc", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 6..7);
+    let e = parse_statement("RESET ab'cd", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 8..9);
+}
+
+/// `CREATE TEMPORARY VIEW` statements and their errors.
+#[test]
+fn create_view_statements() {
+    use ast::Statement;
+    let d = ParserOptions::default();
+    let create = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::CreateView(v) => v,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let v = create("CREATE TEMPORARY VIEW v AS SELECT 1");
+    assert!(!v.or_replace && !v.if_not_exists);
+    assert_eq!(v.name.value, "v");
+    assert!(v.columns.is_empty());
+    assert_eq!(*v.query, ok("SELECT 1"));
+    assert_eq!(
+        v.span.text("CREATE TEMPORARY VIEW v AS SELECT 1"),
+        "CREATE TEMPORARY VIEW v AS SELECT 1"
+    );
+    // `TEMP`, `OR REPLACE` and the column list.
+    let sql = "CREATE OR REPLACE TEMP VIEW `v` (a COMMENT 'the a', b) AS SELECT 1, 2;";
+    let v = create(sql);
+    assert!(v.or_replace && !v.if_not_exists);
+    assert_eq!(v.name.value, "v");
+    assert_eq!(
+        v.columns
+            .iter()
+            .map(|c| c.name.value.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    assert_eq!(v.columns[0].comment.as_deref(), Some("the a"));
+    assert_eq!(v.columns[1].comment, None);
+    assert_eq!(v.columns[0].span.text(sql), "a COMMENT 'the a'");
+    assert_eq!(*v.query, ok("SELECT 1, 2"));
+    assert_eq!(
+        v.span.text(sql),
+        "CREATE OR REPLACE TEMP VIEW `v` (a COMMENT 'the a', b) AS SELECT 1, 2"
+    );
+    // `OR REPLACE` with `IF NOT EXISTS` parses and fails with
+    // `CREATE_VIEW_WITH_IF_NOT_EXISTS_AND_REPLACE`, as in Spark, before
+    // the view's query is checked.
+    let e = parse_statement(
+        "CREATE OR REPLACE TEMP VIEW IF NOT EXISTS `v` (a COMMENT 'the a', b) AS SELECT DATE '2020-02-30'",
+        &d,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::CreateViewWithIfNotExistsAndReplace
+    );
+    assert_eq!(e.error.sql_state(), Some("42601"));
+    assert_eq!(
+        e.error.message_parameters(),
+        [("viewName", "`v`".to_owned())]
+    );
+    // The view's query gets Spark's post-parse checks.
+    let e = parse_statement("CREATE TEMP VIEW v AS SELECT DATE '2020-02-30'", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidTypedLiteral);
+    // `IF NOT EXISTS` without `OR REPLACE` parses and fails with
+    // `_LEGACY_ERROR_TEMP_0053`, as in Spark.
+    let e = parse_statement("CREATE TEMP VIEW IF NOT EXISTS v AS SELECT 1", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0053);
+    assert_eq!(
+        e.error.message(),
+        "It is not allowed to define a TEMPORARY view with IF NOT EXISTS."
+    );
+    // A qualified name parses and fails with
+    // `INVALID_TEMP_OBJ_QUALIFIER`, as in Spark.
+    let e = parse_statement("CREATE TEMP VIEW a.b AS SELECT 1", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidTempObjQualifier);
+    assert_eq!(e.error.sql_state(), Some("42602"));
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("objectType", "view".to_owned()),
+            ("objectName", "`a`.`b`".to_owned()),
+            ("qualifier", "`a`".to_owned()),
+        ]
+    );
+    // Only temporary views: anything else fails where it stands.
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    let e = fail("CREATE VIEW v AS SELECT 1");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 7..11);
+    let e = fail("CREATE GLOBAL TEMPORARY VIEW v AS SELECT 1");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 7..13);
+    // `AS` is required, and the query follows it.
+    let e = fail("CREATE TEMP VIEW v SELECT 1");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 19..25);
+    let e = fail("CREATE TEMP VIEW v AS");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 21..21);
+    // The column list is names (with comments), not types.
+    let e = fail("CREATE TEMP VIEW v (a INT) AS SELECT 1");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 22..25);
+    let e = fail("CREATE TEMP VIEW v () AS SELECT 1");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    let e = fail("CREATE TEMP VIEW v (a COMMENT 1) AS SELECT 1");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 30..31);
+}
+
+/// `DROP VIEW` statements and their errors.
+#[test]
+fn drop_view_statements() {
+    use ast::Statement;
+    let d = ParserOptions::default();
+    let drop = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::DropView(v) => v,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let v = drop("DROP VIEW v;");
+    assert!(!v.if_exists);
+    assert_eq!(v.name.value, "v");
+    assert_eq!(v.span.text("DROP VIEW v;"), "DROP VIEW v");
+    let v = drop("drop view if exists `my view`");
+    assert!(v.if_exists);
+    assert_eq!(v.name.value, "my view");
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    // Only views drop: `DROP TABLE` fails at `TABLE`.
+    let e = fail("DROP TABLE v");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 5..10);
+    // The name is required.
+    let e = fail("DROP VIEW");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 9..9);
+    let e = fail("DROP VIEW IF EXISTS");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 19..19);
 }

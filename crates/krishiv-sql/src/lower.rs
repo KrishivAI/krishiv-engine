@@ -16,27 +16,41 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use krishiv_common::error::{FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature, MissingWindowSpecification,
+};
 use krishiv_common::secret::OptionValue;
 use krishiv_common::stack::{STEP, on_big_stack};
 use krishiv_plan::{
-    Builtin, CastMode, ColumnRef, Cte, Expr as IrExpr, ExprNode, FunctionCall, Grouping,
-    JoinCondition, JoinKind as IrJoin, Literal as IrLiteral, LogicalPlan, Origin, Plan, PlanNode,
-    ReadSource, SortOrder, SourceId, Star, SubqueryKind,
+    Builtin, CastMode, ColumnRef, Cte, Expr as IrExpr, ExprNode, FrameBound as IrFrameBound,
+    FrameUnits as IrFrameUnits, FunctionCall, Grouping, JoinCondition, JoinKind as IrJoin,
+    Literal as IrLiteral, LogicalPlan, Origin, Plan, PlanNode, ReadSource, SortOrder, SourceId,
+    Star, SubqueryKind, TypedLiteralKind as IrTypedKind, WindowExpr, WindowFrame as IrWindowFrame,
+    WindowSpec as IrWindowSpec, WindowSpecRef,
 };
 use krishiv_types::DecimalType;
 
 use crate::ast::{
-    Alias, BinaryOp, Expr, ExprKind, FromClause, GroupItemKind, JoinConstraint, JoinKind, Literal,
-    NullTreatment, NumKind, Query, Relation, RelationExt, Select, SetExpr, SetExprKind,
-    SetOperator, SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth, UnaryOp,
+    Alias, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, FromClause, GroupBy,
+    GroupItem, GroupItemKind, GroupWith, GroupingSet, Ident, JoinConstraint, JoinKind, Literal,
+    NamedWindow, NullTreatment, NumKind, Query, Relation, RelationExt, Select, SelectItem, SetExpr,
+    SetExprKind, SetOperator, SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth,
+    UnaryOp, WindowRef, WindowSpec,
 };
 use crate::validate::literal::{self, Number, TypedKind};
-use crate::{ParseError, ParserOptions, parse_query};
+use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
 
 type R<T> = Result<T, ParseError>;
 
+/// The most grouping sets one `GROUP BY` expands to.
+const MAX_GROUPING_SETS: usize = 1 << 16;
+
 /// Parses and lowers one query; spans index `source`.
+///
+/// Typed datetime literals (`TIMESTAMP '...'`, `TIMESTAMP_LTZ '...'`,
+/// `TIMESTAMP_NTZ '...'`, `DATE '...'`) lower to an unresolved
+/// [`ExprNode::TypedLiteral`] (the type keyword and the raw string): the
+/// analyzer resolves them with the session's time zone and timestamp type.
 ///
 /// # Errors
 /// A [`ParseError`]: the parser's, or a lowering error with its span.
@@ -56,9 +70,58 @@ pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
         source,
         depth: 0,
         root: query.span,
+        windows: Vec::new(),
     };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
+}
+
+/// Lowers one parsed expression into the IR `Session::sql` builds for
+/// `SELECT` items, so it resolves against a DataFrame's columns in the
+/// analyzer. Origins index `source`; too deep a tree fails with
+/// `FAILED_TO_PARSE_TOO_COMPLEX` at the expression's span.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for constructs the IR lacks and Spark's
+/// literal errors, as for [`lower`].
+pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
+    let mut l = Lowerer {
+        source,
+        depth: 0,
+        root: expr.span,
+        windows: Vec::new(),
+    };
+    l.expr(expr)
+}
+
+/// Lowers one parsed select item (`expr [[AS] alias]`), as [`lower`]
+/// lowers the items of a `SELECT` list.
+///
+/// # Errors
+/// As for [`lower_expression`].
+pub fn lower_select_item(item: &SelectItem, source: SourceId) -> R<Arc<IrExpr>> {
+    let mut l = Lowerer {
+        source,
+        depth: 0,
+        root: item.span,
+        windows: Vec::new(),
+    };
+    l.select_item(item)
+}
+
+/// Parses and lowers one named-expression string (`F.expr`,
+/// `selectExpr` once per argument string, `filter`/`where` strings); spans
+/// index `source`.
+///
+/// # Errors
+/// A [`ParseError`]: the parser's, or a lowering error with its span.
+pub fn parse_and_lower_named_expression(
+    sql: &str,
+    options: &ParserOptions,
+    source: SourceId,
+) -> R<Arc<IrExpr>> {
+    lower_select_item(&parse_named_expression(sql, options)?, source)
+        .map_err(|e| e.redacted_in(sql))
 }
 
 fn err(e: impl Into<KrishivError>, span: Span) -> ParseError {
@@ -73,7 +136,6 @@ fn reject_organization(q: &Query) -> R<()> {
     for (present, what) in [
         (!q.cluster_by.is_empty(), "CLUSTER BY"),
         (!q.distribute_by.is_empty(), "DISTRIBUTE BY"),
-        (!q.windows.is_empty(), "WINDOW clauses"),
     ] {
         if present {
             return Err(unsupported(what, q.span));
@@ -96,12 +158,41 @@ struct Lowerer {
     depth: usize,
     /// The whole statement: `FAILED_TO_PARSE_TOO_COMPLEX` refers to it.
     root: Span,
+    /// The `WINDOW` clauses around the expression being lowered, innermost
+    /// last; `None` stands for a subquery expression's boundary (Spark's
+    /// `WindowsSubstitution` does not enter subquery plans).
+    windows: Vec<Option<Arc<WindowDefs>>>,
 }
+
+/// A `WINDOW` clause: each name's specification, references to other
+/// names followed (`validate` checked them).
+type WindowDefs = Vec<(String, WindowSpec)>;
 
 fn arc<T>(v: T) -> Arc<T> {
     Arc::new(v)
 }
 
+/// The definitions of a `WINDOW` clause, as Spark's `AstBuilder` resolves
+/// them: a name defined as another name takes that one's specification.
+fn window_defs(windows: &[NamedWindow]) -> WindowDefs {
+    let spec = |r: &WindowRef| match r {
+        WindowRef::Spec(spec) => Some((**spec).clone()),
+        WindowRef::Named(_) => None,
+    };
+    windows
+        .iter()
+        .filter_map(|w| {
+            let s = match &w.window {
+                WindowRef::Spec(s) => Some((**s).clone()),
+                WindowRef::Named(other) => windows
+                    .iter()
+                    .find(|d| d.name.value == other.value)
+                    .and_then(|d| spec(&d.window)),
+            };
+            s.map(|s| (w.name.value.clone(), s))
+        })
+        .collect()
+}
 impl Lowerer {
     fn origin(&self, span: Span) -> Origin {
         let at = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
@@ -160,10 +251,107 @@ impl Lowerer {
         self.deeper(|l| l.query_inner(q))
     }
 
+    /// A subquery expression's query: the `WINDOW` clauses around it do
+    /// not reach into it.
+    fn subquery(&mut self, q: &Query) -> R<LogicalPlan> {
+        self.windows.push(None);
+        let r = self.query(q);
+        self.windows.pop();
+        r
+    }
+
+    /// Runs `f` with the definitions of `windows` in scope.
+    fn with_windows<T>(
+        &mut self,
+        windows: &[NamedWindow],
+        f: impl FnOnce(&mut Self) -> R<T>,
+    ) -> R<T> {
+        if windows.is_empty() {
+            return f(self);
+        }
+        self.windows.push(Some(Arc::new(window_defs(windows))));
+        let r = f(self);
+        self.windows.pop();
+        r
+    }
+
+    /// `OVER name`, as Spark's `WindowsSubstitution` resolves it: the
+    /// innermost `WINDOW` clause around decides (a name it lacks is
+    /// `MISSING_WINDOW_SPECIFICATION`); with none around, the name stays
+    /// for the analyzer, which reports it once the operator's input
+    /// resolved.
+    fn named_window(&mut self, name: &Ident, span: Span) -> R<WindowSpecRef> {
+        let scope = self.windows.last().cloned().flatten();
+        match scope {
+            None => Ok(WindowSpecRef::Named(name.value.clone())),
+            Some(defs) => match defs.iter().find(|(n, _)| *n == name.value) {
+                Some((_, spec)) => Ok(WindowSpecRef::Spec(self.window_spec(spec)?)),
+                None => Err(err(
+                    MissingWindowSpecification {
+                        window_name: name.value.clone(),
+                        docroot: "https://spark.apache.org/docs/latest".to_owned(),
+                    },
+                    span,
+                )),
+            },
+        }
+    }
+
+    /// `(PARTITION BY ... ORDER BY ... frame)`; `DISTRIBUTE BY` and
+    /// `CLUSTER BY` partition, `SORT BY` orders, as in Spark.
+    fn window_spec(&mut self, w: &WindowSpec) -> R<IrWindowSpec> {
+        let partition_by = w
+            .partition_by
+            .iter()
+            .map(|e| self.arg(e))
+            .collect::<R<Vec<_>>>()?;
+        let order_by = w
+            .order_by
+            .iter()
+            .map(|s| self.sort_item(s))
+            .collect::<R<Vec<_>>>()?;
+        let frame = match &w.frame {
+            None => None,
+            Some(f) => Some(IrWindowFrame {
+                units: match f.units {
+                    FrameUnits::Rows => IrFrameUnits::Rows,
+                    FrameUnits::Range => IrFrameUnits::Range,
+                },
+                lower: self.frame_bound(&f.start)?,
+                upper: match &f.end {
+                    Some(b) => self.frame_bound(b)?,
+                    None => IrFrameBound::CurrentRow,
+                },
+            }),
+        };
+        Ok(IrWindowSpec {
+            partition_by,
+            order_by,
+            frame,
+        })
+    }
+
+    /// A frame bound; `n PRECEDING` is `-(n)`, as Spark's `AstBuilder`
+    /// writes it.
+    fn frame_bound(&mut self, b: &FrameBound) -> R<IrFrameBound> {
+        Ok(match &b.kind {
+            FrameBoundKind::UnboundedPreceding => IrFrameBound::UnboundedPreceding,
+            FrameBoundKind::UnboundedFollowing => IrFrameBound::UnboundedFollowing,
+            FrameBoundKind::CurrentRow => IrFrameBound::CurrentRow,
+            FrameBoundKind::Preceding(e) => {
+                let value = self.expr(e)?;
+                IrFrameBound::Offset(arc(self.op(Builtin::Negative, vec![value], b.span)))
+            }
+            FrameBoundKind::Following(e) => IrFrameBound::Offset(self.arg(e)?),
+        })
+    }
+
     fn query_inner(&mut self, q: &Query) -> R<LogicalPlan> {
         reject_organization(q)?;
-        let mut plan = self.body(&q.body)?;
-        plan = self.organize(plan, q)?;
+        let mut plan = self.with_windows(&q.windows, |l| {
+            let plan = l.body(&q.body)?;
+            l.organize(plan, q)
+        })?;
         if let Some(with) = &q.with {
             if with.recursive {
                 return Err(unsupported("recursive CTEs", with.span));
@@ -216,8 +404,10 @@ impl Lowerer {
                 [body] => match &body.body.kind {
                     SetExprKind::Select(s) => {
                         reject_organization(body)?;
-                        let inner = self.select(s, Some(&f.from))?;
-                        self.organize(inner, body)?
+                        self.with_windows(&body.windows, |l| {
+                            let inner = l.select(s, Some(&f.from))?;
+                            l.organize(inner, body)
+                        })?
                     }
                     _ => return Err(unsupported("FROM ... SELECT with a set body", f.span)),
                 },
@@ -329,7 +519,7 @@ impl Lowerer {
     /// A `SELECT` with its `DISTINCT` and hints: as Spark's AstBuilder,
     /// the hints wrap the rest, the first one outermost.
     fn select(&mut self, s: &Select, from: Option<&FromClause>) -> R<LogicalPlan> {
-        let mut plan = self.select_list(s, from)?;
+        let mut plan = self.with_windows(&s.windows, |l| l.select_list(s, from))?;
         if s.quantifier == Some(SetQuantifier::Distinct) {
             plan = self.node(PlanNode::Distinct { input: arc(plan) }, s.span);
         }
@@ -351,10 +541,24 @@ impl Lowerer {
         Ok(plan)
     }
 
+    fn select_item(&mut self, item: &SelectItem) -> R<Arc<IrExpr>> {
+        let e = self.expr(&item.expr)?;
+        Ok(arc(match &item.alias {
+            None => e,
+            Some(Alias::Name(name)) => self.ex(
+                ExprNode::Alias {
+                    expr: arc(e),
+                    name: name.value.clone(),
+                },
+                item.span,
+            ),
+            Some(_) => return Err(unsupported("multi-name aliases", item.span)),
+        }))
+    }
+
     fn select_list(&mut self, s: &Select, from: Option<&FromClause>) -> R<LogicalPlan> {
         for (present, what) in [
             (!s.lateral_views.is_empty(), "LATERAL VIEW"),
-            (!s.windows.is_empty(), "WINDOW clauses"),
             (s.qualify.is_some(), "QUALIFY"),
         ] {
             if present {
@@ -377,18 +581,7 @@ impl Lowerer {
         }
         let mut items = Vec::new();
         for item in &s.projection {
-            let e = self.expr(&item.expr)?;
-            items.push(arc(match &item.alias {
-                None => e,
-                Some(Alias::Name(name)) => self.ex(
-                    ExprNode::Alias {
-                        expr: arc(e),
-                        name: name.value.clone(),
-                    },
-                    item.span,
-                ),
-                Some(_) => return Err(unsupported("multi-name aliases", item.span)),
-            }));
+            items.push(self.select_item(item)?);
         }
         if s.group_by.is_none() && s.having.is_none() {
             return Ok(self.node(
@@ -399,22 +592,14 @@ impl Lowerer {
                 s.span,
             ));
         }
-        let mut keys = Vec::new();
-        if let Some(g) = &s.group_by {
-            if g.with.is_some() {
-                return Err(unsupported("ROLLUP, CUBE and GROUPING SETS", g.span));
-            }
-            for item in &g.items {
-                match &item.kind {
-                    GroupItemKind::Expr(e) => keys.push(arc(self.expr(e)?)),
-                    _ => return Err(unsupported("ROLLUP, CUBE and GROUPING SETS", item.span)),
-                }
-            }
-        }
+        let grouping = match &s.group_by {
+            Some(g) => self.grouping(g)?,
+            None => Grouping::GroupBy(Vec::new()),
+        };
         plan = self.node(
             PlanNode::Aggregate {
                 input: arc(plan),
-                grouping: Grouping::GroupBy(keys),
+                grouping,
                 aggregates: items,
             },
             s.span,
@@ -445,6 +630,136 @@ impl Lowerer {
             );
         }
         Ok(plan)
+    }
+
+    /// `GROUP BY`, as Spark's `AstBuilder` shapes it: plain keys, `WITH
+    /// ROLLUP` / `WITH CUBE` over them, `GROUPING SETS (..)` after them (the
+    /// keys only fix the grouping expressions), or items that are
+    /// `ROLLUP`, `CUBE` and `GROUPING SETS` among keys, whose grouping sets
+    /// are the cross product of the items' (a key is a set of itself).
+    #[inline(never)]
+    fn grouping(&mut self, g: &GroupBy) -> R<Grouping> {
+        let mut plain = Vec::with_capacity(g.items.len());
+        for item in &g.items {
+            if let GroupItemKind::Expr(e) = &item.kind {
+                plain.push(arc(self.expr(e)?));
+            }
+        }
+        let all_plain = plain.len() == g.items.len();
+        match (&g.with, all_plain) {
+            (None, true) => return Ok(Grouping::GroupBy(plain)),
+            (Some(GroupWith::Rollup), true) => return Ok(Grouping::Rollup(plain)),
+            (Some(GroupWith::Cube), true) => return Ok(Grouping::Cube(plain)),
+            (Some(GroupWith::GroupingSets(sets)), true) => {
+                let sets = sets.iter().map(|s| self.set(s)).collect::<R<Vec<_>>>()?;
+                return Ok(Grouping::GroupingSets { exprs: plain, sets });
+            }
+            (Some(_), false) => {
+                return Err(unsupported(
+                    "ROLLUP, CUBE and GROUPING SETS items with WITH ROLLUP, WITH CUBE or GROUPING SETS",
+                    g.span,
+                ));
+            }
+            (None, false) => {}
+        }
+        let mut exprs = Vec::new();
+        let mut product: Vec<Vec<Arc<IrExpr>>> = vec![Vec::new()];
+        for item in &g.items {
+            let sets = self.item_sets(item, &mut exprs)?;
+            if product.len().saturating_mul(sets.len()) > MAX_GROUPING_SETS {
+                return Err(unsupported(
+                    &format!("more than {MAX_GROUPING_SETS} grouping sets"),
+                    g.span,
+                ));
+            }
+            product = product
+                .iter()
+                .flat_map(|head| {
+                    sets.iter()
+                        .map(move |tail| head.iter().chain(tail).cloned().collect::<Vec<_>>())
+                })
+                .collect();
+        }
+        Ok(Grouping::GroupingSets {
+            exprs,
+            sets: product,
+        })
+    }
+
+    /// The grouping sets one `GROUP BY` item stands for; the expressions it
+    /// names are appended to `written` in order.
+    fn item_sets(
+        &mut self,
+        item: &GroupItem,
+        written: &mut Vec<Arc<IrExpr>>,
+    ) -> R<Vec<Vec<Arc<IrExpr>>>> {
+        Ok(match &item.kind {
+            GroupItemKind::Expr(e) => {
+                let e = arc(self.expr(e)?);
+                written.push(Arc::clone(&e));
+                vec![vec![e]]
+            }
+            GroupItemKind::Set(s) => {
+                let set = self.set(s)?;
+                written.extend(set.iter().cloned());
+                vec![set]
+            }
+            GroupItemKind::GroupingSets(items) => {
+                let mut sets = Vec::new();
+                let span = item.span;
+                for inner in items {
+                    sets.extend(self.deeper(|l| l.item_sets(inner, &mut *written))?);
+                    if sets.len() > MAX_GROUPING_SETS {
+                        return Err(unsupported(
+                            &format!("more than {MAX_GROUPING_SETS} grouping sets"),
+                            span,
+                        ));
+                    }
+                }
+                sets
+            }
+            GroupItemKind::Rollup(elements) | GroupItemKind::Cube(elements) => {
+                let rollup = matches!(item.kind, GroupItemKind::Rollup(_));
+                let mut parts = Vec::with_capacity(elements.len());
+                for element in elements {
+                    let part = self.set(element)?;
+                    written.extend(part.iter().cloned());
+                    parts.push(part);
+                }
+                // `ROLLUP (a, b)`: (a, b), (a), (); `CUBE (a, b)`: every
+                // subset of the elements.
+                let n = parts.len();
+                if !rollup && n >= usize::BITS as usize - 1
+                    || !rollup && (1_usize << n) > MAX_GROUPING_SETS
+                {
+                    return Err(unsupported(
+                        &format!("more than {MAX_GROUPING_SETS} grouping sets"),
+                        item.span,
+                    ));
+                }
+                let chosen: Vec<Vec<usize>> = if rollup {
+                    (0..=n).rev().map(|k| (0..k).collect()).collect()
+                } else {
+                    (0..1_usize << n)
+                        .rev()
+                        .map(|m| (0..n).filter(|i| m >> (n - 1 - i) & 1 == 1).collect())
+                        .collect()
+                };
+                chosen
+                    .into_iter()
+                    .map(|c| {
+                        c.into_iter()
+                            .flat_map(|i| parts[i].iter().cloned())
+                            .collect()
+                    })
+                    .collect()
+            }
+        })
+    }
+
+    /// The expressions of one grouping set.
+    fn set(&mut self, s: &GroupingSet) -> R<Vec<Arc<IrExpr>>> {
+        s.exprs.iter().map(|e| Ok(arc(self.expr(e)?))).collect()
     }
 
     fn from(&mut self, f: &FromClause) -> R<LogicalPlan> {
@@ -605,7 +920,7 @@ impl Lowerer {
     fn expr_inner(&mut self, e: &Expr) -> R<IrExpr> {
         let sp = e.span;
         Ok(match &e.kind {
-            ExprKind::Literal(v) => self.ex(ExprNode::Literal(literal(v, sp)?), sp),
+            ExprKind::Literal(v) => self.ex(literal(v, sp)?, sp),
             ExprKind::Keyword(k) => {
                 self.ex(ExprNode::Literal(IrLiteral::String(k.value.clone())), sp)
             }
@@ -648,7 +963,10 @@ impl Lowerer {
             }
             ExprKind::Unary(op, inner) => {
                 let name = match op {
-                    UnaryOp::Minus => Builtin::Negative.name(),
+                    // Unary `-` keeps `"-"` so the analyzer sees it apart
+                    // from the function `negative(x)` (Spark's `UnaryMinus`
+                    // with and without its `FUNC_ALIAS`).
+                    UnaryOp::Minus => "-",
                     UnaryOp::Plus => "positive",
                     UnaryOp::BitNot => "~",
                 };
@@ -768,7 +1086,7 @@ impl Lowerer {
                     }
                     _ => vec![self.arg(expr)?],
                 };
-                let plan = arc(self.query(query)?);
+                let plan = arc(self.subquery(query)?);
                 let s = self.ex(
                     ExprNode::Subquery {
                         kind: SubqueryKind::In(values),
@@ -809,7 +1127,7 @@ impl Lowerer {
                 self.not(like, *negated, sp)
             }
             ExprKind::Exists(q) => {
-                let plan = arc(self.query(q)?);
+                let plan = arc(self.subquery(q)?);
                 self.ex(
                     ExprNode::Subquery {
                         kind: SubqueryKind::Exists,
@@ -819,7 +1137,7 @@ impl Lowerer {
                 )
             }
             ExprKind::Subquery(q) => {
-                let plan = arc(self.query(q)?);
+                let plan = arc(self.subquery(q)?);
                 self.ex(
                     ExprNode::Subquery {
                         kind: SubqueryKind::Scalar,
@@ -871,7 +1189,6 @@ impl Lowerer {
                     return Err(unsupported("qualified function names", f.name.span));
                 };
                 for (present, what) in [
-                    (f.over.is_some(), "window functions"),
                     (!f.within_group.is_empty(), "WITHIN GROUP"),
                     (
                         f.null_treatment.is_some() && !takes_null_treatment(&name.value),
@@ -911,7 +1228,7 @@ impl Lowerer {
                     }
                 }
                 let filter = f.filter.as_ref().map(|x| self.arg(x)).transpose()?;
-                self.ex(
+                let call = self.ex(
                     ExprNode::Function(FunctionCall {
                         name: name.value.clone(),
                         args,
@@ -919,7 +1236,23 @@ impl Lowerer {
                         filter,
                     }),
                     sp,
-                )
+                );
+                match &f.over {
+                    None => call,
+                    Some(over) => {
+                        let window = match over {
+                            WindowRef::Spec(spec) => WindowSpecRef::Spec(self.window_spec(spec)?),
+                            WindowRef::Named(name) => self.named_window(name, sp)?,
+                        };
+                        self.ex(
+                            ExprNode::Window(WindowExpr {
+                                function: arc(call),
+                                window,
+                            }),
+                            sp,
+                        )
+                    }
+                }
             }
             ExprKind::Nested(inner) => self.expr(inner)?,
             ExprKind::Parameter(_) => return Err(unsupported("parameter markers", sp)),
@@ -987,21 +1320,34 @@ fn is_path(s: &str) -> bool {
     s.contains('/') || s.contains(':')
 }
 
-fn literal(v: &Literal, sp: Span) -> R<IrLiteral> {
+fn literal(v: &Literal, sp: Span) -> R<ExprNode> {
     Ok(match v {
-        Literal::Null => IrLiteral::Null(None),
-        Literal::Boolean(b) => IrLiteral::Boolean(*b),
-        Literal::String(s) => IrLiteral::String(s.clone()),
-        Literal::Number { text, kind } => number(text, *kind, sp)?,
+        Literal::Null => ExprNode::Literal(IrLiteral::Null(None)),
+        Literal::Boolean(b) => ExprNode::Literal(IrLiteral::Boolean(*b)),
+        Literal::String(s) => ExprNode::Literal(IrLiteral::String(s.clone())),
+        Literal::Number { text, kind } => ExprNode::Literal(number(text, *kind, sp)?),
         Literal::Typed { type_name, value } => {
             let kind = TypedKind::of(&type_name.value, type_name.quoted).map_err(|e| err(e, sp))?;
             match kind {
-                TypedKind::Date => IrLiteral::Date(
-                    literal::date(value).ok_or_else(|| err(kind.invalid(value), sp))?,
-                ),
-                TypedKind::Binary => IrLiteral::Binary(
+                TypedKind::Date => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::Date,
+                    value: value.clone(),
+                },
+                TypedKind::Timestamp => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::Timestamp,
+                    value: value.clone(),
+                },
+                TypedKind::TimestampNtz => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::TimestampNtz,
+                    value: value.clone(),
+                },
+                TypedKind::TimestampLtz => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::TimestampLtz,
+                    value: value.clone(),
+                },
+                TypedKind::Binary => ExprNode::Literal(IrLiteral::Binary(
                     literal::hex(value).ok_or_else(|| err(kind.invalid(value), sp))?,
-                ),
+                )),
                 _ => {
                     let t = type_name.value.to_ascii_uppercase();
                     return Err(unsupported(&format!("{t} literals"), sp));

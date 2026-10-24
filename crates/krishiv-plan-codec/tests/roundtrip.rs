@@ -15,7 +15,8 @@ use krishiv_exec::physical::{PhysNode, PhysicalPlan};
 use krishiv_plan::{Expr, ReadSource};
 use krishiv_plan_codec::proto as pb;
 use krishiv_plan_codec::{
-    CodecError, FORMAT_VERSION, Limits, MIN_READER_VERSION, decode, decode_with, encode, to_message,
+    CodecError, FORMAT_VERSION, Feature, FeatureKind, Limits, MIN_READER_VERSION,
+    POST_MIGRATION_READER_VERSION, ReaderFeatures, decode, decode_with, encode, to_message,
 };
 use prost::Message as _;
 
@@ -40,8 +41,10 @@ variants!(
     Project,
     Limit,
     ReplicateRows,
+    Expand,
     Sort,
     TopN,
+    Window,
     Aggregate,
     HashJoin,
     NestedLoopJoin,
@@ -58,8 +61,10 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Project { .. } => Variant::Project,
         PhysNode::Limit { .. } => Variant::Limit,
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
+        PhysNode::Expand { .. } => Variant::Expand,
         PhysNode::Sort { .. } => Variant::Sort,
         PhysNode::TopN { .. } => Variant::TopN,
+        PhysNode::Window { .. } => Variant::Window,
         PhysNode::Aggregate { .. } => Variant::Aggregate,
         PhysNode::HashJoin(_) => Variant::HashJoin,
         PhysNode::NestedLoopJoin(_) => Variant::NestedLoopJoin,
@@ -251,10 +256,16 @@ fn bytes_that_are_not_a_plan_are_corrupt() {
     }
 }
 
+/// `m` as a writer that predates the feature header wrote it.
+fn legacy(mut m: pb::PhysicalPlan) -> pb::PhysicalPlan {
+    m.epoch = 0;
+    m.features.clear();
+    m
+}
+
 #[test]
-fn a_plan_that_needs_a_newer_reader_is_refused() {
-    let mut m = message("scan");
-    m.format_version = FORMAT_VERSION + 1;
+fn a_legacy_plan_that_needs_a_newer_reader_is_refused() {
+    let mut m = legacy(message("scan"));
     m.min_reader_version = FORMAT_VERSION + 1;
     let err = decode(&m.encode_to_vec()).unwrap_err();
     assert_eq!(
@@ -267,30 +278,167 @@ fn a_plan_that_needs_a_newer_reader_is_refused() {
 }
 
 #[test]
-fn an_offset_limit_needs_a_v3_reader() {
-    // A `Limit` with a nonzero offset sets `min_reader_version` to 3: an
-    // older reader would silently ignore the skipped rows.
-    assert_eq!(message("limit").min_reader_version, MIN_READER_VERSION);
-    assert_eq!(message("limit_offset").min_reader_version, 3);
+fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
+    // The frozen format version and the legacy `min_reader_version` gate:
+    // an offset `Limit` needs a v3 reader (an older one would ignore the
+    // skipped rows), a `Window` a v4 reader, a plan without features v2.
+    assert_eq!(FORMAT_VERSION, 5);
+    for (name, plan) in cases() {
+        let m = to_message(&plan).unwrap();
+        assert_eq!(m.format_version, FORMAT_VERSION, "{name}");
+        let expected = match name.as_str() {
+            "limit_offset" => 3,
+            "window_ranking" | "window_aggregates" => 4,
+            n if n.starts_with("expand") => 5,
+            n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
+            _ => MIN_READER_VERSION,
+        };
+        assert_eq!(m.min_reader_version, expected, "{name}");
+    }
 }
 
 #[test]
-fn joins_that_build_their_preserved_side_need_a_v4_reader() {
-    // An older reader would refuse the join type as unknown (corrupt): the
-    // plan says up front, with `min_reader_version`, that it needs v4.
+fn a_legacy_plan_decodes_by_its_content() {
+    // Written before the header: no epoch and no feature list.
+    for name in ["scan", "limit_offset", "window_ranking"] {
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        let bytes = legacy(to_message(&plan).unwrap()).encode_to_vec();
+        assert_eq!(decode(&bytes).unwrap(), plan, "{name}");
+    }
+    // A legacy plan whose content is newer than its reader version.
+    let mut m = legacy(message("window_ranking"));
+    m.min_reader_version = 3;
+    corrupt(&m, "a construct newer than the plan's reader version");
+    // A feature list needs an epoch.
+    let mut m = message("window_ranking");
+    m.epoch = 0;
+    corrupt(&m, "a feature list without an epoch");
+}
+
+#[test]
+fn a_window_plan_survives_the_wire_with_every_field() {
+    for name in ["window_ranking", "window_aggregates"] {
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+}
+
+#[test]
+fn a_corrupt_window_is_refused() {
+    use pb::node::Kind;
+    let edit = |f: &dyn Fn(&mut pb::WindowNode)| {
+        let mut m = message("window_ranking");
+        for node in &mut m.nodes {
+            if let Some(Kind::Window(w)) = &mut node.kind {
+                f(w);
+            }
+        }
+        m
+    };
+    corrupt(
+        &edit(&|w| w.functions[0].function = None),
+        "a window function is missing",
+    );
+    corrupt(
+        &edit(&|w| w.functions[0].frame = None),
+        "a window frame is missing",
+    );
+    corrupt(
+        &edit(&|w| w.functions[0].frame.as_mut().unwrap().units = 0),
+        "unknown window frame unit",
+    );
+    corrupt(
+        &edit(&|w| w.functions[0].frame.as_mut().unwrap().lower = 9),
+        "unknown window frame bound",
+    );
+    corrupt(
+        &edit(&|w| {
+            w.functions[5].function = Some(pb::window_function_plan::Function::Ntile(0));
+        }),
+        "ntile with a bucket count below one",
+    );
+}
+
+#[test]
+fn an_expand_plan_survives_the_wire_with_every_field() {
+    for name in ["expand_rollup", "expand_single", "expand_subquery"] {
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+}
+
+#[test]
+fn a_loose_null_of_item_still_needs_the_expand_feature() {
+    let plan = plan_of(PhysNode::Project {
+        input: Box::new(PhysNode::OneRow),
+        layout: Vec::new(),
+        items: vec![krishiv_exec::physical::ProjectItemPlan::NullOf {
+            index: 0,
+            name: "x".to_owned(),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    });
+    let m = to_message(&plan).unwrap();
+    assert_eq!(m.min_reader_version, 5);
+    assert_eq!(m.features, ["expand"]);
+    assert_eq!(round_trip(&plan), plan);
+}
+
+#[test]
+fn a_corrupt_expand_is_refused() {
+    use pb::node::Kind;
+    let edit = |f: &dyn Fn(&mut pb::ExpandNode)| {
+        let mut m = message("expand_rollup");
+        for node in &mut m.nodes {
+            if let Some(Kind::Expand(e)) = &mut node.kind {
+                f(e);
+            }
+        }
+        m
+    };
+    corrupt(
+        &edit(&|e| e.projections.clear()),
+        "an expand without a projection",
+    );
+    corrupt(
+        &edit(&|e| {
+            e.nullable.pop();
+        }),
+        "do not match the nullability",
+    );
+    corrupt(
+        &edit(&|e| e.projections[0].items[0].kind = None),
+        "a project item kind",
+    );
+}
+
+#[test]
+fn joins_that_build_their_preserved_side_are_a_feature() {
+    // The three join types are the `join_build_preserved` feature, which
+    // the planner can avoid (it builds the other side instead). A reader
+    // that predates features refuses the plan as too new rather than as an
+    // unknown join type.
+    assert_eq!(
+        Feature::JoinBuildPreserved.kind(),
+        FeatureKind::Optimization
+    );
     for name in ["hash_join", "hash_join_anti", "nested_loop_join"] {
-        assert_eq!(
-            message(name).min_reader_version,
-            MIN_READER_VERSION,
-            "{name}"
-        );
+        let m = message(name);
+        assert!(m.features.is_empty(), "{name}");
+        assert_eq!(m.min_reader_version, MIN_READER_VERSION, "{name}");
     }
     for name in [
         "hash_join_right_semi",
         "hash_join_right_anti",
         "hash_join_right_outer",
     ] {
-        assert_eq!(message(name).min_reader_version, 4, "{name}");
+        let m = message(name);
+        assert_eq!(m.features, ["join_build_preserved"], "{name}");
+        assert_eq!(
+            m.min_reader_version, POST_MIGRATION_READER_VERSION,
+            "{name}"
+        );
     }
 }
 
@@ -307,11 +455,10 @@ fn an_unspecified_join_type_is_corrupt() {
 
 #[test]
 fn a_newer_writer_that_stays_compatible_is_read() {
-    // N reads N+1 when the writer only added fields: unknown fields (here
-    // number 999, a varint) are skipped, and the version is higher.
+    // A writer that only added ignorable fields: unknown fields (here
+    // number 999, a varint) are skipped.
     let (_, plan) = cases().remove(0);
-    let mut m = to_message(&plan).unwrap();
-    m.format_version = FORMAT_VERSION + 1;
+    let m = to_message(&plan).unwrap();
     let mut bytes = m.encode_to_vec();
     bytes.extend_from_slice(&[0xB8, 0x3E, 0x07]);
     assert_eq!(decode(&bytes).unwrap(), plan);
@@ -479,7 +626,7 @@ fn limits_bound_size_and_depth() {
         ..Limits::default()
     };
     assert!(matches!(
-        decode_with(&bytes, &small).unwrap_err(),
+        decode_with(&bytes, &small, &ReaderFeatures::all()).unwrap_err(),
         CodecError::Limit(m) if m.contains("bytes")
     ));
     let few = Limits {
@@ -487,7 +634,7 @@ fn limits_bound_size_and_depth() {
         ..Limits::default()
     };
     assert!(matches!(
-        decode_with(&bytes, &few).unwrap_err(),
+        decode_with(&bytes, &few, &ReaderFeatures::all()).unwrap_err(),
         CodecError::Limit(m) if m.contains("expressions")
     ));
 
@@ -512,7 +659,10 @@ fn limits_bound_size_and_depth() {
         max_depth: 2000,
         ..Limits::default()
     };
-    assert_eq!(decode_with(&bytes, &roomy).unwrap(), deep);
+    assert_eq!(
+        decode_with(&bytes, &roomy, &ReaderFeatures::all()).unwrap(),
+        deep
+    );
 }
 
 #[test]
@@ -537,12 +687,15 @@ fn limits_bound_expression_depth() {
         max_depth: 51,
         ..Limits::default()
     };
-    assert_eq!(decode_with(&bytes, &exact).unwrap(), plan);
+    assert_eq!(
+        decode_with(&bytes, &exact, &ReaderFeatures::all()).unwrap(),
+        plan
+    );
     let tight = Limits {
         max_depth: 50,
         ..Limits::default()
     };
-    let err = decode_with(&bytes, &tight).unwrap_err();
+    let err = decode_with(&bytes, &tight, &ReaderFeatures::all()).unwrap_err();
     assert!(
         matches!(&err, CodecError::Limit(m) if m.contains("expression deeper than 50")),
         "{err:?}"

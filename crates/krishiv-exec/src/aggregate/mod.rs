@@ -17,18 +17,19 @@
 //!   when it does not reduce its input (see [`BypassPolicy`]).
 //!
 //! # Row-layout tables (`krishiv.exec.agg.rowLayout`, off by default)
-//! With the setting on and every grouping key fixed-width (integers,
-//! decimals, dates, timestamps, floats, booleans), [`HashAggregate`] keeps
-//! its keys as rows in radix partitions of a seedless row hash (P2-T159,
-//! `rowtable`): each driver's table has a fixed-capacity index that is
-//! cleared when full (a group seen again becomes a partial duplicate), or
-//! skips lookups when its input is nearly unique; `finalize` merges each
-//! range of partitions from every driver in its own task, in parallel,
-//! sized from per-partition sketches. Accumulators, spill files and the
-//! disk phase are the same as the default path's, so results are the same;
-//! deterministic mode never clears an index. String, binary, nested and
-//! dictionary keys, global aggregates and [`PartialAggregate`] keep the
-//! default tables.
+//! With the setting on and every grouping key of a type with a row
+//! encoding (integers, decimals, dates, timestamps, floats, booleans,
+//! strings and binaries), [`HashAggregate`] keeps its keys as rows in radix
+//! partitions of a seedless row hash (P2-T159, `rowtable`): strings of up
+//! to 12 bytes inline in the row, longer ones in their partition's heap.
+//! Each driver's table has a fixed-capacity index that is cleared when
+//! full (a group seen again becomes a partial duplicate), or skips lookups
+//! when its input is nearly unique; `finalize` merges each range of
+//! partitions from every driver in its own task, in parallel, sized from
+//! per-partition sketches. Accumulators, spill files and the disk phase are
+//! the same as the default path's, so results are the same; deterministic
+//! mode never clears an index. Dictionary and nested keys, global
+//! aggregates and [`PartialAggregate`] keep the default tables.
 //!
 //! # Plans
 //! An [`AggregateSpec`] lists the grouping columns and the aggregates. Each
@@ -72,6 +73,9 @@ use krishiv_common::error::{
 };
 use krishiv_memory::SpillScope;
 
+#[cfg(all(test, not(loom)))]
+pub(crate) use accumulator::plain;
+pub(crate) use accumulator::{Accumulator, Running, avg_decimal_wide, wide_sum_value};
 pub use node::{AggregateNode, PartialNode, distinct_plan, union_distinct};
 pub use partial::{BypassPolicy, PartialAggregate};
 #[cfg(test)]

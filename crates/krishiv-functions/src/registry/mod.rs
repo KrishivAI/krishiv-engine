@@ -24,6 +24,7 @@ use std::fmt;
 use std::sync::{Arc, LazyLock};
 
 pub use catalog::SparkFunction;
+pub use defs::legacy_day_count;
 
 use crate::signature::{Arity, FunctionKind, Inputs, ResultType, SparkProfile};
 
@@ -39,6 +40,9 @@ pub enum Execution {
     /// the conditionals, which evaluate their arguments lazily
     /// (`krishiv_kernels::conditional`).
     Evaluator,
+    /// By the executor's window operator, over a window (`row_number`,
+    /// `rank`, ...); never called without `OVER`.
+    Window,
 }
 
 /// The aggregates the executor implements.

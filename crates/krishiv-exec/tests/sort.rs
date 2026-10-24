@@ -534,6 +534,26 @@ async fn external_sort_spills_under_an_eighth_of_its_data() {
     eprintln!("external sort: {data} MiB under {budget} MiB in {took:?}: {m:?}");
 }
 
+/// Without keys every row ties: the sort gathers its input into one
+/// stream, in input order with one driver, through spills and merge
+/// passes (a window over all rows sits on it).
+#[tokio::test(start_paused = true)]
+async fn a_sort_without_keys_gathers_its_input_in_order() {
+    let pool = root();
+    let q = query(&pool, ExecConfig::default(), Some(2 << 20));
+    let (_manager, scope) = spill();
+    let sort = Sort::new(table(1, 30)[0].schema(), &[], Some(scope)).unwrap();
+    let sort = Arc::new(sort.with_max_fan_in(2));
+    let out = run(&deterministic(1), plan(table(60_000, 30), &sort), &q)
+        .await
+        .unwrap();
+    let ids = column::<Int64Type>(&out, 1);
+    assert_eq!(ids, (0..60_000).collect::<Vec<i64>>());
+    assert!(sort.metrics().merge_passes > 0, "{:?}", sort.metrics());
+    drop(out);
+    assert_released(&pool);
+}
+
 /// One driver keeps ties in input order through spills and merge passes,
 /// and deterministic mode replays the same order with several drivers.
 #[tokio::test(start_paused = true)]
@@ -655,8 +675,10 @@ async fn edge_cases_and_errors() {
 
     let class = |e: KrishivError| e.error_class();
     let s = b.schema();
+    // A sort without keys gathers (see below); a TopN without keys is not
+    // planned (a limit without an order is a `Limit`).
     assert_eq!(
-        class(Sort::new(Arc::clone(&s), &[], None).unwrap_err()),
+        class(TopN::new(Arc::clone(&s), &[], 0, 3).unwrap_err()),
         ErrorClass::InternalError
     );
     let out_of_range = Sort::new(Arc::clone(&s), &[SortKey::asc(9)], None);
@@ -708,4 +730,36 @@ async fn cancelling_a_spilling_sort_releases_everything() {
     }
     assert_released(&root);
     assert_eq!(manager.used_bytes(), 0, "the spill files are gone");
+}
+
+/// A sort's in-memory result is spillable until read. Its reader feeds a
+/// breaker that cannot spill; the memory that breaker needs comes from
+/// writing the rest of the merge to disk, and the reader goes on from the
+/// file. Before, the buffers stayed in memory until the merge ended and
+/// these limits failed.
+#[tokio::test(start_paused = true)]
+async fn an_unread_result_spills_the_rest_of_its_merge() {
+    let rows = 20_000;
+    for limit in (57..=67).step_by(2).map(|i| i * 32 * KIB) {
+        let root = root();
+        let q = query(&root, ExecConfig::default(), Some(limit));
+        let (manager, scope) = spill();
+        let sort = Sort::new(table(1, 16)[0].schema(), &[SortKey::asc(0)], Some(scope)).unwrap();
+        let sort = Arc::new(sort);
+        let reader = krishiv_exec::testing::Buffer::new(false, None);
+        let p = Arc::new(Break(plan(table(rows, 16), &sort), reader, true));
+        let out = run(&deterministic(1), p, &q)
+            .await
+            .unwrap_or_else(|e| panic!("{limit} B: {e}"));
+        check_sorted(rows, &out, true);
+        let m = sort.metrics();
+        // Sorted in memory; the one run is the rest of the merge.
+        assert_eq!(m.final_fan_in, 1, "{limit} B: {m:?}");
+        assert!(
+            m.runs_spilled == 1 && m.spilled_bytes > 0,
+            "{limit} B: {m:?}"
+        );
+        assert_released(&root);
+        assert_eq!(manager.used_bytes(), 0);
+    }
 }

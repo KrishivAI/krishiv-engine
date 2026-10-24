@@ -623,3 +623,27 @@ fn shared_equalities_stay_in_the_or_when_the_inputs_are_joined() {
     assert_eq!(text.matches("(o_orderpriority#").count(), 2, "{text}");
     insta::assert_snapshot!(text);
 }
+
+/// A grouping-set column passed through `Expand` keeps whether its
+/// distinct count comes from statistics, so `col = literal` above a
+/// `ROLLUP` reads the count when the statistics have one and the default
+/// otherwise.
+#[test]
+fn expanded_columns_keep_whether_their_distinct_count_is_known() {
+    let ctx = support::ctx();
+    let rows = |sql: &str, stats: &Fixture| {
+        krishiv_optimizer::estimated_rows(support::resolve(sql, &ctx).root(), stats)
+    };
+    let all = "SELECT * FROM (SELECT l_returnflag, l_orderkey FROM lineitem \
+               GROUP BY ROLLUP (l_returnflag, l_orderkey))";
+    let eq = "SELECT * FROM (SELECT l_returnflag, l_orderkey FROM lineitem \
+              GROUP BY ROLLUP (l_returnflag, l_orderkey)) WHERE l_returnflag = 'R'";
+    let (known, footers) = (fixture(), without_distinct(&[]));
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * b;
+    // Three return flags in the statistics: a third of the rows.
+    let k = rows(eq, &known) / rows(all, &known);
+    assert!(close(k, 1.0 / 3.0), "{k}");
+    // No distinct count: the default selectivity.
+    let f = rows(eq, &footers) / rows(all, &footers);
+    assert!(close(f, krishiv_optimizer::DEFAULT_SELECTIVITY), "{f}");
+}

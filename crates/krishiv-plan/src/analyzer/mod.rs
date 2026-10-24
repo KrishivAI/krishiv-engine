@@ -62,12 +62,14 @@
 //! provider's text. Catalog functions are not policy-checked yet (no
 //! catalog functions exist before P3).
 
+mod analytics;
 mod bind;
 mod builtins;
 mod catalog;
 mod coerce;
 mod exprs;
 mod fold;
+mod fold_ops;
 mod hints;
 mod ops;
 mod resolve;
@@ -75,6 +77,7 @@ mod setops;
 mod subquery;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+mod windows;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -122,6 +125,15 @@ pub struct ResolutionConf {
     pub decimal_precision_loss: bool,
     /// `spark.sql.runSQLOnFiles`: `` format.`path` `` reads files.
     pub run_sql_on_files: bool,
+    /// `spark.sql.timestampType = TIMESTAMP_NTZ`: plain `TIMESTAMP '...'`
+    /// without a zone is a `TIMESTAMP_NTZ`.
+    pub timestamp_ntz: bool,
+    /// `spark.sql.session.timeZone` as a fixed offset in seconds east of
+    /// UTC (`UTC` is `Some(0)`); `None` for a region id or a malformed
+    /// zone, which need the time-zone database. Unset is `Some(0)`, the
+    /// default the cast path uses, so the default session resolves
+    /// timestamp literals.
+    pub session_zone: Option<i32>,
 }
 
 impl Default for ResolutionConf {
@@ -136,13 +148,15 @@ impl Default for ResolutionConf {
             lateral_column_alias: true,
             decimal_precision_loss: true,
             run_sql_on_files: true,
+            timestamp_ntz: false,
+            session_zone: Some(0),
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 8] = [
+    pub const KEYS: [&'static str; 10] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -151,6 +165,8 @@ impl ResolutionConf {
         "spark.sql.lateralColumnAlias.enableImplicitResolution",
         "spark.sql.decimalOperations.allowPrecisionLoss",
         "spark.sql.runSQLOnFiles",
+        "spark.sql.timestampType",
+        "spark.sql.session.timeZone",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -168,7 +184,7 @@ impl ResolutionConf {
             d.run_sql_on_files,
         ];
         let mut v = [false; 8];
-        for ((slot, key), default) in v.iter_mut().zip(Self::KEYS).zip(defaults) {
+        for ((slot, key), default) in v.iter_mut().zip(Self::KEYS[..8].iter()).zip(defaults) {
             *slot = conf(key).map_or(default, |s| s.trim().eq_ignore_ascii_case("true"));
         }
         Self {
@@ -180,6 +196,12 @@ impl ResolutionConf {
             lateral_column_alias: v[5],
             decimal_precision_loss: v[6],
             run_sql_on_files: v[7],
+            timestamp_ntz: conf(Self::KEYS[8])
+                .is_some_and(|s| s.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
+            session_zone: match conf(Self::KEYS[9]) {
+                None => Some(0),
+                Some(s) => krishiv_kernels::cast::FixedOffset::parse(s).map(|o| o.0),
+            },
         }
     }
 }
@@ -256,11 +278,20 @@ impl ContextFingerprint {
             c.lateral_column_alias,
             c.decimal_precision_loss,
             c.run_sql_on_files,
+            c.timestamp_ntz,
             self.files,
         ];
         num(
             &mut b,
             flags.iter().fold(0, |acc, f| acc << 1 | u64::from(*f)),
+        );
+        // The session zone: `None` (a region id) is one input.
+        num(
+            &mut b,
+            match c.session_zone {
+                Some(v) => u64::from(u32::from_ne_bytes(v.to_ne_bytes())),
+                None => 0x8000_0000,
+            },
         );
         num(&mut b, self.current.len() as u64);
         self.current.iter().for_each(|p| text(&mut b, p));

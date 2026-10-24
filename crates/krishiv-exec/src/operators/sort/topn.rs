@@ -71,9 +71,13 @@ impl TopN {
     /// `ORDER BY keys LIMIT limit OFFSET offset` over batches of `schema`.
     ///
     /// # Errors
-    /// As [`Sort::new`](super::Sort::new); `INTERNAL_ERROR` if
-    /// `offset + limit` exceeds [`Self::MAX_ROWS`].
+    /// As [`Sort::new`](super::Sort::new); `INTERNAL_ERROR` for no keys (a
+    /// limit without an order is a `Limit`), or if `offset + limit` exceeds
+    /// [`Self::MAX_ROWS`].
     pub fn new(schema: SchemaRef, keys: &[SortKey], offset: usize, limit: usize) -> Result<Self> {
+        if keys.is_empty() {
+            return Err(internal("a TopN needs at least one key".to_owned()));
+        }
         let keep = offset
             .checked_add(limit)
             .filter(|k| *k <= Self::MAX_ROWS)

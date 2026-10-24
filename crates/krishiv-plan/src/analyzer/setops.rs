@@ -387,7 +387,7 @@ impl Resolver<'_> {
             exprs.push(alias(sum, name));
         }
         let items = self.select_items(&u, &exprs, env, "Aggregate")?;
-        let agg = self.build_aggregate(Origin::UNKNOWN, &u, group, &items, false)?;
+        let agg = self.build_aggregate(Origin::UNKNOWN, &u, group, &items, false, None)?;
         let col = |i: usize| col_expr(&agg.out[i].col, Origin::UNKNOWN);
         let (lc, rc) = (col(n), col(n + 1));
         let (predicate, count) = match op {
@@ -442,6 +442,7 @@ impl Resolver<'_> {
                     nullable: a.col.nullable,
                 },
                 agg: None,
+                win: None,
                 outer: None,
                 lateral: Vec::new(),
                 shown: None,
@@ -608,7 +609,7 @@ fn hint_value(e: &Expr) -> String {
         ExprNode::Literal(Literal::Short(n)) => n.to_string(),
         ExprNode::Literal(Literal::Integer(n)) => n.to_string(),
         ExprNode::Literal(Literal::Long(n)) => n.to_string(),
-        _ => super::exprs::pretty(e),
+        _ => super::exprs::pretty(e, None),
     }
 }
 

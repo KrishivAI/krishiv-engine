@@ -25,6 +25,7 @@
 //! - **`UNION`.** See [`union`] for how `UNION ALL` fan-in and the `UNION`
 //!   (distinct) breaker are split between tasks.
 
+mod expand;
 mod expr;
 mod file_scan;
 mod file_write;
@@ -37,6 +38,7 @@ mod scan;
 mod sort;
 mod union;
 
+pub use expand::{Expand, NullOf};
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
 pub use file_scan::{FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN};
 pub use file_write::{FileWrite, FileWriteSink};
@@ -51,6 +53,7 @@ pub use scan::{
 };
 #[cfg(all(test, not(loom)))]
 use scan::{ScanGlobal, ScanLocal};
+pub(crate) use sort::KeyEncoder;
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};
 pub use union::UnionAlign;
 

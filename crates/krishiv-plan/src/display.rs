@@ -21,9 +21,10 @@ use krishiv_common::secret::SecretUrl;
 
 use crate::walk::{self, Node};
 use crate::{
-    Builtin, CastMode, DayTimeField, Expr, ExprNode, FunctionCall, FunctionId, Grouping,
-    JoinCondition, Literal, LogicalPlan, NullOrdering, Plan, PlanNode, ReadSource, ResolvedExpr,
-    ResolvedFunction, SortDirection, SortOrder, SqlArgs, SubqueryKind, YearMonthField,
+    Builtin, CastMode, DayTimeField, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall,
+    FunctionId, Grouping, JoinCondition, Literal, LogicalPlan, NullOrdering, Plan, PlanNode,
+    ReadSource, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, SqlArgs, SubqueryKind,
+    WindowSpec, WindowSpecRef, YearMonthField,
 };
 
 /// Printed instead of a node deeper than [`crate::MAX_DEPTH`].
@@ -237,6 +238,18 @@ impl Display for NodeLine<'_> {
                 }
                 write!(f, "], {global}")
             }
+            PlanNode::Window {
+                exprs,
+                partition_by,
+                order_by,
+                ..
+            } => {
+                write!(f, "Window [{}], [{}], [", List(exprs), List(partition_by))?;
+                for (i, o) in order_by.iter().enumerate() {
+                    write!(f, "{}{o}", sep(i))?;
+                }
+                f.write_str("]")
+            }
             PlanNode::Limit { limit, .. } => write!(f, "Limit {}", Text(limit)),
             PlanNode::Offset { offset, .. } => write!(f, "Offset {}", Text(offset)),
             PlanNode::SubqueryAlias { alias, columns, .. } => {
@@ -288,6 +301,26 @@ impl Display for NodeLine<'_> {
             },
             PlanNode::ReplicateRows { count, .. } => {
                 write!(f, "Generate replicaterows({})", Text(count))
+            }
+            // Spark's `Expand [[a, null, 1], [a, b, 0]], [a, b, spark_grouping_id]`.
+            PlanNode::Expand {
+                projections,
+                output,
+                ..
+            } => {
+                f.write_str("Expand [")?;
+                for (i, p) in projections.iter().enumerate() {
+                    write!(f, "{}[", sep(i))?;
+                    for (j, e) in p.iter().enumerate() {
+                        write!(f, "{}{}", sep(j), Text(e))?;
+                    }
+                    f.write_str("]")?;
+                }
+                f.write_str("], [")?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
             }
             PlanNode::WithCte { ctes, .. } => {
                 f.write_str("WithCte [")?;
@@ -480,6 +513,15 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             out.push(Piece::Owned(format!("{}{id}", Name(&c.name))));
         }
         ExprNode::Literal(v) => out.push(Piece::Owned(literal_text(v))),
+        ExprNode::TypedLiteral { kind, value } => {
+            let keyword = match kind {
+                crate::TypedLiteralKind::Date => "DATE",
+                crate::TypedLiteralKind::Timestamp => "TIMESTAMP",
+                crate::TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
+                crate::TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+            };
+            out.push(Piece::Owned(format!("{keyword} '{value}'")));
+        }
         ExprNode::Star(s) => {
             let q = if s.qualifier.is_empty() {
                 String::new()
@@ -549,6 +591,80 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(" AS {}#{}", output.name, output.id.0)));
         }
+        ExprNode::Window(w) => {
+            out.push(Piece::Expr(&w.function));
+            match &w.window {
+                WindowSpecRef::Named(name) => out.push(Piece::Owned(format!(
+                    " OVER {}",
+                    Name(std::slice::from_ref(name))
+                ))),
+                WindowSpecRef::Spec(spec) => window_pieces(spec, out),
+            }
+        }
+    }
+}
+
+/// ` OVER (...)` as Spark's `WindowSpecDefinition.sql` writes it: the
+/// partitioning, the ordering and the frame, separated by spaces (an
+/// unspecified frame writes nothing).
+fn window_pieces<'a>(spec: &'a WindowSpec, out: &mut Vec<Piece<'a>>) {
+    out.push(Piece::Str(" OVER ("));
+    let mut first = true;
+    let mut gap = |out: &mut Vec<Piece<'a>>| {
+        if !std::mem::take(&mut first) {
+            out.push(Piece::Str(" "));
+        }
+    };
+    if !spec.partition_by.is_empty() {
+        gap(out);
+        out.push(Piece::Str("PARTITION BY "));
+        list(&spec.partition_by, out);
+    }
+    if !spec.order_by.is_empty() {
+        gap(out);
+        out.push(Piece::Str("ORDER BY "));
+        for (i, o) in spec.order_by.iter().enumerate() {
+            if i > 0 {
+                out.push(Piece::Str(", "));
+            }
+            out.push(Piece::Expr(&o.expr));
+            out.push(Piece::Str(order_suffix(o)));
+        }
+    }
+    if let Some(frame) = &spec.frame {
+        gap(out);
+        out.push(Piece::Str(match frame.units {
+            FrameUnits::Rows => "ROWS BETWEEN ",
+            FrameUnits::Range => "RANGE BETWEEN ",
+        }));
+        bound_pieces(&frame.lower, out);
+        out.push(Piece::Str(" AND "));
+        bound_pieces(&frame.upper, out);
+    }
+    out.push(Piece::Str(")"));
+}
+
+/// A frame bound as Spark writes it: a negated value is `n PRECEDING`, any
+/// other value `n FOLLOWING`.
+fn bound_pieces<'a>(b: &'a FrameBound, out: &mut Vec<Piece<'a>>) {
+    match b {
+        FrameBound::UnboundedPreceding => out.push(Piece::Str("UNBOUNDED PRECEDING")),
+        FrameBound::CurrentRow => out.push(Piece::Str("CURRENT ROW")),
+        FrameBound::UnboundedFollowing => out.push(Piece::Str("UNBOUNDED FOLLOWING")),
+        FrameBound::Offset(e) => match crate::expr::negated(e) {
+            Some(n) => out.extend([Piece::Expr(n), Piece::Str(" PRECEDING")]),
+            None => out.extend([Piece::Expr(e), Piece::Str(" FOLLOWING")]),
+        },
+    }
+}
+
+/// ` ASC NULLS FIRST` and the like.
+const fn order_suffix(o: &SortOrder) -> &'static str {
+    match (o.direction, o.nulls) {
+        (SortDirection::Ascending, NullOrdering::NullsFirst) => " ASC NULLS FIRST",
+        (SortDirection::Ascending, NullOrdering::NullsLast) => " ASC NULLS LAST",
+        (SortDirection::Descending, NullOrdering::NullsFirst) => " DESC NULLS FIRST",
+        (SortDirection::Descending, NullOrdering::NullsLast) => " DESC NULLS LAST",
     }
 }
 
@@ -575,6 +691,10 @@ fn call<'a>(
         }
         (Some(Builtin::Not), 1) => out.extend([Piece::Str("(NOT "), arg(0), Piece::Str(")")]),
         (Some(Builtin::Negative), 1) => {
+            out.extend([Piece::Str("(- "), arg(0), Piece::Str(")")]);
+        }
+        // Unary `-` lowers as `"-"` with one argument (see `builtin_op`).
+        _ if name == "-" && args.len() == 1 => {
             out.extend([Piece::Str("(- "), arg(0), Piece::Str(")")]);
         }
         (Some(Builtin::In), n) if n >= 1 => {
@@ -672,14 +792,16 @@ impl Display for Literal {
             Self::Short(v) => write!(f, "{v}S"),
             Self::Integer(v) => write!(f, "{v}"),
             Self::Long(v) => write!(f, "{v}L"),
-            Self::Float(v) if v.is_finite() => write!(f, "{v:?}F"),
+            Self::Float(v) if v.is_finite() => write!(f, "{}F", crate::spark_fmt::float(*v)),
             Self::Float(v) => write!(f, "CAST('{}' AS FLOAT)", special(f64::from(*v))),
-            Self::Double(v) if v.is_finite() => write!(f, "{v:?}D"),
+            Self::Double(v) if v.is_finite() => write!(f, "{}D", crate::spark_fmt::double(*v)),
             Self::Double(v) => write!(f, "CAST('{}' AS DOUBLE)", special(*v)),
             Self::Decimal {
                 unscaled,
                 data_type,
-            } => write_decimal(f, *unscaled, data_type.scale()),
+            } => f.write_str(
+                crate::spark_fmt::decimal(*unscaled, u32::from(data_type.scale())).as_str(),
+            ),
             // A URL's credentials never print, even in a literal.
             Self::String(s) => match SecretUrl::parse(s) {
                 Some(url) => write!(f, "'{}'", Escaped(&url.to_string())),
@@ -690,11 +812,7 @@ impl Display for Literal {
                 b.iter().try_for_each(|byte| write!(f, "{byte:02X}"))?;
                 f.write_char('\'')
             }
-            Self::Date(days) => {
-                let (y, m, d) = civil_from_days(i64::from(*days));
-                let sign = if y < 0 { "-" } else { "" };
-                write!(f, "DATE '{sign}{:04}-{m:02}-{d:02}'", y.unsigned_abs())
-            }
+            Self::Date(days) => f.write_str(crate::spark_fmt::date(*days).as_str()),
             Self::Timestamp(us) => write!(f, "TIMESTAMP_MICROS({us})"),
             Self::TimestampNtz(us) => write!(f, "TIMESTAMP_NTZ_MICROS({us})"),
             Self::YearMonthInterval { months, start, end } => {
@@ -786,32 +904,4 @@ fn day_time_value(micros: u64, start: DayTimeField, end: DayTimeField) -> String
         out.push_str(digits.trim_end_matches('0'));
     }
     out
-}
-
-/// Writes `unscaled * 10^-scale` in plain notation, e.g. `0.06`.
-fn write_decimal(f: &mut Formatter<'_>, unscaled: i128, scale: u8) -> fmt::Result {
-    let digits = unscaled.unsigned_abs().to_string();
-    let scale = usize::from(scale);
-    let sign = if unscaled < 0 { "-" } else { "" };
-    if scale == 0 {
-        return write!(f, "{sign}{digits}");
-    }
-    let padded = format!("{digits:0>width$}", width = scale + 1);
-    let (int, frac) = padded.split_at(padded.len() - scale);
-    write!(f, "{sign}{int}.{frac}")
-}
-
-/// Proleptic Gregorian `(year, month, day)` of a day count since 1970-01-01
-/// (H. Hinnant's `civil_from_days`).
-const fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
-    (y, m, d)
 }

@@ -15,6 +15,7 @@ use krishiv_exec::physical::{
     ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind,
 };
 use krishiv_exec::planner::ExplainNode;
+use krishiv_exec::window::{FrameBound, FrameUnits, WindowFunction, WindowFunctionPlan};
 use krishiv_exec::{RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, KeyFilterOptions};
 use krishiv_plan::{
@@ -25,13 +26,9 @@ use krishiv_types::DataType;
 
 use crate::arrow::{schema_bytes, type_bytes};
 use crate::error::{CodecError, Result};
+use crate::features::{legacy_level, plan_features};
 use crate::proto as pb;
-use crate::{FORMAT_VERSION, MIN_READER_VERSION};
-
-/// The format version that added the joins that build their preserved
-/// side (`RightSemi`, `RightAnti`, `RightOuter`): the reader a plan using
-/// one needs.
-const BUILD_PRESERVED_JOINS: u32 = 4;
+use crate::{EPOCH, FORMAT_VERSION};
 
 /// Encodes `plan` as `krishiv.plan.v1` bytes. Deterministic: the same plan
 /// always gives the same bytes.
@@ -47,11 +44,12 @@ pub fn encode(plan: &PhysicalPlan) -> Result<Vec<u8>> {
 }
 
 /// [`encode`] without the final serialization.
+///
+/// # Errors
+/// As [`encode`].
 pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
-    let mut e = Encoder {
-        min_reader: MIN_READER_VERSION,
-        ..Encoder::default()
-    };
+    let features = plan_features(plan);
+    let mut e = Encoder::default();
     let order = post_order(plan.root(), PhysNode::children);
     for node in &order {
         let message = e.node(node)?;
@@ -77,7 +75,7 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
     }
     Ok(pb::PhysicalPlan {
         format_version: FORMAT_VERSION,
-        min_reader_version: e.min_reader,
+        min_reader_version: legacy_level(&features),
         nodes: e.table,
         root,
         schema: schema_bytes(plan.schema()),
@@ -86,6 +84,8 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
         warnings: plan.warnings().to_vec(),
         env: Some(env(plan.env())),
         exprs: e.exprs,
+        features: features.iter().map(|f| f.id().to_owned()).collect(),
+        epoch: EPOCH,
     })
 }
 
@@ -129,9 +129,6 @@ struct Encoder {
     /// The index of each written expression, by `Arc` identity, so a
     /// shared subexpression is written once.
     expr_ids: HashMap<*const Expr, u32>,
-    /// The oldest reader version that understands every field written so
-    /// far (a `Limit` with a nonzero offset needs version 3).
-    min_reader: u32,
 }
 
 fn layout(layout: &[AttrId]) -> Vec<u64> {
@@ -152,6 +149,16 @@ impl Encoder {
     fn node(&mut self, node: &PhysNode) -> Result<pb::Node> {
         use pb::node::Kind;
         let kind = match node {
+            PhysNode::Window { input, window } => Kind::Window(pb::WindowNode {
+                input: self.node_index(input)?,
+                partition_by: indexes(&window.partition_by),
+                order_by: window.order_by.iter().map(sort_key).collect(),
+                functions: window
+                    .functions
+                    .iter()
+                    .map(window_function)
+                    .collect::<Result<_>>()?,
+            }),
             PhysNode::Scan(scan) => Kind::Scan(self.scan(scan)?),
             PhysNode::OneRow => Kind::OneRow(pb::Empty {}),
             PhysNode::Filter {
@@ -187,17 +194,11 @@ impl Encoder {
                 input,
                 offset,
                 limit,
-            } => {
-                if *offset != 0 {
-                    // An older reader would silently ignore the offset.
-                    self.min_reader = self.min_reader.max(3);
-                }
-                Kind::Limit(pb::LimitNode {
-                    input: self.node_index(input)?,
-                    limit: *limit,
-                    offset: *offset,
-                })
-            }
+            } => Kind::Limit(pb::LimitNode {
+                input: self.node_index(input)?,
+                limit: *limit,
+                offset: *offset,
+            }),
             PhysNode::ReplicateRows {
                 input,
                 layout: l,
@@ -233,6 +234,26 @@ impl Encoder {
                 input: self.node_index(input)?,
             }),
             PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
+            PhysNode::Expand {
+                input,
+                layout: l,
+                projections,
+                nullable,
+                subqueries,
+            } => Kind::Expand(pb::ExpandNode {
+                input: self.node_index(input)?,
+                layout: layout(l),
+                projections: projections
+                    .iter()
+                    .map(|items| {
+                        Ok(pb::ExpandProjection {
+                            items: items.iter().map(|i| self.item(i)).collect::<Result<_>>()?,
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+                nullable: nullable.clone(),
+                subqueries: self.subqueries(subqueries)?,
+            }),
         };
         Ok(pb::Node { kind: Some(kind) })
     }
@@ -265,6 +286,10 @@ impl Encoder {
                 ProjectItemPlan::Expr { name, expr } => Kind::Expr(pb::ProjectExpr {
                     name: name.clone(),
                     expr: self.expr(expr)?,
+                }),
+                ProjectItemPlan::NullOf { index, name } => Kind::NullOf(pb::ProjectNullOf {
+                    index: *index as u64,
+                    name: name.clone(),
                 }),
             }),
         })
@@ -302,7 +327,7 @@ impl Encoder {
         Ok(pb::HashJoinNode {
             probe: self.node_index(&join.probe)?,
             build: self.node_index(&join.build)?,
-            join_type: self.join_type(join.join_type) as i32,
+            join_type: join_type(join.join_type) as i32,
             probe_keys: indexes(&join.probe_keys),
             build_keys: indexes(&join.build_keys),
             null_safe: join.null_safe.clone(),
@@ -316,17 +341,9 @@ impl Encoder {
         Ok(pb::NestedLoopJoinNode {
             probe: self.node_index(&join.probe)?,
             build: self.node_index(&join.build)?,
-            join_type: self.join_type(join.join_type) as i32,
+            join_type: join_type(join.join_type) as i32,
             residual: self.residual(join.residual.as_ref())?,
         })
-    }
-
-    fn join_type(&mut self, t: JoinType) -> pb::JoinType {
-        if t.builds_preserved() {
-            // An older reader does not know these join types.
-            self.min_reader = self.min_reader.max(BUILD_PRESERVED_JOINS);
-        }
-        join_type(t)
     }
 
     fn exchange(&self, exchange: &ExchangePlan) -> Result<pb::ExchangeNode> {
@@ -568,6 +585,45 @@ fn row_stage(s: &RowStageSettings) -> pb::RowStageSettings {
     pb::RowStageSettings {
         min_rows: s.min_rows,
         max_pass_rate: s.max_pass_rate,
+    }
+}
+
+fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
+    use pb::window_function_plan::Function;
+    let function = match &f.function {
+        WindowFunction::RowNumber => Function::RowNumber(pb::Empty {}),
+        WindowFunction::Rank => Function::Rank(pb::Empty {}),
+        WindowFunction::DenseRank => Function::DenseRank(pb::Empty {}),
+        WindowFunction::PercentRank => Function::PercentRank(pb::Empty {}),
+        WindowFunction::CumeDist => Function::CumeDist(pb::Empty {}),
+        WindowFunction::Ntile(buckets) => Function::Ntile(*buckets),
+        WindowFunction::Aggregate(a) => Function::Aggregate(aggregate_expr(a)),
+    };
+    Ok(pb::WindowFunctionPlan {
+        function: Some(function),
+        frame: Some(pb::WindowFrame {
+            units: match f.frame.units {
+                FrameUnits::Rows => pb::FrameUnits::Rows,
+                FrameUnits::Range => pb::FrameUnits::Range,
+            } as i32,
+            lower: frame_bound(f.frame.lower)? as i32,
+            upper: frame_bound(f.frame.upper)? as i32,
+        }),
+        filter: f.filter.map(|c| c as u64),
+        name: f.name.clone(),
+    })
+}
+
+fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
+    match b {
+        FrameBound::UnboundedPreceding => Ok(pb::FrameBound::UnboundedPreceding),
+        FrameBound::CurrentRow => Ok(pb::FrameBound::CurrentRow),
+        FrameBound::UnboundedFollowing => Ok(pb::FrameBound::UnboundedFollowing),
+        // `FrameBound` is `#[non_exhaustive]`: a bound added later needs a
+        // codec change, not a silently wrong frame.
+        _ => Err(CodecError::Unsupported(
+            "a window frame bound the format does not know".to_owned(),
+        )),
     }
 }
 

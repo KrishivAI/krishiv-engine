@@ -174,7 +174,7 @@ impl EvalEnv {
         let zone = config
             .get(&SESSION_TIME_ZONE)
             .and_then(|v| v.as_str())
-            .and_then(fixed_offset);
+            .and_then(|z| krishiv_kernels::cast::FixedOffset::parse(z).map(|o| o.0));
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -209,25 +209,6 @@ impl EvalEnv {
             user: Arc::clone(&self.user),
         }
     }
-}
-
-/// The offset of `UTC`, `GMT`, `Z` or `[+-]hh:mm`, in seconds.
-fn fixed_offset(zone: &str) -> Option<i32> {
-    if ["UTC", "GMT", "Z", "Etc/UTC"].contains(&zone) {
-        return Some(0);
-    }
-    let rest = zone
-        .strip_prefix("UTC")
-        .or_else(|| zone.strip_prefix("GMT"))
-        .unwrap_or(zone);
-    let (sign, hm) = match rest.as_bytes().first()? {
-        b'+' => (1, &rest[1..]),
-        b'-' => (-1, &rest[1..]),
-        _ => return None,
-    };
-    let (h, m) = hm.split_once(':').unwrap_or((hm, "0"));
-    let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
-    ((0..=18).contains(&h) && (0..60).contains(&m)).then(|| sign * (h * 3600 + m * 60))
 }
 
 /// The input an expression is compiled against.
@@ -274,8 +255,18 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 .map(|a| compile(a, input))
                 .collect::<Result<Vec<_>>>()?;
             match &f.id {
-                FunctionId::Builtin(b) => builtin(*b, f, args, input),
-                FunctionId::Registry { name, .. } => func::compile(name, f, args, input, e),
+                FunctionId::Builtin(b) => builtin(*b, f, args, input, e),
+                FunctionId::Registry { name, .. } => {
+                    if name == "coalesce" {
+                        cond::coalesce(f, args)
+                    } else if name == "nullif" || name == "nullifzero" {
+                        cond::null_if(f, args, input)
+                    } else if name == "nanvl" {
+                        cond::nan_vl(f, args, input)
+                    } else {
+                        func::compile(name, f, args, input, e)
+                    }
+                }
                 _ => Err(unsupported_expr(e)),
             }
         }
@@ -290,6 +281,7 @@ fn builtin(
     f: &ResolvedFunction,
     mut args: Vec<Arc<dyn PhysExpr>>,
     input: Input<'_>,
+    e: &Expr,
 ) -> Result<Arc<dyn PhysExpr>> {
     let out = f.data_type.to_arrow();
     let env = input.env;
@@ -344,6 +336,9 @@ fn builtin(
             logic::and_or(true, ge, le)
         }
         (Builtin::Like, 2 | 3) => strings::like(args)?,
+        // `rlike(a, b)` is Spark's `RLike(a, b)`: the registry's
+        // `regexp_like` kernel over the same arguments.
+        (Builtin::RLike, 2) => func::compile("regexp_like", f, args, input, e)?,
         (Builtin::When, n) if n >= 2 => cond::when(args, out)?,
         (Builtin::Concat, _) => strings::concat(args, f.nullable)?,
         _ => {

@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
 
@@ -33,7 +35,8 @@ env:
 # - Label changes do not start this workflow (a relabel would cancel and rebuild
 #   the whole run). Only the label-dependent jobs react to labels, in
 #   pr-policy.yml: `policy` (size cap) and `budgets` (the gate for the
-#   measurement made by `budgets-measure` here).
+#   measurement made by `budgets-measure` here, compared with the main
+#   measurement of main-measure.yml).
 # - Never use `pull_request_target` (enforced by `cargo xtask workflow-lint`).
 
 # Every third-party action is pinned to a full commit SHA (enforced by
@@ -315,7 +318,8 @@ jobs:
           workspaces: tools/connect-protogen
       - run: cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check
 
-  # The generated `krishiv.plan.v1` types match proto/krishiv/plan/v1 (P2-T173).
+  # The generated `krishiv.plan.v1` types match proto/krishiv/plan/v1 (P2-T173),
+  # and every schema element added since ADR 0040 declares its compatibility class.
   # `tools/plan-protogen` is a workspace of its own, like connect-protogen.
   plan-protos:
     needs: changes
@@ -336,6 +340,43 @@ jobs:
         with:
           workspaces: tools/plan-protogen
       - run: cargo run --locked --manifest-path tools/plan-protogen/Cargo.toml -- --check
+      - run: cargo test --locked --manifest-path tools/plan-protogen/Cargo.toml
+
+  # The cargo-fuzz targets (`fuzz/`, a workspace of its own) only run nightly,
+  # so a change to an API they call would break them unseen. Build all of them
+  # here; same pinned nightly as fuzz.yml. cargo-fuzz has no --locked; the
+  # committed fuzz/Cargo.lock pins the graph.
+  fuzz-build:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NIGHTLY: nightly-2026-08-12
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned nightly toolchain (cargo-fuzz needs it)
+        run: rustup toolchain install "$NIGHTLY" --profile minimal
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz@0.13.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz
+      - name: Build every fuzz target
+        working-directory: fuzz
+        # cargo-fuzz builds for its own compile-time target unless told
+        # otherwise, and the prebuilt binary taiki-e installs is a static musl
+        # one: its default target is x86_64-unknown-linux-musl, where the
+        # sanitizer cannot link ("sanitizer is incompatible with statically
+        # linked libc"). Name the runner's target.
+        run: cargo "+$NIGHTLY" fuzz build --target x86_64-unknown-linux-gnu
 
   msrv:
     needs: changes
@@ -463,15 +504,17 @@ jobs:
 
   # Budget measurement (pull requests only). This job only measures and uploads
   # `budgets-current.json`; the label-aware gate (`budgets` in pr-policy.yml)
-  # compares it with the base branch's baseline. That way adding the
-  # `budget-approved` or `unsafe-reviewed` label re-runs only the cheap gate,
-  # not this build. The job name and artifact name are read by
-  # .github/scripts/budgets-measurement.sh; keep them in sync.
+  # compares it with the measurement main-measure.yml made on main for the
+  # commit the PR was measured against (recorded next to it as
+  # `measured-base-sha`). That way adding the `budget-approved` or
+  # `unsafe-reviewed` label re-runs only the cheap gate, not this build. The
+  # job name and artifact name are read by .github/scripts/budgets-measurement.sh;
+  # keep them in sync.
   budgets-measure:
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    # The gate in pr-policy.yml waits up to 75 minutes for this job (queueing
+    # The gate in pr-policy.yml waits up to 70 minutes for this job (queueing
     # included); keep this limit below that.
     timeout-minutes: 45
     steps:
@@ -481,6 +524,9 @@ jobs:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The merge commit and its first parent (the base tip), for the
+          # recorded `measured-base-sha`; the default depth 1 has no parent.
+          fetch-depth: 2
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -489,10 +535,16 @@ jobs:
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       # --build-time wipes its own target dir, so it measures a clean build.
       - run: cargo xtask budgets --build-time --measure-only
+      # The checkout is the PR's merge with the base branch; its first parent
+      # is the main commit this measurement is to be compared with.
+      - name: Record the main commit measured against
+        run: git rev-parse HEAD^1 > target/measured-base-sha
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: budgets-current
-          path: target/budgets-current.json
+          path: |
+            target/budgets-current.json
+            target/measured-base-sha
           if-no-files-found: error
 
   # P2-T148: the Python wheels build and import. abi3 (CPython >= 3.11, one
@@ -607,8 +659,10 @@ jobs:
           grep -q '^SF:python/krishiv/' python-coverage.lcov \
             || { echo "::error::python-coverage.lcov has no python/krishiv paths"; exit 1; }
           cargo xtask diff-coverage --base HEAD^1 --head HEAD --lcov python-coverage.lcov --fail-under 90
+      # Skipped on merge-queue runs: the coverage report only feeds the PR diff
+      # gate above and an informational upload, both already done on the PR.
       - name: Upload Python coverage to Codecov (informational)
-        if: matrix.coverage
+        if: matrix.coverage && github.event_name != 'merge_group'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: python-coverage.xml
@@ -621,11 +675,14 @@ jobs:
           path: dist/*.whl
 
   # P2-T103: every wheel target (wheels.yml), on PRs that can change them.
+  # Not on a push to main (main-measure.yml builds and measures the wheels there)
+  # nor in the merge queue (it rebuilds them after the push); `wheels-ok` passes.
   wheels-targets:
     needs: changes
-    if: needs.changes.outputs.python == 'true'
+    if: needs.changes.outputs.python == 'true' && github.event_name != 'push' && github.event_name != 'merge_group'
     permissions:
       contents: read
+      actions: read
     uses: $/.github/workflows/wheels.yml
 
   # Required-check summary for the `wheels` matrix: a skipped matrix job reports

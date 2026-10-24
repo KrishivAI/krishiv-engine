@@ -492,6 +492,43 @@ impl Config {
         }
     }
 
+    /// Restores `key` (a `krishiv.*` key, a Spark alias or another key) to
+    /// its value in `baseline`: the value set there, or the default when
+    /// neither sets it.
+    pub fn reset_key(&mut self, key: &str, baseline: &Config) {
+        match lookup(key) {
+            Some(entry) => {
+                self.values.remove(entry.key);
+                if let Some(value) = baseline.values.get(entry.key) {
+                    self.values.insert(entry.key, value.clone());
+                }
+            }
+            None => {
+                self.unregistered.remove(key);
+                if let Some(value) = baseline.unregistered.get(key) {
+                    self.unregistered.insert(key.to_owned(), value.clone());
+                }
+            }
+        }
+    }
+
+    /// The canonical keys of registered entries with explicitly set
+    /// values, in order, with their values as text.
+    pub fn explicit_registered(&self) -> Vec<(&'static str, String)> {
+        self.values
+            .iter()
+            .map(|(k, v)| (*k, v.to_string()))
+            .collect()
+    }
+
+    /// The unregistered keys with explicitly set values, in order.
+    pub fn explicit_unregistered(&self) -> Vec<(&str, &str)> {
+        self.unregistered
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect()
+    }
+
     /// The value of `entry`: the set value, else its default.
     pub fn get<'a>(&'a self, entry: &'a ConfigEntry) -> Option<&'a ConfigValue> {
         self.values.get(entry.key).or(entry.default.as_ref())

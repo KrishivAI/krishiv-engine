@@ -106,6 +106,43 @@ class DecimalType(DataType):
         return f"DecimalType({self.precision},{self.scale})"
 
 
+class ArrayType(DataType):
+    """An array of ``elementType`` (``containsNull``: elements may be null)."""
+
+    def __init__(self, elementType: DataType, containsNull: bool = True) -> None:
+        self.elementType = elementType
+        self.containsNull = containsNull
+
+    @classmethod
+    def typeName(cls) -> str:
+        return "array"
+
+    def simpleString(self) -> str:
+        return f"array<{self.elementType.simpleString()}>"
+
+    def __repr__(self) -> str:
+        return f"ArrayType({self.elementType!r}, {self.containsNull})"
+
+
+class MapType(DataType):
+    """A map from ``keyType`` to ``valueType``."""
+
+    def __init__(self, keyType: DataType, valueType: DataType, valueContainsNull: bool = True) -> None:
+        self.keyType = keyType
+        self.valueType = valueType
+        self.valueContainsNull = valueContainsNull
+
+    @classmethod
+    def typeName(cls) -> str:
+        return "map"
+
+    def simpleString(self) -> str:
+        return f"map<{self.keyType.simpleString()},{self.valueType.simpleString()}>"
+
+    def __repr__(self) -> str:
+        return f"MapType({self.keyType!r}, {self.valueType!r}, {self.valueContainsNull})"
+
+
 _SIMPLE: dict[type[DataType], str] = {
     NullType: "void",
     BooleanType: "boolean",

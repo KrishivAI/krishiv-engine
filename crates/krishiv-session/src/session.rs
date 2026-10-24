@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::RecordBatch;
@@ -14,8 +14,9 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use krishiv_common::config::Config;
 use krishiv_common::error::{
-    ColumnAlreadyExists, InternalError, KrishivError, KrishivUnsupportedFeature,
+    ColumnAlreadyExists, ErrorQueryContext, InternalError, KrishivError, KrishivUnsupportedFeature,
 };
+use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::FileWriteSink;
 use krishiv_exec::files::{FileReads, LocalPaths, PathLocator as _};
@@ -30,9 +31,10 @@ use krishiv_exec::{
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
+use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
-    AllowAll, AnalysisContext, AnalyzedPlan, Analyzer as _, BuiltinFunctions, DefaultAnalyzer,
-    FunctionRegistry, Principal, ResolutionConf, SparkProfile, TableColumn,
+    AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _, BuiltinFunctions,
+    DefaultAnalyzer, FunctionRegistry, Principal, ResolutionConf, SparkProfile, TableColumn,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
@@ -43,6 +45,8 @@ use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
+use crate::catalog::{is_hidden_name, reserved_temp_view_name};
+use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
 
@@ -105,6 +109,11 @@ pub(crate) struct SessionState {
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
     query_ids: AtomicU64,
+    /// SQL source ids handed to view lowerings: every `CREATE TEMPORARY
+    /// VIEW` lowers its query with an id of its own, so errors raised
+    /// while expanding a view point into the view's text, not the outer
+    /// statement's (`SourceId(0)` stays the outer statement's).
+    sql_sources: AtomicU32,
 }
 
 /// Builds a [`Session`].
@@ -248,6 +257,7 @@ impl SessionBuilder {
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
                 query_ids: AtomicU64::new(0),
+                sql_sources: AtomicU32::new(1),
             }),
         })
     }
@@ -283,6 +293,13 @@ impl Session {
         Self::builder().build()
     }
 
+    /// Bytes the session's memory pool holds now, across its queries: what
+    /// `krishiv.memory.limit` is checked against (for memory measurements).
+    #[must_use]
+    pub fn memory_reserved(&self) -> usize {
+        self.state.memory.reserved()
+    }
+
     /// The runtime configuration.
     ///
     /// ```
@@ -313,7 +330,7 @@ impl Session {
     ///
     /// # Errors
     /// Spark's parse and analysis errors; `KRISHIV_UNSUPPORTED_FEATURE`
-    /// for statements other than queries.
+    /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let (session, query) = (self.clone(), query.to_owned());
         self.on_executor(async move { session.sql_here(&query).await })
@@ -322,16 +339,24 @@ impl Session {
 
     async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        let statement = krishiv_sql::parse_statement(query, &env.parser).map_err(|e| e.error)?;
-        let q = match statement {
-            Statement::Query(q) => q,
-            Statement::Explain(e) => return self.explain_statement(&e).await,
-            _ => return Err(unsupported_statement("statements other than queries")),
-        };
-        let plan = krishiv_sql::lower(&q, SourceId(0)).map_err(|e| e.error)?;
-        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        df.analyzed_in(env).await?;
-        Ok(df)
+        let redacted = krishiv_sql::redact_sql(query);
+        let statement = krishiv_sql::parse_statement(query, &env.parser)
+            .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        match statement {
+            Statement::Query(q) => {
+                let plan = krishiv_sql::lower(&q, SourceId(0))
+                    .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+                let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+                df.analyzed_in_with_text(env, Some(&redacted)).await?;
+                Ok(df)
+            }
+            Statement::Explain(e) => self.explain_statement(&e).await,
+            Statement::Set(s) => self.exec_set(&s).await,
+            Statement::Reset(r) => self.exec_reset(&r).await,
+            Statement::CreateView(v) => self.exec_create_view(&v).await,
+            Statement::DropView(v) => self.exec_drop_view(&v).await,
+            _ => Err(unsupported_statement("statements other than queries")),
+        }
     }
 
     /// The table or view `name`, lazily (Spark Connect's `spark.table`: an
@@ -361,6 +386,35 @@ impl Session {
                 DataFrame::invalid(self.clone(), Arc::new(LogicalPlan::table([name])), e.error)
             }
         }
+    }
+
+    /// Parses `text` as a SQL expression (`F.expr` over this session) with
+    /// this session's parser options and lowers it as [`Session::sql`]
+    /// lowers `SELECT` items, so it resolves against a DataFrame's columns
+    /// in the analyzer.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// let df = session.table("t").select([session.expr("a + 1").unwrap()]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Spark's parse errors (`PARSE_SYNTAX_ERROR`, ...); lowering errors
+    /// for constructs the IR lacks.
+    pub fn expr(&self, text: &str) -> Result<Column, KrishivError> {
+        let lowered = krishiv_sql::parse_and_lower_named_expression(
+            text,
+            &self.parser_options(),
+            SourceId(0),
+        )
+        .map_err(|e| e.error)?;
+        Ok(Column::new((*lowered).clone()))
+    }
+
+    /// This session's parser options, from its configuration.
+    pub(crate) fn parser_options(&self) -> ParserOptions {
+        parser_options(&self.state.conf.snapshot())
     }
 
     /// Reads files (Spark's `spark.read`).
@@ -393,13 +447,19 @@ impl Session {
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a column type Spark has no
-    /// equivalent of; `INTERNAL_ERROR` when a batch does not have `schema`.
+    /// equivalent of; `INTERNAL_ERROR` when a batch does not have `schema`;
+    /// `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name` starts with the
+    /// reserved snapshot prefix `` `__krishiv_snapshot_` `` (in any letter
+    /// case), which queries cannot spell either.
     pub fn register_batches(
         &self,
         name: &str,
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
     ) -> Result<(), KrishivError> {
+        if is_hidden_name(name) {
+            return Err(reserved_temp_view_name(name));
+        }
         let columns = schema
             .fields()
             .iter()
@@ -442,7 +502,9 @@ impl Session {
     }
 
     /// Drops the temporary table or view `name`; whether it existed
-    /// (Spark's `spark.catalog.dropTempView`).
+    /// (Spark's `spark.catalog.dropTempView`). Dropping a view also
+    /// removes the snapshot pins it owned that no other live view still
+    /// owns. Hidden snapshot names never exist for this call.
     ///
     /// ```
     /// # let session = krishiv_session::Session::new()?;
@@ -492,6 +554,11 @@ impl Session {
     /// A fresh DataFrame plan id.
     pub(crate) fn next_plan_id(&self) -> PlanId {
         PlanId(self.state.plan_ids.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// A fresh SQL source id for a view lowering (see `sql_sources`).
+    pub(crate) fn next_source_id(&self) -> SourceId {
+        SourceId(self.state.sql_sources.fetch_add(1, Ordering::Relaxed))
     }
 
     /// The analysis inputs of one query.
@@ -545,17 +612,27 @@ impl Session {
         }
     }
 
-    /// Analyzes `plan`.
+    /// Analyzes `plan` (`text` is the redacted query the plan came
+    /// from, if it came from SQL text: analysis errors carry its span
+    /// as their query context).
     pub(crate) async fn analyze_in(
         &self,
         plan: &Arc<LogicalPlan>,
         env: &QueryEnv,
+        text: Option<&RedactedSql>,
     ) -> Result<AnalyzedPlan, KrishivError> {
-        let plan = Plan::try_new(Arc::clone(plan))?;
+        // Temporary views over queries inline as subqueries, so the
+        // analyzer sees one plan however the view was made.
+        let plan = crate::catalog::expand_temp_views(
+            &self.state.catalog,
+            plan,
+            env.analysis.conf.case_sensitive,
+        )?;
+        let plan = Plan::try_new(plan)?;
         DefaultAnalyzer
             .analyze(&plan, &env.analysis)
             .await
-            .map_err(|e| e.error)
+            .map_err(|e| attach_analysis(e, text))
     }
 
     /// The physical plan of `analyzed`, once the files it scans are
@@ -873,6 +950,52 @@ fn unsupported_statement(what: &str) -> KrishivError {
         feature: format!("{what} in sessions"),
     }
     .into()
+}
+
+/// An empty redaction, for analyses with no SQL text (DataFrame errors
+/// carry a DataFrame context, which needs no text).
+fn empty_redacted() -> RedactedSql {
+    RedactedSql::opaque("")
+}
+
+/// `error` with the SQL span `start..end` of `text` attached as its
+/// query context (`stop` is inclusive, as Spark reports it).
+fn sql_context(error: KrishivError, text: &RedactedSql, start: usize, end: usize) -> KrishivError {
+    error.with_query_context(ErrorQueryContext::sql(
+        text.fragment(start..end),
+        start,
+        end.saturating_sub(1),
+    ))
+}
+
+/// An analysis error with its query context attached: the SQL span of
+/// `text`, or the DataFrame operation that raised it. With no text, a
+/// SQL span has no fragment to attach, so only DataFrame contexts cross.
+fn attach_analysis(e: AnalysisError, text: Option<&RedactedSql>) -> KrishivError {
+    let empty;
+    let redacted = match text {
+        Some(t) => t,
+        None => {
+            empty = empty_redacted();
+            &empty
+        }
+    };
+    match e.query_context(redacted) {
+        Some(PlanQueryContext::Sql {
+            start,
+            stop,
+            fragment,
+        }) if text.is_some() => e
+            .error
+            .with_query_context(ErrorQueryContext::sql(fragment, start, stop)),
+        Some(PlanQueryContext::DataFrame { .. }) => {
+            e.error.with_query_context(ErrorQueryContext::dataframe())
+        }
+        // A DataFrame action with no origin (e.g. an unbound `col("x")`):
+        // the error still arose from a DataFrame operation.
+        None if text.is_none() => e.error.with_query_context(ErrorQueryContext::dataframe()),
+        _ => e.error,
+    }
 }
 
 /// The parser options `config` sets.

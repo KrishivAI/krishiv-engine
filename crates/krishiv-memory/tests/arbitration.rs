@@ -793,3 +793,110 @@ fn reserve_on_a_runtime_without_timers_times_out_correctly() {
         .unwrap();
     timeout_scenario(|fut| rt.block_on(fut));
 }
+
+/// A consumer that frees memory by giving up its reservation at once, inside
+/// `request_spill`, while the memory stays in use (a scan's decode working
+/// sets): a last-resort victim.
+struct Revocable {
+    held: Mutex<Option<Reservation>>,
+    revoked: std::sync::atomic::AtomicUsize,
+}
+
+impl Revocable {
+    fn new(pool: &Arc<dyn MemoryPool>, bytes: usize) -> Arc<Self> {
+        let me = Arc::new(Self {
+            held: Mutex::new(None),
+            revoked: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let id = pool.register("decode", Some(Arc::clone(&me) as Arc<dyn Spillable>));
+        let mut r = Reservation::new(Arc::clone(pool), id);
+        r.try_grow(bytes).unwrap();
+        *me.held.lock().unwrap() = Some(r);
+        me
+    }
+
+    fn revoked(&self) -> usize {
+        self.revoked.load(Ordering::Acquire)
+    }
+}
+
+impl Spillable for Revocable {
+    fn spillable_bytes(&self) -> usize {
+        self.held
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or(0, Reservation::size)
+    }
+
+    fn request_spill(&self, target: usize) -> SpillTicket {
+        let mut held = self.held.lock().unwrap();
+        let r = held.as_mut().unwrap();
+        let freed = target.min(r.size());
+        r.shrink(freed);
+        self.revoked.fetch_add(freed, Ordering::AcqRel);
+        SpillTicket::ready(freed)
+    }
+
+    fn spill_requested(&self) -> Option<usize> {
+        None
+    }
+
+    fn last_resort(&self) -> bool {
+        true
+    }
+}
+
+/// Claims spillable bytes but frees nothing when asked.
+struct FreesNothing;
+
+impl Spillable for FreesNothing {
+    fn spillable_bytes(&self) -> usize {
+        4 * MIB
+    }
+
+    fn request_spill(&self, _target: usize) -> SpillTicket {
+        SpillTicket::ready(0)
+    }
+
+    fn spill_requested(&self) -> Option<usize> {
+        None
+    }
+}
+
+/// A last-resort consumer is asked only after every other victim: a
+/// spill that covers the shortfall leaves it alone.
+#[tokio::test(start_paused = true)]
+async fn last_resort_victims_come_after_every_other() {
+    let root = new_root(8 * MIB);
+    let qa = root.child("query-a", None);
+    let qb = root.child("query-b", None);
+    let decode = Revocable::new(&qa, 3 * MIB);
+    let (stop, driver) = Spiller::new(&qa, "sort", 4 * MIB).spawn(COOPERATIVE);
+    let mut b = holder(&qb, "hash-build", 0);
+    b.grow(4 * MIB).await.unwrap();
+    stop.store(true, Ordering::Release);
+    assert_eq!(driver.await.unwrap().unwrap(), 3 * MIB, "the sort spilled");
+    assert_eq!(decode.revoked(), 0);
+    assert_eq!(root.stats().aborts, 0);
+}
+
+/// When the spills free nothing, the last-resort victims are still asked
+/// before anything is aborted: the request is granted from what they give
+/// up, and no query is aborted.
+#[tokio::test(start_paused = true)]
+async fn last_resort_victims_are_asked_before_an_abort() {
+    let root = new_root(8 * MIB);
+    let qa = root.child("query-a", None);
+    let qb = root.child("query-b", None);
+    let decode = Revocable::new(&qa, 3 * MIB);
+    let liar = Arc::new(FreesNothing);
+    let id = qa.register("join", Some(Arc::clone(&liar) as Arc<dyn Spillable>));
+    let mut join = Reservation::new(Arc::clone(&qa), id);
+    join.try_grow(4 * MIB).unwrap();
+    let mut b = holder(&qb, "hash-build", 0);
+    b.grow(4 * MIB).await.unwrap();
+    assert_eq!(decode.revoked(), 3 * MIB);
+    assert_eq!(root.stats().aborts, 0);
+    assert!(qa.check_aborted().is_ok() && qb.check_aborted().is_ok());
+}

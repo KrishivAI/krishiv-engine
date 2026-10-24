@@ -4,8 +4,9 @@
 //! Arity, determinism and availability come from Spark's catalog.
 
 use krishiv_common::error::{
-    DatatypeMismatchNonFoldableInput, DatatypeMismatchValueOutOfRange, InvalidExtractField,
-    KrishivError, LegacyErrorTemp1210, NonFoldableArgument, SecondFunctionArgumentNotInteger,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
+    DatatypeMismatchValueOutOfRange, InvalidExtractField, KrishivError, LegacyErrorTemp1210,
+    NonFoldableArgument, SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{DataType, DecimalType};
@@ -103,6 +104,15 @@ pub(super) fn int(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Integer, c)
 }
 
+fn boolean(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Boolean, c)
+}
+
+/// `regexp_substr`: Spark marks it nullable whatever its arguments.
+fn always_null(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::String, true))
+}
+
 /// `startswith`/`endswith`/`contains`: the binary predicates may be null
 /// whatever their arguments (Spark's `BinaryPredicate` is a nullable
 /// static invocation).
@@ -115,19 +125,17 @@ fn date(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Date, c)
 }
 
-/// Whether Spark's legacy string-to-`int` cast reads `s` (surrounding
-/// whitespace, a sign, digits and a fraction it truncates).
-fn legacy_int(s: &str) -> bool {
-    let t = s.trim();
-    let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
-    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
-    !whole.is_empty()
-        && whole.bytes().all(|b| b.is_ascii_digit())
-        && fraction.bytes().all(|b| b.is_ascii_digit())
-        && t.split('.')
-            .next()
-            .and_then(|w| w.parse::<i32>().ok())
-            .is_some()
+/// The day count `date_add`/`date_sub` without ANSI read `s` as: an `int`
+/// with an optional sign, surrounded by whitespace or control characters
+/// (`UTF8String.toIntExact`). A fraction is not read (`'1.5'`, `'1.'`),
+/// nor an exponent, a hex number or one past `int` (checked against a
+/// Spark 4.2 run of each). The typing rule here and the analyzer's shown
+/// form of the call both read the day count through this.
+#[must_use]
+pub fn legacy_day_count(s: &str) -> Option<i32> {
+    s.trim_matches(|c: char| c.is_whitespace() || c.is_control())
+        .parse::<i32>()
+        .ok()
 }
 
 /// `date_add`/`date_sub` with ANSI off: a string literal day count that is
@@ -135,7 +143,7 @@ fn legacy_int(s: &str) -> bool {
 fn day_arith(function: &str, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     if !c.ansi()
         && let Some(Constant::String(s)) = c.constant(1)
-        && !legacy_int(s)
+        && legacy_day_count(s).is_none()
     {
         return Err(SecondFunctionArgumentNotInteger {
             function_name: function.to_owned(),
@@ -237,6 +245,39 @@ fn strings() -> Vec<Spec> {
             exact(DataType::Integer),
         ]),
         regexp_replace_result,
+    ));
+    out.extend(scalar(
+        &["regexp", "regexp_like"],
+        &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
+        boolean,
+    ));
+    out.extend(scalar(
+        &["regexp_extract"],
+        &Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::Integer),
+        ]),
+        string,
+    ));
+    out.extend(scalar(
+        &["regexp_substr"],
+        &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
+        always_null,
+    ));
+    out.extend(scalar(
+        &["regexp_count"],
+        &Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]),
+        int,
+    ));
+    out.extend(scalar(
+        &["regexp_instr"],
+        &Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::Integer),
+        ]),
+        int,
     ));
     out.extend(scalar(
         &["substring", "substr"],
@@ -395,9 +436,11 @@ fn min_max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// `first(x [, ignoreNulls])`: the type of `x`; the flag must be a boolean
-/// literal.
+/// literal (Spark matches `Literal(b, BooleanType)`, so `1 = 1` is rejected).
 fn pick(c: &CallTypes<'_>, function: &str) -> Result<ArgType, KrishivError> {
-    if c.args().len() > 1 && !matches!(c.constant(1), Some(Constant::Boolean(_))) {
+    if c.args().len() > 1
+        && !(c.is_literal(1) && matches!(c.constant(1), Some(Constant::Boolean(_))))
+    {
         return Err(LegacyErrorTemp1210 {
             func_name: function.to_owned(),
         }
@@ -430,11 +473,97 @@ fn aggregates() -> Vec<Spec> {
     ]
 }
 
+// ---- window functions ----
+
+fn window(name: &'static str, result: Rule) -> Spec {
+    Spec {
+        name,
+        kind: FunctionKind::Window,
+        inputs: Inputs::Any,
+        result,
+        execution: Execution::Window,
+    }
+}
+
+/// `row_number`, `rank`, `dense_rank`, `ntile`: `int`, never NULL.
+fn rank_like(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Integer, false))
+}
+
+/// `percent_rank`, `cume_dist`: `double`, never NULL.
+fn distribution(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Double, false))
+}
+
+/// `ntile(buckets)`: Spark's `NTile.checkInputDataTypes`, in its order: a
+/// foldable argument, of type `int` exactly (no implicit cast), above 0.
+/// `ntile()` is `ntile(1)`.
+fn ntile(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if c.args().is_empty() {
+        return rank_like(c);
+    }
+    let sql = |i: usize| c.sql(i).unwrap_or_default();
+    let call = format!("\"ntile({})\"", sql(0));
+    let Some(value) = c.constant(0) else {
+        return Err(DatatypeMismatchNonFoldableInput {
+            sql_expr: call,
+            input_name: "`buckets`".to_owned(),
+            input_type: "\"INT\"".to_owned(),
+            input_expr: format!("\"{}\"", sql(0)),
+        }
+        .into());
+    };
+    if c.data_type(0) != Some(&DataType::Integer) {
+        return Err(DatatypeMismatchUnexpectedInputType {
+            sql_expr: call,
+            param_index: "first".to_owned(),
+            required_type: "\"INT\"".to_owned(),
+            input_sql: format!("\"{}\"", sql(0)),
+            input_type: c
+                .data_type(0)
+                .map_or_else(|| "\"VOID\"".to_owned(), |t| format!("\"{}\"", t.sql())),
+        }
+        .into());
+    }
+    match value {
+        Constant::Integral(n) if *n > 0 => rank_like(c),
+        Constant::Integral(n) => Err(DatatypeMismatchValueOutOfRange {
+            sql_expr: call,
+            expr_name: "buckets".to_owned(),
+            value_range: format!("(0, {}]", i32::MAX),
+            current_value: n.to_string(),
+        }
+        .into()),
+        Constant::Error(e) => Err(e.clone()),
+        // A NULL `int` (`ntile(CAST(NULL AS INT))`): Spark's check reads
+        // it as 0.
+        _ => Err(DatatypeMismatchValueOutOfRange {
+            sql_expr: call,
+            expr_name: "buckets".to_owned(),
+            value_range: format!("(0, {}]", i32::MAX),
+            current_value: "0".to_owned(),
+        }
+        .into()),
+    }
+}
+
+fn windows() -> Vec<Spec> {
+    vec![
+        window("row_number", rank_like),
+        window("rank", rank_like),
+        window("dense_rank", rank_like),
+        window("percent_rank", distribution),
+        window("cume_dist", distribution),
+        window("ntile", ntile),
+    ]
+}
+
 /// Every implemented function.
 pub(super) fn specs() -> Vec<Spec> {
     let mut out = strings();
     out.extend(datetime());
     out.extend(aggregates());
+    out.extend(windows());
     out.extend(super::conditional::specs());
     out.extend(super::math::specs());
     out.extend(super::hashing::specs());

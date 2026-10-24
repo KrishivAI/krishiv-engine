@@ -44,8 +44,11 @@
 //!   configured maximum ([`DEFAULT_MAX_MERGE_FAN_IN`]) halved until the
 //!   merge's memory (one frame per run plus the writer's scratch) is
 //!   granted. The source side streams the final merge of the buffered
-//!   batches or the runs, one output batch per blocking-pool call. A source
-//!   has no spill hook, so an in-memory result stays in memory until read.
+//!   batches or the runs, one output batch per blocking-pool call. With a
+//!   spill scope an in-memory result keeps its headroom and is a memory
+//!   consumer of its own until read ([`crate::output_spill`]): a spill
+//!   writes the rest of the merge as one run and the source reads on from
+//!   it.
 //! - Batches a merge moved past stay referenced until its output batch is
 //!   built: in-flight bytes, like every operator's output.
 
@@ -58,6 +61,7 @@ mod merge;
 mod sort;
 mod topn;
 
+pub(crate) use keys::KeyEncoder;
 pub use keys::SortKey;
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortMetrics};
 pub use topn::TopN;

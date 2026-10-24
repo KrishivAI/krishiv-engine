@@ -41,8 +41,8 @@ use crate::operator::{Operator, Source};
 use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
 use crate::physical::{
     PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
-    SubqueryId, SubqueryPlan, SubqueryValueKind, Values, filter_op, project_op, replicate_op,
-    scan_filter, sort_op, top_n_op,
+    SubqueryId, SubqueryPlan, SubqueryValueKind, Values, expand_op, filter_op, project_op,
+    replicate_op, scan_filter, sort_op, top_n_op,
 };
 
 /// How far above the planner's first fresh attribute subquery ids start:
@@ -362,6 +362,23 @@ impl<'a> Planner<'a> {
             PlanNode::ReplicateRows { input, count } => {
                 let input = self.plan(input)?;
                 self.replicate(input, count)
+            }
+            PlanNode::Expand {
+                input,
+                projections,
+                output,
+            } => {
+                let input = self.plan(input)?;
+                self.expand(input, projections, output)
+            }
+            PlanNode::Window {
+                input,
+                exprs,
+                partition_by,
+                order_by,
+            } => {
+                let input = self.plan(input)?;
+                self.window(input, exprs, partition_by, order_by)
             }
             PlanNode::OneRowRelation => Ok(one_row()),
             _ => {
@@ -795,6 +812,95 @@ impl<'a> Planner<'a> {
         Ok(planned)
     }
 
+    /// Each row once per projection (`ROLLUP`, `CUBE`, `GROUPING SETS`):
+    /// plain columns pass through without a copy.
+    fn expand(
+        &mut self,
+        input: Planned,
+        projections: &[Vec<Arc<Expr>>],
+        output: &[BoundColumn],
+    ) -> Result<Planned> {
+        if projections.iter().any(|row| row.len() != output.len()) {
+            return Err(internal("an expansion row of the wrong width"));
+        }
+        // A column an expansion nulls keeps the Arrow type of the column
+        // another projection copies.
+        let copied: Vec<Option<usize>> = (0..output.len())
+            .map(|j| {
+                projections
+                    .iter()
+                    .find_map(|row| row.get(j).and_then(|e| column_of(e)))
+                    .and_then(|c| input.column(c).ok())
+            })
+            .collect();
+        let null_of = |j: usize, e: &Expr| {
+            let null = matches!(&e.node, ExprNode::Literal(Literal::Null(Some(_))));
+            copied.get(j).copied().flatten().filter(|_| null)
+        };
+        let computed: Vec<&Expr> = projections
+            .iter()
+            .flat_map(|row| row.iter().enumerate())
+            .filter(|(j, e)| column_of(e).is_none() && null_of(*j, e).is_none())
+            .map(|(_, e)| e.as_ref())
+            .collect();
+        let prepared = self.prepare(&computed)?;
+        let mut values = prepared.exprs.iter();
+        let mut rows = Vec::with_capacity(projections.len());
+        for row in projections {
+            let mut items = Vec::with_capacity(row.len());
+            for (j, (e, out)) in row.iter().zip(output).enumerate() {
+                let name = out.name.clone();
+                if let Some(c) = column_of(e) {
+                    items.push(ProjectItemPlan::Column {
+                        index: input.column(c)?,
+                        name: Some(name),
+                    });
+                } else if let Some(index) = null_of(j, e) {
+                    items.push(ProjectItemPlan::NullOf { index, name });
+                } else {
+                    let expr = values.next().ok_or_else(|| internal("expansion arity"))?;
+                    items.push(ProjectItemPlan::Expr {
+                        name,
+                        expr: Arc::clone(expr),
+                    });
+                }
+            }
+            rows.push(items);
+        }
+        let nullable: Vec<bool> = output.iter().map(|c| c.nullable).collect();
+        let layout: Vec<AttrId> = output.iter().map(|c| c.id).collect();
+        let op = expand_op(
+            &input.schema,
+            &input.layout,
+            &rows,
+            &nullable,
+            &self.values(&prepared),
+        )?;
+        let names: Vec<&str> = output.iter().map(|c| c.name.as_str()).collect();
+        let text = names.join(", ");
+        let mut planned = Self::attach(
+            input,
+            prepared,
+            op.schema(),
+            layout,
+            (
+                "Expand",
+                format!("{} projections [{text}]", projections.len()),
+            ),
+            |input, layout, subqueries| PhysNode::Expand {
+                input,
+                layout,
+                projections: rows,
+                nullable,
+                subqueries,
+            },
+        );
+        // The rows are repeated with columns nulled: no runtime filter may
+        // reach a scan through the expansion.
+        planned.sites.clear();
+        Ok(planned)
+    }
+
     /// `SELECT exprs`: plain columns pass through without a copy.
     pub(crate) fn project(&mut self, input: Planned, exprs: &[Arc<Expr>]) -> Result<Planned> {
         let computed: Vec<&Expr> = exprs
@@ -1220,7 +1326,7 @@ pub(crate) fn list(exprs: &[Arc<Expr>]) -> String {
     )
 }
 
-fn orders(order: &[SortOrder]) -> String {
+pub(crate) fn orders(order: &[SortOrder]) -> String {
     let text = order.iter().map(|o| {
         let dir = match o.direction {
             SortDirection::Ascending => "ASC",

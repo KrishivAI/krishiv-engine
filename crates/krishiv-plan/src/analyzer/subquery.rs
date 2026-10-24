@@ -183,7 +183,7 @@ fn conjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
 }
 
 /// The type and nullability of a resolved expression.
-fn typed(e: &Expr) -> (Option<DataType>, bool) {
+pub(super) fn typed(e: &Expr) -> (Option<DataType>, bool) {
     match &e.node {
         ExprNode::Resolved(
             ResolvedExpr::Column(c)
@@ -193,6 +193,7 @@ fn typed(e: &Expr) -> (Option<DataType>, bool) {
         ExprNode::Resolved(ResolvedExpr::Function(f)) => (Some(f.data_type.clone()), f.nullable),
         ExprNode::Literal(v) => (literal_type(v), matches!(v, Literal::Null(_))),
         ExprNode::Cast { expr, to, .. } => (Some(to.clone()), typed(expr).1),
+        ExprNode::Window(w) => typed(&w.function),
         _ => (None, true),
     }
 }
@@ -612,7 +613,7 @@ impl Rewriter {
                             crate::NullOrdering::NullsFirst => "NULLS FIRST",
                             crate::NullOrdering::NullsLast => "NULLS LAST",
                         };
-                        format!("\"{} {dir} {nulls}\"", pretty(&o.expr))
+                        format!("\"{} {dir} {nulls}\"", pretty(&o.expr, None))
                     })
                     .collect();
                 if outer.is_empty() {
@@ -802,7 +803,7 @@ impl Rewriter {
                         .ok_or_else(|| unsupported("a correlation key of this form", k.origin))?;
                     let output = BoundColumn {
                         id: self.fresh(),
-                        name: pretty(k),
+                        name: pretty(k, None),
                         data_type,
                         nullable,
                     };

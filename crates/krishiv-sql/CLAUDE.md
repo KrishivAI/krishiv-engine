@@ -16,6 +16,19 @@ the tree (unknown types, missing sizes, decimal bounds, ...).
 syntactic, origins = spans); `redact_sql` turns query text into a `RedactedSql` from lexer tokens
 (`redact.rs`).
 
+## Key files
+Paths are relative to this crate.
+- `src/lexer.rs` lossless tokenizer; `src/keywords.rs` keyword classes
+- `src/parser.rs` statement parser (recursive descent); `src/parser/expr.rs` precedence climbing
+- `src/parser/types.rs` type strings (`parse_data_type`, `parse_table_schema`, `parse_ddl_type`)
+- `src/ast.rs` spanned AST; `src/error.rs` parser errors with Spark classes
+- `src/validate/mod.rs` checks Spark's `AstBuilder` makes after parsing (`literal.rs`, `types.rs`, `interval.rs`)
+- `src/lower.rs` AST to unresolved `krishiv_plan::Plan`; `src/redact.rs` `redact_sql` to `RedactedSql`
+
+## Extension points
+- New construct: token in `keywords.rs` or `lexer.rs`, grammar in `parser.rs` or `parser/expr.rs`, checks in `validate/`, lowering in `lower.rs`.
+- A construct without an IR node fails with `KRISHIV_UNSUPPORTED_FEATURE` naming it; recursive rules stay inside `nested`.
+
 ## Invariants
 - Own parser (no sqlparser-rs): hand-written lexer + recursive descent.
 - Nesting is capped at `MAX_DEPTH` (= the IR's) with `FAILED_TO_PARSE_TOO_COMPLEX` at the whole statement's
@@ -35,6 +48,9 @@ syntactic, origins = spans); `redact_sql` turns query text into a `RedactedSql` 
 - Ambiguities ANTLR resolves by prediction are decided deterministically; every decision is checked
   against a real Spark run (`tests/fixtures/spark-4.2.0/sql-parse-probe.json`,
   `tests/scripts/gen_sql_parse_probe.py`) and the golden corpus (`krishiv-testkit` `tests/sql_parse.rs`).
+- `OVER w` resolves as Spark's `WindowsSubstitution`: the innermost `WINDOW` clause around decides (derived
+  tables in its `FROM` see it, subquery expressions do not); a name it lacks is `MISSING_WINDOW_SPECIFICATION`
+  at lowering; with no clause around, the name stays in the IR for the analyzer. `n PRECEDING` is `-(n)`.
 - Lowering mirrors Spark's `AstBuilder` shapes (comma joins fold left into inner joins, balanced `AND`/`OR`,
   `<>` as `not(==)`, `HAVING` as a filter over the aggregate); the TPC-H oracle is `krishiv-plan`'s hand-built
   plans. Constructs the IR lacks fail with `KRISHIV_UNSUPPORTED_FEATURE` naming the construct, never silently.
@@ -49,7 +65,7 @@ syntactic, origins = spans); `redact_sql` turns query text into a `RedactedSql` 
 ## ADRs (in `../krishiv-internal/adr/`)
 0003, 0008, 0012, 0038
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-sql --no-tests=pass` · `cargo clippy -p krishiv-sql --all-targets -- -D warnings`
 · corpus: `cargo nextest run -p krishiv-testkit --test sql_parse` · parse rate:
 `cargo xtask golden --engine sql-parse` · fuzz: `cd fuzz && cargo +nightly fuzz run sql_parse`

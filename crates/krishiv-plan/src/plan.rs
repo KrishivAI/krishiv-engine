@@ -241,6 +241,22 @@ pub enum PlanNode {
         /// `max(m - n, 0)` times (except).
         all: bool,
     },
+    /// Window functions over `input` (Spark's `Window`): every input row,
+    /// with one column per window expression after the input's. Resolved
+    /// plans only; the analyzer makes one node per distinct partitioning
+    /// and ordering (Spark's `ExtractWindowExpressions`).
+    Window {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The window expressions, each a [`crate::ResolvedExpr::Alias`] of
+        /// an [`crate::ExprNode::Window`] whose partitioning and ordering
+        /// are this node's.
+        exprs: Vec<Arc<Expr>>,
+        /// The partitioning expressions.
+        partition_by: Vec<Arc<Expr>>,
+        /// The ordering within a partition.
+        order_by: Vec<SortOrder>,
+    },
     /// Each input row `count` times; a row whose count is NULL or below 1
     /// is dropped (Spark's `Generate(ReplicateRows)` in its rewrite of
     /// `INTERSECT ALL` and `EXCEPT ALL`). Resolved plans only: the output
@@ -250,6 +266,19 @@ pub enum PlanNode {
         input: Arc<LogicalPlan>,
         /// A `BIGINT` expression over the input: the copies of each row.
         count: Arc<Expr>,
+    },
+    /// Each input row once per projection (Spark's `Expand`, the first step
+    /// of `ROLLUP`, `CUBE` and `GROUPING SETS`): row `i` of the output for
+    /// an input row is the row evaluated by `projections[i]`. Resolved
+    /// plans only: the analyzer builds it, with one expression per output
+    /// column in every projection.
+    Expand {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The projections, in output order; at least one.
+        projections: Vec<Vec<Arc<Expr>>>,
+        /// The output attributes, aligned with each projection.
+        output: Vec<BoundColumn>,
     },
 }
 
@@ -572,6 +601,8 @@ impl LogicalPlan {
             | PlanNode::Hint { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
+            | PlanNode::Expand { input, .. }
+            | PlanNode::Window { input, .. }
             | PlanNode::ReplicateRows { input, .. } => f(input),
             PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
                 f(left);
@@ -604,6 +635,8 @@ impl LogicalPlan {
             | PlanNode::Hint { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
+            | PlanNode::Expand { input, .. }
+            | PlanNode::Window { input, .. }
             | PlanNode::ReplicateRows { input, .. } => f(input),
             PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
                 f(left);
@@ -664,6 +697,16 @@ impl LogicalPlan {
                 JoinCondition::None | JoinCondition::Using(_) => {}
             },
             PlanNode::Sort { order, .. } => order.iter().for_each(|o| f(&o.expr)),
+            PlanNode::Expand { projections, .. } => projections.iter().flatten().for_each(f),
+            PlanNode::Window {
+                exprs,
+                partition_by,
+                order_by,
+                ..
+            } => {
+                exprs.iter().chain(partition_by).for_each(&mut *f);
+                order_by.iter().for_each(|o| f(&o.expr));
+            }
         }
     }
 
@@ -715,6 +758,18 @@ impl LogicalPlan {
                 JoinCondition::None | JoinCondition::Using(_) => {}
             },
             PlanNode::Sort { order, .. } => order.iter_mut().for_each(|o| f(&mut o.expr)),
+            PlanNode::Expand { projections, .. } => {
+                projections.iter_mut().flatten().for_each(f);
+            }
+            PlanNode::Window {
+                exprs,
+                partition_by,
+                order_by,
+                ..
+            } => {
+                exprs.iter_mut().chain(partition_by).for_each(&mut *f);
+                order_by.iter_mut().for_each(|o| f(&mut o.expr));
+            }
         }
     }
 
@@ -770,6 +825,7 @@ impl LogicalPlan {
                     );
                 }
                 PlanNode::OneRowRelation => return Some(Vec::new()),
+                PlanNode::Expand { output, .. } => return Some(output.clone()),
                 PlanNode::Scan(s) => return Some(s.output.clone()),
                 PlanNode::CteRef(r) => return Some(r.output.clone()),
                 PlanNode::Shift { input, offset } => {
@@ -798,6 +854,19 @@ impl LogicalPlan {
                             _ => None,
                         })
                         .collect();
+                }
+                PlanNode::Window { input, exprs, .. } => {
+                    let mut out = input.resolved_output()?;
+                    for e in exprs {
+                        match &e.node {
+                            crate::ExprNode::Resolved(crate::ResolvedExpr::Alias {
+                                output,
+                                ..
+                            }) => out.push(output.clone()),
+                            _ => return None,
+                        }
+                    }
+                    return Some(out);
                 }
                 PlanNode::Join {
                     left, right, kind, ..

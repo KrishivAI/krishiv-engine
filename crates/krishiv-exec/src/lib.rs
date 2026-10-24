@@ -79,6 +79,7 @@ mod metrics;
 mod morsel;
 mod operator;
 mod operators;
+mod output_spill;
 pub mod physical;
 mod pipeline;
 pub mod planner;
@@ -90,6 +91,7 @@ pub mod rows;
 mod runner;
 mod sync;
 pub mod testing;
+pub mod window;
 
 pub use cancel::CancellationToken;
 pub use context::{
@@ -113,10 +115,11 @@ pub use operator::{
     FlushOutput, GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source,
 };
 pub use operators::{
-    DEFAULT_MAX_MERGE_FAN_IN, FileScan, FileScanMetrics, FileScanSource, FileSelections, FileWrite,
-    FileWriteSink, Filter, FilterPushdown, FnPredicate, Limit, METADATA_COLUMN, MemoryScan,
-    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RowStageSettings, RuntimeFilters,
-    ScalarExpr, ScanPushdown, ScanPushdowns, Sort, SortKey, SortMetrics, TopN, UnionAlign,
+    DEFAULT_MAX_MERGE_FAN_IN, Expand, FileScan, FileScanMetrics, FileScanSource, FileSelections,
+    FileWrite, FileWriteSink, Filter, FilterPushdown, FnPredicate, Limit, METADATA_COLUMN,
+    MemoryScan, NullOf, Predicate, Project, ProjectItem, PushedFilter, ReplicateRows,
+    RowStageSettings, RuntimeFilters, ScalarExpr, ScanPushdown, ScanPushdowns, Sort, SortKey,
+    SortMetrics, TopN, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};
@@ -125,4 +128,4 @@ pub use runner::{QueryRunner, Scheduler};
 mod tests;
 
 #[cfg(all(test, loom))]
-mod loom_tests;
+mod loom_model;

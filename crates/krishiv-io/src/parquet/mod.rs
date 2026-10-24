@@ -41,6 +41,7 @@ mod calendar;
 mod decode;
 mod meta;
 mod row_filter;
+mod thrift_guard;
 mod write;
 
 use std::sync::Arc;

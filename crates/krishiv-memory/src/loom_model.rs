@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Loom models of reserve/release accounting and the cooperative spill
 //! protocol (request, ack, give-up). Bounded for CI:
-//! `RUSTFLAGS="--cfg loom" cargo test -p krishiv-memory --lib --release`.
+//! `RUSTFLAGS="--cfg loom" cargo test -p krishiv-memory --lib --release loom_model::`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -513,5 +513,71 @@ fn an_expired_deadline_still_awaits_a_begun_spill() {
         assert_eq!((q1.reserved(), q2.reserved()), (4, 4));
         assert_eq!(root.stats().aborts, 0, "a begun spill is never given up");
         assert!(q1.check_aborted().is_ok());
+    });
+}
+
+/// Gives up its reservation at once when asked (a last-resort victim, as a
+/// scan's decode working sets): the bytes it holds in `q`.
+struct GivesUp {
+    pool: Arc<TreePool>,
+    id: std::sync::OnceLock<crate::ConsumerId>,
+    held: AtomicUsize,
+}
+
+impl Spillable for GivesUp {
+    fn spillable_bytes(&self) -> usize {
+        self.held.load(Ordering::Acquire)
+    }
+
+    fn request_spill(&self, target: usize) -> crate::SpillTicket {
+        let freed = target.min(self.held.load(Ordering::Acquire));
+        self.held.fetch_sub(freed, Ordering::AcqRel);
+        if let Some(&id) = self.id.get() {
+            self.pool.release(id, freed);
+        }
+        crate::SpillTicket::ready(freed)
+    }
+
+    fn spill_requested(&self) -> Option<usize> {
+        None
+    }
+
+    fn last_resort(&self) -> bool {
+        true
+    }
+}
+
+/// A request that only a last-resort victim can fund, while another
+/// consumer of the victim's query releases concurrently: in every
+/// interleaving it is granted exactly once, nothing is aborted, and the
+/// accounting returns to zero.
+#[test]
+fn a_last_resort_victim_funds_a_request_without_an_abort() {
+    model(|| {
+        let root = pool(8, 1);
+        let q1 = root.child_pool("q1", None);
+        let q2 = root.child_pool("q2", None);
+        let decode = Arc::new(GivesUp {
+            pool: Arc::clone(&q1),
+            id: std::sync::OnceLock::new(),
+            held: AtomicUsize::new(4),
+        });
+        let d = q1.register("decode", Some(Arc::clone(&decode) as Arc<dyn Spillable>));
+        let _ = decode.id.set(d);
+        q1.try_reserve(d, 4).unwrap();
+        let other = q1.register("other", None);
+        q1.try_reserve(other, 4).unwrap();
+        let w = q2.register("w", None);
+        let requester = {
+            let q2 = Arc::clone(&q2);
+            thread::spawn(move || block_on(q2.reserve(w, 4)))
+        };
+        q1.release(other, 4);
+        requester.join().unwrap().unwrap();
+        assert_eq!(q2.reserved(), 4);
+        assert_eq!(root.stats().aborts, 0);
+        q2.release(w, 4);
+        q1.release(d, decode.held.load(Ordering::Acquire));
+        assert_eq!(root.reserved(), 0);
     });
 }

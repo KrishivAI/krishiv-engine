@@ -140,6 +140,132 @@ fn string_carriers_hash_alike() {
     assert_eq!(h, enc(large));
 }
 
+/// The Arrow-view fast path (`Utf8View`, `BinaryView`) writes exactly the
+/// rows, heap and hashes of the plain carriers, for sliced arrays and
+/// values of 0, 12 and 13 bytes.
+#[test]
+fn arrow_views_encode_like_plain_strings() {
+    let v: Vec<Option<String>> = [
+        "",
+        "x",
+        "abcdefghijkl",
+        "abcdefghijklm",
+        "a much longer value",
+    ]
+    .iter()
+    .map(|s| Some((*s).to_owned()))
+    .chain([None])
+    .collect();
+    let [view, utf8, _] = strings(&v);
+    let layout = RowLayout::new(&[DataType::Utf8View], &[true]).unwrap_or_else(|e| panic!("{e}"));
+    let plain = RowLayout::new(&[DataType::Utf8], &[true]).unwrap_or_else(|e| panic!("{e}"));
+    let enc = |l: &RowLayout, a: ArrayRef| l.encode(&[a], 3).unwrap_or_else(|e| panic!("{e}"));
+    let (a, b) = (
+        enc(&layout, Arc::clone(&view)),
+        enc(&plain, utf8.slice(0, v.len())),
+    );
+    let rows = |k: &EncodedKeys| (0..k.len()).map(|i| k.row(i).to_vec()).collect::<Vec<_>>();
+    assert_eq!(
+        (rows(&a), a.heap(), a.hashes()),
+        (rows(&b), b.heap(), b.hashes())
+    );
+    // A slice reads its own views.
+    let (a, b) = (
+        enc(&layout, view.slice(2, 3)),
+        enc(&plain, utf8.slice(2, 3)),
+    );
+    assert_eq!(
+        (rows(&a), a.heap(), a.hashes()),
+        (rows(&b), b.heap(), b.hashes())
+    );
+    let bin = |a: &[Option<&[u8]>]| -> [ArrayRef; 2] {
+        [
+            Arc::new(arrow_array::BinaryViewArray::from(a.to_vec())),
+            Arc::new(BinaryArray::from(a.to_vec())),
+        ]
+    };
+    let raw: Vec<Option<&[u8]>> = vec![Some(&[0xFF, 0x00]), Some(&[0xFE; 13]), None, Some(&[])];
+    let [bv, b] = bin(&raw);
+    let lv = RowLayout::new(&[DataType::BinaryView], &[true]).unwrap_or_else(|e| panic!("{e}"));
+    let lb = RowLayout::new(&[DataType::Binary], &[true]).unwrap_or_else(|e| panic!("{e}"));
+    let (x, y) = (enc(&lv, bv), enc(&lb, b));
+    assert_eq!(
+        (rows(&x), x.heap(), x.hashes()),
+        (rows(&y), y.heap(), y.hashes())
+    );
+}
+
+/// A row moves to another table with its long values: the copy decodes
+/// to the same keys from the new heap, `long_bytes` counts only heap
+/// values, and a view outside its heap is refused with nothing appended.
+#[test]
+fn rows_move_with_their_long_values() {
+    let v = vec![
+        Some("short".to_owned()),
+        Some("a value longer than twelve".to_owned()),
+        None,
+        Some("twelve bytes".to_owned()),
+        Some("thirteen byte".to_owned()),
+    ];
+    let [view, _, _] = strings(&v);
+    let ints: ArrayRef = Arc::new(Int64Array::from(vec![
+        Some(1),
+        None,
+        Some(3),
+        Some(4),
+        None,
+    ]));
+    let types = [DataType::Utf8View, DataType::Int64];
+    let layout = RowLayout::new(&types, &[true, true]).unwrap_or_else(|e| panic!("{e}"));
+    let keys = layout
+        .encode(&[view, ints], 0)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let want = layout
+        .decode_rows(
+            &(0..5)
+                .map(|i| (keys.row(i), keys.heap()))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        (0..5)
+            .map(|i| layout.long_bytes(keys.row(i)))
+            .collect::<Vec<_>>(),
+        // 12 bytes stay inline; 13 go to the heap.
+        vec![0, 26, 0, 0, 13]
+    );
+    let (mut rows, mut heap) = (Vec::new(), b"existing".to_vec());
+    for i in [4, 3, 2, 1, 0] {
+        layout
+            .push_row(keys.row(i), keys.heap(), &mut rows, &mut heap)
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    assert_eq!(heap.len(), 8 + 13 + 26);
+    let stride = layout.stride();
+    let moved: Vec<(&[u8], &[u8])> = rows.chunks(stride).rev().map(|r| (r, &heap[..])).collect();
+    let got = layout.decode_rows(&moved).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(got.len(), want.len());
+    for (g, w) in got.iter().zip(&want) {
+        assert_eq!(g.to_data(), w.to_data());
+    }
+    // Corrupt: the long value's heap is missing.
+    let (len, hlen) = (rows.len(), heap.len());
+    let e = layout
+        .push_row(keys.row(1), &[], &mut rows, &mut heap)
+        .unwrap_err();
+    assert!(e.to_string().contains("outside its heap"), "{e}");
+    assert_eq!((rows.len(), heap.len()), (len, hlen));
+    let e = layout
+        .push_row(&[0; 4], &[], &mut rows, &mut heap)
+        .unwrap_err();
+    assert!(e.to_string().contains("shorter than the stride"), "{e}");
+    // A view outside its heap equals nothing, not even itself.
+    let row = keys.row(1);
+    assert!(layout.eq(row, keys.heap(), row, keys.heap()));
+    assert!(!layout.eq(row, &[], row, &[]));
+    assert!(!layout.eq(row, keys.heap(), row, &[]));
+}
+
 #[test]
 fn every_fixed_type_and_misses() {
     let cols: Vec<ArrayRef> = vec![

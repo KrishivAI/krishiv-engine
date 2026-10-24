@@ -19,11 +19,11 @@ SELECT * FROM range(3)
 SELECT a FROM t LATERAL VIEW explode(b) x AS y
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature LATERAL VIEW is not supported by Krishiv yet. SQLSTATE: 0A000 @ 9..46
 SELECT row_number() OVER (ORDER BY a) FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature window functions is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..37
+  => Project [row_number() OVER (ORDER BY a ASC NULLS FIRST)] | +- Read t | 
 SELECT a FROM t GROUP BY ROLLUP (a)
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature ROLLUP, CUBE and GROUPING SETS is not supported by Krishiv yet. SQLSTATE: 0A000 @ 25..35
+  => Aggregate [a] GROUPING SETS ((a), ()), [a] | +- Read t | 
 SELECT a FROM t GROUP BY a WITH CUBE
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature ROLLUP, CUBE and GROUPING SETS is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..36
+  => Aggregate CUBE [a], [a] | +- Read t | 
 SELECT * FROM t NATURAL JOIN u
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature NATURAL JOIN is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..30
 SELECT * FROM t, LATERAL (SELECT a)
@@ -43,9 +43,9 @@ FROM t SELECT a CLUSTER BY a
 FROM t SELECT a DISTRIBUTE BY a
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature DISTRIBUTE BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..31
 FROM t SELECT a WINDOW w AS (ORDER BY a)
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature WINDOW clauses is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..40
+  => Project [a] | +- Read t | 
 SELECT a FROM t WINDOW w AS (ORDER BY a)
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature WINDOW clauses is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..40
+  => Project [a] | +- Read t | 
 SELECT a FROM t QUALIFY a > 1
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature QUALIFY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..29
 WITH RECURSIVE r AS (SELECT a FROM t) SELECT * FROM r
@@ -77,7 +77,7 @@ SELECT ? FROM t
 SELECT INTERVAL 1 DAY FROM t
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature INTERVAL literals is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..21
 SELECT TIMESTAMP '2020-01-01 00:00:00' FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature TIMESTAMP literals is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..38
+  => Project [TIMESTAMP '2020-01-01 00:00:00'] | +- Read t | 
 SELECT db.f(a) FROM t
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature qualified function names is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..11
 SELECT f(x => 1) FROM t

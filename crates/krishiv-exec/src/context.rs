@@ -115,6 +115,10 @@ impl ExecConfig {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct QueryId(pub u64);
 
+/// The scans' decode working sets may hold `1 / SCAN_GATE_SHARE` of the
+/// query's memory limit at once.
+const SCAN_GATE_SHARE: usize = 4;
+
 /// State shared by every task of one query.
 pub struct QueryContext {
     id: QueryId,
@@ -134,6 +138,9 @@ pub struct QueryContext {
     /// Spill files written per operator, shared by its consumers in every
     /// driver (read into the metrics by [`QueryContext::metrics`]).
     spills: Mutex<BTreeMap<OperatorId, Arc<SpillStats>>>,
+    /// The scans' decode working sets (`krishiv_io::ScanGate`), made on
+    /// first use with a budget of a quarter of the query's memory limit.
+    scan_gate: OnceLock<Arc<krishiv_io::ScanGate>>,
     finished: AtomicBool,
     finished_event: Event,
     /// Blocking closures in flight; the query ends only once they have.
@@ -171,6 +178,7 @@ impl QueryContext {
             epoch: OnceLock::new(),
             threads: Mutex::new(BTreeMap::new()),
             spills: Mutex::new(BTreeMap::new()),
+            scan_gate: OnceLock::new(),
             finished: AtomicBool::new(false),
             finished_event: Event::default(),
             blocking: AtomicUsize::new(0),
@@ -296,6 +304,19 @@ impl QueryContext {
             peak_reserved: self.pool.peak_reserved() as u64,
         };
         m
+    }
+
+    /// The query's scan decode gate (see `krishiv_io::ScanGate`): its
+    /// working sets may take up to a quarter of the query's memory limit at
+    /// once, leaving the rest to operators that cannot wait for a scan.
+    pub fn scan_gate(&self) -> &Arc<krishiv_io::ScanGate> {
+        self.scan_gate.get_or_init(|| {
+            let budget = self
+                .pool
+                .effective_limit()
+                .map_or(usize::MAX, |l| l / SCAN_GATE_SHARE);
+            Arc::new(krishiv_io::ScanGate::new(&self.pool, budget))
+        })
     }
 
     /// Where `op`'s consumers count their spill files.
@@ -460,6 +481,21 @@ impl TaskContext {
             );
             MemoryHandle { consumer, signal }
         })
+    }
+
+    /// A further consumer of this operator with its own spill hook (not
+    /// this driver's): its spill files count with the operator's.
+    pub(crate) fn register_consumer(
+        &self,
+        name: &str,
+        spill: Arc<dyn krishiv_memory::Spillable>,
+    ) -> Arc<ConsumerHandle> {
+        ConsumerHandle::register_counted(
+            Arc::clone(self.query.pool()),
+            name,
+            Some(spill),
+            self.query.spill_stats(self.op),
+        )
     }
 
     /// The consumer, if the operator registered one.

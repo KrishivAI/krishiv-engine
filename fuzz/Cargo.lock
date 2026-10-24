@@ -1049,6 +1049,7 @@ version = "0.1.0-dev"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
+ "arrow-data",
  "arrow-row",
  "arrow-schema",
  "arrow-select",
@@ -1056,11 +1057,30 @@ dependencies = [
  "futures",
  "hashbrown",
  "krishiv-common",
+ "krishiv-functions",
  "krishiv-io",
+ "krishiv-kernels",
  "krishiv-memory",
+ "krishiv-optimizer",
+ "krishiv-plan",
  "krishiv-types",
+ "object_store",
+ "serde_json",
+ "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "krishiv-functions"
+version = "0.1.0-dev"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "arrow-select",
+ "krishiv-common",
+ "krishiv-kernels",
+ "krishiv-types",
 ]
 
 [[package]]
@@ -1091,13 +1111,17 @@ dependencies = [
  "bytes",
  "chrono",
  "futures",
+ "hashbrown",
  "krishiv-common",
+ "krishiv-kernels",
  "krishiv-memory",
  "krishiv-types",
+ "memchr",
  "object_store",
  "parquet",
  "tokio",
  "tracing",
+ "twox-hash",
 ]
 
 [[package]]
@@ -1129,10 +1153,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "krishiv-optimizer"
+version = "0.1.0-dev"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "krishiv-common",
+ "krishiv-kernels",
+ "krishiv-plan",
+ "krishiv-types",
+]
+
+[[package]]
 name = "krishiv-plan"
 version = "0.1.0-dev"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
  "krishiv-common",
+ "krishiv-functions",
  "krishiv-kernels",
  "krishiv-types",
  "thiserror",
@@ -1144,6 +1183,7 @@ name = "krishiv-sql"
 version = "0.1.0-dev"
 dependencies = [
  "krishiv-common",
+ "krishiv-kernels",
  "krishiv-plan",
  "krishiv-types",
  "thiserror",
