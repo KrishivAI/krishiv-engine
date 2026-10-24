@@ -157,15 +157,15 @@ fn dot_shape(text: &str) -> (Vec<usize>, Vec<(usize, usize)>) {
     (nodes, edges)
 }
 
-/// A rendering is one tree: ids `n0..nN` in pre-order, one edge from every
-/// node but the root to its parent.
+/// A rendering is one tree: ids `n0..nN` in pre-order, one edge from each
+/// parent to its inputs (the root sits at the top).
 fn check_tree(nodes: &[usize], edges: &[(usize, usize)]) {
     assert_eq!(nodes, &(0..nodes.len()).collect::<Vec<_>>(), "{nodes:?}");
     assert_eq!(edges.len(), nodes.len().saturating_sub(1), "{edges:?}");
-    let mut sources: Vec<usize> = edges.iter().map(|(child, _)| *child).collect();
-    sources.sort_unstable();
-    assert_eq!(sources, (1..nodes.len()).collect::<Vec<_>>(), "{edges:?}");
-    for (child, parent) in edges {
+    let mut targets: Vec<usize> = edges.iter().map(|(_, child)| *child).collect();
+    targets.sort_unstable();
+    assert_eq!(targets, (1..nodes.len()).collect::<Vec<_>>(), "{edges:?}");
+    for (parent, child) in edges {
         assert_ne!(child, parent, "{edges:?}");
         assert!(*parent < nodes.len(), "{edges:?}");
     }
@@ -308,6 +308,12 @@ fn profile_graph_snapshot_join_aggregate() {
 fn explain_with_covers_every_mode() {
     let s = session();
     let df = block_on(s.sql(QUERY)).unwrap();
+    // Every mode plans the same physical plan: all modes graph identically
+    // to `Simple` (compared across modes, not against a second run of the
+    // same mode).
+    let baseline_mermaid =
+        block_on(df.explain_with(ExplainMode::Simple, GraphFormat::Mermaid)).unwrap();
+    let baseline_dot = block_on(df.explain_with(ExplainMode::Simple, GraphFormat::Dot)).unwrap();
     for mode in [
         ExplainMode::Simple,
         ExplainMode::Extended,
@@ -318,14 +324,11 @@ fn explain_with_covers_every_mode() {
         let mermaid = block_on(df.explain_with(mode, GraphFormat::Mermaid)).unwrap();
         let (nodes, edges) = mermaid_shape(&mermaid);
         check_tree(&nodes, &edges);
-        // Every mode plans the same physical plan, so the graph is stable.
-        assert_eq!(
-            mermaid,
-            block_on(df.explain_with(mode, GraphFormat::Mermaid)).unwrap()
-        );
+        assert_eq!(mermaid, baseline_mermaid, "{mode:?}");
         let dot = block_on(df.explain_with(mode, GraphFormat::Dot)).unwrap();
         let (nodes, edges) = dot_shape(&dot);
         check_tree(&nodes, &edges);
+        assert_eq!(dot, baseline_dot, "{mode:?}");
         // A plan mode has no JSON document (as `DataFrame::explain` has no
         // JSON form either): the error names the mode and the formats.
         let error = block_on(df.explain_with(mode, GraphFormat::Json)).unwrap_err();
@@ -351,12 +354,15 @@ fn verbose_and_analyze_with_all_formats() {
     let s = session();
     let df = block_on(s.sql(QUERY)).unwrap();
     let verbose = block_on(df.explain_verbose()).unwrap();
+    // The fixture query rewrites, so the graph dropping the steps is visible.
+    assert!(!verbose.steps.is_empty(), "QUERY should rewrite");
     let json = block_on(df.explain_verbose_with(GraphFormat::Json)).unwrap();
     assert_eq!(ExplainVerbose::from_json(&json).unwrap(), verbose);
     let mermaid = block_on(df.explain_verbose_with(GraphFormat::Mermaid)).unwrap();
     let (nodes, edges) = mermaid_shape(&mermaid);
     check_tree(&nodes, &edges);
-    // The verbose run plans the same physical plan `explain_with` graphs.
+    // The verbose graph is the physical plan only: the optimizer steps above
+    // are dropped (see `explain_verbose_with` docs), matching `explain_with`.
     assert_eq!(
         mermaid,
         block_on(df.explain_with(ExplainMode::Simple, GraphFormat::Mermaid)).unwrap()

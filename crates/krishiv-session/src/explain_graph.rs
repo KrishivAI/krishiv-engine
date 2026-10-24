@@ -14,10 +14,19 @@
 //!   [`DataFrame::explain_analyze_with`] graphs.
 //!
 //! Node ids (`n0`, `n1`, ...) are the rendered tree's pre-order numbers.
-//! Edges run from a child to its parent, the direction data flows.
-//! Labels escape `\`, `"`, newlines, `&`, `<`, `>` and `|`, so a label never
-//! breaks out of its quotes. Operators no plan node holds (the result sink)
+//! Edges run from a parent to each of its inputs, so the root sits at the
+//! top like every conventional plan drawing.
+//! Mermaid labels escape `\`, `"`, newlines, `&`, `<`, `>`, `|` (Mermaid's
+//! `#...;` entity codes); DOT quoted strings escape only `\`, `"` and
+//! newlines (`<`, `>`, `|`, `&` stay literal text there, never structure).
+//! Either way no raw `"` survives inside a label, so neither Mermaid's `"]`
+//! nor DOT's `";` terminator can appear unescaped: a label never breaks out
+//! of its quotes. Operators no plan node holds (the result sink)
 //! print under a `Result:` section of the root's label.
+//!
+//! The renderers are hand-rolled text (no Mermaid/Graphviz dependency) and
+//! are not checked against those renderers in CI; re-render one snapshot of
+//! each format by hand before trusting a change to the escapers.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -43,10 +52,10 @@ pub enum GraphFormat {
     /// `INVALID_PARAMETER_VALUE`.
     Json,
     /// Mermaid `flowchart TD` text: one `n{id}["label"]` per node, one
-    /// `child --> parent` edge per input.
+    /// `parent --> child` edge per input.
     Mermaid,
     /// Graphviz `digraph` text: one `n{id} [label="..."];` per node, one
-    /// `child -> parent` edge per input.
+    /// `parent -> child` edge per input.
     Dot,
 }
 
@@ -81,7 +90,7 @@ impl GraphFormat {
             "dot" => Ok(Self::Dot),
             _ => Err(InvalidParameterValueString {
                 parameter: "format".to_owned(),
-                function_name: "DataFrame.explain_with".to_owned(),
+                function_name: "GraphFormat::parse".to_owned(),
                 invalid_value: format!("{text} (expected one of: json, mermaid, dot)"),
             }
             .into()),
@@ -124,7 +133,7 @@ pub(crate) fn no_json_for_mode(mode: ExplainMode) -> KrishivError {
 /// );
 /// let text = mermaid_of_plan(&plan);
 /// assert!(text.starts_with("flowchart TD\n"));
-/// assert!(text.contains("n1 --> n0"));
+/// assert!(text.contains("n0 --> n1"));
 /// ```
 #[must_use]
 pub fn mermaid_of_plan(root: &ExplainNode) -> String {
@@ -180,7 +189,7 @@ pub fn dot_of_profile(profile: &QueryProfile) -> String {
 }
 
 /// A rendered tree: one label per node in pre-order (`ni` is the `i`th),
-/// and one `(child, parent)` edge per input.
+/// and one `(parent, child)` edge per input.
 struct Graph {
     labels: Vec<String>,
     edges: Vec<(usize, usize)>,
@@ -199,7 +208,7 @@ fn walk_plan(node: &ExplainNode, parent: Option<usize>, graph: &mut Graph) {
     let id = graph.labels.len();
     graph.labels.push(plan_label(&node.name, &node.detail));
     if let Some(parent) = parent {
-        graph.edges.push((id, parent));
+        graph.edges.push((parent, id));
     }
     for child in &node.children {
         walk_plan(child, Some(id), graph);
@@ -250,7 +259,7 @@ fn walk_profile(
     }
     graph.labels.push(label);
     if let Some(parent) = parent {
-        graph.edges.push((id, parent));
+        graph.edges.push((parent, id));
     }
     for child in &node.children {
         walk_profile(child, Some(id), by_node, graph);
@@ -346,7 +355,10 @@ fn ns(duration: Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
-/// Escapes `label` for a Mermaid quoted node label (`n0["..."]`).
+/// Escapes `label` for a Mermaid quoted node label (`n0["..."]`): Mermaid's
+/// `#...;` entity codes for `"` (`#quot;`), `&` (`#amp;`), `<` (`#lt;`),
+/// `>` (`#gt;`) and `|` (`#124;`; pipes have no named code). No raw `"`
+/// survives, so the `"]` terminator cannot appear unescaped.
 fn escape_mermaid(label: &str) -> String {
     // Newlines become the two characters `\n` (a raw newline would split
     // the node across lines); every other replacement adds no newline.
@@ -368,8 +380,10 @@ fn escape_mermaid(label: &str) -> String {
 }
 
 /// Escapes `label` for a DOT quoted string (`label="..."`): Graphviz splits
-/// `\n` into lines; `<`, `>` and `|` have no quoted-string escape, so they
-/// become entities (they stay literal text, never structure).
+/// the two characters `\n` into lines. `<`, `>`, `|` and `&` need no escape
+/// in a quoted string (that concern applies to `shape=record` labels, which
+/// are never emitted here) and stay literal text. No raw `"` survives, so the
+/// `";` terminator cannot appear unescaped.
 fn escape_dot(label: &str) -> String {
     let flat = label.replace("\r\n", "\n").replace('\r', "\n");
     let mut out = String::with_capacity(flat.len());
@@ -377,10 +391,6 @@ fn escape_dot(label: &str) -> String {
         match c {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '|' => out.push_str("&#124;"),
             '\n' => out.push_str("\\n"),
             c => out.push(c),
         }
@@ -393,8 +403,8 @@ fn emit_mermaid(graph: &Graph) -> String {
     for (id, label) in graph.labels.iter().enumerate() {
         let _ = writeln!(out, "    n{id}[\"{}\"]", escape_mermaid(label));
     }
-    for (child, parent) in &graph.edges {
-        let _ = writeln!(out, "    n{child} --> n{parent}");
+    for (parent, child) in &graph.edges {
+        let _ = writeln!(out, "    n{parent} --> n{child}");
     }
     out
 }
@@ -404,8 +414,8 @@ fn emit_dot(graph: &Graph) -> String {
     for (id, label) in graph.labels.iter().enumerate() {
         let _ = writeln!(out, "    n{id} [label=\"{}\"];", escape_dot(label));
     }
-    for (child, parent) in &graph.edges {
-        let _ = writeln!(out, "    n{child} -> n{parent};");
+    for (parent, child) in &graph.edges {
+        let _ = writeln!(out, "    n{parent} -> n{child};");
     }
     out.push_str("}\n");
     out
@@ -414,9 +424,10 @@ fn emit_dot(graph: &Graph) -> String {
 impl DataFrame {
     /// The physical plan as a graph ([`GraphFormat::Mermaid`] or
     /// [`GraphFormat::Dot`]): the tree [`DataFrame::explain`] prints, with
-    /// stable pre-order node ids (`n0`, `n1`, ...) and edges from each input
-    /// to its parent. Every mode plans the same physical plan, so `mode`
-    /// only names the plan; the graph renders that plan either way.
+    /// stable pre-order node ids (`n0`, `n1`, ...) and edges from each parent
+    /// to its inputs. Every mode plans the same physical plan, so the graph
+    /// is identical for every `mode`; `mode` only names the plan (and appears
+    /// in the [`GraphFormat::Json`] error, which those modes reject).
     ///
     /// ```
     /// use krishiv_session::{ExplainMode, GraphFormat, Session};
@@ -519,10 +530,132 @@ mod tests {
             "a#lt;b#gt;c#124;d\\\\e\\nf\\ng\\nh#amp;i"
         );
         assert_eq!(escape_dot("a\"b"), "a\\\"b");
+        // DOT quoted strings leave `<>|&` literal: only `\\`, `"` and
+        // newlines are escaped.
         assert_eq!(
             escape_dot("a<b>c|d\\e\nf\rg\r\nh&i"),
-            "a&lt;b&gt;c&#124;d\\\\e\\nf\\ng\\nh&amp;i"
+            "a<b>c|d\\\\e\\nf\\ng\\nh&i"
         );
+    }
+
+    #[test]
+    fn dot_keeps_angles_pipes_and_ampersands_literal() {
+        assert_eq!(
+            dot_of_plan(&ExplainNode::leaf("Scan", "a > b & c|d < e")),
+            "digraph {\n    n0 [label=\"Scan a > b & c|d < e\"];\n}\n"
+        );
+        assert!(!dot_of_plan(&ExplainNode::leaf("Scan", "a -> b")).contains("&gt;"));
+    }
+
+    /// Neither Mermaid's `"]` nor DOT's `";` terminator can appear unescaped
+    /// inside a label: `"` (the only terminator character needing an escape)
+    /// never survives escaping, so an adversarial detail cannot break out.
+    #[test]
+    fn adversarial_labels_cannot_break_out_of_quotes() {
+        let node = ExplainNode::new(
+            "Filter",
+            "\"];\"; \" \\ <>&|",
+            vec![ExplainNode::leaf("Scan", "x\n\"];\";")],
+        );
+        let mermaid = mermaid_of_plan(&node);
+        // One header line, one line per node, one line per edge.
+        assert_eq!(mermaid.lines().count(), 1 + 2 + 1, "{mermaid}");
+        for line in mermaid.lines().skip(1).filter(|l| l.contains('[')) {
+            let start = line.find("[\"").expect("mermaid label") + 2;
+            assert!(line.ends_with("\"]"), "{line}");
+            let inner = &line[start..line.len() - 2];
+            assert!(!inner.contains('"'), "{line}");
+        }
+        // The Mermaid escaping round-trips back to the plan text.
+        assert_eq!(
+            unescape_mermaid(mermaid.lines().nth(1).expect("root")),
+            "Filter \"];\"; \" \\ <>&|"
+        );
+
+        let dot = dot_of_plan(&node);
+        // `digraph {`, one line per node, one line per edge, `}`.
+        assert_eq!(dot.lines().count(), 1 + 2 + 1 + 1, "{dot}");
+        for line in dot.lines().filter(|l| l.contains("[label=")) {
+            // Every `"` inside is backslash-escaped, so no unescaped `";`
+            // terminator appears.
+            let inner = dot_label_inner(line);
+            assert!(!has_unescaped_quote(&inner), "{line}");
+        }
+        assert_eq!(
+            unescape_dot(dot.lines().nth(1).expect("root")),
+            "Filter \"];\"; \" \\ <>&|"
+        );
+    }
+
+    /// The label content of a Mermaid node line, unescaped back to plan text.
+    fn unescape_mermaid(line: &str) -> String {
+        let start = line.find("[\"").expect("mermaid label") + 2;
+        assert!(line.ends_with("\"]"));
+        let inner = &line[start..line.len() - 2];
+        // The emitter writes `\\` for backslash and `\n` (two characters)
+        // for newlines first, then `#...;` entities for `"&<>|`.
+        let mut flat = String::new();
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('\\') => flat.push('\\'),
+                    Some('n') => flat.push('\n'),
+                    other => panic!("unexpected mermaid escape: {other:?}"),
+                }
+            } else {
+                flat.push(c);
+            }
+        }
+        flat.replace("#quot;", "\"")
+            .replace("#amp;", "&")
+            .replace("#lt;", "<")
+            .replace("#gt;", ">")
+            .replace("#124;", "|")
+    }
+
+    /// Whether `text` holds a `"` not preceded by an escaping backslash.
+    fn has_unescaped_quote(text: &str) -> bool {
+        let mut escaped = false;
+        for c in text.chars() {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The raw label content of a DOT node line (still `\\`-escaped).
+    fn dot_label_inner(line: &str) -> String {
+        let (_, rest) = line.split_once("[label=\"").expect("dot label");
+        // The line ends with `\"];`: strip it, respecting that `"` inside
+        // does not terminate.
+        assert!(rest.ends_with("\"];"));
+        rest[..rest.len() - 3].to_owned()
+    }
+
+    /// The label content of a DOT node line, unescaped back to plan text.
+    fn unescape_dot(line: &str) -> String {
+        let inner = dot_label_inner(line);
+        let mut out = String::new();
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('\\') => out.push('\\'),
+                    Some('"') => out.push('"'),
+                    Some('n') => out.push('\n'),
+                    other => panic!("unexpected dot escape: {other:?}"),
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
     }
 
     #[test]
@@ -538,23 +671,20 @@ mod tests {
             "{mermaid}"
         );
         let dot = dot_of_plan(&node);
-        assert!(
-            dot.contains("We\\\"ird a&lt;b&gt;&#124;c\\\\d\\ne\\nf\\ng&amp;h"),
-            "{dot}"
-        );
+        assert!(dot.contains("We\\\"ird a<b>|c\\\\d\\ne\\nf\\ng&h"), "{dot}");
     }
 
     #[test]
-    fn deep_chain_numbers_pre_order_with_edges_to_parents() {
+    fn deep_chain_numbers_pre_order_with_edges_to_children() {
         let text = mermaid_of_plan(&chain(4));
         for i in 0..=4 {
             assert!(text.contains(&format!("n{i}[")), "{text}");
         }
-        assert!(text.contains("n4 --> n3"), "{text}");
-        assert!(text.contains("n1 --> n0"), "{text}");
+        assert!(text.contains("n3 --> n4"), "{text}");
+        assert!(text.contains("n0 --> n1"), "{text}");
         let dot = dot_of_plan(&chain(4));
-        assert!(dot.contains("n4 -> n3"), "{dot}");
-        assert!(dot.contains("n1 -> n0"), "{dot}");
+        assert!(dot.contains("n3 -> n4"), "{dot}");
+        assert!(dot.contains("n0 -> n1"), "{dot}");
     }
 
     #[test]
@@ -576,9 +706,9 @@ mod tests {
             .map(|l| l.trim()[1..2].parse().unwrap_or_else(|e| panic!("{e}")))
             .collect();
         assert_eq!(ids, vec![0, 1, 2, 3], "{text}");
-        assert!(text.contains("n1 --> n0"), "{text}");
-        assert!(text.contains("n2 --> n0"), "{text}");
-        assert!(text.contains("n3 --> n0"), "{text}");
+        assert!(text.contains("n0 --> n1"), "{text}");
+        assert!(text.contains("n0 --> n2"), "{text}");
+        assert!(text.contains("n0 --> n3"), "{text}");
     }
 
     #[test]
@@ -703,7 +833,7 @@ mod tests {
         };
         assert_eq!(
             mermaid_of_profile(&profile),
-            "flowchart TD\n    n0[\"Subquery\"]\n    n1[\"Scan t\"]\n    n1 --> n0\n"
+            "flowchart TD\n    n0[\"Subquery\"]\n    n1[\"Scan t\"]\n    n0 --> n1\n"
         );
     }
 
@@ -718,7 +848,7 @@ mod tests {
         };
         assert_eq!(
             mermaid_of_profile(&profile),
-            "flowchart TD\n    n0[\"p0\"]\n    n1[\"p1\"]\n    n2[\"p2\"]\n    n1 --> n0\n    n2 --> n1\n"
+            "flowchart TD\n    n0[\"p0\"]\n    n1[\"p1\"]\n    n2[\"p2\"]\n    n0 --> n1\n    n1 --> n2\n"
         );
     }
 

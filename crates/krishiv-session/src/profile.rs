@@ -328,9 +328,14 @@ impl DataFrame {
     }
 
     /// As [`Self::explain_verbose`], returning the plans in `format`:
-    /// [`GraphFormat::Json`] is the versioned JSON document,
-    /// [`GraphFormat::Mermaid`] and [`GraphFormat::Dot`] graph the physical
-    /// plan (the optimizer's steps are text only).
+    /// [`GraphFormat::Json`] is the versioned JSON document (all stages,
+    /// including every optimizer step).
+    ///
+    /// > **Warning:** [`GraphFormat::Mermaid`] and [`GraphFormat::Dot`] graph
+    /// > only the physical plan and drop the optimizer's steps and rules.
+    /// > What `--explain-verbose` prints as `== Optimizer: ... ==` sections in
+    /// > text is absent from those graphs by design; use text or JSON to
+    /// > inspect the optimizer.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
