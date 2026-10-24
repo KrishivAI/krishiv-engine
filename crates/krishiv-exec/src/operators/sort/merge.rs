@@ -188,6 +188,13 @@ fn next_batch(
     Ok(None)
 }
 
+/// Persistent per-source metadata a [`Merger`] holds: the output `slot` and
+/// generation `stamp` that number an output's sources in one pass. Reserved
+/// in the merge's budget (see `merge_budget`), not per output.
+pub(crate) fn metadata_bytes(sources: usize) -> usize {
+    sources.saturating_mul(size_of::<u64>().saturating_add(size_of::<u32>()))
+}
+
 /// A k-way merge of sorted runs.
 pub(crate) struct Merger {
     schema: SchemaRef,
