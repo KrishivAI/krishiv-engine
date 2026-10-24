@@ -186,16 +186,33 @@ class SparkSession:
             else:
                 names = [f"_{i + 1}" for i in range(len(first))]
         width = len(names)
+        per_column: list[list[Any]] = [[] for _ in names]
+        for row in data:
+            if isinstance(row, dict):
+                for index, name in enumerate(names):
+                    per_column[index].append(row.get(name))
+            else:
+                if len(row) != width:
+                    raise PySparkValueError(f"row has {len(row)} values, expected {width}")
+                for index in range(width):
+                    per_column[index].append(row[index])
         columns: list[Any] = []
-        for index, name in enumerate(names):
-            try:
-                values = [row[name] if isinstance(row, dict) else row[index] for row in data]
-            except (IndexError, KeyError) as e:
-                raise PySparkValueError(f"row has {len(row)} values, expected {width}") from e
+        for index, values in enumerate(per_column):
             if field_types is not None:
                 columns.append(pa.array(values, type=_arrow_type_of(field_types[index])))
             elif data:
-                columns.append(pa.array(values))
+                inferred = pa.array(values)
+                if pa.types.is_timestamp(inferred.type) and inferred.type.tz is None:
+                    from datetime import UTC, datetime
+
+                    if any(isinstance(v, datetime) for v in values if v is not None):
+                        # PySpark interprets naive datetimes in the Python process's local
+                        # time zone; attach it before storing the instant as UTC.
+                        localized = [
+                            v.astimezone(UTC) if isinstance(v, datetime) and v.tzinfo is None else v for v in values
+                        ]
+                        inferred = pa.array(localized, type=pa.timestamp(inferred.type.unit, "UTC"))
+                columns.append(inferred)
             else:
                 columns.append(pa.array([], type=pa.null()))
         if isinstance(schema, StructType):

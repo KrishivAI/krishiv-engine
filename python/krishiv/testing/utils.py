@@ -125,7 +125,7 @@ def _is_dataframe(value: Any) -> bool:
 
 def _is_pandas_frame(value: Any) -> bool:
     try:
-        import pandas as pd
+        import pandas as pd  # ty: ignore[unresolved-import]
     except ImportError:
         return False
     return isinstance(value, pd.DataFrame)
@@ -231,27 +231,26 @@ def _stringified_row(row: Any) -> Any:
 
 
 def _stringified_value(value: Any) -> Any:
-    """``value`` as a string, as a cast to ``STRING`` would render it (nulls stay null)."""
+    """``value`` as a string, as a cast to ``STRING`` would render it (nulls stay null).
+
+    Booleans render as ``true``/``false`` and floating-point numbers with Java's
+    ``Double.toString`` (``1.0``, ``1.0E16``, ``1.5E-7``), matching Spark's cast.
+    """
+    from krishiv.sql._convert import _java_double
     from krishiv.sql.row import Row
 
     if value is None:
         return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
     if isinstance(value, float):
-        if math.isnan(value):
-            return "NaN"
-        if math.isinf(value):
-            return "Infinity" if value > 0 else "-Infinity"
-        if value.is_integer():
-            return str(int(value))
-        return str(value)
+        return _java_double(value)
     if isinstance(value, list):
         return [_stringified_value(v) for v in value]
     if isinstance(value, Row):
         return Row(*[_stringified_value(v) for v in value])
     if isinstance(value, dict):
         return {k: _stringified_value(v) for k, v in value.items()}
-    if isinstance(value, bool | int | Decimal):
-        return str(value)
     return str(value)
 
 
@@ -290,11 +289,17 @@ def _values_equal(first: Any, second: Any, rtol: float, atol: float) -> bool:
     if isinstance(first, dict) and isinstance(second, dict):
         return first.keys() == second.keys() and all(_values_equal(first[k], second[k], rtol, atol) for k in first)
     if isinstance(first, float) and isinstance(second, float):
-        if math.isnan(first) and math.isnan(second):
-            return True
-        return not abs(first - second) > (atol + rtol * abs(second))
+        if math.isnan(first) or math.isnan(second):
+            return math.isnan(first) and math.isnan(second)
+        if math.isinf(first) or math.isinf(second):
+            return first == second
+        return abs(first - second) <= (atol + rtol * abs(second))
     if isinstance(first, Decimal) and isinstance(second, Decimal):
-        return not abs(first - second) > (Decimal(atol) + Decimal(rtol) * abs(second))
+        if first.is_nan() or second.is_nan():
+            return first.is_nan() and second.is_nan()
+        if first.is_infinite() or second.is_infinite():
+            return first == second
+        return abs(first - second) <= (Decimal(atol) + Decimal(rtol) * abs(second))
     return first == second
 
 
@@ -392,7 +397,7 @@ def _assert_rows_equal(
 
 def _assert_pandas_equal(actual: Any, expected: Any, check_order: bool, rtol: float, atol: float) -> None:
     """Approximate equality for pandas frames (raises ``DIFFERENT_PANDAS_DATAFRAME``)."""
-    import pandas as pd
+    import pandas as pd  # ty: ignore[unresolved-import]
 
     if not isinstance(actual, pd.DataFrame) or not isinstance(expected, pd.DataFrame):
         bad, name = (actual, "actual") if not isinstance(actual, pd.DataFrame) else (expected, "expected")

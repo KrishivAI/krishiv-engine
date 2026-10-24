@@ -146,15 +146,19 @@ def test_assert_unequal_null_frames(spark: SparkSession) -> None:
     }
     with pytest.raises(errors.PySparkAssertionError) as expected:
         assertDataFrameEqual(df, None)
-    assert expected.value.getMessageParameters()["arg_name"] == "expected"
+    expected_params = expected.value.getMessageParameters()
+    assert expected_params is not None
+    assert expected_params["arg_name"] == "expected"
 
 
 def test_assert_error_non_pyspark_df() -> None:
     with pytest.raises(errors.PySparkAssertionError) as pe:
         assertDataFrameEqual({"a": 1}, {"a": 1})
     assert pe.value.getCondition() == "INVALID_TYPE_DF_EQUALITY_ARG"
-    assert pe.value.getMessageParameters()["arg_name"] == "actual"
-    assert pe.value.getMessageParameters()["actual_type"] is dict
+    error_params = pe.value.getMessageParameters()
+    assert error_params is not None
+    assert error_params["arg_name"] == "actual"
+    assert error_params["actual_type"] is dict
 
 
 def test_row_order_ignored(spark: SparkSession) -> None:
@@ -177,7 +181,9 @@ def test_different_row_count_no_cascading_diff() -> None:
     expected = [Row(id="1"), Row(id="2"), Row(id="4"), Row(id="5")]
     with pytest.raises(errors.PySparkAssertionError) as pe:
         assertDataFrameEqual(actual, expected)
-    assert "20.00000 %" in pe.value.getMessageParameters()["error_msg"]
+    no_cascade_params = pe.value.getMessageParameters()
+    assert no_cascade_params is not None
+    assert "20.00000 %" in no_cascade_params["error_msg"]
     with pytest.raises(errors.PySparkAssertionError) as include:
         assertDataFrameEqual(actual, expected, includeDiffRows=True)
     assert include.value.data == [(Row(id="3"), None)]
@@ -189,7 +195,9 @@ def test_different_row_count_mixed_extra_and_missing() -> None:
     with pytest.raises(errors.PySparkAssertionError) as pe:
         assertDataFrameEqual(actual, expected, includeDiffRows=True)
     assert pe.value.data == [(None, Row(v="C")), (None, Row(v="E")), (Row(v="X"), None)]
-    assert "60.00000 %" in pe.value.getMessageParameters()["error_msg"]
+    mixed_params = pe.value.getMessageParameters()
+    assert mixed_params is not None
+    assert "60.00000 %" in mixed_params["error_msg"]
 
 
 @orders
@@ -318,6 +326,28 @@ def test_special_vals(spark: SparkSession, check_order: bool) -> None:
 
 
 @orders
+def test_special_vals_not_equal(check_order: bool) -> None:
+    nan_rows = [Row(id=1, amount=float("nan"))]
+    finite_rows = [Row(id=1, amount=5.0)]
+    with pytest.raises(errors.PySparkAssertionError) as nan_vs_finite:
+        assertDataFrameEqual(nan_rows, finite_rows, checkRowOrder=check_order)
+    assert nan_vs_finite.value.getCondition() == "DIFFERENT_ROWS"
+    assert nan_vs_finite.value.getMessageParameters() == rows_error(nan_rows, finite_rows, 1, 1)
+
+    finite = [Row(id=1, amount=5.0)]
+    infinite = [Row(id=1, amount=float("inf"))]
+    with pytest.raises(errors.PySparkAssertionError) as finite_vs_inf:
+        assertDataFrameEqual(finite, infinite, checkRowOrder=check_order)
+    assert finite_vs_inf.value.getMessageParameters() == rows_error(finite, infinite, 1, 1)
+
+    pos_inf = [Row(id=1, amount=float("inf"))]
+    neg_inf = [Row(id=1, amount=float("-inf"))]
+    with pytest.raises(errors.PySparkAssertionError) as inf_vs_neg_inf:
+        assertDataFrameEqual(pos_inf, neg_inf, checkRowOrder=check_order)
+    assert inf_vs_neg_inf.value.getMessageParameters() == rows_error(pos_inf, neg_inf, 1, 1)
+
+
+@orders
 def test_df_list_row_equal(spark: SparkSession, check_order: bool) -> None:
     df1 = spark.createDataFrame(data=[(1, 3000), (2, 1000)], schema=["id", "amount"])
     assertDataFrameEqual(df1, [Row(1, 3000), Row(2, 1000)], checkRowOrder=check_order)
@@ -385,6 +415,30 @@ def test_dataframe_ignore_column_type(spark: SparkSession) -> None:
     assertDataFrameEqual(df1, df2, ignoreColumnType=True)
 
 
+def test_ignore_column_type_bool_renders_lowercase(spark: SparkSession) -> None:
+    df_true = spark.createDataFrame([(True,)], ["flag"])
+    df_lower = spark.createDataFrame([("true",)], ["flag"])
+    df_upper = spark.createDataFrame([("True",)], ["flag"])
+    assertDataFrameEqual(df_true, df_lower, ignoreColumnType=True)
+    with pytest.raises(errors.PySparkAssertionError):
+        assertDataFrameEqual(df_true, df_upper, ignoreColumnType=True)
+
+
+def test_ignore_column_type_float_renders_like_cast(spark: SparkSession) -> None:
+    df_float = spark.createDataFrame([(1.0,)], ["v"])
+    df_str = spark.createDataFrame([("1.0",)], ["v"])
+    df_one = spark.createDataFrame([("1",)], ["v"])
+    assertDataFrameEqual(df_float, df_str, ignoreColumnType=True)
+    with pytest.raises(errors.PySparkAssertionError):
+        assertDataFrameEqual(df_float, df_one, ignoreColumnType=True)
+    assertDataFrameEqual(
+        spark.createDataFrame([(1e16,)], ["v"]), spark.createDataFrame([("1.0E16",)], ["v"]), ignoreColumnType=True
+    )
+    assertDataFrameEqual(
+        spark.createDataFrame([(1.5e-07,)], ["v"]), spark.createDataFrame([("1.5E-7",)], ["v"]), ignoreColumnType=True
+    )
+
+
 def test_dataframe_max_errors(spark: SparkSession) -> None:
     df1 = spark.createDataFrame([(1, "a"), (2, "b"), (3, "c"), (4, "d")], ["id", "value"])
     df2 = spark.createDataFrame([(1, "a"), (2, "z"), (3, "x"), (4, "y")], ["id", "value"])
@@ -434,7 +488,9 @@ def test_assert_unequal_pandas_df() -> None:
     with pytest.raises(errors.PySparkAssertionError) as pe:
         assertDataFrameEqual(df1, df2, checkRowOrder=False)
     assert pe.value.getCondition() == "DIFFERENT_PANDAS_DATAFRAME"
-    assert set(pe.value.getMessageParameters()) == {"left", "left_dtype", "right", "right_dtype"}
+    pandas_params = pe.value.getMessageParameters()
+    assert pandas_params is not None
+    assert set(pandas_params) == {"left", "left_dtype", "right", "right_dtype"}
 
 
 def test_capture_parse_exception(spark: SparkSession) -> None:
@@ -457,6 +513,8 @@ def test_divide_by_zero_accessors(spark: SparkSession) -> None:
     assert e.getMessageParameters() == {"config": '"spark.sql.ansi.enabled"'}
     assert e.getMessage() == str(e)
     assert "[DIVIDE_BY_ZERO]" in e.getMessage()
+    # Divergence from Spark 4.2: the engine attaches no query context to
+    # execution errors, so this is [] here (Spark would carry the failed node).
     assert e.getQueryContext() == []
 
 
@@ -491,3 +549,114 @@ def test_get_error_class_is_deprecated(spark: SparkSession) -> None:
     e = raised.value
     with pytest.warns(FutureWarning, match="getCondition"):
         assert e.getErrorClass() == e.getCondition()
+
+
+def test_query_context_accessors() -> None:
+    sql_ctx = errors.SqlQueryContext(
+        fragment="a", start=7, stop=7, objectType="TABLE", objectName="t", callSite="site", summary="sum"
+    )
+    assert sql_ctx.contextType() == QueryContextType.SQL
+    assert sql_ctx.fragment() == "a"
+    assert sql_ctx.startIndex() == 7
+    assert sql_ctx.stopIndex() == 7
+    assert sql_ctx.objectType() == "TABLE"
+    assert sql_ctx.objectName() == "t"
+    assert sql_ctx.callSite() == "site"
+    assert sql_ctx.summary() == "sum"
+
+    df_ctx = errors.DataFrameQueryContext(callSite="site", summary="sum")
+    assert df_ctx.contextType() == QueryContextType.DataFrame
+    assert df_ctx.objectType() == ""
+    assert df_ctx.objectName() == ""
+    assert df_ctx.startIndex() == 0
+    assert df_ctx.stopIndex() == 0
+    assert df_ctx.fragment() == ""
+    assert df_ctx.callSite() == "site"
+    assert df_ctx.summary() == "sum"
+
+
+def test_collection_type_simple_strings() -> None:
+    assert T.ArrayType(T.DoubleType(), True).simpleString() == "array<double>"
+    assert T.MapType(T.StringType(), T.IntegerType()).simpleString() == "map<string,int>"
+
+
+def test_create_dataframe_rejects_bad_shapes(spark: SparkSession) -> None:
+    with pytest.raises(errors.PySparkValueError, match="expected 2"):
+        spark.createDataFrame([(1, 2, 3)], ["a", "b"])
+    with pytest.raises(errors.PySparkValueError, match="expected 2"):
+        spark.createDataFrame([(1,)], ["a", "b"])
+    with pytest.raises(errors.PySparkValueError, match="can not infer schema"):
+        spark.createDataFrame([], None)
+    with pytest.raises(errors.PySparkTypeError):
+        spark.createDataFrame([(1,)], schema=123)
+    with pytest.raises(errors.PySparkTypeError):
+        spark.createDataFrame([(1,)], schema=[1])
+    with pytest.raises(errors.PySparkTypeError):
+        spark.createDataFrame([1], schema=["a"])
+    with pytest.raises(errors.PySparkNotImplementedError):
+        spark.createDataFrame([(1,)], schema="a int")
+    with pytest.raises(errors.PySparkNotImplementedError):
+        spark.createDataFrame({"a": 1})
+    with pytest.raises(errors.PySparkNotImplementedError):
+        spark.createDataFrame(
+            [(1,)],
+            T.StructType([T.StructField("a", T.ArrayType(T.IntegerType()), True)]),
+        )
+
+
+def test_create_dataframe_dict_missing_is_null(spark: SparkSession) -> None:
+    df = spark.createDataFrame([{"a": 1}, {"b": 2}], ["a", "b"])
+    assert df.columns == ["a", "b"]
+    assert df.collect() == [Row(a=1, b=None), Row(a=None, b=2)]
+
+
+def test_create_dataframe_infers_named_and_positional(spark: SparkSession) -> None:
+    named = spark.createDataFrame([Row(a=1, b="x"), Row(a=2, b="y")])
+    assert named.columns == ["a", "b"]
+    by_dict = spark.createDataFrame([{"a": 1}, {"a": 2}])
+    assert by_dict.columns == ["a"]
+    positional = spark.createDataFrame([(1, 2)])
+    assert positional.columns == ["_1", "_2"]
+
+
+def test_create_dataframe_infers_timestamp_type(spark: SparkSession) -> None:
+    from datetime import datetime
+
+    df = spark.createDataFrame([(datetime(2024, 1, 2, 3, 4, 5),)], ["ts"])
+    assert df.dtypes == [("ts", "timestamp")]
+    assert df.collect() == [Row(ts=datetime(2024, 1, 2, 3, 4, 5))]
+    ntz = spark.createDataFrame(
+        [(datetime(2024, 1, 2, 3, 4, 5),)],
+        T.StructType([T.StructField("ts", T.TimestampNTZType(), True)]),
+    )
+    assert ntz.dtypes == [("ts", "timestamp_ntz")]
+    explicit = spark.createDataFrame(
+        [(datetime(2024, 1, 2, 3, 4, 5),)],
+        T.StructType([T.StructField("ts", T.TimestampType(), True)]),
+    )
+    assert explicit.dtypes == [("ts", "timestamp")]
+
+
+def test_schema_ignores_order_and_names(spark: SparkSession) -> None:
+    left = T.StructType([T.StructField("b", T.IntegerType(), True), T.StructField("a", T.StringType(), True)])
+    right = T.StructType([T.StructField("a", T.StringType(), True), T.StructField("b", T.IntegerType(), True)])
+    with pytest.raises(errors.PySparkAssertionError):
+        assertSchemaEqual(left, right)
+    assertSchemaEqual(left, right, ignoreColumnOrder=True)
+    upper = T.StructType([T.StructField("X", T.IntegerType(), True)])
+    lower = T.StructType([T.StructField("y", T.IntegerType(), True)])
+    with pytest.raises(errors.PySparkAssertionError):
+        assertSchemaEqual(upper, lower, ignoreColumnName=False)
+    assertSchemaEqual(upper, lower, ignoreColumnName=True)
+    with pytest.raises(errors.PySparkAssertionError):
+        assertSchemaEqual(
+            upper,
+            T.StructType([T.StructField("y", T.IntegerType(), True), T.StructField("z", T.IntegerType(), True)]),
+            ignoreColumnName=True,
+        )
+    with pytest.raises(errors.PySparkTypeError):
+        assertSchemaEqual(left, "not a schema")
+    df_wide = spark.createDataFrame([(1, 2)], ["a", "b"])
+    df_narrow = spark.createDataFrame([(1,)], ["a"])
+    with pytest.raises(errors.PySparkAssertionError):
+        assertDataFrameEqual(df_wide, df_narrow, ignoreColumnType=True)
