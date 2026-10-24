@@ -170,8 +170,16 @@ fn agrees_with_spark_on_the_type_string_fixture() {
     for case in doc["ddl"].as_array().unwrap() {
         let ddl = case["ddl"].as_str().unwrap();
         if ddl.to_ascii_lowercase().contains(" collate ") {
-            // Collated string types arrive with `COLLATE` (P2-T075b).
-            assert!(parse_data_type(ddl, &d).is_err(), "{ddl}");
+            // Collated string types parse (their `COLLATE` is DDL syntax)
+            // but do not resolve yet: `krishiv-types` rejects them as
+            // unsupported.
+            let t = parse_data_type(ddl, &d).unwrap_or_else(|e| panic!("{ddl}: {}", e.error));
+            let e = t.to_data_type().unwrap_err();
+            assert_eq!(
+                e.error_class().name(),
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "{ddl}"
+            );
             continue;
         }
         let ours = parse_data_type(ddl, &d);
@@ -349,21 +357,36 @@ fn post_parse_checks_raise_spark_classes() {
 
 /// A statement of many `::` complex casts with a syntax error at its end is
 /// retried a bounded number of times (the bare-type retry in `run`), and
-/// its error is the one the same statement gets with few casts.
+/// its error is the one the same statement gets with few casts. The work is
+/// counted in parse attempts, so the test does not depend on machine load.
 #[test]
 fn many_complex_casts_fail_in_bounded_time() {
+    use crate::parser::PARSERS;
     let options = ParserOptions::default();
     let statement = |casts: usize| {
         let items: Vec<String> = (0..casts).map(|i| format!("c{i}::array<int>")).collect();
         format!("SELECT {} FROM t WHERE x +", items.join(", "))
     };
-    let few = parse_statement(&statement(2), &options).unwrap_err();
-    let start = std::time::Instant::now();
-    let many = parse_statement(&statement(20_000), &options).unwrap_err();
-    // Generous: the cap makes this a handful of parses; the uncapped retry
-    // loop took minutes at this size.
-    assert!(start.elapsed().as_secs() < 30, "{:?}", start.elapsed());
-    assert_eq!(many.error.to_string(), few.error.to_string());
+    let attempts = |casts: usize| {
+        PARSERS.set(0);
+        let error = parse_statement(&statement(casts), &options).unwrap_err();
+        (PARSERS.get(), error.error.to_string())
+    };
+    let (few, few_error) = attempts(2);
+    // Spark 4.2.0's error for the two-cast statement.
+    assert!(
+        few_error.starts_with("[PARSE_SYNTAX_ERROR] Syntax error at or near end of input."),
+        "{few_error}"
+    );
+    let (many, many_error) = attempts(500);
+    // Past the cap of 16 retried casts, more casts add no attempts: the
+    // uncapped retry made one attempt per cast.
+    assert_eq!(attempts(100).0, many, "attempts grow with the casts");
+    assert!(
+        many <= few + 16,
+        "{many} attempts for 500 casts, {few} for 2"
+    );
+    assert_eq!(many_error, few_error);
     // The retry still finds the bare reading when a cast needs it.
     assert!(parse_statement("SELECT x::array<int> > y", &options).is_ok());
 }

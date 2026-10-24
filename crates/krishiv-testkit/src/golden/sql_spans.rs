@@ -10,7 +10,7 @@
 //! differential check that the same tokens with other whitespace and
 //! comments parse to an `==` tree.
 
-use krishiv_sql::ast::{ExprKind, Query, SetExprKind};
+use krishiv_sql::ast::{ExprKind, Query, SetExprKind, Span, Statement};
 use krishiv_sql::lexer::tokenize;
 use krishiv_sql::{ParserOptions, parse_query};
 
@@ -113,10 +113,33 @@ fn reparsed(text: &str, options: &ParserOptions) -> [Option<String>; 2] {
 /// # Errors
 /// A description of the first span that is wrong.
 pub fn check_spans(sql: &str, q: &Query, options: &ParserOptions) -> Result<(), String> {
+    check_tree(sql, &format!("{q:#?}"), q.span, options, "query")
+}
+
+/// Checks the spans of `s`, parsed from `sql` with `options`: the same
+/// checks as [`check_spans`], for a whole statement. Expressions inside
+/// the statement re-parse on their own as for queries.
+///
+/// # Errors
+/// A description of the first span that is wrong.
+pub fn check_statement_spans(
+    sql: &str,
+    s: &Statement,
+    options: &ParserOptions,
+) -> Result<(), String> {
+    check_tree(sql, &format!("{s:#?}"), s.span(), options, "statement")
+}
+
+fn check_tree(
+    sql: &str,
+    debug: &str,
+    root: Span,
+    options: &ParserOptions,
+    what: &str,
+) -> Result<(), String> {
     let tokens = tokenize(sql);
     let starts: Vec<usize> = tokens.iter().map(|t| t.span.start).collect();
     let ends: Vec<usize> = tokens.iter().map(|t| t.span.end).collect();
-    let debug = format!("{q:#?}");
     let lines: Vec<&str> = debug.lines().collect();
     let mut stack = vec![Frame {
         name: "root".into(),
@@ -184,10 +207,10 @@ pub fn check_spans(sql: &str, q: &Query, options: &ParserOptions) -> Result<(), 
         }
     }
     let first = tokens.iter().find(|t| !t.kind.is_trivia());
-    if first.map(|t| t.span.start) != Some(q.span.start) || !ends.contains(&q.span.end) {
+    if first.map(|t| t.span.start) != Some(root.start) || !ends.contains(&root.end) {
         return Err(format!(
-            "query span {}..{} does not start at the first token",
-            q.span.start, q.span.end
+            "{what} span {}..{} does not start at the first token",
+            root.start, root.end
         ));
     }
     Ok(())
