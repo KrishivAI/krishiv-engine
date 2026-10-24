@@ -365,6 +365,11 @@ fn many_complex_casts_fail_in_bounded_time() {
         (PARSERS.get(), error.error.to_string())
     };
     let (few, few_error) = attempts(2);
+    // Spark 4.2.0's error for the two-cast statement.
+    assert!(
+        few_error.starts_with("[PARSE_SYNTAX_ERROR] Syntax error at or near end of input."),
+        "{few_error}"
+    );
     let (many, many_error) = attempts(500);
     // Past the cap of 16 retried casts, more casts add no attempts: the
     // uncapped retry made one attempt per cast.

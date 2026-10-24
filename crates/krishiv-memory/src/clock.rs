@@ -369,7 +369,14 @@ mod tests {
             std::thread::sleep(last.saturating_duration_since(Instant::now()));
         }
         drop(gate);
-        let woken: Vec<(u64, Instant)> = rx.iter().take(3).collect();
+        // Bounded, so a sleep the timer never wakes fails the test instead of
+        // hanging it (each waker holds a sender, so the channel stays open).
+        let woken: Vec<(u64, Instant)> = (0..3)
+            .map(|_| {
+                rx.recv_timeout(Duration::from_secs(60))
+                    .expect("a sleep was never woken")
+            })
+            .collect();
         assert_eq!(woken.iter().map(|w| w.0).collect::<Vec<_>>(), [10, 30, 60]);
         for (ms, at) in woken {
             assert!(
