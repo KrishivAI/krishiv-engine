@@ -1931,7 +1931,7 @@ fn try_arithmetic_casts_its_arguments_in_try_mode() {
 /// Typed datetime literals resolve in the analyzer with the session zone.
 #[test]
 fn typed_literals_resolve_with_the_session_zone() {
-    use crate::{ExprNode, LogicalPlan, Plan, TypedLiteralKind};
+    use crate::{ExprNode, Literal, LogicalPlan, Plan, PlanNode, ResolvedExpr, TypedLiteralKind};
     let project = |kind: TypedLiteralKind, value: &str, conf: ResolutionConf| {
         let expr = Expr::new(ExprNode::TypedLiteral {
             kind,
@@ -1944,6 +1944,21 @@ fn typed_literals_resolve_with_the_session_zone() {
         let plan = Plan::try_new(plan).unwrap();
         let ctx = context(MemoryCatalog::new("spark_catalog"), conf);
         block_on(DefaultAnalyzer.analyze(&plan, &ctx))
+    };
+    // The instant a one-column project holds, unwrapping its alias.
+    let micros_of = |plan: &LogicalPlan| {
+        let PlanNode::Project { exprs, .. } = &plan.node else {
+            panic!("not a project: {plan}");
+        };
+        let inner = match &exprs[0].node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
+            ExprNode::Literal(_) => &exprs[0],
+            other => panic!("not a literal: {other:?}"),
+        };
+        match &inner.node {
+            ExprNode::Literal(Literal::Timestamp(v)) => *v,
+            other => panic!("not a timestamp: {other:?}"),
+        }
     };
     let utc = ResolutionConf {
         session_zone: Some(0),
@@ -1977,13 +1992,13 @@ fn typed_literals_resolve_with_the_session_zone() {
     )
     .unwrap();
     assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
-    // The session zone moves wall-clock instants; names render in it.
+    // The session zone moves wall-clock instants (`+05:30` is 04:30 UTC):
+    // Spark 4.2 gives 1_704_103_200_000_000 µs in UTC and
+    // 1_704_083_400_000_000 µs in +05:30.
     let utc_plan = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", utc).unwrap();
     let plus_plan = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", plus).unwrap();
-    assert_ne!(
-        utc_plan.plan.root().to_string(),
-        plus_plan.plan.root().to_string()
-    );
+    assert_eq!(micros_of(utc_plan.plan.root()), 1_704_103_200_000_000);
+    assert_eq!(micros_of(plus_plan.plan.root()), 1_704_083_400_000_000);
     let a = project(
         TypedLiteralKind::Timestamp,
         "2024-01-01 10:00:00+00:00",
@@ -2001,6 +2016,7 @@ fn typed_literals_resolve_with_the_session_zone() {
         (TypedLiteralKind::TimestampNtz, "10:00"),
         (TypedLiteralKind::Date, "2020-02-30"),
         (TypedLiteralKind::Date, "not-a-date"),
+        (TypedLiteralKind::Date, "10:00"),
     ] {
         let e = project(kind, value, utc).unwrap_err();
         assert_eq!(

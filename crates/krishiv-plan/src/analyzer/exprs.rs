@@ -324,7 +324,8 @@ fn typed_literal(
     // A bare time of day is valid only for an instant type, and needs the
     // clock there too.
     if shape == TimestampText::TimeOnly {
-        let without_zone = kind == TypedLiteralKind::TimestampNtz
+        let without_zone = kind == TypedLiteralKind::Date
+            || kind == TypedLiteralKind::TimestampNtz
             || (kind == TypedLiteralKind::Timestamp && conf.timestamp_ntz);
         if without_zone {
             return Err(invalid(type_name));

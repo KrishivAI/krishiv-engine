@@ -20,8 +20,8 @@ use krishiv_plan::analyzer::{
     ResolutionConf, TableColumn,
 };
 use krishiv_plan::{
-    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, LogicalPlan, PlanNode,
-    ResolvedExpr, SourceId,
+    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, Literal, LogicalPlan,
+    PlanNode, ResolvedExpr, SourceId,
 };
 use krishiv_sql::{ParserOptions, parse_and_lower, redact_sql};
 use serde_json::Value;
@@ -562,7 +562,9 @@ fn typed_timestamp_literals_resolve_like_spark() {
     // ... unless the value names a zone, which stays an instant.
     let a = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'", true, utc).unwrap();
     assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
-    // The session zone moves instants without a zone (`+05:30` is 04:30 UTC).
+    // The session zone moves instants without a zone (`+05:30` is 04:30 UTC):
+    // Spark 4.2 gives 1_704_103_200_000_000 µs in UTC and
+    // 1_704_083_400_000_000 µs in +05:30.
     let utc_plan = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00'", false, utc).unwrap();
     let plus_plan = analyze_with(
         "SELECT TIMESTAMP '2024-01-01 10:00:00'",
@@ -570,10 +572,22 @@ fn typed_timestamp_literals_resolve_like_spark() {
         Some(19_800),
     )
     .unwrap();
-    assert_ne!(
-        utc_plan.plan.root().to_string(),
-        plus_plan.plan.root().to_string()
-    );
+    let micros_of = |plan: &LogicalPlan| {
+        let PlanNode::Project { exprs, .. } = &plan.node else {
+            panic!("not a project: {plan}");
+        };
+        let inner = match &exprs[0].node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
+            ExprNode::Literal(_) => &exprs[0],
+            other => panic!("not a literal: {other:?}"),
+        };
+        match &inner.node {
+            ExprNode::Literal(Literal::Timestamp(v)) => *v,
+            other => panic!("not a timestamp: {other:?}"),
+        }
+    };
+    assert_eq!(micros_of(utc_plan.plan.root()), 1_704_103_200_000_000);
+    assert_eq!(micros_of(plus_plan.plan.root()), 1_704_083_400_000_000);
     // `TIMESTAMP_LTZ` and `TIMESTAMP_NTZ` keep their types.
     let a = analyze_with("SELECT TIMESTAMP_LTZ '2024-01-01 10:00:00'", true, utc).unwrap();
     assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
@@ -614,6 +628,7 @@ fn typed_timestamp_literals_resolve_like_spark() {
         "SELECT TIMESTAMP '2024-13-01 10:00:00'",
         "SELECT TIMESTAMP_NTZ '10:00'",
         "SELECT DATE '2020-02-30'",
+        "SELECT DATE '10:00'",
     ] {
         let e = analyze_with(sql, false, utc).unwrap_err();
         assert_eq!(

@@ -59,9 +59,19 @@ impl FixedOffset {
             b'-' => (-1, &rest[1..]),
             _ => return None,
         };
-        let (h, m) = hm.split_once(':').unwrap_or((hm, "0"));
-        let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
-        ((0..=18).contains(&h) && (0..60).contains(&m)).then(|| Self(sign * (h * 3600 + m * 60)))
+        let (h_str, m_str) = hm.split_once(':').unwrap_or((hm, "0"));
+        // `i32::from_str` accepts a leading `+`/`-`, so `++5` or
+        // `+05:+30` would parse; require 1-2 ASCII digits per field.
+        if !(1..=2).contains(&h_str.len()) || !(1..=2).contains(&m_str.len()) {
+            return None;
+        }
+        if !h_str.bytes().all(|b| b.is_ascii_digit()) || !m_str.bytes().all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        let (h, m): (i32, i32) = (h_str.parse().ok()?, m_str.parse().ok()?);
+        let total = h * 3600 + m * 60;
+        (h <= 18 && m < 60 && total <= 18 * 3600).then(|| Self(sign * total))
     }
 }
 
@@ -180,6 +190,7 @@ mod tests {
             ("UTC-08:00", Some(-28_800)),
             ("GMT+1", Some(3600)),
             ("-18:00", Some(-64_800)),
+            ("+18:00", Some(64_800)),
         ] {
             assert_eq!(FixedOffset::parse(zone), offset.map(FixedOffset), "{zone}");
         }
@@ -192,6 +203,13 @@ mod tests {
             "+05:60",
             "+ab",
             "UTC*1",
+            "++5",
+            "+05:+30",
+            "+18:30",
+            "+18:01",
+            "-18:30",
+            "+5:30:00",
+            "+",
         ] {
             assert_eq!(FixedOffset::parse(zone), None, "{zone}");
         }
