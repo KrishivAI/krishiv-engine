@@ -1029,6 +1029,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     }
                 }
             }
+            ExprNode::TypedLiteral { kind, value } => {
+                self.u8(13);
+                self.u8(match kind {
+                    crate::TypedLiteralKind::Date => 1,
+                    crate::TypedLiteralKind::Timestamp => 2,
+                    crate::TypedLiteralKind::TimestampNtz => 3,
+                    crate::TypedLiteralKind::TimestampLtz => 4,
+                });
+                self.str(value);
+            }
         }
     }
 

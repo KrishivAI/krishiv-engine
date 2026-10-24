@@ -42,7 +42,9 @@ mod validate;
 
 pub use error::ParseError;
 pub use frontend::Frontend;
-pub use lower::{lower, parse_and_lower};
+pub use lower::{
+    lower, lower_expression, lower_select_item, parse_and_lower, parse_and_lower_named_expression,
+};
 pub use redact::redact_sql;
 
 /// The deepest tree the parser builds, counted in nested expressions,
@@ -120,8 +122,9 @@ pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, Par
     parser::parse_query(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
-/// Parses one statement, optionally followed by `;`: a query, or
-/// `EXPLAIN [EXTENDED | FORMATTED | CODEGEN | COST]` of a statement.
+/// Parses one statement, optionally followed by `;`: a query, `SET`,
+/// `RESET`, `CREATE TEMPORARY VIEW`, `DROP VIEW`, or `EXPLAIN
+/// [EXTENDED | FORMATTED | CODEGEN | COST]` of a statement.
 ///
 /// ```
 /// use krishiv_sql::ast::{ExplainMode, Statement};
@@ -165,6 +168,38 @@ pub fn parse_multipart_identifier(
     options: &ParserOptions,
 ) -> Result<ast::ObjectName, ParseError> {
     parser::parse_multipart_identifier(sql, *options).map_err(|e| e.redacted_in(sql))
+}
+
+/// Parses one named expression (`namedExpression`), as Spark's
+/// `CatalystSqlParser.parseExpression` does for `F.expr`,
+/// `df.selectExpr("...")` (once per argument string) and
+/// `df.filter("...")`: one expression with an optional alias, then the end
+/// of the input. The expression grammar is that of [`parse_query`] (spans,
+/// the [`MAX_DEPTH`] recursion limit and error classes); a statement or
+/// trailing tokens are a `PARSE_SYNTAX_ERROR`, as in Spark.
+///
+/// ```
+/// use krishiv_sql::{ParserOptions, parse_named_expression};
+///
+/// let d = ParserOptions::default();
+/// let item = parse_named_expression("a AS b", &d).unwrap();
+/// assert!(item.alias.is_some());
+/// let trailing = parse_named_expression("a, b", &d).unwrap_err();
+/// assert_eq!(
+///     trailing.error.to_string(),
+///     "[PARSE_SYNTAX_ERROR] Syntax error at or near ','. SQLSTATE: 42601"
+/// );
+/// ```
+///
+/// # Errors
+/// The syntax errors of [`parse_query`] (`PARSE_EMPTY_STATEMENT` for an
+/// empty string), and the errors Spark raises after parsing (invalid
+/// literals and types, ...) for the expression it sits in.
+pub fn parse_named_expression(
+    sql: &str,
+    options: &ParserOptions,
+) -> Result<ast::SelectItem, ParseError> {
+    parser::parse_named_expression(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
 /// Parses a data type string, as Spark's `CatalystSqlParser.parseDataType`

@@ -669,10 +669,45 @@ pub(super) fn inputs(
             operator_types(builtin, args, call.ansi(), call.decimal_loss()).map(|t| t.casts)
         }
         _ => match inputs.expected(call) {
-            Some(types) => declared(&types, args),
+            Some(types) => {
+                let casts = declared(&types, args)?;
+                legacy_string_counts(&types, args, call)?;
+                Ok(casts)
+            }
             None => Ok(vec![None; args.len()]),
         },
     }
+}
+
+/// Without ANSI, a string takes the place of a day count (`date_add(d,
+/// '1')`, the collection `INT`, `SMALLINT`, `TINYINT`) only when it is
+/// foldable: `date_add(d, s)` over a column is `UNEXPECTED_INPUT_TYPE`
+/// (checked against a Spark 4.2 run, with `'1' || '2'` and `upper('1')`
+/// accepted).
+fn legacy_string_counts(
+    types: &[InputType],
+    args: &[Arg<'_>],
+    call: &CallTypes<'_>,
+) -> Result<(), Mismatch> {
+    if call.ansi() {
+        return Ok(());
+    }
+    for (i, a) in args.iter().enumerate() {
+        let want = types.get(i).or(types.last()).unwrap_or(&InputType::Any);
+        let days = matches!(
+            want,
+            InputType::OneOf(t) if t == &[DataType::Integer, DataType::Short, DataType::Byte]
+        );
+        if days && a.ty == Some(&DataType::String) && call.constant(i).is_none() {
+            return Err(Mismatch::Unexpected {
+                arg: i,
+                param: i,
+                ty: a.ty.cloned(),
+                required: want.sql(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The casts of `args` to the type all of `meet` (which includes `args`)

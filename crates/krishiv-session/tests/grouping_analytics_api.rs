@@ -372,14 +372,13 @@ fn grouping_reads_the_top_bit_of_a_64_expression_id() -> R {
         keys.join(", ")
     );
     let got = rows(&s, &query)?;
-    assert!(
-        got.iter().any(|r| r == "1\t1"),
-        "the grand total (id -1) reads both bits as 1, got {got:?}"
-    );
-    assert!(
-        !got.iter().any(|r| r.contains('-')),
-        "no negative bits, got {got:?}"
-    );
+    // 65 rollup sets over `a`: the full set holds both expressions
+    // (`0\t0`, one row per distinct `a`), sets 63..1 hold the first but
+    // not the last (`0\t1`), and the empty set holds neither (`1\t1`).
+    let mut expected = vec!["0\t0".to_owned(), "0\t0".to_owned()];
+    expected.extend(std::iter::repeat_n("0\t1".to_owned(), 126));
+    expected.push("1\t1".to_owned());
+    assert_eq!(got, expected);
     Ok(())
 }
 
@@ -410,6 +409,30 @@ fn grouping_calls_inside_aggregate_arguments_resolve() -> R {
     assert_eq!(
         rows(&s, "SELECT sum(grouping(a)) FROM t GROUP BY ROLLUP(a)")?,
         sorted(&["0", "0", "3"])
+    );
+    Ok(())
+}
+
+#[test]
+fn grouping_retype_keeps_distinct_and_filter() -> R {
+    let s = session()?;
+    // `grouping(a)` resolves inside the aggregate and retypes it: `DISTINCT`
+    // stays, so the grand total sums one `1`, not three.
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT a, sum(DISTINCT grouping(a)) FROM t GROUP BY ROLLUP(a)"
+        )?,
+        sorted(&["1\t0", "2\t0", "NULL\t1"])
+    );
+    // `FILTER` stays too: the engine rejects filtered aggregates, so keeping
+    // the filter fails instead of silently summing to 60.
+    assert_eq!(
+        error_class(
+            &s,
+            "SELECT a, sum(v) FILTER (WHERE grouping(a) = 0) FROM t GROUP BY ROLLUP(a)"
+        )?,
+        ErrorClass::KrishivUnsupportedFeature
     );
     Ok(())
 }

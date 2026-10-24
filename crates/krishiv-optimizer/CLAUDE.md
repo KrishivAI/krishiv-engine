@@ -6,12 +6,29 @@
 ## Purpose
 Query optimizer: rule- and cost-based rewrites, including the IVM rewrite pass.
 
+## Key files
+Paths are relative to this crate.
+- `src/lib.rs` rule batches and the `optimize` entry point
+- `src/dag.rs` `dag::Rewriter`, the rewrite-once rule for shared subtrees
+- `src/fold.rs` constant folding; `src/pushdown.rs` predicate pushdown (below a window only on partition keys); `src/prune.rs` column pruning (removes unused window columns)
+- `src/project.rs` projection rules; `src/limit.rs` limit rules
+- `src/restrict.rs` subquery restriction rules
+- `src/join_order.rs` inner-join ordering; `src/stats.rs` `Statistics` it reads
+- `tests/it/rules.rs` per-rule snapshots; `tests/it/join_order.rs` ordering snapshots; `tests/it/support/eval.rs` reference interpreter
+
+## Extension points
+- New rule: a module in `src/`, added to a batch in `src/lib.rs`, with snapshot cases in `tests/it/rules.rs` and a differential check through `tests/it/support/eval.rs`.
+
 ## Invariants
 - Input and output are resolved plans with the same output attributes; the optimised plan is a fixed point.
 - A rule returns its input `Arc` when it changes nothing (that is how a batch detects its fixed point) and
   rewrites a shared subtree once (`dag::Rewriter`), subquery plans included; never copy a shared subtree.
 - Only deterministic predicates move; folding never changes what a query returns or raises (no overflow,
   no division, no time-zone-dependent cast; a raising call stays in the plan).
+- `SUM(x + c)` of a narrow integral column becomes `SUM(x) + c * COUNT(x)` (`sum_rewrite.rs`, one pass after the
+  rewrite batch) only where the type range proves no per-row overflow and `|x|, |c| <= 2^16`; floating point and
+  decimals are never rewritten. Conditions and the one residual assumption (fewer than 2^46 rows per aggregate)
+  are in the module docs; the executor differential test is `krishiv-exec` `tests/planner/sum_rewrite.rs`.
 - Join ordering re-plans each inner-join tree (through deterministic filters and column selections) from
   `Statistics`; it never adds a cross product, places each conjunct at the lowest join that has its inputs
   (subquery conjuncts as filters), and restores column order only for positional consumers. Inputs are
@@ -26,5 +43,5 @@ Query optimizer: rule- and cost-based rewrites, including the IVM rewrite pass.
 ## ADRs (in `../krishiv-internal/adr/`)
 0012, 0017, 0020
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-optimizer --no-tests=pass` · `cargo clippy -p krishiv-optimizer --all-targets -- -D warnings`

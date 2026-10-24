@@ -240,11 +240,14 @@ fn temporary_tables_are_listed_replaced_and_dropped() {
         class(s.register_batches("t", other, vec![batch])),
         ErrorClass::InternalError
     );
-    // A temporary view of anything but a read by path is not supported yet.
+    // A temporary view of a missing table fails with its error.
     let e = block_on(s.table("missing").create_or_replace_temp_view("v"));
     assert_eq!(class(e), ErrorClass::TableOrViewNotFound);
-    let e = block_on(session().table("people").create_or_replace_temp_view("v"));
-    assert_eq!(class(e), ErrorClass::KrishivUnsupportedFeature);
+    // A view over any DataFrame reads through its plan.
+    let s = session();
+    block_on(s.table("people").create_or_replace_temp_view("v")).unwrap();
+    assert_eq!(s.temp_table_names(), ["people", "v"]);
+    assert_eq!(block_on(s.table("v").count()).unwrap(), 3);
 }
 
 /// Writes a Parquet file with `id INT NOT NULL`.
@@ -344,6 +347,34 @@ fn file_views_keep_the_schema_they_were_created_with() {
     // A read by path lists the files again: it sees the new column.
     let read = s.read().parquet([root.as_str()]);
     assert_eq!(names(block_on(read.schema()).unwrap()), ["id", "name"]);
+}
+
+#[test]
+fn views_over_file_views_survive_replacement_and_removal() {
+    // A DataFrame view over a file-backed temporary view snapshots it:
+    // replacing or dropping the file view leaves the snapshot readable.
+    let dir = tempfile::tempdir().unwrap();
+    parquet_file(&dir.path().join("part-0.parquet"));
+    let root = dir.path().to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    block_on(
+        s.read()
+            .parquet([root.as_str()])
+            .create_or_replace_temp_view("fv"),
+    )
+    .unwrap();
+    block_on(s.table("fv").create_or_replace_temp_view("v")).unwrap();
+    let ids_of_v =
+        || ids(&block_on(block_on(s.sql("SELECT * FROM v")).unwrap().collect()).unwrap());
+    assert_eq!(ids_of_v(), [1, 2]);
+    // Replacing the file view with a memory table: the snapshot still
+    // reads the files.
+    let (schema, batch) = people();
+    s.register_batches("fv", schema, vec![batch]).unwrap();
+    assert_eq!(ids_of_v(), [1, 2]);
+    // So does dropping it.
+    assert!(s.drop_temp_view("fv"));
+    assert_eq!(ids_of_v(), [1, 2]);
 }
 
 #[test]
@@ -1126,4 +1157,106 @@ fn decimal_quotients_round_before_they_are_summed() {
         row(&s, "SELECT sum(sales / sq_ft) FROM warehouse_sales"),
         ["11694972e-6"]
     );
+}
+
+/// Typed datetime literals resolve in the analyzer with the session zone:
+/// the default session (no `spark.sql.session.timeZone`) reads plain
+/// `TIMESTAMP '...'` as UTC, and output names render in the session zone.
+#[test]
+fn typed_timestamp_literals_use_the_session_zone() {
+    use arrow_array::types::TimestampMicrosecondType;
+    // The default session works: `2024-01-01 10:00:00` is 10:00 UTC.
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "TIMESTAMP '2024-01-01 10:00:00'");
+    let batches = block_on(
+        block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(batches[0].num_rows(), 1);
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        1_704_103_200_000_000
+    );
+    // A non-UTC session zone moves instants without a zone, and names
+    // render in that zone, not in UTC.
+    let s = Session::builder()
+        .config("spark.sql.session.timeZone", "+05:30")
+        .build()
+        .unwrap();
+    let df = block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "TIMESTAMP '2024-01-01 10:00:00'");
+    let batches = block_on(
+        block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00'"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        1_704_083_400_000_000
+    );
+    // An explicit zone ignores the session zone for the value, but the
+    // name still renders in it: 10:00 UTC is 15:30 in +05:30.
+    let df = block_on(s.sql("SELECT TIMESTAMP '2024-01-01 10:00:00+00:00'")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "TIMESTAMP '2024-01-01 15:30:00'");
+}
+
+#[test]
+fn expression_strings_select_filter_and_resolve() {
+    use krishiv_session::functions::expr;
+    let s = session();
+    // `select_expr`: one expression per string, with aliases and `*`.
+    let df = s.table("people").select_expr(["id", "name AS n"]).unwrap();
+    assert_eq!(block_on(df.schema()).unwrap().field(1).name(), "n");
+    assert_eq!(
+        ids(&block_on(df.order_by(["id"]).collect()).unwrap()),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        block_on(s.table("people").select_expr(["*"]).unwrap().schema())
+            .unwrap()
+            .fields()
+            .len(),
+        2
+    );
+    // `filter_expr`: a string predicate.
+    let df = s.table("people").filter_expr("id > 1").unwrap();
+    assert_eq!(
+        ids(&block_on(df.order_by(["id"]).collect()).unwrap()),
+        [2, 3]
+    );
+    // `Session::expr` and `functions::expr` resolve against the frame.
+    let df = s.table("people").select([s.expr("id + 1").unwrap()]);
+    assert_eq!(
+        ids(&block_on(df.order_by(["id"]).collect()).unwrap()),
+        [2, 3, 4]
+    );
+    let df = s.table("people").select([expr("id + 1").unwrap()]);
+    assert_eq!(block_on(df.count()).unwrap(), 3);
+    // Parse errors surface with Spark's class.
+    assert_eq!(
+        class(s.table("people").select_expr(["id +"])),
+        ErrorClass::ParseSyntaxError
+    );
+    assert_eq!(
+        class(s.table("people").filter_expr("id +").map(drop)),
+        ErrorClass::ParseSyntaxError
+    );
+    assert_eq!(
+        class(s.expr("id +").map(drop)),
+        ErrorClass::ParseSyntaxError
+    );
+    assert_eq!(class(expr("id +").map(drop)), ErrorClass::ParseSyntaxError);
 }

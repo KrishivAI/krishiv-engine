@@ -213,7 +213,7 @@ async fn run_keys(
     keys.extend(window.order_by.iter().copied());
     keys.push(SortKey::asc(2));
     let sort = Arc::new(Sort::new(Arc::clone(&s), &keys, None)?);
-    let op = Arc::new(Window::new(Arc::clone(&s), window.clone(), true)?);
+    let op = Arc::new(Window::new(Arc::clone(&s), window.clone(), true, None)?);
     let plan: Arc<dyn ExecNode> = Arc::new(OperatorNode {
         input: Arc::new(BreakerNode {
             input: Arc::new(SourceNode(Batches::new(s, batches))),
@@ -526,11 +526,15 @@ fn decimal_rows(values: &[i128], p: u8) -> (SchemaRef, Batch) {
 }
 
 fn task(limit: usize) -> (Arc<TreePool>, TaskContext) {
+    task_with(limit, ExecConfig::default())
+}
+
+fn task_with(limit: usize, config: ExecConfig) -> (Arc<TreePool>, TaskContext) {
     let root = pool(limit);
     let q = QueryContext::new(
         QueryId(7),
         WorkloadClass::Batch,
-        ExecConfig::default(),
+        config,
         root.child("q", Some(limit)),
     );
     let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
@@ -580,7 +584,7 @@ fn decimal_window(function: AggregateFunction, frame: WindowFrame, p: u8, ansi: 
             name: "s".to_owned(),
         }],
     };
-    Window::new(s, plan, ansi).unwrap()
+    Window::new(s, plan, ansi, None).unwrap()
 }
 
 fn column_text(out: &[Batch], column: usize) -> Vec<String> {
@@ -726,7 +730,7 @@ async fn filters_and_ignore_nulls() {
             ),
         ],
     };
-    let op = Window::new(Arc::clone(&s), plan, true).unwrap();
+    let op = Window::new(Arc::clone(&s), plan, true, None).unwrap();
     let (_root, ctx) = task(1 << 30);
     let out = drive(&op, &ctx, &[Batch::new(b)]).unwrap();
     assert_eq!(column_text(&out, 3), ["null", "null", "20", "20"]);
@@ -747,7 +751,7 @@ async fn memory_is_reserved_before_a_batch_is_taken() {
         .map(|i| (Some(i % 7), Some(i), i, Some(i)))
         .collect();
     let window = plan(functions(), true);
-    let op = Window::new(schema(), window.clone(), true).unwrap();
+    let op = Window::new(schema(), window.clone(), true, None).unwrap();
     let (root, ctx) = task(64 << 10);
     let mut local = op.local_state(&ctx).unwrap();
     match op.execute(&batch(&rows), &mut local).unwrap() {
@@ -766,7 +770,7 @@ async fn memory_is_reserved_before_a_batch_is_taken() {
 
 #[tokio::test]
 async fn weights_other_than_one_are_refused() {
-    let op = Window::new(schema(), plan(functions(), true), true).unwrap();
+    let op = Window::new(schema(), plan(functions(), true), true, None).unwrap();
     let (_root, ctx) = task(1 << 30);
     let mut local = op.local_state(&ctx).unwrap();
     let rows: Vec<Row> = vec![(Some(1), Some(1), 0, Some(1))];
@@ -778,7 +782,7 @@ async fn weights_other_than_one_are_refused() {
 
 #[tokio::test]
 async fn empty_input_gives_no_rows() {
-    let op = Window::new(schema(), plan(functions(), false), true).unwrap();
+    let op = Window::new(schema(), plan(functions(), false), true, None).unwrap();
     let (_root, ctx) = task(1 << 30);
     let out = drive(&op, &ctx, &[batch(&[])]).unwrap();
     assert!(out.is_empty());
@@ -799,7 +803,11 @@ fn invalid_plans_are_rejected() {
         name: "x".to_owned(),
     };
     let rows = WindowFrame::running(FrameUnits::Rows);
-    let class = |p: WindowPlan| Window::new(schema(), p, true).unwrap_err().error_class();
+    let class = |p: WindowPlan| {
+        Window::new(schema(), p, true, None)
+            .unwrap_err()
+            .error_class()
+    };
     let internal = ErrorClass::InternalError;
     assert_eq!(
         class(window(f(WindowFunction::RowNumber, rows, None), vec![9])),
@@ -832,7 +840,7 @@ fn invalid_plans_are_rejected() {
         )),
         ErrorClass::KrishivUnsupportedFeature
     );
-    let op = Window::new(schema(), plan(functions(), true), true).unwrap();
+    let op = Window::new(schema(), plan(functions(), true), true, None).unwrap();
     assert!(format!("{op:?}").contains("Window"));
 }
 
@@ -919,7 +927,7 @@ async fn partitioned_windows_run_at_a_tight_limit() {
     // The flat estimate this replaces reserved 2 + 16 + 64 + 16 bytes per
     // row besides the input.
     assert!(batches.len() * per_batch * 98 > limit);
-    let op = Window::new(schema(), window, true).unwrap();
+    let op = Window::new(schema(), window, true, None).unwrap();
     let (root, ctx) = task(limit);
     let out = drive(&op, &ctx, &batches).unwrap();
     assert_eq!(out.iter().map(Batch::num_rows).sum::<usize>(), 40_000);
@@ -965,7 +973,7 @@ async fn string_results_share_the_input_buffers() {
             name: "m".to_owned(),
         }],
     };
-    let op = Window::new(Arc::clone(&s), plan, true).unwrap();
+    let op = Window::new(Arc::clone(&s), plan, true, None).unwrap();
     // A copy per row would need 10 MB more than the input.
     let (root, ctx) = task(input_bytes + input_bytes / 2);
     let out = drive(&op, &ctx, &[Batch::new(b)]).unwrap();
@@ -986,4 +994,721 @@ fn windows_require_their_partitioning() {
         plan(functions(), false).required_distribution(),
         RequiredDistribution::Single
     );
+}
+
+// Spilling the buffered rows (P2-T055 part 2).
+
+/// A spill directory of its own: the manager deletes what it wrote, and
+/// the guard the directory itself.
+struct SpillDir {
+    manager: Option<krishiv_memory::SpillManager>,
+    dir: std::path::PathBuf,
+}
+
+impl Drop for SpillDir {
+    fn drop(&mut self) {
+        drop(self.manager.take());
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn spill_scope() -> (SpillDir, krishiv_memory::SpillScope) {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("window-unit-{}-{n}", std::process::id()));
+    let manager = krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
+        dir: dir.clone(),
+        ..krishiv_memory::SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    (
+        SpillDir {
+            manager: Some(manager),
+            dir,
+        },
+        scope,
+    )
+}
+
+/// How [`drive_spilling`] spills.
+#[derive(Clone, Copy, Debug)]
+struct Spills {
+    /// The buffered rows spill after every this many batches (0: only when
+    /// the operator needs memory).
+    every: usize,
+    /// After the input, all but this many free bytes of the pool are taken,
+    /// so partitions that do not fit are evaluated from disk.
+    slack: Option<usize>,
+}
+
+/// Runs `op` over `input` directly as a driver does, with spills (see
+/// [`Spills`]); a request for memory in the flush phase is granted while
+/// the pool has it. Collects the output.
+async fn drive_spilling(
+    op: &Window,
+    ctx: &TaskContext,
+    limit: usize,
+    root: &TreePool,
+    input: &[Batch],
+    spills: Spills,
+) -> crate::Result<Vec<Batch>> {
+    let mut local = op.local_state(ctx)?;
+    let mut out = Vec::new();
+    for (k, b) in input.iter().enumerate() {
+        loop {
+            match op.execute(b, &mut local)? {
+                OperatorOutput::NeedMoreInput(o) => {
+                    out.extend(o);
+                    break;
+                }
+                OperatorOutput::HaveMoreOutput(o) => out.push(o),
+                OperatorOutput::NeedMemory { bytes } => {
+                    if op.spill(&mut local, bytes, ctx).await? == 0 {
+                        return Err(crate::error::internal("nothing spilled".to_owned()));
+                    }
+                }
+                OperatorOutput::Finished(_) => {
+                    return Err(crate::error::internal("unexpected Finished".to_owned()));
+                }
+            }
+        }
+        if spills.every > 0 && (k + 1) % spills.every == 0 {
+            op.spill(&mut local, 1, ctx).await?;
+        }
+    }
+    while let Some(b) = op.finish(&mut local)? {
+        out.push(b);
+    }
+    op.end_input(&mut local, ctx).await?;
+    let pool = Arc::clone(ctx.query().pool());
+    let mut hog = krishiv_memory::Reservation::new(Arc::clone(&pool), pool.register("hog", None));
+    if let Some(slack) = spills.slack {
+        take_all_but(&mut hog, limit.saturating_sub(root.reserved()), slack);
+    }
+    loop {
+        match op.flush(&mut local, ctx).await? {
+            crate::operator::FlushOutput::Batch(b) => out.push(b),
+            crate::operator::FlushOutput::Continue => {}
+            crate::operator::FlushOutput::Done => break,
+            crate::operator::FlushOutput::NeedMemory { bytes } => {
+                let mut r = ctx.consumer().reservation();
+                if r.try_grow(bytes).is_ok() {
+                    r.shrink_to_credit(bytes);
+                }
+            }
+        }
+    }
+    drop((hog, local));
+    ctx.consumer().consumer().release_credit();
+    Ok(out)
+}
+
+/// Grows `hog` by all the pool grants (trying from `free` bytes down),
+/// then gives back `slack`.
+fn take_all_but(hog: &mut krishiv_memory::Reservation, free: usize, slack: usize) {
+    let mut step = free;
+    while step > 0 {
+        if hog.try_grow(step).is_err() {
+            step /= 2;
+        }
+    }
+    hog.shrink(slack);
+}
+
+/// `drive_spilling` next to `drive` without a spill scope: the outputs
+/// must be equal, row for row and in order. Returns the spilling window's
+/// counters (spills, external partitions).
+async fn compare_spilling(
+    rows: &[Row],
+    split: usize,
+    window: &WindowPlan,
+    spills: Spills,
+) -> (u64, u64) {
+    let batches: Vec<Batch> = rows.chunks(split.max(1)).map(batch).collect();
+    let mut sorted = batches.clone();
+    // Sorted by partition, order and id, as the sort below a window gives.
+    let all: Vec<Row> = {
+        let mut v = rows.to_vec();
+        let p = |r: &Row| {
+            if window.partition_by.is_empty() {
+                None
+            } else {
+                r.0
+            }
+        };
+        v.sort_by_key(|r| {
+            (
+                p(r).map(|x| x + 1).unwrap_or(0),
+                r.1.map(|x| x + 1).unwrap_or(0),
+                r.2,
+            )
+        });
+        v
+    };
+    sorted.clear();
+    sorted.extend(all.chunks(split.max(1)).map(batch));
+    let plain = Window::new(schema(), window.clone(), true, None).unwrap();
+    let (_r, ctx) = task(1 << 30);
+    let want = outputs(
+        &drive(&plain, &ctx, &sorted).unwrap(),
+        window.functions.len(),
+    );
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), window.clone(), true, Some(scope)).unwrap();
+    let limit = 1 << 30;
+    // Batches of 4 rows: complete rows reach a batch while rows wait after
+    // a spill, and in the flush phase.
+    let config = ExecConfig {
+        batch_size: 4,
+        ..ExecConfig::default()
+    };
+    let (root, ctx) = task_with(limit, config);
+    let got = drive_spilling(&op, &ctx, limit, &root, &sorted, spills)
+        .await
+        .unwrap();
+    assert_eq!(outputs(&got, window.functions.len()), want, "{spills:?}");
+    drop((got, ctx));
+    assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+    (
+        op.counters
+            .spills
+            .load(std::sync::atomic::Ordering::Relaxed),
+        op.counters
+            .external
+            .load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+fn big_rows_strategy() -> impl Strategy<Value = Vec<Row>> {
+    let opt = |hi: i64| prop_oneof![1 => Just(None), 4 => (0..hi).prop_map(Some)];
+    prop::collection::vec((opt(4), opt(6), opt(100)), 0..240).prop_map(|v| {
+        v.into_iter()
+            .enumerate()
+            .map(|(i, (p, o, x))| (p, o, i64::try_from(i).unwrap(), x))
+            .collect()
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(48))]
+
+    /// With spills at any batch, and partitions read back in memory or
+    /// evaluated from disk, every function gives what it gives without a
+    /// spill, in the same order.
+    #[test]
+    fn spilled_windows_match_in_memory_ones(
+        rows in big_rows_strategy(),
+        split in 1_usize..12,
+        every in 0_usize..4,
+        slack in prop_oneof![Just(None), (0_usize..8192).prop_map(Some)],
+        partitioned in any::<bool>(),
+    ) {
+        let window = plan(functions(), partitioned);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let spills = Spills { every, slack };
+        let (spilled, _) = rt.block_on(compare_spilling(&rows, split, &window, spills));
+        prop_assert!(every == 0 || rows.len() < split.max(1) * every || spilled > 0);
+    }
+}
+
+/// A partition that does not fit in memory is copied to a file of its own
+/// and evaluated from there, with every function, partitioned or not.
+#[tokio::test]
+async fn a_partition_larger_than_memory_is_evaluated_from_disk() {
+    for partitioned in [false, true] {
+        let rows: Vec<Row> = (0..6_000)
+            .map(|i| {
+                // One large partition between two small ones.
+                let p = if i < 100 {
+                    0
+                } else if i < 5_900 {
+                    1
+                } else {
+                    2
+                };
+                (
+                    Some(p),
+                    (i % 7 != 0).then_some(i / 5),
+                    i,
+                    (i % 13 != 0).then_some(i % 17),
+                )
+            })
+            .collect();
+        let window = plan(functions(), partitioned);
+        // Room for evaluating a batch from disk, not for the partition.
+        let spills = Spills {
+            every: 1,
+            slack: Some(96 << 10),
+        };
+        let (spilled, external) = compare_spilling(&rows, 250, &window, spills).await;
+        assert!(spilled > 0);
+        assert!(external >= 1, "partitioned {partitioned}: {external}");
+    }
+}
+
+/// The ROWS and RANGE aggregates of strings, decimals and filtered rows
+/// from disk equal their in-memory values.
+#[tokio::test]
+async fn exact_and_string_frames_from_disk() {
+    use AggregateFunction::{Avg, Max, Min, Sum};
+    let (s, b) = decimal_rows(
+        &(0..3_000)
+            .map(|i| i128::from(i % 97) * 1_000_003)
+            .collect::<Vec<_>>(),
+        20,
+    );
+    let frames = [
+        WindowFrame::running(FrameUnits::Rows),
+        WindowFrame::running(FrameUnits::Range),
+        WindowFrame::whole(FrameUnits::Rows),
+    ];
+    let mut functions = Vec::new();
+    for (k, frame) in frames.iter().enumerate() {
+        for function in [Sum, Avg, Min, Max] {
+            functions.push(WindowFunctionPlan {
+                function: WindowFunction::Aggregate(AggregateExpr {
+                    function,
+                    args: vec![1],
+                    input: AggInput::Raw,
+                    arg_type: DataType::Decimal128(20, 0),
+                    name: "d".to_owned(),
+                }),
+                frame: *frame,
+                filter: None,
+                name: format!("d{k}{function:?}"),
+            });
+        }
+    }
+    let plan = WindowPlan {
+        partition_by: Vec::new(),
+        order_by: vec![SortKey::asc(0)],
+        functions,
+    };
+    let batches: Vec<Batch> = (0..b.num_rows())
+        .step_by(100)
+        .map(|i| Batch::new(b.data().slice(i, 100.min(b.num_rows() - i))))
+        .collect();
+    let plain = Window::new(Arc::clone(&s), plan.clone(), true, None).unwrap();
+    let (_r, ctx) = task(1 << 30);
+    let want = drive(&plain, &ctx, &batches).unwrap();
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(s, plan.clone(), true, Some(scope)).unwrap();
+    let limit = 1 << 30;
+    let (root, ctx) = task(limit);
+    let spills = Spills {
+        every: 1,
+        slack: Some(0),
+    };
+    let got = drive_spilling(&op, &ctx, limit, &root, &batches, spills)
+        .await
+        .unwrap();
+    assert!(
+        op.counters
+            .external
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0
+    );
+    for c in 2..2 + plan.functions.len() {
+        assert_eq!(column_text(&got, c), column_text(&want, c), "column {c}");
+    }
+}
+
+/// A spill whose write fails loses the rows it took: every later call
+/// fails with that error instead of returning a short result. The write
+/// fails with an I/O error (the scope's directory is gone), not a
+/// cancellation, so the stored error's class differs from the placeholder
+/// the spill holds while the blocking write runs.
+#[tokio::test]
+async fn a_failed_spill_fails_every_later_call() {
+    let rows: Vec<Row> = (0..400)
+        .map(|i| (Some(i / 300), Some(i), i, Some(i)))
+        .collect();
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), plan(functions(), true), true, Some(scope.clone())).unwrap();
+    let (_root, ctx) = task(1 << 30);
+    let mut local = op.local_state(&ctx).unwrap();
+    assert!(matches!(
+        op.execute(&batch(&rows), &mut local).unwrap(),
+        OperatorOutput::NeedMoreInput(_)
+    ));
+    std::fs::remove_dir_all(scope.dir()).unwrap();
+    let e = op.spill(&mut local, 1, &ctx).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillIoError, "{e}");
+    let class = e.error_class();
+    let again = op.execute(&batch(&rows[..1]), &mut local).unwrap_err();
+    assert_eq!(again.error_class(), class, "{again}");
+    assert_eq!(op.finish(&mut local).unwrap_err().error_class(), class);
+    assert_eq!(
+        op.end_input(&mut local, &ctx)
+            .await
+            .unwrap_err()
+            .error_class(),
+        class
+    );
+    assert_eq!(
+        op.flush(&mut local, &ctx).await.unwrap_err().error_class(),
+        class
+    );
+}
+
+/// A spill dropped mid-write (its query cancelled) leaves the window
+/// failed with `OPERATION_CANCELED`; a refused scratch reservation spills
+/// nothing and loses nothing.
+#[tokio::test]
+async fn a_dropped_spill_leaves_the_window_cancelled() {
+    use futures::FutureExt;
+    let rows: Vec<Row> = (0..400)
+        .map(|i| (Some(i / 300), Some(i), i, Some(i)))
+        .collect();
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), plan(functions(), true), true, Some(scope)).unwrap();
+    let (_root, ctx) = task(1 << 30);
+    let mut local = op.local_state(&ctx).unwrap();
+    op.execute(&batch(&rows), &mut local).unwrap();
+    // Polled once: it waits for its blocking write, and is dropped.
+    assert!(op.spill(&mut local, 1, &ctx).now_or_never().is_none());
+    let e = op.finish(&mut local).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::OperationCanceled, "{e}");
+
+    // A pool without room for the writer's scratch: the spill declines.
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), plan(functions(), true), true, Some(scope)).unwrap();
+    let limit = 256 << 10;
+    let (root, ctx) = task(limit);
+    let mut local = op.local_state(&ctx).unwrap();
+    op.execute(&batch(&rows[..10]), &mut local).unwrap();
+    let pool = Arc::clone(ctx.query().pool());
+    let mut hog = krishiv_memory::Reservation::new(Arc::clone(&pool), pool.register("hog", None));
+    take_all_but(&mut hog, limit - root.reserved(), 0);
+    assert_eq!(op.spill(&mut local, 1, &ctx).await.unwrap(), 0);
+    drop(hog);
+    let out: usize = std::iter::from_fn(|| op.finish(&mut local).unwrap())
+        .map(|b| b.num_rows())
+        .sum();
+    assert_eq!(out, 10);
+}
+
+/// A failed read in the flush phase fails it and every later step. The
+/// read fails with an I/O error (the spill files are gone), not a
+/// cancellation, so the stored error's class differs from the placeholder
+/// the flush holds while the blocking read runs.
+#[tokio::test]
+async fn a_failed_read_back_fails_the_flush_phase() {
+    let rows: Vec<Row> = (0..400)
+        .map(|i| (Some(i / 300), Some(i), i, Some(i)))
+        .collect();
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), plan(functions(), true), true, Some(scope.clone())).unwrap();
+    let (_root, ctx) = task(1 << 30);
+    let mut local = op.local_state(&ctx).unwrap();
+    op.execute(&batch(&rows), &mut local).unwrap();
+    assert!(op.spill(&mut local, 1, &ctx).await.unwrap() > 0);
+    assert!(op.finish(&mut local).unwrap().is_none());
+    op.end_input(&mut local, &ctx).await.unwrap();
+    std::fs::remove_dir_all(scope.dir()).unwrap();
+    let e = op.flush(&mut local, &ctx).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillIoError, "{e}");
+    let again = op.flush(&mut local, &ctx).await.unwrap_err();
+    assert_eq!(again.error_class(), e.error_class());
+}
+
+/// A source of `count` batches made on demand by `make(k)` (an input
+/// larger than the test should hold).
+struct Generated<F> {
+    schema: SchemaRef,
+    count: i64,
+    make: F,
+}
+
+impl<F: Fn(i64) -> Batch + Send + Sync> Generated<F> {
+    fn new(schema: SchemaRef, count: i64, make: F) -> Arc<Self> {
+        Arc::new(Self {
+            schema,
+            count,
+            make,
+        })
+    }
+}
+
+impl<F: Fn(i64) -> Batch + Send + Sync> crate::Source for Generated<F> {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn global_state(&self, ctx: &TaskContext) -> crate::Result<crate::operator::GlobalState> {
+        let n = usize::try_from(self.count).unwrap_or(0);
+        Ok(Arc::new(crate::MorselCursor::new(
+            n,
+            ctx.query().config().seed,
+        )))
+    }
+
+    fn max_parallelism(&self, _global: &crate::operator::GlobalState) -> usize {
+        1
+    }
+
+    fn local_state(
+        &self,
+        _ctx: &TaskContext,
+        _global: &crate::operator::GlobalState,
+    ) -> crate::Result<crate::operator::LocalState> {
+        Ok(Box::new(()))
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        _local: &'a mut crate::operator::LocalState,
+        global: &'a crate::operator::GlobalState,
+    ) -> futures::future::BoxFuture<'a, crate::Result<Option<Batch>>> {
+        let k = global
+            .downcast_ref::<crate::MorselCursor>()
+            .and_then(crate::MorselCursor::claim);
+        let b = k.map(|k| (self.make)(i64::try_from(k).unwrap()));
+        Box::pin(std::future::ready(Ok(b)))
+    }
+}
+
+/// Rows per partition of [`one_large_partition_spills_through_the_runner`]
+/// (`KRISHIV_WINDOW_SPILL_ROWS`; the plan's 2 GB case is about 40 million),
+/// and the query's memory limit (`KRISHIV_WINDOW_SPILL_LIMIT`).
+fn large_case() -> (i64, usize) {
+    let var = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u64>().ok());
+    let rows = var("KRISHIV_WINDOW_SPILL_ROWS").map_or(60_000, |v| i64::try_from(v).unwrap());
+    let limit = var("KRISHIV_WINDOW_SPILL_LIMIT").map_or(3 << 20, |v| usize::try_from(v).unwrap());
+    (rows, limit)
+}
+
+/// One partition many times the memory limit, through the sort and the
+/// window with spilling: every row's values are checked against closed
+/// forms as the output streams, and the pool is empty at the end.
+#[tokio::test]
+async fn one_large_partition_spills_through_the_runner() {
+    use AggregateFunction::{Count, Sum};
+    let (n, limit) = large_case();
+    let rows = WindowFrame::running(FrameUnits::Rows);
+    let range = WindowFrame::running(FrameUnits::Range);
+    let window = plan(
+        vec![
+            (WindowFunction::RowNumber, rows),
+            (WindowFunction::Rank, rows),
+            (agg(Sum, Some(3)), rows),
+            (agg(Count, None), range),
+            (agg(Sum, Some(3)), WindowFrame::whole(FrameUnits::Rows)),
+        ],
+        true,
+    );
+    let s = schema();
+    // Generated in batches, unsorted (descending ids), into the sort.
+    let per = 8_192;
+    let source = Generated::new(Arc::clone(&s), (n + per - 1) / per, {
+        move |k: i64| {
+            let hi = n - k * per;
+            let lo = (hi - per).max(0);
+            let rows: Vec<Row> = (lo..hi)
+                .rev()
+                .map(|i| (Some(0), Some(i / 3), i, Some(i % 11)))
+                .collect();
+            batch(&rows)
+        }
+    });
+    let (_manager, scope) = spill_scope();
+    let keys = [SortKey::asc(0), SortKey::asc(1), SortKey::asc(2)];
+    let sort = Arc::new(Sort::new(Arc::clone(&s), &keys, Some(scope.clone())).unwrap());
+    let op = Arc::new(Window::new(Arc::clone(&s), window, true, Some(scope)).unwrap());
+    let node: Arc<dyn ExecNode> = Arc::new(OperatorNode {
+        input: Arc::new(BreakerNode {
+            input: Arc::new(SourceNode(source)),
+            sink: Arc::clone(&sort) as Arc<dyn crate::Sink>,
+            source: sort,
+            ordered: true,
+        }),
+        op: Arc::clone(&op) as Arc<dyn crate::Operator>,
+    });
+    let runner = QueryRunner::new(TokioExecutor::deterministic(2).unwrap());
+    let root = pool(limit);
+    let q = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        root.child("q", Some(limit)),
+    );
+    let total: i64 = (0..n).map(|i| i % 11).sum();
+    let mut stream = runner.execute(node, Arc::clone(&q)).await.unwrap();
+    let mut next = 0_i64;
+    let mut running = 0_i64;
+    while let Some(b) = stream.next().await {
+        let b = b.unwrap();
+        let d = b.data();
+        let col = |c: usize| d.column(c).as_primitive::<Int64Type>().clone();
+        let int = |c: usize| d.column(c).as_primitive::<Int32Type>().clone();
+        let (ids, rn, rank, sum, count, whole) = (col(2), int(5), int(6), col(7), col(8), col(9));
+        for r in 0..d.num_rows() {
+            let i = ids.value(r);
+            assert_eq!(i, next, "rows in order");
+            running += i % 11;
+            assert_eq!(i64::from(rn.value(r)), i + 1);
+            assert_eq!(i64::from(rank.value(r)), i / 3 * 3 + 1);
+            assert_eq!(sum.value(r), running);
+            assert_eq!(count.value(r), (i / 3 * 3 + 3).min(n));
+            assert_eq!(whole.value(r), total);
+            next += 1;
+        }
+    }
+    assert_eq!(next, n);
+    drop((stream, q));
+    assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+    assert!(
+        op.counters
+            .external
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= 1
+    );
+}
+
+/// The flush phase's headroom refused: the window is failed, and a later
+/// flush fails too instead of finding no rows.
+#[tokio::test(start_paused = true)]
+async fn a_refused_flush_headroom_fails_the_window() {
+    let rows: Vec<Row> = (0..400)
+        .map(|i| (Some(i / 300), Some(i), i, Some(i)))
+        .collect();
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), plan(functions(), true), true, Some(scope)).unwrap();
+    let limit = 1 << 20;
+    let (root, ctx) = task(limit);
+    let mut local = op.local_state(&ctx).unwrap();
+    op.execute(&batch(&rows), &mut local).unwrap();
+    assert!(op.spill(&mut local, 1, &ctx).await.unwrap() > 0);
+    assert!(op.finish(&mut local).unwrap().is_none());
+    let pool = Arc::clone(ctx.query().pool());
+    let mut hog = krishiv_memory::Reservation::new(Arc::clone(&pool), pool.register("hog", None));
+    take_all_but(&mut hog, limit - root.reserved(), 0);
+    let e = op.end_input(&mut local, &ctx).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory, "{e}");
+    let again = op.flush(&mut local, &ctx).await.unwrap_err();
+    assert_eq!(again.error_class(), ErrorClass::UnableToAcquireMemory);
+    drop((hog, local));
+}
+
+/// The window's metrics count its input once: rows read back in the flush
+/// phase (in memory or copied to a partition's own file) are not counted
+/// again.
+#[tokio::test]
+async fn spilled_rows_are_counted_once() {
+    let rows: Vec<Row> = (0..6_000)
+        .map(|i| {
+            let p = if i < 100 {
+                0
+            } else if i < 5_900 {
+                1
+            } else {
+                2 + i % 5
+            };
+            (Some(p), Some(i), i, Some(i % 17))
+        })
+        .collect();
+    let window = plan(functions(), true);
+    let (_dir, scope) = spill_scope();
+    let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+    let limit = 1 << 30;
+    let (root, ctx) = task(limit);
+    let mut sorted = rows.clone();
+    sorted.sort_by_key(|r| (r.0, r.1));
+    let batches: Vec<Batch> = sorted.chunks(250).map(batch).collect();
+    let spills = Spills {
+        every: 1,
+        slack: Some(96 << 10),
+    };
+    let out = drive_spilling(&op, &ctx, limit, &root, &batches, spills)
+        .await
+        .unwrap();
+    assert_eq!(out.iter().map(Batch::num_rows).sum::<usize>(), 6_000);
+    assert!(
+        op.counters
+            .external
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= 1
+    );
+    let count = |name: &str| {
+        op.extra_metrics()
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, m)| m)
+    };
+    assert!(
+        matches!(count("rows"), Some(crate::metrics::Metric::Count(6_000))),
+        "{:?}",
+        count("rows")
+    );
+    // Partitions 0, 1, then 2..=6.
+    assert!(
+        matches!(count("partitions"), Some(crate::metrics::Metric::Count(7))),
+        "{:?}",
+        count("partitions")
+    );
+}
+
+/// A batch whose first rows wait in the output keeps its bytes reserved
+/// for them when the rest of it spills: they are not the spill's to free
+/// (nor to fund its writer's scratch) until those rows are emitted.
+#[tokio::test]
+async fn bytes_of_rows_waiting_in_the_output_stay_reserved_through_a_spill() {
+    // `a`: 8 rows of partition 0. `b`: 2 more rows of partition 0, then a
+    // large partition 1, so `b`'s first rows are evaluated while the rest
+    // of it stays buffered.
+    let a: Vec<Row> = (0..8).map(|i| (Some(0), Some(i), i, Some(i))).collect();
+    let b: Vec<Row> = (8..20_000)
+        .map(|i| (Some(i64::from(i >= 10)), Some(i), i, Some(i)))
+        .collect();
+    let (_dir, scope) = spill_scope();
+    let window = plan(
+        vec![(
+            WindowFunction::RowNumber,
+            WindowFrame::running(FrameUnits::Rows),
+        )],
+        true,
+    );
+    let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+    let limit = 64 << 20;
+    let config = ExecConfig {
+        batch_size: 4,
+        ..ExecConfig::default()
+    };
+    let (root, ctx) = task_with(limit, config);
+    let mut local = op.local_state(&ctx).unwrap();
+    let mut out = 0;
+    let b = batch(&b);
+    for input in [batch(&a), b.clone()] {
+        match op.execute(&input, &mut local).unwrap() {
+            OperatorOutput::NeedMoreInput(o) => out += o.map_or(0, |o| o.num_rows()),
+            other => panic!("{other:?}"),
+        }
+    }
+    // `a`'s rows went out; `b`'s first two wait in the output.
+    assert_eq!(out, 8);
+    // The buffered rows are all of `b`, whose bytes its waiting rows hold:
+    // the spill writes them but frees nothing yet.
+    assert_eq!(op.spill(&mut local, 1, &ctx).await.unwrap(), 0);
+    let held = b.data().get_array_memory_size();
+    assert!(root.reserved() >= held, "{} < {held}", root.reserved());
+    let waiting = op.finish(&mut local).unwrap().unwrap();
+    assert_eq!(waiting.num_rows(), 2);
+    assert!(root.reserved() < held, "released with its last rows");
+    out += waiting.num_rows();
+    assert!(op.finish(&mut local).unwrap().is_none());
+    op.end_input(&mut local, &ctx).await.unwrap();
+    loop {
+        match op.flush(&mut local, &ctx).await.unwrap() {
+            crate::operator::FlushOutput::Batch(b) => out += b.num_rows(),
+            crate::operator::FlushOutput::Done => break,
+            _ => {}
+        }
+    }
+    assert_eq!(out, 20_000);
+    drop(local);
+    ctx.consumer().consumer().release_credit();
+    assert_eq!(root.reserved(), 0);
 }

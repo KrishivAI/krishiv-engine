@@ -513,6 +513,15 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             out.push(Piece::Owned(format!("{}{id}", Name(&c.name))));
         }
         ExprNode::Literal(v) => out.push(Piece::Owned(literal_text(v))),
+        ExprNode::TypedLiteral { kind, value } => {
+            let keyword = match kind {
+                crate::TypedLiteralKind::Date => "DATE",
+                crate::TypedLiteralKind::Timestamp => "TIMESTAMP",
+                crate::TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
+                crate::TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+            };
+            out.push(Piece::Owned(format!("{keyword} '{value}'")));
+        }
         ExprNode::Star(s) => {
             let q = if s.qualifier.is_empty() {
                 String::new()
@@ -684,6 +693,10 @@ fn call<'a>(
         (Some(Builtin::Negative), 1) => {
             out.extend([Piece::Str("(- "), arg(0), Piece::Str(")")]);
         }
+        // Unary `-` lowers as `"-"` with one argument (see `builtin_op`).
+        _ if name == "-" && args.len() == 1 => {
+            out.extend([Piece::Str("(- "), arg(0), Piece::Str(")")]);
+        }
         (Some(Builtin::In), n) if n >= 1 => {
             out.extend([Piece::Str("("), arg(0), Piece::Str(" IN (")]);
             list(&args[1..], out);
@@ -779,14 +792,16 @@ impl Display for Literal {
             Self::Short(v) => write!(f, "{v}S"),
             Self::Integer(v) => write!(f, "{v}"),
             Self::Long(v) => write!(f, "{v}L"),
-            Self::Float(v) if v.is_finite() => write!(f, "{v:?}F"),
+            Self::Float(v) if v.is_finite() => write!(f, "{}F", crate::spark_fmt::float(*v)),
             Self::Float(v) => write!(f, "CAST('{}' AS FLOAT)", special(f64::from(*v))),
-            Self::Double(v) if v.is_finite() => write!(f, "{v:?}D"),
+            Self::Double(v) if v.is_finite() => write!(f, "{}D", crate::spark_fmt::double(*v)),
             Self::Double(v) => write!(f, "CAST('{}' AS DOUBLE)", special(*v)),
             Self::Decimal {
                 unscaled,
                 data_type,
-            } => write_decimal(f, *unscaled, data_type.scale()),
+            } => f.write_str(
+                crate::spark_fmt::decimal(*unscaled, u32::from(data_type.scale())).as_str(),
+            ),
             // A URL's credentials never print, even in a literal.
             Self::String(s) => match SecretUrl::parse(s) {
                 Some(url) => write!(f, "'{}'", Escaped(&url.to_string())),
@@ -797,11 +812,7 @@ impl Display for Literal {
                 b.iter().try_for_each(|byte| write!(f, "{byte:02X}"))?;
                 f.write_char('\'')
             }
-            Self::Date(days) => {
-                let (y, m, d) = civil_from_days(i64::from(*days));
-                let sign = if y < 0 { "-" } else { "" };
-                write!(f, "DATE '{sign}{:04}-{m:02}-{d:02}'", y.unsigned_abs())
-            }
+            Self::Date(days) => f.write_str(crate::spark_fmt::date(*days).as_str()),
             Self::Timestamp(us) => write!(f, "TIMESTAMP_MICROS({us})"),
             Self::TimestampNtz(us) => write!(f, "TIMESTAMP_NTZ_MICROS({us})"),
             Self::YearMonthInterval { months, start, end } => {
@@ -893,32 +904,4 @@ fn day_time_value(micros: u64, start: DayTimeField, end: DayTimeField) -> String
         out.push_str(digits.trim_end_matches('0'));
     }
     out
-}
-
-/// Writes `unscaled * 10^-scale` in plain notation, e.g. `0.06`.
-fn write_decimal(f: &mut Formatter<'_>, unscaled: i128, scale: u8) -> fmt::Result {
-    let digits = unscaled.unsigned_abs().to_string();
-    let scale = usize::from(scale);
-    let sign = if unscaled < 0 { "-" } else { "" };
-    if scale == 0 {
-        return write!(f, "{sign}{digits}");
-    }
-    let padded = format!("{digits:0>width$}", width = scale + 1);
-    let (int, frac) = padded.split_at(padded.len() - scale);
-    write!(f, "{sign}{int}.{frac}")
-}
-
-/// Proleptic Gregorian `(year, month, day)` of a day count since 1970-01-01
-/// (H. Hinnant's `civil_from_days`).
-const fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
-    (y, m, d)
 }

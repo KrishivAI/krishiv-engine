@@ -163,6 +163,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
             Node::Expr(e) => match &e.node {
                 ExprNode::Column(_)
                 | ExprNode::Star(_)
+                | ExprNode::TypedLiteral { .. }
                 | ExprNode::Function(_)
                 | ExprNode::Alias { .. } => false,
                 ExprNode::Cast { mode, .. } => match mode {
@@ -343,6 +344,7 @@ impl Teardown {
         match node {
             ExprNode::Column(_)
             | ExprNode::Literal(_)
+            | ExprNode::TypedLiteral { .. }
             | ExprNode::Star(_)
             | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {}
             ExprNode::Function(FunctionCall { args, filter, .. })

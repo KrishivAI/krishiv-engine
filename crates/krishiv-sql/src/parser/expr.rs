@@ -1100,7 +1100,7 @@ impl Parser<'_> {
             args.push(self.value()?);
         } else {
             let (first, special) = self.first_arg(keywords)?;
-            let name = ObjectName {
+            let mut name = ObjectName {
                 span: word.span,
                 parts: vec![word],
             };
@@ -1118,6 +1118,12 @@ impl Parser<'_> {
                 }
                 if !position && self.eat_kw("FOR") {
                     args.push(self.value()?);
+                }
+                // `substr(s FROM p [FOR l])` is `substring(s, p [, l])`:
+                // the `FROM` form always prints as `substring`, while the
+                // comma form keeps `substr` vs `substring` as written.
+                if !overlay && !position {
+                    name.parts[0].value = "substring".to_owned();
                 }
             }
             self.expect_sym(Sym::RParen)?;

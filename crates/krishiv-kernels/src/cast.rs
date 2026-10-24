@@ -38,7 +38,7 @@ use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
 use arrow_schema::{DataType, TimeUnit};
 
 pub use datetime::{FixedOffset, TimeZoneRules};
-pub use timestamp::{TimestampText, timestamp_text};
+pub use timestamp::{TimestampText, timestamp_has_zone, timestamp_text};
 
 use crate::decimal::DecimalNative;
 use crate::error::{KernelError, with_capacity};

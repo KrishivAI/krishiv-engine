@@ -317,8 +317,16 @@ fn legacy_day_counts_and_binary_predicates() {
         let consts = [None, s(v)[0].clone()];
         (def(name).result)(&CallTypes::new(&args, &consts).with_ansi(false))
     };
-    for ok in ["1", " -2 ", "+3", "1.9", "7."] {
+    for ok in ["1", " -2 ", "+3", "-0", "2147483647", "007"] {
         assert!(legacy("date_add", ok).is_ok(), "{ok}");
+    }
+    // The day count the analyzer shows is read by the same function.
+    for (text, days) in [(" 12 ", Some(12)), ("-2", Some(-2)), ("+3", Some(3))] {
+        assert_eq!(super::legacy_day_count(text), days, "{text:?}");
+    }
+    for bad in ["1.5", "1.", "1e2", "0x1", "2147483648", "abc", ""] {
+        assert_eq!(super::legacy_day_count(bad), None, "{bad:?}");
+        assert!(legacy("date_add", bad).is_err(), "{bad:?}");
     }
     for (name, shown) in [
         ("date_add", "date_add"),
@@ -335,7 +343,30 @@ fn legacy_day_counts_and_binary_predicates() {
             "{err}"
         );
     }
-    for bad in ["", ".5", "1e3", "99999999999", "1-"] {
+    // A fraction is not an integer to `date_add` (Spark 3.5 to 4.2 raise on
+    // `'1.9'`, checked on each), nor are an exponent, a hex number or a
+    // value past `int`. Spark rejects a fractional string even with ANSI
+    // off: the day count must parse as an `int`, not truncate.
+    for bad in [
+        "",
+        ".5",
+        "1e3",
+        "99999999999",
+        "1-",
+        "1.2",
+        "1.9",
+        "7.",
+        "1.0",
+        "0x1",
+        "2147483648",
+        "1 2",
+    ] {
+        let err = legacy("date_add", bad).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::SecondFunctionArgumentNotInteger,
+            "{bad}"
+        );
         assert!(legacy("date_sub", bad).is_err(), "{bad}");
     }
     // ANSI on: the cast fails at run time instead.
@@ -671,4 +702,69 @@ fn session_and_clock_functions() {
         builtins().lookup("current_time", SparkProfile::V4_2),
         Lookup::KnownUnsupported
     ));
+}
+
+/// The regular-expression functions: arities, inputs and result types.
+#[test]
+fn regex_signatures() {
+    let s = ty(DataType::String);
+    let exact = InputType::Exact;
+    let strings = || Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]);
+    // `regexp` and `regexp_like` take two strings and may be NULL.
+    for name in ["regexp", "regexp_like"] {
+        let d = def(name);
+        assert!(d.arity.accepts(2) && !d.arity.accepts(1) && !d.arity.accepts(3));
+        assert_eq!(d.inputs, strings());
+        assert_eq!(
+            result(name, &[s.clone(), s.clone()], &[]).unwrap(),
+            ty(DataType::Boolean)
+        );
+        assert_eq!(
+            result(
+                name,
+                &[ArgType::new(DataType::String, true), s.clone()],
+                &[]
+            )
+            .unwrap(),
+            ArgType::new(DataType::Boolean, true)
+        );
+    }
+    // The two- and three-argument input shapes.
+    let indexed = || {
+        Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::Integer),
+        ])
+    };
+    assert_eq!(def("regexp_substr").inputs, strings());
+    assert_eq!(def("regexp_count").inputs, strings());
+    assert_eq!(def("regexp_extract").inputs, indexed());
+    assert_eq!(def("regexp_instr").inputs, indexed());
+    for (name, ty) in [
+        ("regexp_extract", DataType::String),
+        ("regexp_count", DataType::Integer),
+        ("regexp_instr", DataType::Integer),
+    ] {
+        let d = def(name);
+        assert!(d.arity.accepts(2), "{name}");
+        assert_eq!(
+            result(name, &[s.clone(), s.clone()], &[]).unwrap(),
+            ArgType::new(ty, false)
+        );
+    }
+    // `regexp_substr` is nullable whatever its arguments.
+    assert_eq!(
+        result("regexp_substr", &[s.clone(), s.clone()], &[]).unwrap(),
+        ArgType::new(DataType::String, true)
+    );
+    assert!(def("regexp_extract").arity.accepts(3));
+    assert!(!def("regexp_extract").arity.accepts(4));
+    assert!(!def("regexp_substr").arity.accepts(3));
+    assert!(!def("regexp_count").arity.accepts(3));
+    // A NULL string is a NULL result.
+    let r = result("regexp_like", &[null_ty(), s.clone()], &[]).unwrap();
+    assert_eq!(r, ArgType::new(DataType::Boolean, true));
+    let r = result("regexp_count", &[s, null_ty()], &[]).unwrap();
+    assert_eq!(r, ArgType::new(DataType::Integer, true));
 }

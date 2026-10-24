@@ -205,7 +205,7 @@ fn extremum(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     })
 }
 
-/// `abs`, `positive`: the argument's type (a string or NULL is `double`).
+/// `abs`, `positive`, `negative`: the argument's type (a string or NULL is `double`).
 fn same_type(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType {
         data_type: Some(c.data_type(0).cloned().unwrap_or(DataType::Double)),
@@ -282,7 +282,7 @@ pub(super) fn specs() -> Vec<Spec> {
     ));
     let numeric_or_interval = Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
     out.extend(scalar(
-        &["abs", "positive"],
+        &["abs", "positive", "negative"],
         &numeric_or_interval,
         same_type,
     ));

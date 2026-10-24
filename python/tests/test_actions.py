@@ -379,15 +379,18 @@ def test_create_or_replace_temp_view(spark: SparkSession, parquet_file: str, tmp
         spark.read.parquet(parquet_file).createOrReplaceTempView(1)  # ty: ignore[invalid-argument-type]
 
 
-def test_temp_view_of_a_computed_dataframe_is_not_supported_yet(df: DataFrame) -> None:
-    with pytest.raises(errors.UnsupportedOperationException, match="temporary views other than reads by path"):
-        df.createOrReplaceTempView("v")
+def test_temp_view_of_a_computed_dataframe_snapshots_its_input(spark: SparkSession, df: DataFrame) -> None:
+    df.createOrReplaceTempView("v")
+    assert spark.sql("select sum(id) as s from v").collect() == [Row(s=6)]
+    # A view built from itself reads the snapshot it replaces, as in Spark.
+    spark.sql("select id + 10 as id from v").createOrReplaceTempView("v")
+    assert spark.sql("select sum(id) as s from v").collect() == [Row(s=36)]
 
 
-def test_string_expressions_are_listed_as_not_implemented(df: DataFrame) -> None:
-    for call in (lambda: df.selectExpr("id + 1"), lambda: df.where("id > 1"), lambda: F.expr("id + 1")):
-        with pytest.raises(errors.PySparkNotImplementedError):
-            call()
+def test_string_expressions_execute(df: DataFrame) -> None:
+    assert [r["id"] for r in df.where("id > 1").orderBy("id").collect()] == [2, 3]
+    assert df.selectExpr("id + 1").count() == 3
+    assert df.filter(F.expr("id > 1")).count() == 2
 
 
 def test_release_does_not_hang_and_the_session_survives(spark: SparkSession, big: Any) -> None:

@@ -133,6 +133,8 @@ pub(super) struct Resolver<'a> {
     depth: usize,
     op_outer: Option<usize>,
     root_env: Option<Arc<Env>>,
+    /// Constant folding's values over this pass (see `fold::Memo`).
+    pub(super) folds: std::cell::RefCell<super::fold::Memo>,
 }
 
 type Resolved = (
@@ -159,6 +161,7 @@ pub(super) fn resolve(
         depth: 0,
         op_outer: None,
         root_env: None,
+        folds: std::cell::RefCell::default(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -226,6 +229,10 @@ pub(super) fn hull(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> Option<(u64,
         (x, None) | (None, x) => x,
     }
 }
+
+/// A CTE scope: every visible CTE (outer ones as `None`, this level's as
+/// `Some(index)`); inner `WITH` names shadow as `None`.
+type CteScope = Vec<(String, Option<usize>)>;
 
 impl Resolver<'_> {
     pub(super) fn fresh(&mut self) -> AttrId {
@@ -450,6 +457,93 @@ impl Resolver<'_> {
             carriers,
             agg: None,
             widen: None,
+        }
+    }
+
+    /// Spark's checks of a `LIMIT` or `OFFSET` (`name`) value: it must be
+    /// foldable (`IS_UNFOLDABLE` when it is not: a column, a nondeterministic
+    /// call, a subquery), to a value that is not NULL and not negative
+    /// (cited at the expression, `at`); what folding raises (`2147483647 + 1`
+    /// under ANSI) is raised as is. `unfoldable` reports the first check
+    /// without folding. A foldable expression this folder cannot evaluate
+    /// (a cast or call the kernels lack here) is not an error: it passes
+    /// through for the executor to evaluate once at run time, as before.
+    /// The folded value, when it is an integral.
+    #[inline(never)]
+    pub(super) fn check_limit(
+        &self,
+        b: &super::exprs::Bound,
+        name: &str,
+        unfoldable: bool,
+        at: Origin,
+        operator: Origin,
+    ) -> Result<Option<i64>, AnalysisError> {
+        use krishiv_common::error::{
+            InvalidLimitLikeExpressionIsNegative, InvalidLimitLikeExpressionIsNull,
+            InvalidLimitLikeExpressionIsUnfoldable,
+        };
+        // A nondeterministic expression is pulled out of the operator into
+        // an attribute of this name before Spark checks it.
+        let nondeterministic = {
+            let mut found = false;
+            let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(&b.expr), |n| {
+                if let crate::walk::Node::Expr(x) = n
+                    && let ExprNode::Resolved(crate::ResolvedExpr::Function(f)) = &x.node
+                    && !f.deterministic
+                {
+                    found = true;
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+            found
+        };
+        let text = if nondeterministic {
+            "\"_nondeterministic\"".to_owned()
+        } else {
+            format!(
+                "\"{}\"",
+                super::exprs::pretty(&b.shown(), self.ctx.conf.session_zone)
+            )
+        };
+        let name = name.to_owned();
+        let folded = if unfoldable {
+            None
+        } else {
+            self.fold(&b.expr, self.ctx.conf.ansi)
+        };
+        match folded {
+            // An attribute carries no position of its own: Spark cites the
+            // input there, the expression otherwise.
+            // Not foldable to Spark either: `IS_UNFOLDABLE` without folding.
+            None if unfoldable => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsUnfoldable { expr: text, name },
+                if matches!(
+                    b.expr.node,
+                    ExprNode::Resolved(crate::ResolvedExpr::Column(_))
+                ) {
+                    operator
+                } else {
+                    b.expr.origin
+                },
+            )),
+            Some(super::Constant::Error(e)) => Err(AnalysisError::new(e, b.expr.origin)),
+            Some(super::Constant::Null) => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsNull { expr: text, name },
+                at,
+            )),
+            Some(super::Constant::Integral(v)) if v < 0 => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsNegative {
+                    expr: text,
+                    name,
+                    v: v.to_string(),
+                },
+                at,
+            )),
+            Some(super::Constant::Integral(v)) => Ok(Some(v)),
+            // Foldable, but not evaluated here (or not an integral): pass
+            // the expression through for the downstream folders and the
+            // executor to read at run time.
+            None | Some(_) => Ok(None),
         }
     }
 
@@ -718,6 +812,12 @@ impl Resolver<'_> {
     /// The CTE definitions resolved in turn, then the input over them. Out
     /// of line: it keeps the recursive `node` frame small (deep plans
     /// resolve on a small stack).
+    ///
+    /// Only definitions the input needs (transitively) are resolved:
+    /// Spark does not analyze a CTE the query never references, so an
+    /// unused definition's column errors (like `AMBIGUOUS_REFERENCE`)
+    /// never fail the query. Table existence still fails even when unused,
+    /// but that comes from Bind, which visits every definition.
     #[inline(never)]
     fn with_cte(
         &mut self,
@@ -727,11 +827,18 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let o = p.origin;
+        let needed = Self::needed_ctes(input, ctes, &env.ctes, self.ctx.conf.case_sensitive);
+        if !needed.iter().any(|b| *b) {
+            return self.rel(input, env);
+        }
         let mut visible = env.ctes.clone();
         let mut scope = env.ctes_id;
         let mut defs = Vec::new();
         let mut rels = Vec::new();
-        for c in ctes {
+        for (c, keep) in ctes.iter().zip(needed.iter()) {
+            if !keep {
+                continue;
+            }
             let e = self.env(visible.clone(), scope, env.outer.clone());
             let r = self.rel(&c.plan, &e)?;
             defs.push(Cte {
@@ -753,5 +860,151 @@ impl Resolver<'_> {
         let mut r = self.make(o, node, i.out.to_vec(), &kids);
         r.carriers = Arc::clone(&i.carriers);
         Ok(r)
+    }
+
+    /// Which definitions of `ctes` the input needs, transitively: a
+    /// definition is needed when the input (or another needed definition)
+    /// reads its name. Reads shadowed by an inner `WITH` never count, and
+    /// a definition's own reads see only the outer CTEs and the earlier
+    /// definitions, so a forward reference never marks a later definition.
+    fn needed_ctes(
+        input: &Arc<LogicalPlan>,
+        ctes: &[Cte],
+        outer: &[(String, Rel)],
+        case_sensitive: bool,
+    ) -> Vec<bool> {
+        let n = ctes.len();
+        let mut needed = vec![false; n];
+        if n == 0 {
+            return needed;
+        }
+        let outer_scope: Vec<(String, Option<usize>)> =
+            outer.iter().map(|(name, _)| (name.clone(), None)).collect();
+        let mut input_scope = outer_scope.clone();
+        input_scope.extend(
+            ctes.iter()
+                .enumerate()
+                .map(|(i, c)| (c.name.clone(), Some(i))),
+        );
+        let mut stack = Self::cte_refs(input, &input_scope, case_sensitive);
+        let mut memo: Vec<Option<Vec<usize>>> = (0..n).map(|_| None).collect();
+        while let Some(i) = stack.pop() {
+            if i >= n || needed[i] {
+                continue;
+            }
+            needed[i] = true;
+            let refs = match &memo[i] {
+                Some(r) => r.clone(),
+                None => {
+                    let mut scope = outer_scope.clone();
+                    scope.extend(
+                        ctes[..i]
+                            .iter()
+                            .enumerate()
+                            .map(|(j, c)| (c.name.clone(), Some(j))),
+                    );
+                    let r = Self::cte_refs(&ctes[i].plan, &scope, case_sensitive);
+                    memo[i] = Some(r.clone());
+                    r
+                }
+            };
+            for j in refs {
+                if j < n && !needed[j] {
+                    stack.push(j);
+                }
+            }
+        }
+        needed
+    }
+
+    /// Indices of this `WITH` level's definitions that `root` reads, with
+    /// `scope` naming every visible CTE (outer ones as `None`, this level's
+    /// as `Some(index)`). A single-part read resolves to the innermost
+    /// scope entry matching its name; only reads resolving to this level
+    /// are reported. Inner `WITH` names shadow as `None`.
+    fn cte_refs(root: &Arc<LogicalPlan>, scope: &CteScope, case_sensitive: bool) -> Vec<usize> {
+        enum Item<'a> {
+            Plan(&'a Arc<LogicalPlan>, CteScope),
+            Expr(&'a Arc<Expr>, CteScope),
+        }
+        let mut out = Vec::new();
+        // Visits are keyed by scope contents, not scope length: the same
+        // plan reached through two inner `WITH` scopes with different names
+        // but equal lengths resolves its reads differently (a shadowing name
+        // hides what the other scope reports), so each scope gets a visit.
+        let mut seen: HashSet<(usize, CteScope)> = HashSet::new();
+        let mut stack = vec![Item::Plan(root, scope.clone())];
+        while let Some(item) = stack.pop() {
+            match item {
+                Item::Plan(p, sc) => {
+                    if !seen.insert((addr(&**p), sc.clone())) {
+                        continue;
+                    }
+                    match &p.node {
+                        PlanNode::Read(ReadSource::Table { name, .. }) => {
+                            if let [n] = name.as_slice() {
+                                for (sname, idx) in sc.iter().rev() {
+                                    if same(sname, n, case_sensitive) {
+                                        if let Some(i) = idx
+                                            && !out.contains(i)
+                                        {
+                                            out.push(*i);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        PlanNode::CteRef(r) => {
+                            // An already-resolved reference: re-analysis
+                            // must keep the definition it names.
+                            for (sname, idx) in sc.iter().rev() {
+                                if same(sname, &r.name, case_sensitive) {
+                                    if let Some(i) = idx
+                                        && !out.contains(i)
+                                    {
+                                        out.push(*i);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        PlanNode::WithCte { input, ctes } => {
+                            let mut ext = sc.clone();
+                            ext.extend(ctes.iter().map(|c| (c.name.clone(), None)));
+                            stack.push(Item::Plan(input, ext));
+                            let mut cur = sc.clone();
+                            for c in ctes {
+                                stack.push(Item::Plan(&c.plan, cur.clone()));
+                                cur.push((c.name.clone(), None));
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    p.for_each_expr(&mut |e| {
+                        stack.push(Item::Expr(e, sc.clone()));
+                    });
+                    // `WithCte` already pushed its children above.
+                    if !matches!(p.node, PlanNode::WithCte { .. }) {
+                        p.for_each_child(&mut |c| {
+                            stack.push(Item::Plan(c, sc.clone()));
+                        });
+                    }
+                }
+                Item::Expr(e, sc) => {
+                    if !seen.insert((addr(&**e), sc.clone())) {
+                        continue;
+                    }
+                    if let ExprNode::Subquery { plan, .. } = &e.node {
+                        stack.push(Item::Plan(plan, sc.clone()));
+                    }
+                    e.for_each_child(&mut |c| {
+                        stack.push(Item::Expr(c, sc.clone()));
+                    });
+                }
+            }
+        }
+        out
     }
 }

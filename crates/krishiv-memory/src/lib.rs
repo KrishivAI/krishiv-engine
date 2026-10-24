@@ -208,4 +208,4 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 mod tests;
 
 #[cfg(all(test, loom))]
-mod loom_tests;
+mod loom_model;

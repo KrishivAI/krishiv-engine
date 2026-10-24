@@ -609,7 +609,7 @@ fn hint_value(e: &Expr) -> String {
         ExprNode::Literal(Literal::Short(n)) => n.to_string(),
         ExprNode::Literal(Literal::Integer(n)) => n.to_string(),
         ExprNode::Literal(Literal::Long(n)) => n.to_string(),
-        _ => super::exprs::pretty(e),
+        _ => super::exprs::pretty(e, None),
     }
 }
 

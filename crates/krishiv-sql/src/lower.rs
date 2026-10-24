@@ -25,20 +25,20 @@ use krishiv_plan::{
     Builtin, CastMode, ColumnRef, Cte, Expr as IrExpr, ExprNode, FrameBound as IrFrameBound,
     FrameUnits as IrFrameUnits, FunctionCall, Grouping, JoinCondition, JoinKind as IrJoin,
     Literal as IrLiteral, LogicalPlan, Origin, Plan, PlanNode, ReadSource, SortOrder, SourceId,
-    Star, SubqueryKind, WindowExpr, WindowFrame as IrWindowFrame, WindowSpec as IrWindowSpec,
-    WindowSpecRef,
+    Star, SubqueryKind, TypedLiteralKind as IrTypedKind, WindowExpr, WindowFrame as IrWindowFrame,
+    WindowSpec as IrWindowSpec, WindowSpecRef,
 };
 use krishiv_types::DecimalType;
 
 use crate::ast::{
     Alias, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, FromClause, GroupBy,
     GroupItem, GroupItemKind, GroupWith, GroupingSet, Ident, JoinConstraint, JoinKind, Literal,
-    NamedWindow, NullTreatment, NumKind, Query, Relation, RelationExt, Select, SetExpr,
+    NamedWindow, NullTreatment, NumKind, Query, Relation, RelationExt, Select, SelectItem, SetExpr,
     SetExprKind, SetOperator, SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth,
     UnaryOp, WindowRef, WindowSpec,
 };
 use crate::validate::literal::{self, Number, TypedKind};
-use crate::{ParseError, ParserOptions, parse_query};
+use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
 
 type R<T> = Result<T, ParseError>;
 
@@ -46,6 +46,11 @@ type R<T> = Result<T, ParseError>;
 const MAX_GROUPING_SETS: usize = 1 << 16;
 
 /// Parses and lowers one query; spans index `source`.
+///
+/// Typed datetime literals (`TIMESTAMP '...'`, `TIMESTAMP_LTZ '...'`,
+/// `TIMESTAMP_NTZ '...'`, `DATE '...'`) lower to an unresolved
+/// [`ExprNode::TypedLiteral`] (the type keyword and the raw string): the
+/// analyzer resolves them with the session's time zone and timestamp type.
 ///
 /// # Errors
 /// A [`ParseError`]: the parser's, or a lowering error with its span.
@@ -69,6 +74,54 @@ pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
     };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
+}
+
+/// Lowers one parsed expression into the IR `Session::sql` builds for
+/// `SELECT` items, so it resolves against a DataFrame's columns in the
+/// analyzer. Origins index `source`; too deep a tree fails with
+/// `FAILED_TO_PARSE_TOO_COMPLEX` at the expression's span.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for constructs the IR lacks and Spark's
+/// literal errors, as for [`lower`].
+pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
+    let mut l = Lowerer {
+        source,
+        depth: 0,
+        root: expr.span,
+        windows: Vec::new(),
+    };
+    l.expr(expr)
+}
+
+/// Lowers one parsed select item (`expr [[AS] alias]`), as [`lower`]
+/// lowers the items of a `SELECT` list.
+///
+/// # Errors
+/// As for [`lower_expression`].
+pub fn lower_select_item(item: &SelectItem, source: SourceId) -> R<Arc<IrExpr>> {
+    let mut l = Lowerer {
+        source,
+        depth: 0,
+        root: item.span,
+        windows: Vec::new(),
+    };
+    l.select_item(item)
+}
+
+/// Parses and lowers one named-expression string (`F.expr`,
+/// `selectExpr` once per argument string, `filter`/`where` strings); spans
+/// index `source`.
+///
+/// # Errors
+/// A [`ParseError`]: the parser's, or a lowering error with its span.
+pub fn parse_and_lower_named_expression(
+    sql: &str,
+    options: &ParserOptions,
+    source: SourceId,
+) -> R<Arc<IrExpr>> {
+    lower_select_item(&parse_named_expression(sql, options)?, source)
+        .map_err(|e| e.redacted_in(sql))
 }
 
 fn err(e: impl Into<KrishivError>, span: Span) -> ParseError {
@@ -488,6 +541,21 @@ impl Lowerer {
         Ok(plan)
     }
 
+    fn select_item(&mut self, item: &SelectItem) -> R<Arc<IrExpr>> {
+        let e = self.expr(&item.expr)?;
+        Ok(arc(match &item.alias {
+            None => e,
+            Some(Alias::Name(name)) => self.ex(
+                ExprNode::Alias {
+                    expr: arc(e),
+                    name: name.value.clone(),
+                },
+                item.span,
+            ),
+            Some(_) => return Err(unsupported("multi-name aliases", item.span)),
+        }))
+    }
+
     fn select_list(&mut self, s: &Select, from: Option<&FromClause>) -> R<LogicalPlan> {
         for (present, what) in [
             (!s.lateral_views.is_empty(), "LATERAL VIEW"),
@@ -513,18 +581,7 @@ impl Lowerer {
         }
         let mut items = Vec::new();
         for item in &s.projection {
-            let e = self.expr(&item.expr)?;
-            items.push(arc(match &item.alias {
-                None => e,
-                Some(Alias::Name(name)) => self.ex(
-                    ExprNode::Alias {
-                        expr: arc(e),
-                        name: name.value.clone(),
-                    },
-                    item.span,
-                ),
-                Some(_) => return Err(unsupported("multi-name aliases", item.span)),
-            }));
+            items.push(self.select_item(item)?);
         }
         if s.group_by.is_none() && s.having.is_none() {
             return Ok(self.node(
@@ -649,8 +706,15 @@ impl Lowerer {
             }
             GroupItemKind::GroupingSets(items) => {
                 let mut sets = Vec::new();
-                for item in items {
-                    sets.extend(self.deeper(|l| l.item_sets(item, &mut *written))?);
+                let span = item.span;
+                for inner in items {
+                    sets.extend(self.deeper(|l| l.item_sets(inner, &mut *written))?);
+                    if sets.len() > MAX_GROUPING_SETS {
+                        return Err(unsupported(
+                            &format!("more than {MAX_GROUPING_SETS} grouping sets"),
+                            span,
+                        ));
+                    }
                 }
                 sets
             }
@@ -856,7 +920,7 @@ impl Lowerer {
     fn expr_inner(&mut self, e: &Expr) -> R<IrExpr> {
         let sp = e.span;
         Ok(match &e.kind {
-            ExprKind::Literal(v) => self.ex(ExprNode::Literal(literal(v, sp)?), sp),
+            ExprKind::Literal(v) => self.ex(literal(v, sp)?, sp),
             ExprKind::Keyword(k) => {
                 self.ex(ExprNode::Literal(IrLiteral::String(k.value.clone())), sp)
             }
@@ -899,7 +963,10 @@ impl Lowerer {
             }
             ExprKind::Unary(op, inner) => {
                 let name = match op {
-                    UnaryOp::Minus => Builtin::Negative.name(),
+                    // Unary `-` keeps `"-"` so the analyzer sees it apart
+                    // from the function `negative(x)` (Spark's `UnaryMinus`
+                    // with and without its `FUNC_ALIAS`).
+                    UnaryOp::Minus => "-",
                     UnaryOp::Plus => "positive",
                     UnaryOp::BitNot => "~",
                 };
@@ -1253,21 +1320,34 @@ fn is_path(s: &str) -> bool {
     s.contains('/') || s.contains(':')
 }
 
-fn literal(v: &Literal, sp: Span) -> R<IrLiteral> {
+fn literal(v: &Literal, sp: Span) -> R<ExprNode> {
     Ok(match v {
-        Literal::Null => IrLiteral::Null(None),
-        Literal::Boolean(b) => IrLiteral::Boolean(*b),
-        Literal::String(s) => IrLiteral::String(s.clone()),
-        Literal::Number { text, kind } => number(text, *kind, sp)?,
+        Literal::Null => ExprNode::Literal(IrLiteral::Null(None)),
+        Literal::Boolean(b) => ExprNode::Literal(IrLiteral::Boolean(*b)),
+        Literal::String(s) => ExprNode::Literal(IrLiteral::String(s.clone())),
+        Literal::Number { text, kind } => ExprNode::Literal(number(text, *kind, sp)?),
         Literal::Typed { type_name, value } => {
             let kind = TypedKind::of(&type_name.value, type_name.quoted).map_err(|e| err(e, sp))?;
             match kind {
-                TypedKind::Date => IrLiteral::Date(
-                    literal::date(value).ok_or_else(|| err(kind.invalid(value), sp))?,
-                ),
-                TypedKind::Binary => IrLiteral::Binary(
+                TypedKind::Date => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::Date,
+                    value: value.clone(),
+                },
+                TypedKind::Timestamp => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::Timestamp,
+                    value: value.clone(),
+                },
+                TypedKind::TimestampNtz => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::TimestampNtz,
+                    value: value.clone(),
+                },
+                TypedKind::TimestampLtz => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::TimestampLtz,
+                    value: value.clone(),
+                },
+                TypedKind::Binary => ExprNode::Literal(IrLiteral::Binary(
                     literal::hex(value).ok_or_else(|| err(kind.invalid(value), sp))?,
-                ),
+                )),
                 _ => {
                     let t = type_name.value.to_ascii_uppercase();
                     return Err(unsupported(&format!("{t} literals"), sp));

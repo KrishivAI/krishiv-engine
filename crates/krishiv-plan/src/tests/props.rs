@@ -678,6 +678,7 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
     match &mut e.node {
         ExprNode::Column(ColumnRef { name, .. }) => m_strings(name, w),
         ExprNode::Literal(v) => m_literal(v, w),
+        ExprNode::TypedLiteral { value, .. } => m_string(value, w),
         ExprNode::Star(Star { qualifier, .. }) => m_strings(qualifier, w),
         ExprNode::Function(FunctionCall {
             name,

@@ -306,9 +306,35 @@ fn plan_id_references_resolve_as_spark_connect_does() {
     assert!(raised.contains("AMBIGUOUS_COLUMN_REFERENCE"));
 }
 
+/// `TIMESTAMP` and `TIMESTAMP_NTZ` literals are named as Spark's
+/// `Literal.sql` prints them (`SELECT TIMESTAMP '2024-01-01 00:00:00'` in
+/// Spark 4.2); SQL does not lower timestamp literals yet, so the plan is
+/// built by hand.
+#[test]
+fn timestamp_literals_are_named_as_spark_sql() {
+    let lit = |v: Literal| Expr::from(v);
+    let r = run(
+        LogicalPlan::table(["t"]).project(vec![
+            lit(Literal::Timestamp(1_704_067_200_000_000)),
+            lit(Literal::TimestampNtz(1_704_067_200_123_456)),
+            lit(Literal::Timestamp(-1)),
+        ]),
+        &ctx(),
+    );
+    let names: Vec<String> = r.unwrap().output.iter().map(|c| c.name.clone()).collect();
+    assert_eq!(
+        names,
+        [
+            "TIMESTAMP '2024-01-01 00:00:00'",
+            "TIMESTAMP_NTZ '2024-01-01 00:00:00.123456'",
+            "TIMESTAMP '1969-12-31 23:59:59.999999'",
+        ]
+    );
+}
+
 /// The select list of the generated-names statement of the corpus.
 fn names_query() -> Vec<Expr> {
-    use crate::Builtin::{EqNullSafe, IsNotNull, IsNull, Negative, Remainder, Subtract};
+    use crate::Builtin::{EqNullSafe, IsNotNull, IsNull, Remainder, Subtract};
     let lit = |v: Literal| Expr::from(v);
     let date = lit(Literal::Date(18263));
     let decimal = lit(Literal::Decimal {
@@ -318,7 +344,9 @@ fn names_query() -> Vec<Expr> {
     let op = |b, args| Expr::builtin(b, args);
     vec![
         add(c("a"), int(1)),
-        op(Negative, vec![c("a")]),
+        // Unary `-` lowers as `"-"` (see `builtin_op`): the function
+        // `negative(x)` is a registry function instead.
+        Expr::function("-", vec![c("a")]),
         eq(c("a"), int(1)),
         op(crate::Builtin::Not, vec![eq(c("a"), int(1))]),
         op(crate::Builtin::Not, vec![eq(c("a"), int(1))]),
@@ -1347,6 +1375,23 @@ fn resolution_reads_only_its_configs() {
         ResolutionConf::from_conf(|_| None),
         ResolutionConf::default()
     );
+    // The timestamp type and session zone flow through `from_conf`: unset
+    // is UTC, fixed offsets resolve, regions and malformed zones are `None`.
+    let ntz =
+        ResolutionConf::from_conf(|k| (k == "spark.sql.timestampType").then_some("TIMESTAMP_NTZ"));
+    assert!(ntz.timestamp_ntz);
+    assert_eq!(ntz.session_zone, Some(0));
+    let plus =
+        ResolutionConf::from_conf(|k| (k == "spark.sql.session.timeZone").then_some("+05:30"));
+    assert_eq!(plus.session_zone, Some(19_800));
+    assert!(!plus.timestamp_ntz);
+    let region = ResolutionConf::from_conf(|k| {
+        (k == "spark.sql.session.timeZone").then_some("America/Los_Angeles")
+    });
+    assert_eq!(region.session_zone, None);
+    let bad =
+        ResolutionConf::from_conf(|k| (k == "spark.sql.session.timeZone").then_some("Mars/Base"));
+    assert_eq!(bad.session_zone, None);
     // Analysis has no configuration source besides `AnalysisContext::conf`
     // (the type holds none): the same context gives the same result.
     let c = ctx();
@@ -1904,4 +1949,509 @@ fn try_arithmetic_casts_its_arguments_in_try_mode() {
     );
     // A TRY cast of a string may be NULL; `try_*` results are nullable anyway.
     assert!(try_add.output[0].nullable);
+}
+
+/// Typed datetime literals resolve in the analyzer with the session zone.
+#[test]
+fn typed_literals_resolve_with_the_session_zone() {
+    use crate::{ExprNode, Literal, LogicalPlan, Plan, PlanNode, ResolvedExpr, TypedLiteralKind};
+    let project = |kind: TypedLiteralKind, value: &str, conf: ResolutionConf| {
+        let expr = Expr::new(ExprNode::TypedLiteral {
+            kind,
+            value: value.to_owned(),
+        });
+        let plan = LogicalPlan::new(crate::PlanNode::Project {
+            input: std::sync::Arc::new(LogicalPlan::new(crate::PlanNode::OneRowRelation)),
+            exprs: vec![std::sync::Arc::new(expr)],
+        });
+        let plan = Plan::try_new(plan).unwrap();
+        let ctx = context(MemoryCatalog::new("spark_catalog"), conf);
+        block_on(DefaultAnalyzer.analyze(&plan, &ctx))
+    };
+    // The instant a one-column project holds, unwrapping its alias.
+    let micros_of = |plan: &LogicalPlan| {
+        let PlanNode::Project { exprs, .. } = &plan.node else {
+            panic!("not a project: {plan}");
+        };
+        let inner = match &exprs[0].node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
+            ExprNode::Literal(_) => &exprs[0],
+            other => panic!("not a literal: {other:?}"),
+        };
+        match &inner.node {
+            ExprNode::Literal(Literal::Timestamp(v)) => *v,
+            other => panic!("not a timestamp: {other:?}"),
+        }
+    };
+    let utc = ResolutionConf {
+        session_zone: Some(0),
+        ..ResolutionConf::default()
+    };
+    let plus = ResolutionConf {
+        session_zone: Some(19_800),
+        ..ResolutionConf::default()
+    };
+    let ntz_conf = ResolutionConf {
+        timestamp_ntz: true,
+        session_zone: Some(0),
+        ..ResolutionConf::default()
+    };
+    let region = ResolutionConf {
+        session_zone: None,
+        ..ResolutionConf::default()
+    };
+    // Plain `TIMESTAMP` is an instant by default, wall-clock under NTZ.
+    let a = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    assert_eq!(a.output[0].name, "TIMESTAMP '2024-01-01 10:00:00'");
+    let a = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", ntz_conf).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp_ntz");
+    assert_eq!(a.output[0].name, "TIMESTAMP_NTZ '2024-01-01 10:00:00'");
+    // An explicit zone stays an instant under NTZ and ignores the session.
+    let a = project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00+05:30",
+        ntz_conf,
+    )
+    .unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    // The session zone moves wall-clock instants (`+05:30` is 04:30 UTC):
+    // Spark 4.2 gives 1_704_103_200_000_000 µs in UTC and
+    // 1_704_083_400_000_000 µs in +05:30.
+    let utc_plan = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", utc).unwrap();
+    let plus_plan = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", plus).unwrap();
+    assert_eq!(micros_of(utc_plan.plan.root()), 1_704_103_200_000_000);
+    assert_eq!(micros_of(plus_plan.plan.root()), 1_704_083_400_000_000);
+    let a = project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00+00:00",
+        plus,
+    )
+    .unwrap();
+    assert_eq!(a.output[0].name, "TIMESTAMP '2024-01-01 15:30:00'");
+    // `DATE` resolves without a zone.
+    let a = project(TypedLiteralKind::Date, "2016-03-12", utc).unwrap();
+    assert_eq!(a.output[0].name, "DATE '2016-03-12'");
+    assert_eq!(a.output[0].data_type.simple_string(), "date");
+    // Malformed text is `INVALID_TYPED_LITERAL`.
+    for (kind, value) in [
+        (TypedLiteralKind::Timestamp, "2024-13-01 10:00:00"),
+        (TypedLiteralKind::TimestampNtz, "10:00"),
+        (TypedLiteralKind::Date, "2020-02-30"),
+        (TypedLiteralKind::Date, "not-a-date"),
+        (TypedLiteralKind::Date, "10:00"),
+    ] {
+        let e = project(kind, value, utc).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidTypedLiteral,
+            "{value}"
+        );
+    }
+    // Clock-dependent spellings need the query clock.
+    for (kind, value) in [
+        (TypedLiteralKind::Timestamp, "now"),
+        (TypedLiteralKind::TimestampLtz, "10:00"),
+        (TypedLiteralKind::Timestamp, "10:00"),
+    ] {
+        let e = project(kind, value, utc).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{value}"
+        );
+    }
+    // A region session serves explicit zones but not wall-clock time.
+    project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00+05:30",
+        region,
+    )
+    .unwrap();
+    let e = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", region).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    // A region id in the value needs the time-zone database.
+    let e = project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00 America/Los_Angeles",
+        utc,
+    )
+    .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+/// A conditional with `FILTER` names the filter once: the shown call takes
+/// only the function's own arguments, not the filter child.
+#[test]
+fn conditional_with_filter_names_the_filter_once() {
+    let ctx = ctx();
+    let call = Expr::new(ExprNode::Function(crate::FunctionCall {
+        name: "nvl".to_owned(),
+        args: vec![Arc::new(c("a")), Arc::new(int(1))],
+        distinct: false,
+        filter: Some(Arc::new(eq(c("b"), s("x")))),
+    }));
+    let a = run(LogicalPlan::table(["t"]).project(vec![call]), &ctx).unwrap();
+    assert_eq!(a.output[0].name, "nvl(a, 1) FILTER (WHERE (b = x))");
+}
+
+/// Built-in functions plus `rand`, a nondeterministic `DOUBLE` function as
+/// in Spark (the engine does not implement it yet; `sqrt`'s signature
+/// stands in for its typing).
+struct WithRand(crate::analyzer::BuiltinFunctions);
+
+impl crate::analyzer::FunctionRegistry for WithRand {
+    fn lookup(&self, name: &[String], profile: SparkProfile) -> crate::analyzer::FunctionLookup {
+        use crate::analyzer::FunctionLookup;
+        if name.len() == 1 && name[0].eq_ignore_ascii_case("rand") {
+            return match self.0.lookup(&["sqrt".to_owned()], profile) {
+                FunctionLookup::Found(mut e) => {
+                    e.deterministic = false;
+                    FunctionLookup::Found(e)
+                }
+                other => other,
+            };
+        }
+        self.0.lookup(name, profile)
+    }
+
+    fn version(&self) -> u64 {
+        self.0.version()
+    }
+}
+
+/// `OFFSET rand(1)` is `IS_UNFOLDABLE` (cited as `_nondeterministic`), not
+/// `DATA_TYPE` for its `DOUBLE`: Spark checks foldability first (Spark 4.2.0
+/// raises the same for `OFFSET rand()`).
+#[test]
+fn a_nondeterministic_count_is_unfoldable_before_its_type() {
+    let mut cx = ctx();
+    cx.functions = Arc::new(WithRand(crate::analyzer::BuiltinFunctions::new()));
+    let rand = || Expr::function("rand", vec![Expr::from(Literal::Integer(1))]);
+    for (plan, name) in [
+        (LogicalPlan::table(["t"]).offset(rand()), "offset"),
+        (LogicalPlan::table(["t"]).limit(rand()), "limit"),
+    ] {
+        let e = run(plan, &cx).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidLimitLikeExpressionIsUnfoldable,
+            "{e:?}"
+        );
+        let msg = e.error.to_string();
+        assert!(
+            msg.contains("\"_nondeterministic\"") && msg.contains(name),
+            "{msg}"
+        );
+    }
+}
+
+/// An unused CTE is not resolved: its column errors never fail the query.
+/// Spark's golden `cte` case 50 keeps an unused `cte3` whose projection
+/// over the duplicate-case columns of `cte2` would be ambiguous.
+#[test]
+fn unused_cte_definitions_are_not_resolved() {
+    let ctx = ctx();
+    let valid = LogicalPlan::table(["t"]).project(vec![c("a")]);
+    let ambiguous = LogicalPlan::table(["t"])
+        .join(
+            LogicalPlan::table(["u"]),
+            JoinKind::Inner,
+            JoinCondition::None,
+        )
+        .project(vec![c("a")]);
+    assert_eq!(class(&run(ambiguous.clone(), &ctx)), "AMBIGUOUS_REFERENCE");
+    // The main query reads only the valid definition; the ambiguous one
+    // is never referenced, so the query resolves.
+    let unused = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["good"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "good".to_owned(),
+                plan: Arc::new(valid),
+            },
+            Cte {
+                name: "bad".to_owned(),
+                plan: Arc::new(ambiguous),
+            },
+        ],
+    });
+    let a = run(unused, &ctx).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a"]
+    );
+    // Referencing the bad definition fails.
+    let used = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["bad"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "good".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            },
+            Cte {
+                name: "bad".to_owned(),
+                plan: Arc::new(
+                    LogicalPlan::table(["t"])
+                        .join(
+                            LogicalPlan::table(["u"]),
+                            JoinKind::Inner,
+                            JoinCondition::None,
+                        )
+                        .project(vec![c("a")]),
+                ),
+            },
+        ],
+    });
+    assert_eq!(class(&run(used, &ctx)), "AMBIGUOUS_REFERENCE");
+}
+
+/// `SELECT 1 GROUP BY `1`` groups by the select-list alias `1`, even
+/// though the item has no explicit alias (Spark golden `group-by-alias`
+/// case 11). With `groupByAliases` off the same key is unresolved.
+#[test]
+fn group_by_resolves_implicit_select_aliases() {
+    let plan = LogicalPlan::new(PlanNode::OneRowRelation).aggregate(vec![c("1")], vec![int(1)]);
+    let a = run(plan, &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["1"]
+    );
+    let conf = ResolutionConf {
+        group_by_aliases: false,
+        ..ResolutionConf::default()
+    };
+    let no_alias = context(catalog(), conf);
+    let plan = LogicalPlan::new(PlanNode::OneRowRelation).aggregate(vec![c("1")], vec![int(1)]);
+    assert_eq!(
+        class(&run(plan, &no_alias)),
+        "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"
+    );
+}
+
+/// A grouping expression may not contain an aggregate call, however it was
+/// written: directly, or through a select-list alias (`SELECT COUNT(b) AS k
+/// ... GROUP BY k`, Spark golden `group-by-alias`). Without the check the
+/// alias resolves to the aggregate, whose semantic key is already in the
+/// grouping-key set `check_aggregation` skips, so the plan wrongly builds.
+#[test]
+fn group_by_rejects_aggregate_functions() {
+    let aliased = LogicalPlan::table(["t"])
+        .aggregate(vec![c("k")], vec![f("count", vec![c("b")]).alias("k")]);
+    assert_eq!(class(&run(aliased, &ctx())), "GROUP_BY_AGGREGATE");
+    let direct = LogicalPlan::table(["t"]).aggregate(vec![f("count", vec![c("b")])], vec![c("a")]);
+    assert_eq!(class(&run(direct, &ctx())), "GROUP_BY_AGGREGATE");
+}
+
+/// A `GROUP BY` key naming a select-list alias that reads lateral column
+/// aliases is `UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_GROUP_BY` (Spark
+/// golden `column-resolution-aggregate`: `SELECT k AS lca, lca + 1 AS col
+/// ... GROUP BY k, col`). Grouping by a lateral alias itself stays fine.
+#[test]
+fn group_by_rejects_aliases_reading_lateral_aliases() {
+    let items = || vec![c("a").alias("lca"), add(c("lca"), int(1)).alias("col")];
+    let lateral = LogicalPlan::table(["t"]).aggregate(vec![c("col")], items());
+    assert_eq!(
+        class(&run(lateral, &ctx())),
+        "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_GROUP_BY"
+    );
+    let direct = LogicalPlan::table(["t"]).aggregate(vec![c("lca")], items());
+    run(direct, &ctx()).unwrap();
+}
+
+/// A plan shared under two inner `WITH` scopes with different shadowing
+/// names is visited under each scope: visits are keyed by scope contents,
+/// not scope length, so a shadowing scope cannot hide a read the other
+/// scope reports and drop a definition the input needs.
+#[test]
+fn cte_refs_visit_shared_plans_under_each_scope() {
+    let shared = Arc::new(LogicalPlan::table(["x"]).project(vec![c("a")]));
+    let inner = |name: &str| {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::clone(&shared),
+            ctes: vec![Cte {
+                name: name.to_owned(),
+                plan: Arc::new(LogicalPlan::table(["u"]).project(vec![c("a")])),
+            }],
+        })
+    };
+    // The right branch shadows `x`, so `shared` is visited under its scope
+    // first (a join pops its right child first): keying visits by scope
+    // length alone would skip the left branch's read and drop the outer `x`.
+    let input = inner("y").join(inner("x"), JoinKind::Inner, JoinCondition::None);
+    let plan = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(input),
+        ctes: vec![Cte {
+            name: "x".to_owned(),
+            plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        }],
+    });
+    let a = run(plan, &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a", "a"]
+    );
+}
+
+/// The same shared subquery expression under two inner `WITH` scopes with
+/// different shadowing names is visited under each scope too: expression
+/// visits are keyed by scope contents as well, or the shadowed visit hides
+/// the read the other scope's subquery reports.
+#[test]
+fn cte_refs_visit_shared_exprs_under_each_scope() {
+    let sub: Arc<Expr> = Arc::new(Expr::subquery(
+        crate::SubqueryKind::Scalar,
+        LogicalPlan::table(["x"]).project(vec![c("a")]),
+    ));
+    let branch = |name: &str| {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(LogicalPlan::new(PlanNode::Project {
+                input: Arc::new(LogicalPlan::table(["t"])),
+                exprs: vec![Arc::clone(&sub)],
+            })),
+            ctes: vec![Cte {
+                name: name.to_owned(),
+                plan: Arc::new(LogicalPlan::table(["u"]).project(vec![c("a")])),
+            }],
+        })
+    };
+    // As above, the right branch shadows `x` and is visited first.
+    let input = branch("y").join(branch("x"), JoinKind::Inner, JoinCondition::None);
+    let plan = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(input),
+        ctes: vec![Cte {
+            name: "x".to_owned(),
+            plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        }],
+    });
+    let a = run(plan, &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["scalarsubquery()", "scalarsubquery()"]
+    );
+}
+
+/// An inner `WITH` name shadows the outer one: reads inside the inner scope
+/// resolve to the inner definition, so an outer definition nothing else
+/// reads is dropped (even when it would not resolve), while a read outside
+/// the inner scope still needs the outer definition.
+#[test]
+fn inner_with_names_shadow_outer_ctes() {
+    let bad = || {
+        LogicalPlan::table(["t"])
+            .join(
+                LogicalPlan::table(["u"]),
+                JoinKind::Inner,
+                JoinCondition::None,
+            )
+            .project(vec![c("a")])
+    };
+    assert_eq!(class(&run(bad(), &ctx())), "AMBIGUOUS_REFERENCE");
+    let good = || LogicalPlan::table(["t"]).project(vec![c("a")]);
+    let inner = || {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(LogicalPlan::table(["x"]).project(vec![c("a")])),
+            ctes: vec![Cte {
+                name: "x".to_owned(),
+                plan: Arc::new(good()),
+            }],
+        })
+    };
+    // Only the inner `x` is read: the outer one is dropped, so its
+    // ambiguity never fails the query.
+    let shadowed = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(inner()),
+        ctes: vec![Cte {
+            name: "x".to_owned(),
+            plan: Arc::new(bad()),
+        }],
+    });
+    let a = run(shadowed, &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a"]
+    );
+    // A read outside the inner scope still needs the outer definition.
+    let outer_read = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(inner().join(
+            LogicalPlan::table(["x"]).project(vec![c("a")]),
+            JoinKind::Inner,
+            JoinCondition::None,
+        )),
+        ctes: vec![Cte {
+            name: "x".to_owned(),
+            plan: Arc::new(bad()),
+        }],
+    });
+    assert_eq!(class(&run(outer_read, &ctx())), "AMBIGUOUS_REFERENCE");
+}
+
+/// A definition's reads see only the outer CTEs and the earlier definitions:
+/// a forward reference never marks a later definition, so the read falls
+/// through to table binding.
+#[test]
+fn cte_forward_references_fall_through_to_tables() {
+    // `a` reads `b`, which is defined later: `b` is dropped, and resolving
+    // `a` reads a missing table.
+    let forward = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["a"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "a".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["b"]).project(vec![c("a")])),
+            },
+            Cte {
+                name: "b".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            },
+        ],
+    });
+    assert_eq!(class(&run(forward, &ctx())), "TABLE_OR_VIEW_NOT_FOUND");
+    // The same definitions in dependency order resolve.
+    let ordered = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["b"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "a".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            },
+            Cte {
+                name: "b".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["a"]).project(vec![c("a")])),
+            },
+        ],
+    });
+    let a = run(ordered, &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a"]
+    );
+}
+
+/// CTE-name matching follows `spark.sql.caseSensitive`: case-insensitive by
+/// default, exact when set.
+#[test]
+fn cte_name_matching_follows_case_sensitivity() {
+    let plan = || {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(LogicalPlan::table(["x"]).project(vec![c("a")])),
+            ctes: vec![Cte {
+                name: "X".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            }],
+        })
+    };
+    let a = run(plan(), &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a"]
+    );
+    let sensitive = ResolutionConf {
+        case_sensitive: true,
+        ..ResolutionConf::default()
+    };
+    assert_eq!(
+        class(&run(plan(), &context(catalog(), sensitive))),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
 }

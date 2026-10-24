@@ -26,8 +26,9 @@ pub(crate) struct AggCore {
     pub(crate) output_schema: SchemaRef,
     /// Each aggregate's columns in the state schema.
     pub(crate) ranges: Vec<Range<usize>>,
-    /// The row layout of the keys, when they are all fixed-width (the
-    /// row tables of `krishiv.exec.agg.rowLayout` need it; others keep
+    /// The row layout of the keys, when every key type has one: fixed
+    /// widths, strings and binaries (the row tables of
+    /// `krishiv.exec.agg.rowLayout` need it; dictionary and nested keys keep
     /// the arrow-row [`KeyTable`]).
     pub(crate) rows: Option<RowLayout>,
 }
@@ -50,8 +51,7 @@ impl AggCore {
         // accepts them), and the row path must do what it does.
         let rows = (!types.is_empty())
             .then(|| RowLayout::new(&types, &vec![true; types.len()]).ok())
-            .flatten()
-            .filter(RowLayout::is_fixed_width);
+            .flatten();
         let state_schema = spec.state_schema()?;
         let output_schema = spec.output_schema()?;
         let mut ranges = Vec::with_capacity(spec.aggregates.len());
@@ -389,6 +389,19 @@ pub(crate) enum TablePrepared {
 }
 
 impl Table {
+    /// Widens a narrow row table that is due to, if `reserve` grants the
+    /// bytes it needs while it runs (returned to the caller after); a
+    /// table that cannot stays narrow. No-op for other tables.
+    pub(crate) fn widen_if(&mut self, reserve: impl FnOnce(usize) -> bool) -> Result<()> {
+        if let Self::Rows(t) = self
+            && t.wants_widen()
+            && reserve(t.widen_bytes())
+        {
+            t.widen()?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn not_worth_spilling(&self) -> bool {
         match self {
             Self::Keys(t) => t.not_worth_spilling(),
@@ -400,6 +413,15 @@ impl Table {
         match self {
             Self::Keys(t) => t.len(),
             Self::Rows(t) => t.len(),
+        }
+    }
+
+    /// Group counts of the table's radix partitions, in position order
+    /// (one partition for an `AggTable`).
+    pub(crate) fn part_lens(&self) -> Vec<usize> {
+        match self {
+            Self::Keys(t) => vec![t.len()],
+            Self::Rows(t) => (0..t.part_count()).map(|p| t.part_len(p)).collect(),
         }
     }
 
@@ -430,6 +452,16 @@ impl Table {
             (Self::Keys(t), TablePrepared::Keys(p)) => Ok(t.projected(p)),
             (Self::Rows(t), TablePrepared::Rows(p)) => Ok(t.projected(p)),
             _ => Err(mixed()),
+        }
+    }
+
+    /// Bytes [`apply`](Self::apply) needs while it runs, beyond
+    /// [`projected`](Self::projected), and frees before it returns: a row
+    /// table's scatter of the batch over its partitions.
+    pub(crate) fn transient(&self, p: &TablePrepared) -> usize {
+        match (self, p) {
+            (Self::Rows(t), TablePrepared::Rows(p)) => t.transient(p),
+            _ => 0,
         }
     }
 

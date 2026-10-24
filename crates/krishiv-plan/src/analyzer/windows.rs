@@ -66,7 +66,7 @@ pub(super) fn window_function_sql(name: &str, shown: &Expr) -> String {
     if RANK_LIKE.contains(&name) {
         format!("{}()", name.to_uppercase())
     } else {
-        pretty(shown)
+        pretty(shown, None)
     }
 }
 
@@ -87,10 +87,10 @@ pub(super) fn window_in_aggregate(origin: Origin) -> AnalysisError {
 
 /// `INVALID_AGGREGATE_FILTER.CONTAINS_WINDOW_FUNCTION` for `filter`.
 pub(super) fn window_in_filter(filter: &Bound, origin: Origin) -> AnalysisError {
-    let window = first_window(&filter.shown()).map_or_else(String::new, |w| pretty(&w));
+    let window = first_window(&filter.shown()).map_or_else(String::new, |w| pretty(&w, None));
     AnalysisError::new(
         InvalidAggregateFilterContainsWindowFunction {
-            filter_expr: format!("\"{}\"", pretty(&filter.shown())),
+            filter_expr: format!("\"{}\"", pretty(&filter.shown(), None)),
             window_expr: format!("\"{window}\""),
         },
         origin,
@@ -110,7 +110,7 @@ pub(super) fn misplaced(use_: WindowUse, b: &Bound, origin: Origin) -> AnalysisE
         WindowUse::Where => clause("WHERE"),
         WindowUse::Having => clause("HAVING"),
         WindowUse::Allowed | WindowUse::Other => {
-            let window = first_window(&b.shown()).map_or_else(String::new, |w| pretty(&w));
+            let window = first_window(&b.shown()).map_or_else(String::new, |w| pretty(&w, None));
             UnsupportedExprForOperator {
                 invalid_expr_sqls: format!("\"{window}\""),
             }
@@ -142,8 +142,8 @@ fn frame_string(f: &WindowFrame) -> String {
         FrameBound::CurrentRow => "currentrow$()".to_owned(),
         FrameBound::UnboundedFollowing => "unboundedfollowing$()".to_owned(),
         FrameBound::Offset(e) => match crate::expr::negated(e) {
-            Some(n) => format!("-{}", pretty(n)),
-            None => pretty(e),
+            Some(n) => format!("-{}", pretty(n, None)),
+            None => pretty(e, None),
         },
     };
     let units = match f.units {
@@ -164,8 +164,8 @@ fn bound_sql(b: &FrameBound) -> String {
         FrameBound::CurrentRow => "CURRENT ROW".to_owned(),
         FrameBound::UnboundedFollowing => "UNBOUNDED FOLLOWING".to_owned(),
         FrameBound::Offset(e) => match crate::expr::negated(e) {
-            Some(n) => format!("{} PRECEDING", pretty(n)),
-            None => format!("{} FOLLOWING", pretty(e)),
+            Some(n) => format!("{} PRECEDING", pretty(n, None)),
+            None => format!("{} FOLLOWING", pretty(e, None)),
         },
     };
     format!("\"{text}\"")
@@ -173,10 +173,13 @@ fn bound_sql(b: &FrameBound) -> String {
 
 /// Spark's text of `function OVER (spec)`, as its errors quote it.
 fn window_text(function: &Arc<Expr>, spec: &WindowSpec) -> String {
-    pretty(&Expr::new(ExprNode::Window(WindowExpr {
-        function: Arc::clone(function),
-        window: WindowSpecRef::Spec(spec.clone()),
-    })))
+    pretty(
+        &Expr::new(ExprNode::Window(WindowExpr {
+            function: Arc::clone(function),
+            window: WindowSpecRef::Spec(spec.clone()),
+        })),
+        None,
+    )
 }
 
 impl Resolver<'_> {
@@ -361,13 +364,16 @@ impl Resolver<'_> {
                 .map_or_else(String::new, |a| a.col.name.clone());
             let shown = shown_of(rest.iter().map(Bound::shown).collect());
             let ids: Vec<crate::AttrId> = kids.iter().flat_map(|k| k.lateral.clone()).collect();
-            let text = pretty(&super::ops::lateral_refs(
-                &Arc::new(Expr::new(ExprNode::Window(WindowExpr {
-                    function: function.shown(),
-                    window: WindowSpecRef::Spec(shown),
-                }))),
-                &ids,
-            ));
+            let text = pretty(
+                &super::ops::lateral_refs(
+                    &Arc::new(Expr::new(ExprNode::Window(WindowExpr {
+                        function: function.shown(),
+                        window: WindowSpecRef::Spec(shown),
+                    }))),
+                    &ids,
+                ),
+                None,
+            );
             return Err(AnalysisError::new(
                 UnsupportedFeatureLateralColumnAliasInWindow {
                     lca: format!("`{lca}`"),
@@ -385,7 +391,7 @@ impl Resolver<'_> {
             _ => {
                 return Err(AnalysisError::new(
                     UnsupportedExprForWindow {
-                        sql_expr: format!("\"{}\"", pretty(&function.shown())),
+                        sql_expr: format!("\"{}\"", pretty(&function.shown(), None)),
                     },
                     e.origin,
                 ));

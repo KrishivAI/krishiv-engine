@@ -65,6 +65,11 @@ pub(crate) fn statement(s: &Statement, sql: &str, opts: ParserOptions) -> R {
     match s {
         Statement::Query(q) => query(q, sql, opts),
         Statement::Explain(e) => statement(&e.statement, sql, opts),
+        // Assignments and resets carry raw strings, and drops name one
+        // view: nothing Spark's builder checks. A created view's query is
+        // checked as a statement of its own.
+        Statement::Set(_) | Statement::Reset(_) | Statement::DropView(_) => Ok(()),
+        Statement::CreateView(v) => query(&v.query, sql, opts),
     }
 }
 
@@ -76,6 +81,12 @@ pub(crate) fn query(q: &Query, sql: &str, opts: ParserOptions) -> R {
 /// Checks the column types of a table schema.
 pub(crate) fn columns(columns: &[StructField]) -> R {
     columns.iter().try_for_each(|c| data_type(&c.data_type))
+}
+
+/// Checks one named-expression string (`F.expr`, `selectExpr` once per
+/// argument string, `filter`/`where` strings); `sql` is its text.
+pub(crate) fn expression(e: &Expr, sql: &str, opts: ParserOptions) -> R {
+    Checker { sql, opts }.expr(e)
 }
 
 /// Functions whose first argument is a `datetimeUnit`: a string there is

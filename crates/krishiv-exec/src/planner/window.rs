@@ -7,20 +7,21 @@
 use std::sync::Arc;
 
 use krishiv_plan::{
-    Expr, ExprNode, FrameBound, FrameUnits, FunctionKind, NullOrdering, ResolvedExpr,
+    AttrId, Expr, ExprNode, FrameBound, FrameUnits, FunctionKind, NullOrdering, ResolvedExpr,
     SortDirection, SortOrder, WindowSpecRef,
 };
 
 use super::aggregate::{non_null_literal, picks};
 use super::build::{Planned, Planner, internal, list, orders, unsupported};
+use super::properties::Distribution;
 use crate::aggregate::{AggInput, AggregateExpr, AggregateFunction};
 use crate::error::Result;
 use crate::operator::Source;
 use crate::operators::SortKey;
 use crate::physical::PhysNode;
 use crate::window::{
-    FrameBound as Bound, FrameUnits as Units, Window, WindowFrame, WindowFunction,
-    WindowFunctionPlan, WindowPlan,
+    FrameBound as Bound, FrameUnits as Units, RequiredDistribution, Window, WindowFrame,
+    WindowFunction, WindowFunctionPlan, WindowPlan,
 };
 
 /// One window expression, read off the plan: its function call, frame and
@@ -44,16 +45,6 @@ impl Planner<'_> {
         // function's arguments and filter.
         let mut wanted: Vec<Arc<Expr>> = partition_by.to_vec();
         wanted.extend(order_by.iter().map(|o| Arc::clone(&o.expr)));
-        // Without keys, a constant one: the sort then gathers every row on
-        // one driver.
-        // TODO(P2-T174 part 2, PR #146's property pass): require
-        // `WindowPlan::required_distribution` of the input below the sort
-        // (`Distribution::Single`, or `Clustered` on the partition
-        // attributes) and drop this constant key.
-        let gather = partition_by.is_empty() && order_by.is_empty();
-        if gather {
-            wanted.push(Arc::new(Expr::literal(krishiv_plan::Literal::Integer(0))));
-        }
         let mut arg_at = Vec::with_capacity(calls.len());
         for c in &calls {
             let args = arguments(c.f);
@@ -78,9 +69,6 @@ impl Planner<'_> {
             })
             .collect();
         keys.extend(order_keys.iter().copied());
-        if gather {
-            keys.push(SortKey::asc(columns[np + no]));
-        }
         let mut functions = Vec::with_capacity(calls.len());
         for (c, &(start, n)) in calls.iter().zip(&arg_at) {
             let args = &columns[start..start + n];
@@ -107,6 +95,20 @@ impl Planner<'_> {
             order_by: order_keys,
             functions,
         };
+        // Every row of a partition in one partition of the input (the
+        // property pass inserts an exchange where the input is not placed
+        // so), then the local sort; without keys the sort gathers the rows
+        // into one stream.
+        let input = match window.required_distribution() {
+            RequiredDistribution::Single => self.require(input, Distribution::Single)?,
+            RequiredDistribution::Clustered(cols) => {
+                let attrs: Vec<AttrId> = cols
+                    .iter()
+                    .map(|&c| input.column_attr(c))
+                    .collect::<Result<_>>()?;
+                self.require(input, Distribution::Clustered(&attrs))?
+            }
+        };
         // The sort, then the window over it.
         let sort_schema = crate::physical::sort_op(&input.schema, &keys, None)?.schema();
         let layout = input.layout.clone();
@@ -117,11 +119,6 @@ impl Planner<'_> {
             .map(|e| SortOrder::asc(Arc::clone(e)))
             .collect();
         sorted_by.extend(order_by.iter().cloned());
-        if gather {
-            sorted_by.push(SortOrder::asc(Expr::literal(
-                krishiv_plan::Literal::Integer(0),
-            )));
-        }
         let sort_detail = orders(&sorted_by);
         let sorted = input.wrap(
             |input| PhysNode::Sort { input, keys },
@@ -129,7 +126,12 @@ impl Planner<'_> {
             layout,
             ("Sort", sort_detail),
         );
-        let op = Window::new(Arc::clone(&sorted.schema), window.clone(), self.env.ansi)?;
+        let op = Window::new(
+            Arc::clone(&sorted.schema),
+            window.clone(),
+            self.env.ansi,
+            None,
+        )?;
         let mut layout = sorted.layout.clone();
         layout.extend(calls.iter().map(|c| c.output.id));
         let names: Vec<String> = calls.iter().map(|c| c.output.name.clone()).collect();

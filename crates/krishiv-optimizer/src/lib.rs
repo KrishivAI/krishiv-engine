@@ -13,6 +13,8 @@
 //!    outer joins inner where a filter rejects their NULL rows), join
 //!    conditions into the side they read, projection collapse and removal,
 //!    limit pushdown.
+//!    **Algebraic sum**, once: `SUM(x + c)` over a narrow integral column
+//!    becomes `SUM(x) + c * COUNT(x)` (`sum_rewrite`).
 //! 2. **Restrict**, then alternating with join order until neither
 //!    changes the plan: an aggregate below a join that drops its unmatched
 //!    groups groups only the input rows whose keys the join's other side
@@ -47,6 +49,7 @@ mod prune;
 mod pushdown;
 mod restrict;
 mod stats;
+mod sum_rewrite;
 
 use std::sync::Arc;
 
@@ -193,6 +196,9 @@ fn run(
             })
         })?;
         let root = batch(root, "Rewrite", &mut t)?;
+        let root = t.once("AlgebraicSum", &root, |r| {
+            sum_rewrite::rewrite(Arc::clone(r))
+        })?;
         // Restriction and join ordering alternate until neither changes
         // the plan: ordering sees the restricted estimates, and restriction
         // sees every join the ordering forms (which side an aggregate joins

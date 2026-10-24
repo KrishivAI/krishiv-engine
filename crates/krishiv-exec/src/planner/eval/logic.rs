@@ -297,7 +297,12 @@ pub(super) fn prim<T: arrow_array::ArrowPrimitiveType>(v: &Value) -> Operand<'_,
 }
 
 /// `l kind r` (NULL where either is NULL).
-fn cmp(kind: CompareKind, l: &Value, r: &Value, ctx: &KernelCtx) -> Result<BooleanArray> {
+pub(super) fn cmp(
+    kind: CompareKind,
+    l: &Value,
+    r: &Value,
+    ctx: &KernelCtx,
+) -> Result<BooleanArray> {
     macro_rules! prim {
         ($t:ty) => {{
             let (a, b) = (prim::<$t>(l), prim::<$t>(r));
