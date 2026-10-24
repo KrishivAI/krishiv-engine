@@ -485,6 +485,13 @@ fn run<R: TopRule>(src: &str, toks: Vec<Token>, opts: ParserOptions) -> Result<R
     Err(failed.into())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests: parsers made on this thread (each is one parse attempt over the
+    /// statement), so a test bounds the work of a parse by count, not time.
+    pub(crate) static PARSERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The most `::` complex-cast keywords [`run`] retries as bare types.
 const MAX_CAST_RETRIES: usize = 16;
 
@@ -561,6 +568,8 @@ impl<'s> Parser<'s> {
     /// A parser at the start of `toks`; `force_bare` is the token of a
     /// complex type keyword after `::` to read as a bare type.
     fn new(src: &'s str, toks: Vec<Token>, opts: ParserOptions, force_bare: Option<usize>) -> Self {
+        #[cfg(test)]
+        PARSERS.set(PARSERS.get() + 1);
         let classes = toks
             .iter()
             .map(|t| {
