@@ -142,21 +142,8 @@ impl Planner<'_> {
         // partition keeps its first `n` rows before the gather.
         let input = match top {
             Some(n) if !input.placement.satisfies(Distribution::Single) => {
-                let schema = top_n_op(&input.schema, &keys, n)?.schema();
-                let layout = input.layout.clone();
-                let local = keys.clone();
-                let mut local = input.wrap(
-                    |input| PhysNode::TopN {
-                        input,
-                        keys: local,
-                        limit: n,
-                    },
-                    schema,
-                    layout,
-                    ("LocalTopN", format!("{n}, {}", orders(&sorted_by))),
-                );
-                local.sites.clear();
-                local
+                let detail = format!("{n}, {}", orders(&sorted_by));
+                Self::local_top_n(input, &keys, n, detail)?
             }
             _ => input,
         };

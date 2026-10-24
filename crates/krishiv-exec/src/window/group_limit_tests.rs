@@ -259,3 +259,28 @@ async fn the_operator_reports_its_rows() {
     assert_eq!(count("rows_in"), Some(crate::metrics::Metric::Count(3)));
     assert_eq!(count("rows_kept"), Some(crate::metrics::Metric::Count(1)));
 }
+
+/// A batch the sink refuses for memory comes back: its pruning is counted
+/// once, when it is taken.
+#[tokio::test]
+async fn a_refused_batch_is_not_counted_as_pruned() {
+    use crate::operator::{Sink, SinkStatus};
+    let (_root, ctx) = task(64);
+    let limit = group_limit(RankLike::RowNumber, 1, true);
+    let keys = vec![SortKey::asc(0), SortKey::asc(1)];
+    let sort = Sort::new(schema(), &keys, None)
+        .unwrap()
+        .with_group_limit(&keys, &limit)
+        .unwrap();
+    let global = Sink::global_state(&sort, &ctx).unwrap();
+    let mut local = Sink::local_state(&sort, &ctx, &global).unwrap();
+    let rows: Vec<Row> = (0..8).map(|i| (Some(0), Some(i), i, None)).collect();
+    for _ in 0..3 {
+        let status = sort.sink(batch(&rows), &mut local, &global).unwrap();
+        assert!(
+            matches!(status, SinkStatus::NeedMemory { .. }),
+            "{status:?}"
+        );
+    }
+    assert_eq!(sort.metrics().rows_pruned, 0);
+}

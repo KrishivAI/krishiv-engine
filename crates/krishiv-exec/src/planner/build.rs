@@ -1092,6 +1092,32 @@ impl<'a> Planner<'a> {
         Ok(planned)
     }
 
+    /// `input` cut to its first `n` rows by `keys` in each partition,
+    /// shown with `detail`.
+    pub(crate) fn local_top_n(
+        input: Planned,
+        keys: &[SortKey],
+        n: u64,
+        detail: String,
+    ) -> Result<Planned> {
+        let schema = top_n_op(&input.schema, keys, n)?.schema();
+        let layout = input.layout.clone();
+        let local = keys.to_vec();
+        let mut local = input.wrap(
+            |input| PhysNode::TopN {
+                input,
+                keys: local,
+                limit: n,
+            },
+            schema,
+            layout,
+            ("LocalTopN", detail),
+        );
+        // A runtime filter below would drop rows the top-N ranks.
+        local.sites.clear();
+        Ok(local)
+    }
+
     /// `input` cut to `n` rows in each partition.
     pub(crate) fn local_limit(input: Planned, n: u64) -> Planned {
         let schema = Arc::clone(&input.schema);
@@ -1116,21 +1142,7 @@ impl<'a> Planner<'a> {
         let input = if input.placement.satisfies(Distribution::Single) {
             input
         } else {
-            let schema = top_n_op(&input.schema, &keys, n)?.schema();
-            let layout = input.layout.clone();
-            let local = keys.clone();
-            let mut local = input.wrap(
-                |input| PhysNode::TopN {
-                    input,
-                    keys: local,
-                    limit: n,
-                },
-                schema,
-                layout,
-                ("LocalTopN", format!("{n}, {}", orders(order))),
-            );
-            local.sites.clear();
-            local
+            Self::local_top_n(input, &keys, n, format!("{n}, {}", orders(order)))?
         };
         let input = self.require(input, Distribution::Single)?;
         let schema = top_n_op(&input.schema, &keys, n)?.schema();

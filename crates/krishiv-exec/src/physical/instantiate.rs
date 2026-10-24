@@ -250,7 +250,12 @@ impl Instantiation<'_> {
     /// adds report under it.
     fn node(&mut self, n: &PhysNode) -> Result<Built> {
         let built = self.untagged(n)?;
-        Ok(match self.ids.get(&std::ptr::from_ref(n).addr()) {
+        Ok(self.tag(n, built))
+    }
+
+    /// `built` (the operators of `n`) under `n`'s `EXPLAIN ANALYZE` id.
+    fn tag(&self, n: &PhysNode, built: Built) -> Built {
+        match self.ids.get(&std::ptr::from_ref(n).addr()) {
             Some(&id) => Built {
                 schema: built.schema,
                 node: Arc::new(Tagged {
@@ -259,7 +264,7 @@ impl Instantiation<'_> {
                 }),
             },
             None => built,
-        })
+        }
     }
 
     fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
@@ -338,12 +343,15 @@ impl Instantiation<'_> {
                 // Directly over its sort, the sort also prunes each sorted
                 // batch (the limit's `Partial` mode).
                 let input = match input.as_ref() {
-                    PhysNode::Sort { input, keys } if limit.sorted_by(keys) => {
+                    sort_node @ PhysNode::Sort { input, keys } if limit.sorted_by(keys) => {
                         let input = self.node(input)?;
                         let sort = Sort::new(Arc::clone(&input.schema), keys, self.spill.clone())?
                             .with_group_limit(keys, limit)?;
                         let sort = Arc::new(sort);
-                        breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort)
+                        let built = breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort);
+                        // Built here, not through `node`: tag it as `node`
+                        // does, for `EXPLAIN ANALYZE`.
+                        self.tag(sort_node, built)
                     }
                     other => self.node(other)?,
                 };

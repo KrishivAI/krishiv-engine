@@ -84,6 +84,24 @@ struct PruneStats {
     off: bool,
 }
 
+impl PruneStats {
+    /// Counts a pruned batch the sink took: `rows` looked at (none: not
+    /// pruned), `dropped` of them dropped.
+    fn count(&mut self, rows: usize, dropped: usize) {
+        if rows == 0 {
+            return;
+        }
+        self.batches = self.batches.saturating_add(1);
+        self.rows_in = self.rows_in.saturating_add(rows as u64);
+        self.rows_out = self.rows_out.saturating_add((rows - dropped) as u64);
+        if self.batches >= PRUNE_PROBE_BATCHES
+            && self.rows_out.saturating_mul(10) > self.rows_in.saturating_mul(9)
+        {
+            self.off = true;
+        }
+    }
+}
+
 /// `ORDER BY` as a pipeline breaker: the sink side of one pipeline and the
 /// source side of the next (one driver, so the order holds).
 ///
@@ -151,12 +169,19 @@ impl Sort {
 
     /// `sorted` without its rows past the group limit (see
     /// [`Sort::with_group_limit`]).
-    fn prune(&self, sorted: SortedBatch, stats: &mut PruneStats) -> Result<SortedBatch> {
+    /// Returns the batch and how many rows were looked at (0 without
+    /// pruning) and dropped; the caller counts them once the batch is
+    /// taken ([`PruneStats::count`]).
+    fn prune(
+        &self,
+        sorted: SortedBatch,
+        stats: &PruneStats,
+    ) -> Result<(SortedBatch, usize, usize)> {
         let Some(p) = &self.prune else {
-            return Ok(sorted);
+            return Ok((sorted, 0, 0));
         };
         if stats.off || !sorted.batch.is_unweighted() {
-            return Ok(sorted);
+            return Ok((sorted, 0, 0));
         }
         let partition = p
             .partition
@@ -183,20 +208,10 @@ impl Sort {
             prev = Some(at);
         }
         let n = sorted.order.len();
-        stats.batches = stats.batches.saturating_add(1);
-        stats.rows_in = stats.rows_in.saturating_add(n as u64);
-        stats.rows_out = stats.rows_out.saturating_add(kept.len() as u64);
-        if stats.batches >= PRUNE_PROBE_BATCHES
-            && stats.rows_out.saturating_mul(10) > stats.rows_in.saturating_mul(9)
-        {
-            stats.off = true;
+        let dropped = n - kept.len();
+        if dropped == 0 {
+            return Ok((sorted, n, 0));
         }
-        if kept.len() == n {
-            return Ok(sorted);
-        }
-        self.counters
-            .pruned
-            .fetch_add((n - kept.len()) as u64, Ordering::Relaxed);
         let indices: Vec<(usize, usize)> = kept.iter().map(|&i| (0, i as usize)).collect();
         let batch = interleave_batches(&self.schema, &[&sorted.batch], &indices)?;
         let bytes = kept
@@ -209,11 +224,15 @@ impl Sort {
         }
         let m = u32::try_from(kept.len())
             .map_err(|_| internal("a batch has more than u32::MAX rows".to_owned()))?;
-        Ok(SortedBatch {
-            batch,
-            rows,
-            order: (0..m).collect(),
-        })
+        Ok((
+            SortedBatch {
+                batch,
+                rows,
+                order: (0..m).collect(),
+            },
+            n,
+            dropped,
+        ))
     }
 
     /// Bounds the runs one merge reads at once (at least 2); more runs are
@@ -741,7 +760,8 @@ impl Sink for Sort {
         } else {
             input
         };
-        let sorted = self.prune(SortedBatch::new(input, &self.encoder)?, &mut l.prune)?;
+        let (sorted, looked_at, dropped) =
+            self.prune(SortedBatch::new(input, &self.encoder)?, &l.prune)?;
         let bytes = sorted.bytes();
         let extra = if self.spill.is_some() {
             headroom(row_bytes, l.batch_rows).saturating_sub(l.buffer.headroom.size())
@@ -760,6 +780,11 @@ impl Sink for Sort {
         b.row_bytes = row_bytes;
         b.batches.push(Arc::new(sorted));
         self.counters.rows.fetch_add(rows as u64, Ordering::Relaxed);
+        // Counted once taken: a batch refused for memory comes back.
+        l.prune.count(looked_at, dropped);
+        self.counters
+            .pruned
+            .fetch_add(dropped as u64, Ordering::Relaxed);
         if self.spill.is_some() {
             l.signal.set_spillable_bytes(b.reservation.size());
         }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use krishiv_common::config::Config;
 use krishiv_exec::planner::{DefaultPlanner, ExplainNode, PhysicalPlanner as _, PlanningContext};
 
-use super::{Env, Runnable, env, run};
+use super::{Env, Runnable, env, run, run_in};
 
 /// The plan of `sql` as `EXPLAIN` prints it, under `threshold`
 /// (`spark.sql.optimizer.windowGroupLimitThreshold`; `None`: unset).
@@ -365,6 +365,12 @@ fn limited_plans_return_sparks_rows() {
         ),
     ];
     for (sql, want) in &cases {
+        // The limit changes every plan: the rows come from the limited one.
+        assert_ne!(
+            explain_with(&env, sql, None),
+            explain_with(&env, sql, Some("-1")),
+            "{sql} is not limited"
+        );
         assert_eq!(sorted_rows(&env, sql, None), *want, "{sql}");
         assert_eq!(
             sorted_rows(&env, sql, Some("-1")),
@@ -372,4 +378,26 @@ fn limited_plans_return_sparks_rows() {
             "{sql} without the limit"
         );
     }
+}
+
+/// `EXPLAIN ANALYZE` books the sort below a group limit (built with it) to
+/// the sort's own node.
+#[test]
+fn the_sort_below_a_group_limit_keeps_its_node() {
+    let env = env();
+    let plan = plan_with(&env, &query("rank()", W, "", "r <= 2"), None);
+    let root = krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+    let (out, query) = run_in(&plan, &root);
+    out.unwrap();
+    let node = |name: &str| {
+        let metrics = query.metrics();
+        metrics
+            .operators
+            .values()
+            .find(|e| e.name == name)
+            .map(|e| e.node)
+    };
+    let (sort, limit) = (node("Sort"), node("WindowGroupLimit"));
+    assert!(sort.is_some_and(|n| n.is_some()), "{sort:?}");
+    assert_ne!(sort, limit);
 }
