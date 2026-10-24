@@ -10,7 +10,14 @@
 //! Run it from the repository root. `--check` regenerates in memory and
 //! fails when the file on disk differs, so CI notices a proto change without
 //! a regeneration. The compiler is `protox`: no `protoc` is needed.
+//!
+//! Both modes also check the compatibility-class annotations of the schema
+//! (see [`classes`]) against `tools/plan-protogen/baseline.txt` and the
+//! codec's feature registry.
 
+mod classes;
+
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use prost_build::Module;
@@ -19,6 +26,8 @@ use std::process::ExitCode;
 const PROTO_DIR: &str = "proto";
 const PROTO: &str = "krishiv/plan/v1/plan.proto";
 const OUTPUT: &str = "crates/krishiv-plan-codec/src/proto/krishiv.plan.v1.pb.rs";
+const BASELINE: &str = "tools/plan-protogen/baseline.txt";
+const FEATURES: &str = "crates/krishiv-plan-codec/src/features.rs";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -38,6 +47,7 @@ fn run() -> Result<()> {
         return Err("pass --write or --check".into());
     }
     let fds = protox::compile([PROTO], [PROTO_DIR])?;
+    check_classes(&fds)?;
     let mut config = prost_build::Config::new();
     // Deterministic iteration order for map fields (read options).
     config.btree_map(["."]);
@@ -62,4 +72,25 @@ fn run() -> Result<()> {
         return Err(format!("{OUTPUT} is out of date; run the generator with --write").into());
     }
     Ok(())
+}
+
+fn check_classes(fds: &prost_types::FileDescriptorSet) -> Result<()> {
+    let file = fds
+        .file
+        .iter()
+        .find(|f| f.name() == PROTO)
+        .ok_or("the plan schema was not compiled")?;
+    let baseline: BTreeSet<String> = std::fs::read_to_string(BASELINE)?
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_owned)
+        .collect();
+    let features = classes::registered_features(&std::fs::read_to_string(FEATURES)?);
+    let problems = classes::check(file, &baseline, &features);
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{PROTO}:\n  {}", problems.join("\n  ")).into())
+    }
 }
