@@ -274,8 +274,7 @@ pub(crate) fn window_aggregates() -> WindowPlan {
     }
 }
 
-/// Frames with offsets and to the partition's end, `lag`/`lead` (with and
-/// without a default) and `nth_value`.
+/// Frames with offsets and to the partition's end.
 pub(crate) fn window_frames() -> WindowPlan {
     let aggs = aggregate_exprs();
     let rows = |lower, upper| WindowFrame {
@@ -301,6 +300,22 @@ pub(crate) fn window_frames() -> WindowPlan {
                 },
                 "rest",
             ),
+        ],
+    }
+}
+
+/// `lag`/`lead` (with and without a default) and `nth_value`, over their
+/// offset frames.
+pub(crate) fn window_offset_values() -> WindowPlan {
+    let rows = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
             window_function(
                 WindowFunction::Offset {
                     input: 2,
@@ -550,6 +565,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::Window {
                 input: boxed(scan()),
                 window: window_frames(),
+            },
+        ),
+        (
+            "window_offset_values",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_offset_values(),
             },
         ),
         (
