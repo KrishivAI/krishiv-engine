@@ -1,0 +1,6801 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_analyzer_goldens.py",
+ "notes": "Output columns or error (condition, SQLSTATE, message parameters, query context) of Spark's analyzer per case, over empty parquet tables in spark_catalog.default whose schemas are `tables`.",
+ "tables": {
+  "part": [
+   {
+    "name": "p_partkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "p_name",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "p_mfgr",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "p_brand",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "p_type",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "p_size",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "p_container",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "p_retailprice",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "p_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "supplier": [
+   {
+    "name": "s_suppkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "s_name",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "s_address",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "s_nationkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "s_phone",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "s_acctbal",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "s_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "partsupp": [
+   {
+    "name": "ps_partkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "ps_suppkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "ps_availqty",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "ps_supplycost",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "ps_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "customer": [
+   {
+    "name": "c_custkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "c_name",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "c_address",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "c_nationkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "c_phone",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "c_acctbal",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "c_mktsegment",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "c_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "orders": [
+   {
+    "name": "o_orderkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "o_custkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "o_orderstatus",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "o_totalprice",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "o_orderdate",
+    "type": "date",
+    "nullable": true
+   },
+   {
+    "name": "o_orderpriority",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "o_clerk",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "o_shippriority",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "o_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "lineitem": [
+   {
+    "name": "l_orderkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "l_partkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "l_suppkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "l_linenumber",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "l_quantity",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "l_extendedprice",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "l_discount",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "l_tax",
+    "type": "decimal(15,2)",
+    "nullable": true
+   },
+   {
+    "name": "l_returnflag",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "l_linestatus",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "l_shipdate",
+    "type": "date",
+    "nullable": true
+   },
+   {
+    "name": "l_commitdate",
+    "type": "date",
+    "nullable": true
+   },
+   {
+    "name": "l_receiptdate",
+    "type": "date",
+    "nullable": true
+   },
+   {
+    "name": "l_shipinstruct",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "l_shipmode",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "l_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "nation": [
+   {
+    "name": "n_nationkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "n_name",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "n_regionkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "n_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "region": [
+   {
+    "name": "r_regionkey",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "r_name",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "r_comment",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "t": [
+   {
+    "name": "a",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "b",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "c",
+    "type": "bigint",
+    "nullable": true
+   }
+  ],
+  "u": [
+   {
+    "name": "a",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "d",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "wide": [
+   {
+    "name": "col1",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col2",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col3",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col4",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col5",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col6",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "col7",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "colx",
+    "type": "int",
+    "nullable": true
+   }
+  ],
+  "MixedCase": [
+   {
+    "name": "Id",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "Name",
+    "type": "string",
+    "nullable": true
+   }
+  ],
+  "g": [
+   {
+    "name": "x",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "l",
+    "type": "bigint",
+    "nullable": true
+   }
+  ],
+  "n": [
+   {
+    "name": "ti",
+    "type": "tinyint",
+    "nullable": true
+   },
+   {
+    "name": "si",
+    "type": "smallint",
+    "nullable": true
+   },
+   {
+    "name": "i",
+    "type": "int",
+    "nullable": true
+   },
+   {
+    "name": "l",
+    "type": "bigint",
+    "nullable": true
+   },
+   {
+    "name": "f",
+    "type": "float",
+    "nullable": true
+   },
+   {
+    "name": "d",
+    "type": "double",
+    "nullable": true
+   },
+   {
+    "name": "dc",
+    "type": "decimal(10,2)",
+    "nullable": true
+   },
+   {
+    "name": "dw",
+    "type": "decimal(38,10)",
+    "nullable": true
+   },
+   {
+    "name": "s",
+    "type": "string",
+    "nullable": true
+   },
+   {
+    "name": "bo",
+    "type": "boolean",
+    "nullable": true
+   },
+   {
+    "name": "dt",
+    "type": "date",
+    "nullable": true
+   },
+   {
+    "name": "ts",
+    "type": "timestamp",
+    "nullable": true
+   },
+   {
+    "name": "tn",
+    "type": "timestamp_ntz",
+    "nullable": true
+   },
+   {
+    "name": "bi",
+    "type": "binary",
+    "nullable": true
+   }
+  ]
+ },
+ "tpch": [],
+ "corpus": [
+  {
+   "sql": "SELECT round(dc, 1+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (1 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 1+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (1 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, i) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"i\"",
+    "inputName": "`scale`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"round(dc, i)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 18,
+    "fragment": "round(dc, i)"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, i) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"i\"",
+    "inputName": "`scale`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"round(dc, i)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 18,
+    "fragment": "round(dc, i)"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, 1+i) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"(1 + i)\"",
+    "inputName": "`scale`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"round(dc, (1 + i))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "round(dc, 1+i)"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, 1+i) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"(1 + i)\"",
+    "inputName": "`scale`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"round(dc, (1 + i))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "round(dc, 1+i)"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, 2147483647+1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "ARITHMETIC_OVERFLOW",
+   "sql_state": "22003",
+   "message_parameters": {
+    "alternative": " Use 'try_add' to tolerate overflow and return NULL instead.",
+    "config": "\"spark.sql.ansi.enabled\"",
+    "message": "overflow"
+   },
+   "context": {
+    "start": 17,
+    "stop": 28,
+    "fragment": "2147483647+1"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, 2147483647+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (2147483647 + 1))",
+     "type": "decimal(9,0)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, CAST(1 AS BIGINT)+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (CAST(1 AS BIGINT) + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, CAST(1 AS BIGINT)+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (CAST(1 AS BIGINT) + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, -(-2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (- -2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, -(-2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (- -2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 5/2) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (5 / 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 5/2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (5 / 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 5 div 2) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (5 div 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 5 div 2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (5 div 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 5 % 3) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (5 % 3))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 5 % 3) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (5 % 3))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 1/0) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DIVIDE_BY_ZERO",
+   "sql_state": "22012",
+   "message_parameters": {
+    "config": "\"spark.sql.ansi.enabled\""
+   },
+   "context": {
+    "start": 17,
+    "stop": 19,
+    "fragment": "1/0"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, 1/0) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (1 / 0))",
+     "type": "decimal(9,0)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, if(true,1,2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (IF(true, 1, 2)))",
+     "type": "decimal(10,1)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, if(true,1,2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (IF(true, 1, 2)))",
+     "type": "decimal(10,1)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, CASE WHEN 1=1 THEN 3 ELSE 2 END) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, CASE WHEN (1 = 1) THEN 3 ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, CASE WHEN 1=1 THEN 3 ELSE 2 END) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, CASE WHEN (1 = 1) THEN 3 ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, coalesce(NULL,2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, coalesce(NULL, 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, coalesce(NULL,2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, coalesce(NULL, 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, abs(-2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, abs(-2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, abs(-2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, abs(-2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, length('abc')) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, length(abc))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, length('abc')) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, length(abc))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 1.5+1.5) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (1.5 + 1.5))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 1.5+1.5) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (1.5 + 1.5))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 1.5D+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (1.5 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 1.5D+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (1.5 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, NULL+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (NULL + 1))",
+     "type": "decimal(9,0)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, NULL+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (NULL + 1))",
+     "type": "decimal(9,0)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 3+5L) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (3 + 5))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 3+5L) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (3 + 5))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 2L) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, 2)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 2L) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, 2)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, CAST(2 AS INT)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, CAST(2 AS INT))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, CAST(2 AS INT)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, CAST(2 AS INT))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 1=1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(1 = 1)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"round(dc, (1 = 1))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "round(dc, 1=1)"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, 1=1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(1 = 1)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"round(dc, (1 = 1))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "round(dc, 1=1)"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, '1'||'1') FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, concat(1, 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, '1'||'1') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, concat(1, 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, upper('2')) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, upper(2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, upper('2')) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, upper(2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, (1+1) * (2-1)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, ((1 + 1) * (2 - 1)))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, (1+1) * (2-1)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, ((1 + 1) * (2 - 1)))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, 1 < 2) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(1 < 2)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"round(dc, (1 < 2))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 22,
+    "fragment": "round(dc, 1 < 2)"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, 1 < 2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(1 < 2)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"round(dc, (1 < 2))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 22,
+    "fragment": "round(dc, 1 < 2)"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, NOT TRUE) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(NOT true)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"round(dc, (NOT true))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 25,
+    "fragment": "round(dc, NOT TRUE)"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, NOT TRUE) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(NOT true)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"round(dc, (NOT true))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 25,
+    "fragment": "round(dc, NOT TRUE)"
+   }
+  },
+  {
+   "sql": "SELECT round(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, CASE WHEN (1 = 2) THEN (1 / 0) ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, CASE WHEN (1 = 2) THEN (1 / 0) ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, if(1=1, 2, 1/0)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (IF((1 = 1), 2, (1 / 0))))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT round(dc, if(1=1, 2, 1/0)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "round(dc, (IF((1 = 1), 2, (1 / 0))))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 1+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (1 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 1+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (1 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, i) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"i\"",
+    "inputName": "`scale`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"bround(dc, i)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "bround(dc, i)"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, i) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"i\"",
+    "inputName": "`scale`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"bround(dc, i)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "bround(dc, i)"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, 1+i) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"(1 + i)\"",
+    "inputName": "`scale`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"bround(dc, (1 + i))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "bround(dc, 1+i)"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, 1+i) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"(1 + i)\"",
+    "inputName": "`scale`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"bround(dc, (1 + i))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "bround(dc, 1+i)"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, 2147483647+1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "ARITHMETIC_OVERFLOW",
+   "sql_state": "22003",
+   "message_parameters": {
+    "alternative": " Use 'try_add' to tolerate overflow and return NULL instead.",
+    "config": "\"spark.sql.ansi.enabled\"",
+    "message": "overflow"
+   },
+   "context": {
+    "start": 18,
+    "stop": 29,
+    "fragment": "2147483647+1"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, 2147483647+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (2147483647 + 1))",
+     "type": "decimal(9,0)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, CAST(1 AS BIGINT)+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (CAST(1 AS BIGINT) + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, CAST(1 AS BIGINT)+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (CAST(1 AS BIGINT) + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, -(-2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (- -2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, -(-2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (- -2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 5/2) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (5 / 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 5/2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (5 / 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 5 div 2) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (5 div 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 5 div 2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (5 div 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 5 % 3) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (5 % 3))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 5 % 3) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (5 % 3))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 1/0) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DIVIDE_BY_ZERO",
+   "sql_state": "22012",
+   "message_parameters": {
+    "config": "\"spark.sql.ansi.enabled\""
+   },
+   "context": {
+    "start": 18,
+    "stop": 20,
+    "fragment": "1/0"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, 1/0) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (1 / 0))",
+     "type": "decimal(9,0)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, if(true,1,2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (IF(true, 1, 2)))",
+     "type": "decimal(10,1)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, if(true,1,2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (IF(true, 1, 2)))",
+     "type": "decimal(10,1)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, CASE WHEN 1=1 THEN 3 ELSE 2 END) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, CASE WHEN (1 = 1) THEN 3 ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, CASE WHEN 1=1 THEN 3 ELSE 2 END) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, CASE WHEN (1 = 1) THEN 3 ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, coalesce(NULL,2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, coalesce(NULL, 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, coalesce(NULL,2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, coalesce(NULL, 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, abs(-2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, abs(-2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, abs(-2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, abs(-2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, length('abc')) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, length(abc))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, length('abc')) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, length(abc))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 1.5+1.5) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (1.5 + 1.5))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 1.5+1.5) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (1.5 + 1.5))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 1.5D+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (1.5 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 1.5D+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (1.5 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, NULL+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (NULL + 1))",
+     "type": "decimal(9,0)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, NULL+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (NULL + 1))",
+     "type": "decimal(9,0)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 3+5L) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (3 + 5))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 3+5L) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (3 + 5))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 2L) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, 2)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 2L) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, 2)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, CAST(2 AS INT)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, CAST(2 AS INT))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, CAST(2 AS INT)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, CAST(2 AS INT))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 1=1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(1 = 1)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"bround(dc, (1 = 1))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "bround(dc, 1=1)"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, 1=1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(1 = 1)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"bround(dc, (1 = 1))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "bround(dc, 1=1)"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, '1'||'1') FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, concat(1, 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, '1'||'1') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, concat(1, 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, upper('2')) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, upper(2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, upper('2')) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, upper(2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, (1+1) * (2-1)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, ((1 + 1) * (2 - 1)))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, (1+1) * (2-1)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, ((1 + 1) * (2 - 1)))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, 1 < 2) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(1 < 2)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"bround(dc, (1 < 2))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "bround(dc, 1 < 2)"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, 1 < 2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(1 < 2)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"bround(dc, (1 < 2))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "bround(dc, 1 < 2)"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, NOT TRUE) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(NOT true)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"bround(dc, (NOT true))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 26,
+    "fragment": "bround(dc, NOT TRUE)"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, NOT TRUE) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"(NOT true)\"",
+    "inputType": "\"BOOLEAN\"",
+    "paramIndex": "second",
+    "requiredType": "\"INT\"",
+    "sqlExpr": "\"bround(dc, (NOT true))\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 26,
+    "fragment": "bround(dc, NOT TRUE)"
+   }
+  },
+  {
+   "sql": "SELECT bround(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, CASE WHEN (1 = 2) THEN (1 / 0) ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, CASE WHEN (1 = 2) THEN (1 / 0) ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, if(1=1, 2, 1/0)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (IF((1 = 1), 2, (1 / 0))))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT bround(dc, if(1=1, 2, 1/0)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "bround(dc, (IF((1 = 1), 2, (1 / 0))))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, 1+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, (1 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, 1+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, (1 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, i) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 17,
+    "fragment": "ceil(dc, i)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, i) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 17,
+    "fragment": "ceil(dc, i)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 1+i) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "ceil(dc, 1+i)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 1+i) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "ceil(dc, 1+i)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 2147483647+1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "ARITHMETIC_OVERFLOW",
+   "sql_state": "22003",
+   "message_parameters": {
+    "alternative": " Use 'try_add' to tolerate overflow and return NULL instead.",
+    "config": "\"spark.sql.ansi.enabled\"",
+    "message": "overflow"
+   },
+   "context": {
+    "start": 16,
+    "stop": 27,
+    "fragment": "2147483647+1"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 2147483647+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, (2147483647 + 1))",
+     "type": "decimal(9,0)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, CAST(1 AS BIGINT)+1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 35,
+    "fragment": "ceil(dc, CAST(1 AS BIGINT)+1)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, CAST(1 AS BIGINT)+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 35,
+    "fragment": "ceil(dc, CAST(1 AS BIGINT)+1)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, -(-2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, (- -2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, -(-2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, (- -2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, 5/2) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "ceil(dc, 5/2)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 5/2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "ceil(dc, 5/2)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 5 div 2) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "ceil(dc, 5 div 2)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 5 div 2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "ceil(dc, 5 div 2)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 5 % 3) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, (5 % 3))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, 5 % 3) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, (5 % 3))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, 1/0) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "ceil(dc, 1/0)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 1/0) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "ceil(dc, 1/0)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, if(true,1,2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, (IF(true, 1, 2)))",
+     "type": "decimal(10,1)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, if(true,1,2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, (IF(true, 1, 2)))",
+     "type": "decimal(10,1)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, CASE WHEN 1=1 THEN 3 ELSE 2 END) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, CASE WHEN (1 = 1) THEN 3 ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, CASE WHEN 1=1 THEN 3 ELSE 2 END) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, CASE WHEN (1 = 1) THEN 3 ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, coalesce(NULL,2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, coalesce(NULL, 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, coalesce(NULL,2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, coalesce(NULL, 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, abs(-2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, abs(-2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, abs(-2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, abs(-2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, length('abc')) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, length(abc))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, length('abc')) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, length(abc))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, 1.5+1.5) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "ceil(dc, 1.5+1.5)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 1.5+1.5) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "ceil(dc, 1.5+1.5)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 1.5D+1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 22,
+    "fragment": "ceil(dc, 1.5D+1)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 1.5D+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 22,
+    "fragment": "ceil(dc, 1.5D+1)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, NULL+1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 22,
+    "fragment": "ceil(dc, NULL+1)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, NULL+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 22,
+    "fragment": "ceil(dc, NULL+1)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 3+5L) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "ceil(dc, 3+5L)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 3+5L) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "ceil(dc, 3+5L)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 2L) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 18,
+    "fragment": "ceil(dc, 2L)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 2L) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 18,
+    "fragment": "ceil(dc, 2L)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, CAST(2 AS INT)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, CAST(2 AS INT))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, CAST(2 AS INT)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, CAST(2 AS INT))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, 1=1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "ceil(dc, 1=1)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 1=1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "ceil(dc, 1=1)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, '1'||'1') FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 24,
+    "fragment": "ceil(dc, '1'||'1')"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, '1'||'1') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 24,
+    "fragment": "ceil(dc, '1'||'1')"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, upper('2')) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 26,
+    "fragment": "ceil(dc, upper('2'))"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, upper('2')) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 26,
+    "fragment": "ceil(dc, upper('2'))"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, (1+1) * (2-1)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, ((1 + 1) * (2 - 1)))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, (1+1) * (2-1)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ceil(dc, ((1 + 1) * (2 - 1)))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT ceil(dc, 1 < 2) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "ceil(dc, 1 < 2)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, 1 < 2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "ceil(dc, 1 < 2)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, NOT TRUE) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 24,
+    "fragment": "ceil(dc, NOT TRUE)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, NOT TRUE) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 24,
+    "fragment": "ceil(dc, NOT TRUE)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 49,
+    "fragment": "ceil(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 49,
+    "fragment": "ceil(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END)"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, if(1=1, 2, 1/0)) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 31,
+    "fragment": "ceil(dc, if(1=1, 2, 1/0))"
+   }
+  },
+  {
+   "sql": "SELECT ceil(dc, if(1=1, 2, 1/0)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`ceil`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 31,
+    "fragment": "ceil(dc, if(1=1, 2, 1/0))"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 1+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, (1 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, 1+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, (1 + 1))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, i) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 18,
+    "fragment": "floor(dc, i)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, i) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 18,
+    "fragment": "floor(dc, i)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 1+i) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "floor(dc, 1+i)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 1+i) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "floor(dc, 1+i)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 2147483647+1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "ARITHMETIC_OVERFLOW",
+   "sql_state": "22003",
+   "message_parameters": {
+    "alternative": " Use 'try_add' to tolerate overflow and return NULL instead.",
+    "config": "\"spark.sql.ansi.enabled\"",
+    "message": "overflow"
+   },
+   "context": {
+    "start": 17,
+    "stop": 28,
+    "fragment": "2147483647+1"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 2147483647+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, (2147483647 + 1))",
+     "type": "decimal(9,0)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, CAST(1 AS BIGINT)+1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 36,
+    "fragment": "floor(dc, CAST(1 AS BIGINT)+1)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, CAST(1 AS BIGINT)+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 36,
+    "fragment": "floor(dc, CAST(1 AS BIGINT)+1)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, -(-2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, (- -2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, -(-2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, (- -2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, 5/2) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "floor(dc, 5/2)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 5/2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "floor(dc, 5/2)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 5 div 2) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 24,
+    "fragment": "floor(dc, 5 div 2)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 5 div 2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 24,
+    "fragment": "floor(dc, 5 div 2)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 5 % 3) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, (5 % 3))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, 5 % 3) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, (5 % 3))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, 1/0) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "floor(dc, 1/0)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 1/0) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "floor(dc, 1/0)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, if(true,1,2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, (IF(true, 1, 2)))",
+     "type": "decimal(10,1)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, if(true,1,2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, (IF(true, 1, 2)))",
+     "type": "decimal(10,1)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, CASE WHEN 1=1 THEN 3 ELSE 2 END) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, CASE WHEN (1 = 1) THEN 3 ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, CASE WHEN 1=1 THEN 3 ELSE 2 END) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, CASE WHEN (1 = 1) THEN 3 ELSE 2 END)",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, coalesce(NULL,2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, coalesce(NULL, 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, coalesce(NULL,2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, coalesce(NULL, 2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, abs(-2)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, abs(-2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, abs(-2)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, abs(-2))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, length('abc')) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, length(abc))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, length('abc')) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, length(abc))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, 1.5+1.5) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 24,
+    "fragment": "floor(dc, 1.5+1.5)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 1.5+1.5) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 24,
+    "fragment": "floor(dc, 1.5+1.5)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 1.5D+1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "floor(dc, 1.5D+1)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 1.5D+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "floor(dc, 1.5D+1)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, NULL+1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "floor(dc, NULL+1)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, NULL+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "floor(dc, NULL+1)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 3+5L) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "floor(dc, 3+5L)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 3+5L) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "floor(dc, 3+5L)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 2L) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "floor(dc, 2L)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 2L) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "floor(dc, 2L)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, CAST(2 AS INT)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, CAST(2 AS INT))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, CAST(2 AS INT)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, CAST(2 AS INT))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, 1=1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "floor(dc, 1=1)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 1=1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "floor(dc, 1=1)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, '1'||'1') FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 25,
+    "fragment": "floor(dc, '1'||'1')"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, '1'||'1') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 25,
+    "fragment": "floor(dc, '1'||'1')"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, upper('2')) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 27,
+    "fragment": "floor(dc, upper('2'))"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, upper('2')) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 27,
+    "fragment": "floor(dc, upper('2'))"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, (1+1) * (2-1)) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, ((1 + 1) * (2 - 1)))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, (1+1) * (2-1)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "floor(dc, ((1 + 1) * (2 - 1)))",
+     "type": "decimal(11,2)",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT floor(dc, 1 < 2) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 22,
+    "fragment": "floor(dc, 1 < 2)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, 1 < 2) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 22,
+    "fragment": "floor(dc, 1 < 2)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, NOT TRUE) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 25,
+    "fragment": "floor(dc, NOT TRUE)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, NOT TRUE) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 25,
+    "fragment": "floor(dc, NOT TRUE)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 50,
+    "fragment": "floor(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 50,
+    "fragment": "floor(dc, CASE WHEN 1=2 THEN 1/0 ELSE 2 END)"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, if(1=1, 2, 1/0)) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 32,
+    "fragment": "floor(dc, if(1=1, 2, 1/0))"
+   }
+  },
+  {
+   "sql": "SELECT floor(dc, if(1=1, 2, 1/0)) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`floor`",
+    "paramName": "`scale`",
+    "paramType": "\"INT\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 32,
+    "fragment": "floor(dc, if(1=1, 2, 1/0))"
+   }
+  },
+  {
+   "sql": "SELECT date_part('y'||'ear', dt) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_part(concat(y, ear), dt)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_part('y'||'ear', dt) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_part(concat(y, ear), dt)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_part(s, dt) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`date_part`",
+    "paramName": "`field`",
+    "paramType": "\"STRING\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 22,
+    "fragment": "date_part(s, dt)"
+   }
+  },
+  {
+   "sql": "SELECT date_part(s, dt) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`date_part`",
+    "paramName": "`field`",
+    "paramType": "\"STRING\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 22,
+    "fragment": "date_part(s, dt)"
+   }
+  },
+  {
+   "sql": "SELECT date_part(CAST(NULL AS STRING), dt) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_part(CAST(NULL AS STRING), dt)",
+     "type": "double",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_part(CAST(NULL AS STRING), dt) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_part(CAST(NULL AS STRING), dt)",
+     "type": "double",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_part(upper('year'), dt) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_part(upper(year), dt)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_part(upper('year'), dt) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_part(upper(year), dt)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_part(1+1, dt) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`date_part`",
+    "paramName": "`field`",
+    "paramType": "\"STRING\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 24,
+    "fragment": "date_part(1+1, dt)"
+   }
+  },
+  {
+   "sql": "SELECT date_part(1+1, dt) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "NON_FOLDABLE_ARGUMENT",
+   "sql_state": "42K08",
+   "message_parameters": {
+    "funcName": "`date_part`",
+    "paramName": "`field`",
+    "paramType": "\"STRING\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 24,
+    "fragment": "date_part(1+1, dt)"
+   }
+  },
+  {
+   "sql": "SELECT first(i, true) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "first(i)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT first(i, false) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "first(i)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT first(i, 1=1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "first"
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "first(i, 1=1)"
+   }
+  },
+  {
+   "sql": "SELECT first(i, true AND true) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "first"
+   },
+   "context": {
+    "start": 7,
+    "stop": 29,
+    "fragment": "first(i, true AND true)"
+   }
+  },
+  {
+   "sql": "SELECT first(i, i > 1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "first"
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "first(i, i > 1)"
+   }
+  },
+  {
+   "sql": "SELECT first(i, NOT FALSE) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "first"
+   },
+   "context": {
+    "start": 7,
+    "stop": 25,
+    "fragment": "first(i, NOT FALSE)"
+   }
+  },
+  {
+   "sql": "SELECT first(i, NULL) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "first"
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "first(i, NULL)"
+   }
+  },
+  {
+   "sql": "SELECT first(i, CAST(true AS BOOLEAN)) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "first"
+   },
+   "context": {
+    "start": 7,
+    "stop": 37,
+    "fragment": "first(i, CAST(true AS BOOLEAN))"
+   }
+  },
+  {
+   "sql": "SELECT last(i, true) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "last(i)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT last(i, false) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "last(i)",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT last(i, 1=1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "last"
+   },
+   "context": {
+    "start": 7,
+    "stop": 18,
+    "fragment": "last(i, 1=1)"
+   }
+  },
+  {
+   "sql": "SELECT last(i, true AND true) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "last"
+   },
+   "context": {
+    "start": 7,
+    "stop": 28,
+    "fragment": "last(i, true AND true)"
+   }
+  },
+  {
+   "sql": "SELECT last(i, i > 1) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "last"
+   },
+   "context": {
+    "start": 7,
+    "stop": 20,
+    "fragment": "last(i, i > 1)"
+   }
+  },
+  {
+   "sql": "SELECT last(i, NOT FALSE) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "last"
+   },
+   "context": {
+    "start": 7,
+    "stop": 24,
+    "fragment": "last(i, NOT FALSE)"
+   }
+  },
+  {
+   "sql": "SELECT last(i, NULL) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "last"
+   },
+   "context": {
+    "start": 7,
+    "stop": 19,
+    "fragment": "last(i, NULL)"
+   }
+  },
+  {
+   "sql": "SELECT last(i, CAST(true AS BOOLEAN)) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1210",
+   "sql_state": null,
+   "message_parameters": {
+    "funcName": "last"
+   },
+   "context": {
+    "start": 7,
+    "stop": 36,
+    "fragment": "last(i, CAST(true AS BOOLEAN))"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, '1'||'2') FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, concat(1, 2))",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, '1'||'2') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, 12)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, '1'||'.5') FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, concat(1, .5))",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, '1'||'.5') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, upper('1')) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, upper(1))",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, upper('1')) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, 1)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, 1+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, (1 + 1))",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, 1+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, (1 + 1))",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, 'a') FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, a)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, 'a') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, s) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, s)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, s) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"s\"",
+    "inputType": "\"STRING\"",
+    "paramIndex": "second",
+    "requiredType": "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
+    "sqlExpr": "\"date_add(dt, s)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "date_add(dt, s)"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, 1.5) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"1.5\"",
+    "inputType": "\"DECIMAL(2,1)\"",
+    "paramIndex": "second",
+    "requiredType": "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
+    "sqlExpr": "\"date_add(dt, 1.5)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "date_add(dt, 1.5)"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, 1.5) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"1.5\"",
+    "inputType": "\"DECIMAL(2,1)\"",
+    "paramIndex": "second",
+    "requiredType": "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
+    "sqlExpr": "\"date_add(dt, 1.5)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "date_add(dt, 1.5)"
+   }
+  },
+  {
+   "sql": "SELECT date_sub(dt, '1'||'2') FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_sub(dt, concat(1, 2))",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_sub(dt, '1'||'2') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_sub(dt, 12)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_sub(dt, '1'||'.5') FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_sub(dt, concat(1, .5))",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_sub(dt, '1'||'.5') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_sub"
+   }
+  },
+  {
+   "sql": "SELECT date_sub(dt, upper('1')) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_sub(dt, upper(1))",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_sub(dt, upper('1')) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_sub(dt, 1)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_sub(dt, 1+1) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_sub(dt, (1 + 1))",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_sub(dt, 1+1) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_sub(dt, (1 + 1))",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_sub(dt, 'a') FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_sub(dt, a)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_sub(dt, 'a') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_sub"
+   }
+  },
+  {
+   "sql": "SELECT date_sub(dt, s) FROM n",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "date_sub(dt, s)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_sub(dt, s) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"s\"",
+    "inputType": "\"STRING\"",
+    "paramIndex": "second",
+    "requiredType": "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
+    "sqlExpr": "\"date_sub(dt, s)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 21,
+    "fragment": "date_sub(dt, s)"
+   }
+  },
+  {
+   "sql": "SELECT date_sub(dt, 1.5) FROM n",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"1.5\"",
+    "inputType": "\"DECIMAL(2,1)\"",
+    "paramIndex": "second",
+    "requiredType": "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
+    "sqlExpr": "\"date_sub(dt, 1.5)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "date_sub(dt, 1.5)"
+   }
+  },
+  {
+   "sql": "SELECT date_sub(dt, 1.5) FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputSql": "\"1.5\"",
+    "inputType": "\"DECIMAL(2,1)\"",
+    "paramIndex": "second",
+    "requiredType": "(\"INT\" or \"SMALLINT\" or \"TINYINT\")",
+    "sqlExpr": "\"date_sub(dt, 1.5)\""
+   },
+   "context": {
+    "start": 7,
+    "stop": 23,
+    "fragment": "date_sub(dt, 1.5)"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, '1') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, 1)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, '1.5') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, ' 12 ') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, 12)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, '+3') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, 3)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, '1.') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, '.5') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, '1e2') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, '0x1') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, '2147483648') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, '-0') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "date_add(dt, 0)",
+     "type": "date",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT date_add(dt, '1.0') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, 'abc') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, '') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, ' ') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT date_add(dt, '1 2') FROM n",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "SECOND_FUNCTION_ARGUMENT_NOT_INTEGER",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "date_add"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT 1+1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ti",
+     "type": "tinyint",
+     "nullable": true
+    },
+    {
+     "name": "si",
+     "type": "smallint",
+     "nullable": true
+    },
+    {
+     "name": "i",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "l",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "f",
+     "type": "float",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "dc",
+     "type": "decimal(10,2)",
+     "nullable": true
+    },
+    {
+     "name": "dw",
+     "type": "decimal(38,10)",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "bo",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "dt",
+     "type": "date",
+     "nullable": true
+    },
+    {
+     "name": "ts",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "tn",
+     "type": "timestamp_ntz",
+     "nullable": true
+    },
+    {
+     "name": "bi",
+     "type": "binary",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT 1+1",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ti",
+     "type": "tinyint",
+     "nullable": true
+    },
+    {
+     "name": "si",
+     "type": "smallint",
+     "nullable": true
+    },
+    {
+     "name": "i",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "l",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "f",
+     "type": "float",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "dc",
+     "type": "decimal(10,2)",
+     "nullable": true
+    },
+    {
+     "name": "dw",
+     "type": "decimal(38,10)",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "bo",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "dt",
+     "type": "date",
+     "nullable": true
+    },
+    {
+     "name": "ts",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "tn",
+     "type": "timestamp_ntz",
+     "nullable": true
+    },
+    {
+     "name": "bi",
+     "type": "binary",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT i",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "expr": "\"i\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 0,
+    "stop": 14,
+    "fragment": "SELECT * FROM n"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT i",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "expr": "\"i\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 0,
+    "stop": 14,
+    "fragment": "SELECT * FROM n"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT 2147483647+1",
+   "conf": {},
+   "ok": false,
+   "error_class": "ARITHMETIC_OVERFLOW",
+   "sql_state": "22003",
+   "message_parameters": {
+    "alternative": " Use 'try_add' to tolerate overflow and return NULL instead.",
+    "config": "\"spark.sql.ansi.enabled\"",
+    "message": "overflow"
+   },
+   "context": {
+    "start": 22,
+    "stop": 33,
+    "fragment": "2147483647+1"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT 2147483647+1",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "expr": "\"(2147483647 + 1)\"",
+    "name": "limit",
+    "v": "-2147483648"
+   },
+   "context": {
+    "start": 22,
+    "stop": 33,
+    "fragment": "2147483647+1"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT length('ab')",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ti",
+     "type": "tinyint",
+     "nullable": true
+    },
+    {
+     "name": "si",
+     "type": "smallint",
+     "nullable": true
+    },
+    {
+     "name": "i",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "l",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "f",
+     "type": "float",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "dc",
+     "type": "decimal(10,2)",
+     "nullable": true
+    },
+    {
+     "name": "dw",
+     "type": "decimal(38,10)",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "bo",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "dt",
+     "type": "date",
+     "nullable": true
+    },
+    {
+     "name": "ts",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "tn",
+     "type": "timestamp_ntz",
+     "nullable": true
+    },
+    {
+     "name": "bi",
+     "type": "binary",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT length('ab')",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ti",
+     "type": "tinyint",
+     "nullable": true
+    },
+    {
+     "name": "si",
+     "type": "smallint",
+     "nullable": true
+    },
+    {
+     "name": "i",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "l",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "f",
+     "type": "float",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "dc",
+     "type": "decimal(10,2)",
+     "nullable": true
+    },
+    {
+     "name": "dw",
+     "type": "decimal(38,10)",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "bo",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "dt",
+     "type": "date",
+     "nullable": true
+    },
+    {
+     "name": "ts",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "tn",
+     "type": "timestamp_ntz",
+     "nullable": true
+    },
+    {
+     "name": "bi",
+     "type": "binary",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT CAST(NULL AS INT)",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "expr": "\"CAST(NULL AS INT)\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 22,
+    "stop": 38,
+    "fragment": "CAST(NULL AS INT)"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT CAST(NULL AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "expr": "\"CAST(NULL AS INT)\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 22,
+    "stop": 38,
+    "fragment": "CAST(NULL AS INT)"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT -1",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "expr": "\"-1\"",
+    "name": "limit",
+    "v": "-1"
+   },
+   "context": {
+    "start": 22,
+    "stop": 23,
+    "fragment": "-1"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT -1",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "expr": "\"-1\"",
+    "name": "limit",
+    "v": "-1"
+   },
+   "context": {
+    "start": 22,
+    "stop": 23,
+    "fragment": "-1"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT 1+(-2)",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "expr": "\"(1 + -2)\"",
+    "name": "limit",
+    "v": "-1"
+   },
+   "context": {
+    "start": 22,
+    "stop": 27,
+    "fragment": "1+(-2)"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT 1+(-2)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "expr": "\"(1 + -2)\"",
+    "name": "limit",
+    "v": "-1"
+   },
+   "context": {
+    "start": 22,
+    "stop": 27,
+    "fragment": "1+(-2)"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT 1L",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.DATA_TYPE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "dataType": "\"BIGINT\"",
+    "expr": "\"1\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 22,
+    "stop": 23,
+    "fragment": "1L"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT 1L",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.DATA_TYPE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "dataType": "\"BIGINT\"",
+    "expr": "\"1\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 22,
+    "stop": 23,
+    "fragment": "1L"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT '1'",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.DATA_TYPE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "dataType": "\"STRING\"",
+    "expr": "\"1\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 22,
+    "stop": 24,
+    "fragment": "'1'"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT '1'",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.DATA_TYPE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "dataType": "\"STRING\"",
+    "expr": "\"1\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 22,
+    "stop": 24,
+    "fragment": "'1'"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT 1.5",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.DATA_TYPE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "dataType": "\"DECIMAL(2,1)\"",
+    "expr": "\"1.5\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 22,
+    "stop": 24,
+    "fragment": "1.5"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT 1.5",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.DATA_TYPE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "dataType": "\"DECIMAL(2,1)\"",
+    "expr": "\"1.5\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 22,
+    "stop": 24,
+    "fragment": "1.5"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT CASE WHEN 1=1 THEN 5 ELSE 6 END",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "ti",
+     "type": "tinyint",
+     "nullable": true
+    },
+    {
+     "name": "si",
+     "type": "smallint",
+     "nullable": true
+    },
+    {
+     "name": "i",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "l",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "f",
+     "type": "float",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "dc",
+     "type": "decimal(10,2)",
+     "nullable": true
+    },
+    {
+     "name": "dw",
+     "type": "decimal(38,10)",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "bo",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "dt",
+     "type": "date",
+     "nullable": true
+    },
+    {
+     "name": "ts",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "tn",
+     "type": "timestamp_ntz",
+     "nullable": true
+    },
+    {
+     "name": "bi",
+     "type": "binary",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT CASE WHEN 1=1 THEN 5 ELSE 6 END",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "ti",
+     "type": "tinyint",
+     "nullable": true
+    },
+    {
+     "name": "si",
+     "type": "smallint",
+     "nullable": true
+    },
+    {
+     "name": "i",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "l",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "f",
+     "type": "float",
+     "nullable": true
+    },
+    {
+     "name": "d",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "dc",
+     "type": "decimal(10,2)",
+     "nullable": true
+    },
+    {
+     "name": "dw",
+     "type": "decimal(38,10)",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "bo",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "dt",
+     "type": "date",
+     "nullable": true
+    },
+    {
+     "name": "ts",
+     "type": "timestamp",
+     "nullable": true
+    },
+    {
+     "name": "tn",
+     "type": "timestamp_ntz",
+     "nullable": true
+    },
+    {
+     "name": "bi",
+     "type": "binary",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT (SELECT 1)",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "expr": "\"scalarsubquery()\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 22,
+    "stop": 31,
+    "fragment": "(SELECT 1)"
+   }
+  },
+  {
+   "sql": "SELECT * FROM n LIMIT (SELECT 1)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": false,
+   "error_class": "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE",
+   "sql_state": "42K0E",
+   "message_parameters": {
+    "expr": "\"scalarsubquery()\"",
+    "name": "limit"
+   },
+   "context": {
+    "start": 22,
+    "stop": 31,
+    "fragment": "(SELECT 1)"
+   }
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 2",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`c`, `m`"
+   },
+   "context": {
+    "start": 58,
+    "stop": 58,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY 1 + x",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY m + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`c`, `m`"
+   },
+   "context": {
+    "start": 58,
+    "stop": 58,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT x m, count(*) c FROM g GROUP BY x ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY abs(x + 1)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY (x + 1) * count(*)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY sum(x)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY sum(x + 1)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 HAVING x + 1 > 3 ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 HAVING x + 2 > 3",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`c`, `m`"
+   },
+   "context": {
+    "start": 56,
+    "stop": 56,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 HAVING x + 1 > 3",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT count(*) c FROM g GROUP BY x + 1 HAVING x + 1 > 3",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT count(*) c FROM g GROUP BY x + 1 HAVING x + 1 > 3 ORDER BY x + 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`c`"
+   },
+   "context": {
+    "start": 66,
+    "stop": 66,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT sum(l) FROM g GROUP BY x + 1 HAVING x + 1 > 3 ORDER BY x + 1 DESC",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`sum(l)`"
+   },
+   "context": {
+    "start": 62,
+    "stop": 62,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT count(*) c FROM g GROUP BY x + 1 HAVING x + 1 > 3 ORDER BY x + 2",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`c`"
+   },
+   "context": {
+    "start": 66,
+    "stop": 66,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT count(*) c FROM g GROUP BY x HAVING sum(l) > 1 ORDER BY sum(l)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`l`",
+    "proposal": "`c`"
+   },
+   "context": {
+    "start": 67,
+    "stop": 67,
+    "fragment": "l"
+   }
+  },
+  {
+   "sql": "SELECT count(*) c FROM g GROUP BY x HAVING sum(l) > 1 ORDER BY c",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT count(*) c FROM g GROUP BY x + 1 HAVING sum(l) > 1 ORDER BY x + 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`c`"
+   },
+   "context": {
+    "start": 67,
+    "stop": 67,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT count(*) c FROM g GROUP BY x HAVING x > 1 ORDER BY sum(l)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`l`",
+    "proposal": "`c`"
+   },
+   "context": {
+    "start": 62,
+    "stop": 62,
+    "fragment": "l"
+   }
+  },
+  {
+   "sql": "SELECT count(*) c FROM g GROUP BY x HAVING count(*) > 0 ORDER BY sum(l)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT count(*) c FROM g GROUP BY x + 1 HAVING count(*) > 0 ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY m ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY 1 ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT DISTINCT x + 1 FROM g ORDER BY x + 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`(x + 1)`"
+   },
+   "context": {
+    "start": 38,
+    "stop": 38,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT DISTINCT x + 1 m FROM g ORDER BY x + 2",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`m`"
+   },
+   "context": {
+    "start": 40,
+    "stop": 40,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1 DESC, c",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT abs(x) m FROM g GROUP BY abs(x) ORDER BY abs(x)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT X + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY X + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT g.x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY g.x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY g.x + 1 ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT sum(x) + 1 m FROM g GROUP BY x + 1 ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT sum(x) s FROM g GROUP BY x + 1 ORDER BY x + 1, s",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "s",
+     "type": "bigint",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1 + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT cast(x as string) m, count(*) c FROM g GROUP BY cast(x as string) ORDER BY cast(x as string)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY (SELECT 1) + x + 1",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`x`",
+    "proposal": "`c`, `m`"
+   },
+   "context": {
+    "start": 71,
+    "stop": 71,
+    "fragment": "x"
+   }
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY CASE WHEN x + 1 > 1 THEN 1 ELSE 2 END",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (x + 1) * 2 m FROM g GROUP BY x + 1 ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (x + 1) * 2 m FROM g GROUP BY x + 1 ORDER BY (x + 1) * 2",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + l m, count(*) c FROM g GROUP BY x + l ORDER BY l + x",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x * l m, count(*) c FROM g GROUP BY x * l ORDER BY l * x",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (x = 1 AND l = 2) m, count(*) c FROM g GROUP BY (x = 1 AND l = 2) ORDER BY (l = 2 AND x = 1)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (x = 1 OR l = 2) m, count(*) c FROM g GROUP BY (x = 1 OR l = 2) ORDER BY (l = 2 OR x = 1)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (x = l) m, count(*) c FROM g GROUP BY (x = l) ORDER BY (l = x)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (x <=> l) m, count(*) c FROM g GROUP BY (x <=> l) ORDER BY (l <=> x)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "boolean",
+     "nullable": false
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (x < l) m, count(*) c FROM g GROUP BY (x < l) ORDER BY (l > x)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT (x <= l) m, count(*) c FROM g GROUP BY (x <= l) ORDER BY (l >= x)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "boolean",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT greatest(x, l) m, count(*) c FROM g GROUP BY greatest(x, l) ORDER BY greatest(l, x)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT least(x, l) m, count(*) c FROM g GROUP BY least(x, l) ORDER BY least(l, x)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x - l m, count(*) c FROM g GROUP BY x - l ORDER BY l - x",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`l`",
+    "proposal": "`c`, `m`"
+   },
+   "context": {
+    "start": 58,
+    "stop": 58,
+    "fragment": "l"
+   }
+  },
+  {
+   "sql": "SELECT concat(cast(x as string), cast(l as string)) m, count(*) c FROM g GROUP BY concat(cast(x as string), cast(l as string)) ORDER BY concat(cast(l as string), cast(x as string))",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`l`",
+    "proposal": "`c`, `m`"
+   },
+   "context": {
+    "start": 148,
+    "stop": 148,
+    "fragment": "l"
+   }
+  },
+  {
+   "sql": "SELECT coalesce(x, l) m, count(*) c FROM g GROUP BY coalesce(x, l) ORDER BY coalesce(l, x)",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`l`",
+    "proposal": "`c`, `m`"
+   },
+   "context": {
+    "start": 85,
+    "stop": 85,
+    "fragment": "l"
+   }
+  },
+  {
+   "sql": "SELECT (x + 1) + 2 m, count(*) c FROM g GROUP BY (x + 1) + 2 ORDER BY x + (1 + 2)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 + l m, count(*) c FROM g GROUP BY x + 1 + l ORDER BY l + 1 + x",
+   "conf": {},
+   "ok": false,
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+   "sql_state": "42703",
+   "message_parameters": {
+    "objectName": "`l`",
+    "proposal": "`c`, `m`"
+   },
+   "context": {
+    "start": 66,
+    "stop": 66,
+    "fragment": "l"
+   }
+  },
+  {
+   "sql": "SELECT x + l m, count(*) c FROM g GROUP BY l + x ORDER BY x + l",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT l - l % 60 m, count(*) c FROM g WHERE x = 62 GROUP BY l - l % 60 ORDER BY l - l % 60 LIMIT 10",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x m, count(*) c FROM g GROUP BY x HAVING x > 3 ORDER BY x",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x m, count(*) c FROM g GROUP BY x HAVING x > 3 ORDER BY sum(l)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x m, count(*) c FROM g GROUP BY x HAVING count(*) > 3 ORDER BY sum(l)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x m FROM g GROUP BY x HAVING count(*) > 3 ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 HAVING count(*) > 3 ORDER BY x + 1",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  },
+  {
+   "sql": "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 HAVING count(*) > 3 ORDER BY m",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "m",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": false
+    }
+   ]
+  }
+ ],
+ "plan_ids": []
+}

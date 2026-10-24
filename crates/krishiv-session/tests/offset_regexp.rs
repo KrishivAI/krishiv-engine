@@ -88,6 +88,15 @@ fn offset_skips_then_limit_keeps() {
         ints(&s, "SELECT id FROM t ORDER BY id DESC LIMIT 20 OFFSET 7"),
         [3, 2, 1]
     );
+    // A foldable count folds to a literal the planner reads (Spark 4.2.0:
+    // two rows).
+    assert_eq!(
+        ints(
+            &s,
+            "SELECT id FROM t ORDER BY id LIMIT length('ab') OFFSET 1 + 1"
+        ),
+        [3, 4]
+    );
     // Offset 0 is a no-op; a limit of 0 returns nothing whatever the offset.
     assert_eq!(ints(&s, "SELECT id FROM t ORDER BY id OFFSET 0").len(), 10);
     assert!(ints(&s, "SELECT id FROM t ORDER BY id LIMIT 0 OFFSET 3").is_empty());
@@ -267,16 +276,48 @@ fn regexp_replace_position_is_checked_before_any_row() {
         one("SELECT regexp_replace(CAST(NULL AS STRING), 'a', 'b', CAST(NULL AS INT))"),
         None
     );
-    // Known divergence: Spark folds `1 + 1`; the analyzer only folds
-    // literals and casts of them (as for the scale of `round`).
+    // A foldable position folds, as in Spark 4.2.0: `1 + 1` is 2.
     assert_eq!(
-        fails(&s, "SELECT regexp_replace('a', 'a', 'b', 1 + 1)").error_class(),
-        ErrorClass::DatatypeMismatchNonFoldableInput
+        one("SELECT regexp_replace('a', 'a', 'b', 1 + 1)").as_deref(),
+        Some("a")
+    );
+    assert_eq!(
+        one("SELECT regexp_replace('abc', 'b', 'x', 1 + 1)").as_deref(),
+        Some("axc")
     );
     assert_eq!(
         one("SELECT regexp_replace('abc', 'b', 'x', CAST(2 AS BIGINT))").as_deref(),
         Some("axc")
     );
+}
+
+/// Spark checks a count is foldable before its type, and bounds the sum of
+/// folded counts (error classes and messages from Spark 4.2.0).
+#[test]
+fn limit_like_checks_follow_spark_order() {
+    let s = session();
+    let unfoldable = ErrorClass::InvalidLimitLikeExpressionIsUnfoldable;
+    // A STRING column is not foldable: that, not its type, is the error.
+    let e = fails(
+        &s,
+        "SELECT s FROM (SELECT CAST(id AS STRING) AS s FROM t) LIMIT s",
+    );
+    assert_eq!(e.error_class(), unfoldable, "{e}");
+    assert!(e.to_string().contains("\"s\""), "{e}");
+    // `OFFSET rand()` (Spark: `IS_UNFOLDABLE` with `"_nondeterministic"`)
+    // is pinned in the analyzer's tests: `rand` is not implemented yet.
+    for sql in [
+        "SELECT id FROM t LIMIT 2147483647 OFFSET 1 + 0",
+        "SELECT id FROM t LIMIT 2147483646 + 1 OFFSET 1",
+    ] {
+        let e = fails(&s, sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::SumOfLimitAndOffsetExceedsMaxInt,
+            "{sql}: {e}"
+        );
+        assert!(e.to_string().contains("2147483647"), "{sql}: {e}");
+    }
 }
 
 /// Results and error classes of Spark 4.2.0 (local session, same data) for

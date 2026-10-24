@@ -300,6 +300,19 @@ pub fn scalar_names() -> Vec<&'static str> {
     names
 }
 
+/// Whether the result of the scalar function `name` depends only on its
+/// arguments and `spark.sql.ansi.enabled`: the string, math and arithmetic
+/// families. The datetime, session and hash families read the session time
+/// zone, the user or the query start, so a caller that evaluates a call
+/// before execution (constant folding) must not evaluate those.
+#[must_use]
+pub fn is_argument_pure(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    [string::NAMES, math::NAMES, arith::NAMES]
+        .iter()
+        .any(|names| names.contains(&lower.as_str()))
+}
+
 /// Binds the scalar function `name` (ASCII case-insensitive) to `args`.
 ///
 /// # Errors

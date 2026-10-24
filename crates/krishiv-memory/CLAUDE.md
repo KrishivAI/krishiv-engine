@@ -14,7 +14,7 @@ Paths are relative to this crate.
 - `src/spill.rs` spill scopes and spill accounting
 - `src/spillfile/format.rs` on-disk spill format; `src/spillfile/writer.rs` and `reader.rs` frame I/O
 - `src/spillfile/dir.rs` spill directory, advisory lock and crash reclaim
-- `src/loom_tests.rs` loom models; `src/sync.rs` loom/std primitive switch
+- `src/loom_model.rs` loom models; `src/sync.rs` loom/std primitive switch
 
 ## Extension points
 - New memory consumer: take a `Reservation` from the pool and grow it with `try_grow`; do not allocate unaccounted.
@@ -23,7 +23,7 @@ Paths are relative to this crate.
 ## Invariants
 - Every operator allocation is accounted through reservations; pools are empty at query end (tested).
 - Arbitration and OOM paths return typed errors or trigger spill; never panic.
-- Concurrency primitives tested with loom (`src/loom_tests.rs`; `src/sync.rs` swaps in loom's types).
+- Concurrency primitives tested with loom (`src/loom_model.rs`; `src/sync.rs` swaps in loom's types).
 - Arbitration is cooperative: never call into, lock or mutate another task's operator state; no sync lock across an await.
 - `unsafe` allowed; every block has a `// SAFETY:` comment; runs under Miri in CI and nightly ASan/TSan (ADR 0029).
 - Spill files (`spillfile`): a finished `.spill` is complete (temp file + rename; no fsync by design: scratch data, deleted at the
@@ -37,4 +37,4 @@ Paths are relative to this crate.
 
 ## Tests
 `cargo nextest run -p krishiv-memory --no-tests=pass` · `cargo clippy -p krishiv-memory --all-targets -- -D warnings` ·
-loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-memory --lib --release` (use a separate target dir)
+loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-memory --lib --release loom_model::` (use a separate target dir)

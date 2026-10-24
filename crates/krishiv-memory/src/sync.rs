@@ -2,7 +2,7 @@
 //! Synchronisation primitives, swapped for loom's under `--cfg loom`, so
 //! the model tests explore every interleaving of the accounting, wake-up
 //! and arbitration code (the models inject a clock that never fires)
-//! (`RUSTFLAGS="--cfg loom" cargo test -p krishiv-memory --lib --release`).
+//! (`RUSTFLAGS="--cfg loom" cargo test -p krishiv-memory --lib --release loom_model::`).
 
 #[cfg(all(test, loom))]
 pub(crate) use loom::sync::{
