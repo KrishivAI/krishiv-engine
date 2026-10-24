@@ -543,3 +543,49 @@ fn bucket_counts_follow_the_drivers() {
     assert_eq!(bucket_bits(5000), 12);
     assert_eq!(bucket_bits(usize::MAX), 12);
 }
+
+/// A merge of many slices sorts their rows instead of running the loser
+/// tree, in the same stable order (ties by run, then within a run); without
+/// memory for the sort it runs the tree.
+#[test]
+fn a_wide_bucket_merge_sorts_in_the_merge_order() {
+    let (schema, batch) = floats();
+    let keys = KeyEncoder::new(&schema, &[SortKey::asc(0).nulls_first(false)]).unwrap();
+    let n = batch.num_rows();
+    // 100 runs: rotations of the rows, so ties come from many runs.
+    let runs: Vec<_> = (0..100)
+        .map(|i| {
+            let rows: Vec<(usize, usize)> = (0..n).map(|r| (0, (r + i) % n)).collect();
+            let b = interleave_batches(&schema, std::slice::from_ref(&batch), &rows).unwrap();
+            Arc::new(SortedBatch::new(b, &keys, None).unwrap())
+        })
+        .collect();
+    let root = TreePool::new(&MemoryConfig::default());
+    let handle = ConsumerHandle::register(root.child("q", None), "sort", None);
+    let drain = |mut m: Merger| {
+        let mut out = Vec::new();
+        while let Some(b) = m.next(37).unwrap() {
+            out.extend(ids(&b));
+        }
+        out
+    };
+    let tree = Merger::new(
+        Arc::clone(&schema),
+        Arc::clone(&keys),
+        runs.clone(),
+        &[],
+        &handle,
+    );
+    let sorted = Merger::bucket(Arc::clone(&schema), Arc::clone(&keys), &runs, 0, &handle);
+    let want = drain(tree.unwrap());
+    assert_eq!(want.len(), 100 * n);
+    assert_eq!(drain(sorted.unwrap()), want);
+    // A pool too small for the keyed rows: the tree, same order.
+    let tight = TreePool::new(&MemoryConfig {
+        limit: Some(1024),
+        ..MemoryConfig::default()
+    });
+    let small = ConsumerHandle::register(tight.child("q", None), "sort", None);
+    let fallback = Merger::bucket(schema, keys, &runs, 0, &small).unwrap();
+    assert_eq!(drain(fallback), want);
+}

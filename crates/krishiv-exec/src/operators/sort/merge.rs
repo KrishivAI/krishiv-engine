@@ -285,6 +285,11 @@ pub(crate) fn metadata_bytes(sources: usize) -> usize {
     sources.saturating_mul(size_of::<u64>().saturating_add(size_of::<u32>()))
 }
 
+/// Bytes per row of a sort merge's keyed rows (prefix, slice, row).
+const KEYED_ROW_BYTES: usize = size_of::<(u64, u32, u32)>();
+/// Bytes per row of a sort merge's output order.
+const ORDER_ROW_BYTES: usize = size_of::<(u32, u32)>();
+
 /// A k-way merge of sorted runs.
 pub(crate) struct Merger {
     schema: SchemaRef,
@@ -305,7 +310,26 @@ pub(crate) struct Merger {
     /// A 64-bit count of output batches: it never wraps.
     stamp: Vec<u64>,
     generation: u64,
+    /// A merge of many in-memory slices done as one sort of their rows
+    /// (see [`Merger::bucket`]): no cursors, the rows in output order.
+    sorted: Option<SortedRows>,
 }
+
+/// The rows of a sorted merge, in output order, and the memory they hold.
+struct SortedRows {
+    /// `(source, row)` in output order.
+    order: Vec<(u32, u32)>,
+    /// The next row of `order` to emit.
+    pos: usize,
+    /// Accounts `order` (and, while sorting, its keyed form).
+    _scratch: Reservation,
+}
+
+/// In-memory slices above which a bucket's merge sorts its rows instead of
+/// running a loser tree: with many small slices each tree step is a chain
+/// of cache misses, while one sort of the rows' key prefixes stays in
+/// cache (most comparisons end at the 8-byte prefix).
+const SORT_MIN_SLICES: usize = 64;
 
 impl Merger {
     /// A merge of `memory` runs followed by `spilled` runs (in that run
@@ -337,12 +361,75 @@ impl Merger {
         bucket: usize,
         handle: &Arc<ConsumerHandle>,
     ) -> Result<Self> {
-        let memory = memory
+        let memory: Vec<_> = memory
             .iter()
             .map(|s| (Arc::clone(s), s.bucket(bucket)))
             .filter(|(_, r)| !r.is_empty())
             .collect();
+        if memory.len() > SORT_MIN_SLICES {
+            let rows: usize = memory.iter().map(|(_, r)| r.len()).sum();
+            let mut scratch = handle.reservation();
+            // Without the memory for the keyed rows, the loser tree (which
+            // needs none) merges them.
+            if scratch
+                .try_grow(rows.saturating_mul(KEYED_ROW_BYTES))
+                .is_ok()
+            {
+                return Self::sorted(schema, encoder, &memory, scratch);
+            }
+        }
         Self::slices(schema, encoder, memory, &[], handle)
+    }
+
+    /// The merge of `memory`'s slices as one stable sort of their rows by
+    /// `(key, slice, position)`, `scratch` holding its memory.
+    fn sorted(
+        schema: SchemaRef,
+        encoder: Arc<KeyEncoder>,
+        memory: &[(Arc<SortedBatch>, std::ops::Range<usize>)],
+        mut scratch: Reservation,
+    ) -> Result<Self> {
+        let too_many = || internal("a sort merge of more than u32::MAX rows".to_owned());
+        let rows: usize = memory.iter().map(|(_, r)| r.len()).sum();
+        let mut keyed: Vec<(u64, u32, u32)> = Vec::with_capacity(rows);
+        for (i, (s, range)) in memory.iter().enumerate() {
+            let i = u32::try_from(i).map_err(|_| too_many())?;
+            keyed.extend(
+                s.order[range.clone()]
+                    .iter()
+                    .map(|&r| (prefix(s.rows.row(r as usize).data()), i, r)),
+            );
+        }
+        // Ties in a slice keep its order (its own ties are in row order),
+        // and slices keep their run order: the merge's stable order.
+        keyed.sort_unstable_by(|&(pa, sa, ra), &(pb, sb, rb)| {
+            pa.cmp(&pb)
+                .then_with(|| {
+                    let a = memory[sa as usize].0.rows.row(ra as usize);
+                    let b = memory[sb as usize].0.rows.row(rb as usize);
+                    a.cmp(&b)
+                })
+                .then((sa, ra).cmp(&(sb, rb)))
+        });
+        let order: Vec<(u32, u32)> = keyed.into_iter().map(|(_, s, r)| (s, r)).collect();
+        scratch.shrink(scratch.size().saturating_sub(order.len() * ORDER_ROW_BYTES));
+        let sources = memory.iter().map(|(s, _)| s.batch.clone()).collect();
+        Ok(Self {
+            schema,
+            encoder,
+            cursors: Vec::new(),
+            tree: Vec::new(),
+            sources,
+            retired: false,
+            slot: Vec::new(),
+            stamp: Vec::new(),
+            generation: 0,
+            sorted: Some(SortedRows {
+                order,
+                pos: 0,
+                _scratch: scratch,
+            }),
+        })
     }
 
     /// A merge of the `order` ranges of `memory` followed by `spilled`
@@ -398,6 +485,7 @@ impl Merger {
             slot: Vec::new(),
             stamp: Vec::new(),
             generation: 0,
+            sorted: None,
         };
         for i in 0..merger.cursors.len() {
             // Plays `i` up until it meets an empty node (initial build).
@@ -470,7 +558,16 @@ impl Merger {
     /// I/O.
     pub(crate) fn next(&mut self, max_rows: usize) -> Result<Option<Batch>> {
         let mut out = Vec::with_capacity(max_rows.min(1 << 16));
-        while out.len() < max_rows.max(1) {
+        if let Some(sorted) = &mut self.sorted {
+            let end = sorted.order.len().min(sorted.pos + max_rows.max(1));
+            out.extend(
+                sorted.order[sorted.pos..end]
+                    .iter()
+                    .map(|&(s, r)| (s as usize, r as usize)),
+            );
+            sorted.pos = end;
+        }
+        while self.sorted.is_none() && out.len() < max_rows.max(1) {
             let Some(&top) = self.tree.first() else {
                 break;
             };
