@@ -33,15 +33,18 @@ pub struct PhysicalPlan {
     #[prost(message, repeated, tag = "10")]
     pub exprs: ::prost::alloc::vec::Vec<Expr>,
     /// The ids of the features the plan uses, sorted and without duplicates.
+    /// ignorable: a reader that predates features checks min_reader_version.
     #[prost(string, repeated, tag = "11")]
     pub features: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// The wire epoch, written explicitly (1). Absent marks a plan written
     /// before the feature header existed: its features follow from its
     /// content.
+    /// ignorable: a reader that predates features checks min_reader_version.
     #[prost(uint32, tag = "12")]
     pub epoch: u32,
 }
 /// The header fields of a `PhysicalPlan`, read without decoding its tables.
+/// ignorable: a reader-side view of `PhysicalPlan`, never written as such.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PlanHeader {
     #[prost(uint32, tag = "1")]

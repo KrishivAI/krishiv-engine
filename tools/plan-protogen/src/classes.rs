@@ -135,10 +135,15 @@ fn names(file: &FileDescriptorProto) -> Vec<String> {
 }
 
 /// The feature ids in the registry source `features_rs`: the first item of
-/// each `(id, Variant, ...)` registry line.
+/// each `(id, Variant, ...)` line inside the `registry! { ... }` invocation.
+/// Lines elsewhere (the macro's definition, comments, other code) never
+/// register an id.
 pub fn registered_features(features_rs: &str) -> BTreeSet<String> {
     features_rs
         .lines()
+        .skip_while(|l| l.trim() != "registry! {")
+        .skip(1)
+        .take_while(|l| l.trim() != "}")
         .filter_map(|l| l.trim().strip_prefix('('))
         .filter_map(|l| l.split_once(','))
         .map(|(id, _)| id.trim().to_owned())
@@ -303,5 +308,15 @@ mod tests {
         let src = "registry! {\n    (alpha_one, AlphaOne, 3, Semantic, \"a\"),\n    \
                    (beta, Beta, 6, Optimization, \"b\"),\n}\n    (Not, an id)\n";
         assert_eq!(registered_features(src), set(&["alpha_one", "beta"]));
+    }
+
+    #[test]
+    fn registry_like_lines_outside_the_invocation_are_ignored() {
+        let src = "/*\n    (phantom, Phantom, 6, Semantic, \"p\"),\n*/\n\
+                   macro_rules! registry {\n    (ghost, Ghost, 6, Semantic, \"g\"),\n}\n\
+                   registry! {\n    (real, Real, 6, Semantic, \"r\"),\n}\n\
+                   (after, After, 6, Semantic, \"a\"),\n";
+        assert_eq!(registered_features(src), set(&["real"]));
+        assert!(registered_features("(only, Only, 6, Semantic, \"o\"),\n").is_empty());
     }
 }
