@@ -18,6 +18,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_AGG_ROW_LAYOUT,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_RADIX_BITS,
+    &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
     &NETWORK_TIMEOUT,
     &MEMORY_LIMIT,
@@ -89,6 +90,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
+    ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
@@ -286,6 +288,19 @@ pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
           table that switches by size between a flat and a salted directory. Results are \
           the same either way; joins whose key types have no row encoding keep the \
           default path.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Hash buckets of a sort below a window (P2-T055).
+pub static EXEC_SORT_HASH_BUCKETS: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.sort.hashBuckets",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: the sort below a window with a PARTITION BY splits its rows into buckets by \
+          the hash of the partitioning keys and sorts, merges and evaluates the buckets in \
+          parallel. Results are the same either way.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
