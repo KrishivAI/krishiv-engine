@@ -92,6 +92,9 @@ struct Counters {
     row_final_tasks: AtomicU64,
     /// Final phases that moved to disk (out of memory, or a spill request).
     row_final_spills: AtomicU64,
+    /// Times the final phase wrote its finished partitions' groups to the
+    /// output file to free memory.
+    row_final_flushes: AtomicU64,
 }
 
 fn bump(c: &AtomicU64, n: u64) {
@@ -106,6 +109,10 @@ pub struct HashAggregate {
     /// Overrides the thread-local row tables' index mode (tests force
     /// abandons).
     row_mode: Option<Mode>,
+    /// Tests: once this many final-phase tasks finished, no further task
+    /// gets its memory (forces the flush and spill paths).
+    #[cfg(test)]
+    stall_after: Option<usize>,
     /// A gate the result's spill waits at before writing (tests cancel a
     /// query during the spill).
     #[cfg(test)]
@@ -123,6 +130,8 @@ impl HashAggregate {
             counters: Arc::default(),
             row_mode: None,
             #[cfg(test)]
+            stall_after: None,
+            #[cfg(test)]
             output_gate: None,
         }))
     }
@@ -136,6 +145,24 @@ impl HashAggregate {
             core: Arc::new(AggCore::new(spec)?),
             counters: Arc::default(),
             row_mode: Some(mode),
+            stall_after: None,
+            output_gate: None,
+        }))
+    }
+
+    /// [`with_row_mode`](Self::with_row_mode) whose final phase refuses
+    /// memory to every task after the first `finished` ones finished.
+    #[cfg(test)]
+    pub(crate) fn with_final_stall(
+        spec: AggregateSpec,
+        mode: Mode,
+        finished: usize,
+    ) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self {
+            core: Arc::new(AggCore::new(spec)?),
+            counters: Arc::default(),
+            row_mode: Some(mode),
+            stall_after: Some(finished),
             output_gate: None,
         }))
     }
@@ -151,6 +178,7 @@ impl HashAggregate {
             core: Arc::new(AggCore::new(spec)?),
             counters: Arc::default(),
             row_mode: None,
+            stall_after: None,
             output_gate: Some(gate),
         }))
     }
@@ -172,9 +200,14 @@ impl HashAggregate {
     fn new_table(&self, g: &Global, local: bool) -> Result<Table> {
         Ok(match g.rows {
             Some(mode) => {
-                let mode = if local { mode } else { Mode::Grow };
+                // Merge tables of the disk phase need no radix partitions.
+                let (mode, bits) = if local {
+                    (mode, g.row_bits)
+                } else {
+                    (Mode::Grow, 0)
+                };
                 Table::Rows(
-                    RowTable::new(&self.core, &g.seed, mode, local)?
+                    RowTable::new(&self.core, &g.seed, mode, local, bits)?
                         .with_abandons(Arc::clone(&self.counters.row_abandons)),
                 )
             }
@@ -242,31 +275,56 @@ impl Spiller {
     fn write_run(&self, table: &Table, from: usize, level: u32) -> Result<Run> {
         let parts = table.ids_by_partition(level, from);
         let chunk = spill_chunk(table.memory_size(), table.len());
-        self.write_parts(parts, chunk, &|ids| table.state_batch(ids))
+        self.write_parts(parts, chunk, table, &|ids| table.state_batch(ids))
     }
 
-    /// Writes the rows of a row table that `keep` selects as one run of
-    /// partition files at `level` (blocking I/O).
-    fn write_run_rows(
+    /// Writes the rows that each source's filter keeps as one run of
+    /// partition files at `level`: per partition file, the sources in
+    /// order (their merge order; blocking I/O).
+    fn write_run_sources(
         &self,
-        table: &RowTable,
-        keep: &dyn Fn(u32) -> bool,
+        sources: &[(&RowTable, &dyn Fn(u32) -> bool)],
         level: u32,
     ) -> Result<Run> {
-        let mut parts = table.ids_by_partition(level, 0);
-        for ids in &mut parts {
-            ids.retain(|&r| keep(r));
+        let per: Vec<Vec<Vec<u32>>> = sources
+            .iter()
+            .map(|(t, keep)| {
+                let mut parts = t.ids_by_partition(level, 0);
+                for ids in &mut parts {
+                    ids.retain(|&r| keep(r));
+                }
+                parts
+            })
+            .collect();
+        let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
+        for (p, file) in files.iter_mut().enumerate() {
+            if per.iter().all(|parts| parts[p].is_empty()) {
+                continue;
+            }
+            let mut writer = self.run_writer()?;
+            for ((t, _), parts) in sources.iter().zip(&per) {
+                let chunk = spill_chunk(t.memory_size(), t.len());
+                for ids in row_chunks(&parts[p], chunk, t) {
+                    self.query.check_cancelled()?;
+                    writer
+                        .write(&Batch::new(t.state_batch(ids)?))
+                        .map_err(KrishivError::from)?;
+                }
+            }
+            *file = Some(self.finish(writer)?);
         }
-        let chunk = spill_chunk(table.memory_size(), table.len());
-        self.write_parts(parts, chunk, &|ids| table.state_batch(ids))
+        bump(&self.counters.spill_runs, 1);
+        Ok(Run(files))
     }
 
     /// Writes the state batches of the groups of each partition (`parts`,
-    /// in chunks of `chunk`) as one run.
+    /// in chunks of `chunk`, of one radix partition each for a row table)
+    /// as one run.
     fn write_parts(
         &self,
         parts: Vec<Vec<u32>>,
         chunk: usize,
+        table: &Table,
         state: &dyn Fn(&[u32]) -> Result<RecordBatch>,
     ) -> Result<Run> {
         let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
@@ -275,7 +333,7 @@ impl Spiller {
                 continue;
             }
             let mut writer = self.run_writer()?;
-            for chunk in ids.chunks(chunk) {
+            for chunk in chunks(&ids, chunk, table) {
                 self.query.check_cancelled()?;
                 writer
                     .write(&Batch::new(state(chunk)?))
@@ -305,7 +363,8 @@ impl Spiller {
     fn write_output(&self, table: &Table, out: &mut SpillWriter) -> Result<()> {
         let n = u32::try_from(table.len()).map_err(|_| internal("too many groups".to_owned()))?;
         let ids = table.ids(0..table.len());
-        for chunk in ids.chunks(self.batch_size) {
+        let size = out_chunk(table.memory_size(), table.len(), self.batch_size);
+        for chunk in chunks(&ids, size, table) {
             self.query.check_cancelled()?;
             let b = Batch::new(table.output_batch(chunk)?);
             out.write(&b).map_err(KrishivError::from)?;
@@ -322,6 +381,43 @@ impl Spiller {
 fn spill_chunk(memory: usize, groups: usize) -> usize {
     let per_group = memory / groups.max(1);
     ((HEADROOM - (64 << 10)) / 3 / per_group.max(1)).clamp(16, CHUNK)
+}
+
+/// Group ids of `table` in chunks of at most `size`; a row table's chunks
+/// stay within one radix partition, whose states are one partition's
+/// arrays (no concatenation).
+fn chunks<'a>(
+    ids: &'a [u32],
+    size: usize,
+    table: &'a Table,
+) -> Box<dyn Iterator<Item = &'a [u32]> + 'a> {
+    match table {
+        Table::Rows(t) => Box::new(row_chunks(ids, size, t)),
+        Table::Keys(_) => Box::new(ids.chunks(size.max(1))),
+    }
+}
+
+/// Row references of `table` in chunks of at most `size`, each within one
+/// radix partition.
+fn row_chunks<'a>(
+    ids: &'a [u32],
+    size: usize,
+    table: &'a RowTable,
+) -> impl Iterator<Item = &'a [u32]> {
+    ids.chunk_by(move |a, b| table.same_part(*a, *b))
+        .flat_map(move |run| run.chunks(size.max(1)))
+}
+
+/// Bytes an output frame aims at: reading the output back reserves its
+/// largest frame (encoded and decoded), so frames stay well under small
+/// memory limits.
+const OUT_FRAME: usize = 256 << 10;
+
+/// Groups per output batch written to disk: the batch size, or fewer when
+/// a table's bytes per group say a batch would pass [`OUT_FRAME`].
+fn out_chunk(memory: usize, groups: usize, batch_size: usize) -> usize {
+    let per_group = memory / groups.max(1);
+    (OUT_FRAME / per_group.max(1)).clamp(16, batch_size.max(16))
 }
 
 /// One spill: a file per hash partition.
@@ -638,6 +734,8 @@ struct Global {
     /// Row tables (`krishiv.exec.agg.rowLayout` with fixed-width keys):
     /// the thread-local tables' index mode.
     rows: Option<Mode>,
+    /// Radix bits of the thread-local row tables.
+    row_bits: u32,
     /// Where tables count probe lengths (a detailed profile only).
     probes: Option<Arc<ProbeTotals>>,
     /// Bytes of the combined tables, before `finalize`.
@@ -856,7 +954,7 @@ impl HashAggregate {
         let ids = src.ids(inner.merged..end);
         let p = dst.0.prepare(&Batch::new(src.state_batch(&ids)?), true)?;
         let granted: usize = inner.granted.iter().map(Reservation::size).sum();
-        let want = dst.0.projected(&p)?;
+        let want = dst.0.projected(&p)? + dst.0.transient(&p);
         if let Err(need) = reserve_to(&mut dst.1, want.saturating_sub(granted)) {
             if self.core.spec.spill.is_none() {
                 return Ok(Step::Grow(need));
@@ -970,7 +1068,7 @@ impl HashAggregate {
             })));
         }
         let p = cur.table.prepare(&batch, true)?;
-        let want = cur.table.projected(&p)? + HEADROOM;
+        let want = cur.table.projected(&p)? + HEADROOM.max(cur.table.transient(&p));
         if reserve_to(&mut cur.reservation, want).is_err() {
             cur.pending = Some(batch);
             return self.must_free(g, inner, ctx, want);
@@ -1023,8 +1121,9 @@ impl HashAggregate {
         })))
     }
 
-    /// Publishes an in-memory result: `tables` read in chunks of a batch,
-    /// held by `held`.
+    /// Publishes an in-memory result: `tables` read in chunks of a batch
+    /// (a row table's within one radix partition, whose states are one
+    /// partition's arrays), held by `held`.
     fn finish_memory(
         &self,
         g: &Global,
@@ -1035,8 +1134,16 @@ impl HashAggregate {
         let batch = ctx.query().config().batch_size.max(1);
         let mut chunks = Vec::new();
         for (i, t) in tables.iter().enumerate() {
-            let n = t.len();
-            chunks.extend((0..n).step_by(batch).map(|s| (i, s..(s + batch).min(n))));
+            let mut start = 0;
+            for len in t.part_lens() {
+                let end = start + len;
+                chunks.extend(
+                    (start..end)
+                        .step_by(batch)
+                        .map(|s| (i, s..(s + batch).min(end))),
+                );
+                start = end;
+            }
         }
         self.publish_memory(g, ctx, tables, chunks, held)
     }
@@ -1102,8 +1209,8 @@ impl Sink for HashAggregate {
 
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         let config = ctx.query().config();
+        let threads = ctx.executor().parallelism();
         let rows = (config.agg_row_layout && self.core.rows.is_some()).then(|| {
-            let threads = ctx.executor().parallelism();
             self.row_mode
                 .unwrap_or_else(|| Mode::local(config.seed.is_some(), threads))
         });
@@ -1115,6 +1222,7 @@ impl Sink for HashAggregate {
         Ok(Arc::new(Global {
             seed: HashSeed::new(config.seed),
             rows,
+            row_bits: rows.map_or(0, |m| m.radix_bits(threads)),
             probes: config
                 .detailed_metrics
                 .then(|| Arc::clone(&self.counters.probes)),
@@ -1144,7 +1252,9 @@ impl Sink for HashAggregate {
             ));
         }
         let p = l.table.prepare(&input, false)?;
-        let want = l.table.projected(&p)? + self.headroom();
+        // The spill headroom is idle while a batch is applied: the apply's
+        // transient bytes may use it.
+        let want = l.table.projected(&p)? + self.headroom().max(l.table.transient(&p));
         if let Err(bytes) = reserve_to(&mut l.reservation, want) {
             return Ok(SinkStatus::NeedMemory { bytes });
         }
@@ -1338,6 +1448,10 @@ impl Sink for HashAggregate {
                 (
                     "row_final_spills",
                     c.row_final_spills.load(AtomicOrdering::Relaxed),
+                ),
+                (
+                    "row_final_flushes",
+                    c.row_final_flushes.load(AtomicOrdering::Relaxed),
                 ),
             ]));
             out.push((

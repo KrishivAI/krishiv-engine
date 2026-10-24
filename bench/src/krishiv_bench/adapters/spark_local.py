@@ -35,8 +35,9 @@ class _SparkSQLEngine(Engine):
         return [tuple(r) for r in self.spark.sql(query.sql).collect()]
 
     def timed_run(self, query: Query) -> tuple[int, float]:
+        """Count rows engine-side: the answer can be large, so it is never collected into Python objects."""
         t0 = time.perf_counter()
-        n = len(self.spark.sql(query.sql).collect())
+        n = self.spark.sql(query.sql).count()
         return n, time.perf_counter() - t0
 
     def teardown(self) -> None:

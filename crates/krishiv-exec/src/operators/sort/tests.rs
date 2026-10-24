@@ -477,3 +477,53 @@ async fn a_late_spill_request_leaves_the_spilled_run_to_the_reader() {
     drop(manager);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The merge budget covers the merger's per-source `slot`/`stamp` metadata,
+/// not just the run frames and the output batch.
+#[tokio::test(start_paused = true)]
+async fn merge_budget_covers_per_source_metadata() {
+    use super::merge::{SpillRun, metadata_bytes};
+    use super::sort::merge_budget;
+
+    assert_eq!(metadata_bytes(3), 3 * (8 + 4));
+
+    let root = TreePool::new(&MemoryConfig::default());
+    let handle = ConsumerHandle::register(root.child("q", None), "sort", None);
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("sort-unit-merge-budget-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.clone(),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+    let k: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+    let batch = Batch::new(RecordBatch::try_new(Arc::clone(&schema), vec![k]).unwrap());
+    let mut runs = Vec::new();
+    for (max_batch_bytes, row_bytes) in [(1000usize, 10usize), (2000, 20), (1500, 15)] {
+        let scratch = handle.reservation().for_spill_scratch();
+        let mut writer = scope.writer(Arc::clone(&schema), scratch).unwrap();
+        writer.write(&batch).unwrap();
+        let file = writer.finish().unwrap();
+        runs.push(SpillRun {
+            file,
+            max_batch_bytes,
+            row_bytes,
+        });
+    }
+    let batch_rows = 100;
+    let (budget, fan_in) = merge_budget(&runs, runs.len(), batch_rows, &handle, false)
+        .await
+        .unwrap();
+    assert_eq!(fan_in, runs.len());
+    let per_run = runs.iter().map(SpillRun::merge_bytes).max().unwrap();
+    let row_bytes = runs.iter().map(|r| r.row_bytes).max().unwrap();
+    let expected = per_run * fan_in + row_bytes * batch_rows + metadata_bytes(fan_in);
+    assert_eq!(budget.size(), expected);
+    drop((budget, runs, handle));
+    assert_eq!(root.reserved(), 0);
+    drop(manager);
+    let _ = std::fs::remove_dir_all(dir);
+}

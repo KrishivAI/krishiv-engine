@@ -67,9 +67,20 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT"]
 python-version = "3.11"
 
 [tool.ty.analysis]
-# The compiled extension only exists after `maturin develop`; its typed stub is
-# P2-T130's job, so until then the import is allowed to stay unresolved.
+# The compiled extension only exists after `maturin develop`; when it is missing
+# (or its stub is), the import is allowed to stay unresolved.
 allowed-unresolved-imports = ["krishiv._native", "pandas"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+show_error_codes = true
+
+# pyarrow is an optional dependency without inline types; the bridge code that
+# reads it is still checked, only the import itself is allowed to stay untyped.
+[[tool.mypy.overrides]]
+module = ["pyarrow.*"]
+ignore_missing_imports = true
 
 [tool.coverage.paths]
 # The wheel is tested from its installed location; map it back to the source tree so

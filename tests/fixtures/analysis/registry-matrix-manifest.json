@@ -1,5 +1,5 @@
 {
-  "cases": 9266,
+  "cases": 9964,
   "entries": [
     {
       "id": "abs#23a3b7c1c876/ansi_off",
@@ -8698,6 +8698,622 @@
       "reason": "SELECT a, b, rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
     },
     {
+      "id": "regexp#10ceb5cfa22a/ansi_off",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#10ceb5cfa22a/ansi_on",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#22061d7b0026/ansi_off",
+      "reason": "SELECT regexp(INTERVAL '1-2' YEAR TO MONTH, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#22061d7b0026/ansi_on",
+      "reason": "SELECT regexp(INTERVAL '1-2' YEAR TO MONTH, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#3569bac9fe9d/ansi_off",
+      "reason": "SELECT regexp(named_struct('a', 1, 'b', 'x'), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#3569bac9fe9d/ansi_on",
+      "reason": "SELECT regexp(named_struct('a', 1, 'b', 'x'), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#6659866add7c/ansi_off",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#6659866add7c/ansi_on",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#67d31682d598/ansi_off",
+      "reason": "SELECT regexp(TIMESTAMP'2024-02-29 12:34:56.123456', '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp#67d31682d598/ansi_on",
+      "reason": "SELECT regexp(TIMESTAMP'2024-02-29 12:34:56.123456', '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp#748b7c7362b9/ansi_off",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp#748b7c7362b9/ansi_on",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp#75f562e9a5ab/ansi_off",
+      "reason": "SELECT regexp(INTERVAL '1 02:03:04' DAY TO SECOND, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#75f562e9a5ab/ansi_on",
+      "reason": "SELECT regexp(INTERVAL '1 02:03:04' DAY TO SECOND, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp#7a9373d75338/ansi_off",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#7a9373d75338/ansi_on",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#7e85a4423a0c/ansi_off",
+      "reason": "SELECT regexp(array(1, 2), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#7e85a4423a0c/ansi_on",
+      "reason": "SELECT regexp(array(1, 2), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#8f7b1c130176/ansi_off",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#8f7b1c130176/ansi_on",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#b5e72f23ba3a/ansi_off",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#b5e72f23ba3a/ansi_on",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#f2d787a50f4c/ansi_off",
+      "reason": "SELECT regexp(map('a', 1), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#f2d787a50f4c/ansi_on",
+      "reason": "SELECT regexp(map('a', 1), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp#f50cba0eb252/ansi_off",
+      "reason": "SELECT regexp(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp#f50cba0eb252/ansi_on",
+      "reason": "SELECT regexp(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp#ff7358cf46d4/ansi_off",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp#ff7358cf46d4/ansi_on",
+      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_count#07bc658c7105/ansi_off",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#07bc658c7105/ansi_on",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#0965479a4260/ansi_off",
+      "reason": "SELECT regexp_count(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_count#0965479a4260/ansi_on",
+      "reason": "SELECT regexp_count(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_count#0afc8da34f72/ansi_off",
+      "reason": "SELECT regexp_count(map('a', 1), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#0afc8da34f72/ansi_on",
+      "reason": "SELECT regexp_count(map('a', 1), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#10f4912f6ce6/ansi_off",
+      "reason": "SELECT regexp_count(INTERVAL '1-2' YEAR TO MONTH, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#10f4912f6ce6/ansi_on",
+      "reason": "SELECT regexp_count(INTERVAL '1-2' YEAR TO MONTH, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#3aa426da86a3/ansi_off",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#3aa426da86a3/ansi_on",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#3fc084e47395/ansi_off",
+      "reason": "SELECT regexp_count(INTERVAL '1 02:03:04' DAY TO SECOND, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#3fc084e47395/ansi_on",
+      "reason": "SELECT regexp_count(INTERVAL '1 02:03:04' DAY TO SECOND, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#4e5127786dc5/ansi_off",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#4e5127786dc5/ansi_on",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#5d692adb9c66/ansi_off",
+      "reason": "SELECT regexp_count(named_struct('a', 1, 'b', 'x'), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#5d692adb9c66/ansi_on",
+      "reason": "SELECT regexp_count(named_struct('a', 1, 'b', 'x'), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#61f9d5879d78/ansi_off",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_count#61f9d5879d78/ansi_on",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_count#6c6463b67079/ansi_off",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_count#6c6463b67079/ansi_on",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_count#a5306ef03b06/ansi_off",
+      "reason": "SELECT regexp_count(TIMESTAMP'2024-02-29 12:34:56.123456', 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_count#a5306ef03b06/ansi_on",
+      "reason": "SELECT regexp_count(TIMESTAMP'2024-02-29 12:34:56.123456', 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_count#cdb52bc0b466/ansi_off",
+      "reason": "SELECT regexp_count(array(1, 2), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#cdb52bc0b466/ansi_on",
+      "reason": "SELECT regexp_count(array(1, 2), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#e50fca3b8f7b/ansi_off",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#e50fca3b8f7b/ansi_on",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#e5e31afb4760/ansi_off",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#e5e31afb4760/ansi_on",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#0106750a1e73/ansi_off",
+      "reason": "SELECT regexp_extract(INTERVAL '1 02:03:04' DAY TO SECOND, '(\\\\d+)-(\\\\d+)', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_extract#0106750a1e73/ansi_on",
+      "reason": "SELECT regexp_extract(INTERVAL '1 02:03:04' DAY TO SECOND, '(\\\\d+)-(\\\\d+)', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_extract#17d1cf23ebb1/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#17d1cf23ebb1/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#2c42b03814f3/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#2c42b03814f3/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#30b54cc8b365/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_extract#30b54cc8b365/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_extract#3542d2841552/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#3542d2841552/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#41eb55972574/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', INTERVAL '1-2' YEAR TO MONTH, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_extract#41eb55972574/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', INTERVAL '1-2' YEAR TO MONTH, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_extract#41ef0cdd8f83/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#41ef0cdd8f83/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#4d31ef6296af/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#4d31ef6296af/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#51a5af26aeef/ansi_off",
+      "reason": "SELECT regexp_extract(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', '(\\\\d+)-(\\\\d+)', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_extract#51a5af26aeef/ansi_on",
+      "reason": "SELECT regexp_extract(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', '(\\\\d+)-(\\\\d+)', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_extract#74bd57081b89/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#74bd57081b89/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#79c755b3b667/ansi_off",
+      "reason": "SELECT regexp_extract(named_struct('a', 1, 'b', 'x'), '(\\\\d+)-(\\\\d+)', 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#79c755b3b667/ansi_on",
+      "reason": "SELECT regexp_extract(named_struct('a', 1, 'b', 'x'), '(\\\\d+)-(\\\\d+)', 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#7f23cd648ea5/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', TIMESTAMP'2024-02-29 12:34:56.123456', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_extract#7f23cd648ea5/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', TIMESTAMP'2024-02-29 12:34:56.123456', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_extract#8abf01d909ed/ansi_off",
+      "reason": "SELECT regexp_extract(INTERVAL '1-2' YEAR TO MONTH, '(\\\\d+)-(\\\\d+)', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_extract#8abf01d909ed/ansi_on",
+      "reason": "SELECT regexp_extract(INTERVAL '1-2' YEAR TO MONTH, '(\\\\d+)-(\\\\d+)', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_extract#a1bd824c3f9d/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#a1bd824c3f9d/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#a63edbab1015/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#a63edbab1015/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#bbaba3d221ce/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#bbaba3d221ce/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#e26de6a3cb61/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_extract#e26de6a3cb61/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_extract#e4b7e0aa5c1b/ansi_off",
+      "reason": "SELECT regexp_extract(map('a', 1), '(\\\\d+)-(\\\\d+)', 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#e4b7e0aa5c1b/ansi_on",
+      "reason": "SELECT regexp_extract(map('a', 1), '(\\\\d+)-(\\\\d+)', 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#e5dffb2a2b0c/ansi_off",
+      "reason": "SELECT regexp_extract(TIMESTAMP'2024-02-29 12:34:56.123456', '(\\\\d+)-(\\\\d+)', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_extract#e5dffb2a2b0c/ansi_on",
+      "reason": "SELECT regexp_extract(TIMESTAMP'2024-02-29 12:34:56.123456', '(\\\\d+)-(\\\\d+)', 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_extract#fcf4d6cba0ab/ansi_off",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#fcf4d6cba0ab/ansi_on",
+      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#fdd1523dc79a/ansi_off",
+      "reason": "SELECT regexp_extract(array(1, 2), '(\\\\d+)-(\\\\d+)', 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_extract#fdd1523dc79a/ansi_on",
+      "reason": "SELECT regexp_extract(array(1, 2), '(\\\\d+)-(\\\\d+)', 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#1580670d40c3/ansi_off",
+      "reason": "SELECT regexp_instr(INTERVAL '1 02:03:04' DAY TO SECOND, r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#1580670d40c3/ansi_on",
+      "reason": "SELECT regexp_instr(INTERVAL '1 02:03:04' DAY TO SECOND, r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#1fdeb48d1ede/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#1fdeb48d1ede/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#2e41d5a7fabc/ansi_off",
+      "reason": "SELECT regexp_instr(named_struct('a', 1, 'b', 'x'), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#2e41d5a7fabc/ansi_on",
+      "reason": "SELECT regexp_instr(named_struct('a', 1, 'b', 'x'), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#2faa36b849a1/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#2faa36b849a1/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#3617c6f1fc4e/ansi_off",
+      "reason": "SELECT regexp_instr(TIMESTAMP'2024-02-29 12:34:56.123456', r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_instr#3617c6f1fc4e/ansi_on",
+      "reason": "SELECT regexp_instr(TIMESTAMP'2024-02-29 12:34:56.123456', r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_instr#53563883dd91/ansi_off",
+      "reason": "SELECT regexp_instr(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_instr#53563883dd91/ansi_on",
+      "reason": "SELECT regexp_instr(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_instr#782bd946f194/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#782bd946f194/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#92709d4e5bb3/ansi_off",
+      "reason": "SELECT regexp_instr(INTERVAL '1-2' YEAR TO MONTH, r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#92709d4e5bb3/ansi_on",
+      "reason": "SELECT regexp_instr(INTERVAL '1-2' YEAR TO MONTH, r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#a177fdc18858/ansi_off",
+      "reason": "SELECT regexp_instr(map('a', 1), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#a177fdc18858/ansi_on",
+      "reason": "SELECT regexp_instr(map('a', 1), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#b75040d7ff90/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_instr#b75040d7ff90/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_instr#d1b7ae971b09/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#d1b7ae971b09/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#e239a0d2f594/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_instr#e239a0d2f594/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_instr#e495063cde68/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#e495063cde68/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#eb546ff0ffa5/ansi_off",
+      "reason": "SELECT regexp_instr(array(1, 2), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#eb546ff0ffa5/ansi_on",
+      "reason": "SELECT regexp_instr(array(1, 2), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#0df5d67c2bbf/ansi_off",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#0df5d67c2bbf/ansi_on",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#12e70fa5d0b4/ansi_off",
+      "reason": "SELECT regexp_like(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_like#12e70fa5d0b4/ansi_on",
+      "reason": "SELECT regexp_like(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_like#13bf747628ed/ansi_off",
+      "reason": "SELECT regexp_like(INTERVAL '1-2' YEAR TO MONTH, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_like#13bf747628ed/ansi_on",
+      "reason": "SELECT regexp_like(INTERVAL '1-2' YEAR TO MONTH, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_like#3c1582a99279/ansi_off",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_like#3c1582a99279/ansi_on",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_like#55ca391fec1c/ansi_off",
+      "reason": "SELECT regexp_like(INTERVAL '1 02:03:04' DAY TO SECOND, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_like#55ca391fec1c/ansi_on",
+      "reason": "SELECT regexp_like(INTERVAL '1 02:03:04' DAY TO SECOND, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_like#623a0f9dc12b/ansi_off",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_like#623a0f9dc12b/ansi_on",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_like#8452da8decec/ansi_off",
+      "reason": "SELECT regexp_like(TIMESTAMP'2024-02-29 12:34:56.123456', '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_like#8452da8decec/ansi_on",
+      "reason": "SELECT regexp_like(TIMESTAMP'2024-02-29 12:34:56.123456', '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_like#84a661eb1231/ansi_off",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#84a661eb1231/ansi_on",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#890c550d2cad/ansi_off",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#890c550d2cad/ansi_on",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#8ed857c04e18/ansi_off",
+      "reason": "SELECT regexp_like(map('a', 1), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#8ed857c04e18/ansi_on",
+      "reason": "SELECT regexp_like(map('a', 1), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#9f58a004fc29/ansi_off",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_like#9f58a004fc29/ansi_on",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_like#a09640912b93/ansi_off",
+      "reason": "SELECT regexp_like(named_struct('a', 1, 'b', 'x'), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#a09640912b93/ansi_on",
+      "reason": "SELECT regexp_like(named_struct('a', 1, 'b', 'x'), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#e155c6f9762d/ansi_off",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_like#e155c6f9762d/ansi_on",
+      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_like#f002c215b8c3/ansi_off",
+      "reason": "SELECT regexp_like(array(1, 2), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_like#f002c215b8c3/ansi_on",
+      "reason": "SELECT regexp_like(array(1, 2), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
       "id": "regexp_replace#074e6419593f/ansi_off",
       "reason": "SELECT regexp_replace(map('a', 1), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -8864,6 +9480,118 @@
     {
       "id": "regexp_replace#fb71844662a3/ansi_on",
       "reason": "SELECT regexp_replace(array(1, 2), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#057311aea945/ansi_off",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#057311aea945/ansi_on",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#3863580221d9/ansi_off",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_substr#3863580221d9/ansi_on",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_substr#5cb59df0f0ef/ansi_off",
+      "reason": "SELECT regexp_substr(INTERVAL '1-2' YEAR TO MONTH, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#5cb59df0f0ef/ansi_on",
+      "reason": "SELECT regexp_substr(INTERVAL '1-2' YEAR TO MONTH, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#6597365c5a90/ansi_off",
+      "reason": "SELECT regexp_substr(TIMESTAMP'2024-02-29 12:34:56.123456', 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_substr#6597365c5a90/ansi_on",
+      "reason": "SELECT regexp_substr(TIMESTAMP'2024-02-29 12:34:56.123456', 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_substr#77e7335bfb95/ansi_off",
+      "reason": "SELECT regexp_substr(INTERVAL '1 02:03:04' DAY TO SECOND, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#77e7335bfb95/ansi_on",
+      "reason": "SELECT regexp_substr(INTERVAL '1 02:03:04' DAY TO SECOND, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#8151fec1d35c/ansi_off",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#8151fec1d35c/ansi_on",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#8231e7fc3dac/ansi_off",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#8231e7fc3dac/ansi_on",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#8893fdead5eb/ansi_off",
+      "reason": "SELECT regexp_substr(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_substr#8893fdead5eb/ansi_on",
+      "reason": "SELECT regexp_substr(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP_NTZ literals"
+    },
+    {
+      "id": "regexp_substr#892ffdc712e7/ansi_off",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#892ffdc712e7/ansi_on",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_substr#97d5b3fe669b/ansi_off",
+      "reason": "SELECT regexp_substr(array(1, 2), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#97d5b3fe669b/ansi_on",
+      "reason": "SELECT regexp_substr(array(1, 2), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#a3caad2c31af/ansi_off",
+      "reason": "SELECT regexp_substr(named_struct('a', 1, 'b', 'x'), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#a3caad2c31af/ansi_on",
+      "reason": "SELECT regexp_substr(named_struct('a', 1, 'b', 'x'), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#cc9e77840c0c/ansi_off",
+      "reason": "SELECT regexp_substr(map('a', 1), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#cc9e77840c0c/ansi_on",
+      "reason": "SELECT regexp_substr(map('a', 1), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#cd1b17330070/ansi_off",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#cd1b17330070/ansi_on",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_substr#ee608ae28a00/ansi_off",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+    },
+    {
+      "id": "regexp_substr#ee608ae28a00/ansi_on",
+      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', TIMESTAMP'2024-02-29 12:34:56.123456') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
     },
     {
       "id": "replace#19a6746c3d66/ansi_off",
@@ -13232,9 +13960,39 @@
       "pass": 0
     },
     {
+      "cases": 110,
+      "function": "regexp",
+      "pass": 82
+    },
+    {
+      "cases": 108,
+      "function": "regexp_count",
+      "pass": 80
+    },
+    {
+      "cases": 154,
+      "function": "regexp_extract",
+      "pass": 112
+    },
+    {
+      "cases": 108,
+      "function": "regexp_instr",
+      "pass": 80
+    },
+    {
+      "cases": 110,
+      "function": "regexp_like",
+      "pass": 82
+    },
+    {
       "cases": 160,
       "function": "regexp_replace",
       "pass": 118
+    },
+    {
+      "cases": 108,
+      "function": "regexp_substr",
+      "pass": 80
     },
     {
       "cases": 156,
@@ -13407,5 +14165,5 @@
       "pass": 36
     }
   ],
-  "pass": 6068
+  "pass": 6584
 }

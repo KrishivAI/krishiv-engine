@@ -39,7 +39,8 @@ class Column:
     """A column expression. Build one with ``F.col``, ``df["name"]`` or an operator."""
 
     __slots__ = ("_c",)
-    __hash__ = None  # __eq__ builds a Column, as in PySpark
+    # `==` builds an expression (as in PySpark), so instances are unhashable.
+    __hash__: None = None  # type: ignore[assignment]  # object defines __hash__ as a method
 
     def __init__(self, native: _native.Column) -> None:
         self._c = native
@@ -79,10 +80,11 @@ class Column:
         return Column(self._c.neg())
 
     # Comparison and logic.
-    def __eq__(self, other: object) -> Column:  # ty: ignore[invalid-method-override]
+    # `==` builds an expression (as in PySpark), not a bool.
+    def __eq__(self, other: object) -> Column:  # type: ignore[override]  # ty: ignore[invalid-method-override]
         return Column(self._c.eq(_operand(other)))
 
-    def __ne__(self, other: object) -> Column:  # ty: ignore[invalid-method-override]
+    def __ne__(self, other: object) -> Column:  # type: ignore[override]  # ty: ignore[invalid-method-override]
         return Column(self._c.ne(_operand(other)))
 
     def __lt__(self, other: Any) -> Column:
