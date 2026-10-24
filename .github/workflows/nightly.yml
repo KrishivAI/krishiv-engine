@@ -51,6 +51,10 @@ jobs:
       - name: clippy (all features)
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: nextest (all features)
+        # The row-layout aggregate's tight-memory property at full size (64
+        # cases per PR).
+        env:
+          KRISHIV_TIGHT_MEMORY_CASES: "256"
         run: cargo nextest run --workspace --all-features --locked --no-tests=pass
       - name: doctests (all features)
         run: cargo test --workspace --doc --all-features --locked
