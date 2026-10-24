@@ -637,12 +637,17 @@ mod tests {
             Ok(out.rows[0][0].clone())
         };
         e.apply_set("SET spark.sql.session.timeZone=UTC");
-        // The command itself is the session's answer: it does not parse yet.
-        let set = e
-            .execute("SET spark.sql.session.timeZone=+01:00")
-            .map(drop)
-            .unwrap_err();
-        assert_eq!(set.class.as_deref(), Some("PARSE_SYNTAX_ERROR"));
+        // The session runs the command itself (`Session::sql` handles
+        // `SET`), and the mirrored value reaches the session's conf.
+        e.execute("SET spark.sql.session.timeZone=+01:00")
+            .map_err(err)?;
+        assert_eq!(
+            e.session
+                .as_ref()
+                .and_then(|s| s.conf().get("spark.sql.session.timeZone"))
+                .as_deref(),
+            Some("+01:00")
+        );
         assert_eq!(ts(&mut e)?, "2020-01-01 00:00:00");
         e.apply_set("RESET spark.sql.session.timeZone");
         e.apply_set("SET spark.sql.session.timeZone=UTC");
