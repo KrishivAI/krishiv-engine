@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::Int32Type;
+use arrow_array::types::{Float64Type, Int32Type};
 use arrow_array::{Array, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use futures::executor::block_on;
@@ -156,18 +156,30 @@ fn union_by_name_matches_by_name() {
         rows(&block_on(df.collect()).unwrap()),
         [(1, Some("a".to_owned())), (2, Some("b".to_owned())),]
     );
-    // A missing column reads NULL with `allow_missing_columns`, once the
-    // engine can plan it: today a null-filled branch meets a `Utf8View`
-    // branch and the physical planner rejects the union with its own
-    // `InternalError` (reproducible in SQL: `SELECT id, NULL AS name FROM
-    // t1 UNION ALL SELECT id, name FROM t1`).
+    // A missing column fails without `allow_missing_columns`.
     let c = block_on(s.sql("SELECT id FROM t1 ORDER BY id LIMIT 1")).unwrap();
-    let df = a.union_by_name(&c, true);
-    assert_eq!(class(block_on(df.collect())), ErrorClass::InternalError);
     let df = a.union_by_name(&c, false);
     assert_eq!(
         class(block_on(df.collect())),
         ErrorClass::UnresolvedColumnAmongFieldNames
+    );
+}
+
+/// With `allow_missing_columns`, a column one side lacks reads NULL there
+/// (Spark 4.2 rows). Ignored until the physical planner unions a
+/// null-filled string branch with a `Utf8View` one: it rejects that union
+/// with `InternalError` today, as it does the SQL form `SELECT id, NULL AS
+/// name FROM t1 UNION ALL SELECT id, name FROM t1`.
+#[test]
+#[ignore = "physical planner rejects a union of Utf8 and Utf8View branches"]
+fn union_by_name_fills_missing_columns() {
+    let s = session();
+    let a = block_on(s.sql("SELECT id, name FROM t1 ORDER BY id LIMIT 1")).unwrap();
+    let c = block_on(s.sql("SELECT id FROM t1 ORDER BY id LIMIT 1")).unwrap();
+    let df = a.union_by_name(&c, true).order_by([col("name")]);
+    assert_eq!(
+        rows(&block_on(df.collect()).unwrap()),
+        [(1, None), (1, Some("a".to_owned()))]
     );
 }
 
@@ -308,7 +320,34 @@ fn unpivot_stacks_value_columns() {
     );
     // Values widen to the common type, and NULLs are kept.
     assert_eq!(schema.field(2).data_type(), &ArrowType::Float64);
-    assert_eq!(block_on(df.count()).unwrap(), 4);
+    let batches = block_on(df.collect()).unwrap();
+    let mut got: Vec<(i32, String, Option<f64>)> = batches
+        .iter()
+        .flat_map(|b| {
+            let ids = b.column(0).as_primitive::<Int32Type>();
+            let vars = b.column(1);
+            let vals = b.column(2).as_primitive::<Float64Type>();
+            (0..b.num_rows())
+                .map(|i| {
+                    let var = match vars.data_type() {
+                        ArrowType::Utf8View => vars.as_string_view().value(i).to_owned(),
+                        _ => vars.as_string::<i32>().value(i).to_owned(),
+                    };
+                    (ids.value(i), var, (!vals.is_null(i)).then(|| vals.value(i)))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    got.sort_by(|x, y| (x.0, &x.1).cmp(&(y.0, &y.1)));
+    assert_eq!(
+        got,
+        [
+            (1, "a".to_owned(), Some(10.0)),
+            (1, "b".to_owned(), Some(1.5)),
+            (2, "a".to_owned(), None),
+            (2, "b".to_owned(), Some(2.5)),
+        ]
+    );
     // Without value columns the frame fails, as Spark leaves it unresolved.
     let df = s
         .table("wide")

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from krishiv import _native
 from krishiv.errors import (
+    AnalysisException,
     PySparkAttributeError,
     PySparkTypeError,
     PySparkValueError,
@@ -88,6 +89,11 @@ def _case_sensitive(session: SparkSession) -> bool:
 def _same(left: str, right: str, case_sensitive: bool) -> bool:
     """Whether the column name ``left`` matches ``right`` under the session's resolver."""
     return left == right if case_sensitive else left.lower() == right.lower()
+
+
+def _has_duplicates(columns: list[str]) -> bool:
+    """Whether two output columns share a name (as a join can leave them)."""
+    return len({c.lower() for c in columns}) != len(columns)
 
 
 def _check_partitions(count: int) -> None:
@@ -399,6 +405,10 @@ class DataFrame:
         unique = list(dict.fromkeys(keys))
         case_sensitive = _case_sensitive(self._session)
         others = [c for c in self.columns if not any(_same(c, k, case_sensitive) for k in unique)]
+        if not others:
+            # Every column is a key: a distinct. Selecting the keys first keeps the
+            # unresolved-column error for an unknown name.
+            return self.select([_quoted(k) for k in unique]).distinct().select([_quoted(c) for c in self.columns])
         grouped = self.groupBy([_quoted(k) for k in unique])
         out = grouped.agg(*[_first(_quoted(c)).alias(c) for c in others])
         return out.select([_quoted(c) for c in self.columns])
@@ -473,7 +483,14 @@ class DataFrame:
             doomed.update(h for h in hits if h in self.columns)
         if not doomed:
             return self._new(self._df)
-        return self.select([_quoted(c) for c in self.columns if c not in doomed])
+        columns = self.columns
+        if _has_duplicates(columns):
+            # A name select would be ambiguous: give every column a unique name by
+            # position, keep the survivors, and restore their names.
+            staged = self.toDF(*[f"_{i}" for i in range(len(columns))])
+            kept = [i for i, c in enumerate(columns) if c not in doomed]
+            return staged.select([_quoted(f"_{i}") for i in kept]).toDF(*[columns[i] for i in kept])
+        return self.select([_quoted(c) for c in columns if c not in doomed])
 
     def withColumnRenamed(self, existing: str, new: str) -> DataFrame:
         """Returns a new :class:`DataFrame` by renaming an existing column.
@@ -599,6 +616,9 @@ class DataFrame:
                     return v
             return c
 
+        if _has_duplicates(self.columns):
+            # A name select would be ambiguous: rename by position.
+            return self.toDF(*[renamed(c) for c in self.columns])
         return self.select([_quoted(c).alias(renamed(c)) for c in self.columns])
 
     def union(self, other: DataFrame) -> DataFrame:
@@ -1226,8 +1246,13 @@ class DataFrame:
         """
         if not isinstance(num, int):
             raise not_expected_type("num", "int", num)
+        if num < 0:
+            raise AnalysisException(
+                errorClass="INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE",
+                messageParameters={"expr": f'"{num}"', "name": "tail", "v": str(num)},
+            )
         rows = self.collect()
-        return rows[max(0, len(rows) - num) :]
+        return rows[len(rows) - num :] if num else []
 
     # Actions: each runs the query again (as each PySpark action does), with the GIL released.
     def __arrow_c_stream__(self, requested_schema: object = None) -> object:

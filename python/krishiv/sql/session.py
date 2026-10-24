@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime
+import sys
 import threading
 import warnings
 from decimal import Decimal
@@ -60,7 +61,7 @@ class SparkSession:
             global _active
             with _lock:
                 if _active is None:
-                    _active = SparkSession(_native.Session(list(self._config.items())))
+                    _active = SparkSession(_native.Session(list(self._config.items())), list(self._config.items()))
                 else:
                     skipped = [k for k in self._config if not _active._native.conf_is_modifiable(k)]
                     if skipped:
@@ -77,7 +78,7 @@ class SparkSession:
 
         def create(self) -> SparkSession:
             """A new session, which does not become the active one."""
-            return SparkSession(_native.Session(list(self._config.items())))
+            return SparkSession(_native.Session(list(self._config.items())), list(self._config.items()))
 
     class _BuilderProperty:
         """``SparkSession.builder``: a fresh Builder per access, so options do not leak between callers."""
@@ -88,9 +89,11 @@ class SparkSession:
     # Typed as Builder (what attribute access gives); the descriptor below provides it.
     builder: Builder = _BuilderProperty()  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
-    def __init__(self, native: _native.Session) -> None:
+    def __init__(self, native: _native.Session, config: list[tuple[str, str]] | None = None) -> None:
         self._native = native
         self._conf = RuntimeConfig(native)
+        # The options the session was built with: `newSession` starts from them.
+        self._config = list(config or [])
 
     @property
     def version(self) -> str:
@@ -169,7 +172,11 @@ class SparkSession:
         from krishiv.sql import _convert
 
         pa = _convert.require_pyarrow("range")
-        table = pa.table({"id": pa.array(list(range(start, end, step)), type=pa.int64())})
+        ids = range(start, end, step)
+        chunk = 1 << 20
+        table = pa.table(
+            {"id": pa.chunked_array([ids[i : i + chunk] for i in range(0, len(ids), chunk)], type=pa.int64())}
+        )
         return DataFrame(self._native.create_dataframe(table), self)
 
     def createDataFrame(
@@ -236,7 +243,7 @@ class SparkSession:
         from krishiv.sql import _convert
 
         pa = _convert.require_pyarrow("createDataFrame")
-        table = pa.Table.from_pandas(data)
+        table = pa.Table.from_pandas(data, preserve_index=False)
         if schema is None:
             return DataFrame(self._native.create_dataframe(table), self)
         if isinstance(schema, list | tuple):
@@ -297,8 +304,9 @@ class SparkSession:
 
     def newSession(self) -> SparkSession:
         """A new session with separate SQL configuration and temporary views,
-        as ``pyspark.sql.SparkSession.newSession``."""
-        return SparkSession.builder.create()
+        as ``pyspark.sql.SparkSession.newSession``: it starts from the options
+        this session was built with, not from later ``conf.set`` changes."""
+        return SparkSession(_native.Session(list(self._config)), self._config)
 
     def _create_from_rows(self, data: list[Any], schema: list[Any] | tuple[Any, ...] | None) -> DataFrame:
         """A DataFrame of Python rows with column names, or none: names come from ``schema``,
@@ -368,11 +376,9 @@ class SparkSession:
 
 
 def _is_pandas(data: Any) -> bool:
-    try:
-        import pandas as pd
-    except ImportError:
-        return False
-    return isinstance(data, pd.DataFrame)
+    # A pandas DataFrame means pandas is already imported; never import it here.
+    pd = sys.modules.get("pandas")
+    return pd is not None and isinstance(data, pd.DataFrame)
 
 
 def _pa_type(data_type: DataType, pa: Any) -> Any:
@@ -433,14 +439,11 @@ def _pa_schema(struct: StructType, pa: Any) -> Any:
 
 def _row_values(row: Any, names: list[str] | None, width: int, Row: Any) -> list[Any]:
     """One row of ``createDataFrame`` data as ``width`` values: a tuple, list
-    or positional ``Row`` in order; a dict or named ``Row`` by field name
-    (missing keys are NULL); any other value is a single-column row."""
+    or ``Row`` (named or not) in order, as PySpark converts rows against an
+    explicit schema; a dict by field name (missing keys are NULL); any other
+    value is a single-column row."""
     if isinstance(row, Row):
-        if hasattr(row, "__fields__"):
-            by_name = row.asDict()
-            values = [by_name.get(n) for n in names] if names is not None else list(by_name.values())
-        else:
-            values = list(row)
+        values = list(row)
     elif isinstance(row, dict):
         values = list(row.values()) if names is None else [row.get(n) for n in names]
     elif isinstance(row, list | tuple):
@@ -511,15 +514,15 @@ def _verify_row(struct: StructType, values: list[Any]) -> None:
         elif isinstance(t, IntegralType):
             ok = isinstance(value, int) and not isinstance(value, bool)
         elif isinstance(t, DecimalType):
-            ok = isinstance(value, Decimal | int) and not isinstance(value, bool)
+            ok = isinstance(value, Decimal)
         elif isinstance(t, FractionalType):
-            ok = isinstance(value, int | float) and not isinstance(value, bool)
+            ok = isinstance(value, float)
         elif isinstance(t, StringType):
             ok = isinstance(value, str)
         elif isinstance(t, BinaryType):
             ok = isinstance(value, bytes | bytearray)
         elif isinstance(t, DateType):
-            ok = isinstance(value, datetime.date) and not isinstance(value, datetime.datetime)
+            ok = isinstance(value, datetime.date)
         elif isinstance(t, TimestampType | TimestampNTZType):
             ok = isinstance(value, datetime.datetime)
         else:
@@ -540,6 +543,10 @@ class Catalog:
     def __init__(self, session: SparkSession) -> None:
         self._session = session
 
+    def _user_tables(self) -> list[str]:
+        """The temporary tables and views, without those holding ``createDataFrame`` data."""
+        return [n for n in self._session._native.temp_table_names() if not _native.Session.is_dataframe_table(n)]
+
     def currentDatabase(self) -> str:
         """The current database: always ``default`` (there is no other)."""
         return "default"
@@ -552,7 +559,7 @@ class Catalog:
         """Whether the temporary view ``tableName`` exists."""
         if not isinstance(tableName, str):
             raise not_expected_type("tableName", "str", tableName)
-        names = self._session._native.temp_table_names()
+        names = self._user_tables()
         return any(n.lower() == tableName.lower() for n in names)
 
     def listTables(self, dbName: str | None = None) -> DataFrame:
@@ -564,7 +571,7 @@ class Catalog:
         """
         if dbName is not None and not isinstance(dbName, str):
             raise not_expected_type("dbName", "str", dbName)
-        rows = [(n, "default", None, "TEMPORARY", True) for n in self._session._native.temp_table_names()]
+        rows = [(n, "default", None, "TEMPORARY", True) for n in self._user_tables()]
         return self._session.createDataFrame(
             rows,
             "name string, database string, description string, tableType string, isTemporary boolean",

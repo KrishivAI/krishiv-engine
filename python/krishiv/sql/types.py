@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json as _json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from typing import Any, ClassVar, overload
 
 
@@ -445,11 +445,10 @@ class StructField(DataType):
 
 
 class StructType(DataType):
-    def __init__(self, fields: list[StructField] | None = None) -> None:
-        assert fields is None or all(isinstance(f, StructField) for f in fields), (
-            "fields should be a list of StructField"
-        )
+    def __init__(self, fields: Iterable[StructField] | None = None) -> None:
         self.fields = list(fields or [])
+        if not all(isinstance(f, StructField) for f in self.fields):
+            raise AssertionError("fields should be a list of StructField")
         self.names = [f.name for f in self.fields]
 
     @classmethod
@@ -802,7 +801,7 @@ class _DdlParser:
             if following is not None and following.lower() == "to":
                 self.next()
                 second = self.next().lower()
-                if second not in fields:
+                if second not in fields or fields[second] < fields[first]:
                     raise ValueError(second)
                 return DayTimeIntervalType(fields[first], fields[second])
             return DayTimeIntervalType(fields[first])

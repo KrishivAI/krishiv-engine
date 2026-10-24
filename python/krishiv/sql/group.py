@@ -24,16 +24,24 @@ if TYPE_CHECKING:
 _NUMERIC = ("tinyint", "smallint", "int", "bigint", "float", "double")
 
 
-def _numeric(names: list[str], dtypes: list[tuple[str, str]]) -> list[str]:
+def _numeric(names: list[str], dtypes: list[tuple[str, str]], strict: bool) -> list[str]:
     """The ``names`` that hold numeric values: unknown names pass through
-    (analysis reports them, as Spark does), known non-numeric ones are
-    ignored (as Spark's shortcuts ignore them)."""
+    (analysis reports them, as Spark does). Known non-numeric ones are
+    skipped when every column is taken (``strict`` off), and named
+    explicitly they fail with ``NOT_NUMERIC_COLUMNS``, as in PySpark."""
     by_name = dict(dtypes)
     out = []
+    invalid = []
     for n in names:
         t = by_name.get(n)
         if t is None or t in _NUMERIC or t.startswith("decimal"):
             out.append(n)
+        else:
+            invalid.append(n)
+    if strict and invalid:
+        from krishiv.errors import PySparkTypeError
+
+        raise PySparkTypeError(errorClass="NOT_NUMERIC_COLUMNS", messageParameters={"invalid_columns": str(invalid)})
     return out
 
 
@@ -112,10 +120,10 @@ class GroupedData:
             if not isinstance(c, str):
                 raise not_expected_type("cols", "str", c)
         if cols:
-            names = _numeric(list(cols), self._source.dtypes)
+            names = _numeric(list(cols), self._source.dtypes, strict=True)
         else:
             # No columns: every numeric column, as Spark aggregates those.
-            names = _numeric(self._source.columns, self._source.dtypes)
+            names = _numeric(self._source.columns, self._source.dtypes, strict=False)
         return self.agg(*[func(F.col(n)) for n in names])
 
     def sum(self, *cols: str) -> DataFrame:

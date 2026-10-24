@@ -761,7 +761,7 @@ impl DataFrame {
         value: &str,
     ) -> Self {
         let ids: Vec<Column> = ids.into_iter().collect();
-        let mut values = values.into_iter().peekable();
+        let mut values = values.into_iter();
         let Some((label, column)) = values.next() else {
             return Self::invalid(
                 self.session.clone(),
@@ -774,11 +774,24 @@ impl DataFrame {
                 }),
             );
         };
-        let mut out = self.branch(&ids, label, column, variable, value);
-        for (label, column) in values {
-            out = out.union(&self.branch(&ids, label, column, variable, value));
+        // One union over every branch: the common type is computed once
+        // and each branch is cast to it directly.
+        let first = self.branch(&ids, label, column, variable, value);
+        let rest: Vec<Self> = values
+            .map(|(label, column)| self.branch(&ids, label, column, variable, value))
+            .collect();
+        if rest.is_empty() {
+            return first;
         }
-        out
+        let inputs = std::iter::once(&first)
+            .chain(&rest)
+            .map(|b| Arc::clone(&b.plan))
+            .collect();
+        self.derive(PlanNode::Union {
+            inputs,
+            by_name: false,
+            allow_missing_columns: false,
+        })
     }
 
     /// One unpivot branch: the identifiers, the `label` in `variable`

@@ -440,7 +440,8 @@ def test_tail(people: DataFrame) -> None:
     assert people.sort("age").tail(2) == [Row(age=16, name="Bob"), Row(age=23, name="Alice")]
     assert people.sort("age").tail(99) == people.sort("age").collect()
     assert people.sort("age").tail(0) == []
-    assert people.sort("age").tail(-1) == []
+    with pytest.raises(errors.AnalysisException, match=r"INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE.*tail"):
+        people.tail(-1)
     with pytest.raises(errors.PySparkTypeError):
         people.tail("2")  # ty: ignore[invalid-argument-type]
 
@@ -566,3 +567,27 @@ def test_to_local_iterator(people: DataFrame) -> None:
 def test_to_json_is_unsupported(people: DataFrame) -> None:
     with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
         people.toJSON()
+
+
+def test_drop_duplicates_on_every_column(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(1, "a"), (1, "a"), (2, "b")], ["k", "v"])
+    assert df.dropDuplicates(["k", "v"]).sort("k").collect() == [Row(k=1, v="a"), Row(k=2, v="b")]
+    one = spark.createDataFrame([(1,), (1,)], ["a"])
+    assert one.dropDuplicates(["a"]).collect() == [Row(a=1)]
+    with pytest.raises(errors.AnalysisException):
+        _ = one.dropDuplicates(["missing"]).columns
+
+
+def test_drop_and_rename_keep_duplicate_join_columns(spark: SparkSession) -> None:
+    # Spark 4.2 keeps both `id` columns of the join.
+    a = spark.createDataFrame([(1, "p")], ["id", "v"])
+    b = spark.createDataFrame([(1, "q")], ["id", "w"])
+    joined = a.join(b, a.id == b.id)
+    assert joined.columns == ["id", "v", "id", "w"]
+    dropped = joined.drop("v")
+    assert dropped.columns == ["id", "id", "w"]
+    assert [tuple(r) for r in dropped.collect()] == [(1, 1, "q")]
+    renamed = joined.withColumnsRenamed({"v": "vv"})
+    assert renamed.columns == ["id", "vv", "id", "w"]
+    assert [tuple(r) for r in renamed.collect()] == [(1, "p", 1, "q")]
+    assert joined.withColumnRenamed("w", "ww").columns == ["id", "v", "id", "ww"]

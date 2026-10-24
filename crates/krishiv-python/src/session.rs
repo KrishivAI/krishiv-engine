@@ -13,6 +13,16 @@ use crate::stream::ArrowStream;
 /// Numbers the tables `create_dataframe` registers.
 static ARROW_TABLES: AtomicU64 = AtomicU64::new(0);
 
+/// The name prefix of the tables `create_dataframe` registers.
+const ARROW_TABLE_PREFIX: &str = "__krishiv_arrow_";
+
+/// Whether `name` is a table `create_dataframe` registered (names match
+/// case-insensitively, as the catalog's do).
+fn is_arrow_table(name: &str) -> bool {
+    name.get(..ARROW_TABLE_PREFIX.len())
+        .is_some_and(|p| p.eq_ignore_ascii_case(ARROW_TABLE_PREFIX))
+}
+
 /// A Krishiv session.
 #[pyclass(name = "Session", module = "krishiv._native", frozen)]
 #[derive(Debug)]
@@ -45,9 +55,11 @@ impl PySession {
         PyDataFrame::new(self.inner.table(name))
     }
 
-    /// Drops the temporary table or view `name`; whether it existed.
+    /// Drops the temporary table or view `name`; whether it existed. The
+    /// tables that hold `create_dataframe` data are not the user's to drop:
+    /// a DataFrame still reads them.
     fn drop_temp_view(&self, name: &str) -> bool {
-        self.inner.drop_temp_view(name)
+        !is_arrow_table(name) && self.inner.drop_temp_view(name)
     }
 
     /// The DataFrame reading the files `paths` as `format`, with `options`.
@@ -72,7 +84,7 @@ impl PySession {
     fn create_dataframe(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<PyDataFrame> {
         let (schema, batches) = ArrowStream::from_arrow(data)?.read_all()?;
         let name = format!(
-            "__krishiv_arrow_{}",
+            "{ARROW_TABLE_PREFIX}{}",
             ARROW_TABLES.fetch_add(1, Ordering::Relaxed)
         );
         self.inner
@@ -84,9 +96,16 @@ impl PySession {
         })
     }
 
-    /// Names of the session's temporary tables and views.
+    /// Names of the session's temporary tables and views (with the tables
+    /// that hold `create_dataframe` data).
     fn temp_table_names(&self) -> Vec<String> {
         self.inner.temp_table_names()
+    }
+
+    /// Whether `name` is a table that holds `create_dataframe` data.
+    #[staticmethod]
+    fn is_dataframe_table(name: &str) -> bool {
+        is_arrow_table(name)
     }
 
     fn conf_is_modifiable(&self, key: &str) -> bool {
