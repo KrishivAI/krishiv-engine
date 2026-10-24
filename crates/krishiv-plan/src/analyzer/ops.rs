@@ -8,25 +8,39 @@ use std::sync::Arc;
 use krishiv_common::error::{
     AmbiguousReference, AssignmentArityMismatch, DatatypeMismatchFilterNotBoolean,
     FailedToParseTooComplex, GroupByAggregate, GroupByPosAggregate, GroupByPosOutOfRange,
-    InvalidLimitLikeExpressionDataType, InvalidLimitLikeExpressionIsNegative,
-    InvalidLimitLikeExpressionIsNull, InvalidLimitLikeExpressionIsUnfoldable,
-    InvalidWhereCondition, JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy,
-    OrderByPosOutOfRange, StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound,
-    UnresolvedUsingColumnForJoin, UnsupportedFeatureLateralColumnAliasInAggregateFunc,
+    InvalidLimitLikeExpressionDataType, InvalidWhereCondition, JoinConditionIsNotBooleanType,
+    MissingAggregation, MissingGroupBy, OrderByPosOutOfRange, StarGroupByPos,
+    SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UnresolvedUsingColumnForJoin,
+    UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy,
 };
 
+use super::analytics::Analytics;
 use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
 use super::exprs::{Bound, Cx, WindowUse, names, pretty, semantic_key};
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
-use super::{AnalysisError, ArgType, Constant, TableKind};
+use super::{AnalysisError, ArgType, TableKind};
 use crate::{
     AttrId, BoundColumn, CteRef, Expr, ExprNode, FunctionCall, FunctionKind, Grouping,
     JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanNode, ReadSource, ResolvedExpr,
     ResolvedFunction, Scan, SortOrder,
 };
+
+/// What [`Resolver::group_substitute`] reads and grows: the aggregate, the
+/// attributes it shows, and the output it adds for grouping expressions the
+/// select list does not name.
+struct Grouped<'a> {
+    info: &'a AggInfo,
+    env: &'a Arc<Env>,
+    op: &'static str,
+    visible: &'a HashSet<AttrId>,
+    memo: &'a mut HashMap<usize, u128>,
+    known: &'a mut Vec<(u128, Attr)>,
+    grown: &'a mut AggInfo,
+    pass: &'a mut Vec<Attr>,
+}
 
 /// The two attributes of a `USING` column.
 type Keys = (Attr, Attr);
@@ -247,7 +261,7 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let items = self.select_items(c, exprs, env, "Aggregate")?;
         if items.iter().any(|b| b.agg.is_some()) {
-            return self.build_aggregate(p.origin, c, Vec::new(), &items, true);
+            return self.build_aggregate(p.origin, c, Vec::new(), &items, true, None);
         }
         if items.iter().any(|b| b.win.is_some()) {
             return self.window_project(p.origin, c, &items, &[]);
@@ -265,6 +279,20 @@ impl Resolver<'_> {
         env: &Arc<Env>,
         op: &'static str,
     ) -> Result<Vec<Bound>, AnalysisError> {
+        self.select_items_in(c, exprs, env, op, None)
+    }
+
+    /// [`Self::select_items`] of an aggregate over grouping sets, which
+    /// may call `grouping` and `grouping_id` and name `grouping__id`
+    /// (`extra`, searched after the input).
+    pub(super) fn select_items_in(
+        &mut self,
+        c: &Rel,
+        exprs: &[Arc<Expr>],
+        env: &Arc<Env>,
+        op: &'static str,
+        extra: Option<&[Attr]>,
+    ) -> Result<Vec<Bound>, AnalysisError> {
         let rels = [c];
         let mut items = Vec::new();
         let mut lateral: Vec<Attr> = Vec::new();
@@ -280,6 +308,8 @@ impl Resolver<'_> {
             let b = {
                 let mut cx = Self::cx(&c.out, &rels, env, op);
                 cx.lateral = lca.then_some(&lateral[..]);
+                cx.extra = extra;
+                cx.grouping = extra.is_some();
                 cx.windows = WindowUse::Allowed;
                 self.bind(e, &cx)?
             };
@@ -306,13 +336,14 @@ impl Resolver<'_> {
             return Ok(b);
         }
         let shown = b.shown();
+        let zone = self.ctx.conf.session_zone;
         let name = match &shown.node {
             ExprNode::Cast { expr, .. }
                 if matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Column(_))) =>
             {
-                pretty(expr)
+                pretty(expr, zone)
             }
-            _ => pretty(&lateral_refs(&shown, &b.lateral)),
+            _ => pretty(&lateral_refs(&shown, &b.lateral), zone),
         };
         let output = self.attr(&name, &b.ty);
         let origin = b.expr.origin;
@@ -462,7 +493,7 @@ impl Resolver<'_> {
         if b.agg.is_some() {
             return Err(AnalysisError::new(
                 InvalidWhereCondition {
-                    condition: format!("\"{}\"", pretty(&b.shown())),
+                    condition: format!("\"{}\"", pretty(&b.shown(), self.ctx.conf.session_zone)),
                     expression_list: aggregate_sql(&b.expr, &wide.out),
                 },
                 p.origin,
@@ -560,6 +591,44 @@ impl Resolver<'_> {
         // The retry resolved a name only `below` holds: `missing` is not
         // empty.
         Ok((bounds, self.widened(c, &missing)?))
+    }
+
+    /// The aggregate under `c`'s filters, sorts and limits (`HAVING`), and
+    /// those layers, top first; `None` when `c` is not such a stack. A
+    /// `HAVING` that had to grow the aggregate left a projection over its
+    /// filter (`restore`), and that is not such a stack: Spark does not
+    /// resolve a sort through it (`GROUP BY x + 1 HAVING sum(l) > 1 ORDER BY
+    /// x + 1` is UNRESOLVED_COLUMN, checked against 4.2.0).
+    fn through_to_agg(c: &Rel) -> Option<(Vec<Rel>, Rel)> {
+        let mut layers = Vec::new();
+        let mut cur = c.clone();
+        loop {
+            if cur.agg.is_some() {
+                return Some((layers, cur));
+            }
+            let child = match cur.widen.as_deref() {
+                Some(Widen::Through { child }) => child.clone(),
+                _ => return None,
+            };
+            layers.push(cur);
+            cur = child;
+        }
+    }
+
+    /// `layers` (from [`Self::through_to_agg`]) rebuilt over `inner`, a
+    /// grown version of the aggregate they were over.
+    fn rewrapped(&self, layers: &[Rel], inner: Rel) -> Rel {
+        let mut built = inner;
+        for rel in layers.iter().rev() {
+            let child = built;
+            let plan = Arc::clone(&rel.plan)
+                .map_children(|_| Ok::<_, Infallible>(Arc::clone(&child.plan)))
+                .unwrap_or_else(|never| match never {});
+            let mut wide = self.wrap(plan, rel.plan.origin.plan_id, child.out.to_vec(), &[&child]);
+            wide.widen = Some(Arc::new(Widen::Through { child }));
+            built = wide;
+        }
+        built
     }
 
     /// Binds each of `exprs` in `cx`.
@@ -685,12 +754,9 @@ impl Resolver<'_> {
         let mut cx = Self::cx(&agg.out, &rels, env, op);
         cx.extra = Some(&info.keys);
         cx.agg_scope = Some(&info.input.out);
+        cx.grouping = info.analytics.is_some();
         if op == "Filter" {
             cx.windows = WindowUse::Having;
-        }
-        let mut bounds = Vec::new();
-        for e in exprs {
-            bounds.push(self.bind(e, &cx)?);
         }
         let mut memo = HashMap::new();
         let mut known: Vec<(u128, Attr)> = info
@@ -703,6 +769,45 @@ impl Resolver<'_> {
         let mut grown = (*info).clone();
         // What the aggregate adds to the output it shows.
         let mut pass: Vec<Attr> = Vec::new();
+        let mut bounds = Vec::new();
+        for e in exprs {
+            match self.bind(e, &cx) {
+                Ok(b) => bounds.push(b),
+                // A grouping expression written out in full (`GROUP BY x + 1
+                // ORDER BY x + 1`) is the aggregate's output, wherever it
+                // appears in the expression; names it does not cover stay
+                // unresolved, as in Spark.
+                Err(err)
+                    if err
+                        .error
+                        .error_class()
+                        .name()
+                        .starts_with("UNRESOLVED_COLUMN") =>
+                {
+                    let mut st = Grouped {
+                        info: &info,
+                        env,
+                        op,
+                        visible: &visible,
+                        memo: &mut memo,
+                        known: &mut known,
+                        grown: &mut grown,
+                        pass: &mut pass,
+                    };
+                    let Some(sub) = self.group_substitute(e, &mut st) else {
+                        return Err(err);
+                    };
+                    bounds.push(self.bind(&sub, &cx).map_err(|_| err)?);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        if let Some(an) = &info.analytics {
+            for b in &mut bounds {
+                an.check_late_call(&b.expr)?;
+                b.expr = self.resolve_grouping(&b.expr, an, env)?;
+            }
+        }
         for b in &mut bounds {
             b.expr = Arc::clone(&b.expr).transform_down(&mut |x: Arc<Expr>| match &x.node {
                 ExprNode::Resolved(ResolvedExpr::Function(f))
@@ -716,7 +821,7 @@ impl Resolver<'_> {
                                 data_type: Some(f.data_type.clone()),
                                 nullable: f.nullable,
                             };
-                            let output = self.attr(&pretty(&x), &ty);
+                            let output = self.attr(&pretty(&x, self.ctx.conf.session_zone), &ty);
                             grown.aggregates.push(Arc::new(Expr::new(ExprNode::Resolved(
                                 ResolvedExpr::Alias {
                                     expr: Arc::clone(&x),
@@ -742,6 +847,12 @@ impl Resolver<'_> {
                     if !visible.contains(&c.id) && !pass.iter().any(|a| a.col.id == c.id) =>
                 {
                     if let Some(k) = info.keys.iter().find(|k| k.col.id == c.id) {
+                        // An output that already computes the key (`x AS
+                        // m`) stands for it, as in Spark: nothing grows.
+                        let key = semantic_key(&x, &mut memo);
+                        if let Some((_, a)) = known.iter().find(|(kk, _)| *kk == key) {
+                            return Ok(col_expr(&a.col, x.origin));
+                        }
                         if !grown.out.iter().any(|o| o.col.id == c.id) {
                             grown.aggregates.push(col_expr(&k.col, Origin::UNKNOWN));
                             grown.out.push(k.clone());
@@ -778,6 +889,89 @@ impl Resolver<'_> {
         Ok((bounds, r, true))
     }
 
+    /// `e` with every subexpression that is one of the aggregate's grouping
+    /// expressions or output expressions (equal after canonicalisation, as Spark's
+    /// `semanticEquals`) replaced by the attribute the aggregate computes
+    /// it as, added to the aggregate when it does not output it. `None`
+    /// when nothing matches, or `e` holds a subquery.
+    #[inline(never)]
+    fn group_substitute(&mut self, e: &Arc<Expr>, st: &mut Grouped<'_>) -> Option<Arc<Expr>> {
+        let info = st.info;
+        let rels = [&info.input];
+        let probe = Self::cx(&info.input.out, &rels, st.env, st.op);
+        let grouping: HashSet<u128> = info
+            .grouping
+            .iter()
+            .map(|g| semantic_key(g, st.memo))
+            .collect();
+        let mut subquery = false;
+        let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+            if let crate::walk::Node::Expr(x) = n
+                && matches!(x.node, ExprNode::Subquery { .. })
+            {
+                subquery = true;
+            }
+            std::ops::ControlFlow::Continue(())
+        });
+        if subquery {
+            return None;
+        }
+        let mut changed = false;
+        let out = Arc::clone(e)
+            .transform_down(&mut |x: Arc<Expr>| -> Result<Arc<Expr>, Infallible> {
+                // Leaves resolve by name; aggregate calls and the rest of
+                // the output are bound by the caller.
+                if matches!(
+                    x.node,
+                    ExprNode::Column(_) | ExprNode::Literal(_) | ExprNode::Star(_)
+                ) {
+                    return Ok(x);
+                }
+                let Ok(b) = self.expr(&x, &probe) else {
+                    return Ok(x);
+                };
+                if b.agg.is_some() || b.outer.is_some() || !b.lateral.is_empty() {
+                    return Ok(x);
+                }
+                // The probe's expressions are dropped on return: their
+                // addresses must not outlive them in a memo.
+                let key = semantic_key(&b.expr, &mut HashMap::new());
+                if !grouping.contains(&key) && !st.known.iter().any(|(k, _)| *k == key) {
+                    return Ok(x);
+                }
+                let a = match st.known.iter().find(|(k, _)| *k == key) {
+                    Some((_, a)) => a.clone(),
+                    None => {
+                        let output = self.attr(&pretty(&b.expr, self.ctx.conf.session_zone), &b.ty);
+                        st.grown
+                            .aggregates
+                            .push(Arc::new(Expr::new(ExprNode::Resolved(
+                                ResolvedExpr::Alias {
+                                    expr: Arc::clone(&b.expr),
+                                    output: output.clone(),
+                                },
+                            ))));
+                        let a = Attr {
+                            col: output,
+                            qual: no_qual(),
+                            source: None,
+                        };
+                        st.grown.out.push(a.clone());
+                        st.known.push((key, a.clone()));
+                        a
+                    }
+                };
+                if !st.visible.contains(&a.col.id) && !st.pass.iter().any(|p| p.col.id == a.col.id)
+                {
+                    st.pass.push(a.clone());
+                }
+                changed = true;
+                Ok(col_expr(&a.col, x.origin))
+            })
+            .unwrap_or_else(|never| match never {});
+        changed.then_some(out)
+    }
+
     /// The aggregate of `info`, under its `HAVING` (with windows), its
     /// windows and the projections of its lateral aliases if it has any;
     /// `pass` (attributes of the aggregate) are output after the select
@@ -788,8 +982,14 @@ impl Resolver<'_> {
         info: AggInfo,
         pass: &[Attr],
     ) -> Result<Rel, AnalysisError> {
+        // Over grouping sets, the aggregate reads their expansion; the
+        // attributes it defines are part of the aggregate's id span.
+        let (input, defined) = match info.analytics.as_deref().and_then(|a| a.expand.as_ref()) {
+            Some(e) => (Arc::clone(&e.plan), e.ids),
+            None => (Arc::clone(&info.input.plan), None),
+        };
         let node = PlanNode::Aggregate {
-            input: Arc::clone(&info.input.plan),
+            input,
             grouping: Grouping::GroupBy(info.grouping.clone()),
             aggregates: info.aggregates.clone(),
         };
@@ -811,6 +1011,7 @@ impl Resolver<'_> {
                 }
             }
         };
+        r.ids = super::resolve::hull(r.ids, defined);
         let info = Arc::new(info);
         // A column the select list dropped comes back from the aggregate
         // (rebuilt with its windows and projections above it).
@@ -828,27 +1029,57 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let Grouping::GroupBy(keys) = grouping else {
-            return Err(unsupported("ROLLUP, CUBE and GROUPING SETS", p.origin));
+            return self.grouping_sets(p, input, grouping, aggregates, env);
         };
         let c = self.child(input, env)?;
-        let conf = self.ctx.conf;
-        let ordinal = |k: &Expr| match &k.node {
-            ExprNode::Literal(Literal::Integer(n)) if conf.group_by_ordinal => Some(*n),
-            _ => None,
-        };
-        let star = aggregates
-            .iter()
-            .any(|e| matches!(e.node, ExprNode::Star(_)));
-        if star && keys.iter().any(|k| ordinal(k).is_some()) {
-            return Err(AnalysisError::new(StarGroupByPos {}, Origin::UNKNOWN));
-        }
+        self.check_star_ordinals(keys, aggregates)?;
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
+        let group = self.group_keys(&c, keys, &items, env)?;
+        // No grouping (`HAVING` without `GROUP BY`): Spark's
+        // `MISSING_GROUP_BY` for an ungrouped column.
+        let global = group.is_empty();
+        self.build_aggregate(p.origin, &c, group, &items, global, None)
+    }
+
+    /// `SELECT *` with `GROUP BY n` is an error (Spark's
+    /// `STAR_GROUP_BY_POS`).
+    pub(super) fn check_star_ordinals(
+        &self,
+        keys: &[Arc<Expr>],
+        aggregates: &[Arc<Expr>],
+    ) -> Result<(), AnalysisError> {
+        let star = aggregates
+            .iter()
+            .any(|e| matches!(e.node, ExprNode::Star(_)));
+        if star && keys.iter().any(|k| self.ordinal(k).is_some()) {
+            return Err(AnalysisError::new(StarGroupByPos {}, Origin::UNKNOWN));
+        }
+        Ok(())
+    }
+
+    /// `GROUP BY n` with ordinals on: `n`.
+    fn ordinal(&self, k: &Expr) -> Option<i32> {
+        match &k.node {
+            ExprNode::Literal(Literal::Integer(n)) if self.ctx.conf.group_by_ordinal => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// The grouping expressions `keys` over `c`: an ordinal names a select
+    /// item, other names may be select-list aliases.
+    pub(super) fn group_keys(
+        &mut self,
+        c: &Rel,
+        keys: &[Arc<Expr>],
+        items: &[Bound],
+        env: &Arc<Env>,
+    ) -> Result<Vec<Bound>, AnalysisError> {
         let mut group: Vec<Option<Bound>> = vec![None; keys.len()];
         for (slot, k) in group.iter_mut().zip(keys) {
-            if let Some(n) = ordinal(k) {
-                *slot = Some(self.group_ordinal(n, k.origin, &items, &c)?);
+            if let Some(n) = self.ordinal(k) {
+                *slot = Some(self.group_ordinal(n, k.origin, items, c)?);
             }
         }
         // Spark resolves the select list first, then ordinals, then the
@@ -856,7 +1087,7 @@ impl Resolver<'_> {
         // or implicit (`SELECT 1 GROUP BY `1`` groups by the literal): the
         // aliases are the items' output names over the expressions that
         // compute them, searched after the input.
-        let aliases: Vec<(String, Arc<Expr>)> = if conf.group_by_aliases {
+        let aliases: Vec<(String, Arc<Expr>)> = if self.ctx.conf.group_by_aliases {
             items
                 .iter()
                 .map(|b| {
@@ -871,7 +1102,7 @@ impl Resolver<'_> {
         } else {
             Vec::new()
         };
-        let rels = [&c];
+        let rels = [c];
         for (slot, k) in group.iter_mut().zip(keys) {
             if slot.is_none() {
                 let mut cx = Self::cx(&c.out, &rels, env, "Aggregate");
@@ -880,11 +1111,8 @@ impl Resolver<'_> {
             }
         }
         let group: Vec<Bound> = group.into_iter().flatten().collect();
-        self.check_grouping(&group, &items)?;
-        // No grouping (`HAVING` without `GROUP BY`): Spark's
-        // `MISSING_GROUP_BY` for an ungrouped column.
-        let global = group.is_empty();
-        self.build_aggregate(p.origin, &c, group, &items, global)
+        self.check_grouping(&group, items)?;
+        Ok(group)
     }
 
     /// Spark's `GROUP_BY_AGGREGATE` and
@@ -906,7 +1134,7 @@ impl Resolver<'_> {
             if has_aggregate(&b.expr) {
                 return Err(AnalysisError::new(
                     GroupByAggregate {
-                        sql_expr: pretty(&b.expr),
+                        sql_expr: pretty(&b.expr, self.ctx.conf.session_zone),
                     },
                     b.expr.origin,
                 ));
@@ -955,7 +1183,7 @@ impl Resolver<'_> {
         if let (Some(_), ExprNode::Resolved(ResolvedExpr::Alias { expr, output })) =
             (item.agg, &item.expr.node)
         {
-            let text = pretty(&qualified(expr, &c.out));
+            let text = pretty(&qualified(expr, &c.out), self.ctx.conf.session_zone);
             return Err(AnalysisError::new(
                 GroupByPosAggregate {
                     index: n.to_string(),
@@ -985,6 +1213,7 @@ impl Resolver<'_> {
         group: Vec<Bound>,
         items: &[Bound],
         global: bool,
+        analytics: Option<Arc<Analytics>>,
     ) -> Result<Rel, AnalysisError> {
         let mut memo = HashMap::new();
         let gkeys: Vec<(u128, ArgType)> = group
@@ -1000,22 +1229,37 @@ impl Resolver<'_> {
             .cloned()
             .collect();
         self.check_aggregation(&base, &key_set, &mut memo, origin, global)?;
-        let keys: Vec<Attr> = group
-            .iter()
-            .filter_map(|b| match &b.expr.node {
-                ExprNode::Resolved(ResolvedExpr::Column(col)) => {
-                    c.out.iter().find(|a| a.col.id == col.id).cloned()
-                }
-                _ => None,
-            })
-            .collect();
+        // Over grouping sets, the grouping attributes are the expansion's.
+        let (keys, scope): (Vec<Attr>, Vec<Attr>) = match &analytics {
+            Some(a) => (
+                a.keys(),
+                c.out
+                    .iter()
+                    .chain(a.exprs.iter().map(|g| &g.attr))
+                    .cloned()
+                    .collect(),
+            ),
+            None => (
+                group
+                    .iter()
+                    .filter_map(|b| match &b.expr.node {
+                        ExprNode::Resolved(ResolvedExpr::Column(col)) => {
+                            c.out.iter().find(|a| a.col.id == col.id).cloned()
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                c.out.to_vec(),
+            ),
+        };
         let mut info = AggInfo {
             input: c.clone(),
             grouping: group.into_iter().map(|b| b.expr).collect(),
             aggregates: base.iter().map(|b| Arc::clone(&b.expr)).collect(),
-            out: base.iter().map(|b| out_attr(b, &c.out)).collect(),
+            out: base.iter().map(|b| out_attr(b, &scope)).collect(),
             keys,
             top: None,
+            analytics,
             having: None,
         };
         if base.len() == items.len() {
@@ -1028,7 +1272,7 @@ impl Resolver<'_> {
         let mut top = Vec::new();
         for b in items {
             if b.lateral.is_empty() && b.win.is_none() {
-                let a = out_attr(b, &c.out);
+                let a = out_attr(b, &scope);
                 top.push(Bound {
                     expr: col_expr(&a.col, b.expr.origin),
                     ..b.clone()
@@ -1106,7 +1350,7 @@ impl Resolver<'_> {
                 return Err(AnalysisError::new(MissingGroupBy {}, l.origin));
             }
             (None, ExprNode::Resolved(ResolvedExpr::Column(_))) => {
-                let text = pretty(&x);
+                let text = pretty(&x, self.ctx.conf.session_zone);
                 return Err(AnalysisError::new(
                     MissingAggregation {
                         expression: format!("\"{text}\""),
@@ -1139,7 +1383,7 @@ impl Resolver<'_> {
                 a
             }
             (None, None) => {
-                let output = self.attr(&pretty(&x), &ty);
+                let output = self.attr(&pretty(&x, self.ctx.conf.session_zone), &ty);
                 info.aggregates.push(Arc::new(Expr::new(ExprNode::Resolved(
                     ResolvedExpr::Alias {
                         expr: Arc::clone(&x),
@@ -1183,7 +1427,7 @@ impl Resolver<'_> {
                         return Err(AnalysisError::new(MissingGroupBy {}, origin));
                     }
                     ExprNode::Resolved(ResolvedExpr::Column(_)) => {
-                        let text = pretty(&x);
+                        let text = pretty(&x, self.ctx.conf.session_zone);
                         return Err(AnalysisError::new(
                             MissingAggregation {
                                 expression: format!("\"{text}\""),
@@ -1246,7 +1490,10 @@ impl Resolver<'_> {
                 if b.ty.data_type != Some(krishiv_types::DataType::Boolean) {
                     return Err(AnalysisError::new(
                         JoinConditionIsNotBooleanType {
-                            join_condition: format!("\"{}\"", pretty(&b.shown())),
+                            join_condition: format!(
+                                "\"{}\"",
+                                pretty(&b.shown(), self.ctx.conf.session_zone)
+                            ),
                             condition_type: quoted_type(b.ty.data_type.as_ref()),
                         },
                         p.origin,
@@ -1480,44 +1727,22 @@ impl Resolver<'_> {
             if name == "limit" { "Limit" } else { "Offset" },
         );
         let b = self.bind(e, &cx)?;
-        let shown = || format!("\"{}\"", pretty(&b.shown()));
-        if not_constant(&b.expr) {
-            return Err(AnalysisError::new(
-                InvalidLimitLikeExpressionIsUnfoldable {
-                    expr: shown(),
-                    name: name.to_owned(),
-                },
-                e.origin,
-            ));
-        }
-        if b.ty.data_type != Some(krishiv_types::DataType::Integer) {
+        // Spark's order: foldable, then the type, then the value.
+        let unfoldable = not_constant(&b.expr);
+        if !unfoldable && b.ty.data_type != Some(krishiv_types::DataType::Integer) {
             return Err(AnalysisError::new(
                 InvalidLimitLikeExpressionDataType {
-                    expr: shown(),
+                    expr: format!("\"{}\"", pretty(&b.shown(), self.ctx.conf.session_zone)),
                     name: name.to_owned(),
                     data_type: quoted_type(b.ty.data_type.as_ref()),
                 },
                 e.origin,
             ));
         }
-        match super::fold::constant(&b.expr, self.ctx.conf.ansi) {
-            Some(Constant::Null) => Err(AnalysisError::new(
-                InvalidLimitLikeExpressionIsNull {
-                    expr: shown(),
-                    name: name.to_owned(),
-                },
-                e.origin,
-            )),
-            Some(Constant::Integral(v)) if v < 0 => Err(AnalysisError::new(
-                InvalidLimitLikeExpressionIsNegative {
-                    expr: shown(),
-                    name: name.to_owned(),
-                    v: v.to_string(),
-                },
-                e.origin,
-            )),
+        let folded = self.check_limit(&b, name, unfoldable, e.origin, input.plan.origin)?;
+        match folded {
             // `CAST('3' AS INT)` and the like: the planner reads a literal.
-            Some(Constant::Integral(v)) if !matches!(b.expr.node, ExprNode::Literal(_)) => {
+            Some(v) if !matches!(b.expr.node, ExprNode::Literal(_)) => {
                 let v = i32::try_from(v)
                     .map_err(|_| unsupported("a LIMIT or OFFSET out of range", e.origin))?;
                 Ok(Arc::new(Expr::literal(Literal::Integer(v))))
@@ -1564,6 +1789,11 @@ impl Resolver<'_> {
                 .map(|(o, expr)| SortOrder { expr, ..o.clone() })
                 .collect()
         };
+        // Over no grouping sets, `ORDER BY grouping(..)` is rejected before
+        // its argument resolves (`HAVING` reports the argument first).
+        if c.agg.as_ref().is_none_or(|a| a.analytics.is_none()) {
+            super::analytics::reject_grouping_calls(&exprs)?;
+        }
         // Over an aggregate with windows, Spark's `ORDER BY` reads the
         // select list only (nothing resolves through the windows).
         let (bounds, below, extended) = if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
@@ -1571,9 +1801,40 @@ impl Resolver<'_> {
         } else {
             // A name the select list outputs twice is looked up below it,
             // as Spark does.
-            let (bounds, wide) = self.bind_missing(&c, &exprs, env, "Sort", true)?;
-            let extended = wide.out.len() > c.out.len();
-            (bounds, wide, extended)
+            match self.bind_missing(&c, &exprs, env, "Sort", true) {
+                Ok((bounds, wide)) => {
+                    let extended = wide.out.len() > c.out.len();
+                    (bounds, wide, extended)
+                }
+                // `HAVING ... ORDER BY`: the sort reads the aggregate below
+                // the filter, which grows what the sort needs.
+                Err(e)
+                    if e.error
+                        .error_class()
+                        .name()
+                        .starts_with("UNRESOLVED_COLUMN") =>
+                {
+                    let Some((layers, inner)) = Self::through_to_agg(&c) else {
+                        return Err(e);
+                    };
+                    // Over windows, Spark's `ORDER BY` reads the select list
+                    // only: nothing resolves through them to the aggregate.
+                    if inner.agg.as_ref().is_some_and(|i| i.has_windows()) {
+                        return Err(e);
+                    }
+                    let Ok((bounds, grown, extended)) = self.over_agg(&inner, &exprs, env, "Sort")
+                    else {
+                        return Err(e);
+                    };
+                    let top = if extended {
+                        self.rewrapped(&layers, grown)
+                    } else {
+                        c.clone()
+                    };
+                    (bounds, top, extended)
+                }
+                Err(e) => return Err(e),
+            }
         };
         let node = PlanNode::Sort {
             input: Arc::clone(&below.plan),
@@ -1690,7 +1951,7 @@ fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
         _ => Attr {
             col: BoundColumn {
                 id: AttrId(u64::MAX),
-                name: pretty(&b.expr),
+                name: pretty(&b.expr, None),
                 data_type: krishiv_types::DataType::Boolean,
                 nullable: true,
             },
@@ -1705,7 +1966,7 @@ pub(super) fn boolean_filter(b: &Bound, origin: Origin) -> Result<(), AnalysisEr
     if b.ty.data_type == Some(krishiv_types::DataType::Boolean) {
         return Ok(());
     }
-    let text = format!("\"{}\"", pretty(&b.shown()));
+    let text = format!("\"{}\"", pretty(&b.shown(), None));
     Err(AnalysisError::new(
         DatatypeMismatchFilterNotBoolean {
             sql_expr: text.clone(),
@@ -1815,7 +2076,10 @@ fn in_aggregate_call(b: &Bound) -> Result<(), AnalysisError> {
                 {
                     return Err(AnalysisError::new(
                         UnsupportedFeatureLateralColumnAliasInAggregateFunc {
-                            agg_func: format!("\"{}\"", pretty(&lateral_refs(&x, &b.lateral))),
+                            agg_func: format!(
+                                "\"{}\"",
+                                pretty(&lateral_refs(&x, &b.lateral), None)
+                            ),
                             lca: quoted(std::slice::from_ref(&c.name)),
                         },
                         Origin::UNKNOWN,
@@ -1843,7 +2107,7 @@ fn aggregate_sql(e: &Arc<Expr>, scope: &[Attr]) -> String {
         if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
             && f.kind == FunctionKind::Aggregate
         {
-            found.push(pretty(&qualified(&x, scope)));
+            found.push(pretty(&qualified(&x, scope), None));
             continue;
         }
         x.for_each_child(&mut |k| stack.push(Arc::clone(k)));

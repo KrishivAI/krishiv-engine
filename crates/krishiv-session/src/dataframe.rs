@@ -19,7 +19,7 @@ use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{AnalyzedPlan, TableColumn};
 use krishiv_plan::{
     Expr, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode,
-    ReadSource, SetOperation,
+    ReadSource, SetOperation, SourceId,
 };
 
 use crate::catalog::TempTable;
@@ -198,6 +198,38 @@ impl DataFrame {
         })
     }
 
+    /// `SELECT` of SQL expression strings (PySpark's `selectExpr`): each
+    /// string holds one expression with an optional alias
+    /// (`expr [[AS] alias]`), so `*` and aliases work as they do in a
+    /// `SELECT` list. The strings parse with this session's parser options.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.table("t").select_expr(["a", "b AS second"]).unwrap();
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Spark's parse errors (`PARSE_SYNTAX_ERROR`, ...); lowering errors
+    /// for constructs the IR lacks.
+    pub fn select_expr(
+        &self,
+        exprs: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Self, KrishivError> {
+        let options = self.session.parser_options();
+        let mut lowered = Vec::new();
+        for text in exprs {
+            lowered.push(
+                krishiv_sql::parse_and_lower_named_expression(text.as_ref(), &options, SourceId(0))
+                    .map_err(|e| e.error)?,
+            );
+        }
+        Ok(self.derive(PlanNode::Project {
+            input: Arc::clone(&self.plan),
+            exprs: lowered,
+        }))
+    }
+
     /// Rows where `condition` is true (PySpark's `filter`).
     ///
     /// ```
@@ -225,6 +257,32 @@ impl DataFrame {
     #[must_use]
     pub fn where_(&self, condition: Column) -> Self {
         self.filter(condition)
+    }
+
+    /// Rows where the SQL expression `condition` is true (PySpark's
+    /// `filter(str)` and `where(str)`). The string parses with this
+    /// session's parser options.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.table("t").filter_expr("a IS NOT NULL").unwrap();
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Spark's parse errors (`PARSE_SYNTAX_ERROR`, ...); lowering errors
+    /// for constructs the IR lacks.
+    pub fn filter_expr(&self, condition: &str) -> Result<Self, KrishivError> {
+        let predicate = krishiv_sql::parse_and_lower_named_expression(
+            condition,
+            &self.session.parser_options(),
+            SourceId(0),
+        )
+        .map_err(|e| e.error)?;
+        Ok(self.derive(PlanNode::Filter {
+            input: Arc::clone(&self.plan),
+            predicate,
+        }))
     }
 
     /// This DataFrame with the column `name` added, or replaced
@@ -255,9 +313,73 @@ impl DataFrame {
     /// ```
     #[must_use]
     pub fn group_by(&self, keys: impl IntoIterator<Item = impl Into<Column>>) -> GroupedData {
+        self.grouped(keys, Sets::GroupBy)
+    }
+
+    /// Groups rows by `keys` and by each prefix of them, down to the grand
+    /// total, for [`GroupedData::agg`] (PySpark's `rollup`): a key a row is
+    /// rolled up over reads `NULL`.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::{col, sum};
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.table("t").rollup([col("a"), col("b")]).agg([sum(col("v"))]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn rollup(&self, keys: impl IntoIterator<Item = impl Into<Column>>) -> GroupedData {
+        self.grouped(keys, Sets::Rollup)
+    }
+
+    /// Groups rows by every subset of `keys`, for [`GroupedData::agg`]
+    /// (PySpark's `cube`): a key a row is rolled up over reads `NULL`.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::{col, sum};
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.table("t").cube([col("a"), col("b")]).agg([sum(col("v"))]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn cube(&self, keys: impl IntoIterator<Item = impl Into<Column>>) -> GroupedData {
+        self.grouped(keys, Sets::Cube)
+    }
+
+    /// Groups rows by each of `sets` (grouping expressions among `keys`),
+    /// for [`GroupedData::agg`] (PySpark's `groupingSets`): the output has
+    /// the columns of `keys`, `NULL` where a set does not group by them.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::{col, sum};
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s
+    ///     .table("t")
+    ///     .grouping_sets([vec![col("a")], vec![col("b")], vec![]], [col("a"), col("b")])
+    ///     .agg([sum(col("v"))]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn grouping_sets(
+        &self,
+        sets: impl IntoIterator<Item = impl IntoIterator<Item = Column>>,
+        keys: impl IntoIterator<Item = impl Into<Column>>,
+    ) -> GroupedData {
+        let sets = sets
+            .into_iter()
+            .map(|set| set.into_iter().map(|c| c.expr).collect())
+            .collect();
+        self.grouped(keys, Sets::Explicit(sets))
+    }
+
+    fn grouped(
+        &self,
+        keys: impl IntoIterator<Item = impl Into<Column>>,
+        sets: Sets,
+    ) -> GroupedData {
         GroupedData {
             df: self.clone(),
             keys: keys.into_iter().map(|k| k.into().expr).collect(),
+            sets,
         }
     }
 
@@ -578,34 +700,6 @@ impl DataFrame {
         })
     }
 
-    /// This DataFrame, accepted as if repartitioned to `partitions`
-    /// (PySpark's `repartition`): an embedded plan runs on one node, so
-    /// the rows never change.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("t").repartition(4);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn repartition(&self, _partitions: i32) -> Self {
-        self.clone()
-    }
-
-    /// This DataFrame, accepted as if coalesced to `partitions`
-    /// (PySpark's `coalesce`): an embedded plan runs on one node, so the
-    /// rows never change.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("t").coalesce(1);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn coalesce(&self, _partitions: i32) -> Self {
-        self.clone()
-    }
-
     /// A sample of the rows (PySpark's `sample`). The engine cannot
     /// sample yet: the returned frame fails its first action with
     /// `KRISHIV_UNSUPPORTED_FEATURE`, as do the schema and the plans.
@@ -782,10 +876,20 @@ impl DataFrame {
 
     /// Analyzes the plan in `env` and keeps the result.
     pub(crate) async fn analyzed_in(&self, env: QueryEnv) -> Result<Arc<Analysis>, KrishivError> {
+        self.analyzed_in_with_text(env, None).await
+    }
+
+    /// As [`Self::analyzed_in`], with `text` the redacted query the plan
+    /// came from, so an analysis error carries its SQL span as context.
+    pub(crate) async fn analyzed_in_with_text(
+        &self,
+        env: QueryEnv,
+        text: Option<&krishiv_common::redact::RedactedSql>,
+    ) -> Result<Arc<Analysis>, KrishivError> {
         if let Some(e) = &self.invalid {
             return Err(e.clone());
         }
-        let analyzed = self.session.analyze_in(&self.plan, &env).await?;
+        let analyzed = self.session.analyze_in(&self.plan, &env, text).await?;
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),
@@ -1088,11 +1192,26 @@ impl DataFrame {
     }
 }
 
-/// Rows grouped by keys ([`DataFrame::group_by`]).
+/// Which groups of its keys a [`GroupedData`] aggregates.
+#[derive(Debug, Clone)]
+enum Sets {
+    /// All the keys together.
+    GroupBy,
+    /// Each prefix of the keys.
+    Rollup,
+    /// Each subset of the keys.
+    Cube,
+    /// These sets.
+    Explicit(Vec<Vec<Expr>>),
+}
+
+/// Rows grouped by keys ([`DataFrame::group_by`], [`DataFrame::rollup`],
+/// [`DataFrame::cube`], [`DataFrame::grouping_sets`]).
 #[derive(Debug, Clone)]
 pub struct GroupedData {
     df: DataFrame,
     keys: Vec<Expr>,
+    sets: Sets,
 }
 
 impl GroupedData {
@@ -1110,9 +1229,21 @@ impl GroupedData {
         let keys: Vec<Arc<Expr>> = self.keys.iter().cloned().map(Arc::new).collect();
         let mut output = keys.clone();
         output.extend(aggregates.into_iter().map(|c| Arc::new(c.expr)));
+        let grouping = match &self.sets {
+            Sets::GroupBy => Grouping::GroupBy(keys),
+            Sets::Rollup => Grouping::Rollup(keys),
+            Sets::Cube => Grouping::Cube(keys),
+            Sets::Explicit(sets) => Grouping::GroupingSets {
+                exprs: keys,
+                sets: sets
+                    .iter()
+                    .map(|set| set.iter().cloned().map(Arc::new).collect())
+                    .collect(),
+            },
+        };
         self.df.derive(PlanNode::Aggregate {
             input: Arc::clone(&self.df.plan),
-            grouping: Grouping::GroupBy(keys),
+            grouping,
             aggregates: output,
         })
     }

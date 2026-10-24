@@ -131,6 +131,7 @@ impl ArgType {
 pub struct CallTypes<'a> {
     args: &'a [ArgType],
     constants: &'a [Option<Constant>],
+    literals: &'a [bool],
     sql: Option<&'a dyn Fn(usize) -> Option<String>>,
     ansi: bool,
     decimal_loss: bool,
@@ -141,6 +142,7 @@ impl fmt::Debug for CallTypes<'_> {
         f.debug_struct("CallTypes")
             .field("args", &self.args)
             .field("constants", &self.constants)
+            .field("literals", &self.literals)
             .field("ansi", &self.ansi)
             .field("decimal_loss", &self.decimal_loss)
             .finish_non_exhaustive()
@@ -155,10 +157,20 @@ impl<'a> CallTypes<'a> {
         Self {
             args,
             constants,
+            literals: &[],
             sql: None,
             ansi: true,
             decimal_loss: true,
         }
+    }
+
+    /// With `literals[i]` telling whether argument `i` is a plain literal
+    /// (not merely foldable). Without it, every constant counts as a
+    /// literal.
+    #[must_use]
+    pub const fn with_literals(mut self, literals: &'a [bool]) -> Self {
+        self.literals = literals;
+        self
     }
 
     /// With `spark.sql.ansi.enabled = ansi` (on by default): some legacy
@@ -220,6 +232,17 @@ impl<'a> CallTypes<'a> {
     #[must_use]
     pub fn constant(&self, i: usize) -> Option<&'a Constant> {
         self.constants.get(i).and_then(Option::as_ref)
+    }
+
+    /// Whether argument `i` is a plain literal: what Spark's rules that
+    /// match `Literal(..)` (the `ignoreNulls` flag of `first`) require, as
+    /// opposed to the foldable expressions [`Self::constant`] also gives.
+    #[must_use]
+    pub fn is_literal(&self, i: usize) -> bool {
+        match self.literals.get(i) {
+            Some(plain) => *plain && self.constant(i).is_some(),
+            None => self.constant(i).is_some(),
+        }
     }
 
     /// Whether any argument may be null.

@@ -139,7 +139,6 @@ pub struct krishiv_session::DataFrame
 impl krishiv_session::DataFrame
 pub fn krishiv_session::DataFrame::agg(&self, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> Self
 pub fn krishiv_session::DataFrame::alias(&self, &str) -> Self
-pub fn krishiv_session::DataFrame::coalesce(&self, i32) -> Self
 pub fn krishiv_session::DataFrame::col(&self, &str) -> krishiv_session::Column
 pub async fn krishiv_session::DataFrame::collect(&self) -> core::result::Result<alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::collect_with_metrics(&self) -> core::result::Result<(alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_exec::metrics::QueryMetrics), krishiv_common::error::KrishivError>
@@ -160,7 +159,6 @@ pub fn krishiv_session::DataFrame::join_using<'a>(&self, &Self, impl core::iter:
 pub fn krishiv_session::DataFrame::limit(&self, i32) -> Self
 pub fn krishiv_session::DataFrame::offset(&self, i32) -> Self
 pub fn krishiv_session::DataFrame::order_by(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
-pub fn krishiv_session::DataFrame::repartition(&self, i32) -> Self
 pub fn krishiv_session::DataFrame::sample(&self, bool, f64, i64) -> Self
 pub async fn krishiv_session::DataFrame::schema(&self) -> core::result::Result<arrow_schema::schema::SchemaRef, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::select(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self

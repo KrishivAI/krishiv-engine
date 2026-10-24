@@ -19,10 +19,9 @@ from krishiv.errors import (
     PySparkTypeError,
     PySparkValueError,
     not_expected_type,
-    not_implemented,
+    unsupported_feature,
 )
 from krishiv.sql import _convert
-from krishiv.sql._convert import jsonable
 from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
@@ -58,6 +57,12 @@ _HOW = {
 #: The most rows ``show`` prints, as Spark: ``ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH - 1``.
 _SHOW_MAX = 2**31 - 17
 
+#: The session key of the notebook preview size, as Spark's ``spark.sql.repl.eagerEval.maxNumRows``.
+EAGER_MAX_ROWS_KEY = "spark.sql.repl.eagerEval.maxNumRows"
+
+#: The preview size when the key is unset or not a number, as Spark's default of 20.
+EAGER_DEFAULT_MAX_ROWS = 20
+
 ColumnOrName = Column | str
 ColumnsOrNames = ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...]
 
@@ -83,6 +88,28 @@ def _case_sensitive(session: SparkSession) -> bool:
 def _same(left: str, right: str, case_sensitive: bool) -> bool:
     """Whether the column name ``left`` matches ``right`` under the session's resolver."""
     return left == right if case_sensitive else left.lower() == right.lower()
+
+
+def _check_partitions(count: int) -> None:
+    """PySpark's check of a ``repartition``/``coalesce`` partition count."""
+    if count <= 0:
+        raise PySparkValueError(
+            errorClass="VALUE_NOT_POSITIVE",
+            messageParameters={"arg_name": "numPartitions", "arg_value": str(count)},
+        )
+
+
+def _eager_max_rows(session: SparkSession) -> int:
+    """The notebook preview size: ``spark.sql.repl.eagerEval.maxNumRows`` (default 20). Unset,
+    empty or non-numeric values give the default; negatives give no rows."""
+    raw = session.conf.get(EAGER_MAX_ROWS_KEY, str(EAGER_DEFAULT_MAX_ROWS))
+    if raw is None:
+        return EAGER_DEFAULT_MAX_ROWS
+    try:
+        rows = int(raw.strip())
+    except ValueError:
+        return EAGER_DEFAULT_MAX_ROWS
+    return min(max(rows, 0), _SHOW_MAX)
 
 
 class DataFrame:
@@ -136,15 +163,44 @@ class DataFrame:
     def _new(self, native: _native.DataFrame) -> DataFrame:
         return DataFrame(native, self._session)
 
+    def __repr__(self) -> str:
+        """``DataFrame[a: int, b: string]``: the columns with their types, by analysis only
+        (the query does not run)."""
+        fields = ", ".join(f"{name}: {type_}" for name, type_ in self.dtypes)
+        return f"DataFrame[{fields}]"
+
+    def _repr_html_(self) -> str | None:
+        """The first ``spark.sql.repl.eagerEval.maxNumRows`` rows (default 20) as an HTML table,
+        for notebooks: column names and types in the header, HTML-escaped values. Without
+        pyarrow there is no preview, so ``None`` (the notebook falls back to :meth:`__repr__`)."""
+        try:
+            _convert.require_pyarrow("_repr_html_")
+        except ImportError:
+            return None
+        rows = _eager_max_rows(self._session)
+        table = self.limit(rows).toArrow()
+        cells = _convert.table_cells(table, self._session_zone())
+        columns = [(name, type_) for name, type_ in self.dtypes]
+        return _convert.repr_html_string(columns, cells)
+
     def select(self, *cols: ColumnsOrNames) -> DataFrame:
         return self._new(self._df.select([_named(c) for c in _flatten(cols)]))
 
-    def selectExpr(self, *expr: str) -> DataFrame:
-        raise not_implemented("selectExpr (SQL expression strings)")
+    def selectExpr(self, *expr: str | list[str]) -> DataFrame:
+        """Projects a set of SQL expressions, as ``pyspark.sql.DataFrame.selectExpr``: each string
+        holds one expression with an optional alias, so ``AS`` aliases and ``*`` work as they do
+        in a ``SELECT`` list (``df.selectExpr("a", "b AS c")``)."""
+        exprs = _flatten(expr)
+        for e in exprs:
+            if not isinstance(e, str):
+                raise not_expected_type("expr", "str", e)
+        return self._new(self._df.select_expr(list(exprs)))
 
     def filter(self, condition: Column | str) -> DataFrame:
+        """Rows where ``condition`` is true; a string parses as a SQL expression, as PySpark's
+        ``filter``."""
         if isinstance(condition, str):
-            raise not_implemented("filter/where with a SQL expression string")
+            return self._new(self._df.filter_expr(condition))
         if not isinstance(condition, Column):
             raise not_expected_type("condition", "Column or str", condition)
         return self._new(self._df.filter(condition._c))
@@ -189,7 +245,7 @@ class DataFrame:
             return self._new(self._df.join(other._df, how="cross"))
         items = list(on) if isinstance(on, list | tuple) else [on]
         if all(isinstance(i, str) for i in items):
-            return self._new(self._df.join(other._df, using=items, how=kind))
+            return self._new(self._df.join(other._df, using=cast("list[str]", items), how=kind))
         if all(isinstance(i, Column) for i in items):
             condition: Column = reduce(lambda a, b: a & b, cast("list[Column]", items))
             return self._new(self._df.join(other._df, on=condition._c, how=kind))
@@ -863,7 +919,9 @@ class DataFrame:
         for c in targets:
             if not isinstance(c, str | Column):
                 raise not_expected_type("cols", "Column or str", c)
-        return self._new(self._df.repartition())
+        if isinstance(numPartitions, int):
+            _check_partitions(numPartitions)
+        return self._new(self._df)
 
     def coalesce(self, numPartitions: int) -> DataFrame:
         """Returns a new :class:`DataFrame` with exactly ``numPartitions`` partitions.
@@ -882,7 +940,8 @@ class DataFrame:
         """
         if not isinstance(numPartitions, int):
             raise not_expected_type("numPartitions", "int", numPartitions)
-        return self._new(self._df.coalesce())
+        _check_partitions(numPartitions)
+        return self._new(self._df)
 
     def hint(self, name: str, *parameters: Any) -> DataFrame:
         """Specifies some hint on the current :class:`DataFrame`.
@@ -1133,42 +1192,15 @@ class DataFrame:
         """
         return iter(self.collect())
 
-    def toJSON(self, use_unicode: bool = True) -> list[str]:
-        """Converts a :class:`DataFrame` into a list of JSON strings, one per row.
+    def toJSON(self, use_unicode: bool = True) -> DataFrame:
+        """Converts a :class:`DataFrame` into one of JSON strings, one row per document, in a
+        single ``string`` column ``value`` (Spark Connect's form; classic PySpark returns an
+        ``RDD``).
 
-        .. note:: Embedded Krishiv has no ``RDD``: this returns a ``list[str]`` where PySpark
-            returns an ``RDD[str]``.
-
-        Parameters
-        ----------
-        use_unicode : bool, optional, default True
-            Whether to convert to unicode or not.
-
-        Returns
-        -------
-        list
-            A list of JSON strings, each row as one JSON document.
-
-        Examples
-        --------
-        >>> df = spark.createDataFrame([(2, "Alice"), (5, "Bob")], schema=["age", "name"])
-        >>> df.sort("age").toJSON()
-        ['{"age": 2, "name": "Alice"}', '{"age": 5, "name": "Bob"}']
+        The engine has no ``to_json`` function yet, so this raises the engine's
+        ``KRISHIV_UNSUPPORTED_FEATURE`` rather than formatting JSON in Python.
         """
-        import json
-
-        table = self.toArrow()
-        zone = self._session_zone()
-        names = table.schema.names
-        arrow_types = [table.field(name).type for name in names]
-        rows = table.to_pylist()
-        return [
-            json.dumps(
-                {n: jsonable(r[n], t, zone) for n, t in zip(names, arrow_types, strict=True)},
-                ensure_ascii=not use_unicode,
-            )
-            for r in rows
-        ]
+        raise unsupported_feature("DataFrame.toJSON")
 
     def tail(self, num: int) -> list[Row]:
         """Returns the last ``num`` rows as a :class:`list` of :class:`Row`.

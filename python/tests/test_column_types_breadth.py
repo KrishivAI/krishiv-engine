@@ -119,16 +119,15 @@ def test_like(df: DataFrame) -> None:
         df.name.like(1)  # ty: ignore[invalid-argument-type]
 
 
-def test_rlike_ilike_resolve_but_cannot_run(df: DataFrame) -> None:
-    # The analyzer resolves both, as SQL does; the engine cannot run them yet.
-    assert df.filter(df.name.rlike("ice$")).columns == df.columns
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        _ = df.filter(df.name.rlike("ice$")).collect()
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+def test_rlike_ilike(df: DataFrame) -> None:
+    # PySpark's docstring examples.
+    assert df.filter(df.name.rlike("ice$")).collect() == [Row(age=2, name="Alice")]
+    # The engine cannot run `ilike` yet; the DataFrame form fails as the SQL form does.
     assert df.filter(df.name.ilike("%ICE")).columns == df.columns
     with pytest.raises(errors.UnsupportedOperationException) as bad:
         _ = df.filter(df.name.ilike("%ICE")).collect()
     assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+    assert "ilike" in str(bad.value)
     with pytest.raises(errors.PySparkTypeError):
         df.name.rlike(1)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError):
@@ -544,10 +543,9 @@ def test_create_pandas(spark: SparkSession) -> None:
 def test_create_scalars(spark: SparkSession) -> None:
     assert spark.createDataFrame([(datetime.date(2020, 1, 1),)], "d date").collect() == [Row(datetime.date(2020, 1, 1))]
     assert spark.createDataFrame([(Decimal("1.5"),)], "d decimal(10,2)").collect() == [Row(Decimal("1.50"))]
-    spark.conf.set("spark.sql.session.timeZone", "+00:00")
-    want = spark.sql("SELECT CAST('2020-01-01 12:00:00' AS TIMESTAMP) AS t").collect()
-    got = spark.createDataFrame([(datetime.datetime(2020, 1, 1, 12, 0, 0),)], "t timestamp").collect()
-    assert got == want
+    naive = datetime.datetime(2020, 1, 1, 12, 0, 0)
+    got = spark.createDataFrame([(naive,)], "t timestamp").selectExpr("CAST(t AS BIGINT) AS s").collect()
+    assert got == [Row(s=int(naive.timestamp()))]
     assert spark.createDataFrame([(b"x",)], "b binary").collect() == [Row(b"x")]
 
 
@@ -564,8 +562,7 @@ def test_create_verify_schema(spark: SparkSession) -> None:
     ).collect() == [Row(datetime.date(2020, 1, 2))]
     with pytest.raises(errors.PySparkTypeError):
         spark.createDataFrame([("Alice", 1)], 1)
-    with pytest.raises(errors.PySparkNotImplementedError):
-        spark.createDataFrame([("Alice", 1)])
+    assert spark.createDataFrame([("Alice", 1)]).columns == ["_1", "_2"]
     with pytest.raises(TypeError):
         spark.createDataFrame(spark.range(1))
     with pytest.raises(errors.PySparkNotImplementedError):
@@ -646,8 +643,7 @@ def test_create_pandas_schema_errors(spark: SparkSession) -> None:
         spark.createDataFrame([], ["a"])
     with pytest.raises(errors.PySparkTypeError):
         spark.createDataFrame([(1, 2)], [1])
-    with pytest.raises(ValueError, match="2 values, schema has 1"):
-        spark.createDataFrame([(1, 2)], ["a"])
+    assert spark.createDataFrame([(1, 2)], ["a"]).collect() == [Row(a=1, _2=2)]
 
 
 def test_create_wide_scalars(spark: SparkSession) -> None:
@@ -707,12 +703,20 @@ def test_type_reprs_and_json_values() -> None:
 
 
 def test_create_aware_timestamp_and_no_pandas(spark: SparkSession, monkeypatch: pytest.MonkeyPatch) -> None:
-    aware = datetime.datetime(2020, 1, 1, 12, 0, tzinfo=datetime.UTC)
+    # A naive datetime is read in the Python process's local time zone, as
+    # PySpark reads it, never in the session time zone.
     naive = datetime.datetime(2020, 1, 1, 12, 0)
-    assert (
-        spark.createDataFrame([(aware,)], "t timestamp").collect()
-        == spark.createDataFrame([(naive,)], "t timestamp").collect()
-    )
+    aware = naive.astimezone(datetime.UTC)
+    spark.conf.set("spark.sql.session.timeZone", "Pacific/Kiritimati")
+    try:
+        for schema in ("t timestamp", ["t"]):
+            assert (
+                spark.createDataFrame([(aware,)], schema).selectExpr("CAST(t AS BIGINT) AS s").collect()
+                == spark.createDataFrame([(naive,)], schema).selectExpr("CAST(t AS BIGINT) AS s").collect()
+                == [Row(s=int(aware.timestamp()))]
+            )
+    finally:
+        spark.conf.unset("spark.sql.session.timeZone")
     import builtins
 
     real_import = builtins.__import__

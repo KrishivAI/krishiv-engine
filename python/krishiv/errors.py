@@ -3,12 +3,18 @@
 
 Engine errors carry a Spark error class and SQLSTATE. The JVM exception type Spark
 would have thrown is not carried, so :func:`_from_native` picks the class from the
-error class and SQLSTATE (see ``_class_for``).
+error class and SQLSTATE (see :func:`_class_for`). Query contexts (where an error
+arose: a SQL span or a DataFrame operation) cross the bridge as plain tuples and
+are wrapped here as :class:`QueryContext` objects.
 """
 
 from __future__ import annotations
 
 import re
+import warnings
+from abc import ABC, abstractmethod
+from collections.abc import Iterable
+from enum import Enum
 from typing import Any
 
 # The message templates of the client-side errors this package raises (the wording of
@@ -25,10 +31,167 @@ _TEMPLATES = {
         "Argument `<arg_name>`(type: <arg_type>) should only contain a type in [<allowed_types>], got <item_type>"
     ),
     "UNSUPPORTED_OPERATION": "<operation> is not supported.",
+    "AXIS_LENGTH_MISMATCH": (
+        "Length mismatch: Expected axis has <expected_length> elements, new values have <actual_length> elements."
+    ),
+    "CANNOT_INFER_EMPTY_SCHEMA": "Can not infer schema from an empty dataset.",
+    "VALUE_NOT_POSITIVE": "Value for `<arg_name>` must be positive, got '<arg_value>'.",
     "VALUE_NOT_ALLOWED": "Value for `<arg_name>` has to be amongst the following values: <allowed_values>.",
     "CANNOT_BE_NONE": "Argument `<arg_name>` cannot be None.",
     "UNSUPPORTED_DATA_TYPE": "Unsupported DataType `<data_type>`.",
+    "DIFFERENT_ROWS": "<error_msg>",
+    "DIFFERENT_SCHEMA": "Schemas do not match.\n--- actual\n+++ expected\n<error_msg>",
+    "DIFFERENT_PANDAS_DATAFRAME": (
+        "DataFrames are not almost equal:\nLeft:\n<left>\n<left_dtype>\nRight:\n<right>\n<right_dtype>"
+    ),
+    "INVALID_TYPE_DF_EQUALITY_ARG": ("Expected type <expected_type> for `<arg_name>` but got type <actual_type>."),
 }
+
+
+class QueryContextType(Enum):
+    """Where a :class:`QueryContext` came from (``pyspark.errors.QueryContextType``)."""
+
+    SQL = 0
+    DataFrame = 1
+
+
+class QueryContext(ABC):
+    """Where an error arose (``pyspark.errors.QueryContext``)."""
+
+    @abstractmethod
+    def contextType(self) -> QueryContextType:
+        """Whether this context is a SQL span or a DataFrame operation."""
+        ...
+
+    @abstractmethod
+    def objectType(self) -> str:
+        """The object type of the query (``""`` when directly in the query)."""
+        ...
+
+    @abstractmethod
+    def objectName(self) -> str:
+        """The object name of the query (``""`` when directly in the query)."""
+        ...
+
+    @abstractmethod
+    def startIndex(self) -> int:
+        """The starting byte offset in the query text (0 for DataFrames)."""
+        ...
+
+    @abstractmethod
+    def stopIndex(self) -> int:
+        """The stopping byte offset, inclusive (0 for DataFrames)."""
+        ...
+
+    @abstractmethod
+    def fragment(self) -> str:
+        """The redacted query fragment (``""`` for DataFrames)."""
+        ...
+
+    @abstractmethod
+    def callSite(self) -> str:
+        """The user code that raised the error (``""``: not tracked yet)."""
+        ...
+
+    @abstractmethod
+    def summary(self) -> str:
+        """A short description of the error's cause."""
+        ...
+
+
+class SqlQueryContext(QueryContext):
+    """A span of SQL text."""
+
+    def __init__(
+        self,
+        fragment: str = "",
+        start: int = 0,
+        stop: int = 0,
+        objectType: str = "",
+        objectName: str = "",
+        callSite: str = "",
+        summary: str = "",
+    ) -> None:
+        self._fragment = fragment
+        self._start = start
+        self._stop = stop
+        self._object_type = objectType
+        self._object_name = objectName
+        self._call_site = callSite
+        self._summary = summary
+
+    def contextType(self) -> QueryContextType:
+        return QueryContextType.SQL
+
+    def objectType(self) -> str:
+        return self._object_type
+
+    def objectName(self) -> str:
+        return self._object_name
+
+    def startIndex(self) -> int:
+        return self._start
+
+    def stopIndex(self) -> int:
+        return self._stop
+
+    def fragment(self) -> str:
+        return self._fragment
+
+    def callSite(self) -> str:
+        return self._call_site
+
+    def summary(self) -> str:
+        return self._summary
+
+
+class DataFrameQueryContext(QueryContext):
+    """A DataFrame operation (call sites are not tracked yet)."""
+
+    def __init__(self, callSite: str = "", summary: str = "") -> None:
+        self._call_site = callSite
+        self._summary = summary
+
+    def contextType(self) -> QueryContextType:
+        return QueryContextType.DataFrame
+
+    def objectType(self) -> str:
+        return ""
+
+    def objectName(self) -> str:
+        return ""
+
+    def startIndex(self) -> int:
+        return 0
+
+    def stopIndex(self) -> int:
+        return 0
+
+    def fragment(self) -> str:
+        return ""
+
+    def callSite(self) -> str:
+        return self._call_site
+
+    def summary(self) -> str:
+        return self._summary
+
+
+def _context_from_native(raw: Any) -> QueryContext:
+    """A :class:`QueryContext` for one bridge tuple
+    ``(kind, fragment, start, stop, object_type, object_name, call_site, summary)``."""
+    kind, fragment, start, stop, object_type, object_name, call_site, summary = raw
+    if int(kind) == QueryContextType.DataFrame.value:
+        return DataFrameQueryContext(callSite=str(call_site), summary=str(summary))
+    return SqlQueryContext(
+        fragment=str(fragment),
+        start=int(start),
+        stop=int(stop),
+        objectType=str(object_type),
+        objectName=str(object_name),
+        callSite=str(call_site),
+        summary=str(summary),
+    )
 
 
 class PySparkException(Exception):
@@ -38,8 +201,8 @@ class PySparkException(Exception):
         self,
         message: str | None = None,
         errorClass: str | None = None,
-        messageParameters: dict[str, str] | None = None,
-        contexts: list[Any] | None = None,
+        messageParameters: dict[str, Any] | None = None,
+        contexts: list[QueryContext] | list[tuple] | None = None,
         sqlState: str | None = None,
     ) -> None:
         if message is None:
@@ -50,7 +213,7 @@ class PySparkException(Exception):
         self._message = message
         self._error_class = errorClass
         self._message_parameters = messageParameters
-        self._contexts = contexts or []
+        self._contexts = [c if isinstance(c, QueryContext) else _context_from_native(c) for c in contexts or []]
         self._sql_state = sqlState
 
     def getCondition(self) -> str | None:
@@ -59,6 +222,7 @@ class PySparkException(Exception):
 
     def getErrorClass(self) -> str | None:
         """Deprecated name of :meth:`getCondition`."""
+        warnings.warn("Deprecated in 4.0.0, use getCondition instead.", FutureWarning, stacklevel=2)
         return self._error_class
 
     def getSqlState(self) -> str | None:
@@ -67,10 +231,10 @@ class PySparkException(Exception):
     def getMessage(self) -> str:
         return self._message
 
-    def getMessageParameters(self) -> dict[str, str] | None:
+    def getMessageParameters(self) -> dict[str, Any] | None:
         return self._message_parameters
 
-    def getQueryContext(self) -> list[Any]:
+    def getQueryContext(self) -> list[QueryContext]:
         return list(self._contexts)
 
     def __str__(self) -> str:
@@ -145,16 +309,22 @@ class PySparkAttributeError(PySparkException, AttributeError):
     pass
 
 
-class PySparkKeyError(PySparkException, KeyError):
-    pass
-
-
-class PySparkIndexError(PySparkException, IndexError):
-    pass
-
-
 class PySparkRuntimeError(PySparkException, RuntimeError):
     pass
+
+
+class PySparkAssertionError(PySparkException, AssertionError):
+    """An assertion in a test utility failed (``pyspark.errors.PySparkAssertionError``)."""
+
+    def __init__(
+        self,
+        message: str | None = None,
+        errorClass: str | None = None,
+        messageParameters: dict[str, Any] | None = None,
+        data: Iterable[Any] | None = None,
+    ) -> None:
+        super().__init__(message, errorClass, messageParameters)
+        self.data = list(data) if data is not None else None
 
 
 class PySparkNotImplementedError(PySparkException, NotImplementedError):
@@ -165,7 +335,15 @@ class PySparkImportError(PySparkException, ImportError):
     pass
 
 
-def _render(error_class: str, parameters: dict[str, str]) -> str:
+class PySparkIndexError(PySparkException, IndexError):
+    pass
+
+
+class PySparkKeyError(PySparkException, KeyError):
+    pass
+
+
+def _render(error_class: str, parameters: dict[str, Any]) -> str:
     template = _TEMPLATES.get(error_class, error_class)
     text = re.sub(r"<(\w+)>", lambda m: str(parameters.get(m.group(1), m.group(0))), template)
     return f"[{error_class}] {text}"
@@ -205,10 +383,16 @@ def _class_for(error_class: str, sql_state: str | None) -> type[PySparkException
     return SparkRuntimeException
 
 
-def _from_native(error_class: str, sql_state: str | None, message: str, parameters: dict[str, str]) -> PySparkException:
+def _from_native(
+    error_class: str,
+    sql_state: str | None,
+    message: str,
+    parameters: dict[str, str],
+    contexts: list[tuple] | None = None,
+) -> PySparkException:
     """The exception for an engine error (called by ``krishiv._native``)."""
     return _class_for(error_class, sql_state)(
-        message, errorClass=error_class, messageParameters=parameters, sqlState=sql_state
+        message, errorClass=error_class, messageParameters=parameters, contexts=contexts, sqlState=sql_state
     )
 
 

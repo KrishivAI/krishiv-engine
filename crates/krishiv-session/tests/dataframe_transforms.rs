@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The DataFrame transforms of P2-T186 part A: distinct, unions,
-//! intersections and excepts, hints, renames, repartitioning, sampling
+//! intersections and excepts, hints, renames, sampling
 //! (unsupported) and unpivoting, through analysis and execution.
 #![cfg(test)]
 
@@ -252,20 +252,6 @@ fn offset_skips_and_rejects_negatives() {
     assert_eq!(
         class(block_on(df.collect())),
         ErrorClass::InvalidLimitLikeExpressionIsNegative
-    );
-}
-
-#[test]
-fn repartition_and_coalesce_keep_the_rows() {
-    let s = session();
-    let want = rows(&block_on(s.table("t1").collect()).unwrap());
-    assert_eq!(
-        rows(&block_on(s.table("t1").repartition(7).collect()).unwrap()),
-        want
-    );
-    assert_eq!(
-        rows(&block_on(s.table("t1").coalesce(1).collect()).unwrap()),
-        want
     );
 }
 

@@ -613,7 +613,7 @@ impl Rewriter {
                             crate::NullOrdering::NullsFirst => "NULLS FIRST",
                             crate::NullOrdering::NullsLast => "NULLS LAST",
                         };
-                        format!("\"{} {dir} {nulls}\"", pretty(&o.expr))
+                        format!("\"{} {dir} {nulls}\"", pretty(&o.expr, None))
                     })
                     .collect();
                 if outer.is_empty() {
@@ -803,7 +803,7 @@ impl Rewriter {
                         .ok_or_else(|| unsupported("a correlation key of this form", k.origin))?;
                     let output = BoundColumn {
                         id: self.fresh(),
-                        name: pretty(k),
+                        name: pretty(k, None),
                         data_type,
                         nullable,
                     };

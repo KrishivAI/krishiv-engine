@@ -795,6 +795,17 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.exprs(partition_by);
                 self.orders(order_by);
             }
+            PlanNode::Expand {
+                projections,
+                output,
+                ..
+            } => {
+                self.u8(24);
+                self.len(projections.len());
+                projections.iter().for_each(|p| self.exprs(p));
+                self.len(output.len());
+                output.iter().for_each(|c| self.bound(c));
+            }
         }
     }
 
@@ -1017,6 +1028,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
                         }
                     }
                 }
+            }
+            ExprNode::TypedLiteral { kind, value } => {
+                self.u8(13);
+                self.u8(match kind {
+                    crate::TypedLiteralKind::Date => 1,
+                    crate::TypedLiteralKind::Timestamp => 2,
+                    crate::TypedLiteralKind::TimestampNtz => 3,
+                    crate::TypedLiteralKind::TimestampLtz => 4,
+                });
+                self.str(value);
             }
         }
     }

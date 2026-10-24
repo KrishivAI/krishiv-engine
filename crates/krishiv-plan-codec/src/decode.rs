@@ -299,6 +299,20 @@ impl Decoder {
                 count: self.expr_ref(r.count)?,
                 subqueries: self.subqueries(&r.subqueries)?,
             },
+            Kind::Expand(e) => {
+                expand_shape(e)?;
+                PhysNode::Expand {
+                    input: self.boxed(e.input)?,
+                    layout: layout(&e.layout),
+                    projections: e
+                        .projections
+                        .iter()
+                        .map(|p| p.items.iter().map(|i| self.item(i)).collect())
+                        .collect::<Result<_>>()?,
+                    nullable: e.nullable.clone(),
+                    subqueries: self.subqueries(&e.subqueries)?,
+                }
+            }
             Kind::Sort(s) => PhysNode::Sort {
                 input: self.boxed(s.input)?,
                 keys: sort_keys(&s.keys)?,
@@ -363,6 +377,10 @@ impl Decoder {
             Kind::Expr(e) => ProjectItemPlan::Expr {
                 name: e.name.clone(),
                 expr: self.expr_ref(e.expr)?,
+            },
+            Kind::NullOf(n) => ProjectItemPlan::NullOf {
+                index: usize_of(n.index)?,
+                name: n.name.clone(),
             },
         })
     }
@@ -543,6 +561,23 @@ fn aggregate(a: &pb::AggregateNode) -> Result<AggregatePlan> {
             _ => AggregateOutput::Partial,
         },
     })
+}
+
+/// An expand has a projection, and every projection has one item per output
+/// column.
+fn expand_shape(e: &pb::ExpandNode) -> Result<()> {
+    if e.projections.is_empty() {
+        return Err(corrupt("an expand without a projection"));
+    }
+    if e.projections
+        .iter()
+        .any(|p| p.items.len() != e.nullable.len())
+    {
+        return Err(corrupt(
+            "an expand projection whose items do not match the nullability",
+        ));
+    }
+    Ok(())
 }
 
 fn window_plan(w: &pb::WindowNode) -> Result<WindowPlan> {

@@ -10,10 +10,7 @@ own error instead of emulating it.
 
 from __future__ import annotations
 
-from datetime import date, datetime
-from decimal import Decimal
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -412,6 +409,11 @@ def test_repartition_and_coalesce_keep_the_rows(people: DataFrame) -> None:
     assert dicts(people.repartition(7, "age").sort("age"), "age") == dicts(people.sort("age"), "age")
     assert dicts(people.repartition("age", "name").sort("age"), "age") == dicts(people.sort("age"), "age")
     assert people.coalesce(1).count() == 3
+    for bad in (lambda: people.repartition(0), lambda: people.repartition(-1, "age"), lambda: people.coalesce(0)):
+        with pytest.raises(
+            errors.PySparkValueError, match=r"\[VALUE_NOT_POSITIVE\] Value for `numPartitions` must be positive"
+        ):
+            bad()
     with pytest.raises(errors.PySparkTypeError):
         people.repartition(1, 1.5)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError):
@@ -561,47 +563,6 @@ def test_to_local_iterator(people: DataFrame) -> None:
     ]
 
 
-def test_to_json(people: DataFrame) -> None:
-    assert people.sort("age").toJSON() == [
-        '{"age": 14, "name": "Tom"}',
-        '{"age": 16, "name": "Bob"}',
-        '{"age": 23, "name": "Alice"}',
-    ]
-
-
-def test_to_json_types(spark: SparkSession) -> None:
-    df = spark.createDataFrame(
-        pa.table(
-            {
-                "b": pa.array([True]),
-                "d": pa.array([1.5]),
-                "day": pa.array([date(2020, 1, 2)]),
-                "ts": pa.array([datetime(2020, 1, 2, 3, 4, 5)], type=pa.timestamp("us")),
-                "dec": pa.array([Decimal("1.50")], type=pa.decimal128(10, 2)),
-                "bin": pa.array([b"ab"]),
-                "nil": pa.array([None], pa.int64()),
-                "micro": pa.array([datetime(2020, 1, 2, 3, 4, 5, 123456)], type=pa.timestamp("us")),
-                "zoned": pa.array(
-                    [datetime(2020, 1, 2, 3, 4, 5, 123000, tzinfo=ZoneInfo("America/New_York"))],
-                    type=pa.timestamp("us", tz="America/New_York"),
-                ),
-            }
-        )
-    )
-    [doc] = df.toJSON()
-    assert doc == (
-        '{"b": true, "d": 1.5, "day": "2020-01-02", "ts": "2020-01-02 03:04:05", '
-        '"dec": 1.5, "bin": "YWI=", "nil": null, "micro": "2020-01-02 03:04:05.123456", '
-        '"zoned": "2020-01-02 08:04:05.123"}'
-    )
-
-
-def test_jsonable_nested_types() -> None:
-    """The converter for types the engine cannot produce yet (structs, maps, lists)."""
-    from krishiv.sql._convert import jsonable
-
-    struct = pa.struct([pa.field("x", pa.int64()), pa.field("y", pa.string())])
-    assert jsonable({"x": 1, "y": "z"}, struct) == {"x": 1, "y": "z"}
-    assert jsonable(None, struct) is None
-    assert jsonable([("k", 1)], pa.map_(pa.string(), pa.int64())) == {"k": 1}
-    assert jsonable([[1, None]], pa.list_(pa.int64())) == [[1, None]]
+def test_to_json_is_unsupported(people: DataFrame) -> None:
+    with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
+        people.toJSON()

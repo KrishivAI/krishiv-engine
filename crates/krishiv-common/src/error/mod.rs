@@ -42,6 +42,74 @@ include!(concat!(env!("OUT_DIR"), "/error_classes.rs"));
 
 use std::sync::Arc;
 
+/// How an error's query context arose: a span of SQL text, or a
+/// DataFrame operation (Spark's `QueryContextType`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorContextType {
+    /// A span of SQL text.
+    Sql,
+    /// A DataFrame operation.
+    DataFrame,
+}
+
+/// Where an error arose, as Spark's `QueryContext`: the fragment of SQL
+/// text (with `start`/`stop` byte offsets, `stop` inclusive) or the
+/// DataFrame operation that raised it. `object_type`/`object_name` name
+/// the object (a view, usually empty), `call_site` the user code that
+/// raised it (empty: the engine does not track call sites yet) and
+/// `summary` a short description.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorQueryContext {
+    /// Whether this context is a SQL span or a DataFrame operation.
+    pub context_type: ErrorContextType,
+    /// The redacted SQL fragment (empty for DataFrame contexts).
+    pub fragment: String,
+    /// First byte of the span (0 for DataFrame contexts).
+    pub start: usize,
+    /// Last byte of the span, inclusive (0 for DataFrame contexts).
+    pub stop: usize,
+    /// The object type (`""` when the error is directly in the query).
+    pub object_type: String,
+    /// The object name (`""` when the error is directly in the query).
+    pub object_name: String,
+    /// The user code that raised the error (empty: not tracked yet).
+    pub call_site: String,
+    /// A short description of the error's cause.
+    pub summary: String,
+}
+
+impl ErrorQueryContext {
+    /// A SQL context: the redacted `fragment` at bytes `start..=stop`.
+    #[must_use]
+    pub fn sql(fragment: impl Into<String>, start: usize, stop: usize) -> Self {
+        Self {
+            context_type: ErrorContextType::Sql,
+            fragment: fragment.into(),
+            start,
+            stop,
+            object_type: String::new(),
+            object_name: String::new(),
+            call_site: String::new(),
+            summary: String::new(),
+        }
+    }
+
+    /// A DataFrame context (the engine does not track call sites yet).
+    #[must_use]
+    pub fn dataframe() -> Self {
+        Self {
+            context_type: ErrorContextType::DataFrame,
+            fragment: String::new(),
+            start: 0,
+            stop: 0,
+            object_type: String::new(),
+            object_name: String::new(),
+            call_site: String::new(),
+            summary: String::new(),
+        }
+    }
+}
+
 /// An error with a Spark error class, SQLSTATE and message parameters.
 ///
 /// `Display` matches Spark 4's `getMessage` without query context:
@@ -62,6 +130,7 @@ pub struct KrishivError {
     message: String,
     #[source]
     cause: Option<Arc<KrishivError>>,
+    contexts: Vec<ErrorQueryContext>,
 }
 
 fn class_prefix(class: ErrorClass) -> String {
@@ -88,6 +157,7 @@ impl KrishivError {
             parameters,
             message,
             cause: None,
+            contexts: Vec::new(),
         }
     }
 
@@ -128,6 +198,20 @@ impl KrishivError {
         &self.parameters
     }
 
+    /// This error with `context` attached (where it arose, as Spark's
+    /// query context); replaces no context already attached.
+    #[must_use]
+    pub fn with_query_context(mut self, context: ErrorQueryContext) -> Self {
+        self.contexts.push(context);
+        self
+    }
+
+    /// The attached query contexts, oldest first (empty when the error
+    /// carries none, e.g. an execution error like division by zero).
+    pub fn query_contexts(&self) -> &[ErrorQueryContext] {
+        &self.contexts
+    }
+
     /// The same error with every message parameter replaced by
     /// [`crate::secret::REDACTED`], for an error raised at a secret (a
     /// syntax error at a password in query text). Its causes are redacted
@@ -141,6 +225,7 @@ impl KrishivError {
             .collect();
         let mut out = Self::from_parts(self.class, parameters);
         out.cause = self.cause.as_ref().map(|c| Arc::new(c.redacted()));
+        out.contexts = self.contexts.clone();
         out
     }
 }

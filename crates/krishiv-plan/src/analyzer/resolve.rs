@@ -52,6 +52,9 @@ pub(super) struct AggInfo {
     /// select item, over the aggregate's output (`None` when no item
     /// does).
     pub(super) top: Option<Arc<[Bound]>>,
+    /// The grouping sets, for an aggregate over `ROLLUP`, `CUBE` or
+    /// `GROUPING SETS`: its input is then their expansion.
+    pub(super) analytics: Option<Arc<super::analytics::Analytics>>,
     /// With windows: the `HAVING` filtering the aggregate below them.
     pub(super) having: Option<Arc<Expr>>,
 }
@@ -130,6 +133,8 @@ pub(super) struct Resolver<'a> {
     depth: usize,
     op_outer: Option<usize>,
     root_env: Option<Arc<Env>>,
+    /// Constant folding's values over this pass (see `fold::Memo`).
+    pub(super) folds: std::cell::RefCell<super::fold::Memo>,
 }
 
 type Resolved = (
@@ -156,6 +161,7 @@ pub(super) fn resolve(
         depth: 0,
         op_outer: None,
         root_env: None,
+        folds: std::cell::RefCell::default(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -217,7 +223,7 @@ fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
     Ok(next)
 }
 
-fn hull(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> Option<(u64, u64)> {
+pub(super) fn hull(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> Option<(u64, u64)> {
     match (a, b) {
         (Some(x), Some(y)) => Some((x.0.min(y.0), x.1.max(y.1))),
         (x, None) | (None, x) => x,
@@ -454,6 +460,93 @@ impl Resolver<'_> {
         }
     }
 
+    /// Spark's checks of a `LIMIT` or `OFFSET` (`name`) value: it must be
+    /// foldable (`IS_UNFOLDABLE` when it is not: a column, a nondeterministic
+    /// call, a subquery), to a value that is not NULL and not negative
+    /// (cited at the expression, `at`); what folding raises (`2147483647 + 1`
+    /// under ANSI) is raised as is. `unfoldable` reports the first check
+    /// without folding. A foldable expression this folder cannot evaluate
+    /// (a cast or call the kernels lack here) is not an error: it passes
+    /// through for the executor to evaluate once at run time, as before.
+    /// The folded value, when it is an integral.
+    #[inline(never)]
+    pub(super) fn check_limit(
+        &self,
+        b: &super::exprs::Bound,
+        name: &str,
+        unfoldable: bool,
+        at: Origin,
+        operator: Origin,
+    ) -> Result<Option<i64>, AnalysisError> {
+        use krishiv_common::error::{
+            InvalidLimitLikeExpressionIsNegative, InvalidLimitLikeExpressionIsNull,
+            InvalidLimitLikeExpressionIsUnfoldable,
+        };
+        // A nondeterministic expression is pulled out of the operator into
+        // an attribute of this name before Spark checks it.
+        let nondeterministic = {
+            let mut found = false;
+            let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(&b.expr), |n| {
+                if let crate::walk::Node::Expr(x) = n
+                    && let ExprNode::Resolved(crate::ResolvedExpr::Function(f)) = &x.node
+                    && !f.deterministic
+                {
+                    found = true;
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+            found
+        };
+        let text = if nondeterministic {
+            "\"_nondeterministic\"".to_owned()
+        } else {
+            format!(
+                "\"{}\"",
+                super::exprs::pretty(&b.shown(), self.ctx.conf.session_zone)
+            )
+        };
+        let name = name.to_owned();
+        let folded = if unfoldable {
+            None
+        } else {
+            self.fold(&b.expr, self.ctx.conf.ansi)
+        };
+        match folded {
+            // An attribute carries no position of its own: Spark cites the
+            // input there, the expression otherwise.
+            // Not foldable to Spark either: `IS_UNFOLDABLE` without folding.
+            None if unfoldable => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsUnfoldable { expr: text, name },
+                if matches!(
+                    b.expr.node,
+                    ExprNode::Resolved(crate::ResolvedExpr::Column(_))
+                ) {
+                    operator
+                } else {
+                    b.expr.origin
+                },
+            )),
+            Some(super::Constant::Error(e)) => Err(AnalysisError::new(e, b.expr.origin)),
+            Some(super::Constant::Null) => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsNull { expr: text, name },
+                at,
+            )),
+            Some(super::Constant::Integral(v)) if v < 0 => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsNegative {
+                    expr: text,
+                    name,
+                    v: v.to_string(),
+                },
+                at,
+            )),
+            Some(super::Constant::Integral(v)) => Ok(Some(v)),
+            // Foldable, but not evaluated here (or not an integral): pass
+            // the expression through for the downstream folders and the
+            // executor to read at run time.
+            None | Some(_) => Ok(None),
+        }
+    }
+
     /// Binds a top-level expression of the current operator.
     pub(super) fn bind(&mut self, e: &Arc<Expr>, cx: &Cx<'_>) -> Result<Bound, AnalysisError> {
         let b = self.expr(e, cx)?;
@@ -474,6 +567,7 @@ impl Resolver<'_> {
             aliases: &[],
             extra: None,
             agg_scope: None,
+            grouping: false,
             lenient: false,
             outer: true,
             windows: super::exprs::WindowUse::Other,
@@ -548,6 +642,7 @@ impl Resolver<'_> {
             | PlanNode::CteRef(_)
             | PlanNode::Shift { .. }
             | PlanNode::ReplicateRows { .. }
+            | PlanNode::Expand { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
         }
     }
@@ -632,6 +727,11 @@ impl Resolver<'_> {
                 };
                 Ok(self.make(o, node, c.out.to_vec(), &[&c]))
             }
+            PlanNode::Expand {
+                input,
+                projections,
+                output,
+            } => self.expand_node(o, input, projections, output, env),
             PlanNode::JoinHint { input, strategy } => {
                 let c = self.child(input, env)?;
                 let node = PlanNode::JoinHint {

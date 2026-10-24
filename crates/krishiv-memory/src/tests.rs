@@ -1154,6 +1154,30 @@ fn transfer_moves_bytes_between_consumers_of_one_pool() {
     assert_eq!(r.consumer(), b.id());
 }
 
+#[test]
+fn split_moves_bytes_into_a_new_reservation_of_the_consumer() {
+    let root = root(Some(1 << 20), 4096);
+    let q = root.child("q", None);
+    let a = ConsumerHandle::register(Arc::clone(&q), "a", None);
+    let mut r = a.reservation();
+    r.try_grow(10_000).unwrap();
+    let before = q.reserved();
+    let mut part = r.split(4_000);
+    // More than is left moves what is left.
+    let rest = r.split(usize::MAX);
+    assert_eq!((r.size(), part.size(), rest.size()), (0, 4_000, 6_000));
+    assert_eq!(
+        (part.consumer(), q.reserved(), a.peak()),
+        (a.id(), before, 10_000)
+    );
+    // The parts shrink and drop on their own; the pool sees each.
+    part.shrink(4_000);
+    drop(rest);
+    assert_eq!(q.reserved(), 0);
+    drop(r);
+    assert_eq!(q.reserved(), 0);
+}
+
 /// Bytes transferred to a spillable consumer are what the arbitrator sees:
 /// it asks that consumer to spill them (`min(spillable, used)`).
 #[tokio::test(start_paused = true)]
