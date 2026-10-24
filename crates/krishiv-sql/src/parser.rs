@@ -21,16 +21,19 @@ mod types;
 use std::collections::HashMap;
 
 use crate::ast::{
-    Alias, Cte, Expr, ExprKind, FromClause, FromStatement, GroupBy, GroupItem, GroupItemKind,
-    GroupWith, GroupingSet, Hint, Ident, Join, JoinConstraint, JoinKind, LateralView, Limit,
-    Literal, NamedWindow, NumKind, ObjectName, OptionKey, Pivot, Query, Relation, RelationExt,
-    Select, SelectItem, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem, Span,
-    TableAlias, TableFactor, TableFactorKind, TableOption, TemporalClause, TemporalKind, Unpivot,
-    UnpivotColumns, Values, With,
-};
-use crate::ast::{
-    CreateView, DataTypeSpec, DropView, Explain, ExplainMode, Reset, Set, SetKind, Statement,
-    StructField, TimeZone, ViewColumn,
+    Alias, BucketSpec, ColumnConstraint, ColumnConstraintKind, ColumnDef, ColumnName,
+    ConstraintCharacteristic, CreateNamespace, CreateTable, CreateTableLike, CreateView, Cte,
+    DataTypeSpec, DdlName, DropBehavior, DropNamespace, DropTable, DropView, DynamicName, Explain,
+    ExplainMode, Expr, ExprKind, FileFormat, FileFormatKind, ForeignKeyConstraint, ForeignKeyRef,
+    FromClause, FromStatement, GeneratedColumn, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
+    GroupWith, GroupingSet, Hint, Ident, IdentityColumn, IdentityHow, Join, JoinConstraint,
+    JoinKind, LateralView, Limit, Literal, NamedWindow, NamespaceKind, NumKind, ObjectName,
+    OptionKey, OrderedIdent, PartitionColumn, PartitionField, PartitionFieldKind,
+    PartitionTransform, Pivot, Query, Relation, RelationExt, Reset, RowDelimited, RowFormat,
+    RowFormatKind, RowSerde, Select, SelectItem, Set, SetExpr, SetExprKind, SetKind, SetOperator,
+    SetQuantifier, SkewSpec, SortItem, Span, Statement, StructField, TableAlias, TableConstraint,
+    TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause,
+    TemporalKind, TimeZone, Unpivot, UnpivotColumns, Use, Values, ViewColumn, With,
 };
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
@@ -43,6 +46,16 @@ pub(crate) enum Fail {
     Syntax,
     /// An error to report as is.
     Fatal(Box<ParseError>),
+}
+
+/// Parse state to rewind to when a speculative parse fails.
+struct Checkpoint {
+    pos: usize,
+    far: usize,
+    extra: Option<usize>,
+    missing: Option<(usize, &'static str)>,
+    matched: Option<(usize, Sym, Close)>,
+    deferred: Option<ParseError>,
 }
 
 /// The inline recovery ANTLR shows a failed `match` of a closing token with
@@ -630,6 +643,28 @@ impl<'s> Parser<'s> {
         hit
     }
 
+    /// The current parse state, for a speculative parse.
+    fn checkpoint(&mut self) -> Checkpoint {
+        Checkpoint {
+            pos: self.pos,
+            far: self.far,
+            extra: self.extra,
+            missing: self.missing,
+            matched: self.matched,
+            deferred: self.deferred.take(),
+        }
+    }
+
+    /// Rewinds to `checkpoint`, abandoning the speculative parse.
+    fn restore(&mut self, checkpoint: Checkpoint) {
+        self.pos = checkpoint.pos;
+        self.far = checkpoint.far;
+        self.extra = checkpoint.extra;
+        self.missing = checkpoint.missing;
+        self.matched = checkpoint.matched;
+        self.deferred = checkpoint.deferred;
+    }
+
     fn expect_kw(&mut self, kw: &str) -> PR<()> {
         if self.eat_kw(kw) { Ok(()) } else { self.fail() }
     }
@@ -1187,11 +1222,11 @@ impl<'s> Parser<'s> {
             }
             explains.push((start, mode.unwrap_or(ExplainMode::Simple), logical));
         }
-        // `SET`, `RESET`, `CREATE TEMPORARY VIEW` and `DROP VIEW` start no
-        // query: without an `EXPLAIN` the statement is that command, and
-        // under one it is the explained statement. Anything else is a
-        // query, which fails under `EXPLAIN` as in Spark when it is a
-        // command (a command explains; it never reads as a query).
+        // `SET`, `RESET`, `CREATE`, `DROP` and `USE` start no query:
+        // without an `EXPLAIN` the statement is that command, and under one
+        // it is the explained statement. Anything else is a query, which
+        // fails under `EXPLAIN` as in Spark when it is a command (a command
+        // explains; it never reads as a query).
         let statement = if self.kw_at(0, "SET") {
             self.set_command()?
         } else if self.kw_at(0, "RESET") {
@@ -1200,17 +1235,12 @@ impl<'s> Parser<'s> {
             self.create_command()?
         } else if self.kw_at(0, "DROP") {
             self.drop_command()?
+        } else if self.kw_at(0, "USE") {
+            self.use_command()?
         } else {
             Statement::Query(Box::new(self.statement()?))
         };
-        let end = match &statement {
-            Statement::Query(q) => q.span.end,
-            Statement::Explain(e) => e.span.end,
-            Statement::Set(s) => s.span.end,
-            Statement::Reset(r) => r.span.end,
-            Statement::CreateView(v) => v.span.end,
-            Statement::DropView(v) => v.span.end,
-        };
+        let end = statement.span().end;
         // The outermost `EXPLAIN LOGICAL` is reported first, before any
         // error Spark raises while building the explained query.
         if let Some(&(start, ..)) = explains.iter().find(|e| e.2) {
@@ -1539,16 +1569,9 @@ impl<'s> Parser<'s> {
         }))
     }
 
-    /// `CREATE [OR REPLACE] TEMPORARY VIEW [IF NOT EXISTS] name
-    /// [(column [COMMENT '...'], ...)] AS query` (`TEMP` for `TEMPORARY`).
-    /// A qualified name parses and fails with
-    /// `INVALID_TEMP_OBJ_QUALIFIER`; `OR REPLACE` with `IF NOT EXISTS`
-    /// parses and fails with `CREATE_VIEW_WITH_IF_NOT_EXISTS_AND_REPLACE`,
-    /// and `IF NOT EXISTS` without `OR REPLACE` parses and fails with
-    /// `_LEGACY_ERROR_TEMP_0053`, as in Spark. The flag checks run here, on
-    /// the parsed statement, so they come before the post-parse checks of
-    /// the view's query and before execution (an `EXPLAIN` of such a
-    /// statement fails too).
+    /// `CREATE ...`: a temporary view, a table (or `TABLE ... LIKE`), or
+    /// a namespace. Anything else (`CREATE VIEW`, `CREATE FUNCTION`,
+    /// `CREATE GLOBAL ...`, ...) fails where it stands, as in Spark.
     fn create_command(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("CREATE")?;
@@ -1558,9 +1581,43 @@ impl<'s> Parser<'s> {
         } else {
             false
         };
-        if !self.eat_kw("TEMP") && !self.eat_kw("TEMPORARY") {
+        if or_replace {
+            if self.eat_kw("TEMP") || self.eat_kw("TEMPORARY") {
+                return self.create_temp_view_command(start, true);
+            }
+            if self.kw_at(0, "TABLE") {
+                return self.create_table_command(start, true, false, false);
+            }
             return self.fail();
         }
+        let temporary = self.eat_kw("TEMP") || self.eat_kw("TEMPORARY");
+        let external = self.eat_kw("EXTERNAL");
+        if self.kw_at(0, "TABLE") {
+            return self.create_table_command(start, false, temporary, external);
+        }
+        if self.kw_at(0, "VIEW") {
+            if temporary && !external {
+                return self.create_temp_view_command(start, false);
+            }
+            return self.fail();
+        }
+        if !temporary && !external {
+            return self.create_namespace_command(start);
+        }
+        self.fail()
+    }
+
+    /// `CREATE [OR REPLACE] TEMPORARY VIEW [IF NOT EXISTS] name
+    /// [(column [COMMENT '...'], ...)] AS query` (`TEMP` for `TEMPORARY`),
+    /// after the `CREATE [OR REPLACE] TEMPORARY` at `start`. A qualified
+    /// name parses and fails with `INVALID_TEMP_OBJ_QUALIFIER`;
+    /// `OR REPLACE` with `IF NOT EXISTS` parses and fails with
+    /// `CREATE_VIEW_WITH_IF_NOT_EXISTS_AND_REPLACE`, and `IF NOT EXISTS`
+    /// without `OR REPLACE` parses and fails with `_LEGACY_ERROR_TEMP_0053`,
+    /// as in Spark. The flag checks run here, on the parsed statement, so
+    /// they come before the post-parse checks of the view's query and
+    /// before execution (an `EXPLAIN` of such a statement fails too).
+    fn create_temp_view_command(&mut self, start: usize, or_replace: bool) -> PR<Statement> {
         self.expect_kw("VIEW")?;
         let if_not_exists =
             if self.kw_at(0, "IF") && self.kw_at(1, "NOT") && self.kw_at(2, "EXISTS") {
@@ -1638,10 +1695,22 @@ impl<'s> Parser<'s> {
         })
     }
 
-    /// `DROP VIEW [IF EXISTS] name`.
+    /// `DROP ...`: a view, a table, or a namespace. Anything else fails
+    /// where it stands, as in Spark.
     fn drop_command(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("DROP")?;
+        if self.kw_at(0, "VIEW") {
+            return self.drop_view_command(start);
+        }
+        if self.kw_at(0, "TABLE") {
+            return self.drop_table_command(start);
+        }
+        self.drop_namespace_command(start)
+    }
+
+    /// `DROP VIEW [IF EXISTS] name`, after the `DROP` at `start`.
+    fn drop_view_command(&mut self, start: usize) -> PR<Statement> {
         self.expect_kw("VIEW")?;
         let if_exists = if self.kw_at(0, "IF") && self.kw_at(1, "EXISTS") {
             self.pos += 2;
@@ -1657,6 +1726,962 @@ impl<'s> Parser<'s> {
             name,
             span,
         }))
+    }
+
+    // ---- DDL: tables, namespaces, USE ------------------------------------
+
+    /// A table, namespace or `USE` name: dotted parts or
+    /// `IDENTIFIER(expr)`, which Spark's `identifierReference` allows in
+    /// both identifier modes.
+    fn ddl_name(&mut self) -> PR<DdlName> {
+        if self.kw_at(0, "IDENTIFIER") && self.sym_at(1, Sym::LParen) {
+            return self.identifier_name().map(DdlName::Dynamic);
+        }
+        self.table_name().map(DdlName::Parts)
+    }
+
+    /// A column name: `name` or `IDENTIFIER('name')` (never in legacy
+    /// identifier mode, where it fails at the `(` as in Spark).
+    fn column_name(&mut self) -> PR<ColumnName> {
+        if self.kw_at(0, "IDENTIFIER") && self.sym_at(1, Sym::LParen) {
+            if self.opts.legacy_identifier_clause {
+                self.pos += 1;
+                return self.fail();
+            }
+            return self.identifier_name().map(ColumnName::Dynamic);
+        }
+        self.name_part(true).map(ColumnName::Ident)
+    }
+
+    /// `IDENTIFIER(expr)`.
+    fn identifier_name(&mut self) -> PR<DynamicName> {
+        let start = self.start();
+        self.expect_kw("IDENTIFIER")?;
+        self.expect_sym(Sym::LParen)?;
+        let expr = Box::new(self.expr()?);
+        self.expect_closing(Sym::RParen, Close::DropOrInsert)?;
+        Ok(DynamicName {
+            expr,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `DATABASE`, `SCHEMA` or `NAMESPACE`.
+    fn namespace_kind(&mut self) -> PR<NamespaceKind> {
+        if self.eat_kw("DATABASE") {
+            Ok(NamespaceKind::Database)
+        } else if self.eat_kw("SCHEMA") {
+            Ok(NamespaceKind::Schema)
+        } else if self.eat_kw("NAMESPACE") {
+            Ok(NamespaceKind::Namespace)
+        } else {
+            self.fail()
+        }
+    }
+
+    /// The string literal after `LOCATION`, `COMMENT` or `STORED BY`
+    /// (adjacent strings concatenate, as in Spark).
+    fn string_after(&mut self) -> PR<String> {
+        match self.string_lit() {
+            Some(s) => Ok(s),
+            None => self.fail(),
+        }
+    }
+
+    /// `CREATE [OR REPLACE] [TEMPORARY] [EXTERNAL] TABLE [IF NOT EXISTS]
+    /// name [(elements)] [USING provider] [clauses] [AS query]`, after the
+    /// `CREATE [OR REPLACE]` at `start` (`OR REPLACE` takes no
+    /// `TEMPORARY`/`EXTERNAL`/`IF NOT EXISTS`/`LIKE`, as in Spark).
+    fn create_table_command(
+        &mut self,
+        start: usize,
+        or_replace: bool,
+        temporary: bool,
+        external: bool,
+    ) -> PR<Statement> {
+        self.nested(|p| {
+            p.expect_kw("TABLE")?;
+            let if_not_exists =
+                if !or_replace && p.kw_at(0, "IF") && p.kw_at(1, "NOT") && p.kw_at(2, "EXISTS") {
+                    p.pos += 3;
+                    true
+                } else {
+                    false
+                };
+            let name = p.ddl_name()?;
+            // `... LIKE source ...`: no columns and none of the other
+            // clauses.
+            if !or_replace && p.eat_kw("LIKE") {
+                let source = p.ddl_name()?;
+                let mut like = CreateTableLike {
+                    if_not_exists,
+                    name,
+                    source,
+                    using: None,
+                    row_format: None,
+                    file_format: None,
+                    location: None,
+                    tblproperties: Vec::new(),
+                    span: Span::new(start, start),
+                };
+                loop {
+                    if p.eat_kw("USING") {
+                        like.using = Some(p.table_name()?);
+                    } else if p.kw_at(0, "ROW") && p.kw_at(1, "FORMAT") {
+                        like.row_format = Some(p.row_format()?);
+                    } else if p.kw_at(0, "STORED") {
+                        like.file_format = Some(p.file_format()?);
+                    } else if p.eat_kw("LOCATION") {
+                        like.location = Some(p.string_after()?);
+                    } else if p.eat_kw("TBLPROPERTIES") {
+                        like.tblproperties.extend(p.property_list(false)?);
+                    } else {
+                        break;
+                    }
+                }
+                like.span = p.span_from(start);
+                p.command_end()?;
+                return Ok(Statement::CreateTableLike(Box::new(like)));
+            }
+            // `(columns)` or `(query)`: a parenthesized query reads as the
+            // CTAS query (the query consumes its own parens), anything else
+            // as a column list. ANTLR predicts a query when the `(` opens
+            // one and rewinds to the column list otherwise, so `WITH` still
+            // reads as a column name. No clauses follow a parenthesized
+            // query.
+            let (elements, paren_query) = if p.sym_at(0, Sym::LParen) && p.query_follows(1) {
+                let save = p.checkpoint();
+                match p.query() {
+                    Ok(query) => (Vec::new(), Some(query)),
+                    Err(Fail::Syntax) => {
+                        p.restore(save);
+                        (p.paren_list(Self::table_element)?, None)
+                    }
+                    Err(fatal) => return Err(fatal),
+                }
+            } else if p.sym_at(0, Sym::LParen) {
+                (p.paren_list(Self::table_element)?, None)
+            } else {
+                (Vec::new(), None)
+            };
+            let using = if paren_query.is_none() && p.eat_kw("USING") {
+                Some(p.table_name()?)
+            } else {
+                None
+            };
+            let mut options = Vec::new();
+            let mut partitioned_by = Vec::new();
+            let mut cluster_by = Vec::new();
+            let mut bucket = None;
+            let mut skew = None;
+            let mut row_format = None;
+            let mut file_format = None;
+            let mut location = None;
+            let mut comment = None;
+            let mut collation = None;
+            let mut tblproperties = Vec::new();
+            loop {
+                if paren_query.is_some() {
+                    break;
+                }
+                if p.eat_kw("OPTIONS") {
+                    options.extend(p.property_list(true)?);
+                } else if p.kw_at(0, "PARTITIONED") && p.kw_at(1, "BY") {
+                    p.pos += 2;
+                    partitioned_by.extend(p.paren_list(Self::partition_field)?);
+                } else if p.kw_at(0, "SKEWED") {
+                    skew = Some(p.skew_spec()?);
+                } else if p.kw_at(0, "CLUSTERED") {
+                    bucket = Some(p.bucket_spec()?);
+                } else if p.kw_at(0, "CLUSTER") && p.kw_at(1, "BY") {
+                    p.pos += 2;
+                    cluster_by.extend(p.paren_list(Self::table_name)?);
+                } else if p.kw_at(0, "ROW") && p.kw_at(1, "FORMAT") {
+                    row_format = Some(p.row_format()?);
+                } else if p.kw_at(0, "STORED") {
+                    file_format = Some(p.file_format()?);
+                } else if p.eat_kw("LOCATION") {
+                    location = Some(p.string_after()?);
+                } else if p.eat_kw("COMMENT") {
+                    comment = Some(p.string_after()?);
+                } else if p.kw_at(0, "DEFAULT") && p.kw_at(1, "COLLATION") {
+                    p.pos += 2;
+                    collation = Some(p.table_name()?);
+                } else if p.eat_kw("TBLPROPERTIES") {
+                    tblproperties.extend(p.property_list(false)?);
+                } else {
+                    break;
+                }
+            }
+            // `[AS] query`: a CTAS (or the parenthesized query above).
+            let as_query = (if let Some(query) = paren_query {
+                Some(query)
+            } else if p.eat_kw("AS")
+                || p.kw_at(0, "SELECT")
+                || p.kw_at(0, "WITH")
+                || p.kw_at(0, "VALUES")
+                || p.kw_at(0, "TABLE")
+                || p.kw_at(0, "FROM")
+                || (p.sym_at(0, Sym::LParen) && p.query_follows(1))
+            {
+                Some(p.query()?)
+            } else {
+                None
+            })
+            .map(Box::new);
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::CreateTable(Box::new(CreateTable {
+                or_replace,
+                temporary,
+                external,
+                if_not_exists,
+                name,
+                elements,
+                using,
+                options,
+                partitioned_by,
+                cluster_by,
+                bucket,
+                skew,
+                row_format,
+                file_format,
+                location,
+                comment,
+                collation,
+                tblproperties,
+                as_query,
+                span,
+            })))
+        })
+    }
+
+    /// A `CREATE TABLE` element: a table constraint, or a column
+    /// definition. The constraint keywords are never column names, so a
+    /// constraint-starting element is committed to.
+    fn table_element(&mut self) -> PR<TableElement> {
+        if self.kw_at(0, "CONSTRAINT")
+            || self.any_kw_at(0, &["PRIMARY", "FOREIGN", "CHECK", "UNIQUE"])
+        {
+            return self.table_constraint().map(TableElement::Constraint);
+        }
+        self.table_column()
+            .map(|c| TableElement::Column(Box::new(c)))
+    }
+
+    /// `name type [NOT NULL] [DEFAULT ...] [GENERATED ...] [COMMENT '...']
+    /// [constraints]`.
+    fn table_column(&mut self) -> PR<ColumnDef> {
+        let start = self.start();
+        let name = self.column_name()?;
+        let data_type = self.data_type()?;
+        let mut not_null = false;
+        let mut default = None;
+        let mut generated = None;
+        let mut comment = None;
+        let mut constraints = Vec::new();
+        loop {
+            if self.eat_kw("NOT") {
+                not_null = true;
+                if !self.eat_kw("NULL") {
+                    // ANTLR inserts the missing `NULL` when what follows
+                    // fits after it.
+                    if self.kind(0).is_none()
+                        || self.sym_at(0, Sym::Comma)
+                        || self.sym_at(0, Sym::RParen)
+                        || self.kw_at(0, "COMMENT")
+                    {
+                        self.missing = Some((self.pos, "'NULL'"));
+                    }
+                    return self.fail();
+                }
+            } else if self.eat_kw("DEFAULT") {
+                default = Some(self.expr()?);
+            } else if self.kw_at(0, "GENERATED") {
+                generated = Some(self.generated_column()?);
+            } else if self.eat_kw("COMMENT") {
+                comment = Some(match self.string_lit() {
+                    Some(comment) => comment,
+                    None => return self.fail(),
+                });
+            } else if self.kw_at(0, "CONSTRAINT")
+                || self.any_kw_at(0, &["PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "REFERENCES"])
+            {
+                constraints.push(self.column_constraint()?);
+            } else {
+                break;
+            }
+        }
+        Ok(ColumnDef {
+            name,
+            data_type,
+            not_null,
+            default,
+            generated,
+            comment,
+            constraints,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `GENERATED ALWAYS AS (expr)` or `GENERATED (ALWAYS | BY DEFAULT)
+    /// AS IDENTITY [(START WITH n INCREMENT BY m)]`.
+    fn generated_column(&mut self) -> PR<GeneratedColumn> {
+        let start = self.start();
+        self.expect_kw("GENERATED")?;
+        let kind = if self.eat_kw("ALWAYS") {
+            self.expect_kw("AS")?;
+            if self.kw_at(0, "IDENTITY") {
+                let ident = self.start();
+                self.bump();
+                GeneratedKind::Identity(self.identity_options(IdentityHow::Always, ident)?)
+            } else {
+                self.expect_sym(Sym::LParen)?;
+                let expr = self.expr()?;
+                self.expect_closing(Sym::RParen, Close::DropOrInsert)?;
+                GeneratedKind::Expr(expr)
+            }
+        } else if self.kw_at(0, "BY") {
+            self.pos += 1;
+            self.expect_kw("DEFAULT")?;
+            self.expect_kw("AS")?;
+            let ident = self.start();
+            self.expect_kw("IDENTITY")?;
+            GeneratedKind::Identity(self.identity_options(IdentityHow::ByDefault, ident)?)
+        } else {
+            return self.fail();
+        };
+        Ok(GeneratedColumn {
+            kind,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `[(START WITH n INCREMENT BY m)]` after `IDENTITY` at `ident`.
+    fn identity_options(&mut self, how: IdentityHow, ident: usize) -> PR<IdentityColumn> {
+        let (mut start, mut step) = (None, None);
+        let mut count = 0;
+        if self.eat_sym(Sym::LParen) {
+            loop {
+                if self.kw_at(0, "START") && self.kw_at(1, "WITH") {
+                    self.pos += 2;
+                    start = Some(self.identity_count()?);
+                    count += 1;
+                } else if self.kw_at(0, "INCREMENT") && self.kw_at(1, "BY") {
+                    self.pos += 2;
+                    step = Some(self.identity_count()?);
+                    count += 1;
+                } else {
+                    break;
+                }
+            }
+            self.expect_closing(Sym::RParen, Close::List(count))?;
+        }
+        Ok(IdentityColumn {
+            how,
+            start,
+            step,
+            span: self.span_from(ident),
+        })
+    }
+
+    /// A `START WITH` / `INCREMENT BY` count.
+    fn identity_count(&mut self) -> PR<i64> {
+        match self.kind(0) {
+            Some(TokenKind::Number(NumKind::Int)) => {
+                let text = self.text(0).to_owned();
+                match text.parse() {
+                    Ok(n) => {
+                        self.bump();
+                        Ok(n)
+                    }
+                    Err(_) => self.fail(),
+                }
+            }
+            _ => self.fail(),
+        }
+    }
+
+    /// `[CONSTRAINT name] (PRIMARY KEY ... | FOREIGN KEY ... | UNIQUE ...
+    /// | CHECK ...) [characteristics]`.
+    fn table_constraint(&mut self) -> PR<TableConstraint> {
+        let start = self.start();
+        let name = if self.eat_kw("CONSTRAINT") {
+            Some(self.name_part(true)?)
+        } else {
+            None
+        };
+        let kind = if self.kw_at(0, "PRIMARY") && self.kw_at(1, "KEY") {
+            self.pos += 2;
+            TableConstraintKind::PrimaryKey(self.paren_list(|p| p.name_part(true))?)
+        } else if self.kw_at(0, "FOREIGN") && self.kw_at(1, "KEY") {
+            let fk = self.start();
+            self.pos += 2;
+            let columns = self.paren_list(|p| p.name_part(true))?;
+            let (table, ref_columns) = self.foreign_key_ref()?;
+            TableConstraintKind::ForeignKey(ForeignKeyConstraint {
+                columns,
+                table,
+                ref_columns,
+                span: self.span_from(fk),
+            })
+        } else if self.eat_kw("UNIQUE") {
+            TableConstraintKind::Unique(self.paren_list(|p| p.name_part(true))?)
+        } else if self.eat_kw("CHECK") {
+            self.expect_sym(Sym::LParen)?;
+            let expr = self.expr()?;
+            self.expect_closing(Sym::RParen, Close::DropOrInsert)?;
+            TableConstraintKind::Check(expr)
+        } else {
+            return self.fail();
+        };
+        let characteristics = self.constraint_characteristics()?;
+        Ok(TableConstraint {
+            name,
+            kind,
+            characteristics,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `[CONSTRAINT name] (PRIMARY KEY | UNIQUE | REFERENCES ... | CHECK
+    /// ...) [characteristics]` on a column.
+    fn column_constraint(&mut self) -> PR<ColumnConstraint> {
+        let start = self.start();
+        let name = if self.eat_kw("CONSTRAINT") {
+            Some(self.name_part(true)?)
+        } else {
+            None
+        };
+        let kind = if self.kw_at(0, "PRIMARY") && self.kw_at(1, "KEY") {
+            self.pos += 2;
+            ColumnConstraintKind::PrimaryKey
+        } else if self.eat_kw("UNIQUE") {
+            ColumnConstraintKind::Unique
+        } else if self.eat_kw("REFERENCES") {
+            let start = self.start();
+            let table = self.table_name()?;
+            let columns = if self.sym_at(0, Sym::LParen) {
+                self.paren_list(|p| p.name_part(true))?
+            } else {
+                Vec::new()
+            };
+            ColumnConstraintKind::References(ForeignKeyRef {
+                table,
+                columns,
+                span: self.span_from(start),
+            })
+        } else if self.eat_kw("CHECK") {
+            self.expect_sym(Sym::LParen)?;
+            let expr = self.expr()?;
+            self.expect_closing(Sym::RParen, Close::DropOrInsert)?;
+            ColumnConstraintKind::Check(expr)
+        } else {
+            return self.fail();
+        };
+        let characteristics = self.constraint_characteristics()?;
+        Ok(ColumnConstraint {
+            name,
+            kind,
+            characteristics,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `REFERENCES table [(columns)]` after `FOREIGN KEY (columns)`.
+    fn foreign_key_ref(&mut self) -> PR<(ObjectName, Vec<Ident>)> {
+        self.expect_kw("REFERENCES")?;
+        let table = self.table_name()?;
+        let columns = if self.sym_at(0, Sym::LParen) {
+            self.paren_list(|p| p.name_part(true))?
+        } else {
+            Vec::new()
+        };
+        Ok((table, columns))
+    }
+
+    /// `ENFORCED`, `NOT ENFORCED`, `RELY` and `NORELY`, in any order.
+    fn constraint_characteristics(&mut self) -> PR<Vec<ConstraintCharacteristic>> {
+        let mut out = Vec::new();
+        loop {
+            if self.eat_kw("ENFORCED") {
+                out.push(ConstraintCharacteristic::Enforced(true));
+            } else if self.kw_at(0, "NOT") && self.kw_at(1, "ENFORCED") {
+                self.pos += 2;
+                out.push(ConstraintCharacteristic::Enforced(false));
+            } else if self.eat_kw("RELY") {
+                out.push(ConstraintCharacteristic::Rely(true));
+            } else if self.kw_at(0, "NORELY") {
+                self.bump();
+                out.push(ConstraintCharacteristic::Rely(false));
+            } else {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// `(key [=] value, ...)` for `OPTIONS` (full expressions) and
+    /// `TBLPROPERTIES` / `DBPROPERTIES` (literals only): `expressions`
+    /// selects which.
+    fn property_list(&mut self, expressions: bool) -> PR<Vec<TableOption>> {
+        self.paren_list(|p| {
+            let start = p.start();
+            let key = p.option_key()?;
+            let has_eq = p.eat_sym(Sym::Eq);
+            let value = if has_eq || !(p.sym_at(0, Sym::Comma) || p.sym_at(0, Sym::RParen)) {
+                if expressions {
+                    Some(p.expr()?)
+                } else {
+                    Some(p.property_value()?)
+                }
+            } else {
+                None
+            };
+            Ok(TableOption {
+                key,
+                value,
+                span: p.span_from(start),
+            })
+        })
+    }
+
+    /// A `TBLPROPERTIES` / `DBPROPERTIES` value: a number, string or
+    /// boolean literal.
+    fn property_value(&mut self) -> PR<Expr> {
+        let start = self.start();
+        let kind = match self.kind(0) {
+            Some(TokenKind::Number(kind @ (NumKind::Int | NumKind::Decimal))) => {
+                let text = self.text(0).to_owned();
+                self.bump();
+                Literal::Number { text, kind }
+            }
+            Some(TokenKind::String) => Literal::String(self.string_lit().unwrap_or_default()),
+            Some(TokenKind::DoubleQuoted) if !self.opts.double_quoted_identifiers => {
+                Literal::String(self.string_lit().unwrap_or_default())
+            }
+            Some(TokenKind::Word) if self.kw_at(0, "TRUE") || self.kw_at(0, "FALSE") => {
+                let value = self.kw_at(0, "TRUE");
+                self.bump();
+                Literal::Boolean(value)
+            }
+            _ => return self.fail(),
+        };
+        Ok(Expr {
+            kind: ExprKind::Literal(kind),
+            span: self.span_from(start),
+        })
+    }
+
+    /// One `PARTITIONED BY` element: `name [(args)]`, or `name type [NOT
+    /// NULL] [COMMENT '...']` for a single plain name. A
+    /// `PARTITIONED BY` column takes no `COLLATE`: one reads as an
+    /// identity transform instead, which fails at the `COLLATE`.
+    /// (Applied and dotted dynamic names are not supported.)
+    fn partition_field(&mut self) -> PR<PartitionField> {
+        let start = self.start();
+        let name = if self.kw_at(0, "IDENTIFIER") && self.sym_at(1, Sym::LParen) {
+            DdlName::Dynamic(self.identifier_name()?)
+        } else {
+            let first = self.name_part(true)?;
+            if self.sym_at(0, Sym::LParen) {
+                return self.partition_apply_transform(start, first);
+            }
+            let mut parts = vec![first];
+            while self.eat_sym(Sym::Dot) {
+                parts.push(self.name_part(true)?);
+            }
+            let span = self.span_from(start);
+            DdlName::Parts(ObjectName { parts, span })
+        };
+        // An identity transform, or a column when a single name takes a
+        // type.
+        if let DdlName::Parts(name) = &name
+            && name.parts.len() == 1
+            && matches!(
+                self.kind(0),
+                Some(TokenKind::Word | TokenKind::QuotedIdent | TokenKind::DoubleQuoted)
+                if self.kind(0) != Some(TokenKind::DoubleQuoted)
+                    || !self.opts.double_quoted_identifiers
+            )
+        {
+            let save = self.pos;
+            let (far, extra, missing, matched) = (self.far, self.extra, self.missing, self.matched);
+            match self.data_type() {
+                Ok(data_type) => {
+                    if data_type.collation.is_none() {
+                        let mut not_null = false;
+                        if self.eat_kw("NOT") {
+                            not_null = true;
+                            if !self.eat_kw("NULL") {
+                                if self.kind(0).is_none()
+                                    || self.sym_at(0, Sym::Comma)
+                                    || self.sym_at(0, Sym::RParen)
+                                    || self.kw_at(0, "COMMENT")
+                                {
+                                    self.missing = Some((self.pos, "'NULL'"));
+                                }
+                                return self.fail();
+                            }
+                        }
+                        let comment = if self.eat_kw("COMMENT") {
+                            match self.string_lit() {
+                                Some(comment) => Some(comment),
+                                None => return self.fail(),
+                            }
+                        } else {
+                            None
+                        };
+                        let span = self.span_from(start);
+                        return Ok(PartitionField {
+                            kind: PartitionFieldKind::Column(PartitionColumn {
+                                name: ColumnName::Ident(name.parts[0].clone()),
+                                data_type,
+                                not_null,
+                                comment,
+                                span,
+                            }),
+                            span,
+                        });
+                    }
+                    self.pos = save;
+                    (self.far, self.extra, self.missing, self.matched) =
+                        (far, extra, missing, matched);
+                }
+                Err(Fail::Syntax) => {
+                    self.pos = save;
+                    (self.far, self.extra, self.missing, self.matched) =
+                        (far, extra, missing, matched);
+                }
+                Err(fatal) => return Err(fatal),
+            }
+        }
+        // An identity transform.
+        let span = self.span_from(start);
+        Ok(PartitionField {
+            kind: PartitionFieldKind::Transform(PartitionTransform {
+                name,
+                args: Vec::new(),
+                span,
+            }),
+            span,
+        })
+    }
+
+    /// `name(args)` in `PARTITIONED BY`.
+    fn partition_apply_transform(&mut self, start: usize, first: Ident) -> PR<PartitionField> {
+        let name_span = first.span;
+        self.expect_sym(Sym::LParen)?;
+        let args = self.comma_sep(Self::primary_expr)?;
+        self.expect_closing(Sym::RParen, Close::List(args.len()))?;
+        let span = self.span_from(start);
+        Ok(PartitionField {
+            kind: PartitionFieldKind::Transform(PartitionTransform {
+                name: DdlName::Parts(ObjectName {
+                    parts: vec![first],
+                    span: name_span,
+                }),
+                args,
+                span,
+            }),
+            span,
+        })
+    }
+
+    /// `CLUSTERED BY (...) [SORTED BY (...)] INTO n BUCKETS`.
+    fn bucket_spec(&mut self) -> PR<BucketSpec> {
+        let start = self.start();
+        self.expect_kw("CLUSTERED")?;
+        self.expect_kw("BY")?;
+        let clustered_by = self.paren_list(|p| p.name_part(true))?;
+        let mut sorted_by = Vec::new();
+        if self.kw_at(0, "SORTED") && self.kw_at(1, "BY") {
+            self.pos += 2;
+            sorted_by = self.paren_list(Self::ordered_ident)?;
+        }
+        self.expect_kw("INTO")?;
+        let buckets = self.bucket_count()?;
+        self.expect_kw("BUCKETS")?;
+        Ok(BucketSpec {
+            clustered_by,
+            sorted_by,
+            buckets,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `name [ASC | DESC]`.
+    fn ordered_ident(&mut self) -> PR<OrderedIdent> {
+        let start = self.start();
+        let name = self.name_part(true)?;
+        let asc = if self.eat_kw("ASC") {
+            Some(true)
+        } else if self.eat_kw("DESC") {
+            Some(false)
+        } else {
+            None
+        };
+        Ok(OrderedIdent {
+            name,
+            asc,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `INTO n`: a plain integer token.
+    fn bucket_count(&mut self) -> PR<u64> {
+        let text = match self.kind(0) {
+            Some(TokenKind::Number(NumKind::Int)) => self.text(0).to_owned(),
+            _ => return self.fail(),
+        };
+        match text.parse() {
+            Ok(n) => {
+                self.bump();
+                Ok(n)
+            }
+            Err(_) => self.fail(),
+        }
+    }
+
+    /// `SKEWED BY (...) ON (...) [STORED AS DIRECTORIES]`.
+    fn skew_spec(&mut self) -> PR<SkewSpec> {
+        let start = self.start();
+        self.expect_kw("SKEWED")?;
+        self.expect_kw("BY")?;
+        let skewed_by = self.paren_list(|p| p.name_part(true))?;
+        self.expect_kw("ON")?;
+        // `(...)` holds one value group, `((...), ...)` several.
+        let values = if self.sym_at(0, Sym::LParen) && self.sym_at(1, Sym::LParen) {
+            self.paren_list(|p| p.paren_list(Self::primary_expr))?
+        } else {
+            vec![self.paren_list(Self::primary_expr)?]
+        };
+        let mut stored_as_directories = false;
+        if self.eat_kw("STORED") {
+            self.expect_kw("AS")?;
+            self.expect_kw("DIRECTORIES")?;
+            stored_as_directories = true;
+        }
+        Ok(SkewSpec {
+            skewed_by,
+            values,
+            stored_as_directories,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `ROW FORMAT SERDE ...` or `ROW FORMAT DELIMITED ...`.
+    fn row_format(&mut self) -> PR<RowFormat> {
+        let start = self.start();
+        self.expect_kw("ROW")?;
+        self.expect_kw("FORMAT")?;
+        let kind = if self.eat_kw("SERDE") {
+            let serde = self.start();
+            let class = self.string_after()?;
+            let properties = if self.kw_at(0, "WITH") && self.kw_at(1, "SERDEPROPERTIES") {
+                self.pos += 2;
+                self.property_list(false)?
+            } else {
+                Vec::new()
+            };
+            RowFormatKind::Serde(RowSerde {
+                class,
+                properties,
+                span: self.span_from(serde),
+            })
+        } else if self.kw_at(0, "DELIMITED") {
+            let delimited_start = self.start();
+            self.bump();
+            // `ROW FORMAT DELIMITED` on its own: every clause is empty.
+            let mut delimited = RowDelimited {
+                fields_terminated_by: None,
+                escaped_by: None,
+                collection_items_terminated_by: None,
+                map_keys_terminated_by: None,
+                lines_terminated_by: None,
+                null_defined_as: None,
+                span: Span::new(delimited_start, delimited_start),
+            };
+            if self.kw_at(0, "FIELDS") && self.kw_at(1, "TERMINATED") && self.kw_at(2, "BY") {
+                self.pos += 3;
+                delimited.fields_terminated_by = Some(self.string_after()?);
+                if self.kw_at(0, "ESCAPED") && self.kw_at(1, "BY") {
+                    self.pos += 2;
+                    delimited.escaped_by = Some(self.string_after()?);
+                }
+            }
+            if self.kw_at(0, "COLLECTION")
+                && self.kw_at(1, "ITEMS")
+                && self.kw_at(2, "TERMINATED")
+                && self.kw_at(3, "BY")
+            {
+                self.pos += 4;
+                delimited.collection_items_terminated_by = Some(self.string_after()?);
+            }
+            if self.kw_at(0, "MAP")
+                && self.kw_at(1, "KEYS")
+                && self.kw_at(2, "TERMINATED")
+                && self.kw_at(3, "BY")
+            {
+                self.pos += 4;
+                delimited.map_keys_terminated_by = Some(self.string_after()?);
+            }
+            if self.kw_at(0, "LINES") && self.kw_at(1, "TERMINATED") && self.kw_at(2, "BY") {
+                self.pos += 3;
+                delimited.lines_terminated_by = Some(self.string_after()?);
+            }
+            if self.kw_at(0, "NULL") && self.kw_at(1, "DEFINED") && self.kw_at(2, "AS") {
+                self.pos += 3;
+                delimited.null_defined_as = Some(self.string_after()?);
+            }
+            delimited.span = self.span_from(delimited_start);
+            RowFormatKind::Delimited(delimited)
+        } else {
+            return self.fail();
+        };
+        Ok(RowFormat {
+            kind,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `STORED AS name` or `STORED BY 'handler'`.
+    fn file_format(&mut self) -> PR<FileFormat> {
+        let start = self.start();
+        self.expect_kw("STORED")?;
+        let kind = if self.eat_kw("AS") {
+            FileFormatKind::StoredAs(self.table_name()?)
+        } else if self.eat_kw("BY") {
+            FileFormatKind::StoredBy(self.string_after()?)
+        } else {
+            return self.fail();
+        };
+        Ok(FileFormat {
+            kind,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `CREATE DATABASE|SCHEMA|NAMESPACE [IF NOT EXISTS] name
+    /// [COMMENT ...] [LOCATION ...] [DEFAULT COLLATION ...]
+    /// [WITH DBPROPERTIES|PROPERTIES (...)]`, after the `CREATE` at
+    /// `start`.
+    fn create_namespace_command(&mut self, start: usize) -> PR<Statement> {
+        self.nested(|p| {
+            let kind = p.namespace_kind()?;
+            let if_not_exists = if p.kw_at(0, "IF") && p.kw_at(1, "NOT") && p.kw_at(2, "EXISTS") {
+                p.pos += 3;
+                true
+            } else {
+                false
+            };
+            let name = p.ddl_name()?;
+            let mut comment = None;
+            let mut location = None;
+            let mut collation = None;
+            let mut properties = Vec::new();
+            loop {
+                if p.eat_kw("COMMENT") {
+                    comment = Some(p.string_after()?);
+                } else if p.eat_kw("LOCATION") {
+                    location = Some(p.string_after()?);
+                } else if p.kw_at(0, "DEFAULT") && p.kw_at(1, "COLLATION") {
+                    p.pos += 2;
+                    collation = Some(p.table_name()?);
+                } else if p.eat_kw("WITH") {
+                    if p.eat_kw("DBPROPERTIES") || p.eat_kw("PROPERTIES") {
+                        properties.extend(p.property_list(false)?);
+                    } else {
+                        return p.fail();
+                    }
+                } else {
+                    break;
+                }
+            }
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::CreateNamespace(CreateNamespace {
+                kind,
+                if_not_exists,
+                name,
+                comment,
+                location,
+                collation,
+                properties,
+                span,
+            }))
+        })
+    }
+
+    /// `DROP TABLE [IF EXISTS] name [PURGE]`, after the `DROP` at `start`.
+    fn drop_table_command(&mut self, start: usize) -> PR<Statement> {
+        self.nested(|p| {
+            p.expect_kw("TABLE")?;
+            let if_exists = if p.kw_at(0, "IF") && p.kw_at(1, "EXISTS") {
+                p.pos += 2;
+                true
+            } else {
+                false
+            };
+            let name = p.ddl_name()?;
+            let purge = p.eat_kw("PURGE");
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::DropTable(DropTable {
+                if_exists,
+                name,
+                purge,
+                span,
+            }))
+        })
+    }
+
+    /// `DROP DATABASE|SCHEMA|NAMESPACE [IF EXISTS] name
+    /// [RESTRICT|CASCADE]`, after the `DROP` at `start`.
+    fn drop_namespace_command(&mut self, start: usize) -> PR<Statement> {
+        self.nested(|p| {
+            let kind = p.namespace_kind()?;
+            let if_exists = if p.kw_at(0, "IF") && p.kw_at(1, "EXISTS") {
+                p.pos += 2;
+                true
+            } else {
+                false
+            };
+            let name = p.ddl_name()?;
+            let behavior = if p.eat_kw("RESTRICT") {
+                Some(DropBehavior::Restrict)
+            } else if p.eat_kw("CASCADE") {
+                Some(DropBehavior::Cascade)
+            } else {
+                None
+            };
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::DropNamespace(DropNamespace {
+                kind,
+                if_exists,
+                name,
+                behavior,
+                span,
+            }))
+        })
+    }
+
+    /// `USE name` or `USE DATABASE|SCHEMA|NAMESPACE name`.
+    fn use_command(&mut self) -> PR<Statement> {
+        self.nested(|p| {
+            let start = p.start();
+            p.expect_kw("USE")?;
+            let kind = if p.any_kw_at(0, &["DATABASE", "SCHEMA", "NAMESPACE"]) {
+                Some(p.namespace_kind()?)
+            } else {
+                None
+            };
+            let name = p.ddl_name()?;
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::Use(Use { kind, name, span }))
+        })
     }
 
     /// A query; a failure at a position is remembered, so the subquery
@@ -2253,6 +3278,17 @@ impl<'s> Parser<'s> {
 
     fn table_alias(&mut self) -> PR<Option<TableAlias>> {
         let start = self.start();
+        // `AS (columns)`: a column list without a table name, as in
+        // `VALUES (1) AS (c)`.
+        if self.kw_at(0, "AS") && self.sym_at(1, Sym::LParen) && !self.query_follows(2) {
+            self.pos += 1;
+            let columns = self.ident_list()?;
+            return Ok(Some(TableAlias {
+                name: None,
+                columns,
+                span: self.span_from(start),
+            }));
+        }
         let Some(name) = self.opt_alias_name()? else {
             return Ok(None);
         };
@@ -2262,7 +3298,7 @@ impl<'s> Parser<'s> {
             vec![]
         };
         Ok(Some(TableAlias {
-            name,
+            name: Some(name),
             columns,
             span: self.span_from(start),
         }))

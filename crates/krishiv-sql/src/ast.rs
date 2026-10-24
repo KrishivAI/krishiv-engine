@@ -108,6 +108,39 @@ pub enum Statement {
     CreateView(CreateView),
     /// `DROP VIEW [IF EXISTS] name`.
     DropView(DropView),
+    /// `CREATE [OR REPLACE] [TEMPORARY] [EXTERNAL] TABLE ...`.
+    CreateTable(Box<CreateTable>),
+    /// `CREATE TABLE ... LIKE ...`.
+    CreateTableLike(Box<CreateTableLike>),
+    /// `DROP TABLE [IF EXISTS] name [PURGE]`.
+    DropTable(DropTable),
+    /// `CREATE DATABASE|SCHEMA|NAMESPACE [IF NOT EXISTS] name ...`.
+    CreateNamespace(CreateNamespace),
+    /// `DROP DATABASE|SCHEMA|NAMESPACE [IF EXISTS] name ...`.
+    DropNamespace(DropNamespace),
+    /// `USE name` or `USE DATABASE|SCHEMA|NAMESPACE name`.
+    Use(Use),
+}
+
+impl Statement {
+    /// Source text, from the first keyword to the end of the statement.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Query(q) => q.span,
+            Self::Explain(e) => e.span,
+            Self::Set(s) => s.span,
+            Self::Reset(r) => r.span,
+            Self::CreateView(v) => v.span,
+            Self::DropView(v) => v.span,
+            Self::CreateTable(t) => t.span,
+            Self::CreateTableLike(t) => t.span,
+            Self::DropTable(t) => t.span,
+            Self::CreateNamespace(n) => n.span,
+            Self::DropNamespace(n) => n.span,
+            Self::Use(u) => u.span,
+        }
+    }
 }
 
 /// `EXPLAIN [EXTENDED | FORMATTED | CODEGEN | COST] statement`.
@@ -250,6 +283,503 @@ pub struct DropView {
     /// The view name (temporary views take one part).
     pub name: Ident,
     /// Source text, from `DROP` to the end of the statement.
+    pub span: Span,
+}
+
+/// A table, namespace or `USE` name in a DDL statement: dotted parts or
+/// `IDENTIFIER(expr)`, which Spark resolves when it analyzes the plan.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DdlName {
+    /// `a.b.c`.
+    Parts(ObjectName),
+    /// `IDENTIFIER(expr)`, kept as written.
+    Dynamic(DynamicName),
+}
+
+/// `IDENTIFIER(expr)`: a name computed from an expression.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DynamicName {
+    /// The expression.
+    pub expr: Box<Expr>,
+    /// Source text, from `IDENTIFIER` to `)`.
+    pub span: Span,
+}
+
+/// A column name in `CREATE TABLE`: `name` or `IDENTIFIER('name')` (the
+/// latter only when `spark.sql.legacy.identifierClause` is off).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ColumnName {
+    /// A plain identifier.
+    Ident(Ident),
+    /// `IDENTIFIER('name')`, kept as written.
+    Dynamic(DynamicName),
+}
+
+/// `CREATE [OR REPLACE] [TEMPORARY] [EXTERNAL] TABLE [IF NOT EXISTS] name
+/// [(elements)] [USING provider] [clauses] [AS query]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateTable {
+    /// `OR REPLACE`.
+    pub or_replace: bool,
+    /// `TEMPORARY` (`TEMP`).
+    pub temporary: bool,
+    /// `EXTERNAL`.
+    pub external: bool,
+    /// `IF NOT EXISTS`.
+    pub if_not_exists: bool,
+    /// The table name.
+    pub name: DdlName,
+    /// The column definitions and table constraints.
+    pub elements: Vec<TableElement>,
+    /// `USING provider`.
+    pub using: Option<ObjectName>,
+    /// `OPTIONS (...)`.
+    pub options: Vec<TableOption>,
+    /// `PARTITIONED BY (...)`.
+    pub partitioned_by: Vec<PartitionField>,
+    /// `CLUSTER BY (...)`.
+    pub cluster_by: Vec<ObjectName>,
+    /// `CLUSTERED BY ... SORTED BY ... INTO n BUCKETS`.
+    pub bucket: Option<BucketSpec>,
+    /// `SKEWED BY ... ON ...`.
+    pub skew: Option<SkewSpec>,
+    /// `ROW FORMAT ...`.
+    pub row_format: Option<RowFormat>,
+    /// `STORED AS ...` or `STORED BY ...`.
+    pub file_format: Option<FileFormat>,
+    /// `LOCATION '...'`.
+    pub location: Option<String>,
+    /// `COMMENT '...'`.
+    pub comment: Option<String>,
+    /// `DEFAULT COLLATION ...`.
+    pub collation: Option<ObjectName>,
+    /// `TBLPROPERTIES (...)`.
+    pub tblproperties: Vec<TableOption>,
+    /// The `AS query` (or bare query) of a CTAS.
+    pub as_query: Option<Box<Query>>,
+    /// Source text, from `CREATE` to the end of the statement.
+    pub span: Span,
+}
+
+/// A `CREATE TABLE` element: a column definition or a table constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TableElement {
+    /// A column definition.
+    Column(Box<ColumnDef>),
+    /// A table constraint.
+    Constraint(TableConstraint),
+}
+
+/// `name type [NOT NULL] [DEFAULT ...] [GENERATED ...] [COMMENT '...']
+/// [constraints]` in `CREATE TABLE`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ColumnDef {
+    /// The column name.
+    pub name: ColumnName,
+    /// Its type.
+    pub data_type: DataTypeSpec,
+    /// `NOT NULL`.
+    pub not_null: bool,
+    /// `DEFAULT expr`.
+    pub default: Option<Expr>,
+    /// `GENERATED ...`.
+    pub generated: Option<GeneratedColumn>,
+    /// `COMMENT '...'`.
+    pub comment: Option<String>,
+    /// Inline constraints.
+    pub constraints: Vec<ColumnConstraint>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `GENERATED ALWAYS AS (expr)` or `GENERATED ... AS IDENTITY ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GeneratedColumn {
+    /// What it is.
+    pub kind: GeneratedKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`GeneratedColumn`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GeneratedKind {
+    /// `GENERATED ALWAYS AS (expr)`.
+    Expr(Expr),
+    /// `GENERATED ... AS IDENTITY ...`.
+    Identity(IdentityColumn),
+}
+
+/// `GENERATED (ALWAYS | BY DEFAULT) AS IDENTITY [(START WITH n
+/// INCREMENT BY m)]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IdentityColumn {
+    /// `ALWAYS` or `BY DEFAULT`.
+    pub how: IdentityHow,
+    /// `START WITH n`.
+    pub start: Option<i64>,
+    /// `INCREMENT BY n`.
+    pub step: Option<i64>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// How an identity column generates values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum IdentityHow {
+    /// `ALWAYS`.
+    Always,
+    /// `BY DEFAULT`.
+    ByDefault,
+}
+
+/// `[CONSTRAINT name] (PRIMARY KEY | FOREIGN KEY ... | UNIQUE | CHECK ...)
+/// [characteristics]` on a `CREATE TABLE` column.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ColumnConstraint {
+    /// The `CONSTRAINT name`, if written.
+    pub name: Option<Ident>,
+    /// What it is.
+    pub kind: ColumnConstraintKind,
+    /// `ENFORCED`/`NOT ENFORCED`/`RELY`/`NORELY`.
+    pub characteristics: Vec<ConstraintCharacteristic>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`ColumnConstraint`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ColumnConstraintKind {
+    /// `PRIMARY KEY`.
+    PrimaryKey,
+    /// `UNIQUE`.
+    Unique,
+    /// `REFERENCES table [(columns)]`.
+    References(ForeignKeyRef),
+    /// `CHECK (expr)`.
+    Check(Expr),
+}
+
+/// `[CONSTRAINT name] (PRIMARY KEY ... | FOREIGN KEY ... | UNIQUE ... |
+/// CHECK ...) [characteristics]` on a `CREATE TABLE` table.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableConstraint {
+    /// The `CONSTRAINT name`, if written.
+    pub name: Option<Ident>,
+    /// What it is.
+    pub kind: TableConstraintKind,
+    /// `ENFORCED`/`NOT ENFORCED`/`RELY`/`NORELY`.
+    pub characteristics: Vec<ConstraintCharacteristic>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`TableConstraint`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TableConstraintKind {
+    /// `PRIMARY KEY (columns)`.
+    PrimaryKey(Vec<Ident>),
+    /// `FOREIGN KEY (columns) REFERENCES table [(columns)]`.
+    ForeignKey(ForeignKeyConstraint),
+    /// `UNIQUE (columns)`.
+    Unique(Vec<Ident>),
+    /// `CHECK (expr)`.
+    Check(Expr),
+}
+
+/// `FOREIGN KEY (columns) REFERENCES table [(ref columns)]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ForeignKeyConstraint {
+    /// The foreign key columns.
+    pub columns: Vec<Ident>,
+    /// The referenced table.
+    pub table: ObjectName,
+    /// The referenced columns; empty for none.
+    pub ref_columns: Vec<Ident>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `REFERENCES table [(columns)]` on a `CREATE TABLE` column.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ForeignKeyRef {
+    /// The referenced table.
+    pub table: ObjectName,
+    /// The referenced columns; empty for none.
+    pub columns: Vec<Ident>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `ENFORCED`, `NOT ENFORCED`, `RELY` or `NORELY` after a constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ConstraintCharacteristic {
+    /// `ENFORCED` (`true`) or `NOT ENFORCED` (`false`).
+    Enforced(bool),
+    /// `RELY` (`true`) or `NORELY` (`false`).
+    Rely(bool),
+}
+
+/// A `PARTITIONED BY` element: a column or a transform.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PartitionField {
+    /// What it is.
+    pub kind: PartitionFieldKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`PartitionField`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PartitionFieldKind {
+    /// `name type [NOT NULL] [COMMENT '...']`.
+    Column(PartitionColumn),
+    /// `name` or `name(args)`.
+    Transform(PartitionTransform),
+}
+
+/// A `PARTITIONED BY` column.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PartitionColumn {
+    /// The column name.
+    pub name: ColumnName,
+    /// Its type.
+    pub data_type: DataTypeSpec,
+    /// `NOT NULL`.
+    pub not_null: bool,
+    /// `COMMENT '...'`.
+    pub comment: Option<String>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// A `PARTITIONED BY` transform.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PartitionTransform {
+    /// The transform name.
+    pub name: DdlName,
+    /// Its arguments; empty for an identity transform.
+    pub args: Vec<Expr>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `CLUSTERED BY (columns) [SORTED BY (ordered columns)] INTO n BUCKETS`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BucketSpec {
+    /// The clustered columns.
+    pub clustered_by: Vec<Ident>,
+    /// The sorted columns.
+    pub sorted_by: Vec<OrderedIdent>,
+    /// The bucket count.
+    pub buckets: u64,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `name [ASC | DESC]` in `SORTED BY`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OrderedIdent {
+    /// The column.
+    pub name: Ident,
+    /// `ASC` (`true`), `DESC` (`false`), or neither.
+    pub asc: Option<bool>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `SKEWED BY (columns) ON (...) [STORED AS DIRECTORIES]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SkewSpec {
+    /// The skewed columns.
+    pub skewed_by: Vec<Ident>,
+    /// The skewed value groups.
+    pub values: Vec<Vec<Expr>>,
+    /// `STORED AS DIRECTORIES`.
+    pub stored_as_directories: bool,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `ROW FORMAT SERDE ...` or `ROW FORMAT DELIMITED ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RowFormat {
+    /// What it is.
+    pub kind: RowFormatKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`RowFormat`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RowFormatKind {
+    /// `ROW FORMAT SERDE 'class' [WITH SERDEPROPERTIES (...)]`.
+    Serde(RowSerde),
+    /// `ROW FORMAT DELIMITED [...]`.
+    Delimited(RowDelimited),
+}
+
+/// `SERDE 'class' [WITH SERDEPROPERTIES (...)]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RowSerde {
+    /// The SerDe class.
+    pub class: String,
+    /// `WITH SERDEPROPERTIES (...)`.
+    pub properties: Vec<TableOption>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `DELIMITED [FIELDS TERMINATED BY ...] ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RowDelimited {
+    /// `FIELDS TERMINATED BY '...'`.
+    pub fields_terminated_by: Option<String>,
+    /// `ESCAPED BY '...'`.
+    pub escaped_by: Option<String>,
+    /// `COLLECTION ITEMS TERMINATED BY '...'`.
+    pub collection_items_terminated_by: Option<String>,
+    /// `MAP KEYS TERMINATED BY '...'`.
+    pub map_keys_terminated_by: Option<String>,
+    /// `LINES TERMINATED BY '...'`.
+    pub lines_terminated_by: Option<String>,
+    /// `NULL DEFINED AS '...'`.
+    pub null_defined_as: Option<String>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `STORED AS name` or `STORED BY 'handler'`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FileFormat {
+    /// What it is.
+    pub kind: FileFormatKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`FileFormat`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FileFormatKind {
+    /// `STORED AS name`.
+    StoredAs(ObjectName),
+    /// `STORED BY 'handler'`.
+    StoredBy(String),
+}
+
+/// `CREATE TABLE [IF NOT EXISTS] target LIKE source [...]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateTableLike {
+    /// `IF NOT EXISTS`.
+    pub if_not_exists: bool,
+    /// The new table.
+    pub name: DdlName,
+    /// The liked table.
+    pub source: DdlName,
+    /// `USING provider`.
+    pub using: Option<ObjectName>,
+    /// `ROW FORMAT ...`.
+    pub row_format: Option<RowFormat>,
+    /// `STORED AS ...` or `STORED BY ...`.
+    pub file_format: Option<FileFormat>,
+    /// `LOCATION '...'`.
+    pub location: Option<String>,
+    /// `TBLPROPERTIES (...)`.
+    pub tblproperties: Vec<TableOption>,
+    /// Source text, from `CREATE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `DROP TABLE [IF EXISTS] name [PURGE]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropTable {
+    /// `IF EXISTS`.
+    pub if_exists: bool,
+    /// The table name.
+    pub name: DdlName,
+    /// `PURGE`.
+    pub purge: bool,
+    /// Source text, from `DROP` to the end of the statement.
+    pub span: Span,
+}
+
+/// `DATABASE`, `SCHEMA` or `NAMESPACE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum NamespaceKind {
+    /// `DATABASE`.
+    Database,
+    /// `SCHEMA`.
+    Schema,
+    /// `NAMESPACE`.
+    Namespace,
+}
+
+/// `CREATE DATABASE|SCHEMA|NAMESPACE [IF NOT EXISTS] name [...]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateNamespace {
+    /// Which keyword.
+    pub kind: NamespaceKind,
+    /// `IF NOT EXISTS`.
+    pub if_not_exists: bool,
+    /// The namespace name.
+    pub name: DdlName,
+    /// `COMMENT '...'`.
+    pub comment: Option<String>,
+    /// `LOCATION '...'`.
+    pub location: Option<String>,
+    /// `DEFAULT COLLATION ...`.
+    pub collation: Option<ObjectName>,
+    /// `WITH DBPROPERTIES|PROPERTIES (...)`.
+    pub properties: Vec<TableOption>,
+    /// Source text, from `CREATE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `DROP DATABASE|SCHEMA|NAMESPACE [IF EXISTS] name [RESTRICT|CASCADE]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropNamespace {
+    /// Which keyword.
+    pub kind: NamespaceKind,
+    /// `IF EXISTS`.
+    pub if_exists: bool,
+    /// The namespace name.
+    pub name: DdlName,
+    /// `RESTRICT` or `CASCADE`.
+    pub behavior: Option<DropBehavior>,
+    /// Source text, from `DROP` to the end of the statement.
+    pub span: Span,
+}
+
+/// `RESTRICT` or `CASCADE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DropBehavior {
+    /// `RESTRICT`.
+    Restrict,
+    /// `CASCADE`.
+    Cascade,
+}
+
+/// `USE name` or `USE DATABASE|SCHEMA|NAMESPACE name`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Use {
+    /// The namespace keyword, if written.
+    pub kind: Option<NamespaceKind>,
+    /// The name.
+    pub name: DdlName,
+    /// Source text, from `USE` to the end of the statement.
     pub span: Span,
 }
 
@@ -663,11 +1193,12 @@ pub enum RelationExt {
     Unpivot(Unpivot),
 }
 
-/// `[AS] name [(columns)]`.
+/// `[AS] name [(columns)]`, or `AS (columns)` without a name, as in
+/// `VALUES (1) AS (c)`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableAlias {
-    /// The alias.
-    pub name: Ident,
+    /// The alias; `None` for `AS (columns)`.
+    pub name: Option<Ident>,
     /// Column aliases.
     pub columns: Vec<Ident>,
     /// Source text.
@@ -1014,6 +1545,8 @@ pub enum LikeQuantifier {
 pub struct DataTypeSpec {
     /// What it is.
     pub kind: DataTypeKind,
+    /// `COLLATE ...` after a `STRING`, `CHAR` or `VARCHAR` type.
+    pub collation: Option<ObjectName>,
     /// Source text.
     pub span: Span,
 }

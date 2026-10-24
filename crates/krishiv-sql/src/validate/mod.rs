@@ -44,9 +44,10 @@ pub(crate) use self::types::data_type;
 use crate::ParserOptions;
 use crate::ast::{
     Expr, ExprKind, FrameBoundKind, FromClause, Function, GroupBy, GroupItem, GroupItemKind,
-    GroupWith, GroupingSet, Join, JoinConstraint, Literal, NamedWindow, NumKind, Query, Relation,
-    RelationExt, Select, SelectItem, SetExpr, SetExprKind, SortItem, Span, Statement, StructField,
-    TableAlias, TableFactor, TableFactorKind, WindowRef, WindowSpec, With,
+    GroupWith, GroupingSet, Join, JoinConstraint, Literal, NamedWindow, NumKind,
+    PartitionFieldKind, Query, Relation, RelationExt, Select, SelectItem, SetExpr, SetExprKind,
+    SortItem, Span, Statement, StructField, TableAlias, TableElement, TableFactor, TableFactorKind,
+    WindowRef, WindowSpec, With,
 };
 use crate::error::ParseError;
 use crate::lexer::tokenize;
@@ -65,11 +66,33 @@ pub(crate) fn statement(s: &Statement, sql: &str, opts: ParserOptions) -> R {
     match s {
         Statement::Query(q) => query(q, sql, opts),
         Statement::Explain(e) => statement(&e.statement, sql, opts),
-        // Assignments and resets carry raw strings, and drops name one
-        // view: nothing Spark's builder checks. A created view's query is
-        // checked as a statement of its own.
-        Statement::Set(_) | Statement::Reset(_) | Statement::DropView(_) => Ok(()),
+        // Assignments and resets carry raw strings; drops, namespaces and
+        // `USE` name one object: nothing Spark's builder checks. A created
+        // view's query, and a CTAS query, are checked as statements of
+        // their own; `TABLE ... LIKE` names two tables.
+        Statement::Set(_)
+        | Statement::Reset(_)
+        | Statement::DropView(_)
+        | Statement::DropTable(_)
+        | Statement::CreateNamespace(_)
+        | Statement::DropNamespace(_)
+        | Statement::Use(_)
+        | Statement::CreateTableLike(_) => Ok(()),
         Statement::CreateView(v) => query(&v.query, sql, opts),
+        Statement::CreateTable(t) => {
+            // Column types get Spark's parse-time checks; default and
+            // constraint expressions are unevaluated here (Spark checks
+            // them when it analyzes the table).
+            t.elements.iter().try_for_each(|e| match e {
+                TableElement::Column(c) => data_type(&c.data_type),
+                TableElement::Constraint(_) => Ok(()),
+            })?;
+            t.partitioned_by.iter().try_for_each(|f| match &f.kind {
+                PartitionFieldKind::Column(c) => data_type(&c.data_type),
+                _ => Ok(()),
+            })?;
+            t.as_query.as_ref().map_or(Ok(()), |q| query(q, sql, opts))
+        }
     }
 }
 

@@ -900,7 +900,12 @@ impl Lowerer {
             Some(a) => self.node(
                 PlanNode::SubqueryAlias {
                     input: arc(plan),
-                    alias: a.name.value.clone(),
+                    // `AS (columns)` names no table: a generated name, as
+                    // for no alias at all.
+                    alias: a.name.as_ref().map_or_else(
+                        || "__auto_generated_subquery_name".to_owned(),
+                        |n| n.value.clone(),
+                    ),
                     columns: a.columns.iter().map(|c| c.value.clone()).collect(),
                 },
                 tf.span,
