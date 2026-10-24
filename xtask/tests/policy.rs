@@ -662,18 +662,28 @@ fn release_publishing_is_manual_and_gated() {
 }
 
 /// The `cargo test` commands of a loom job that do not select exactly the
-/// `loom_model` modules (`--lib`, filter `loom_model::`).
+/// `loom_model` modules (`--lib`, filter `loom_model::`). The `run:` value
+/// is YAML-quoted (a trailing `::` is not a valid plain scalar), so
+/// surrounding quotes are stripped before matching.
 fn loom_steps_off_the_models(loom_job: &str) -> Vec<String> {
     loom_job
         .lines()
         .map(|l| l.trim().trim_start_matches("- "))
         .filter_map(|l| l.strip_prefix("run: "))
+        .map(|cmd| {
+            cmd.trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .trim()
+                .to_owned()
+        })
         .filter(|cmd| cmd.starts_with("cargo test"))
         .filter(|cmd| {
             let words: Vec<&str> = cmd.split_whitespace().collect();
-            !(words.contains(&"--lib") && words.last() == Some(&"loom_model::"))
+            let last = words
+                .last()
+                .map(|w| w.trim_matches(|c| c == '"' || c == '\''));
+            !(words.contains(&"--lib") && last == Some("loom_model::"))
         })
-        .map(str::to_owned)
         .collect()
 }
 
@@ -731,7 +741,7 @@ fn loom_steps_select_only_loom_models() {
     let crates = crates_with_loom_models();
     assert!(!crates.is_empty(), "no loom models found");
     for krate in crates {
-        let step = format!("run: cargo test -p {krate} --lib --release --locked loom_model::");
+        let step = format!("run: \"cargo test -p {krate} --lib --release --locked loom_model::\"");
         assert!(loom.contains(&step), "the nightly loom job lacks {step:?}");
     }
 }
@@ -742,7 +752,10 @@ fn loom_step_check_rejects_name_filters_and_whole_crates() {
                - run: cargo test -p a --lib --release --locked runtime_filter\n      \
                - run: cargo test -p b --lib --release --locked\n      \
                - run: cargo test -p c --release --locked loom_model::\n      \
-               - run: cargo test -p d --lib --release --locked loom_model::\n";
+               - run: cargo test -p d --lib --release --locked loom_model::\n      \
+               - run: \"cargo test -p e --lib --release --locked loom_model::\"\n      \
+               - run: 'cargo test -p f --lib --release --locked loom_model::'\n      \
+               - run: cargo test -p g --lib --release --locked \"loom_model::\"\n";
     assert_eq!(
         loom_steps_off_the_models(job),
         [

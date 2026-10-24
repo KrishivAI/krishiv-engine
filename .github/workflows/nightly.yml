@@ -194,11 +194,11 @@ jobs:
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - name: loom models (krishiv-memory)
-        run: cargo test -p krishiv-memory --lib --release --locked loom_model::
+        run: "cargo test -p krishiv-memory --lib --release --locked loom_model::"
       - name: loom models (krishiv-exec)
-        run: cargo test -p krishiv-exec --lib --release --locked loom_model::
+        run: "cargo test -p krishiv-exec --lib --release --locked loom_model::"
       - name: loom models (krishiv-io runtime filters)
-        run: cargo test -p krishiv-io --lib --release --locked loom_model::
+        run: "cargo test -p krishiv-io --lib --release --locked loom_model::"
 
   # cargo-fuzz targets (`fuzz/`), one hour each: the reusable `fuzz.yml`
   # (regression replay, cached corpus, crash triage). The weekly long run is
