@@ -141,5 +141,9 @@ fn engine_raised_set_of_this_repo_is_a_small_subset_of_the_catalog() {
     let catalog = parse_error_classes(&json).unwrap();
     assert!(catalog.len() > 1_900, "full Spark 4.2.0 catalog is loaded");
     let in_use = raised(&catalog, &collect_engine(root));
-    assert!(in_use.len() < catalog.len() / 10, "{}", in_use.len());
+    // A detector that matched the whole catalog (the bug this guards
+    // against) would far exceed this bound; the engine's raised set grows
+    // with each function family (193 of the 1,929 classes after the bitwise
+    // and number-format functions), so the bound is a quarter, not a tenth.
+    assert!(in_use.len() < catalog.len() / 4, "{}", in_use.len());
 }

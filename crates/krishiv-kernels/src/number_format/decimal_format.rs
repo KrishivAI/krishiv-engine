@@ -268,17 +268,15 @@ fn exact_tie_up(abs: f64, shift: u32, max_frac: usize, int: &str, keep: &str) ->
     // The exact decimal terminates within 1074 fractional digits (the
     // smallest subnormal is `2^-1074`).
     let text = format!("{abs:.1074}");
-    let (int_part, frac_part) = text.split_once('.').unwrap_or((text.as_str(), ""));
+    let frac_part = text.split_once('.').map_or("", |(_, f)| f);
     let shift = usize::try_from(shift).unwrap_or(usize::MAX);
-    let (scaled_frac, first, rest) = if shift >= frac_part.len() {
-        (String::new(), '0', false)
-    } else {
-        let scaled = &frac_part[shift..];
-        let first = scaled.chars().nth(max_frac).unwrap_or('0');
-        let rest = scaled.chars().skip(max_frac + 1).any(|c| c != '0');
-        (scaled.to_owned(), first, rest)
+    let (first, rest) = match frac_part.get(shift..) {
+        Some(scaled) if !scaled.is_empty() => (
+            scaled.chars().nth(max_frac).unwrap_or('0'),
+            scaled.chars().skip(max_frac + 1).any(|c| c != '0'),
+        ),
+        _ => ('0', false),
     };
-    let _ = (int_part, scaled_frac);
     if first > '5' {
         return true;
     }
