@@ -306,6 +306,32 @@ fn plan_id_references_resolve_as_spark_connect_does() {
     assert!(raised.contains("AMBIGUOUS_COLUMN_REFERENCE"));
 }
 
+/// `TIMESTAMP` and `TIMESTAMP_NTZ` literals are named as Spark's
+/// `Literal.sql` prints them (`SELECT TIMESTAMP '2024-01-01 00:00:00'` in
+/// Spark 4.2); SQL does not lower timestamp literals yet, so the plan is
+/// built by hand.
+#[test]
+fn timestamp_literals_are_named_as_spark_sql() {
+    let lit = |v: Literal| Expr::from(v);
+    let r = run(
+        LogicalPlan::table(["t"]).project(vec![
+            lit(Literal::Timestamp(1_704_067_200_000_000)),
+            lit(Literal::TimestampNtz(1_704_067_200_123_456)),
+            lit(Literal::Timestamp(-1)),
+        ]),
+        &ctx(),
+    );
+    let names: Vec<String> = r.unwrap().output.iter().map(|c| c.name.clone()).collect();
+    assert_eq!(
+        names,
+        [
+            "TIMESTAMP '2024-01-01 00:00:00'",
+            "TIMESTAMP_NTZ '2024-01-01 00:00:00.123456'",
+            "TIMESTAMP '1969-12-31 23:59:59.999999'",
+        ]
+    );
+}
+
 /// The select list of the generated-names statement of the corpus.
 fn names_query() -> Vec<Expr> {
     use crate::Builtin::{EqNullSafe, IsNotNull, IsNull, Remainder, Subtract};

@@ -49,14 +49,34 @@ fn java_float(v: f64, is_float: bool) -> String {
             "0.0".to_owned()
         };
     }
-    let text = if is_float {
-        // `v` holds an `f32` value exactly; format the `f32` so the digits
-        // are the float's shortest, not the double's.
-        #[expect(clippy::cast_possible_truncation, reason = "v holds an f32 value")]
-        let as_f32 = v as f32;
-        format!("{:e}", as_f32)
+    // `v` holds an `f32` value exactly when `is_float`; format the `f32` so
+    // the digits are the float's shortest, not the double's.
+    #[expect(clippy::cast_possible_truncation, reason = "v holds an f32 value")]
+    let as_f32 = v as f32;
+    let shortest = if is_float {
+        format!("{as_f32:e}")
     } else {
-        format!("{:e}", v)
+        format!("{v:e}")
+    };
+    // Java never prints a single digit: when the shortest round-trip
+    // decimal has one digit, it picks the two-digit decimal closest to the
+    // value (`Float.MIN_VALUE` is `1.4E-45`, not `1.0E-45`; `4.9E-324` for
+    // `Double.MIN_VALUE`). That decimal is Rust's correctly rounded
+    // `{:.1e}`; it only differs from `d.0` for values far from a
+    // one-digit decimal, which in practice means subnormals.
+    let text = if split_scientific(&shortest).0.contains('.') {
+        shortest
+    } else {
+        let two = if is_float {
+            format!("{as_f32:.1e}")
+        } else {
+            format!("{v:.1e}")
+        };
+        if split_scientific(&two).0.ends_with(".0") {
+            shortest
+        } else {
+            two
+        }
     };
     let negative = text.starts_with('-');
     let (mant, exp) = split_scientific(&text);
@@ -348,6 +368,12 @@ mod tests {
             (1.8508157176809255, "1.8508157176809255"),
             (1.1883951057781212, "1.1883951057781212"),
             (0.6420926159343306, "0.6420926159343306"),
+            (1e23, "1.0E23"),
+            (0.001, "0.001"),
+            // `Double.MIN_VALUE`: one shortest digit (`5e-324`), so Java
+            // prints the closest two-digit decimal, as Spark 4.2 names
+            // `SELECT 4.9E-324D`.
+            (f64::from_bits(1), "4.9E-324"),
         ];
         for (v, want) in cases {
             assert_eq!(&double(*v), want, "{v}");
@@ -364,6 +390,14 @@ mod tests {
             (-1.2, "-1.2"),
             (-0.1, "-0.1"),
             (6.8, "6.8"),
+            (3.4e38, "3.4E38"),
+            (1.0e-10, "1.0E-10"),
+            // Subnormals whose shortest decimal has one digit print the
+            // closest two-digit decimal, as Spark 4.2 names
+            // `SELECT 1.4E-45F` and `SELECT 9E-45F`.
+            (f32::from_bits(1), "1.4E-45"),
+            (f32::from_bits(6), "8.4E-45"),
+            (-f32::from_bits(1), "-1.4E-45"),
         ];
         for (v, want) in cases {
             assert_eq!(&float(*v), want, "{v}");
