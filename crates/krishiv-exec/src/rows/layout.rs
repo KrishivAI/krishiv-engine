@@ -513,7 +513,12 @@ impl RowLayout {
                         if len <= INLINE_MAX {
                             word(a, v + 8) == word(b, v + 8)
                         } else {
-                            heap_bytes(a, a_heap, v, len) == heap_bytes(b, b_heap, v, len)
+                            // A view outside its heap (a corrupt row)
+                            // equals nothing, not even another corrupt row.
+                            match (heap_bytes(a, a_heap, v, len), heap_bytes(b, b_heap, v, len)) {
+                                (Some(x), Some(y)) => x == y,
+                                _ => false,
+                            }
                         }
                     })
             }
@@ -932,12 +937,12 @@ pub(super) fn view_len(row: &[u8], at: usize) -> usize {
     u32::try_from(word(row, at) & u64::from(u32::MAX)).map_or(0, |l| l as usize)
 }
 
-/// The heap bytes of the long view at `at` of `row`.
+/// The heap bytes of the long view at `at` of `row` (`None` outside the
+/// heap: a corrupt row).
 #[inline]
-fn heap_bytes<'a>(row: &[u8], heap: &'a [u8], at: usize, len: usize) -> &'a [u8] {
-    let start = usize::try_from(word(row, at + 8)).unwrap_or(usize::MAX);
-    heap.get(start..start.saturating_add(len))
-        .unwrap_or_default()
+fn heap_bytes<'a>(row: &[u8], heap: &'a [u8], at: usize, len: usize) -> Option<&'a [u8]> {
+    let start = usize::try_from(word(row, at + 8)).ok()?;
+    heap.get(start..start.checked_add(len)?)
 }
 
 fn round8(n: usize) -> usize {

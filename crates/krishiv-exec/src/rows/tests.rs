@@ -204,9 +204,17 @@ fn rows_move_with_their_long_values() {
         Some("short".to_owned()),
         Some("a value longer than twelve".to_owned()),
         None,
+        Some("twelve bytes".to_owned()),
+        Some("thirteen byte".to_owned()),
     ];
     let [view, _, _] = strings(&v);
-    let ints: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
+    let ints: ArrayRef = Arc::new(Int64Array::from(vec![
+        Some(1),
+        None,
+        Some(3),
+        Some(4),
+        None,
+    ]));
     let types = [DataType::Utf8View, DataType::Int64];
     let layout = RowLayout::new(&types, &[true, true]).unwrap_or_else(|e| panic!("{e}"));
     let keys = layout
@@ -214,24 +222,25 @@ fn rows_move_with_their_long_values() {
         .unwrap_or_else(|e| panic!("{e}"));
     let want = layout
         .decode_rows(
-            &(0..3)
+            &(0..5)
                 .map(|i| (keys.row(i), keys.heap()))
                 .collect::<Vec<_>>(),
         )
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(
-        (0..3)
+        (0..5)
             .map(|i| layout.long_bytes(keys.row(i)))
             .collect::<Vec<_>>(),
-        vec![0, 26, 0]
+        // 12 bytes stay inline; 13 go to the heap.
+        vec![0, 26, 0, 0, 13]
     );
     let (mut rows, mut heap) = (Vec::new(), b"existing".to_vec());
-    for i in [2, 1, 0] {
+    for i in [4, 3, 2, 1, 0] {
         layout
             .push_row(keys.row(i), keys.heap(), &mut rows, &mut heap)
             .unwrap_or_else(|e| panic!("{e}"));
     }
-    assert_eq!(heap.len(), 8 + 26);
+    assert_eq!(heap.len(), 8 + 13 + 26);
     let stride = layout.stride();
     let moved: Vec<(&[u8], &[u8])> = rows.chunks(stride).rev().map(|r| (r, &heap[..])).collect();
     let got = layout.decode_rows(&moved).unwrap_or_else(|e| panic!("{e}"));
@@ -250,6 +259,11 @@ fn rows_move_with_their_long_values() {
         .push_row(&[0; 4], &[], &mut rows, &mut heap)
         .unwrap_err();
     assert!(e.to_string().contains("shorter than the stride"), "{e}");
+    // A view outside its heap equals nothing, not even itself.
+    let row = keys.row(1);
+    assert!(layout.eq(row, keys.heap(), row, keys.heap()));
+    assert!(!layout.eq(row, &[], row, &[]));
+    assert!(!layout.eq(row, keys.heap(), row, &[]));
 }
 
 #[test]
