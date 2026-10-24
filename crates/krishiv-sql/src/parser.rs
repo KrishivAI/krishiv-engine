@@ -23,15 +23,16 @@ use std::collections::HashMap;
 use crate::ast::{
     Alias, BucketSpec, ColumnConstraint, ColumnConstraintKind, ColumnDef, ColumnName,
     ConstraintCharacteristic, CreateNamespace, CreateTable, CreateTableLike, CreateView, Cte,
-    DataTypeSpec, DdlName, DropBehavior, DropNamespace, DropTable, DropView, DynamicName, Explain,
-    ExplainMode, Expr, ExprKind, FileFormat, FileFormatKind, ForeignKeyConstraint, ForeignKeyRef,
-    FromClause, FromStatement, GeneratedColumn, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
-    GroupWith, GroupingSet, Hint, Ident, IdentityColumn, IdentityHow, Join, JoinConstraint,
-    JoinKind, LateralView, Limit, Literal, NamedWindow, NamespaceKind, NumKind, ObjectName,
-    OptionKey, OrderedIdent, PartitionColumn, PartitionField, PartitionFieldKind,
-    PartitionTransform, Pivot, Query, Relation, RelationExt, Reset, RowDelimited, RowFormat,
-    RowFormatKind, RowSerde, Select, SelectItem, Set, SetExpr, SetExprKind, SetKind, SetOperator,
-    SetQuantifier, SkewSpec, SortItem, Span, Statement, StructField, TableAlias, TableConstraint,
+    DataTypeSpec, DdlName, DeclareVariable, DropBehavior, DropNamespace, DropTable, DropVariable,
+    DropView, DynamicName, Explain, ExplainMode, Expr, ExprKind, FileFormat, FileFormatKind,
+    ForeignKeyConstraint, ForeignKeyRef, FromClause, FromStatement, GeneratedColumn, GeneratedKind,
+    GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Hint, Ident, IdentityColumn,
+    IdentityHow, Join, JoinConstraint, JoinKind, LateralView, Limit, Literal, NamedWindow,
+    NamespaceKind, NumKind, ObjectName, OptionKey, OrderedIdent, PartitionColumn, PartitionField,
+    PartitionFieldKind, PartitionTransform, Pivot, Query, Relation, RelationExt, Reset,
+    RowDelimited, RowFormat, RowFormatKind, RowSerde, Select, SelectItem, Set, SetAssignment,
+    SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier, SetVariable, SetVariableKind,
+    SkewSpec, SortItem, Span, Statement, StructField, TableAlias, TableConstraint,
     TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause,
     TemporalKind, TimeZone, Unpivot, UnpivotColumns, Use, Values, ViewColumn, With,
 };
@@ -1286,7 +1287,16 @@ impl<'s> Parser<'s> {
         // fails under `EXPLAIN` as in Spark when it is a command (a command
         // explains; it never reads as a query).
         let statement = if self.kw_at(0, "SET") {
-            self.set_command()?
+            // `SET VAR | VARIABLE ...` assigns session variables; anything
+            // else is the configuration command (a backquoted `` `VAR` ``
+            // is a key, not the keyword, as `kw_at` only matches words).
+            if self.kw_at(1, "VAR") || self.kw_at(1, "VARIABLE") {
+                self.set_variable_command()?
+            } else {
+                self.set_command()?
+            }
+        } else if self.kw_at(0, "DECLARE") {
+            self.declare_command()?
         } else if self.kw_at(0, "RESET") {
             self.reset_command()?
         } else if self.kw_at(0, "CREATE") {
@@ -1504,6 +1514,115 @@ impl<'s> Parser<'s> {
             kind: SetKind::TimeZone { zone, zone_span },
             span,
         }))
+    }
+
+    /// `DECLARE [OR REPLACE] [VARIABLE | VAR] name [, ...] [type]
+    /// [{DEFAULT | =} expr]`. Names are dotted (`v`, `session.v`,
+    /// `system.session.v`); whether they are well-formed is execution's
+    /// check, so `DECLARE builtin.var1 INT` parses and fails with
+    /// `UNRESOLVED_VARIABLE`. `IF NOT EXISTS` is not supported: `IF NOT`
+    /// is consumed so the error is at `EXISTS`, as Spark reports it.
+    fn declare_command(&mut self) -> PR<Statement> {
+        self.nested(|p| {
+            let start = p.start();
+            p.expect_kw("DECLARE")?;
+            let or_replace = if p.kw_at(0, "OR") {
+                p.pos += 1;
+                p.expect_kw("REPLACE")?;
+                true
+            } else {
+                false
+            };
+            // One keyword at most: `DECLARE VAR variable INT` declares
+            // a variable named `variable`.
+            if !p.eat_kw("VARIABLE") {
+                p.eat_kw("VAR");
+            }
+            if p.kw_at(0, "IF") && p.kw_at(1, "NOT") && p.kw_at(2, "EXISTS") {
+                p.pos += 2;
+                return p.fail();
+            }
+            let mut names = vec![p.object_name()?];
+            while p.eat_sym(Sym::Comma) {
+                names.push(p.object_name()?);
+            }
+            // A type follows unless the names end here: `DEFAULT`, `=`,
+            // `;` or the end of input (anything else fails after the
+            // statement parsed, or when the type is built).
+            let data_type = match p.kind(0) {
+                Some(TokenKind::Word) if !p.kw_at(0, "DEFAULT") => Some(p.data_type()?),
+                Some(TokenKind::QuotedIdent) => Some(p.data_type()?),
+                _ => None,
+            };
+            let default = if p.eat_kw("DEFAULT") || p.eat_sym(Sym::Eq) {
+                Some(p.expr()?)
+            } else {
+                None
+            };
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::DeclareVariable(DeclareVariable {
+                or_replace,
+                names,
+                data_type,
+                default,
+                span,
+            }))
+        })
+    }
+
+    /// `SET VAR[IABLE] v = expr [, ...]` or `SET VAR[IABLE] (v, ...) =
+    /// (query)` (`VAR` for `VARIABLE`), dispatched from [`Self::explainable`]
+    /// when `VAR` or `VARIABLE` follows `SET`.
+    fn set_variable_command(&mut self) -> PR<Statement> {
+        self.nested(|p| {
+            let start = p.start();
+            p.expect_kw("SET")?;
+            // Dispatched on `VAR` or `VARIABLE` following `SET`; only that
+            // one keyword is the form (`SET VAR variable = 1` assigns a
+            // variable named `variable`).
+            if !p.eat_kw("VAR") {
+                p.eat_kw("VARIABLE");
+            }
+            if p.sym_at(0, Sym::LParen) {
+                // The row form: `(v, ...) = (query)`. An empty target
+                // list parses and fails after the statement parsed, with
+                // `INVALID_SET_SYNTAX`.
+                p.bump();
+                let mut targets = Vec::new();
+                if !p.sym_at(0, Sym::RParen) {
+                    targets = p.comma_sep(Self::object_name)?;
+                }
+                p.expect_sym(Sym::RParen)?;
+                p.expect_sym(Sym::Eq)?;
+                p.expect_sym(Sym::LParen)?;
+                let query = Box::new(p.query()?);
+                p.expect_sym(Sym::RParen)?;
+                let span = p.span_from(start);
+                p.command_end()?;
+                return Ok(Statement::SetVariable(SetVariable {
+                    kind: SetVariableKind::Row { targets, query },
+                    span,
+                }));
+            }
+            let assignments = p.comma_sep(|q| {
+                let element = q.start();
+                let name = q.object_name()?;
+                q.expect_sym(Sym::Eq)?;
+                let value = q.expr()?;
+                Ok(SetAssignment {
+                    name,
+                    value,
+                    span: q.span_from(element),
+                })
+            })?;
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::SetVariable(SetVariable {
+                kind: SetVariableKind::Single { assignments },
+                span,
+            }))
+        })
     }
 
     /// The raw rest of a `SET key =` assignment, trimmed: decoded only
@@ -1753,8 +1872,8 @@ impl<'s> Parser<'s> {
         })
     }
 
-    /// `DROP ...`: a view, a table, or a namespace. Anything else fails
-    /// where it stands, as in Spark.
+    /// `DROP ...`: a view, a table, a namespace, or a temporary variable.
+    /// Anything else fails where it stands, as in Spark.
     fn drop_command(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("DROP")?;
@@ -1764,7 +1883,34 @@ impl<'s> Parser<'s> {
         if self.kw_at(0, "TABLE") {
             return self.drop_table_command(start);
         }
+        if self.kw_at(0, "TEMPORARY") {
+            return self.drop_variable_command(start);
+        }
         self.drop_namespace_command(start)
+    }
+
+    /// `DROP TEMPORARY VAR[IABLE] [IF EXISTS] name` (`VAR` for
+    /// `VARIABLE`), after the `DROP` at `start`. Any other word after
+    /// `TEMPORARY` fails there, as Spark reports `DROP TEMPORARY`.
+    fn drop_variable_command(&mut self, start: usize) -> PR<Statement> {
+        self.expect_kw("TEMPORARY")?;
+        if !(self.eat_kw("VAR") || self.eat_kw("VARIABLE")) {
+            return self.fail();
+        }
+        let if_exists = if self.kw_at(0, "IF") && self.kw_at(1, "EXISTS") {
+            self.pos += 2;
+            true
+        } else {
+            false
+        };
+        let name = self.object_name()?;
+        let span = self.span_from(start);
+        self.command_end()?;
+        Ok(Statement::DropVariable(DropVariable {
+            if_exists,
+            name,
+            span,
+        }))
     }
 
     /// `DROP VIEW [IF EXISTS] name`, after the `DROP` at `start`.

@@ -1865,6 +1865,33 @@ impl Resolver<'_> {
                 ));
             }
         }
+        // A name no column or outer reference has may be a session
+        // variable (`v`, `session.v` or `system.session.v`): Spark
+        // resolves columns and outer references first, then variables. A
+        // name of another shape, or one naming no variable, stays an
+        // unresolved column. The reference becomes the variable's current
+        // value as a typed literal, so no physical, executor or plan-codec
+        // change is needed; the expression keeps the spelling it was
+        // written with for names and errors.
+        if let Some(var) = self.ctx.variables.get(&c.name) {
+            let col = BoundColumn {
+                id: self.fresh(),
+                name: c.name.last().cloned().unwrap_or_default(),
+                data_type: var.data_type.clone(),
+                nullable: matches!(var.value, Literal::Null(_)),
+            };
+            return Ok(Bound {
+                expr: Arc::new(Expr::new(ExprNode::Literal(var.value.clone())).with_origin(origin)),
+                ty: column(&col),
+                agg: None,
+                win: None,
+                outer: None,
+                lateral: Vec::new(),
+                shown: Some(Arc::new(
+                    Expr::new(ExprNode::Column(c.clone())).with_origin(origin),
+                )),
+            });
+        }
         Err(unresolved(&c.name, cx.scope, origin))
     }
 

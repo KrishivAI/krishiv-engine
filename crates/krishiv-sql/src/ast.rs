@@ -120,6 +120,14 @@ pub enum Statement {
     DropNamespace(DropNamespace),
     /// `USE name` or `USE DATABASE|SCHEMA|NAMESPACE name`.
     Use(Use),
+    /// `DECLARE [OR REPLACE] [VARIABLE | VAR] name [, ...] [type]
+    /// [{DEFAULT | =} expr]`.
+    DeclareVariable(DeclareVariable),
+    /// `SET VAR[IABLE] v = expr [, ...]` or `SET VAR[IABLE] (v, ...) =
+    /// (query)`.
+    SetVariable(SetVariable),
+    /// `DROP TEMPORARY VAR[IABLE] [IF EXISTS] name`.
+    DropVariable(DropVariable),
 }
 
 impl Statement {
@@ -139,6 +147,9 @@ impl Statement {
             Self::CreateNamespace(n) => n.span,
             Self::DropNamespace(n) => n.span,
             Self::Use(u) => u.span,
+            Self::DeclareVariable(d) => d.span,
+            Self::SetVariable(s) => s.span,
+            Self::DropVariable(d) => d.span,
         }
     }
 }
@@ -727,6 +738,74 @@ pub struct DropTable {
     pub name: DdlName,
     /// `PURGE`.
     pub purge: bool,
+    /// Source text, from `DROP` to the end of the statement.
+    pub span: Span,
+}
+
+/// `DECLARE [OR REPLACE] [VARIABLE | VAR] name [, ...] [type] [{DEFAULT
+/// | =} expr]`: one or several session variables sharing a type and a
+/// default (`VAR` for `VARIABLE`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeclareVariable {
+    /// `OR REPLACE`.
+    pub or_replace: bool,
+    /// The variable names (each 1-3 parts: `v`, `session.v` or
+    /// `system.session.v`).
+    pub names: Vec<ObjectName>,
+    /// The declared type, if written.
+    pub data_type: Option<DataTypeSpec>,
+    /// The default (`DEFAULT expr` or `= expr`), if written.
+    pub default: Option<Expr>,
+    /// Source text, from `DECLARE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `SET VAR[IABLE] v = expr [, ...]` or `SET VAR[IABLE] (v, ...) =
+/// (query)` (`VAR` for `VARIABLE`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SetVariable {
+    /// What it is.
+    pub kind: SetVariableKind,
+    /// Source text, from `SET` to the end of the statement.
+    pub span: Span,
+}
+
+/// The kinds of [`SetVariable`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SetVariableKind {
+    /// `v = expr [, ...]`.
+    Single {
+        /// The assignments, in order.
+        assignments: Vec<SetAssignment>,
+    },
+    /// `(v, ...) = (query)`.
+    Row {
+        /// The target variables, in order.
+        targets: Vec<ObjectName>,
+        /// The query whose single row is assigned.
+        query: Box<Query>,
+    },
+}
+
+/// `v = expr` in a [`SetVariableKind::Single`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SetAssignment {
+    /// The target variable.
+    pub name: ObjectName,
+    /// The value (`DEFAULT` reads the variable's default).
+    pub value: Expr,
+    /// Source text, from the name to the end of the expression.
+    pub span: Span,
+}
+
+/// `DROP TEMPORARY VAR[IABLE] [IF EXISTS] name` (`VAR` for `VARIABLE`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropVariable {
+    /// `IF EXISTS`.
+    pub if_exists: bool,
+    /// The variable name (`v`, `session.v` or `system.session.v`).
+    pub name: ObjectName,
     /// Source text, from `DROP` to the end of the statement.
     pub span: Span,
 }
