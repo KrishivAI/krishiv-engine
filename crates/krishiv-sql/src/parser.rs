@@ -21,7 +21,7 @@ mod types;
 use std::collections::HashMap;
 
 use crate::ast::{
-    Alias, BucketSpec, ColumnConstraint, ColumnConstraintKind, ColumnDef, ColumnName,
+    Alias, BucketOn, BucketSpec, ColumnConstraint, ColumnConstraintKind, ColumnDef, ColumnName,
     ConstraintCharacteristic, CreateNamespace, CreateTable, CreateTableLike, CreateView, Cte,
     DataTypeSpec, DdlName, DropBehavior, DropNamespace, DropTable, DropView, DynamicName, Explain,
     ExplainMode, Expr, ExprKind, FileFormat, FileFormatKind, ForeignKeyConstraint, ForeignKeyRef,
@@ -30,10 +30,11 @@ use crate::ast::{
     JoinKind, LateralView, Limit, Literal, NamedWindow, NamespaceKind, NumKind, ObjectName,
     OptionKey, OrderedIdent, PartitionColumn, PartitionField, PartitionFieldKind,
     PartitionTransform, Pivot, Query, Relation, RelationExt, Reset, RowDelimited, RowFormat,
-    RowFormatKind, RowSerde, Select, SelectItem, Set, SetExpr, SetExprKind, SetKind, SetOperator,
-    SetQuantifier, SkewSpec, SortItem, Span, Statement, StructField, TableAlias, TableConstraint,
-    TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause,
-    TemporalKind, TimeZone, Unpivot, UnpivotColumns, Use, Values, ViewColumn, With,
+    RowFormatKind, RowSerde, SampleMethod, SampleMethodKind, SampleType, Select, SelectItem, Set,
+    SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier, SkewSpec, SortItem, Span, Statement,
+    StructField, TableAlias, TableConstraint, TableConstraintKind, TableElement, TableFactor,
+    TableFactorKind, TableOption, TableSample, TemporalClause, TemporalKind, TimeZone, Unpivot,
+    UnpivotColumns, Use, Values, ViewColumn, With,
 };
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
@@ -3445,6 +3446,7 @@ impl<'s> Parser<'s> {
             let values = self.values()?;
             return Ok(TableFactor {
                 kind: TableFactorKind::Values(values.rows),
+                sample: None,
                 alias: values.alias,
                 span: values.span,
             });
@@ -3490,10 +3492,119 @@ impl<'s> Parser<'s> {
                 }
             }
         };
+        let sample = if self.kw_at(0, "TABLESAMPLE")
+            && matches!(
+                kind,
+                TableFactorKind::Table { .. }
+                    | TableFactorKind::Subquery(_)
+                    | TableFactorKind::Nested(_)
+            ) {
+            Some(self.table_sample()?)
+        } else {
+            None
+        };
         let alias = self.table_alias()?;
         Ok(TableFactor {
             kind,
+            sample,
             alias,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `TABLESAMPLE [SYSTEM | BERNOULLI] ([method]) [REPEATABLE (seed)]`.
+    #[inline(never)]
+    fn table_sample(&mut self) -> PR<TableSample> {
+        let start = self.start();
+        self.expect_kw("TABLESAMPLE")?;
+        let sample_type = if self.eat_kw("SYSTEM") {
+            Some(SampleType::System)
+        } else if self.eat_kw("BERNOULLI") {
+            Some(SampleType::Bernoulli)
+        } else {
+            None
+        };
+        self.expect_sym(Sym::LParen)?;
+        let method = if self.sym_at(0, Sym::RParen) {
+            None
+        } else {
+            Some(self.sample_method()?)
+        };
+        self.expect_sym(Sym::RParen)?;
+        let mut seed = None;
+        if self.kw_at(0, "REPEATABLE") && self.sym_at(1, Sym::LParen) {
+            self.pos += 2;
+            seed = Some(self.integer_text()?);
+            self.expect_sym(Sym::RParen)?;
+        }
+        Ok(TableSample {
+            sample_type,
+            method,
+            seed,
+            span: self.span_from(start),
+        })
+    }
+
+    /// An integer literal's text (`integerValue`).
+    fn integer_text(&mut self) -> PR<String> {
+        if self.kind(0) != Some(TokenKind::Number(NumKind::Int)) {
+            return self.fail();
+        }
+        let text = self.text(0).to_owned();
+        self.bump();
+        Ok(text)
+    }
+
+    fn sample_method(&mut self) -> PR<SampleMethod> {
+        let start = self.start();
+        let negative = self.sym_at(0, Sym::Minus);
+        let n = usize::from(negative);
+        let kind = if self.kw_at(0, "BUCKET")
+            && self.kind(1) == Some(TokenKind::Number(NumKind::Int))
+            && self.kw_at(2, "OUT")
+            && self.kw_at(3, "OF")
+        {
+            self.bump();
+            let numerator = self.integer_text()?;
+            self.pos += 2;
+            let denominator = self.integer_text()?;
+            let on = if self.eat_kw("ON") {
+                let name = self.table_name()?;
+                Some(if self.eat_sym(Sym::LParen) {
+                    self.expect_sym(Sym::RParen)?;
+                    BucketOn::Function(name)
+                } else if let [ident] = &name.parts[..] {
+                    BucketOn::Column(ident.clone())
+                } else {
+                    return self.fail();
+                })
+            } else {
+                None
+            };
+            SampleMethodKind::Bucket {
+                numerator,
+                denominator,
+                on,
+            }
+        } else if matches!(
+            self.kind(n),
+            Some(TokenKind::Number(NumKind::Int | NumKind::Decimal))
+        ) && self.kw_at(n + 1, "PERCENT")
+        {
+            self.pos += n;
+            let value = self.text(0).to_owned();
+            self.pos += 2;
+            SampleMethodKind::Percent { negative, value }
+        } else {
+            let e = self.expr()?;
+            if self.eat_kw("ROWS") {
+                SampleMethodKind::Rows(e)
+            } else {
+                SampleMethodKind::Bytes(e)
+            }
+        };
+        Ok(SampleMethod {
+            kind,
             span: self.span_from(start),
         })
     }

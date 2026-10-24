@@ -33,6 +33,8 @@ const SPANLESS: &[&str] = &[
     "Number",
     "Typed",
     "Primitive",
+    "Percent",
+    "Bucket",
     "Table",
     "TableFunction",
 ];

@@ -13,8 +13,8 @@
 //! Excluded are statements that are not queries (DDL, DML, commands) and
 //! queries using syntax that later parser work covers: the pipe operator
 //! `|>`; `TRANSFORM` scripts, variant paths and named
-//! parameters (`:`), `IDENTIFIER(...)`, `TABLE(...)` arguments,
-//! `TABLESAMPLE` and `NEAREST BY`; streaming relations (`STREAM`,
+//! parameters (`:`), `IDENTIFIER(...)`, `TABLE(...)` arguments
+//! and `NEAREST BY`; streaming relations (`STREAM`,
 //! `WATERMARK`, `CHANGES`).
 
 use std::collections::HashMap;
@@ -170,7 +170,7 @@ fn out_of_scope_word(sql: &str, tokens: &[Token], i: usize, depth: i32) -> bool 
     };
     let next = tokens.get(i + 1).map(|t| t.kind);
     let w = word;
-    (["TABLESAMPLE", "WATERMARK", "STREAM", "CHANGES", "NEAREST"]
+    (["WATERMARK", "STREAM", "CHANGES", "NEAREST"]
         .iter()
         .any(|k| w(i, k)))
         || ((w(i, "IDENTIFIER") || (w(i, "TABLE") && i > 0))
@@ -197,6 +197,7 @@ mod tests {
             "SELECT a | b FROM t",
             "SELECT CAST(x AS STRUCT<a: INT>)",
             "SELECT a COLLATE utf8_lcase FROM t",
+            "SELECT * FROM t TABLESAMPLE (1 ROWS)",
         ] {
             assert!(in_dql_scope(sql), "{sql}");
         }
@@ -209,7 +210,6 @@ mod tests {
             "SELECT * FROM IDENTIFIER('t')",
             "SELECT * FROM f(TABLE(t))",
             "SELECT TRANSFORM(a) USING 'cat' FROM t",
-            "SELECT * FROM t TABLESAMPLE (1 ROWS)",
             "SELECT $1",
             "TABLE t | SELECT a",
         ] {

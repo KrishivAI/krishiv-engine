@@ -838,6 +838,9 @@ impl Lowerer {
     }
 
     fn factor(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
+        if let Some(sample) = &tf.sample {
+            return Err(unsupported("TABLESAMPLE", sample.span));
+        }
         let plan = match &tf.kind {
             TableFactorKind::Table {
                 name,

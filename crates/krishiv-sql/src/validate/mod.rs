@@ -16,6 +16,7 @@
 //! | a string unit in `TIMESTAMPADD` and friends | `INVALID_PARAMETER_VALUE.DATETIME_UNIT` |
 //! | `IN ()` | `INVALID_SQL_SYNTAX.EMPTY_IN_PREDICATE` |
 //! | `LIKE ANY ()`, a frame bound that is not a literal | `_LEGACY_ERROR_TEMP_0064` |
+//! | `TABLESAMPLE` with no method, an out-of-range percentage, `SYSTEM` misuse, byte and column forms | see [`sample`] |
 //! | duplicate CTE names, duplicate window names | `DUPLICATED_CTE_NAMES`, `INVALID_SQL_SYNTAX.REPETITIVE_WINDOW_DEFINITION` |
 //! | `MAX RECURSION LEVEL` without `RECURSIVE`, a table option without a value | `_LEGACY_ERROR_TEMP_0035` |
 //! | `NATURAL JOIN LATERAL`, `JOIN LATERAL ... USING` | `INCOMPATIBLE_JOIN_TYPES`, `UNSUPPORTED_FEATURE.LATERAL_JOIN_USING` |
@@ -31,6 +32,7 @@
 
 mod interval;
 pub(crate) mod literal;
+mod sample;
 mod types;
 
 use std::collections::HashSet;
@@ -445,6 +447,11 @@ impl Checker<'_> {
     }
 
     fn factor(&self, f: &TableFactor) -> R {
+        self.factor_kind(f)?;
+        f.sample.as_ref().map_or(Ok(()), |s| self.sample(s))
+    }
+
+    fn factor_kind(&self, f: &TableFactor) -> R {
         match &f.kind {
             TableFactorKind::Table {
                 name,

@@ -1229,6 +1229,8 @@ pub struct TableAlias {
 pub struct TableFactor {
     /// What it is.
     pub kind: TableFactorKind,
+    /// `TABLESAMPLE`, after a table, a subquery or a parenthesized relation.
+    pub sample: Option<TableSample>,
     /// The alias.
     pub alias: Option<TableAlias>,
     /// Source text.
@@ -1261,6 +1263,77 @@ pub enum TableFactorKind {
         /// The arguments.
         args: Vec<FunctionArg>,
     },
+}
+
+/// `TABLESAMPLE [SYSTEM | BERNOULLI] ([method]) [REPEATABLE (seed)]`, as a
+/// relation suffix or a pipe operator. Spark's builder rejects an empty
+/// method, `SYSTEM` with `REPEATABLE` or with any method but a percentage,
+/// and the byte and column forms; the tree keeps what it needs to say so.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableSample {
+    /// `SYSTEM` or `BERNOULLI`, if written.
+    pub sample_type: Option<SampleType>,
+    /// What to sample; `None` for `TABLESAMPLE ()`.
+    pub method: Option<SampleMethod>,
+    /// The `REPEATABLE` seed, as written.
+    pub seed: Option<String>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The sampling type keyword.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(missing_docs, reason = "each variant is the keyword named")]
+#[non_exhaustive]
+pub enum SampleType {
+    System,
+    Bernoulli,
+}
+
+/// The method inside `TABLESAMPLE (...)`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SampleMethod {
+    /// What it is.
+    pub kind: SampleMethodKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`SampleMethod`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SampleMethodKind {
+    /// `[-] number PERCENT`.
+    Percent {
+        /// A leading `-`.
+        negative: bool,
+        /// The integer or decimal, as written.
+        value: String,
+    },
+    /// `expr ROWS`.
+    Rows(Expr),
+    /// `BUCKET numerator OUT OF denominator [ON column | ON function()]`.
+    Bucket {
+        /// The numerator, as written.
+        numerator: String,
+        /// The denominator, as written.
+        denominator: String,
+        /// The `ON` target.
+        on: Option<BucketOn>,
+    },
+    /// A bare expression, which Spark reads as a byte length (`10M`) and
+    /// rejects.
+    Bytes(Expr),
+}
+
+/// The target of `BUCKET ... ON`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum BucketOn {
+    /// A column.
+    Column(Ident),
+    /// `name()`.
+    Function(ObjectName),
 }
 
 /// What a time-travel clause selects by.
