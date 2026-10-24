@@ -48,6 +48,26 @@ pub(super) struct Arg<'a> {
     pub(super) literal: Option<i128>,
 }
 
+/// The session settings coercion depends on.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Rules {
+    /// `spark.sql.ansi.enabled`.
+    pub(super) ansi: bool,
+    /// `spark.sql.caseSensitive`: struct field names match by case when
+    /// nested types meet.
+    pub(super) case_sensitive: bool,
+}
+
+impl Rules {
+    /// The rules of `call`.
+    fn of(call: &CallTypes<'_>) -> Self {
+        Self {
+            ansi: call.ansi(),
+            case_sensitive: call.case_sensitive(),
+        }
+    }
+}
+
 /// An operator call, typed.
 #[derive(Debug)]
 pub(super) struct Typed {
@@ -82,6 +102,8 @@ pub(super) enum Mismatch {
     /// `DATA_DIFF_TYPES`: the argument types; whether Spark lists them as
     /// `["A", "B"]` (else `("A" or "B")`).
     DataDiff(Vec<Option<DataType>>, bool),
+    /// `INVALID_ORDERING_TYPE`: a type that does not order (a map).
+    InvalidOrdering(DataType),
     /// A coercion Krishiv does not implement.
     Unsupported(&'static str),
 }
@@ -156,8 +178,17 @@ fn wider_decimal(a: DecimalType, b: DecimalType) -> DecimalType {
 /// The type `a` and `b` meet at (ANSI `findWiderTypeForTwo` with string
 /// promotion, as comparisons and `IN` use it); integral literals size as
 /// their digits against a decimal when `literal`.
-fn common(a: &Arg<'_>, b: &Arg<'_>, literal: bool) -> Option<Option<DataType>> {
-    common_in(a, b, literal, true, Nested::Tightest)
+fn common(
+    a: &Arg<'_>,
+    b: &Arg<'_>,
+    literal: bool,
+    case_sensitive: bool,
+) -> Option<Option<DataType>> {
+    let rules = Rules {
+        ansi: true,
+        case_sensitive,
+    };
+    common_in(a, b, literal, rules, Nested::Tightest)
 }
 
 /// How the elements of two nested types meet.
@@ -172,12 +203,12 @@ enum Nested {
 
 /// The type two arrays, two maps or two structs meet at
 /// (`findTypeForComplex`), if any.
-fn complex(x: &DataType, y: &DataType, ansi: bool, how: Nested) -> Option<DataType> {
+fn complex(x: &DataType, y: &DataType, rules: Rules, how: Nested) -> Option<DataType> {
     use DataType as T;
     let meet = |p: &DataType, q: &DataType| -> Option<DataType> {
         let met = match how {
-            Nested::Wider => common_all(&[elem(p), elem(q)], ansi)?,
-            Nested::Tightest => tightest(p, q, ansi)?,
+            Nested::Wider => common_all(&[elem(p), elem(q)], rules)?,
+            Nested::Tightest => tightest(p, q, rules)?,
         };
         Some(met.unwrap_or(T::Null))
     };
@@ -207,7 +238,7 @@ fn complex(x: &DataType, y: &DataType, ansi: bool, how: Nested) -> Option<DataTy
         (T::Struct(a), T::Struct(b)) if a.fields().len() == b.fields().len() => {
             let mut fields = Vec::with_capacity(a.fields().len());
             for (f, g) in a.fields().iter().zip(b.fields()) {
-                if !f.name().eq_ignore_ascii_case(g.name()) {
+                if !super::bind::same(f.name(), g.name(), rules.case_sensitive) {
                     return None;
                 }
                 let t = meet(f.data_type(), g.data_type())?;
@@ -235,7 +266,7 @@ fn elem(t: &DataType) -> Arg<'_> {
 /// `findTightestCommonType` of two element types: equal types, NULL with
 /// anything, numbers without decimals, an integral type with a decimal that
 /// holds it, dates with timestamps, and nested types element by element.
-fn tightest(x: &DataType, y: &DataType, ansi: bool) -> Option<Option<DataType>> {
+fn tightest(x: &DataType, y: &DataType, rules: Rules) -> Option<Option<DataType>> {
     use DataType as T;
     match (x, y) {
         _ if x == y => Some(Some(x.clone())),
@@ -244,7 +275,7 @@ fn tightest(x: &DataType, y: &DataType, ansi: bool) -> Option<Option<DataType>> 
             .filter(|digits| d.precision() - d.scale() >= *digits)
             .map(|_| Some(T::Decimal(*d))),
         (T::String | T::Binary | T::Boolean, _) | (_, T::String | T::Binary | T::Boolean) => None,
-        _ => common_in(&elem(x), &elem(y), false, ansi, Nested::Tightest),
+        _ => common_in(&elem(x), &elem(y), false, rules, Nested::Tightest),
     }
 }
 
@@ -254,10 +285,11 @@ fn common_in(
     a: &Arg<'_>,
     b: &Arg<'_>,
     literal: bool,
-    ansi: bool,
+    rules: Rules,
     nested: Nested,
 ) -> Option<Option<DataType>> {
     use DataType as T;
+    let ansi = rules.ansi;
     let (x, y) = match (a.ty, b.ty) {
         (None, None) => return Some(None),
         (Some(t), None) | (None, Some(t)) => return Some(Some(t.clone())),
@@ -267,7 +299,7 @@ fn common_in(
         return Some(Some(x.clone()));
     }
     if x.is_nested() || y.is_nested() {
-        return complex(x, y, ansi, nested).map(Some);
+        return complex(x, y, rules, nested).map(Some);
     }
     let t = match (x, y) {
         (T::Decimal(_), _) | (_, T::Decimal(_))
@@ -305,8 +337,10 @@ fn common_in(
 
 /// The common type of all of `args` (`findWiderCommonType`: strings
 /// first), `Some(None)` when every one is an untyped `NULL`.
-fn common_all(args: &[Arg<'_>], ansi: bool) -> Option<Option<DataType>> {
-    if !ansi && let Some(t) = legacy_string_type(args) {
+fn common_all(args: &[Arg<'_>], rules: Rules) -> Option<Option<DataType>> {
+    if !rules.ansi
+        && let Some(t) = legacy_string_type(args)
+    {
         return t;
     }
     let strings = args
@@ -322,7 +356,7 @@ fn common_all(args: &[Arg<'_>], ansi: bool) -> Option<Option<DataType>> {
             nullable: false,
             literal: None,
         };
-        acc = common_in(&cur, a, false, ansi, Nested::Wider)?;
+        acc = common_in(&cur, a, false, rules, Nested::Wider)?;
     }
     Some(acc)
 }
@@ -344,14 +378,18 @@ fn legacy_string_type(args: &[Arg<'_>]) -> Option<Option<Option<DataType>>> {
 
 /// The type a value and a subquery column of `(values) IN (subquery)`
 /// meet at.
-pub(super) fn common_type(a: &Arg<'_>, b: &Arg<'_>) -> Option<Option<DataType>> {
-    common(a, b, false)
+pub(super) fn common_type(
+    a: &Arg<'_>,
+    b: &Arg<'_>,
+    case_sensitive: bool,
+) -> Option<Option<DataType>> {
+    common(a, b, false, case_sensitive)
 }
 
 /// The type two set-operation columns meet at (`findWiderTypeForTwo`, the
 /// legacy rules with ANSI off).
-pub(super) fn wider_type(a: &Arg<'_>, b: &Arg<'_>, ansi: bool) -> Option<Option<DataType>> {
-    common_all(&[*a, *b], ansi)
+pub(super) fn wider_type(a: &Arg<'_>, b: &Arg<'_>, rules: Rules) -> Option<Option<DataType>> {
+    common_all(&[*a, *b], rules)
 }
 
 /// The cast to `to` an argument of type `from` needs, if any.
@@ -405,10 +443,10 @@ fn legacy_strings(args: &[Arg<'_>], ansi: bool) -> Result<(), Mismatch> {
 pub(super) fn operator(
     op: Builtin,
     args: &[Arg<'_>],
-    ansi: bool,
+    rules: Rules,
     loss: bool,
 ) -> Result<Typed, Mismatch> {
-    let mut typed = operator_types(op, args, ansi, loss)?;
+    let mut typed = operator_types(op, args, rules, loss)?;
     // A cast that may yield NULL makes the result nullable, as the cast
     // argument is.
     if !matches!(
@@ -426,10 +464,11 @@ pub(super) fn operator(
 fn operator_types(
     op: Builtin,
     args: &[Arg<'_>],
-    ansi: bool,
+    rules: Rules,
     loss: bool,
 ) -> Result<Typed, Mismatch> {
     use Builtin as B;
+    let ansi = rules.ansi;
     let boolean = |casts: Vec<Option<DataType>>, nullable: bool| Typed {
         casts,
         data_type: DataType::Boolean,
@@ -438,9 +477,18 @@ fn operator_types(
     match (op, args) {
         (B::Eq | B::EqNullSafe | B::Lt | B::LtEq | B::Gt | B::GtEq, [a, b]) => {
             legacy_strings(args, ansi)?;
-            let t = common(a, b, true)
-                .ok_or_else(|| Mismatch::DiffTypes(a.ty.cloned(), b.ty.cloned()))?;
-            let casts = vec![cast_to(a.ty, t.as_ref()), cast_to(b.ty, t.as_ref())];
+            // Types equal but for field names and nullability compare as
+            // they are (Spark's `DataTypeUtils.sameType` check passes).
+            let casts = if same_shape(args) {
+                vec![None, None]
+            } else {
+                let t = common(a, b, true, rules.case_sensitive)
+                    .ok_or_else(|| Mismatch::DiffTypes(a.ty.cloned(), b.ty.cloned()))?;
+                vec![cast_to(a.ty, t.as_ref()), cast_to(b.ty, t.as_ref())]
+            };
+            if let Some(t) = a.ty.filter(|t| !orderable(t)) {
+                return Err(Mismatch::InvalidOrdering(t.clone()));
+            }
             Ok(boolean(casts, op != B::EqNullSafe && any_nullable(args)))
         }
         (B::Add | B::Subtract | B::Multiply | B::Divide | B::Remainder, [a, b]) => {
@@ -469,7 +517,7 @@ fn operator_types(
         (B::And | B::Or, [a, b]) => {
             if let (Some(x), Some(y)) = (a.ty, b.ty)
                 && x != y
-                && common(a, b, false).is_none()
+                && common(a, b, false, rules.case_sensitive).is_none()
             {
                 return Err(Mismatch::DiffTypes(Some(x.clone()), Some(y.clone())));
             }
@@ -485,42 +533,103 @@ fn operator_types(
             Ok(boolean(casts, any_nullable(args)))
         }
         (B::IsNull | B::IsNotNull, [_]) => Ok(boolean(vec![None], false)),
-        (B::In, [_, ..]) => {
+        (B::In, [first, ..]) => {
             legacy_strings(args, ansi)?;
-            let t = common_all(args, ansi).ok_or_else(|| {
-                Mismatch::DataDiff(args.iter().map(|a| a.ty.cloned()).collect(), true)
-            })?;
-            let casts = args.iter().map(|a| cast_to(a.ty, t.as_ref())).collect();
+            let casts = if same_shape(args) {
+                vec![None; args.len()]
+            } else {
+                let t = common_all(args, rules).ok_or_else(|| {
+                    Mismatch::DataDiff(args.iter().map(|a| a.ty.cloned()).collect(), true)
+                })?;
+                args.iter().map(|a| cast_to(a.ty, t.as_ref())).collect()
+            };
+            if let Some(t) = first.ty.filter(|t| !orderable(t)) {
+                return Err(Mismatch::InvalidOrdering(t.clone()));
+            }
             Ok(boolean(casts, any_nullable(args)))
         }
         (B::Like | B::ILike | B::RLike, _) => {
+            // Only atomic types become a string implicitly.
+            if let Some((i, a)) = args
+                .iter()
+                .enumerate()
+                .find(|(_, a)| a.ty.is_some_and(DataType::is_nested))
+            {
+                return Err(unexpected(i, i, a.ty, r#""STRING""#));
+            }
             let casts = args
                 .iter()
                 .map(|a| cast_to(a.ty, Some(&DataType::String)))
                 .collect();
             Ok(boolean(casts, any_nullable(args)))
         }
-        (B::Concat, _) => {
-            let binary = !args.is_empty() && args.iter().all(|a| a.ty == Some(&DataType::Binary));
-            let t = if binary {
-                DataType::Binary
-            } else {
-                DataType::String
-            };
-            Ok(Typed {
-                casts: args.iter().map(|a| cast_to(a.ty, Some(&t))).collect(),
-                data_type: t,
-                nullable: any_nullable(args),
-            })
-        }
-        (B::When, _) => when(args, ansi),
+        (B::Concat, _) => concat(args, rules),
+        (B::When, _) => when(args, rules),
         _ => Err(Mismatch::Unsupported("this operator's arguments")),
     }
 }
 
 /// `CASE WHEN c THEN v ... ELSE e END`: conditions are booleans, values
 /// meet at their common type.
-fn when(args: &[Arg<'_>], ansi: bool) -> Result<Typed, Mismatch> {
+/// Whether every typed argument is equal to the first but for field names
+/// and nullability (and at least one is nested): such arguments compare as
+/// they are, with no cast.
+fn same_shape(args: &[Arg<'_>]) -> bool {
+    let mut typed = args.iter().filter_map(|a| a.ty);
+    let Some(first) = typed.next() else {
+        return false;
+    };
+    first.is_nested() && typed.all(|t| t.equals_structurally(first, true))
+}
+
+/// Spark's `TypeUtils.isOrderable`: a map orders nowhere, and neither does
+/// an array or struct holding one.
+pub(super) fn orderable(t: &DataType) -> bool {
+    match t {
+        DataType::Map(_) => false,
+        DataType::Array(a) => orderable(a.element_type()),
+        DataType::Struct(s) => s.fields().iter().all(|f| orderable(f.data_type())),
+        _ => true,
+    }
+}
+
+/// `concat`: strings (anything atomic becomes one), binaries (when every
+/// argument is one), or arrays (meeting at their common type). Any other
+/// nested argument is refused, as is a mix of arrays and other types.
+fn concat(args: &[Arg<'_>], rules: Rules) -> Result<Typed, Mismatch> {
+    const TAKES: &str = r#"("STRING" or "BINARY" or "ARRAY")"#;
+    if let Some((i, a)) = args
+        .iter()
+        .enumerate()
+        .find(|(_, a)| matches!(a.ty, Some(DataType::Map(_) | DataType::Struct(_))))
+    {
+        return Err(unexpected(i, i, a.ty, TAKES));
+    }
+    let typed = || args.iter().filter_map(|a| a.ty);
+    let t = if typed().any(DataType::is_nested) {
+        if !typed().all(DataType::is_nested) {
+            return Err(Mismatch::DataDiff(
+                args.iter().map(|a| a.ty.cloned()).collect(),
+                false,
+            ));
+        }
+        common_all(args, rules)
+            .ok_or_else(|| Mismatch::DataDiff(args.iter().map(|a| a.ty.cloned()).collect(), false))?
+            .unwrap_or(DataType::Null)
+    } else if !args.is_empty() && args.iter().all(|a| a.ty == Some(&DataType::Binary)) {
+        DataType::Binary
+    } else {
+        DataType::String
+    };
+    Ok(Typed {
+        casts: args.iter().map(|a| cast_to(a.ty, Some(&t))).collect(),
+        data_type: t,
+        nullable: any_nullable(args),
+    })
+}
+
+fn when(args: &[Arg<'_>], rules: Rules) -> Result<Typed, Mismatch> {
+    let ansi = rules.ansi;
     let mut values = Vec::new();
     let mut casts = vec![None; args.len()];
     for (i, pair) in args.chunks(2).enumerate() {
@@ -544,7 +653,7 @@ fn when(args: &[Arg<'_>], ansi: bool) -> Result<Typed, Mismatch> {
         })
         .collect();
     legacy_strings(&vals, ansi)?;
-    let t = common_all(&vals, ansi)
+    let t = common_all(&vals, rules)
         .ok_or_else(|| Mismatch::DataDiff(vals.iter().map(|a| a.ty.cloned()).collect(), true))?
         .unwrap_or(DataType::Null);
     for (i, v) in &values {
@@ -651,7 +760,7 @@ fn arithmetic(
         // Operands of one type the operator does not take, or a string
         // promoted to one; other types do not meet.
         let promoted = (x == y || *x == T::String || *y == T::String)
-            .then(|| common(&of_type(x), &of_type(y), false))
+            .then(|| common(&of_type(x), &of_type(y), false, false))
             .flatten();
         let Some(t) = promoted else {
             return Err(Mismatch::DiffTypes(Some(x.clone()), Some(y.clone())));
@@ -722,7 +831,7 @@ pub(super) fn inputs(
     call: &CallTypes<'_>,
 ) -> Result<Vec<Option<DataType>>, Mismatch> {
     match inputs {
-        Inputs::Common => common_casts(args, args, call.ansi()),
+        Inputs::Common => common_casts(args, args, Rules::of(call)),
         Inputs::CommonNoStrings => {
             let typed = args.iter().filter(|a| a.ty.is_some());
             let strings = typed
@@ -735,16 +844,16 @@ pub(super) fn inputs(
                     false,
                 ));
             }
-            common_casts(args, args, call.ansi())
+            common_casts(args, args, Rules::of(call))
         }
         Inputs::CommonWithZero => {
             let all: Vec<Arg<'_>> = args.iter().copied().chain([hidden_zero()]).collect();
-            common_casts(args, &all, call.ansi())
+            common_casts(args, &all, Rules::of(call))
         }
         Inputs::Leading(types) => {
             let n = types.len().min(args.len());
             let mut casts = declared(types, &args[..n])?;
-            casts.extend(common_casts(&args[n..], &args[n..], call.ansi())?);
+            casts.extend(common_casts(&args[n..], &args[n..], Rules::of(call))?);
             Ok(casts)
         }
         Inputs::Comparable { zero } => {
@@ -763,7 +872,7 @@ pub(super) fn inputs(
                 let structural =
                     matches!((a.ty, b.ty), (Some(x), Some(y)) if x.equals_structurally(y, true));
                 if !legacy_boolean && !structural {
-                    common_in(a, b, true, call.ansi(), Nested::Tightest)
+                    common_in(a, b, true, Rules::of(call), Nested::Tightest)
                         .ok_or_else(|| Mismatch::DiffTypes(a.ty.cloned(), b.ty.cloned()))?;
                 }
             }
@@ -777,13 +886,16 @@ pub(super) fn inputs(
                 Operator::Divide => Builtin::Divide,
                 Operator::Remainder => Builtin::Remainder,
             };
-            operator_types(builtin, args, call.ansi(), call.decimal_loss()).map(|t| t.casts)
+            operator_types(builtin, args, Rules::of(call), call.decimal_loss()).map(|t| t.casts)
         }
         // `equal_null`: the casts of the null-safe `<=>` operator.
-        Inputs::NullSafeEqual => {
-            operator_types(Builtin::EqNullSafe, args, call.ansi(), call.decimal_loss())
-                .map(|t| t.casts)
-        }
+        Inputs::NullSafeEqual => operator_types(
+            Builtin::EqNullSafe,
+            args,
+            Rules::of(call),
+            call.decimal_loss(),
+        )
+        .map(|t| t.casts),
         _ => match inputs.expected(call) {
             Some(types) => {
                 let casts = declared(&types, args)?;
@@ -831,9 +943,9 @@ fn legacy_string_counts(
 fn common_casts(
     args: &[Arg<'_>],
     meet: &[Arg<'_>],
-    ansi: bool,
+    rules: Rules,
 ) -> Result<Vec<Option<DataType>>, Mismatch> {
-    let t = common_all(meet, ansi)
+    let t = common_all(meet, rules)
         .ok_or_else(|| Mismatch::DataDiff(meet.iter().map(|a| a.ty.cloned()).collect(), false))?;
     Ok(args.iter().map(|a| cast_to(a.ty, t.as_ref())).collect())
 }
@@ -890,9 +1002,10 @@ fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType
                     t,
                     T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary
                 );
+            // Only an atomic type becomes a string implicitly.
             let ok = f == t
                 || (is_numeric(f) && is_numeric(t))
-                || *t == T::String
+                || (*t == T::String && !f.is_nested())
                 || (*f == T::String && from_string)
                 || (*f == T::Date && matches!(t, T::Timestamp | T::TimestampNtz))
                 || (matches!(f, T::Timestamp | T::TimestampNtz) && *t == T::Date);
@@ -1064,6 +1177,9 @@ fn null_safe_decimal(from: &DataType, to: DecimalType) -> bool {
 /// Spark keeps them, and its result is not nullable).
 pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
     use DataType as T;
+    if from.is_nested() || to.is_nested() {
+        return !nested_up_cast(from, to);
+    }
     if (from, to) == (&T::Binary, &T::String) {
         return true;
     }
@@ -1093,6 +1209,33 @@ pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
         (f, t) => rank(f).zip(rank(t)).is_some_and(|(f, t)| f <= t),
     };
     !up
+}
+
+/// Spark's `Cast.canUpCast` for nested types: element by element, where a
+/// target that may not hold NULL needs a source that has none (to `STRING`
+/// as for any type).
+fn nested_up_cast(from: &DataType, to: &DataType) -> bool {
+    use DataType as T;
+    let fits = |from_null: bool, to_null: bool| !from_null || to_null;
+    let up = |f: &DataType, t: &DataType| !try_nullable(f, t);
+    match (from, to) {
+        _ if from == to || *to == T::String => true,
+        (T::Array(a), T::Array(b)) => {
+            up(a.element_type(), b.element_type()) && fits(a.contains_null(), b.contains_null())
+        }
+        (T::Map(a), T::Map(b)) => {
+            up(a.key_type(), b.key_type())
+                && up(a.value_type(), b.value_type())
+                && fits(a.value_contains_null(), b.value_contains_null())
+        }
+        (T::Struct(a), T::Struct(b)) => {
+            a.fields().len() == b.fields().len()
+                && a.fields().iter().zip(b.fields()).all(|(f, t)| {
+                    up(f.data_type(), t.data_type()) && fits(f.nullable(), t.nullable())
+                })
+        }
+        _ => false,
+    }
 }
 
 /// Spark's `ordinalNumber`: `first`, `second`, `third`, `4th`, ...
@@ -1186,10 +1329,17 @@ mod tests {
             literal: None,
         };
         assert_eq!(
-            operator(Builtin::Not, &[int, int], true, true).err(),
+            operator(Builtin::Not, &[int, int], rules(true), true).err(),
             Some(Mismatch::Unsupported("this operator's arguments"))
         );
         assert_eq!(ordinal(3), "4th");
+    }
+
+    fn rules(ansi: bool) -> Rules {
+        Rules {
+            ansi,
+            case_sensitive: false,
+        }
     }
 
     fn arg(t: Option<&T>) -> Arg<'_> {
@@ -1356,7 +1506,7 @@ mod tests {
         };
         let wider = |a: &str, b: &str, ansi: bool| {
             let (a, b) = (t(a), t(b));
-            wider_type(&arg(Some(&a)), &arg(Some(&b)), ansi).map(|r| r.map(|t| t.json()))
+            wider_type(&arg(Some(&a)), &arg(Some(&b)), rules(ansi)).map(|r| r.map(|t| t.json()))
         };
         let int = r#""integer""#;
         let long = r#""long""#;
@@ -1503,7 +1653,7 @@ mod tests {
         // Comparisons meet by the tightest common type only.
         let compare = |a: &str, b: &str| {
             let (a, b) = (t(a), t(b));
-            common(&arg(Some(&a)), &arg(Some(&b)), false).map(|r| r.map(|t| t.json()))
+            common(&arg(Some(&a)), &arg(Some(&b)), false, false).map(|r| r.map(|t| t.json()))
         };
         assert_eq!(
             compare(&arr(int, false), &arr(long, false)),

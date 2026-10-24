@@ -577,3 +577,20 @@ fn struct_strings_quote_names_and_escape_comments_as_spark() {
     // The empty struct parses as `<>` and as `< >`.
     assert_eq!(ty("struct<>"), ty("struct< >"));
 }
+
+/// Metadata keys print sorted whatever order they arrive in: the JSON form,
+/// and so the plan codec's bytes, must not depend on serde_json's map
+/// (`preserve_order` enabled by any crate would change it).
+#[test]
+fn metadata_prints_with_sorted_keys() {
+    let t = DataType::from_json(
+        r#"{"type":"struct","fields":[{"name":"a","type":"integer","nullable":true,"metadata":{"z":1,"comment":"c","b":[true]}}]}"#,
+    )
+    .unwrap();
+    assert!(
+        t.json()
+            .contains(r#""metadata":{"b":[true],"comment":"c","z":1}"#),
+        "{}",
+        t.json()
+    );
+}

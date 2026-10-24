@@ -223,7 +223,11 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                 Some(Feature::WindowOffsetFunctions)
             }
         },
-        // A type Krishiv does not know cannot be encoded at all.
+        // A type Krishiv does not know cannot be encoded at all. A later
+        // feature for a type that can sit inside an array, map or struct
+        // (variant, char/varchar, intervals) must look through them: its
+        // arm walks the element, key, value and field types, so that
+        // `array<variant>` needs it too.
         Construct::Type(t) => t.is_nested().then_some(Feature::NestedTypes),
         // The `Window` node's format carries every frame between unbounded
         // and current-row bounds; an offset bound is newer. `FrameBound` is

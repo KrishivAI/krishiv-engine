@@ -365,6 +365,11 @@ fn a_malformed_nested_type_is_corrupt() {
             "an invalid nested type",
         );
     }
+    // Only the canonical form (the encoder's) decodes.
+    corrupt(
+        &with_type(&|t| t.json = t.json.replace(':', ": ")),
+        "an invalid nested type",
+    );
     let deep = format!(
         "{}\"integer\"{}",
         r#"{"type":"array","elementType":"#.repeat(40),

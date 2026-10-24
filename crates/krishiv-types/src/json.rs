@@ -59,9 +59,10 @@ impl DataType {
     /// Spark's `DataType.fromJson`.
     ///
     /// # Errors
-    /// `INVALID_JSON_DATA_TYPE` for JSON that is not a Spark type (or nests
-    /// deeper than [`Self::MAX_NESTING_DEPTH`]); `KRISHIV_UNSUPPORTED_FEATURE`
-    /// for a Spark type Krishiv does not support yet.
+    /// `INVALID_JSON_DATA_TYPE` for JSON that is not a Spark type,
+    /// `FAILED_TO_PARSE_TOO_COMPLEX` for a type nested deeper than
+    /// [`Self::MAX_NESTING_DEPTH`], and `KRISHIV_UNSUPPORTED_FEATURE` for a
+    /// Spark type Krishiv does not support yet.
     pub fn from_json(text: &str) -> Result<Self> {
         let value: Value =
             serde_json::from_str(text).map_err(|_| error::invalid_json_type(text))?;

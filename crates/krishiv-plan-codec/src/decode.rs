@@ -979,8 +979,10 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
 
 /// A nested type from its Spark JSON (depth-bounded by `from_json`).
 fn nested(t: &pb::DataType) -> Result<DataType> {
+    // Only the canonical form the encoder writes: bytes decode to a plan
+    // that encodes to the same bytes.
     match DataType::from_json(&t.json) {
-        Ok(d) if d.is_nested() => Ok(d),
+        Ok(d) if d.is_nested() && d.json() == t.json => Ok(d),
         _ => Err(corrupt("an invalid nested type")),
     }
 }
