@@ -125,8 +125,10 @@ fn a_default_estimate_needs_a_larger_ratio() {
     // 5M rows against a default 1M: 5x is enough with statistics on both
     // sides (above 2x), not with a default estimate on one (8x).
     let sql = "SELECT a FROM bare WHERE EXISTS (SELECT 1 FROM mid WHERE mid.a = bare.a)";
-    assert!(
-        joins(&env, sql).iter().all(|j| !j.contains("prefers")),
+    // No preference: `bare` probes a `LeftSemi` that builds `mid`.
+    assert_eq!(
+        joins(&env, sql),
+        ["HashJoin LeftSemi, [a#0] = [a#3], RuntimeFilter #1: a#0 -> spark_catalog.default.bare.a"],
         "{sql}"
     );
     let sql = "SELECT a FROM bare WHERE EXISTS (SELECT 1 FROM big WHERE big.a = bare.a)";
