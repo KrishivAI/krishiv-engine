@@ -1060,8 +1060,13 @@ impl<'s> Parser<'s> {
     /// Spark parses the string of an identifier literal as a name when it
     /// builds the tree: it must be a name (not empty), of `parts` parts at
     /// most (`1` for a position taking one identifier). The first problem
-    /// is deferred.
-    fn check_identifier_literal(&mut self, text: &str, span: Span, parts: usize) {
+    /// is deferred; the name is returned when there is none.
+    fn check_identifier_literal(
+        &mut self,
+        text: &str,
+        span: Span,
+        parts: usize,
+    ) -> Option<ObjectName> {
         match parse_multipart_identifier(text, self.opts) {
             Err(e) => self.defer(ParseError { span, ..e }),
             Ok(name) if name.parts.len() > parts => {
@@ -1073,8 +1078,9 @@ impl<'s> Parser<'s> {
                     span,
                 ));
             }
-            Ok(_) => {}
+            Ok(name) => return Some(name),
         }
+        None
     }
 
     /// Whether token `n` is an identifier ([`Self::ident_at`] without
@@ -1098,10 +1104,9 @@ impl<'s> Parser<'s> {
         };
         if self.identifier_literal_at(0) {
             let mut id = id;
-            self.check_identifier_literal(&id.value, id.span, 1);
             // A name that is not one part is an error already; one part
             // is the identifier.
-            if let Ok(name) = parse_multipart_identifier(&id.value, self.opts)
+            if let Some(name) = self.check_identifier_literal(&id.value, id.span, 1)
                 && let [part] = name.parts.as_slice()
             {
                 id.value.clone_from(&part.value);

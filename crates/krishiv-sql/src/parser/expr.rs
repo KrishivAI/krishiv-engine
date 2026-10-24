@@ -1419,7 +1419,7 @@ impl Parser<'_> {
             return Ok(Some(e));
         }
         if let ExprKind::Literal(Literal::String(text)) = &dynamic.expr.kind {
-            self.check_identifier_literal(text, dynamic.span, usize::MAX);
+            let _ = self.check_identifier_literal(text, dynamic.span, usize::MAX);
         }
         let span = self.span_from(start);
         let call = Self::call(name, vec![*dynamic.expr], span);
