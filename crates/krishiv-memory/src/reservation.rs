@@ -190,6 +190,25 @@ impl Reservation {
         self.bytes
     }
 
+    /// Moves up to `bytes` of this reservation into a new reservation of
+    /// the same consumer, without touching the pool: for state that is
+    /// split into parts freed at different times (an aggregate's driver
+    /// table handed to several merge tasks). The new reservation shrinks
+    /// and drops as this one does.
+    #[must_use]
+    pub fn split(&mut self, bytes: usize) -> Self {
+        let bytes = bytes.min(self.bytes);
+        self.bytes -= bytes;
+        Self {
+            pool: Arc::clone(&self.pool),
+            id: self.id,
+            bytes,
+            handle: self.handle.clone(),
+            to_credit: self.to_credit,
+            scratch: self.scratch,
+        }
+    }
+
     /// Re-charges this reservation to `to` (a consumer of the same pool),
     /// for state handed over to another operator instance (a breaker's
     /// combined tables): the pool's total is unchanged, and `to`'s spill

@@ -7,11 +7,17 @@ use std::path::Path;
 fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
     println!("cargo:rerun-if-changed=build.rs");
-    // OUT_DIR is <target>[/<triple>]/<profile dir>/build/<package>-<hash>/out.
+    // OUT_DIR is <target>[/<triple>]/<profile dir>/build/<package>-<hash>/out, or with the
+    // newer layout (nightly, so under `cargo llvm-cov --branch`) .../build/<package>/<hash>/out:
+    // the profile is the directory holding the `build` ancestor.
     let profile = std::env::var_os("OUT_DIR")
         .as_deref()
         .map(Path::new)
-        .and_then(|p| p.ancestors().nth(3))
+        .and_then(|p| {
+            p.ancestors()
+                .find(|a| a.file_name().is_some_and(|n| n == "build"))
+        })
+        .and_then(Path::parent)
         .and_then(Path::file_name)
         .map_or_else(
             || "unknown".to_owned(),

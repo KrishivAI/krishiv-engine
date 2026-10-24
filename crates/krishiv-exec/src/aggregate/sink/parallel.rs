@@ -2,35 +2,33 @@
 //! The in-memory final phase of row tables (P2-T159): radix partitions
 //! merged in parallel.
 //!
-//! Every driver's [`RowTable`] holds its groups in [`PARTS`] radix
-//! partitions of the seedless row hash `h`, with partial duplicates
-//! where its fixed index was cleared. The final phase is "read partition
-//! `p` from every producer" (P2-T171 §5.1, I8): one task per range of
-//! partitions ([`final_tasks`], sized from the merged per-partition
-//! sketches) merges that range's rows from every table, in table order,
-//! into its own growing table, presized from the sketches. Tasks share
-//! nothing mutable: each owns its table and its reservation and reads the
-//! driver tables, which are immutable here. They run on the blocking pool,
-//! at most the executor's parallelism at once, each started once its
-//! memory is reserved (as the join's partition builds are).
+//! Every driver's [`RowTable`] holds its groups in radix partitions of the
+//! seedless row hash `h`, each partition with its own rows and states,
+//! with partial duplicates where its fixed index was cleared. The final
+//! phase is "read partition `p` from every producer" (P2-T171 §5.1, I8):
+//! one task per range of partitions ([`final_tasks`], sized from the merged
+//! per-partition sketches) takes that range out of every driver table
+//! ([`RowTable::split_parts`], with its share of the driver's reservation)
+//! and merges it, in table order, into its own growing table, presized
+//! from the sketches. Tasks share nothing: each owns its inputs, its table
+//! and their reservations. They run on the blocking pool, at most the
+//! executor's parallelism at once, each started once its memory is
+//! reserved (as the join's partition builds are).
 //!
-//! **Memory.** The driver tables stay until every task is done (their
-//! states are per-driver accumulators, not per partition), so this phase
-//! holds the driver tables and the merged tables together: up to about
-//! twice the default path's in-place merge. Releasing each partition's
-//! input once merged needs per-partition (or inline) states; until then
-//! the setting stays off by default.
+//! **Memory.** A task frees each input partition as soon as it is merged,
+//! so the phase holds about the unmerged inputs plus the merged tables,
+//! never both in full.
 //!
-//! With a spill directory the merge publishes the driver tables as
-//! spillable. A spill request (`spill_global`) stops new tasks; once the
-//! running ones end, every merge table and every row not yet merged is
-//! written as spill runs and the disk phase takes over.
-//!
-//! When a task cannot get memory and none is running: with a spill
-//! directory, every merge table and every row not yet merged is written as
-//! spill runs and the disk phase takes over (the default path's in-memory
-//! merge does the same); without one, the task waits for the memory
-//! through arbitration.
+//! **Pressure.** With a spill directory the merge publishes what it holds
+//! as spillable. When a task cannot get memory and none is running, or a
+//! spill request (`spill_global`) arrives, the finished tasks' groups are
+//! written to the output file first: they are final, so they are written
+//! once and never merged again, and the merge goes on in memory (the
+//! groups merged after that follow them to the file). Only when
+//! no task is finished is everything left (every merge table and every
+//! input row not merged yet) written as spill runs, for the disk phase.
+//! Without a spill directory a task waits for its memory through
+//! arbitration.
 
 use std::collections::VecDeque;
 use std::ops::Range;
@@ -39,11 +37,14 @@ use std::sync::Arc;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use krishiv_common::error::KrishivError;
-use krishiv_memory::Reservation;
+use krishiv_memory::{Reservation, SpillWriter};
 
-use super::super::rowtable::{Mode, PARTS, RowTable, final_tasks, split_ref};
+use super::super::rowtable::{Mode, RowTable, final_tasks};
 use super::super::table::Table;
-use super::{CHUNK, Global, HashAggregate, Run, bump, lend_headroom, reserve_to, tasks_of};
+use super::{
+    CHUNK, Final, Global, HEADROOM, HashAggregate, Output, Run, Spiller, bump, lend_headroom,
+    reserve_to, shrink_to, tasks_of,
+};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::sync::lock;
@@ -53,7 +54,10 @@ struct Task {
     parts: Range<usize>,
     table: RowTable,
     reservation: Reservation,
-    /// The next row to merge: (input table, partition, row).
+    /// Partitions `parts` of every driver table, in table order, each with
+    /// its share of the driver's reservation.
+    inputs: Vec<(RowTable, Reservation)>,
+    /// The next row to merge: (input, partition, row).
     at: (usize, usize, usize),
     /// Bytes to reserve before the task can (re)start.
     need: usize,
@@ -63,38 +67,51 @@ struct Task {
 
 impl Task {
     /// Merges until done (`None`), or until the reservation cannot grow
-    /// (`Some(missing bytes)`).
-    fn run(&mut self, inputs: &[RowTable], query: &QueryContext) -> Result<Option<usize>> {
+    /// (`Some(missing bytes)`). Each input partition is freed once merged.
+    fn run(&mut self, query: &QueryContext) -> Result<Option<usize>> {
         if self.presize > 0 {
             self.table.presize(std::mem::take(&mut self.presize));
         }
+        let Self {
+            parts,
+            table,
+            reservation,
+            inputs,
+            at,
+            ..
+        } = self;
         loop {
             query.check_cancelled()?;
-            let (t, p, row) = self.at;
-            let Some(input) = inputs.get(t) else {
-                let keep = self.table.memory_size();
-                self.reservation
-                    .shrink(self.reservation.size().saturating_sub(keep));
+            let (t, p, row) = *at;
+            let Some((input, held)) = inputs.get_mut(t) else {
+                shrink_to(reservation, table.memory_size());
                 return Ok(None);
             };
-            if p >= self.parts.end {
-                self.at = (t + 1, self.parts.start, 0);
+            if p >= parts.end {
+                *at = (t + 1, parts.start, 0);
                 continue;
             }
             let len = input.part_len(p);
             if row >= len {
-                self.at = (t, p + 1, 0);
+                input.release_part(p);
+                shrink_to(held, input.memory_size());
+                *at = (t, p + 1, 0);
                 continue;
             }
             let end = (row + CHUNK).min(len);
             let chunk = input.merge_chunk(p, row..end)?;
-            let want = self.table.projected_merge(&chunk);
-            if let Err(missing) = reserve_to(&mut self.reservation, want) {
+            let want = table.projected_merge(&chunk);
+            if let Err(missing) = reserve_to(reservation, want) {
                 return Ok(Some(missing));
             }
-            self.table.apply_merge(input, &chunk)?;
-            self.at = (t, p, end);
+            table.apply_merge(input, &chunk)?;
+            *at = (t, p, end);
         }
+    }
+
+    /// Bytes the task holds.
+    fn held(&self) -> usize {
+        self.reservation.size() + self.inputs.iter().map(|(_, r)| r.size()).sum::<usize>()
     }
 }
 
@@ -102,13 +119,23 @@ type Running<'a> = FuturesUnordered<
     std::pin::Pin<Box<dyn Future<Output = Result<(Task, Option<usize>)>> + Send + 'a>>,
 >;
 
+/// What the merge does when it lacks memory.
+enum Relief {
+    /// Write the finished tasks' groups to the output file and go on.
+    Flush,
+    /// Write everything left as spill runs; the disk phase takes over.
+    Spill,
+    /// Wait for the memory (no spill directory).
+    Wait,
+}
+
 impl HashAggregate {
     /// Finalizes the combined row tables in memory, partitions in parallel.
     /// Returns `false` when nothing was done (spill runs exist: the disk
-    /// phase merges everything) or when memory ran out and everything was
-    /// spilled; the step machine then continues with the disk phase.
+    /// phase merges everything) or when memory ran out and what was left
+    /// was spilled; the step machine then continues with the disk phase.
     pub(super) async fn finalize_rows(&self, g: &Global, ctx: &TaskContext) -> Result<bool> {
-        let (inputs, held) = {
+        let (mut inputs, held) = {
             let mut inner = lock(&g.inner);
             if !inner.runs.is_empty() || inner.disk {
                 return Ok(false);
@@ -133,7 +160,6 @@ impl HashAggregate {
             (inputs, held)
         };
         // One table without partial duplicates is the result as it is.
-        let mut inputs = inputs;
         if let [only] = inputs.as_slice()
             && only.is_unique()
         {
@@ -147,101 +173,141 @@ impl HashAggregate {
             self.finish_memory(g, ctx, vec![Table::Rows(table)], held)?;
             return Ok(true);
         }
-        let inputs: Arc<[RowTable]> = inputs.into();
-        // With a spill directory the merge stays spillable: a request stops
-        // new tasks, and what is left is spilled once the running ones end.
-        let spill = self.core.spec.spill.is_some();
-        lock(&g.inner).row_merge = spill;
-        let spillable = if spill {
-            held.iter().map(Reservation::size).sum()
-        } else {
-            0
-        };
-        ctx.consumer().signal().set_spillable_bytes(spillable);
-        let mut queue = VecDeque::new();
-        {
-            let refs: Vec<&RowTable> = inputs.iter().collect();
-            for t in final_tasks(&refs) {
-                let table = RowTable::new(&self.core, &g.seed, Mode::Grow, false)?;
-                queue.push_back(Task {
-                    need: table.projected_presize(t.groups),
-                    presize: t.groups.max(1),
-                    at: (0, t.parts.start, 0),
-                    parts: t.parts,
-                    table,
-                    reservation: ctx.consumer().reservation(),
-                });
-            }
-        }
+        let spill = self.spiller(ctx);
+        lock(&g.inner).row_merge = spill.is_some();
+        let (mut queue, spare) = self.final_queue(g, ctx, inputs, held, spill.is_some())?;
         bump(&self.counters.row_final_tasks, queue.len() as u64);
+        let publish = |queue: &VecDeque<Task>, done: &[Task], spare: &Option<Reservation>| {
+            let bytes = if spill.is_some() {
+                queue.iter().chain(done).map(Task::held).sum::<usize>()
+                    + spare.as_ref().map_or(0, Reservation::size)
+            } else {
+                0
+            };
+            ctx.consumer().signal().set_spillable_bytes(bytes);
+        };
+        publish(&queue, &[], &spare);
         let limit = ctx.executor().parallelism().max(1);
         let mut running: Running<'_> = FuturesUnordered::new();
-        let mut done = Vec::new();
+        let mut done: Vec<Task> = Vec::new();
+        let mut out: Option<SpillWriter> = None;
+        let mut spare = spare;
+        // Tasks finished so far (flushed ones included).
+        let mut finished = 0;
         loop {
-            let asked = spill && lock(&g.inner).spill_asked;
+            let asked = spill.is_some() && lock(&g.inner).spill_asked;
+            let mut stalled = false;
             while !asked && running.len() < limit {
                 let Some(mut task) = queue.pop_front() else {
                     break;
                 };
+                if self.refused(finished) {
+                    queue.push_front(task);
+                    stalled = running.is_empty();
+                    break;
+                }
                 if task.need > 0 {
                     if task.reservation.try_grow(task.need).is_err() {
-                        if !running.is_empty() {
-                            queue.push_front(task);
-                            break;
-                        }
-                        if spill {
-                            queue.push_front(task);
-                            queue.extend(done);
-                            self.spill_rows(g, ctx, inputs, held, queue).await?;
-                            return Ok(false);
-                        }
+                        queue.push_front(task);
+                        stalled = running.is_empty();
+                        break;
+                    }
+                    task.need = 0;
+                }
+                let query = Arc::clone(ctx.query());
+                running.push(Box::pin(ctx.run_blocking(move || {
+                    let stall = task.run(&query)?;
+                    Ok((task, stall))
+                })));
+            }
+            if stalled || (asked && running.is_empty()) {
+                let relief = match &spill {
+                    None => Relief::Wait,
+                    Some(_) if !done.is_empty() => Relief::Flush,
+                    Some(_) if asked && queue.is_empty() => {
+                        // Asked once everything was merged: nothing to free
+                        // that the output does not hold.
+                        lock(&g.inner).spill_asked = false;
+                        continue;
+                    }
+                    Some(_) => Relief::Spill,
+                };
+                match (relief, &spill) {
+                    (Relief::Flush, Some(s)) => {
+                        lock(&g.inner).spill_asked = false;
+                        out = Some(
+                            self.flush_done(ctx, s, std::mem::take(&mut done), out, &mut spare)
+                                .await?,
+                        );
+                        publish(&queue, &done, &spare);
+                    }
+                    (Relief::Spill, Some(s)) => {
+                        self.spill_rows(g, ctx, s, queue, spare, out).await?;
+                        return Ok(false);
+                    }
+                    _ => {
+                        // No spill directory: wait for the memory.
+                        let mut task = queue
+                            .pop_front()
+                            .ok_or_else(|| internal("a stalled merge without a task".to_owned()))?;
                         task.reservation
                             .grow(task.need)
                             .await
                             .map_err(KrishivError::from)?;
+                        task.need = 0;
+                        queue.push_front(task);
                     }
-                    task.need = 0;
                 }
-                let (inputs, query) = (Arc::clone(&inputs), Arc::clone(ctx.query()));
-                running.push(Box::pin(ctx.run_blocking(move || {
-                    let stall = task.run(&inputs, &query)?;
-                    Ok((task, stall))
-                })));
+                continue;
             }
             let Some(next) = running.next().await else {
-                if asked && !queue.is_empty() {
-                    queue.extend(done);
-                    self.spill_rows(g, ctx, inputs, held, queue).await?;
-                    return Ok(false);
-                }
-                // Done (or only finished tasks left: finishing frees the
-                // driver tables).
+                // Every task is done.
                 break;
             };
             let (mut task, stall) = next?;
             match stall {
-                None => done.push(task),
+                None => {
+                    finished += 1;
+                    done.push(task);
+                }
                 Some(missing) => {
                     task.need = missing;
                     queue.push_back(task);
                 }
             }
+            publish(&queue, &done, &spare);
         }
         drop(running);
-        // Every task is done: the driver tables go.
-        drop(inputs);
-        drop(held);
-        let batch = ctx.query().config().batch_size.max(1);
+        // Groups already went to the output file (memory ran short): the
+        // rest follow, so the result is read from disk with nothing else
+        // held, as the disk phase's is.
+        if let (Some(w), Some(s)) = (out, &spill) {
+            let w = self
+                .flush_done(ctx, s, std::mem::take(&mut done), Some(w), &mut spare)
+                .await?;
+            drop(spare);
+            let s = s.clone();
+            let file = ctx.run_blocking(move || s.finish(w)).await?;
+            let mut inner = lock(&g.inner);
+            inner.busy = false;
+            inner.row_merge = false;
+            inner.spill_asked = false;
+            let out = Output::on_disk(Some(file), Arc::clone(ctx.executor()));
+            let _ = g.done.set(Final {
+                out: Arc::new(out),
+                chunks: 1,
+            });
+            return Ok(true);
+        }
+        drop(spare);
         let mut tables = Vec::with_capacity(done.len());
-        let mut chunks = Vec::new();
         let mut reservations = Vec::with_capacity(done.len());
         let mut groups = 0;
         done.sort_by_key(|t| t.parts.start);
-        for (i, task) in done.into_iter().enumerate() {
+        for task in done {
             let n = task.table.len();
             groups += n;
             bump(&self.counters.hash_buckets, task.table.buckets() as u64);
-            chunks.extend((0..n).step_by(batch).map(|s| (i, s..(s + batch).min(n))));
             tables.push(Table::Rows(task.table));
             reservations.push(task.reservation);
         }
@@ -253,59 +319,153 @@ impl HashAggregate {
             inner.row_merge = false;
             inner.spill_asked = false;
         }
-        self.publish_memory(g, ctx, tables, chunks, reservations)?;
+        self.finish_memory(g, ctx, tables, reservations)?;
         Ok(true)
     }
 
+    /// Whether a test refuses memory to the next task once `finished`
+    /// tasks finished (`HashAggregate::with_final_stall`; never outside
+    /// tests).
+    fn refused(&self, finished: usize) -> bool {
+        #[cfg(test)]
+        let refused = self.stall_after.is_some_and(|n| finished >= n);
+        #[cfg(not(test))]
+        let refused = {
+            let _ = (self, finished);
+            false
+        };
+        refused
+    }
+
+    /// The final phase's tasks: each takes its partitions out of every
+    /// driver table with that share of the driver's reservation. What the
+    /// drivers keep (their indexes) is freed, but for spill headroom kept
+    /// once (`spill`).
+    fn final_queue(
+        &self,
+        g: &Global,
+        ctx: &TaskContext,
+        mut inputs: Vec<RowTable>,
+        held: Vec<Reservation>,
+        spill: bool,
+    ) -> Result<(VecDeque<Task>, Option<Reservation>)> {
+        let plan = {
+            let refs: Vec<&RowTable> = inputs.iter().collect();
+            final_tasks(&refs)
+        };
+        let bits = g.row_bits;
+        let ranges: Vec<Range<usize>> = plan.iter().map(|t| t.parts.clone()).collect();
+        let mut per_task: Vec<Vec<(RowTable, Reservation)>> = ranges
+            .iter()
+            .map(|_| Vec::with_capacity(inputs.len()))
+            .collect();
+        let mut spare = None;
+        for (t, mut r) in inputs.iter_mut().zip(held) {
+            for (slices, part) in per_task.iter_mut().zip(t.split_parts(&ranges)) {
+                let share = r.split(part.memory_size());
+                slices.push((part, share));
+            }
+            if spill && spare.is_none() {
+                shrink_to(&mut r, HEADROOM);
+                spare = Some(r);
+            }
+        }
+        drop(inputs);
+        let mut queue = VecDeque::with_capacity(plan.len());
+        for (t, inputs) in plan.into_iter().zip(per_task) {
+            let table = RowTable::new(&self.core, &g.seed, Mode::Grow, false, bits)?;
+            queue.push_back(Task {
+                need: table.projected_presize(t.groups),
+                presize: t.groups.max(1),
+                at: (0, t.parts.start, 0),
+                parts: t.parts,
+                table,
+                reservation: ctx.consumer().reservation(),
+                inputs,
+            });
+        }
+        Ok((queue, spare))
+    }
+
+    /// Writes the finished tasks' groups to the output file (opened on the
+    /// first flush) and frees them.
+    async fn flush_done(
+        &self,
+        ctx: &TaskContext,
+        s: &Spiller,
+        done: Vec<Task>,
+        out: Option<SpillWriter>,
+        spare: &mut Option<Reservation>,
+    ) -> Result<SpillWriter> {
+        bump(&self.counters.row_final_flushes, 1);
+        let lent = spare.as_mut().map_or(0, lend_headroom);
+        let s = s.clone();
+        let out = ctx
+            .run_blocking(move || {
+                let mut out = match out {
+                    Some(w) => w,
+                    None => s
+                        .scope
+                        .writer(Arc::clone(&s.core.output_schema), s.consumer.reservation())
+                        .map_err(KrishivError::from)?,
+                };
+                for task in done {
+                    s.write_output(&Table::Rows(task.table), &mut out)?;
+                }
+                Ok(out)
+            })
+            .await?;
+        if let Some(r) = spare.as_mut() {
+            super::regrow(r, lent);
+        }
+        Ok(out)
+    }
+
     /// Writes every task's table and every input row no task merged yet as
-    /// spill runs (on the blocking pool), then hands the runs to the disk
-    /// phase.
+    /// spill runs (on the blocking pool), then hands the runs, and the
+    /// output file of the groups already flushed, to the disk phase.
     async fn spill_rows(
         &self,
         g: &Global,
         ctx: &TaskContext,
-        inputs: Arc<[RowTable]>,
-        held: Vec<Reservation>,
+        s: &Spiller,
         tasks: VecDeque<Task>,
+        spare: Option<Reservation>,
+        out: Option<SpillWriter>,
     ) -> Result<()> {
-        let s = self
-            .spiller(ctx)
-            .ok_or_else(|| internal("spilling an unspillable aggregate".to_owned()))?;
         bump(&self.counters.row_final_spills, 1);
-        let mut held = held;
+        let s = s.clone();
+        let mut spare = spare;
         let runs = ctx
             .run_blocking(move || {
-                // The driver tables kept spill headroom: the writers' scratch.
-                for r in &mut held {
+                if let Some(r) = spare.as_mut() {
                     lend_headroom(r);
                 }
                 let mut runs: Vec<Run> = Vec::new();
-                // Per partition, the cursor of the task that merges it: rows
-                // before it are in that task's table.
-                let mut cursor = vec![(0, 0, 0); PARTS];
-                for t in &tasks {
-                    for p in t.parts.clone() {
-                        cursor[p] = t.at;
+                for task in tasks {
+                    // Per key, merge order: what the task merged precedes
+                    // every input row it did not reach.
+                    let at = task.at;
+                    let all = |_: u32| true;
+                    let keeps: Vec<_> = task
+                        .inputs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (input, _))| {
+                            move |r: u32| {
+                                let (p, row) = input.split_ref(r);
+                                (i, p, row) >= at
+                            }
+                        })
+                        .collect();
+                    let mut sources: Vec<(&RowTable, &dyn Fn(u32) -> bool)> =
+                        vec![(&task.table, &all)];
+                    for ((input, _), keep) in task.inputs.iter().zip(&keeps) {
+                        sources.push((input, keep));
                     }
+                    runs.push(s.write_run_sources(&sources, 0)?);
                 }
-                // Merge order: what the tasks merged precedes every row
-                // they did not reach.
-                for t in tasks {
-                    let Task {
-                        table, reservation, ..
-                    } = t;
-                    runs.push(s.write_run(&Table::Rows(table), 0, 0)?);
-                    drop(reservation);
-                }
-                for (i, input) in inputs.iter().enumerate() {
-                    let keep = |r: u32| {
-                        let (p, row) = split_ref(r);
-                        cursor.get(p).is_none_or(|&at| (i, p, row) >= at)
-                    };
-                    runs.push(s.write_run_rows(input, &keep, 0)?);
-                }
-                drop(held);
-                drop(inputs);
+                drop(spare);
                 Ok(runs)
             })
             .await?;
@@ -314,6 +474,7 @@ impl HashAggregate {
         inner.row_merge = false;
         inner.spill_asked = false;
         inner.disk = true;
+        inner.out = out;
         tasks_of(runs, 0, &mut inner.tasks);
         Ok(())
     }

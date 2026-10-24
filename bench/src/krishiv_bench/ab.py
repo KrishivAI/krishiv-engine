@@ -19,8 +19,10 @@ from typing import Any
 from . import compare
 from .abba import LOAD_INDICATIVE, bench_lock, bootstrap_ci, discover_tables, loadavg, summarize, wait_idle
 from .adapters import Dataset
+from .adapters.base import check_query, result_rows
 from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
 from .errors import describe_error
+from .h2o import is_h2o
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
 from .runner import git_info, load_queries, machine_info
 
@@ -67,12 +69,12 @@ def one_query(q, a, b, reps: int) -> dict:
     rows: dict[str, list] = {}
     for side, eng in (("a", a), ("b", b)):
         try:
-            rows[side] = eng.run(q)
+            rows[side] = eng.run(check_query(q))
         except RunnerError as e:
             return _fail(entry, f"{side} error: {describe_error(e)}")
         except RunnerCrashed as e:
             return _fail(entry, f"{side} crashed/timed out: {e}")
-    entry["rows"] = len(rows["a"])
+    entry["rows"] = result_rows(q, rows["a"])
     ok, msg = compare.rows_match(rows["a"], rows["b"], compare.has_top_level_order_by(q.sql), sql=q.sql)
     if not ok:
         return _fail(entry, f"A and B differ: {msg[:300]}")
@@ -165,7 +167,7 @@ def run_ab(
     a_sha: str | None = None,
     b_sha: str | None = None,
 ) -> Path:
-    root = data_root() / dataset if suite == "clickbench" else dataset_dir(dataset, sf)
+    root = data_root() / dataset if suite == "clickbench" or is_h2o(suite) else dataset_dir(dataset, sf)
     tables = discover_tables(root)
     if not tables:
         raise SystemExit(f"no dataset at {root}")
