@@ -2255,6 +2255,26 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
         ExprNode::Function(FunctionCall { name, distinct, .. }) => {
             call(name, Builtin::from_name(name), *distinct, k, None)
         }
+        // Spark's `lag`/`lead` show `input, offset, default`, and
+        // `nth_value` `input, offset` then ` ignore nulls` when set.
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.kind == FunctionKind::Window
+                && matches!(f.id.name(), "lag" | "lead" | "nth_value")
+                && f.filter.is_none() =>
+        {
+            let shown = if f.id.name() == "nth_value" { 2 } else { 3 };
+            let n = shown.min(k.len());
+            let text = call(f.id.name(), None, f.distinct, &k[..n], Some(&f.data_type));
+            let ignore = matches!(
+                f.args.get(shown).map(|a| &a.node),
+                Some(ExprNode::Literal(Literal::Boolean(true)))
+            );
+            if ignore && f.id.name() == "nth_value" {
+                format!("{text} ignore nulls")
+            } else {
+                text
+            }
+        }
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
             let op = match &f.id {
                 FunctionId::Builtin(b) => Some(*b),

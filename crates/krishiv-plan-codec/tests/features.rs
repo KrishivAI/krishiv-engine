@@ -34,6 +34,14 @@ fn the_header_lists_exactly_the_features_in_use() {
     assert_eq!(m.epoch, EPOCH);
     assert_eq!(message("limit_offset").features, ["limit_offset"]);
     assert!(message("limit").features.is_empty());
+    assert_eq!(
+        message("window_frames").features,
+        ["window", "window_frame_offsets"]
+    );
+    assert_eq!(
+        message("window_offset_values").features,
+        ["window", "window_frame_offsets", "window_offset_functions"]
+    );
     // An offset of zero is the baseline `Limit`.
     let zero = plan_of(PhysNode::Limit {
         input: Box::new(PhysNode::OneRow),
@@ -110,7 +118,47 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         None
     );
+    // A frame needs a feature only for an offset bound: the `Window`
+    // node's format carries the others, `CURRENT ROW` at both ends included.
+    use krishiv_exec::window::{FrameBound, FrameUnits, WindowFrame};
+    let frame = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    for (lower, upper) in [
+        (
+            FrameBound::UnboundedPreceding,
+            FrameBound::UnboundedFollowing,
+        ),
+        (FrameBound::CurrentRow, FrameBound::CurrentRow),
+        (FrameBound::CurrentRow, FrameBound::UnboundedFollowing),
+    ] {
+        assert_eq!(feature_of(Construct::Frame(&frame(lower, upper))), None);
+    }
+    for (lower, upper) in [
+        (FrameBound::Offset(-1), FrameBound::CurrentRow),
+        (FrameBound::UnboundedPreceding, FrameBound::Offset(2)),
+    ] {
+        assert_eq!(
+            feature_of(Construct::Frame(&frame(lower, upper))),
+            Some(Feature::WindowFrameOffsets)
+        );
+    }
+    assert_eq!(
+        feature_of(Construct::Window(
+            &krishiv_exec::window::WindowFunction::NthValue {
+                input: 0,
+                n: 1,
+                ignore_nulls: false,
+                data_type: arrow_schema::DataType::Int64,
+            }
+        )),
+        Some(Feature::WindowOffsetFunctions)
+    );
     assert_eq!(Feature::Window.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::WindowFrameOffsets.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::WindowOffsetFunctions.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::LimitOffset.to_string(), "limit_offset");
     assert_eq!(Feature::from_id("no_such_feature"), None);
 }
