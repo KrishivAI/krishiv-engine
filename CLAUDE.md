@@ -11,6 +11,9 @@ not here). Start sessions here with `claude --add-dir ../krishiv-internal`.
 3. Only the ADRs your task lists: `../krishiv-internal/adr/NNNN-*.md`. Spec chapters in `../krishiv-internal/spec/`
    only when an ADR or the task points there. Read by path; never paste docs into prompts.
 4. `git status`, `git log --oneline -10`, `git worktree list`, `gh pr list` before changing anything.
+5. `ARCHITECTURE.md`: the path of a query through the crates, the layer table and a "where does X live" index.
+
+Navigate code with the LSP tool (go-to-definition, find-references) before grepping or reading whole files.
 
 From a worktree, the docs repo is `$(git rev-parse --path-format=absolute --git-common-dir)/../../krishiv-internal`
 (or set `KRISHIV_INTERNAL`).
@@ -109,7 +112,9 @@ New crate → add it to `xtask/layers.toml` and root `Cargo.toml`, and write its
 - Per task: spark-semantics goldens first (if Spark-observable) → implementer with TDD → reviewer (stage 1
   spec/ADR compliance, stage 2 quality/unsafe/concurrency) → fix → merge via PR (user merges `main`).
 - Skills: `krishiv-handoff`, `krishiv-spark-function`, `krishiv-operator`, `krishiv-adr`, `krishiv-dependency`,
-  `krishiv-benchmark`, `krishiv-experiment`, `krishiv-release`; plus the superpowers workflow skills.
+  `krishiv-benchmark`, `krishiv-experiment`, `krishiv-release`; recipes `krishiv-add-type`, `krishiv-add-config`,
+  `krishiv-add-error-class`, `krishiv-codec-feature`, `krishiv-golden-category`, `krishiv-bench-suite`;
+  plus the superpowers workflow skills.
 - Session end: tick the plan, update STATUS.md, push branch / draft PR, write a handoff. The Stop hook reminds you.
 
 ## Token efficiency
