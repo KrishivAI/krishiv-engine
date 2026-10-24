@@ -235,6 +235,49 @@ pub(crate) fn implied(pred: &Arc<Expr>, side: &Attrs) -> Option<Arc<Expr>> {
     or_all(out)
 }
 
+/// `pred` with the column equalities every one of its disjuncts holds
+/// taken out as conjuncts of their own: `(a = b and x) or (a = b and y)` is
+/// `a = b` and `x or y` (distributivity, which holds in three-valued logic
+/// too). A plain column equality cannot raise and is deterministic, so
+/// evaluating it once instead of in each disjunct changes nothing. Join
+/// ordering needs it: an `or` over three inputs whose disjuncts all join
+/// the same keys (TPC-DS q13) is otherwise one condition over all three,
+/// and the inputs meet only in a cross product.
+pub(crate) fn common_equalities(pred: &Arc<Expr>) -> Vec<Arc<Expr>> {
+    let parts = disjuncts(pred);
+    if parts.len() < 2 || has_subquery(pred) {
+        return vec![Arc::clone(pred)];
+    }
+    let each: Vec<Vec<Arc<Expr>>> = parts.iter().map(conjuncts).collect();
+    let is_column = |e: &Expr| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_)));
+    let common: Vec<Arc<Expr>> = each[0]
+        .iter()
+        .filter(|c| matches!(builtin(c), Some((Builtin::Eq, [l, r], _)) if is_column(l) && is_column(r)))
+        .filter(|c| each[1..].iter().all(|d| d.iter().any(|x| same(x, c))))
+        .cloned()
+        .collect();
+    if common.is_empty() {
+        return vec![Arc::clone(pred)];
+    }
+    let mut rest = Vec::with_capacity(each.len());
+    for d in &each {
+        let left: Vec<Arc<Expr>> = d
+            .iter()
+            .filter(|x| !common.iter().any(|c| same(x, c)))
+            .cloned()
+            .collect();
+        match and_all(left) {
+            Some(e) => rest.push(e),
+            // A disjunct of only common equalities: the `or` always holds
+            // once they do.
+            None => return common,
+        }
+    }
+    let mut out = common;
+    out.extend(or_all(rest));
+    out
+}
+
 /// `a and b and ...`, left-deep; `None` for no predicates.
 pub(crate) fn and_all(preds: impl IntoIterator<Item = Arc<Expr>>) -> Option<Arc<Expr>> {
     preds

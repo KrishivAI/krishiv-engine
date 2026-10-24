@@ -67,10 +67,16 @@ impl NestedLoopJoin {
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for the null-aware anti join (it needs
-    /// an equality key; the planner uses the hash join).
+    /// an equality key; the planner uses the hash join) and for the joins
+    /// that return rows of their build side by their matches.
     pub fn try_new(spec: NestedLoopSpec) -> Result<Self> {
         if spec.join_type == JoinType::NullAwareAnti {
             return Err(unsupported("a null-aware anti join without a key"));
+        }
+        if spec.join_type.builds_preserved() {
+            return Err(unsupported(
+                "nested-loop joins that return rows of their build side by their matches",
+            ));
         }
         let fields = |nullable: bool| -> Vec<Field> {
             spec.probe_schema
