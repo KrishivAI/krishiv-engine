@@ -69,7 +69,7 @@ python-version = "3.11"
 [tool.ty.analysis]
 # The compiled extension only exists after `maturin develop`; its typed stub is
 # P2-T130's job, so until then the import is allowed to stay unresolved.
-allowed-unresolved-imports = ["krishiv._native"]
+allowed-unresolved-imports = ["krishiv._native", "pandas"]
 
 [tool.coverage.paths]
 # The wheel is tested from its installed location; map it back to the source tree so

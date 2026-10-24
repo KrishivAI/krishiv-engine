@@ -125,7 +125,7 @@ def _is_dataframe(value: Any) -> bool:
 
 def _is_pandas_frame(value: Any) -> bool:
     try:
-        import pandas as pd  # ty: ignore[unresolved-import]
+        import pandas as pd
     except ImportError:
         return False
     return isinstance(value, pd.DataFrame)
@@ -397,7 +397,7 @@ def _assert_rows_equal(
 
 def _assert_pandas_equal(actual: Any, expected: Any, check_order: bool, rtol: float, atol: float) -> None:
     """Approximate equality for pandas frames (raises ``DIFFERENT_PANDAS_DATAFRAME``)."""
-    import pandas as pd  # ty: ignore[unresolved-import]
+    import pandas as pd
 
     if not isinstance(actual, pd.DataFrame) or not isinstance(expected, pd.DataFrame):
         bad, name = (actual, "actual") if not isinstance(actual, pd.DataFrame) else (expected, "expected")

@@ -347,6 +347,18 @@ def test_special_vals_not_equal(check_order: bool) -> None:
     assert inf_vs_neg_inf.value.getMessageParameters() == rows_error(pos_inf, neg_inf, 1, 1)
 
 
+def test_decimal_special_vals() -> None:
+    nan = [Row(v=Decimal("NaN"))]
+    assertDataFrameEqual(nan, [Row(v=Decimal("NaN"))])
+    with pytest.raises(errors.PySparkAssertionError):
+        assertDataFrameEqual(nan, [Row(v=Decimal("1.0"))])
+    assertDataFrameEqual([Row(v=Decimal("Infinity"))], [Row(v=Decimal("Infinity"))])
+    with pytest.raises(errors.PySparkAssertionError):
+        assertDataFrameEqual([Row(v=Decimal("Infinity"))], [Row(v=Decimal("1.0"))])
+    with pytest.raises(errors.PySparkAssertionError):
+        assertDataFrameEqual([Row(v=Decimal("Infinity"))], [Row(v=Decimal("-Infinity"))])
+
+
 @orders
 def test_df_list_row_equal(spark: SparkSession, check_order: bool) -> None:
     df1 = spark.createDataFrame(data=[(1, 3000), (2, 1000)], schema=["id", "amount"])
