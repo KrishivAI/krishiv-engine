@@ -14,8 +14,6 @@ from krishiv.sql import functions as F
 from krishiv.sql._convert import cell, repr_html_string
 from krishiv.sql.dataframe import EAGER_DEFAULT_MAX_ROWS, EAGER_MAX_ROWS_KEY, _eager_max_rows
 
-pa = pytest.importorskip("pyarrow")
-
 
 @pytest.fixture
 def spark() -> SparkSession:
@@ -34,6 +32,7 @@ def test_repr_shows_columns_and_types(spark: SparkSession) -> None:
 
 def test_repr_does_not_execute_the_query(spark: SparkSession) -> None:
     """``1 / 0`` fails at execution, not analysis: the repr still works."""
+    pytest.importorskip("pyarrow")
     df = spark.sql("select 1 / 0 as x")
     assert repr(df) == "DataFrame[x: double]"
     with pytest.raises(errors.ArithmeticException, match="DIVIDE_BY_ZERO"):
@@ -60,6 +59,7 @@ def test_eager_max_rows_defaults_and_bounds(spark: SparkSession) -> None:
 
 
 def test_html_shows_names_types_and_values(spark: SparkSession) -> None:
+    pytest.importorskip("pyarrow")
     df = spark.sql("SELECT 1 AS a, 'x' AS b")
     html = df._repr_html_()
     assert html is not None
@@ -71,6 +71,7 @@ def test_html_shows_names_types_and_values(spark: SparkSession) -> None:
 
 
 def test_html_is_a_bounded_preview(spark: SparkSession) -> None:
+    pa = pytest.importorskip("pyarrow")
     df = spark.createDataFrame(pa.table({"id": list(range(30))})).orderBy("id")
     assert body_rows(df._repr_html_() or "") == 20
     spark.conf.set(EAGER_MAX_ROWS_KEY, "5")
@@ -80,6 +81,7 @@ def test_html_is_a_bounded_preview(spark: SparkSession) -> None:
 
 
 def test_html_escapes_names_types_and_values(spark: SparkSession) -> None:
+    pa = pytest.importorskip("pyarrow")
     df = spark.createDataFrame(pa.table({"a<b": ['<x>&"y"'], "c": [1]})).select(F.col("a<b").alias("d>e"))
     html = df._repr_html_()
     assert html is not None
@@ -89,6 +91,7 @@ def test_html_escapes_names_types_and_values(spark: SparkSession) -> None:
 
 
 def test_html_renders_nulls(spark: SparkSession) -> None:
+    pa = pytest.importorskip("pyarrow")
     df = spark.createDataFrame(pa.table({"a": ["x", None], "v": [1.5, None]})).orderBy("a")
     html = df._repr_html_()
     assert html is not None
@@ -96,6 +99,7 @@ def test_html_renders_nulls(spark: SparkSession) -> None:
 
 
 def test_html_keeps_wide_characters(spark: SparkSession) -> None:
+    pytest.importorskip("pyarrow")
     df = spark.sql("select '日本語' as cjk, 'abcdefghijklmnopqrstuvwxyz' as long")
     html = df._repr_html_()
     assert html is not None
@@ -124,6 +128,7 @@ def test_html_string_without_columns_or_rows() -> None:
 
 
 def test_html_string_renders_nested_and_missing_values() -> None:
+    pa = pytest.importorskip("pyarrow")
     nested = pa.struct([("x", pa.int64()), ("y", pa.string())])
     rows = [[cell({"x": 1, "y": "<a>"}, nested), cell(None, pa.int64())]]
     html = repr_html_string([("s", "struct"), ("n", "int")], rows)
@@ -131,12 +136,14 @@ def test_html_string_renders_nested_and_missing_values() -> None:
 
 
 def test_html_string_renders_lists_with_nulls() -> None:
+    pa = pytest.importorskip("pyarrow")
     rows = [[cell([1, None], pa.list_(pa.int64()))]]
     assert "<td>[1, NULL]</td>" in repr_html_string([("l", "array")], rows)
 
 
 def test_html_matches_show_cells(spark: SparkSession) -> None:
     """The preview uses the same display text as ``show`` (floats, dates, binary)."""
+    pytest.importorskip("pyarrow")
     df = spark.sql("select 1.5 as f, DATE'2020-01-02' as d").limit(1)
     html = df._repr_html_()
     assert html is not None
@@ -144,8 +151,22 @@ def test_html_matches_show_cells(spark: SparkSession) -> None:
     assert "<td>2020-01-02</td>" in html
 
 
-def test_html_preview_reruns_the_query(spark: SparkSession) -> None:
+def test_html_preview_reruns_the_query(spark: SparkSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each preview runs the query again: it calls ``toArrow`` every time, not from a cache."""
+    pytest.importorskip("pyarrow")
+    from krishiv.sql.dataframe import DataFrame as _DataFrame
+
     df = spark.sql("select 1 as a")
+    calls = 0
+    original = _DataFrame.toArrow
+
+    def counting(self: _DataFrame) -> Any:
+        nonlocal calls
+        calls += 1
+        return original(self)
+
+    monkeypatch.setattr(_DataFrame, "toArrow", counting)
     first: Any = df._repr_html_()
+    assert calls == 1
     assert first == df._repr_html_()
-    assert df.collect() == df.collect()
+    assert calls == 2

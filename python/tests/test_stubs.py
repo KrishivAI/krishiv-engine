@@ -22,12 +22,27 @@ import pytest
 PYTHON_DIR = Path(__file__).resolve().parent.parent
 
 
+def _installed_package_dir() -> Path:
+    """The ``krishiv`` package under test: the installed wheel, not the source tree.
+
+    Resolved without importing the package (which needs the built extension),
+    so the check also runs before ``maturin develop``. Under the wheel jobs the
+    test files run from outside the source tree, so this is the installed wheel.
+    """
+    import importlib.util
+
+    spec = importlib.util.find_spec("krishiv")
+    assert spec is not None, "krishiv package not found"
+    assert spec.origin is not None, "krishiv package not found"
+    return Path(spec.origin).resolve().parent
+
+
 def test_py_typed_marker_is_shipped() -> None:
-    assert (PYTHON_DIR / "krishiv" / "py.typed").is_file()
+    assert (_installed_package_dir() / "py.typed").is_file()
 
 
 def test_native_stub_is_shipped() -> None:
-    assert (PYTHON_DIR / "krishiv" / "_native.pyi").is_file()
+    assert (_installed_package_dir() / "_native.pyi").is_file()
 
 
 def _stub_methods(tree: ast.Module) -> dict[str, dict[str, ast.FunctionDef]]:
@@ -59,7 +74,7 @@ def _stub_defaulted(fn: ast.FunctionDef) -> set[str]:
 
 def test_native_stub_matches_runtime() -> None:
     krishiv_native = pytest.importorskip("krishiv._native")
-    tree = ast.parse((PYTHON_DIR / "krishiv" / "_native.pyi").read_text())
+    tree = ast.parse((_installed_package_dir() / "_native.pyi").read_text())
     classes = _stub_methods(tree)
     assert set(classes) == {"Session", "DataFrame", "GroupedData", "Column", "ArrowStream"}
     for cls_name, methods in classes.items():
