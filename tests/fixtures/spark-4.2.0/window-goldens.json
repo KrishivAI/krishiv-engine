@@ -4879,6 +4879,3200 @@
      "43"
     ]
    ]
+  },
+  {
+   "id": "rows_around",
+   "sql": "SELECT k, s, sum(d) OVER w, avg(d) OVER w, count(s) OVER w, min(s) OVER w, max(s) OVER w, first(s) OVER w, last(s, true) OVER w, sum(x) OVER w, min(x) OVER w FROM e WINDOW w AS (PARTITION BY k ORDER BY s ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "decimal(17,2)",
+     "nullable": true
+    },
+    {
+     "name": "avg(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "decimal(11,6)",
+     "nullable": true
+    },
+    {
+     "name": "count(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "min(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "max(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "first(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "last(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "min(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     "23.83",
+     "11.915000",
+     "2",
+     "apple",
+     "fig",
+     null,
+     "fig",
+     "0.5",
+     "0.2"
+    ],
+    [
+     "a",
+     "fig",
+     "34.08",
+     "11.360000",
+     "3",
+     "apple",
+     "pear",
+     "apple",
+     "pear",
+     "0.30000000000000004",
+     "0.1"
+    ],
+    [
+     "a",
+     "pear",
+     "13.58",
+     "6.790000",
+     "2",
+     "fig",
+     "pear",
+     "fig",
+     "pear",
+     "0.1",
+     "0.1"
+    ],
+    [
+     "a",
+     null,
+     "20.50",
+     "20.500000",
+     "1",
+     "apple",
+     "apple",
+     null,
+     "apple",
+     "0.5",
+     "0.2"
+    ],
+    [
+     "b",
+     "Kiwi",
+     "99999.98",
+     "49999.990000",
+     "2",
+     "Kiwi",
+     "kiwi",
+     "Kiwi",
+     "kiwi",
+     "0.0",
+     "-10000000000.0"
+    ],
+    [
+     "b",
+     "éclair",
+     "99999.99",
+     "49999.995000",
+     "2",
+     "kiwi",
+     "éclair",
+     "kiwi",
+     "éclair",
+     "10000000001.5",
+     "1.5"
+    ],
+    [
+     "b",
+     "kiwi",
+     "99999.98",
+     "33333.326667",
+     "3",
+     "Kiwi",
+     "éclair",
+     "Kiwi",
+     "éclair",
+     "1.5",
+     "-10000000000.0"
+    ],
+    [
+     null,
+     "plum",
+     "1.11",
+     "1.110000",
+     "1",
+     "plum",
+     "plum",
+     "plum",
+     "plum",
+     "2.5",
+     "2.5"
+    ]
+   ]
+  },
+  {
+   "id": "rows_ahead",
+   "sql": "SELECT k, s, sum(d) OVER w, avg(d) OVER w, count(s) OVER w, min(s) OVER w, max(s) OVER w, first(s) OVER w, last(s, true) OVER w, sum(x) OVER w, min(x) OVER w FROM e WINDOW w AS (PARTITION BY k ORDER BY s ROWS BETWEEN 2 FOLLOWING AND 3 FOLLOWING)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2 FOLLOWING AND 3 FOLLOWING)",
+     "type": "decimal(17,2)",
+     "nullable": true
+    },
+    {
+     "name": "avg(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2 FOLLOWING AND 3 FOLLOWING)",
+     "type": "decimal(11,6)",
+     "nullable": true
+    },
+    {
+     "name": "count(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2 FOLLOWING AND 3 FOLLOWING)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "min(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2 FOLLOWING AND 3 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "max(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2 FOLLOWING AND 3 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "first(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2 FOLLOWING AND 3 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "last(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2 FOLLOWING AND 3 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2 FOLLOWING AND 3 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "min(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2 FOLLOWING AND 3 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     "10.25",
+     "10.250000",
+     "1",
+     "pear",
+     "pear",
+     "pear",
+     "pear",
+     "0.1",
+     "0.1"
+    ],
+    [
+     "a",
+     "fig",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "a",
+     "pear",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "a",
+     null,
+     "13.58",
+     "6.790000",
+     "2",
+     "fig",
+     "pear",
+     "fig",
+     "pear",
+     "0.1",
+     "0.1"
+    ],
+    [
+     "b",
+     "Kiwi",
+     "0.00",
+     "0.000000",
+     "1",
+     "éclair",
+     "éclair",
+     "éclair",
+     "éclair",
+     "1.5",
+     "1.5"
+    ],
+    [
+     "b",
+     "éclair",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "b",
+     "kiwi",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     null,
+     "plum",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "rows_before",
+   "sql": "SELECT k, s, sum(d) OVER w, avg(d) OVER w, count(s) OVER w, min(s) OVER w, max(s) OVER w, first(s) OVER w, last(s, true) OVER w, sum(x) OVER w, min(x) OVER w FROM e WINDOW w AS (PARTITION BY k ORDER BY s ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
+     "type": "decimal(17,2)",
+     "nullable": true
+    },
+    {
+     "name": "avg(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
+     "type": "decimal(11,6)",
+     "nullable": true
+    },
+    {
+     "name": "count(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "min(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "max(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "first(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "last(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "min(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     "0.3",
+     "0.3"
+    ],
+    [
+     "a",
+     "fig",
+     "20.50",
+     "20.500000",
+     "1",
+     "apple",
+     "apple",
+     null,
+     "apple",
+     "0.5",
+     "0.2"
+    ],
+    [
+     "a",
+     "pear",
+     "23.83",
+     "11.915000",
+     "2",
+     "apple",
+     "fig",
+     null,
+     "fig",
+     "0.5",
+     "0.2"
+    ],
+    [
+     "a",
+     null,
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "b",
+     "Kiwi",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "b",
+     "éclair",
+     "99999.98",
+     "49999.990000",
+     "2",
+     "Kiwi",
+     "kiwi",
+     "Kiwi",
+     "kiwi",
+     "0.0",
+     "-10000000000.0"
+    ],
+    [
+     "b",
+     "kiwi",
+     "-0.01",
+     "-0.010000",
+     "1",
+     "Kiwi",
+     "Kiwi",
+     "Kiwi",
+     "Kiwi",
+     "-10000000000.0",
+     "-10000000000.0"
+    ],
+    [
+     null,
+     "plum",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "rows_to_end",
+   "sql": "SELECT k, s, sum(d) OVER w, avg(d) OVER w, count(s) OVER w, min(s) OVER w, max(s) OVER w, first(s) OVER w, last(s, true) OVER w, sum(x) OVER w, min(x) OVER w FROM e WINDOW w AS (PARTITION BY k ORDER BY s ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "decimal(17,2)",
+     "nullable": true
+    },
+    {
+     "name": "avg(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "decimal(11,6)",
+     "nullable": true
+    },
+    {
+     "name": "count(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "min(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "max(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "first(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "last(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "min(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     "34.08",
+     "11.360000",
+     "3",
+     "apple",
+     "pear",
+     null,
+     "pear",
+     "0.6",
+     "0.1"
+    ],
+    [
+     "a",
+     "fig",
+     "34.08",
+     "11.360000",
+     "3",
+     "apple",
+     "pear",
+     "apple",
+     "pear",
+     "0.30000000000000004",
+     "0.1"
+    ],
+    [
+     "a",
+     "pear",
+     "13.58",
+     "6.790000",
+     "2",
+     "fig",
+     "pear",
+     "fig",
+     "pear",
+     "0.1",
+     "0.1"
+    ],
+    [
+     "a",
+     null,
+     "34.08",
+     "11.360000",
+     "3",
+     "apple",
+     "pear",
+     null,
+     "pear",
+     "0.6",
+     "0.1"
+    ],
+    [
+     "b",
+     "Kiwi",
+     "99999.98",
+     "33333.326667",
+     "3",
+     "Kiwi",
+     "éclair",
+     "Kiwi",
+     "éclair",
+     "1.5",
+     "-10000000000.0"
+    ],
+    [
+     "b",
+     "éclair",
+     "99999.99",
+     "49999.995000",
+     "2",
+     "kiwi",
+     "éclair",
+     "kiwi",
+     "éclair",
+     "10000000001.5",
+     "1.5"
+    ],
+    [
+     "b",
+     "kiwi",
+     "99999.98",
+     "33333.326667",
+     "3",
+     "Kiwi",
+     "éclair",
+     "Kiwi",
+     "éclair",
+     "1.5",
+     "-10000000000.0"
+    ],
+    [
+     null,
+     "plum",
+     "1.11",
+     "1.110000",
+     "1",
+     "plum",
+     "plum",
+     "plum",
+     "plum",
+     "2.5",
+     "2.5"
+    ]
+   ]
+  },
+  {
+   "id": "rows_rest",
+   "sql": "SELECT k, s, sum(d) OVER w, avg(d) OVER w, count(s) OVER w, min(s) OVER w, max(s) OVER w, first(s) OVER w, last(s, true) OVER w, sum(x) OVER w, min(x) OVER w FROM e WINDOW w AS (PARTITION BY k ORDER BY s ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "decimal(17,2)",
+     "nullable": true
+    },
+    {
+     "name": "avg(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "decimal(11,6)",
+     "nullable": true
+    },
+    {
+     "name": "count(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "min(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "max(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "first(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "last(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "min(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     "34.08",
+     "11.360000",
+     "3",
+     "apple",
+     "pear",
+     "apple",
+     "pear",
+     "0.30000000000000004",
+     "0.1"
+    ],
+    [
+     "a",
+     "fig",
+     "13.58",
+     "6.790000",
+     "2",
+     "fig",
+     "pear",
+     "fig",
+     "pear",
+     "0.1",
+     "0.1"
+    ],
+    [
+     "a",
+     "pear",
+     "10.25",
+     "10.250000",
+     "1",
+     "pear",
+     "pear",
+     "pear",
+     "pear",
+     "0.1",
+     "0.1"
+    ],
+    [
+     "a",
+     null,
+     "34.08",
+     "11.360000",
+     "3",
+     "apple",
+     "pear",
+     null,
+     "pear",
+     "0.6",
+     "0.1"
+    ],
+    [
+     "b",
+     "Kiwi",
+     "99999.98",
+     "33333.326667",
+     "3",
+     "Kiwi",
+     "éclair",
+     "Kiwi",
+     "éclair",
+     "1.5",
+     "-10000000000.0"
+    ],
+    [
+     "b",
+     "éclair",
+     "0.00",
+     "0.000000",
+     "1",
+     "éclair",
+     "éclair",
+     "éclair",
+     "éclair",
+     "1.5",
+     "1.5"
+    ],
+    [
+     "b",
+     "kiwi",
+     "99999.99",
+     "49999.995000",
+     "2",
+     "kiwi",
+     "éclair",
+     "kiwi",
+     "éclair",
+     "10000000001.5",
+     "1.5"
+    ],
+    [
+     null,
+     "plum",
+     "1.11",
+     "1.110000",
+     "1",
+     "plum",
+     "plum",
+     "plum",
+     "plum",
+     "2.5",
+     "2.5"
+    ]
+   ]
+  },
+  {
+   "id": "rows_negative_preceding",
+   "sql": "SELECT k, s, sum(d) OVER w, avg(d) OVER w, count(s) OVER w, min(s) OVER w, max(s) OVER w, first(s) OVER w, last(s, true) OVER w, sum(x) OVER w, min(x) OVER w FROM e WINDOW w AS (PARTITION BY k ORDER BY s ROWS BETWEEN -1 PRECEDING AND 1 FOLLOWING)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 PRECEDING AND 1 FOLLOWING)",
+     "type": "decimal(17,2)",
+     "nullable": true
+    },
+    {
+     "name": "avg(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 PRECEDING AND 1 FOLLOWING)",
+     "type": "decimal(11,6)",
+     "nullable": true
+    },
+    {
+     "name": "count(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 PRECEDING AND 1 FOLLOWING)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "min(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 PRECEDING AND 1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "max(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 PRECEDING AND 1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "first(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 PRECEDING AND 1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "last(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 PRECEDING AND 1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 PRECEDING AND 1 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "min(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 PRECEDING AND 1 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     "3.33",
+     "3.330000",
+     "1",
+     "fig",
+     "fig",
+     "fig",
+     "fig",
+     null,
+     null
+    ],
+    [
+     "a",
+     "fig",
+     "10.25",
+     "10.250000",
+     "1",
+     "pear",
+     "pear",
+     "pear",
+     "pear",
+     "0.1",
+     "0.1"
+    ],
+    [
+     "a",
+     "pear",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "a",
+     null,
+     "20.50",
+     "20.500000",
+     "1",
+     "apple",
+     "apple",
+     "apple",
+     "apple",
+     "0.2",
+     "0.2"
+    ],
+    [
+     "b",
+     "Kiwi",
+     "99999.99",
+     "99999.990000",
+     "1",
+     "kiwi",
+     "kiwi",
+     "kiwi",
+     "kiwi",
+     "10000000000.0",
+     "10000000000.0"
+    ],
+    [
+     "b",
+     "éclair",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "b",
+     "kiwi",
+     "0.00",
+     "0.000000",
+     "1",
+     "éclair",
+     "éclair",
+     "éclair",
+     "éclair",
+     "1.5",
+     "1.5"
+    ],
+    [
+     null,
+     "plum",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "rows_empty",
+   "sql": "SELECT k, s, sum(d) OVER w, avg(d) OVER w, count(s) OVER w, min(s) OVER w, max(s) OVER w, first(s) OVER w, last(s, true) OVER w, sum(x) OVER w, min(x) OVER w FROM e WINDOW w AS (PARTITION BY k ORDER BY s ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW)",
+     "type": "decimal(17,2)",
+     "nullable": true
+    },
+    {
+     "name": "avg(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW)",
+     "type": "decimal(11,6)",
+     "nullable": true
+    },
+    {
+     "name": "count(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "min(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "max(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "first(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "last(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "min(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW)",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "a",
+     "fig",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "a",
+     "pear",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "a",
+     null,
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "b",
+     "Kiwi",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "b",
+     "éclair",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "b",
+     "kiwi",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     null,
+     "plum",
+     null,
+     null,
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "rows_huge",
+   "sql": "SELECT k, s, sum(d) OVER w, avg(d) OVER w, count(s) OVER w, min(s) OVER w, max(s) OVER w, first(s) OVER w, last(s, true) OVER w, sum(x) OVER w, min(x) OVER w FROM e WINDOW w AS (PARTITION BY k ORDER BY s ROWS BETWEEN 2147483647 PRECEDING AND 2147483647 FOLLOWING)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2147483647 PRECEDING AND 2147483647 FOLLOWING)",
+     "type": "decimal(17,2)",
+     "nullable": true
+    },
+    {
+     "name": "avg(d) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2147483647 PRECEDING AND 2147483647 FOLLOWING)",
+     "type": "decimal(11,6)",
+     "nullable": true
+    },
+    {
+     "name": "count(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2147483647 PRECEDING AND 2147483647 FOLLOWING)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "min(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2147483647 PRECEDING AND 2147483647 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "max(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2147483647 PRECEDING AND 2147483647 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "first(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2147483647 PRECEDING AND 2147483647 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "last(s) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2147483647 PRECEDING AND 2147483647 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "sum(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2147483647 PRECEDING AND 2147483647 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "min(x) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 2147483647 PRECEDING AND 2147483647 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     "34.08",
+     "11.360000",
+     "3",
+     "apple",
+     "pear",
+     null,
+     "pear",
+     "0.6",
+     "0.1"
+    ],
+    [
+     "a",
+     "fig",
+     "34.08",
+     "11.360000",
+     "3",
+     "apple",
+     "pear",
+     null,
+     "pear",
+     "0.6",
+     "0.1"
+    ],
+    [
+     "a",
+     "pear",
+     "34.08",
+     "11.360000",
+     "3",
+     "apple",
+     "pear",
+     null,
+     "pear",
+     "0.6",
+     "0.1"
+    ],
+    [
+     "a",
+     null,
+     "34.08",
+     "11.360000",
+     "3",
+     "apple",
+     "pear",
+     null,
+     "pear",
+     "0.6",
+     "0.1"
+    ],
+    [
+     "b",
+     "Kiwi",
+     "99999.98",
+     "33333.326667",
+     "3",
+     "Kiwi",
+     "éclair",
+     "Kiwi",
+     "éclair",
+     "1.5",
+     "-10000000000.0"
+    ],
+    [
+     "b",
+     "éclair",
+     "99999.98",
+     "33333.326667",
+     "3",
+     "Kiwi",
+     "éclair",
+     "Kiwi",
+     "éclair",
+     "1.5",
+     "-10000000000.0"
+    ],
+    [
+     "b",
+     "kiwi",
+     "99999.98",
+     "33333.326667",
+     "3",
+     "Kiwi",
+     "éclair",
+     "Kiwi",
+     "éclair",
+     "1.5",
+     "-10000000000.0"
+    ],
+    [
+     null,
+     "plum",
+     "1.11",
+     "1.110000",
+     "1",
+     "plum",
+     "plum",
+     "plum",
+     "plum",
+     "2.5",
+     "2.5"
+    ]
+   ]
+  },
+  {
+   "id": "rows_shorthand",
+   "sql": "SELECT o, v, sum(v) OVER (ORDER BY o, p, v ROWS 2 PRECEDING) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "sum(v) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "17"
+    ],
+    [
+     "1",
+     "20",
+     "35"
+    ],
+    [
+     "2",
+     null,
+     "30"
+    ],
+    [
+     "3",
+     "7",
+     "27"
+    ],
+    [
+     "4",
+     "1",
+     "8"
+    ],
+    [
+     null,
+     "2",
+     "2"
+    ],
+    [
+     null,
+     "5",
+     "7"
+    ]
+   ]
+  },
+  {
+   "id": "rows_cast_int",
+   "sql": "SELECT o, v, sum(v) OVER (ORDER BY o, p, v ROWS BETWEEN CAST(1 AS INT) PRECEDING AND CURRENT ROW) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "sum(v) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN CAST(1 AS INT) PRECEDING AND CURRENT ROW)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "15"
+    ],
+    [
+     "1",
+     "20",
+     "30"
+    ],
+    [
+     "2",
+     null,
+     "20"
+    ],
+    [
+     "3",
+     "7",
+     "7"
+    ],
+    [
+     "4",
+     "1",
+     "8"
+    ],
+    [
+     null,
+     "2",
+     "2"
+    ],
+    [
+     null,
+     "5",
+     "7"
+    ]
+   ]
+  },
+  {
+   "id": "rows_decimal_back",
+   "sql": "SELECT i, sum(x) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW), avg(x) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM m",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "i",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "sum(x) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)",
+     "type": "decimal(38,0)",
+     "nullable": true
+    },
+    {
+     "name": "avg(x) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING)",
+     "type": "decimal(38,4)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "99999999999999999999999999999999999999",
+     null
+    ],
+    [
+     "2",
+     null,
+     "-2.0000"
+    ],
+    [
+     "3",
+     "-4",
+     "-5.0000"
+    ]
+   ]
+  },
+  {
+   "id": "rows_decimal_back_ansi",
+   "sql": "SELECT i, sum(x) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM m",
+   "conf": {},
+   "ok": false,
+   "error_class": "NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION",
+   "sql_state": "22003",
+   "message_parameters": {
+    "config": "\"spark.sql.ansi.enabled\"",
+    "precision": "38",
+    "scale": "0",
+    "value": "100000000000000000000000000000000000000"
+   }
+  },
+  {
+   "id": "rows_long_wrap",
+   "sql": "SELECT i, sum(x) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM l",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "ok": true,
+   "output": [
+    {
+     "name": "i",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "sum(x) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "-9223372036854775808"
+    ],
+    [
+     "2",
+     "9223372036854775803"
+    ],
+    [
+     "3",
+     "-4"
+    ]
+   ]
+  },
+  {
+   "id": "rows_long_ansi",
+   "sql": "SELECT i, sum(x) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM l",
+   "conf": {},
+   "ok": false,
+   "error_class": "ARITHMETIC_OVERFLOW",
+   "sql_state": "22003",
+   "message_parameters": {
+    "alternative": " Use 'try_add' to tolerate overflow and return NULL instead.",
+    "config": "\"spark.sql.ansi.enabled\"",
+    "message": "overflow"
+   }
+  },
+  {
+   "id": "rows_long_ansi_cancels",
+   "sql": "SELECT i, sum(x) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM l",
+   "conf": {},
+   "ok": false,
+   "error_class": "ARITHMETIC_OVERFLOW",
+   "sql_state": "22003",
+   "message_parameters": {
+    "alternative": " Use 'try_add' to tolerate overflow and return NULL instead.",
+    "config": "\"spark.sql.ansi.enabled\"",
+    "message": "overflow"
+   }
+  },
+  {
+   "id": "rows_doubles",
+   "sql": "SELECT i, sum(x) OVER w, avg(x) OVER w, min(x) OVER w, max(x) OVER w FROM f WINDOW w AS (ORDER BY i ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "i",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "sum(x) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "avg(x) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "min(x) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    },
+    {
+     "name": "max(x) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "nan",
+     "nan",
+     "nan",
+     "nan"
+    ],
+    [
+     "2",
+     "nan",
+     "nan",
+     "0.0",
+     "nan"
+    ],
+    [
+     "3",
+     "nan",
+     "nan",
+     "0.0",
+     "nan"
+    ],
+    [
+     "4",
+     "0.0",
+     "0.0",
+     "0.0",
+     "0.0"
+    ],
+    [
+     "5",
+     "1.0",
+     "0.5",
+     "-0.0",
+     "1.0"
+    ],
+    [
+     "6",
+     "1.0",
+     "1.0",
+     "1.0",
+     "1.0"
+    ]
+   ]
+  },
+  {
+   "id": "range_rest",
+   "sql": "SELECT o, count(*) OVER w, sum(v) OVER w, max(v) OVER w FROM t WINDOW w AS (ORDER BY o RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "count(1) OVER (ORDER BY o ASC NULLS FIRST RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "bigint",
+     "nullable": false
+    },
+    {
+     "name": "sum(v) OVER (ORDER BY o ASC NULLS FIRST RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "max(v) OVER (ORDER BY o ASC NULLS FIRST RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "5",
+     "38",
+     "20"
+    ],
+    [
+     "1",
+     "5",
+     "38",
+     "20"
+    ],
+    [
+     "2",
+     "3",
+     "8",
+     "7"
+    ],
+    [
+     "3",
+     "2",
+     "8",
+     "7"
+    ],
+    [
+     "4",
+     "1",
+     "1",
+     "1"
+    ],
+    [
+     null,
+     "7",
+     "45",
+     "20"
+    ],
+    [
+     null,
+     "7",
+     "45",
+     "20"
+    ]
+   ]
+  },
+  {
+   "id": "range_rest_partitioned",
+   "sql": "SELECT p, o, sum(v) OVER (PARTITION BY p ORDER BY o RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "p",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "sum(v) OVER (PARTITION BY p ORDER BY o ASC NULLS FIRST RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "1",
+     "30"
+    ],
+    [
+     "1",
+     "1",
+     "30"
+    ],
+    [
+     "1",
+     "2",
+     null
+    ],
+    [
+     "1",
+     null,
+     "35"
+    ],
+    [
+     "2",
+     "3",
+     "7"
+    ],
+    [
+     null,
+     "4",
+     "1"
+    ],
+    [
+     null,
+     null,
+     "3"
+    ]
+   ]
+  },
+  {
+   "id": "frame_decimal_bound",
+   "sql": "SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN 1.5 PRECEDING AND CURRENT ROW) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "expectedType": "\"INT\"",
+    "exprType": "\"DECIMAL(2,1)\"",
+    "location": "lower",
+    "sqlExpr": "\"ROWS BETWEEN 1.5 PRECEDING AND CURRENT ROW\""
+   }
+  },
+  {
+   "id": "frame_bigint_bound",
+   "sql": "SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN 1L PRECEDING AND CURRENT ROW) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "expectedType": "\"INT\"",
+    "exprType": "\"BIGINT\"",
+    "location": "lower",
+    "sqlExpr": "\"ROWS BETWEEN 1 PRECEDING AND CURRENT ROW\""
+   }
+  },
+  {
+   "id": "frame_string_bound",
+   "sql": "SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN 'a' PRECEDING AND CURRENT ROW) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "expectedType": "\"INT\"",
+    "exprType": "\"DOUBLE\"",
+    "location": "lower",
+    "sqlExpr": "\"ROWS BETWEEN a PRECEDING AND CURRENT ROW\""
+   }
+  },
+  {
+   "id": "frame_smallint_bound",
+   "sql": "SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN CAST(1 AS SMALLINT) PRECEDING AND CURRENT ROW) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "expectedType": "\"INT\"",
+    "exprType": "\"SMALLINT\"",
+    "location": "lower",
+    "sqlExpr": "\"ROWS BETWEEN CAST(1 AS SMALLINT) PRECEDING AND CURRENT ROW\""
+   }
+  },
+  {
+   "id": "frame_upper_bigint",
+   "sql": "SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN 2 FOLLOWING AND 1L FOLLOWING) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "expectedType": "\"INT\"",
+    "exprType": "\"BIGINT\"",
+    "location": "upper",
+    "sqlExpr": "\"ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING\""
+   }
+  },
+  {
+   "id": "frame_wrong_order",
+   "sql": "SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_WRONG_COMPARISON",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "comparison": "less than or equal",
+    "sqlExpr": "\"ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING\""
+   }
+  },
+  {
+   "id": "frame_wrong_order_2",
+   "sql": "SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN 1 FOLLOWING AND 1 PRECEDING) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_WRONG_COMPARISON",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "comparison": "less than or equal",
+    "sqlExpr": "\"ROWS BETWEEN 1 FOLLOWING AND 1 PRECEDING\""
+   }
+  },
+  {
+   "id": "frame_wrong_order_distinct",
+   "sql": "SELECT sum(DISTINCT v) OVER (ORDER BY o ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_WRONG_COMPARISON",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "comparison": "less than or equal",
+    "sqlExpr": "\"ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING\""
+   }
+  },
+  {
+   "id": "frame_column_bound",
+   "sql": "SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN o PRECEDING AND CURRENT ROW) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_0064",
+   "sql_state": null,
+   "message_parameters": {
+    "msg": "Frame bound value must be a literal."
+   }
+  },
+  {
+   "id": "frame_folded_bound",
+   "sql": "SELECT sum(v) OVER (ORDER BY o, p, v ROWS BETWEEN 1 + 1 PRECEDING AND CURRENT ROW) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "sum(v) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN (1 + 1) PRECEDING AND CURRENT ROW)",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "17"
+    ],
+    [
+     "2"
+    ],
+    [
+     "27"
+    ],
+    [
+     "30"
+    ],
+    [
+     "35"
+    ],
+    [
+     "7"
+    ],
+    [
+     "8"
+    ]
+   ]
+  },
+  {
+   "id": "lag_lead",
+   "sql": "SELECT o, v, lag(v) OVER (ORDER BY o, p, v), lead(v) OVER (ORDER BY o, p, v), lag(v, 2) OVER (ORDER BY o, p, v), lead(v, 2, -1) OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 2, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -2 FOLLOWING AND -2 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, 2, -1) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 2 FOLLOWING AND 2 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "5",
+     "20",
+     "2",
+     null
+    ],
+    [
+     "1",
+     "20",
+     "10",
+     null,
+     "5",
+     "7"
+    ],
+    [
+     "2",
+     null,
+     "20",
+     "7",
+     "10",
+     "1"
+    ],
+    [
+     "3",
+     "7",
+     null,
+     "1",
+     "20",
+     "-1"
+    ],
+    [
+     "4",
+     "1",
+     "7",
+     null,
+     null,
+     "-1"
+    ],
+    [
+     null,
+     "2",
+     null,
+     "5",
+     null,
+     "10"
+    ],
+    [
+     null,
+     "5",
+     "2",
+     "10",
+     null,
+     "20"
+    ]
+   ]
+  },
+  {
+   "id": "lag_partitioned_default",
+   "sql": "SELECT p, o, v, lag(v, 1, 0) OVER (PARTITION BY p ORDER BY o, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "p",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, 0) OVER (PARTITION BY p ORDER BY o ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "1",
+     "10",
+     "5"
+    ],
+    [
+     "1",
+     "1",
+     "20",
+     "10"
+    ],
+    [
+     "1",
+     "2",
+     null,
+     "20"
+    ],
+    [
+     "1",
+     null,
+     "5",
+     "0"
+    ],
+    [
+     "2",
+     "3",
+     "7",
+     "0"
+    ],
+    [
+     null,
+     "4",
+     "1",
+     "2"
+    ],
+    [
+     null,
+     null,
+     "2",
+     "0"
+    ]
+   ]
+  },
+  {
+   "id": "lag_negative_and_zero",
+   "sql": "SELECT o, v, lag(v, -1) OVER (ORDER BY o, p, v), lead(v, 0) OVER (ORDER BY o, p, v), lag(v, 0) OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, -1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, 0, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 0 FOLLOWING AND 0 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 0, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 0 FOLLOWING AND 0 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "20",
+     "10",
+     "10"
+    ],
+    [
+     "1",
+     "20",
+     null,
+     "20",
+     "20"
+    ],
+    [
+     "2",
+     null,
+     "7",
+     null,
+     null
+    ],
+    [
+     "3",
+     "7",
+     "1",
+     "7",
+     "7"
+    ],
+    [
+     "4",
+     "1",
+     null,
+     "1",
+     "1"
+    ],
+    [
+     null,
+     "2",
+     "5",
+     "2",
+     "2"
+    ],
+    [
+     null,
+     "5",
+     "10",
+     "5",
+     "5"
+    ]
+   ]
+  },
+  {
+   "id": "lag_ignore_nulls",
+   "sql": "SELECT o, v, lag(v) IGNORE NULLS OVER (ORDER BY o, p, v), lead(v, 1) IGNORE NULLS OVER (ORDER BY o, p, v), lag(v, 2, 99) IGNORE NULLS OVER (ORDER BY o, p, v), lag(v, 1, NULL, true) OVER (ORDER BY o, p, v), lead(v, -2) IGNORE NULLS OVER (ORDER BY o, p, v), lag(v, 0) IGNORE NULLS OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 2, 99) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -2 FOLLOWING AND -2 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, -2, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -2 FOLLOWING AND -2 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 0, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 0 FOLLOWING AND 0 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "5",
+     "20",
+     "2",
+     "5",
+     "2",
+     "10"
+    ],
+    [
+     "1",
+     "20",
+     "10",
+     "7",
+     "5",
+     "10",
+     "5",
+     "20"
+    ],
+    [
+     "2",
+     null,
+     "20",
+     "7",
+     "10",
+     "20",
+     "10",
+     null
+    ],
+    [
+     "3",
+     "7",
+     "20",
+     "1",
+     "10",
+     "20",
+     "10",
+     "7"
+    ],
+    [
+     "4",
+     "1",
+     "7",
+     null,
+     "20",
+     "7",
+     "20",
+     "1"
+    ],
+    [
+     null,
+     "2",
+     null,
+     "5",
+     "99",
+     null,
+     null,
+     "2"
+    ],
+    [
+     null,
+     "5",
+     "2",
+     "10",
+     "99",
+     "2",
+     null,
+     "5"
+    ]
+   ]
+  },
+  {
+   "id": "lag_respect_nulls",
+   "sql": "SELECT o, v, lag(v, 1, 0) RESPECT NULLS OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, 0) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "5"
+    ],
+    [
+     "1",
+     "20",
+     "10"
+    ],
+    [
+     "2",
+     null,
+     "20"
+    ],
+    [
+     "3",
+     "7",
+     null
+    ],
+    [
+     "4",
+     "1",
+     "7"
+    ],
+    [
+     null,
+     "2",
+     "0"
+    ],
+    [
+     null,
+     "5",
+     "2"
+    ]
+   ]
+  },
+  {
+   "id": "lag_strings_decimals",
+   "sql": "SELECT k, s, lag(s, 1, 'z') OVER w, lead(d, 1, 0) OVER w, lag(d) OVER w, lag(d, 1, 7.123) OVER w FROM e WINDOW w AS (PARTITION BY k ORDER BY s)",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "lag(s, 1, z) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "lead(d, 1, 0) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)",
+     "type": "decimal(7,2)",
+     "nullable": true
+    },
+    {
+     "name": "lag(d, 1, NULL) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "decimal(7,2)",
+     "nullable": true
+    },
+    {
+     "name": "lag(d, 1, 7.123) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "decimal(7,2)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     null,
+     "3.33",
+     null,
+     null
+    ],
+    [
+     "a",
+     "fig",
+     "apple",
+     "10.25",
+     "20.50",
+     "20.50"
+    ],
+    [
+     "a",
+     "pear",
+     "fig",
+     "0.00",
+     "3.33",
+     "3.33"
+    ],
+    [
+     "a",
+     null,
+     "z",
+     "20.50",
+     null,
+     "7.12"
+    ],
+    [
+     "b",
+     "Kiwi",
+     "z",
+     "99999.99",
+     null,
+     "7.12"
+    ],
+    [
+     "b",
+     "éclair",
+     "kiwi",
+     "0.00",
+     "99999.99",
+     "99999.99"
+    ],
+    [
+     "b",
+     "kiwi",
+     "Kiwi",
+     "0.00",
+     "-0.01",
+     "-0.01"
+    ],
+    [
+     null,
+     "plum",
+     "z",
+     "0.00",
+     null,
+     "7.12"
+    ]
+   ]
+  },
+  {
+   "id": "lag_default_column",
+   "sql": "SELECT o, v, lag(v, 1, o) OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 1, o) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "5"
+    ],
+    [
+     "1",
+     "20",
+     "10"
+    ],
+    [
+     "2",
+     null,
+     "20"
+    ],
+    [
+     "3",
+     "7",
+     null
+    ],
+    [
+     "4",
+     "1",
+     "7"
+    ],
+    [
+     null,
+     "2",
+     null
+    ],
+    [
+     null,
+     "5",
+     "2"
+    ]
+   ]
+  },
+  {
+   "id": "lag_huge_offsets",
+   "sql": "SELECT o, lag(v, 2147483647) OVER (ORDER BY o, p, v), lead(v, -2147483648) OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(v, 2147483647, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -2147483647 FOLLOWING AND -2147483647 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lead(v, -2147483648, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -2147483648 FOLLOWING AND -2147483648 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     null,
+     null
+    ],
+    [
+     "1",
+     null,
+     null
+    ],
+    [
+     "2",
+     null,
+     null
+    ],
+    [
+     "3",
+     null,
+     null
+    ],
+    [
+     "4",
+     null,
+     null
+    ],
+    [
+     null,
+     null,
+     null
+    ],
+    [
+     null,
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "nth_value_frames",
+   "sql": "SELECT o, v, nth_value(v, 2) OVER (ORDER BY o, p, v), nth_value(v, 2) OVER (ORDER BY o, p, v ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING), nth_value(v, 1, true) OVER (ORDER BY o, p, v ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING), nth_value(v, 2) IGNORE NULLS OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 2) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 2) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 1) ignore nulls OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 2) ignore nulls OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "10",
+     "5",
+     "5",
+     "5",
+     "5"
+    ],
+    [
+     "1",
+     "20",
+     "5",
+     "5",
+     "10",
+     "5"
+    ],
+    [
+     "2",
+     null,
+     "5",
+     "5",
+     "20",
+     "5"
+    ],
+    [
+     "3",
+     "7",
+     "5",
+     "5",
+     "7",
+     "5"
+    ],
+    [
+     "4",
+     "1",
+     "5",
+     "5",
+     "7",
+     "5"
+    ],
+    [
+     null,
+     "2",
+     null,
+     "5",
+     "2",
+     null
+    ],
+    [
+     null,
+     "5",
+     "5",
+     "5",
+     "2",
+     "5"
+    ]
+   ]
+  },
+  {
+   "id": "nth_value_strings",
+   "sql": "SELECT k, s, nth_value(s, 2) OVER (PARTITION BY k ORDER BY s ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING), nth_value(d, 1, true) OVER (PARTITION BY k ORDER BY s ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM e",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(s, 2) OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(d, 1) ignore nulls OVER (PARTITION BY k ORDER BY s ASC NULLS FIRST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+     "type": "decimal(7,2)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a",
+     "apple",
+     "apple",
+     "20.50"
+    ],
+    [
+     "a",
+     "fig",
+     "fig",
+     "3.33"
+    ],
+    [
+     "a",
+     "pear",
+     "pear",
+     "10.25"
+    ],
+    [
+     "a",
+     null,
+     "apple",
+     "20.50"
+    ],
+    [
+     "b",
+     "Kiwi",
+     "kiwi",
+     "-0.01"
+    ],
+    [
+     "b",
+     "éclair",
+     "éclair",
+     "0.00"
+    ],
+    [
+     "b",
+     "kiwi",
+     "kiwi",
+     "99999.99"
+    ],
+    [
+     null,
+     "plum",
+     null,
+     "1.11"
+    ]
+   ]
+  },
+  {
+   "id": "nth_value_offsets",
+   "sql": "SELECT o, nth_value(v, 1.5) OVER (ORDER BY o, p, v), nth_value(v, '2') OVER (ORDER BY o, p, v), nth_value(v, 2L) OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 1.5) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 2) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 2) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     "1",
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     "2",
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     "3",
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     "4",
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     null,
+     "2",
+     "5",
+     "5"
+    ],
+    [
+     null,
+     "2",
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "nth_value_partition_whole",
+   "sql": "SELECT p, o, nth_value(v, 3) OVER (PARTITION BY p ORDER BY o, v RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "p",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "nth_value(v, 3) OVER (PARTITION BY p ORDER BY o ASC NULLS FIRST, v ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "1",
+     "20"
+    ],
+    [
+     "1",
+     "1",
+     "20"
+    ],
+    [
+     "1",
+     "2",
+     "20"
+    ],
+    [
+     "1",
+     null,
+     "20"
+    ],
+    [
+     "2",
+     "3",
+     null
+    ],
+    [
+     null,
+     "4",
+     null
+    ],
+    [
+     null,
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "lag_no_arguments",
+   "sql": "SELECT o, lag() OVER (ORDER BY o, p, v) FROM t",
+   "conf": {},
+   "ok": true,
+   "output": [
+    {
+     "name": "o",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "lag(NULL, 1, NULL) OVER (ORDER BY o ASC NULLS FIRST, p ASC NULLS FIRST, v ASC NULLS FIRST ROWS BETWEEN -1 FOLLOWING AND -1 FOLLOWING)",
+     "type": "void",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     null
+    ],
+    [
+     "1",
+     null
+    ],
+    [
+     "2",
+     null
+    ],
+    [
+     "3",
+     null
+    ],
+    [
+     "4",
+     null
+    ],
+    [
+     null,
+     null
+    ],
+    [
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "id": "lag_bigint_offset",
+   "sql": "SELECT o, lag(v, 1L) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_decimal_offset",
+   "sql": "SELECT o, lag(v, 1.0) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_smallint_offset",
+   "sql": "SELECT o, lag(v, CAST(1 AS SMALLINT)) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_null_offset",
+   "sql": "SELECT o, lag(v, NULL) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_string_offset",
+   "sql": "SELECT o, lag(v, '1') OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "FAILED_FUNCTION_CALL",
+   "sql_state": "38000",
+   "message_parameters": {
+    "funcName": "`lag`"
+   }
+  },
+  {
+   "id": "lag_column_offset",
+   "sql": "SELECT o, lag(v, o) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"(- o)\"",
+    "inputName": "`offset`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"lag(v, o, NULL)\""
+   }
+  },
+  {
+   "id": "lead_column_offset",
+   "sql": "SELECT o, lead(v, o) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"o\"",
+    "inputName": "`offset`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"lead(v, o, NULL)\""
+   }
+  },
+  {
+   "id": "lag_framed",
+   "sql": "SELECT o, lag(v) OVER (ORDER BY o ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_framed_same",
+   "sql": "SELECT o, lag(v) OVER (ORDER BY o ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "_LEGACY_ERROR_TEMP_1035",
+   "sql_state": null,
+   "message_parameters": {
+    "prettyName": "lag"
+   }
+  },
+  {
+   "id": "lag_not_ordered",
+   "sql": "SELECT o, lag(v) OVER (PARTITION BY p) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "WINDOW_FUNCTION_FRAME_NOT_ORDERED",
+   "sql_state": "42601",
+   "message_parameters": {
+    "wf_expr": "lag(t.v, 1, NULL)",
+    "wf_name": "lag"
+   }
+  },
+  {
+   "id": "lag_flag_not_boolean",
+   "sql": "SELECT o, lag(v, 1, 2, 3) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_PARAMETER_VALUE.BOOLEAN",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "`lag`",
+    "invalidValue": "\"3\"",
+    "parameter": "`ignoreNulls`"
+   }
+  },
+  {
+   "id": "lag_distinct",
+   "sql": "SELECT o, lag(DISTINCT v) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX",
+   "sql_state": "42000",
+   "message_parameters": {
+    "prettyName": "`lag`",
+    "syntax": "DISTINCT"
+   }
+  },
+  {
+   "id": "lag_without_over",
+   "sql": "SELECT o, lag(v) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "WINDOW_FUNCTION_WITHOUT_OVER_CLAUSE",
+   "sql_state": "42601",
+   "message_parameters": {
+    "funcName": "\"lag(v, 1, NULL)\""
+   }
+  },
+  {
+   "id": "nth_value_not_ordered",
+   "sql": "SELECT o, nth_value(v, 3) OVER (PARTITION BY p) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "WINDOW_FUNCTION_FRAME_NOT_ORDERED",
+   "sql_state": "42601",
+   "message_parameters": {
+    "wf_expr": "nth_value(t.v, 3)",
+    "wf_name": "nth_value"
+   }
+  },
+  {
+   "id": "nth_value_zero",
+   "sql": "SELECT o, nth_value(v, 0) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "currentValue": "0L",
+    "exprName": "offset",
+    "sqlExpr": "\"nth_value(v, 0)\"",
+    "valueRange": "(0, 9223372036854775807]"
+   }
+  },
+  {
+   "id": "nth_value_null",
+   "sql": "SELECT o, nth_value(v, NULL) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "currentValue": "0L",
+    "exprName": "offset",
+    "sqlExpr": "\"nth_value(v, NULL)\"",
+    "valueRange": "(0, 9223372036854775807]"
+   }
+  },
+  {
+   "id": "nth_value_column",
+   "sql": "SELECT o, nth_value(v, o) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+   "sql_state": "42K09",
+   "message_parameters": {
+    "inputExpr": "\"o\"",
+    "inputName": "`offset`",
+    "inputType": "\"INT\"",
+    "sqlExpr": "\"nth_value(v, o)\""
+   }
+  },
+  {
+   "id": "nth_value_flag_string",
+   "sql": "SELECT o, nth_value(v, 1, 'x') OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "INVALID_PARAMETER_VALUE.BOOLEAN",
+   "sql_state": "22023",
+   "message_parameters": {
+    "functionName": "`nth_value`",
+    "invalidValue": "\"x\"",
+    "parameter": "`ignoreNulls`"
+   }
+  },
+  {
+   "id": "nth_value_one_argument",
+   "sql": "SELECT o, nth_value(v) OVER (ORDER BY o) FROM t",
+   "conf": {},
+   "ok": false,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "sql_state": "42605",
+   "message_parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "[2, 3]",
+    "functionName": "`nth_value`"
+   }
   }
  ]
 }
