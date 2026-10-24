@@ -45,6 +45,7 @@ variants!(
     Sort,
     TopN,
     Window,
+    WindowGroupLimit,
     Aggregate,
     HashJoin,
     NestedLoopJoin,
@@ -65,6 +66,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Sort { .. } => Variant::Sort,
         PhysNode::TopN { .. } => Variant::TopN,
         PhysNode::Window { .. } => Variant::Window,
+        PhysNode::WindowGroupLimit { .. } => Variant::WindowGroupLimit,
         PhysNode::Aggregate { .. } => Variant::Aggregate,
         PhysNode::HashJoin(_) => Variant::HashJoin,
         PhysNode::NestedLoopJoin(_) => Variant::NestedLoopJoin,
@@ -290,6 +292,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             "limit_offset" => 3,
             "window_ranking" | "window_aggregates" => 4,
             n if n.starts_with("expand") => 5,
+            // A feature added after the freeze: above every frozen version.
+            "window_group_limit" => 6,
             "window_frames" | "window_offset_values" => POST_MIGRATION_READER_VERSION,
             _ => MIN_READER_VERSION,
         };
@@ -362,6 +366,23 @@ fn a_corrupt_window_is_refused() {
         }),
         "ntile with a bucket count below one",
     );
+}
+
+#[test]
+fn a_corrupt_window_group_limit_is_refused() {
+    use pb::node::Kind;
+    let edit = |f: &dyn Fn(&mut pb::WindowGroupLimitNode)| {
+        let mut m = message("window_group_limit");
+        for node in &mut m.nodes {
+            if let Some(Kind::WindowGroupLimit(g)) = &mut node.kind {
+                f(g);
+            }
+        }
+        m
+    };
+    corrupt(&edit(&|g| g.limit = 0), "window group limit of 0 rows");
+    corrupt(&edit(&|g| g.function = 0), "unknown rank-like function");
+    corrupt(&edit(&|g| g.function = 9), "unknown rank-like function");
 }
 
 #[test]

@@ -2157,3 +2157,6 @@ async fn bytes_of_rows_waiting_in_the_output_stay_reserved_through_a_spill() {
     ctx.consumer().consumer().release_credit();
     assert_eq!(root.reserved(), 0);
 }
+
+#[path = "group_limit_tests.rs"]
+mod group_limit_tests;

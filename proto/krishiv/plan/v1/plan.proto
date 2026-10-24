@@ -102,6 +102,8 @@ message Node {
     WindowNode window = 15;
     // feature: expand
     ExpandNode expand = 16;
+    // feature: window_group_limit
+    WindowGroupLimitNode window_group_limit = 17;
   }
 }
 
@@ -224,6 +226,26 @@ message WindowNode {
   repeated uint64 partition_by = 2;
   repeated SortKey order_by = 3;
   repeated WindowFunctionPlan functions = 4;
+}
+
+// feature: window_group_limit
+// The rows of each partition a rank-like function ranks at most `limit`,
+// over an input sorted as a window's (Spark's WindowGroupLimit).
+message WindowGroupLimitNode {
+  uint32 input = 1;
+  repeated uint64 partition_by = 2;
+  repeated SortKey order_by = 3;
+  RankLikeFunction function = 4;
+  // At least one.
+  uint64 limit = 5;
+}
+
+// feature: window_group_limit
+enum RankLikeFunction {
+  RANK_LIKE_FUNCTION_UNSPECIFIED = 0;
+  RANK_LIKE_FUNCTION_ROW_NUMBER = 1;
+  RANK_LIKE_FUNCTION_RANK = 2;
+  RANK_LIKE_FUNCTION_DENSE_RANK = 3;
 }
 
 message WindowFunctionPlan {
