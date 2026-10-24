@@ -219,6 +219,8 @@ def test_ours_query_interleaves_and_summarizes(tiny):
     assert pol["status"] == "ok"
     assert len(pol["samples_s"]) == 4
     assert pol["ratio_ci95"][0] <= pol["ratio_ci95"][1]
+    assert ent["engines"]["duckdb"]["cpu_seconds_median"] >= 0
+    assert pol["cpu_seconds_median"] >= 0
     record = {
         "methods": ["ours"],
         "engines": {"duckdb": {}, "polars": {}},
@@ -232,6 +234,33 @@ def test_ours_query_interleaves_and_summarizes(tiny):
     assert "polars" in reproduce.markdown(
         {**record, "suite": "tpch", "dataset": {"scale_factor": 1}, "pinned": {"threads": 2}, "summary": s}
     )
+
+
+def test_process_engine_reports_the_cpu_seconds_of_a_timed_run(tiny):
+    eng = ProcessEngine("duckdb", 2, 1, 120)
+    eng.setup(tiny)
+    try:
+        assert eng.last_cpu_seconds is None
+        eng.timed_run(q("SELECT sum(a * a) FROM range(30000000) t(a)"))
+        busy = eng.last_cpu_seconds
+        assert busy is not None
+        assert busy > 0.05  # real work, read from the worker's /proc entries
+        eng.timed_run(q("SELECT 1"))
+        assert eng.last_cpu_seconds is not None
+        assert eng.last_cpu_seconds < busy
+    finally:
+        eng.teardown()
+
+
+def test_process_engine_has_no_cpu_reading_after_a_timeout(tiny, blocking_worker):
+    eng = ProcessEngine("duckdb", 2, 1, 1.0)
+    eng.setup(tiny)
+    try:
+        with pytest.raises(EngineTimeout):
+            eng.timed_run(q("block"))
+        assert eng.last_cpu_seconds is None
+    finally:
+        eng.teardown()
 
 
 def test_theirs_query_best_of_runs(tiny):

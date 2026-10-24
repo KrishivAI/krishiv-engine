@@ -160,6 +160,7 @@ def ours_query(
         return entry
     samples: dict[str, list[float]] = {n: [] for n in live}
     peaks: dict[str, int] = {}
+    cpus: dict[str, list[float]] = {n: [] for n in live}
     for _ in range(reps):
         for name in [*live, *reversed(live)]:
             if name not in samples:
@@ -170,6 +171,8 @@ def ours_query(
                     raise EngineError(f"timed run returned {n} rows, expected {nrows}")
                 samples[name].append(secs)
                 _note_peak(peaks, name, engines[name])
+                if (cpu := engines[name].last_cpu_seconds) is not None:
+                    cpus[name].append(cpu)
             except (EngineError, EngineTimeout, EngineCrashed) as e:
                 entry["engines"][name] = _fail(_status_of(e), f"timed run: {e}")
                 del samples[name]
@@ -179,6 +182,8 @@ def ours_query(
         e.update(samples_s=s, median_s=statistics.median(s))
         if name in peaks:
             e["peak_rss_bytes"] = peaks[name]
+        if cpus[name]:
+            e["cpu_seconds_median"] = statistics.median(cpus[name])
         if base and name != REFERENCE:
             lo, hi = bootstrap_ci(s, base)
             e.update(ratio=e["median_s"] / statistics.median(base), ratio_ci95=[lo, hi])
