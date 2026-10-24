@@ -36,6 +36,11 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   and `split_literal` (`string/split.rs`: delimiters without regex metacharacters; a regex delimiter is
   `KRISHIV_UNSUPPORTED_FEATURE` until the regex engine). Operands are columns or literals (`StrOperand`, `BinOperand`,
   `Operand<Int32Type>`); NULL rows are skipped, so these kernels have no has-nulls axis. Output offsets are checked.
+  `string/chars.rs` adds the character-level functions (`ascii`, `chr`, `right`, `repeat`, `space`, `reverse`, `initcap`, `translate`,
+  `locate`, `substring_index`, `split_part`, `find_in_set`, `overlay`, `levenshtein`, `soundex`, `luhn_check`, `mask`, `quote`, `elt`,
+  `concat_ws`, `bit_length`) and `string/codec.rs` the encodings (`base64`/`unbase64` as Java's MIME codec, `to_binary`, `encode`/`decode`
+  for Spark's seven default charsets, the UTF-8 validators of `binary`, `url_encode`/`url_decode`); a kernel needs a column operand, the
+  binding repeats an all-literal call over one row.
 - `hash` (P2-T027): `hash` (Murmur3 x86_32, seed 42; the tail bytes are mixed one sign-extended byte at a time, as Spark does), `xxhash64`
   (XXH64, seed 42; `hashInt`/`hashLong` written out), `md5`/`sha1`/`sha2`/`crc32` (`hash/digest.rs`; CRC table in-house, digests from
   RustCrypto). `hash`/`xxhash64` take any number of columns of any type and chain per row (NULL leaves the hash unchanged; arrays hash

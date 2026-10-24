@@ -1124,6 +1124,10 @@ impl Parser<'_> {
                 // comma form keeps `substr` vs `substring` as written.
                 if !overlay && !position {
                     name.parts[0].value = "substring".to_owned();
+                } else if position {
+                    // `position(s IN t)` is Spark's `StringLocate`, which the
+                    // schema names `locate`; the comma form keeps `position`.
+                    name.parts[0].value = "locate".to_owned();
                 }
             }
             self.expect_sym(Sym::RParen)?;

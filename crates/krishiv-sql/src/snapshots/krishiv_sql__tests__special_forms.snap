@@ -659,7 +659,7 @@ Query {
                                     name: ObjectName {
                                         parts: [
                                             Ident {
-                                                value: "position",
+                                                value: "locate",
                                                 quoted: false,
                                                 span: 7..15,
                                             },

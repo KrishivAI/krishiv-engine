@@ -3,7 +3,9 @@
 //! Spark defines the function on binary): `upper`/`lower`, `length`, the
 //! `trim` family, `startswith`/`endswith`/`contains`, `replace`,
 //! `lpad`/`rpad`, `substring`, `concat`, `like` ([`like()`]) and a literal
-//! `split` ([`split_literal`]).
+//! `split` ([`split_literal`]), plus the character-level functions of
+//! `chars.rs` (`right`, `repeat`, `translate`, `locate`, `mask`, ...) and the
+//! encodings of `codec.rs` (`base64`, `to_binary`, `encode`, `url_encode`, ...).
 //!
 //! `STRING` is valid UTF-8 (validated at the edges), so a "character" is a
 //! Unicode scalar value (Spark counts code points) and every slice a kernel
@@ -14,6 +16,8 @@
 //! rows) and ASCII rows take byte-wise fast paths.
 
 mod case_table;
+mod chars;
+mod codec;
 mod like;
 mod split;
 
@@ -25,6 +29,15 @@ use arrow_array::{
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 
+pub use chars::{
+    MaskRule, MaskRules, ascii, bit_length, chr, concat_ws, elt, elt_binary, find_in_set, initcap,
+    levenshtein, locate, luhn_check, mask, overlay, overlay_binary, quote, repeat, reverse,
+    reverse_binary, right, soundex, space, split_part, substring_index, translate,
+};
+pub use codec::{
+    base64, decode, encode, is_valid_utf8, make_valid_utf8, to_binary, unbase64, url_decode,
+    url_encode, validate_utf8,
+};
 pub use like::{LikePattern, like};
 pub use split::{literal_delimiter, split_literal};
 
