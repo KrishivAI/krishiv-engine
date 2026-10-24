@@ -151,6 +151,14 @@ async fn drive(run: Arc<PipelineRun>) -> Result<()> {
 
 /// Times every poll of a driver: the stall detector. A poll is a
 /// non-yielding slice of a worker thread.
+///
+/// In fail-on-stall mode (tests and CI) a slice is measured without the
+/// time its thread waited on a run queue (runnable, but another thread had
+/// the core): that time is the machine's load, not the driver's work, and
+/// counting it failed queries on loaded machines. Running and blocking
+/// (a sleep or blocking I/O inside a poll) both still count. Where the
+/// kernel does not report run-queue waits, and when stalls are only
+/// counted, the slice is wall time.
 struct Timed {
     inner: BoxFuture<'static, ()>,
     stats: DriverStats,
@@ -168,6 +176,11 @@ impl Future for Timed {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let queued = if self.query.config().fail_on_stall {
+            runqueue_wait()
+        } else {
+            None
+        };
         let start = self.executor.now();
         let this = &mut *self;
         if this.started.is_none() {
@@ -180,18 +193,31 @@ impl Future for Timed {
         let out = this.inner.as_mut().poll(cx);
         let slice = since(&*this.executor, start);
         this.stats.max_slice = this.stats.max_slice.max(slice);
+        let held = match queued.zip(runqueue_wait()) {
+            Some((before, after)) => slice.saturating_sub(after.saturating_sub(before)),
+            None => slice,
+        };
         let config = this.query.config();
-        if slice > config.stall_threshold {
+        if held > config.stall_threshold {
             this.stats.stalls += 1;
             if config.fail_on_stall {
                 this.query.fail(internal(format!(
-                    "a driver ran {slice:?} without yielding (stall threshold {:?}, batch size {})",
+                    "a driver ran {held:?} without yielding (stall threshold {:?}, batch size {})",
                     config.stall_threshold, config.batch_size
                 )));
             }
         }
         out
     }
+}
+
+/// The time this thread has waited on a run queue so far, from
+/// `/proc/thread-self/schedstat` (its second field, in nanoseconds); `None`
+/// where the kernel does not report it.
+fn runqueue_wait() -> Option<Duration> {
+    let stat = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+    let nanos = stat.split_whitespace().nth(1)?.parse().ok()?;
+    Some(Duration::from_nanos(nanos))
 }
 
 impl Drop for Timed {
