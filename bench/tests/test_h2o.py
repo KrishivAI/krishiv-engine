@@ -331,15 +331,21 @@ def test_a_timeout_cancels_the_engine_and_fails_only_that_question(
     # q02 answers from the cached reference, so the test never depends on engine timing: only q01 can time out.
     ds = h2o.resolve_dataset(tiny["h2o-groupby"], 0.5)
     refs = h2o.reference_checksums(ds, h2o.load_queries("h2o-groupby", "duckdb", ["q02"]))
-    eng = Wrapped(block={"q01"})
 
-    def fast_run(query):
-        return [tuple(refs["q02"])] if query.id == "q02" else Wrapped.run(eng, query)
+    class FastQ02(Wrapped):
+        """Serve q02 from the cached reference; every other question uses the blocking behaviour."""
 
-    def fast_timed(query):
-        return (int(refs["q02"][0]), 0.001) if query.id == "q02" else Wrapped.timed_run(eng, query)
+        def run(self, query: Query) -> list[tuple]:
+            if query.id == "q02":
+                return [tuple(refs["q02"])]
+            return super().run(query)
 
-    eng.run, eng.timed_run = fast_run, fast_timed  # type: ignore[method-assign]
+        def timed_run(self, query: Query) -> tuple[int, float]:
+            if query.id == "q02":
+                return (int(refs["q02"][0]), 0.001)
+            return super().timed_run(query)
+
+    eng = FastQ02(block={"q01"})
     rec, failed = run_with(monkeypatch, tiny["h2o-groupby"], eng, ["q01", "q02"], timeout_s=0.2)
     assert failed == 1
     assert "exceeded 0.2s" in rec["queries"]["q01"]["error"]
