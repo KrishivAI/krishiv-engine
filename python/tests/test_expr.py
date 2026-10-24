@@ -48,6 +48,12 @@ def test_select_expr_aliases_star_and_single_item(df: DataFrame) -> None:
         df.selectExpr("id, name")
 
 
+def test_select_expr_single_list_arg(df: DataFrame) -> None:
+    out = df.selectExpr(["id", "name as n"])
+    assert out.columns == ["id", "n"]
+    assert [r["id"] for r in out.orderBy("id").collect()] == [1, 2, 3]
+
+
 def test_select_expr_runs_against_data(df: DataFrame) -> None:
     rows = df.selectExpr("id * 2 as double").orderBy("double").collect()
     assert [r["double"] for r in rows] == [2, 4, 6]

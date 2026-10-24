@@ -1036,20 +1036,25 @@ impl<'s> Parser<'s> {
         })
     }
 
+    /// Whether the trailing input is one token to Spark, so ANTLR
+    /// reports it as "extra input": the last token when nothing follows
+    /// it. An unterminated quote with text after it is several tokens to
+    /// Spark, so no single extraneous token.
+    fn trailing_is_single_token(&self) -> bool {
+        self.tok(0)
+            .filter(|_| self.pos + 1 == self.toks.len())
+            .is_some_and(|t| {
+                t.kind != TokenKind::Unterminated || t.span.text(self.src).chars().count() == 1
+            })
+    }
+
     /// `singleMultipartIdentifier`: a dotted name and the end of the input.
     fn single_multipart_identifier(&mut self) -> PR<ObjectName> {
         let name = self.table_name()?;
         if self.pos < self.toks.len() {
             // ANTLR drops one extraneous token before the end, as "extra
-            // input"; an unterminated quote with text after it is several
-            // tokens to Spark.
-            let one_token = self
-                .tok(0)
-                .filter(|_| self.pos + 1 == self.toks.len())
-                .is_some_and(|t| {
-                    t.kind != TokenKind::Unterminated || t.span.text(self.src).chars().count() == 1
-                });
-            if one_token {
+            // input".
+            if self.trailing_is_single_token() {
                 self.extra = Some(self.pos);
             }
             return self.fail();
@@ -1063,7 +1068,7 @@ impl<'s> Parser<'s> {
     fn single_named_expression(&mut self) -> PR<SelectItem> {
         let item = self.select_item()?;
         if self.pos < self.toks.len() {
-            if self.pos + 1 == self.toks.len() {
+            if self.trailing_is_single_token() {
                 self.extra = Some(self.pos);
             }
             return self.fail();
@@ -1132,13 +1137,7 @@ impl<'s> Parser<'s> {
             semi = true;
         }
         if self.pos < self.toks.len() {
-            // An unterminated quote with text after it is several tokens
-            // to Spark, so no single extraneous token.
-            let last = self.tok(0).filter(|_| self.pos + 1 == self.toks.len());
-            let one_token = last.is_some_and(|t| {
-                t.kind != TokenKind::Unterminated || t.span.text(self.src).chars().count() == 1
-            });
-            if semi || one_token {
+            if semi || self.trailing_is_single_token() {
                 self.extra = Some(self.pos);
             }
             return self.fail();

@@ -1001,6 +1001,24 @@ fn expression_strings() {
         ]
     );
     assert_eq!(e.span.range(), 1..2);
+    // An unterminated quote with text after it is several tokens to Spark,
+    // so no "extra input" hint (as for statements: `SELECT a 'bc` has none,
+    // `SELECT a '` keeps it for the lone quote).
+    let e = parse_named_expression("a 'bc", &d).unwrap_err();
+    assert_eq!(
+        e.error.message_parameters(),
+        [("error", "'''".to_owned()), ("hint", String::new())]
+    );
+    assert_eq!(e.span.range(), 2..3);
+    let e = parse_named_expression("a '", &d).unwrap_err();
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("error", "'''".to_owned()),
+            ("hint", ": extra input '''".to_owned())
+        ]
+    );
+    assert_eq!(e.span.range(), 2..3);
     // An unfinished expression ends at the end of the input.
     let e = parse_named_expression("a +", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
@@ -1045,14 +1063,41 @@ fn expression_strings_lower_like_select_items() {
     assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
 }
 
+/// `lower_expression` lowers one parsed expression as `SELECT` items lower
+/// it, and `lower_select_item` keeps its alias.
+#[test]
+fn lower_expression_and_select_item() {
+    use super::lower::{lower_expression, lower_select_item};
+    use krishiv_plan::SourceId;
+    let d = ParserOptions::default();
+    let item = parse_named_expression("a + 1", &d).unwrap();
+    let lowered = lower_expression(&item.expr, SourceId(0)).unwrap();
+    let krishiv_plan::ExprNode::Function(call) = &lowered.node else {
+        panic!("not a call: {lowered:?}");
+    };
+    assert_eq!(call.name, "+");
+    let item = parse_named_expression("b AS c", &d).unwrap();
+    let lowered = lower_select_item(&item, SourceId(0)).unwrap();
+    let krishiv_plan::ExprNode::Alias { name, .. } = &lowered.node else {
+        panic!("not an alias: {lowered:?}");
+    };
+    assert_eq!(name, "c");
+}
+
 /// Deep expression strings fail with `FAILED_TO_PARSE_TOO_COMPLEX` at the
-/// whole string instead of overflowing the stack.
+/// whole string instead of overflowing the stack. The cap is exact: one
+/// nested level per parenthesis, so `MAX_DEPTH - 1` pairs parse and one
+/// more fails with the full-input span.
 #[test]
 fn expression_depth_is_capped() {
     let d = ParserOptions::default();
     let (shallow, deep) = on_small_stack(move || {
-        let shallow = format!("{}1{}", "(".repeat(100), ")".repeat(100));
-        let deep = format!("{}1{}", "(".repeat(5000), ")".repeat(5000));
+        let shallow = format!(
+            "{}1{}",
+            "(".repeat(MAX_DEPTH - 1),
+            ")".repeat(MAX_DEPTH - 1)
+        );
+        let deep = format!("{}1{}", "(".repeat(MAX_DEPTH), ")".repeat(MAX_DEPTH));
         (
             parse_named_expression(&shallow, &d).map(drop),
             parse_named_expression(&deep, &d),
@@ -1061,7 +1106,7 @@ fn expression_depth_is_capped() {
     assert_eq!(shallow, Ok(()));
     let e = deep.unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::FailedToParseTooComplex);
-    assert_eq!(e.span.range(), 0..10001);
+    assert_eq!(e.span.range(), 0..2 * MAX_DEPTH + 1);
 }
 
 /// `SET` statements: every form, with spans and decoded keys/values.
