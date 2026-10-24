@@ -6,7 +6,7 @@
 //! `IN`, `LIKE`, `IS`, ...), comparison, `|`, `^`, `&`, shifts, `+ - ||`,
 //! `* / % DIV`, unary `- + ~`, postfix `[i]`, `.field`, `::type`.
 
-use super::{Close, Fail, PR, Parser};
+use super::{Close, Fail, PR, Parser, QUERY_START};
 use crate::ast::{
     BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, Function, FunctionArg, Ident,
     Interval, IntervalValue, LikeQuantifier, Literal, NullTreatment, NumKind, ObjectName,
@@ -1369,17 +1369,17 @@ impl Parser<'_> {
         &mut self,
         mut item: impl FnMut(&mut Self) -> PR<T>,
     ) -> PR<(Vec<T>, Option<Span>)> {
-        if self.sym_at(0, Sym::LParen) {
-            // `(a, b)` is the list unless it only starts an expression
-            // (`(a + b) * 2`).
-            let at = self.checkpoint();
-            match self.paren_list(&mut item) {
-                Ok(items) if self.item_end_at(0) || self.any_kw_at(0, &["ORDER", "SORT"]) => {
-                    self.commit(at);
-                    return Ok((items, None));
+        // `(a, b)` is the list unless it only starts an expression
+        // (`(a + b) * 2`) or is a subquery. Decided from the token after
+        // the matching `)`, so each level is parsed once (a retry as an
+        // expression would double the work at every nesting level).
+        if self.sym_at(0, Sym::LParen) && !self.any_kw_at(1, QUERY_START) {
+            let close = self.closers[self.pos];
+            if close != usize::MAX {
+                let n = close + 1 - self.pos;
+                if self.item_end_at(n) || self.any_kw_at(n, &["ORDER", "SORT"]) {
+                    return Ok((self.paren_list(&mut item)?, None));
                 }
-                Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
-                _ => self.restore(at),
             }
         }
         let mut items = vec![item(self)?];

@@ -119,6 +119,9 @@ pub(crate) struct Parser<'s> {
     failed_queries: HashMap<usize, usize>,
     /// For each token, the first token at or after it that is not `(`.
     after_parens: Vec<usize>,
+    /// For each `(` token, the position of its matching `)`; `usize::MAX`
+    /// for any other token and for an unclosed `(`.
+    closers: Vec<usize>,
     /// Token positions of the `?` parameter markers, in order.
     markers: Vec<usize>,
     /// The first error Spark raises after parsing (in `AstBuilder`) that
@@ -591,6 +594,19 @@ impl<'s> Parser<'s> {
             }
             after_parens[i] = next;
         }
+        let mut closers = vec![usize::MAX; toks.len()];
+        let mut open = Vec::new();
+        for (i, t) in toks.iter().enumerate() {
+            match t.kind {
+                TokenKind::Sym(Sym::LParen) => open.push(i),
+                TokenKind::Sym(Sym::RParen) => {
+                    if let Some(o) = open.pop() {
+                        closers[o] = i;
+                    }
+                }
+                _ => {}
+            }
+        }
         let markers = (0..toks.len())
             .filter(|&i| toks[i].kind == TokenKind::Sym(Sym::Question))
             .collect();
@@ -608,6 +624,7 @@ impl<'s> Parser<'s> {
             peak: 0,
             failed_queries: HashMap::new(),
             after_parens,
+            closers,
             markers,
             deferred: None,
             cast_types: vec![],
@@ -3562,23 +3579,15 @@ impl<'s> Parser<'s> {
         if !(self.kw_at(0, "SELECT") && self.kw_at(1, "TRANSFORM") && self.sym_at(2, Sym::LParen)) {
             return false;
         }
-        let mut depth = 0_usize;
-        for (i, t) in self.toks.iter().enumerate().skip(self.pos + 2) {
-            match t.kind {
-                TokenKind::Sym(Sym::LParen) => depth += 1,
-                TokenKind::Sym(Sym::RParen) => {
-                    depth -= 1;
-                    if depth == 0 {
-                        let n = i + 1 - self.pos;
-                        return self.kw_at(n, "USING")
-                            || self.kw_at(n, "RECORDWRITER")
-                            || self.kw_at(n, "ROW") && self.kw_at(n + 1, "FORMAT");
-                    }
-                }
-                _ => {}
-            }
+        // The token after the parenthesis that opens at `pos + 2`.
+        let close = self.closers[self.pos + 2];
+        if close == usize::MAX {
+            return false;
         }
-        false
+        let n = close + 1 - self.pos;
+        self.kw_at(n, "USING")
+            || self.kw_at(n, "RECORDWRITER")
+            || self.kw_at(n, "ROW") && self.kw_at(n + 1, "FORMAT")
     }
 
     /// `SELECT TRANSFORM (inputs)`, `MAP inputs` or `REDUCE inputs`, the

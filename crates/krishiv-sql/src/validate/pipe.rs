@@ -107,7 +107,8 @@ impl Checker<'_> {
             PipeOpKind::SetOp { right, .. } => self.set_expr(right),
             PipeOpKind::Organization(o) => self.pipe_organization(o),
             PipeOpKind::Aggregate(a) => self.pipe_aggregate(a, op.span),
-            _ => Ok(()),
+            // Nothing to check: a name list and a table alias.
+            PipeOpKind::Drop(_) | PipeOpKind::As(_) => Ok(()),
         }
     }
 

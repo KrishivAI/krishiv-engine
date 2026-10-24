@@ -1015,3 +1015,47 @@ fn transform_errors() {
         assert_eq!(class(sql), expected, "{sql}");
     }
 }
+
+/// `PARTITION BY (1 + (SELECT .. f(TABLE(t) PARTITION BY (..) * 2))) * 2`
+/// nested `depth` deep: every level starts with a parenthesis that is only
+/// the prefix of an expression.
+fn nested_partition(depth: usize, innermost: &str) -> String {
+    let mut e = innermost.to_owned();
+    for _ in 0..depth {
+        e = format!("(1 + (SELECT 1 FROM f(TABLE(t) PARTITION BY {e} * 2)))");
+    }
+    format!("SELECT * FROM f(TABLE(t) PARTITION BY {e} * 2)")
+}
+
+/// Each nesting level parses its body once, not once as a list and once
+/// as an expression: with a retry per level, depth 30 would take 2^30
+/// parses (the input is untrusted, nesting is capped only at `MAX_DEPTH`).
+#[test]
+fn nested_table_argument_partitions_parse_in_bounded_time() {
+    let started = std::time::Instant::now();
+    for depth in [10, 30, 100] {
+        let sql = nested_partition(depth, "(1)");
+        ok(&sql);
+        // The same shape that fails at the bottom fails as fast.
+        let bad = nested_partition(depth, "(1 +)");
+        err(&bad, &defaults());
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "nested TABLE argument partitions took {:?}",
+        started.elapsed()
+    );
+    // The list forms keep their meaning.
+    let table_arg = |arg: &ast::FunctionArg| match &arg.expr.kind {
+        ExprKind::TableArgument(t) => (**t).clone(),
+        other => panic!("{other:?}"),
+    };
+    let args = table_function_args("SELECT * FROM f(TABLE(t) PARTITION BY (a, b) ORDER BY c)");
+    let p = table_arg(&args[0]).partitioning.unwrap();
+    assert_eq!((p.partition_by.len(), p.order_by.len()), (2, 1));
+    let args = table_function_args("SELECT * FROM f(TABLE(t) PARTITION BY (SELECT 1))");
+    assert!(matches!(
+        table_arg(&args[0]).partitioning.unwrap().partition_by[0].kind,
+        ExprKind::Subquery(..)
+    ));
+}
