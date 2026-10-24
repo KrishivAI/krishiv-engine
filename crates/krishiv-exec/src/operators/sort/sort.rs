@@ -373,14 +373,18 @@ impl Held {
         }
     }
 
-    /// The next bucket for a reader, if any is left.
-    fn claim(&self) -> Option<usize> {
+    /// The next bucket for a reader, if any is left; the error once the
+    /// result was lost.
+    fn claim(&self) -> Result<Option<usize>> {
         let mut s = lock(&self.state);
-        if s.failed.is_some() || s.next >= s.buckets.len() {
-            return None;
+        if let Some(e) = &s.failed {
+            return Err(e.clone());
+        }
+        if s.next >= s.buckets.len() {
+            return Ok(None);
         }
         s.next += 1;
-        Some(s.next - 1)
+        Ok(Some(s.next - 1))
     }
 
     /// A reader's next step on bucket `b` (leaving it `Busy` for a merge).
@@ -1245,7 +1249,11 @@ impl Source for Sort {
                         };
                     }
                     SourceState::Held(held, bucket) => {
-                        let Some(b) = bucket.or_else(|| held.claim()) else {
+                        let next = match bucket {
+                            Some(b) => Some(b),
+                            None => held.claim()?,
+                        };
+                        let Some(b) = next else {
                             continue;
                         };
                         match read_bucket(l, &held, b).await? {
