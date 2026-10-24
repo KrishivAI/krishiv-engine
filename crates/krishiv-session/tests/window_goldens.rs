@@ -491,3 +491,62 @@ fn a_dataframe_filter_sees_the_window_output_and_having_does_not() {
         "UNRESOLVED_COLUMN.WITH_SUGGESTION"
     );
 }
+
+/// `lag`/`lead` take any foldable `INT` offset, as Spark 4.2.0 does
+/// (`1 + 1`, `abs(-2)`, `-(-1)`); another type of offset is a frame Spark
+/// refuses as the user's (`_LEGACY_ERROR_TEMP_1035`). Values from the
+/// Spark 4.2.0 oracle over `(o, v)` = `(1, 10) .. (4, 40)`.
+#[test]
+fn lag_and_lead_take_any_foldable_int_offset() {
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("o", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]));
+    let column = |v: [i32; 4]| -> arrow_array::ArrayRef { Arc::new(Int32Array::from(v.to_vec())) };
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![column([1, 2, 3, 4]), column([10, 20, 30, 40])],
+    )
+    .unwrap();
+    s.register_batches("t", schema, vec![batch]).unwrap();
+    let run = |f: &str, offset: &str| {
+        let sql = format!("SELECT {f}(v, {offset}) OVER (ORDER BY o) AS x FROM t ORDER BY o");
+        block_on(async { s.sql(&sql).await?.collect().await }).map(|batches| {
+            batches
+                .iter()
+                .flat_map(|b| {
+                    let c = b.column(0);
+                    (0..b.num_rows())
+                        .map(|i| (!c.is_null(i)).then(|| c.as_primitive::<Int32Type>().value(i)))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    for offset in ["1 + 1", "abs(-2)", "2 * 1"] {
+        assert_eq!(
+            run("lag", offset).unwrap(),
+            [None, None, Some(10), Some(20)],
+            "{offset}"
+        );
+        assert_eq!(
+            run("lead", offset).unwrap(),
+            [Some(30), Some(40), None, None],
+            "{offset}"
+        );
+    }
+    assert_eq!(
+        run("lag", "-(-1)").unwrap(),
+        [None, Some(10), Some(20), Some(30)]
+    );
+    for offset in ["CAST(2 AS BIGINT)", "2L", "CAST(1.5 AS DOUBLE)", "NULL"] {
+        let e = run("lag", offset).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "_LEGACY_ERROR_TEMP_1035",
+            "{offset}: {e}"
+        );
+        assert!(e.to_string().contains("lag"), "{offset}: {e}");
+    }
+}

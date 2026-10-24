@@ -183,13 +183,10 @@ fn is_offset_frame(f: &WindowFrame) -> bool {
     f.units == FrameUnits::Rows && literal(&f.lower) && f.lower == f.upper
 }
 
-/// Whether a `lag`/`lead` offset is an `INT` literal (or a cast to `INT`).
+/// Whether a `lag`/`lead` offset is of type `INT`: any foldable `INT`
+/// expression counts (`1 + 1`, `abs(-2)`), as in Spark.
 fn offset_type(e: &Expr) -> bool {
-    match &e.node {
-        ExprNode::Literal(Literal::Integer(_)) => true,
-        ExprNode::Cast { to, .. } => *to == krishiv_types::DataType::Integer,
-        _ => false,
-    }
+    expr_type(e).data_type == Some(krishiv_types::DataType::Integer)
 }
 
 fn is_null_literal(e: &Expr) -> bool {
