@@ -29,12 +29,13 @@ use crate::ast::{
     GroupWith, GroupingSet, Hint, Ident, IdentityColumn, IdentityHow, Join, JoinConstraint,
     JoinKind, LateralView, Limit, Literal, NamedWindow, NamespaceKind, NumKind, ObjectName,
     OptionKey, OrderedIdent, PartitionColumn, PartitionField, PartitionFieldKind,
-    PartitionTransform, Pivot, Query, Relation, RelationExt, Reset, RowDelimited, RowFormat,
-    RowFormatKind, RowSerde, SampleMethod, SampleMethodKind, SampleType, Select, SelectItem, Set,
-    SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier, SkewSpec, SortItem, Span, Statement,
-    StructField, TableAlias, TableConstraint, TableConstraintKind, TableElement, TableFactor,
-    TableFactorKind, TableOption, TableSample, TemporalClause, TemporalKind, TimeZone, Unpivot,
-    UnpivotColumns, Use, Values, ViewColumn, With,
+    PartitionTransform, Pipe, PipeAggregate, PipeAssignment, PipeOp, PipeOpKind, PipeSelect,
+    PipeWhere, Pivot, Query, QueryOrganization, Relation, RelationExt, Reset, RowDelimited,
+    RowFormat, RowFormatKind, RowSerde, SampleMethod, SampleMethodKind, SampleType, Select,
+    SelectItem, Set, SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier, SkewSpec, SortItem,
+    Span, Statement, StructField, TableAlias, TableConstraint, TableConstraintKind, TableElement,
+    TableFactor, TableFactorKind, TableOption, TableSample, TemporalClause, TemporalKind, TimeZone,
+    Unpivot, UnpivotColumns, Use, Values, ViewColumn, With,
 };
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
@@ -2868,18 +2869,45 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// `queryOrganization`.
-    #[inline(never)]
+    /// `queryOrganization`, onto `q`.
     fn organization(&mut self, q: &mut Query) -> PR<()> {
+        let o = self.query_organization()?;
+        q.order_by = o.order_by;
+        q.order_span = o.order_span;
+        q.cluster_by = o.cluster_by;
+        q.distribute_by = o.distribute_by;
+        q.sort_by = o.sort_by;
+        q.windows = o.windows;
+        q.limit = o.limit;
+        q.offset = o.offset;
+        Ok(())
+    }
+
+    /// `queryOrganization`: every clause is optional, so it may be empty
+    /// (its span then is the empty range at the current token).
+    #[inline(never)]
+    fn query_organization(&mut self) -> PR<QueryOrganization> {
+        let begin = self.start();
+        let mut o = QueryOrganization {
+            order_by: vec![],
+            order_span: None,
+            cluster_by: vec![],
+            distribute_by: vec![],
+            sort_by: vec![],
+            windows: vec![],
+            limit: None,
+            offset: None,
+            span: Span::default(),
+        };
         if self.kw_at(0, "ORDER") && self.kw_at(1, "BY") {
             let start = self.start();
             self.pos += 2;
-            q.order_by = self.comma_sep(|p| p.sort_item(true))?;
-            q.order_span = Some(self.span_from(start));
+            o.order_by = self.comma_sep(|p| p.sort_item(true))?;
+            o.order_span = Some(self.span_from(start));
         }
         for (kw, list) in [
-            ("CLUSTER", &mut q.cluster_by),
-            ("DISTRIBUTE", &mut q.distribute_by),
+            ("CLUSTER", &mut o.cluster_by),
+            ("DISTRIBUTE", &mut o.distribute_by),
         ] {
             if self.kw_at(0, kw) && self.kw_at(1, "BY") {
                 self.pos += 2;
@@ -2888,9 +2916,9 @@ impl<'s> Parser<'s> {
         }
         if self.kw_at(0, "SORT") && self.kw_at(1, "BY") {
             self.pos += 2;
-            q.sort_by = self.comma_sep(|p| p.sort_item(false))?;
+            o.sort_by = self.comma_sep(|p| p.sort_item(false))?;
         }
-        q.windows = self.window_clause()?;
+        o.windows = self.window_clause()?;
         let start = self.start();
         if self.eat_kw("LIMIT") {
             let value = if self.eat_kw("ALL") {
@@ -2898,15 +2926,16 @@ impl<'s> Parser<'s> {
             } else {
                 Some(self.expr()?)
             };
-            q.limit = Some(Limit {
+            o.limit = Some(Limit {
                 value,
                 span: self.span_from(start),
             });
         }
         if self.eat_kw("OFFSET") {
-            q.offset = Some(self.expr()?);
+            o.offset = Some(self.expr()?);
         }
-        Ok(())
+        o.span = self.span_from(begin);
+        Ok(o)
     }
 
     #[inline(never)]
@@ -2960,6 +2989,26 @@ impl<'s> Parser<'s> {
     fn set_ops(&mut self, min_prec: u8) -> PR<SetExpr> {
         let (mut left, mut height) = self.measured(Self::query_primary)?;
         loop {
+            if min_prec == 0 && self.pipe_follows() {
+                let op = self.pipe_op()?;
+                if let SetExprKind::Pipe(pipe) = &mut left.kind {
+                    left.span = left.span.to(op.span);
+                    pipe.span = left.span;
+                    pipe.ops.push(op);
+                } else {
+                    height += 1;
+                    self.grow(height)?;
+                    let span = left.span.to(op.span);
+                    let input = Box::new(left);
+                    let kind = SetExprKind::Pipe(Pipe {
+                        input,
+                        ops: vec![op],
+                        span,
+                    });
+                    left = SetExpr { kind, span };
+                }
+                continue;
+            }
             let (op, prec) = if self.kw_at(0, "INTERSECT") {
                 (SetOperator::Intersect, 2)
             } else if self.kw_at(0, "UNION") {
@@ -2994,6 +3043,231 @@ impl<'s> Parser<'s> {
             };
         }
         Ok(left)
+    }
+
+    /// Whether a pipe operator starts here: `|>`, or `|` before a word that
+    /// starts one (Spark's `isOperatorPipeStart`), unless the single
+    /// character form is off.
+    pub(crate) fn pipe_follows(&self) -> bool {
+        self.sym_at(0, Sym::PipeGt) || (self.sym_at(0, Sym::Pipe) && self.single_pipe_word_at(1))
+    }
+
+    /// Whether `|` before token `n` is the pipe operator, not a bitwise or.
+    pub(crate) fn single_pipe_word_at(&self, n: usize) -> bool {
+        self.opts.single_character_pipe_operator
+            && self.any_kw_at(
+                n,
+                &[
+                    "SELECT",
+                    "EXTEND",
+                    "SET",
+                    "DROP",
+                    "AS",
+                    "WHERE",
+                    "PIVOT",
+                    "UNPIVOT",
+                    "TABLESAMPLE",
+                    "INNER",
+                    "CROSS",
+                    "LEFT",
+                    "RIGHT",
+                    "FULL",
+                    "NATURAL",
+                    "SEMI",
+                    "ANTI",
+                    "JOIN",
+                    "UNION",
+                    "EXCEPT",
+                    "MINUS",
+                    "INTERSECT",
+                    "ORDER",
+                    "CLUSTER",
+                    "DISTRIBUTE",
+                    "SORT",
+                    "LIMIT",
+                    "OFFSET",
+                    "AGGREGATE",
+                    "WINDOW",
+                    "LATERAL",
+                ],
+            )
+    }
+
+    /// One pipe operator, from its `|>` (or `|`).
+    #[inline(never)]
+    fn pipe_op(&mut self) -> PR<PipeOp> {
+        let start = self.start();
+        let pipe_span = self.tok(0).map_or_else(Span::default, |t| t.span);
+        self.bump();
+        let kind = if self.kw_at(0, "SELECT") {
+            let begin = self.start();
+            let (hints, quantifier, projection) = self.select_head()?;
+            let group_by = if self.kw_at(0, "GROUP") && self.kw_at(1, "BY") {
+                Some(self.group_by()?)
+            } else {
+                None
+            };
+            let windows = self.window_clause()?;
+            PipeOpKind::Select(Box::new(PipeSelect {
+                hints,
+                quantifier,
+                projection,
+                group_by,
+                windows,
+                span: self.span_from(begin),
+            }))
+        } else if self.eat_kw("EXTEND") {
+            PipeOpKind::Extend(self.comma_sep(Self::select_item)?)
+        } else if self.eat_kw("SET") {
+            PipeOpKind::Set(self.comma_sep(|p| {
+                let start = p.start();
+                let mut key = vec![p.name_part(true)?];
+                while p.eat_sym(Sym::Dot) {
+                    key.push(p.name_part(true)?);
+                }
+                p.expect_sym(Sym::Eq)?;
+                Ok(PipeAssignment {
+                    key,
+                    value: p.expr()?,
+                    span: p.span_from(start),
+                })
+            })?)
+        } else if self.eat_kw("DROP") {
+            PipeOpKind::Drop(self.comma_sep(Self::table_name)?)
+        } else if self.eat_kw("AS") {
+            PipeOpKind::As(self.name_part(true)?)
+        } else if self.kw_at(0, "WHERE") {
+            let begin = self.start();
+            self.bump();
+            let condition = self.expr()?;
+            let windows = self.window_clause()?;
+            PipeOpKind::Where(PipeWhere {
+                condition,
+                windows,
+                span: self.span_from(begin),
+            })
+        } else if self.kw_at(0, "PIVOT") {
+            let pivot = Box::new(self.pivot()?);
+            let unpivot = if self.unpivot_follows() {
+                Some(Box::new(self.unpivot()?))
+            } else {
+                None
+            };
+            PipeOpKind::Pivot(pivot, unpivot)
+        } else if self.unpivot_follows() {
+            let unpivot = Box::new(self.unpivot()?);
+            let pivot = if self.kw_at(0, "PIVOT") {
+                Some(Box::new(self.pivot()?))
+            } else {
+                None
+            };
+            PipeOpKind::Unpivot(unpivot, pivot)
+        } else if self.kw_at(0, "TABLESAMPLE") {
+            PipeOpKind::Sample(self.table_sample()?)
+        } else if self.any_kw_at(0, &["UNION", "EXCEPT", "MINUS", "INTERSECT"]) {
+            let op = if self.kw_at(0, "UNION") {
+                SetOperator::Union
+            } else if self.kw_at(0, "INTERSECT") {
+                SetOperator::Intersect
+            } else {
+                SetOperator::Except
+            };
+            self.bump();
+            let quantifier = self.set_quantifier();
+            let right = Box::new(self.nested(Self::query_primary)?);
+            PipeOpKind::SetOp {
+                op,
+                quantifier,
+                right,
+            }
+        } else if self.kw_at(0, "AGGREGATE") {
+            let begin = self.start();
+            self.bump();
+            // `AGGREGATE group by` with nothing after `by` reads `group` as
+            // an aggregate named `by`, as Spark does.
+            let group_follows =
+                self.kw_at(0, "GROUP") && self.kw_at(1, "BY") && self.expr_may_start_at(2);
+            let aggregates = if group_follows || !self.expr_may_start_at(0) {
+                vec![]
+            } else if self.kw_at(0, "GROUP")
+                && self.kw_at(1, "BY")
+                && !self.opts.enforce_reserved_keywords
+            {
+                let item_start = self.start();
+                let column = self.keyword_ident();
+                let expr = Expr {
+                    span: column.span,
+                    kind: ExprKind::Column(vec![column]),
+                };
+                let alias = Some(Alias::Name(self.any_ident()?));
+                let mut items = vec![SelectItem {
+                    expr,
+                    alias,
+                    span: self.span_from(item_start),
+                }];
+                while self.eat_sym(Sym::Comma) {
+                    items.push(self.select_item()?);
+                }
+                items
+            } else {
+                self.comma_sep(Self::select_item)?
+            };
+            let group_by = if self.kw_at(0, "GROUP") && self.kw_at(1, "BY") {
+                Some(self.group_by_with(true)?)
+            } else {
+                None
+            };
+            PipeOpKind::Aggregate(Box::new(PipeAggregate {
+                aggregates,
+                group_by,
+                span: self.span_from(begin),
+            }))
+        } else if let Some(join) = self.join()? {
+            PipeOpKind::Join(Box::new(join))
+        } else {
+            let mut o = self.query_organization()?;
+            if o.span.start == o.span.end {
+                o.span = pipe_span;
+            }
+            PipeOpKind::Organization(o)
+        };
+        Ok(PipeOp {
+            kind,
+            span: self.span_from(start),
+        })
+    }
+
+    fn unpivot_follows(&self) -> bool {
+        self.kw_at(0, "UNPIVOT")
+            && (self.sym_at(1, Sym::LParen) || self.any_kw_at(1, &["INCLUDE", "EXCLUDE"]))
+    }
+
+    /// Whether an expression can start at token `n` (not the end of the
+    /// operator: a closing bracket, a pipe or a query clause).
+    fn expr_may_start_at(&self, n: usize) -> bool {
+        match self.kind(n) {
+            None
+            | Some(TokenKind::Sym(
+                Sym::RParen | Sym::RBracket | Sym::Semi | Sym::Comma | Sym::PipeGt,
+            )) => false,
+            Some(TokenKind::Sym(Sym::Pipe)) => !self.single_pipe_word_at(n + 1),
+            _ => !self.any_kw_at(
+                n,
+                &[
+                    "ORDER",
+                    "UNION",
+                    "EXCEPT",
+                    "MINUS",
+                    "INTERSECT",
+                    "LIMIT",
+                    "OFFSET",
+                    "WINDOW",
+                    "CLUSTER",
+                    "DISTRIBUTE",
+                    "SORT",
+                ],
+            ),
+        }
     }
 
     fn set_quantifier(&mut self) -> Option<SetQuantifier> {
@@ -3097,9 +3371,8 @@ impl<'s> Parser<'s> {
         })
     }
 
-    /// A query specification from `SELECT` on; `with_from` reads a `FROM`
-    /// clause (a body of a `FROM ... SELECT` statement has none).
-    fn select(&mut self, start: usize, with_from: bool) -> PR<Select> {
+    /// `SELECT [hints] [DISTINCT | ALL] items`.
+    fn select_head(&mut self) -> PR<(Vec<Hint>, Option<SetQuantifier>, Vec<SelectItem>)> {
         self.expect_kw("SELECT")?;
         let mut hints = vec![];
         while self.kind(0) == Some(TokenKind::HintStart) {
@@ -3114,6 +3387,13 @@ impl<'s> Parser<'s> {
             self.set_quantifier()
         };
         let projection = self.comma_sep(Self::select_item)?;
+        Ok((hints, quantifier, projection))
+    }
+
+    /// A query specification from `SELECT` on; `with_from` reads a `FROM`
+    /// clause (a body of a `FROM ... SELECT` statement has none).
+    fn select(&mut self, start: usize, with_from: bool) -> PR<Select> {
+        let (hints, quantifier, projection) = self.select_head()?;
         let from = if with_from && self.kw_at(0, "FROM") {
             Some(self.clause_from()?)
         } else {
@@ -3181,7 +3461,17 @@ impl<'s> Parser<'s> {
     fn select_item(&mut self) -> PR<SelectItem> {
         let start = self.start();
         let expr = self.expr()?;
-        let alias = if !self.item_end_at(1) && self.eat_kw("AS") {
+        let alias = self.select_alias()?;
+        Ok(SelectItem {
+            expr,
+            alias,
+            span: self.span_from(start),
+        })
+    }
+
+    /// The `[AS] alias` after a select item's expression.
+    fn select_alias(&mut self) -> PR<Option<Alias>> {
+        Ok(if !self.item_end_at(1) && self.eat_kw("AS") {
             Some(if self.sym_at(0, Sym::LParen) {
                 Alias::List(self.ident_list()?)
             } else {
@@ -3191,11 +3481,6 @@ impl<'s> Parser<'s> {
             Some(Alias::List(self.ident_list()?))
         } else {
             self.implicit_alias(true)?.map(Alias::Name)
-        };
-        Ok(SelectItem {
-            expr,
-            alias,
-            span: self.span_from(start),
         })
     }
 
@@ -3249,11 +3534,17 @@ impl<'s> Parser<'s> {
 
     // ---- GROUP BY -------------------------------------------------------
 
-    #[inline(never)]
     fn group_by(&mut self) -> PR<GroupBy> {
+        self.group_by_with(false)
+    }
+
+    /// `GROUP BY items`; `named` lets an item carry an alias, as in the
+    /// pipe operator `AGGREGATE`.
+    #[inline(never)]
+    fn group_by_with(&mut self, named: bool) -> PR<GroupBy> {
         let start = self.start();
         self.pos += 2;
-        let items = self.comma_sep(Self::group_item)?;
+        let items = self.comma_sep(|p| p.group_item_with(named))?;
         let with = if self.kw_at(0, "WITH") && self.any_kw_at(1, &["ROLLUP", "CUBE"]) {
             let rollup = self.kw_at(1, "ROLLUP");
             self.pos += 2;
@@ -3278,6 +3569,10 @@ impl<'s> Parser<'s> {
     }
 
     fn group_item(&mut self) -> PR<GroupItem> {
+        self.group_item_with(false)
+    }
+
+    fn group_item_with(&mut self, named: bool) -> PR<GroupItem> {
         let start = self.start();
         let kind = if self.any_kw_at(0, &["ROLLUP", "CUBE"]) && self.sym_at(1, Sym::LParen) {
             let rollup = self.kw_at(0, "ROLLUP");
@@ -3309,6 +3604,20 @@ impl<'s> Parser<'s> {
             && !self.sym_at(1, Sym::LParen)
         {
             GroupItemKind::Expr(self.column_named_all())
+        } else if named {
+            let expr = self.expr()?;
+            // `GROUPING SETS` after the items is no alias (`GROUPING`).
+            let alias = if self.kw_at(0, "GROUPING") && self.kw_at(1, "SETS") {
+                None
+            } else {
+                self.select_alias()?
+            };
+            if alias.is_some() {
+                let span = self.span_from(start);
+                GroupItemKind::Named(SelectItem { expr, alias, span })
+            } else {
+                GroupItemKind::Expr(expr)
+            }
         } else {
             GroupItemKind::Expr(self.expr()?)
         };

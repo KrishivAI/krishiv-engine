@@ -11,8 +11,7 @@
 //!
 //! [`in_dql_scope`] selects the query statements the DQL parser covers.
 //! Excluded are statements that are not queries (DDL, DML, commands) and
-//! queries using syntax that later parser work covers: the pipe operator
-//! `|>`; `TRANSFORM` scripts, variant paths and named
+//! queries using syntax that later parser work covers: `TRANSFORM` scripts, variant paths and named
 //! parameters (`:`), `IDENTIFIER(...)`, `TABLE(...)` arguments
 //! and `NEAREST BY`; streaming relations (`STREAM`,
 //! `WATERMARK`, `CHANGES`).
@@ -128,11 +127,7 @@ pub fn in_dql_scope(sql: &str) -> bool {
             TokenKind::Sym(Sym::RParen) => depth -= 1,
             TokenKind::Sym(Sym::Lt) if i > 0 && word(i - 1, "STRUCT") => type_depth += 1,
             TokenKind::Sym(Sym::Gt) if type_depth > 0 => type_depth -= 1,
-            TokenKind::Sym(Sym::PipeGt) | TokenKind::Unrecognized => return false,
-            // `|` as the pipe operator (`singleCharacterPipeOperator`).
-            TokenKind::Sym(Sym::Pipe) if PIPE_OPERATORS.iter().any(|k| word(i + 1, k)) => {
-                return false;
-            }
+            TokenKind::Unrecognized => return false,
             TokenKind::Sym(Sym::Colon) if type_depth == 0 => return false,
             TokenKind::Word if out_of_scope_word(sql, &tokens, i, depth) => return false,
             _ => {}
@@ -140,27 +135,6 @@ pub fn in_dql_scope(sql: &str) -> bool {
     }
     true
 }
-
-/// Words that start the right side of a pipe operator.
-const PIPE_OPERATORS: &[&str] = &[
-    "AGGREGATE",
-    "AS",
-    "DROP",
-    "EXCEPT",
-    "EXTEND",
-    "INTERSECT",
-    "JOIN",
-    "LIMIT",
-    "ORDER",
-    "PIVOT",
-    "SELECT",
-    "SET",
-    "TABLESAMPLE",
-    "UNION",
-    "UNPIVOT",
-    "WHERE",
-    "WINDOW",
-];
 
 fn out_of_scope_word(sql: &str, tokens: &[Token], i: usize, depth: i32) -> bool {
     let word = |j: usize, kw: &str| {
@@ -198,6 +172,8 @@ mod tests {
             "SELECT CAST(x AS STRUCT<a: INT>)",
             "SELECT a COLLATE utf8_lcase FROM t",
             "SELECT * FROM t TABLESAMPLE (1 ROWS)",
+            "FROM t |> SELECT a",
+            "TABLE t | SELECT a",
         ] {
             assert!(in_dql_scope(sql), "{sql}");
         }
@@ -205,13 +181,11 @@ mod tests {
             "CREATE TABLE t (a INT)",
             "INSERT INTO t VALUES 1",
             "WITH t AS (SELECT 1) INSERT INTO u SELECT * FROM t",
-            "FROM t |> SELECT a",
             "SELECT v:a FROM t",
             "SELECT * FROM IDENTIFIER('t')",
             "SELECT * FROM f(TABLE(t))",
             "SELECT TRANSFORM(a) USING 'cat' FROM t",
             "SELECT $1",
-            "TABLE t | SELECT a",
         ] {
             assert!(!in_dql_scope(sql), "{sql}");
         }

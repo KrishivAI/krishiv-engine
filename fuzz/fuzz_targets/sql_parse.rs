@@ -35,6 +35,7 @@ fuzz_target!(|data: &[u8]| {
         legacy_interval: bits & 32 != 0,
         timestamp_ntz: bits & 64 != 0,
         legacy_identifier_clause: bits & 128 != 0,
+        single_character_pipe_operator: true,
     };
     match parse_query(&sql, &options) {
         Ok(q) => {

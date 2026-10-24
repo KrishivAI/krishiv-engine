@@ -391,6 +391,7 @@ impl Lowerer {
     /// A query body: a `SELECT`, a set operation, a table, ...
     fn body(&mut self, body: &SetExpr) -> R<LogicalPlan> {
         Ok(match &body.kind {
+            SetExprKind::Pipe(_) => return Err(unsupported("pipe operators", body.span)),
             SetExprKind::Select(s) => self.select(s, s.from.as_ref())?,
             SetExprKind::Query(inner) => self.query(inner)?,
             SetExprKind::Table(name) => self.node(
@@ -694,6 +695,7 @@ impl Lowerer {
         written: &mut Vec<Arc<IrExpr>>,
     ) -> R<Vec<Vec<Arc<IrExpr>>>> {
         Ok(match &item.kind {
+            GroupItemKind::Named(_) => return Err(unsupported("named grouping items", item.span)),
             GroupItemKind::Expr(e) => {
                 let e = arc(self.expr(e)?);
                 written.push(Arc::clone(&e));

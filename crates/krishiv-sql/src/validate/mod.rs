@@ -16,6 +16,7 @@
 //! | a string unit in `TIMESTAMPADD` and friends | `INVALID_PARAMETER_VALUE.DATETIME_UNIT` |
 //! | `IN ()` | `INVALID_SQL_SYNTAX.EMPTY_IN_PREDICATE` |
 //! | `LIKE ANY ()`, a frame bound that is not a literal | `_LEGACY_ERROR_TEMP_0064` |
+//! | pipe operators and result clause combinations | see [`pipe`] |
 //! | `TABLESAMPLE` with no method, an out-of-range percentage, `SYSTEM` misuse, byte and column forms | see [`sample`] |
 //! | duplicate CTE names, duplicate window names | `DUPLICATED_CTE_NAMES`, `INVALID_SQL_SYNTAX.REPETITIVE_WINDOW_DEFINITION` |
 //! | `MAX RECURSION LEVEL` without `RECURSIVE`, a table option without a value | `_LEGACY_ERROR_TEMP_0035` |
@@ -32,6 +33,7 @@
 
 mod interval;
 pub(crate) mod literal;
+mod pipe;
 mod sample;
 mod types;
 
@@ -277,6 +279,7 @@ impl Checker<'_> {
 
     fn query(&self, q: &Query) -> R {
         self.set_expr(&q.body)?;
+        self.query_result_clauses(q)?;
         self.sort_items(&q.order_by)?;
         q.cluster_by.iter().try_for_each(|e| self.expr(e))?;
         q.distribute_by.iter().try_for_each(|e| self.expr(e))?;
@@ -358,6 +361,7 @@ impl Checker<'_> {
             }
             SetExprKind::Query(q) => self.query(q),
             SetExprKind::Values(v) => self.inline_table(&v.rows, v.alias.as_ref(), v.span),
+            SetExprKind::Pipe(p) => self.pipe(p),
             _ => Ok(()),
         }
     }
@@ -554,6 +558,7 @@ impl Checker<'_> {
         };
         match &item.kind {
             GroupItemKind::Expr(e) => self.expr(e),
+            GroupItemKind::Named(i) => self.expr(&i.expr),
             GroupItemKind::Rollup(s) => sets(s, "ROLLUP"),
             GroupItemKind::Cube(s) => sets(s, "CUBE"),
             GroupItemKind::GroupingSets(items) => {

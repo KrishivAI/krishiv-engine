@@ -921,6 +921,148 @@ pub enum SetExprKind {
     Values(Values),
     /// `TABLE name`.
     Table(ObjectName),
+    /// `input |> operator |> ...`.
+    Pipe(Pipe),
+}
+
+/// A query term followed by pipe operators (`|>`, or `|` before an
+/// operator keyword). Operators apply left to right, each to the result of
+/// the one before; a set operation or a further pipe over the result is a
+/// new node around this one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Pipe {
+    /// The query the operators start from.
+    pub input: Box<SetExpr>,
+    /// The operators, in source order (never empty).
+    pub ops: Vec<PipeOp>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// One pipe operator, from its `|>` to its last token.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PipeOp {
+    /// What it is.
+    pub kind: PipeOpKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`PipeOp`] (Spark's `operatorPipeRightSide`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PipeOpKind {
+    /// `SELECT ... [GROUP BY ...] [WINDOW ...]`.
+    Select(Box<PipeSelect>),
+    /// `EXTEND expr [AS name], ...`.
+    Extend(Vec<SelectItem>),
+    /// `SET name = expr, ...`.
+    Set(Vec<PipeAssignment>),
+    /// `DROP name, ...`.
+    Drop(Vec<ObjectName>),
+    /// `AS name`.
+    As(Ident),
+    /// `WHERE condition`.
+    Where(PipeWhere),
+    /// `PIVOT (...)`, with the `UNPIVOT` Spark parses after it and rejects.
+    Pivot(Box<Pivot>, Option<Box<Unpivot>>),
+    /// `UNPIVOT (...)`, with the `PIVOT` Spark parses after it and rejects.
+    Unpivot(Box<Unpivot>, Option<Box<Pivot>>),
+    /// `TABLESAMPLE (...)`.
+    Sample(TableSample),
+    /// `[type] JOIN right [ON ... | USING (...) | NEAREST BY ...]`.
+    Join(Box<Join>),
+    /// `UNION | EXCEPT | MINUS | INTERSECT [ALL | DISTINCT] right`; the
+    /// right side is a query primary.
+    SetOp {
+        /// The operator.
+        op: SetOperator,
+        /// `ALL` or `DISTINCT`, if written.
+        quantifier: Option<SetQuantifier>,
+        /// The right input.
+        right: Box<SetExpr>,
+    },
+    /// `ORDER BY`, `LIMIT`, ... (possibly none: the operator is then bare).
+    Organization(QueryOrganization),
+    /// `AGGREGATE [aggregates] [GROUP BY ...]`.
+    Aggregate(Box<PipeAggregate>),
+}
+
+/// The `SELECT` of a pipe operator.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PipeSelect {
+    /// `/*+ ... */` hints.
+    pub hints: Vec<Hint>,
+    /// `DISTINCT` or `ALL`.
+    pub quantifier: Option<SetQuantifier>,
+    /// The select list.
+    pub projection: Vec<SelectItem>,
+    /// `GROUP BY`.
+    pub group_by: Option<GroupBy>,
+    /// `WINDOW`.
+    pub windows: Vec<NamedWindow>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `name = expr` of a pipe `SET`. Spark's grammar reads a dotted key and
+/// rejects it afterwards.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PipeAssignment {
+    /// The key's parts (one for a valid key).
+    pub key: Vec<Ident>,
+    /// The new value.
+    pub value: Expr,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `WHERE condition` of a pipe operator, with the `WINDOW` clause Spark
+/// parses after it and rejects.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PipeWhere {
+    /// The condition.
+    pub condition: Expr,
+    /// The (invalid) `WINDOW` clause.
+    pub windows: Vec<NamedWindow>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `AGGREGATE [aggregates] [GROUP BY items]`: grouping items may carry
+/// aliases ([`GroupItemKind::Named`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PipeAggregate {
+    /// The aggregate expressions.
+    pub aggregates: Vec<SelectItem>,
+    /// `GROUP BY`.
+    pub group_by: Option<GroupBy>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// Spark's `queryOrganization`: the trailing clauses of a query, or the
+/// body of a pipe operator that starts with one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QueryOrganization {
+    /// `ORDER BY`.
+    pub order_by: Vec<SortItem>,
+    /// The `ORDER BY` clause, as Spark's errors cite the sort.
+    pub order_span: Option<Span>,
+    /// `CLUSTER BY`.
+    pub cluster_by: Vec<Expr>,
+    /// `DISTRIBUTE BY`.
+    pub distribute_by: Vec<Expr>,
+    /// `SORT BY`.
+    pub sort_by: Vec<SortItem>,
+    /// `WINDOW`.
+    pub windows: Vec<NamedWindow>,
+    /// `LIMIT`.
+    pub limit: Option<Limit>,
+    /// `OFFSET`.
+    pub offset: Option<Expr>,
+    /// Source text (the operator's `|>` when no clause is written).
+    pub span: Span,
 }
 
 /// `VALUES row, ... [alias]`.
@@ -1067,6 +1209,8 @@ pub enum GroupItemKind {
     GroupingSets(Vec<GroupItem>),
     /// A grouping set inside `GROUPING SETS`.
     Set(GroupingSet),
+    /// `expr [AS] alias`, in the `GROUP BY` of a pipe `AGGREGATE`.
+    Named(SelectItem),
 }
 
 /// `(a, b)`, `()` or a single expression.

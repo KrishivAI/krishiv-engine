@@ -590,6 +590,7 @@ impl Parser<'_> {
                 Sym::Gt => (B::Gt, VALUE),
                 Sym::Ge => (B::GtEq, VALUE),
                 Sym::NullSafeEq => (B::NullSafeEq, VALUE),
+                Sym::Pipe if self.single_pipe_word_at(1) => return None,
                 Sym::Pipe => (B::BitOr, 6),
                 Sym::Caret => (B::BitXor, 7),
                 Sym::Amp => (B::BitAnd, 8),
@@ -941,7 +942,7 @@ impl Parser<'_> {
     }
 
     /// The current word as an identifier, whatever it is.
-    fn keyword_ident(&mut self) -> Ident {
+    pub(super) fn keyword_ident(&mut self) -> Ident {
         let span = self.tok(0).map_or_else(Span::default, |t| t.span);
         self.bump();
         Ident {
