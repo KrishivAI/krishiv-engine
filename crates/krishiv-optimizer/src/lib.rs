@@ -42,6 +42,7 @@
 mod dag;
 mod expr;
 mod fold;
+mod group_limit;
 mod join_order;
 mod limit;
 mod project;
@@ -56,6 +57,10 @@ use std::sync::Arc;
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{Expr, ExprNode, Grouping, LogicalPlan, Plan, PlanNode, ResolvedExpr};
 
+pub use group_limit::{
+    DEFAULT_WINDOW_GROUP_LIMIT_THRESHOLD, RankLikeFunction, WindowGroupLimit,
+    infer_window_group_limit,
+};
 pub use join_order::DP_LIMIT;
 pub use limit::TopN;
 pub use stats::{

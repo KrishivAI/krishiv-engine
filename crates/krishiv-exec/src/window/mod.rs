@@ -57,6 +57,7 @@
 //! 1 are `KRISHIV_UNSUPPORTED_FEATURE` (incremental windows are P4).
 
 mod eval;
+mod group_limit;
 mod spill;
 mod stream;
 #[cfg(all(test, not(loom)))]
@@ -79,6 +80,9 @@ use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::operator::{FlushOutput, LocalState, Operator, OperatorOutput};
 use crate::operators::{KeyEncoder, SortKey};
+
+pub(crate) use group_limit::Ranker;
+pub use group_limit::{GroupLimitPlan, RankLike, WindowGroupLimit};
 
 /// A window function.
 #[derive(Clone, Debug, PartialEq)]

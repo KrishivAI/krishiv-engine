@@ -18,7 +18,8 @@ use krishiv_exec::physical::{
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
-    FrameBound, FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan,
+    FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
+    WindowFunctionPlan, WindowPlan,
 };
 use krishiv_exec::{RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
@@ -490,6 +491,24 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     keys: vec![SortKey::asc(0), SortKey::desc(1)],
                 }),
                 window: window_aggregates(),
+            },
+        ),
+        (
+            "window_group_limit",
+            PhysNode::Window {
+                input: boxed(PhysNode::WindowGroupLimit {
+                    input: boxed(PhysNode::Sort {
+                        input: boxed(scan()),
+                        keys: vec![SortKey::asc(0), SortKey::desc(1)],
+                    }),
+                    limit: GroupLimitPlan {
+                        partition_by: vec![0],
+                        order_by: vec![SortKey::desc(1)],
+                        function: RankLike::DenseRank,
+                        limit: 3,
+                    },
+                }),
+                window: window_ranking(),
             },
         ),
         (
