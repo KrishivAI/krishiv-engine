@@ -26,8 +26,8 @@ use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::{ColumnPath, FilterId};
 use krishiv_plan::{
-    AttrId, BoundColumn, Expr, ExprNode, Literal, LogicalPlan, NullOrdering, Plan, PlanNode,
-    ResolvedExpr, SortDirection, SortOrder, SubqueryKind,
+    AttrId, BoundColumn, CastMode, Expr, ExprNode, Literal, LogicalPlan, NullOrdering, Plan,
+    PlanNode, ResolvedExpr, SortDirection, SortOrder, SubqueryKind,
 };
 
 use super::eval::{self, EvalEnv, PhysExpr};
@@ -105,6 +105,15 @@ impl Planned {
             .iter()
             .position(|a| *a == id)
             .ok_or_else(|| internal(&format!("attribute #{} is not an input column", id.0)))
+    }
+
+    /// The Arrow type column `index` is stored in.
+    fn stored(&self, index: usize) -> Result<&arrow_schema::DataType> {
+        self.schema
+            .fields()
+            .get(index)
+            .map(|f| f.data_type())
+            .ok_or_else(|| internal(&format!("column {index} is not in the schema")))
     }
 
     /// The attribute of column `c`.
@@ -467,17 +476,17 @@ impl<'a> Planner<'a> {
 
     /// `UNION ALL`: each input projected to the union's columns (the first
     /// input's attributes, nullable where any input's column is), fanned
-    /// into the pipeline above.
+    /// into the pipeline above. Where the inputs store a column of one Spark
+    /// type in different Arrow types (`Utf8` beside `Utf8View`), every input
+    /// yields the type's canonical Arrow type: the branches that store it
+    /// otherwise cast it.
     fn union(&mut self, p: &Arc<LogicalPlan>, inputs: &[Arc<LogicalPlan>]) -> Result<Planned> {
         let out = p
             .resolved_output()
             .ok_or_else(|| internal("a union without output"))?;
         let layout: Vec<AttrId> = out.iter().map(|c| c.id).collect();
         let nullable: Vec<bool> = out.iter().map(|c| c.nullable).collect();
-        let mut schema: Option<SchemaRef> = None;
-        let mut nodes = Vec::with_capacity(inputs.len());
-        let mut explain = Vec::with_capacity(inputs.len());
-        let mut sites = Vec::new();
+        let mut branches = Vec::with_capacity(inputs.len());
         for input in inputs {
             let cols = input
                 .resolved_output()
@@ -485,17 +494,38 @@ impl<'a> Planner<'a> {
             if cols.len() != out.len() {
                 return Err(internal("union inputs of different widths"));
             }
-            let planned = self.plan(input)?;
-            let items = cols
-                .iter()
-                .zip(&out)
-                .map(|(c, o)| {
-                    Ok(ProjectItemPlan::Column {
-                        index: planned.column(c.id)?,
+            branches.push((cols, self.plan(input)?));
+        }
+        let carriers = union_carriers(&out, &branches)?;
+        let mut schema: Option<SchemaRef> = None;
+        let mut nodes = Vec::with_capacity(inputs.len());
+        let mut explain = Vec::with_capacity(inputs.len());
+        let mut sites = Vec::new();
+        for (cols, planned) in branches {
+            let mut cast = HashSet::new();
+            let mut items = Vec::with_capacity(cols.len());
+            for ((c, o), carrier) in cols.iter().zip(&out).zip(&carriers) {
+                let index = planned.column(c.id)?;
+                if planned.stored(index)? == carrier {
+                    items.push(ProjectItemPlan::Column {
+                        index,
                         name: Some(o.name.clone()),
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
+                    });
+                } else {
+                    let node = ExprNode::Cast {
+                        expr: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+                            c.clone(),
+                        )))),
+                        to: o.data_type.clone(),
+                        mode: CastMode::Ansi,
+                    };
+                    cast.insert(c.id);
+                    items.push(ProjectItemPlan::Expr {
+                        name: o.name.clone(),
+                        expr: Arc::new(Expr::new(node)),
+                    });
+                }
+            }
             let op = project_op(
                 &planned.schema,
                 &planned.layout,
@@ -504,7 +534,14 @@ impl<'a> Planner<'a> {
                 &self.no_values(),
             )?;
             let branch: Vec<AttrId> = cols.iter().map(|c| c.id).collect();
-            sites.extend(renamed(&planned.sites, &branch, &layout));
+            // A cast column no longer is the scan's column.
+            let passing: Vec<Site> = planned
+                .sites
+                .iter()
+                .filter(|s| !cast.contains(&s.attr))
+                .cloned()
+                .collect();
+            sites.extend(renamed(&passing, &branch, &layout));
             let input_layout = planned.layout.clone();
             let nullable = nullable.clone();
             let planned = planned.wrap(
@@ -1215,6 +1252,36 @@ fn max_id(root: &LogicalPlan) -> u64 {
         });
     }
     max
+}
+
+/// The Arrow type each column of a union has in every input: the type the
+/// inputs all store it in, or, where they differ, the canonical Arrow type
+/// of its Spark type. An input column of another Spark type than the
+/// union's is an error.
+fn union_carriers(
+    out: &[BoundColumn],
+    branches: &[(Vec<BoundColumn>, Planned)],
+) -> Result<Vec<arrow_schema::DataType>> {
+    let mut carriers = Vec::with_capacity(out.len());
+    for (i, o) in out.iter().enumerate() {
+        let mut stored = Vec::with_capacity(branches.len());
+        for (cols, planned) in branches {
+            let c = cols
+                .get(i)
+                .ok_or_else(|| internal("union inputs of different widths"))?;
+            stored.push((c, planned.stored(planned.column(c.id)?)?));
+        }
+        let first = stored.first().map(|(_, t)| *t);
+        let carrier = if stored.iter().all(|(_, t)| Some(*t) == first) {
+            first.cloned()
+        } else if stored.iter().all(|(c, _)| c.data_type == o.data_type) {
+            Some(o.data_type.to_arrow())
+        } else {
+            return Err(internal("union inputs of different physical types"));
+        };
+        carriers.push(carrier.ok_or_else(|| internal("a union without inputs"))?);
+    }
+    Ok(carriers)
 }
 
 /// The id of a plain (or aliased plain) column expression.

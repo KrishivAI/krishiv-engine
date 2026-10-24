@@ -192,8 +192,10 @@ class SparkSession:
         an explicit ``schema``.
 
         ``schema`` is a :class:`StructType`, a DDL string (``"a int, b string"``),
-        a list of column names (types are inferred from the rows), or a single
-        atomic type (values become one ``value`` column). With ``verifySchema``
+        a list of column names (types are inferred from the rows as PySpark does:
+        each value by its Python type, the rows merged, so an ``int`` and a ``float`` in
+        one column raise ``CANNOT_MERGE_TYPE``), or a single atomic type (values become
+        one ``value`` column). With ``verifySchema``
         (the default), every row is checked against the schema first;
         ``samplingRatio`` is accepted and ignored (it only affects RDD input,
         which the embedded session does not take).
@@ -236,7 +238,7 @@ class SparkSession:
             return DataFrame(self._native.create_dataframe(data), self)
         rows = list(data)
         if schema is None or isinstance(schema, list | tuple):
-            return self._create_from_rows(rows, schema)
+            return self._create_from_rows(rows, schema, verifySchema)
         return self._from_rows(rows, schema, verifySchema, Row)
 
     def _from_pandas(self, data: Any, schema: Any) -> DataFrame:
@@ -308,13 +310,15 @@ class SparkSession:
         this session was built with, not from later ``conf.set`` changes."""
         return SparkSession(_native.Session(list(self._config)), self._config)
 
-    def _create_from_rows(self, data: list[Any], schema: list[Any] | tuple[Any, ...] | None) -> DataFrame:
+    def _create_from_rows(
+        self, data: list[Any], schema: list[Any] | tuple[Any, ...] | None, verify: bool = True
+    ) -> DataFrame:
         """A DataFrame of Python rows with column names, or none: names come from ``schema``,
-        else the first ``Row`` or dict, else ``_1``, ``_2``, ...; pyarrow infers the types."""
-        from krishiv.sql import _convert
+        else the first ``Row`` or dict, else ``_1``, ``_2``, ...; the types are PySpark's
+        inference over every row (see :mod:`krishiv.sql._infer`), converted like an explicit schema."""
+        from krishiv.sql._infer import infer_schema
         from krishiv.sql.row import Row
 
-        pa = _convert.require_pyarrow("createDataFrame")
         names: list[str] | None = None
         if schema is not None:
             names = list(schema)
@@ -342,30 +346,15 @@ class SparkSession:
             raise _axis_length_mismatch(len(names), width)
         else:
             names = names + inferred_names[len(names) :]
-        per_column: list[list[Any]] = [[] for _ in names]
+        valued: list[list[Any]] = []
         for row in data:
             if isinstance(row, dict):
-                for index, name in enumerate(names):
-                    per_column[index].append(row.get(name))
+                valued.append([row.get(name) for name in names])
             else:
                 if len(row) != width:
                     raise _axis_length_mismatch(width, len(row))
-                for index in range(width):
-                    per_column[index].append(row[index])
-        columns: list[Any] = []
-        for values in per_column:
-            inferred = pa.array(values)
-            if pa.types.is_timestamp(inferred.type) and inferred.type.tz is None:
-                # PySpark reads naive datetimes in the Python process's local time
-                # zone; attach it before storing the instant as UTC.
-                localized = [
-                    v.astimezone(datetime.UTC) if isinstance(v, datetime.datetime) and v.tzinfo is None else v
-                    for v in values
-                ]
-                inferred = pa.array(localized, type=pa.timestamp(inferred.type.unit, "UTC"))
-            columns.append(inferred)
-        table = pa.table(columns, names=names)
-        return DataFrame(self._native.create_dataframe(table), self)
+                valued.append(list(row))
+        return self._from_rows(valued, infer_schema(valued, names), verify, Row)
 
     def stop(self) -> None:
         """Ends this session; the next ``getOrCreate`` makes a new one."""

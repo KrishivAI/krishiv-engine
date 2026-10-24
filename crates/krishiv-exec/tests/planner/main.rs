@@ -22,6 +22,7 @@ mod runtime_filters;
 mod semantics;
 mod sum_rewrite;
 mod tpch;
+mod union;
 mod window;
 mod write;
 
