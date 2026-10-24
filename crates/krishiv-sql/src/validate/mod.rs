@@ -108,10 +108,6 @@ pub(crate) fn expression(e: &Expr, sql: &str, opts: ParserOptions) -> R {
     Checker { sql, opts }.expr(e)
 }
 
-/// Spark's default `spark.sql.sources.bucketing.maxBuckets`: the session
-/// config is not read here.
-const MAX_BUCKETS: u64 = 100_000;
-
 /// Functions whose first argument is a `datetimeUnit`: a string there is
 /// an error (`TIMESTAMPADD('DAY', ...)`).
 const UNIT_FUNCTIONS: &[&str] = &[
@@ -176,11 +172,11 @@ impl Checker<'_> {
             }
         }
         if let Some(b) = &t.bucket
-            && (b.buckets == 0 || b.buckets > MAX_BUCKETS)
+            && (b.buckets == 0 || b.buckets > self.opts.max_buckets)
         {
             return Err(at(
                 InvalidBucketCount {
-                    bucketing_max_buckets: MAX_BUCKETS.to_string(),
+                    bucketing_max_buckets: self.opts.max_buckets.to_string(),
                     num_buckets: b.buckets.to_string(),
                 },
                 b.span,

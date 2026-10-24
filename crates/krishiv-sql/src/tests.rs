@@ -177,6 +177,15 @@ fn options_follow_spark_confs() {
         ParserOptions::from_conf(|k| pairs.iter().find(|(key, _)| *key == k).map(|(_, v)| *v))
     };
     assert_eq!(conf(&[]), ParserOptions::default());
+    assert_eq!(conf(&[]).max_buckets, 100_000);
+    assert_eq!(
+        conf(&[("spark.sql.sources.bucketing.maxBuckets", " 4 ")]).max_buckets,
+        4
+    );
+    assert_eq!(
+        conf(&[("spark.sql.sources.bucketing.maxBuckets", "many")]).max_buckets,
+        100_000
+    );
     let all = conf(&[
         ("spark.sql.ansi.enforceReservedKeywords", "true"),
         ("spark.sql.ansi.doubleQuotedIdentifiers", " TRUE "),
@@ -2025,6 +2034,31 @@ fn bucket_count_must_be_in_range() {
             "{sql}"
         );
     }
+    // The session's `spark.sql.sources.bucketing.maxBuckets` moves the limit.
+    let two = ParserOptions::from_conf(|k| {
+        (k == "spark.sql.sources.bucketing.maxBuckets").then_some("2")
+    });
+    assert_eq!(two.max_buckets, 2);
+    assert!(
+        parse_statement(
+            "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 2 BUCKETS",
+            &two
+        )
+        .is_ok()
+    );
+    let e = parse_statement(
+        "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 3 BUCKETS",
+        &two,
+    )
+    .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidBucketCount);
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("bucketingMaxBuckets", "2".to_owned()),
+            ("numBuckets", "3".to_owned())
+        ]
+    );
 }
 
 /// `CREATE TABLE` column constraints, identity columns and `IDENTIFIER` names.

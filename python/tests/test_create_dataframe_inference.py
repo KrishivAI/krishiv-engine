@@ -231,3 +231,6 @@ def test_infer_schema_merges_rows_in_order() -> None:
     assert infer_row((1, 2), ["u", "v"]).names == ["u", "v"]
     with pytest.raises(errors.PySparkValueError, match="CANNOT_DETERMINE_TYPE"):
         infer_schema([[None, 1], [None, 2]], ["x", "y"])
+    with pytest.raises(errors.PySparkValueError, match="CANNOT_INFER_EMPTY_SCHEMA") as empty:
+        infer_schema([], ["x", "y"])
+    assert empty.value.getCondition() == "CANNOT_INFER_EMPTY_SCHEMA"

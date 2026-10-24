@@ -57,8 +57,11 @@ pub use redact::redact_sql;
 /// Spark has no fixed cap: its parser fails when the JVM stack runs out.
 pub const MAX_DEPTH: usize = 1000;
 
+/// Spark's default `spark.sql.sources.bucketing.maxBuckets`.
+pub const DEFAULT_MAX_BUCKETS: u64 = 100_000;
+
 /// The Spark session configs that change how SQL parses.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParserOptions {
     /// `spark.sql.ansi.enabled` and `spark.sql.ansi.enforceReservedKeywords`:
     /// reserved keywords are never identifiers.
@@ -85,6 +88,25 @@ pub struct ParserOptions {
     /// `spark.sql.timestampType = TIMESTAMP_NTZ`: a `TIMESTAMP '...'`
     /// literal without a zone is a `TIMESTAMP_NTZ`.
     pub timestamp_ntz: bool,
+    /// `spark.sql.sources.bucketing.maxBuckets`: a bucket count above it
+    /// fails with `INVALID_BUCKET_COUNT`.
+    pub max_buckets: u64,
+}
+
+impl Default for ParserOptions {
+    fn default() -> Self {
+        Self {
+            enforce_reserved_keywords: false,
+            double_quoted_identifiers: false,
+            legacy_setops_precedence: false,
+            escaped_string_literals: false,
+            legacy_bang_equals_not: false,
+            legacy_identifier_clause: false,
+            legacy_interval: false,
+            timestamp_ntz: false,
+            max_buckets: DEFAULT_MAX_BUCKETS,
+        }
+    }
 }
 
 impl ParserOptions {
@@ -105,6 +127,9 @@ impl ParserOptions {
             legacy_interval: on("spark.sql.legacy.interval.enabled", false),
             timestamp_ntz: conf("spark.sql.timestampType")
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
+            max_buckets: conf("spark.sql.sources.bucketing.maxBuckets")
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .unwrap_or(DEFAULT_MAX_BUCKETS),
         }
     }
 }

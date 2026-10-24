@@ -31,10 +31,10 @@ impl SqlFrontend for Frontend {
         redact_sql(query)
     }
 
-    /// The parser options, one bit each.
+    /// The parser options: one bit per flag, mixed with the bucket limit.
     fn fingerprint(&self) -> u64 {
         let o = self.options;
-        [
+        let flags = [
             o.enforce_reserved_keywords,
             o.double_quoted_identifiers,
             o.legacy_setops_precedence,
@@ -45,6 +45,7 @@ impl SqlFrontend for Frontend {
             o.legacy_identifier_clause,
         ]
         .iter()
-        .fold(0, |acc, b| acc << 1 | u64::from(*b))
+        .fold(0, |acc, b| acc << 1 | u64::from(*b));
+        flags.wrapping_add(o.max_buckets.wrapping_mul(0x9E3779B97F4A7C15))
     }
 }

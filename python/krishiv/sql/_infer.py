@@ -125,6 +125,8 @@ def infer_schema(rows: list[list[Any]], names: list[str]) -> StructType:
     Raises ``CANNOT_MERGE_TYPE`` at the first row whose types do not merge with the rows
     before it, and ``CANNOT_DETERMINE_TYPE`` when a column is only ever ``None`` (or only
     holds empty lists and dicts)."""
+    if not rows:
+        raise PySparkValueError(errorClass="CANNOT_INFER_EMPTY_SCHEMA")
     merged = reduce(merge_type, (infer_row(row, names) for row in rows))
     if has_nulltype(merged):
         raise PySparkValueError(errorClass="CANNOT_DETERMINE_TYPE")
