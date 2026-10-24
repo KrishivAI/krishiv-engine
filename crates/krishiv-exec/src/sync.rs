@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Synchronisation primitives, swapped for loom's under `--cfg loom` so the
-//! models in `loom_tests.rs` explore every interleaving of the morsel
+//! models in `loom_model.rs` explore every interleaving of the morsel
 //! cursor, the finalize countdown, cancellation and the result channel.
 //!
 //! [`Event`] is a broadcast wake-up with no lost notifications: a listener

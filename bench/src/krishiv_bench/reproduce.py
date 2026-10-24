@@ -40,9 +40,11 @@ from typing import Any
 from . import compare
 from .abba import LOAD_INDICATIVE, bootstrap_ci, discover_tables, geomean, geomean_ci, loadavg, wait_idle
 from .adapters import Dataset, Engine, Query
+from .adapters.base import check_query, result_rows
 from .adapters.process import EngineCrashed, EngineError, EngineTimeout, ProcessEngine
 from .dialect import dialect_reason
 from .errors import describe_error, error_fields
+from .h2o import is_h2o
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
 from .runner import git_info, load_queries, machine_info
 
@@ -56,13 +58,16 @@ PUBLISHED: dict[str, dict[str, Any]] = {
     "tpch": {"runs": 5, "timeout_s": 60.0, "source": "Polars TPC-H benchmark: 5 runs, 60 s limit"},
     "tpcds": {"runs": 5, "timeout_s": 60.0, "source": "Polars TPC-H method applied to TPC-DS: 5 runs, 60 s limit"},
     "clickbench": {"runs": 3, "timeout_s": 300.0, "source": "ClickBench: 3 runs, first cold; 300 s limit is ours"},
+    "h2o-groupby": {"runs": 2, "timeout_s": 600.0, "source": "db-benchmark: each question twice; 600 s limit is ours"},
+    "h2o-join": {"runs": 2, "timeout_s": 600.0, "source": "db-benchmark: each question twice; 600 s limit is ours"},
 }
 LIBS = ["duckdb", "polars", "datafusion", "pysail", "pyspark", "pyarrow", "chdb"]
 
 
 def resolve_dataset(suite: str, dataset: str | None, sf: float) -> Dataset:
     name = dataset or SUITE_DATASET[suite]
-    root = data_root() / name if suite == "clickbench" else dataset_dir(name, sf)
+    # clickbench and the h2o suites name a directory relative to $KRISHIV_DATA (h2o: h2o/<version>/<label>)
+    root = data_root() / name if suite == "clickbench" or is_h2o(suite) else dataset_dir(name, sf)
     tables = discover_tables(root)
     if not tables:
         raise SystemExit(f"no dataset at {root}")
@@ -105,7 +110,7 @@ def correctness(qm: Mapping[str, Query], engines: Mapping[str, Engine]) -> tuple
     verdict: dict[str, dict] = {}
     for name, eng in engines.items():
         try:
-            rows[name] = eng.run(qm[name])
+            rows[name] = eng.run(check_query(qm[name]))
         except (EngineError, EngineTimeout, EngineCrashed) as e:
             verdict[name] = _fail(_status_of(e), e)
     ref = rows.get(REFERENCE)
@@ -134,7 +139,7 @@ def correctness(qm: Mapping[str, Query], engines: Mapping[str, Engine]) -> tuple
             kok, kmsg = compare.rows_match(r, rows["krishiv"], ordered, sql=sql)
             if not kok:  # equal to DuckDB but not to Krishiv: Krishiv itself differs (also flagged on its own verdict)
                 verdict[name]["vs_krishiv"] = kmsg[:200]
-    return verdict, len(ref)
+    return verdict, result_rows(qm[REFERENCE], ref)
 
 
 def _note_peak(peaks: dict[str, int], name: str, eng: Engine) -> None:

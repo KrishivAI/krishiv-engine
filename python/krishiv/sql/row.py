@@ -8,7 +8,7 @@ from typing import Any
 from krishiv.errors import PySparkAttributeError, PySparkValueError
 
 
-class Row(tuple):
+class Row(tuple[Any, ...]):
     """``Row(a=1, b="x")``: access by position, ``row.a`` or ``row["a"]``."""
 
     __fields__: list[str]

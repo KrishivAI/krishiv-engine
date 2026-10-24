@@ -11,5 +11,6 @@
 mod join_order;
 mod props;
 mod rules;
+mod sum_rewrite;
 mod support;
 mod tpch;

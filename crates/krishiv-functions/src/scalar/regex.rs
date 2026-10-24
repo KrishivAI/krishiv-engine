@@ -1,18 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Regular-expression functions: `regexp_replace`.
+//! Regular-expression functions: `regexp`, `regexp_like`, `regexp_extract`,
+//! `regexp_count`, `regexp_instr`, `regexp_substr` and `regexp_replace`.
 //!
 //! Spark evaluates patterns with `java.util.regex`. The patterns are
 //! translated to the syntax of [`fancy_regex`] (the `regex` crate plus
 //! back-references and look-around) by [`java::translate`], which keeps
 //! Java's meaning where the two differ: `\d`, `\w`, `\s` are ASCII, `.`
 //! stops at every line terminator, `$` also matches before a final line
-//! terminator, `\Q..\E` quotes, and `\<`/`\>` are literals. Constructs with
-//! no translation (possessive quantifiers, `\G`, the `U` flag, Unicode
-//! blocks) are rejected as an invalid pattern.
+//! terminator, `\Q..\E` quotes, POSIX `\p{..}` classes, possessive
+//! quantifiers (as atomic groups) and Java's inline flags. `\<`/`\>` are
+//! literals. Constructs with no translation (stacked quantifiers, `\G`, the
+//! `U` flag, Unicode blocks) are rejected as an invalid pattern, as are
+//! patterns past [`java::MAX_PATTERN_LEN`] characters or with a counted
+//! repetition past [`java::MAX_REPETITION`].
 //!
 //! The replacement follows `Matcher.appendReplacement`: `$n` / `${name}` are
 //! groups, `\x` is the literal `x`. Replacement errors are raised on the
 //! first match, as Java does.
+//!
+//! `regexp_extract` takes the group index `idx` (default 1).
+//! `regexp_instr`'s `idx` (default 0) only selects which index is
+//! validated: the reported position is always the whole match's. An index
+//! outside `0..=groupCount` is `INVALID_PARAMETER_VALUE.REGEX_GROUP_INDEX`,
+//! checked lazily: only once the pattern matched, as in Spark, so a
+//! non-matching input never raises it.
 //!
 //! Divergence from Spark: patterns with back-references or look-around are
 //! matched by backtracking, which can take exponential time on a crafted
@@ -23,15 +34,22 @@
 //! the translation adds for `$` and the multiline anchors does not change
 //! that: it only follows the pattern (`(a+)+$` stays linear on a near miss
 //! ending in a line terminator; pinned in the tests).
+//!
+//! Positions (`regexp_replace`'s `position`, `regexp_instr`'s result) count
+//! UTF-16 units, as Java's `Matcher` does; the goldens only pin ASCII, so
+//! supplementary characters stay unverified against Spark 4.2.0.
 
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, StringArray};
-use arrow_schema::DataType;
+use arrow_array::builder::{GenericStringBuilder, ListBuilder};
+use arrow_array::types::Int32Type;
+use arrow_array::{Array, ArrayRef, BooleanArray, Int32Array, ListArray, StringArray};
+use arrow_schema::{DataType, Field};
 use fancy_regex::{Regex, RegexBuilder, RuntimeError};
 use krishiv_common::error::{
-    DatatypeMismatchValueOutOfRange, InvalidParameterValuePattern, InvalidRegexpReplace,
-    KrishivError, KrishivRegexpBacktrackLimitExceeded,
+    DatatypeMismatchValueOutOfRange, InvalidParameterValuePattern,
+    InvalidParameterValueRegexGroupIndex, InvalidRegexpReplace, KrishivError,
+    KrishivRegexpBacktrackLimitExceeded, UnableToAcquireMemory,
 };
 
 use super::args::{Inputs, Prim, Str, internal, is_string};
@@ -44,24 +62,62 @@ mod java;
 pub(crate) const BACKTRACK_LIMIT: usize = 1_000_000;
 
 /// Every name this family binds.
-pub(super) const NAMES: &[&str] = &["regexp_replace"];
+pub(super) const NAMES: &[&str] = &[
+    "regexp",
+    "regexp_like",
+    "regexp_extract",
+    "regexp_count",
+    "regexp_instr",
+    "regexp_substr",
+    "regexp_replace",
+];
 
 /// Binds the regular-expression function `name`.
 pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyResult {
     let listed = listed(NAMES, name)?;
     let types: Vec<DataType> = args.iter().map(BindArg::data_type).collect();
-    let well_typed = matches!(types.len(), 3 | 4)
-        && types[..3].iter().all(is_string)
-        && types
-            .get(3)
-            .is_none_or(|t| matches!(t, DataType::Int8 | DataType::Int16 | DataType::Int32));
-    if !well_typed {
-        return Some((listed, Err(bad_types(listed, args))));
-    }
-    let with_position = types.len() == 4;
-    let binding = Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
-        regexp_replace(x, with_position)
-    });
+    let strings = |n: usize| types.len() == n && types.iter().all(is_string);
+    let indexed = (types.len() == 2 && types.iter().all(is_string))
+        || (types.len() == 3
+            && types[..2].iter().all(is_string)
+            && matches!(types[2], DataType::Int8 | DataType::Int16 | DataType::Int32));
+    let binding = match (listed, types.len()) {
+        ("regexp" | "regexp_like", 2) if strings(2) => {
+            let function: &'static str = match listed {
+                "regexp" => "`regexp`",
+                _ => "`regexp_like`",
+            };
+            Binding::new(DataType::Boolean, move |x: &Inputs<'_>| find(x, function))
+        }
+        ("regexp_extract", 2 | 3) if indexed => {
+            let with_idx = types.len() == 3;
+            Binding::new(DataType::Utf8, move |x: &Inputs<'_>| extract(x, with_idx))
+        }
+        ("regexp_count", 2) if strings(2) => {
+            Binding::new(DataType::Int32, |x: &Inputs<'_>| count(x))
+        }
+        ("regexp_instr", 2 | 3) if indexed => {
+            let with_idx = types.len() == 3;
+            Binding::new(DataType::Int32, move |x: &Inputs<'_>| instr(x, with_idx))
+        }
+        ("regexp_substr", 2) if strings(2) => {
+            Binding::new(DataType::Utf8, |x: &Inputs<'_>| substr(x))
+        }
+        ("regexp_replace", 3 | 4) => {
+            let well_typed = types[..3].iter().all(is_string)
+                && types.get(3).is_none_or(|t| {
+                    matches!(t, DataType::Int8 | DataType::Int16 | DataType::Int32)
+                });
+            if !well_typed {
+                return Some((listed, Err(bad_types(listed, args))));
+            }
+            let with_position = types.len() == 4;
+            Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
+                regexp_replace(x, with_position)
+            })
+        }
+        _ => return Some((listed, Err(bad_types(listed, args)))),
+    };
     Some((listed, Ok(binding)))
 }
 
@@ -69,6 +125,8 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
 struct Compiled {
     /// The pattern as written, for the error message.
     source: String,
+    /// The backticked function name, for the error message.
+    function: &'static str,
     /// Matches `$` at the very end of the input only (or the only variant
     /// when the pattern has no non-multiline `$`).
     plain: Regex,
@@ -78,10 +136,10 @@ struct Compiled {
 }
 
 impl Compiled {
-    fn new(pattern: &str) -> Result<Self, KrishivError> {
+    fn new(pattern: &str, function: &'static str) -> Result<Self, KrishivError> {
         let invalid = || -> KrishivError {
             InvalidParameterValuePattern {
-                function_name: "`regexp_replace`".to_owned(),
+                function_name: function.to_owned(),
                 parameter: "`regexp`".to_owned(),
                 value: format!("'{pattern}'"),
             }
@@ -96,6 +154,7 @@ impl Compiled {
         };
         Ok(Self {
             source: pattern.to_owned(),
+            function,
             terminated: plain
                 .has_dollar
                 .then(|| java::translate(pattern, true).map_err(|_| invalid()))
@@ -113,6 +172,445 @@ impl Compiled {
             _ => &self.plain,
         }
     }
+
+    /// [`BACKTRACK_LIMIT`] exceeded while matching `self`.
+    fn backtrack(&self, e: fancy_regex::Error) -> KrishivError {
+        match e {
+            fancy_regex::Error::RuntimeError(RuntimeError::BacktrackLimitExceeded) => {
+                KrishivRegexpBacktrackLimitExceeded {
+                    pattern: format!("'{}'", self.source),
+                    function_name: self.function.to_owned(),
+                    limit: BACKTRACK_LIMIT.to_string(),
+                }
+                .into()
+            }
+            e => internal(format!("{}: {e}", self.source)),
+        }
+    }
+
+    /// `idx` against the pattern's group count, `INVALID_PARAMETER_VALUE
+    /// .REGEX_GROUP_INDEX` when it names no group. Checked lazily, only
+    /// once the pattern matched (as in Spark).
+    fn group(&self, idx: i32) -> Result<usize, KrishivError> {
+        let groups = self.plain.captures_len().saturating_sub(1);
+        match usize::try_from(idx).ok().filter(|n| *n <= groups) {
+            Some(n) => Ok(n),
+            None => Err(InvalidParameterValueRegexGroupIndex {
+                parameter: "`idx`".to_owned(),
+                function_name: self.function.to_owned(),
+                group_count: groups.to_string(),
+                group_index: idx.to_string(),
+            }
+            .into()),
+        }
+    }
+}
+
+/// Java `Matcher.find` from byte `from`: the whole-match span and where the
+/// next search resumes (`None` resumes nowhere: stop after this match).
+/// An empty match advances past one character, as Java does.
+type FindStep = Option<((usize, usize), Option<usize>)>;
+
+fn find_at(compiled: &Compiled, text: &str, from: usize) -> Result<FindStep, KrishivError> {
+    let re = compiled.for_input(text);
+    let Some(caps) = re
+        .captures_from_pos(text, from)
+        .map_err(|e| compiled.backtrack(e))?
+    else {
+        return Ok(None);
+    };
+    let Some(whole) = caps.get(0) else {
+        return Ok(None);
+    };
+    let next = if whole.end() == whole.start() {
+        text[whole.end()..]
+            .chars()
+            .next()
+            .map(|c| whole.end() + c.len_utf8())
+    } else {
+        Some(whole.end())
+    };
+    Ok(Some(((whole.start(), whole.end()), next)))
+}
+
+/// Iterates Java `find` over `text`: every whole-match span.
+fn find_all(compiled: &Compiled, text: &str) -> Result<Vec<(usize, usize)>, KrishivError> {
+    let mut out = Vec::new();
+    let mut from = Some(0);
+    while let Some(at) = from {
+        let Some(((start, end), next)) = find_at(compiled, text, at)? else {
+            break;
+        };
+        out.push((start, end));
+        from = next;
+    }
+    Ok(out)
+}
+
+/// The memo of the compiled pattern of the last row: a constant pattern
+/// compiles once per expression, a column pattern once per distinct value.
+#[derive(Default)]
+struct Cache {
+    pattern: Option<(String, Compiled)>,
+}
+
+impl Cache {
+    fn compiled(
+        &mut self,
+        pattern: &str,
+        function: &'static str,
+    ) -> Result<&Compiled, KrishivError> {
+        if self.pattern.as_ref().is_none_or(|(p, _)| p != pattern) {
+            self.pattern = Some((pattern.to_owned(), Compiled::new(pattern, function)?));
+        }
+        self.pattern
+            .as_ref()
+            .map(|(_, c)| c)
+            .ok_or_else(|| internal("no compiled pattern".to_owned()))
+    }
+}
+
+fn operand(s: &Str, row: usize) -> Option<&str> {
+    match s {
+        Str::Array(a) => a.is_valid(row).then(|| a.value(row)),
+        Str::Scalar(v) => v.as_deref(),
+    }
+}
+
+fn idx_at(p: &Option<Prim<Int32Type>>, row: usize) -> Option<i32> {
+    match p {
+        Some(Prim::Array(a)) => a.is_valid(row).then(|| a.value(row)),
+        Some(Prim::Scalar(v)) => *v,
+        None => None,
+    }
+}
+
+/// `regexp` / `regexp_like`: Java `find`, true on any match.
+fn find(x: &Inputs<'_>, function: &'static str) -> Result<ArrayRef, KrishivError> {
+    let strings = x.strings(0)?;
+    let patterns = x.str(1)?;
+    let mut cache = Cache::default();
+    let mut out = Vec::with_capacity(x.rows());
+    for row in 0..x.rows() {
+        let (Some(source), Some(pattern)) = (
+            strings.is_valid(row).then(|| strings.value(row)),
+            operand(&patterns, row),
+        ) else {
+            out.push(None);
+            continue;
+        };
+        let compiled = cache.compiled(pattern, function)?;
+        out.push(Some(find_at(compiled, source, 0)?.is_some()));
+    }
+    Ok(Arc::new(BooleanArray::from(out)) as ArrayRef)
+}
+
+/// `regexp_extract(str, regexp[, idx])`: group `idx` (default 1) of the
+/// first match; `""` when the pattern or the group did not match.
+fn extract(x: &Inputs<'_>, with_idx: bool) -> Result<ArrayRef, KrishivError> {
+    const FUNCTION: &str = "`regexp_extract`";
+    let strings = x.strings(0)?;
+    let patterns = x.str(1)?;
+    let idxs = with_idx.then(|| x.int(2)).transpose()?;
+    let mut cache = Cache::default();
+    let mut out = Vec::with_capacity(x.rows());
+    for row in 0..x.rows() {
+        let (Some(source), Some(pattern)) = (
+            strings.is_valid(row).then(|| strings.value(row)),
+            operand(&patterns, row),
+        ) else {
+            out.push(None);
+            continue;
+        };
+        let Some(idx) = idx_at(&idxs, row).or(if with_idx { None } else { Some(1) }) else {
+            out.push(None);
+            continue;
+        };
+        let compiled = cache.compiled(pattern, FUNCTION)?;
+        let re = compiled.for_input(source);
+        let found = re
+            .captures_from_pos(source, 0)
+            .map_err(|e| compiled.backtrack(e))?;
+        // The index is validated only once the pattern matched (as in
+        // Spark): a non-matching input never raises.
+        let text = match found.as_ref() {
+            Some(caps) => {
+                let group = compiled.group(idx)?;
+                caps.get(group)
+                    .map_or_else(String::new, |m| m.as_str().to_owned())
+            }
+            None => String::new(),
+        };
+        out.push(Some(text));
+    }
+    Ok(Arc::new(StringArray::from(out)) as ArrayRef)
+}
+
+/// `regexp_count(str, regexp)`: the number of `find` iterations.
+fn count(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
+    const FUNCTION: &str = "`regexp_count`";
+    let strings = x.strings(0)?;
+    let patterns = x.str(1)?;
+    let mut cache = Cache::default();
+    let mut out = Vec::with_capacity(x.rows());
+    for row in 0..x.rows() {
+        let (Some(source), Some(pattern)) = (
+            strings.is_valid(row).then(|| strings.value(row)),
+            operand(&patterns, row),
+        ) else {
+            out.push(None);
+            continue;
+        };
+        let compiled = cache.compiled(pattern, FUNCTION)?;
+        let n = find_all(compiled, source)?.len();
+        out.push(Some(i32::try_from(n).unwrap_or(i32::MAX)));
+    }
+    Ok(Arc::new(Int32Array::from(out)) as ArrayRef)
+}
+
+/// The 1-based position of byte `at` in `text`, in UTF-16 units (as Java's
+/// `Matcher.start` reports it).
+fn utf16_position(text: &str, at: usize) -> i32 {
+    let units = text[..at].encode_utf16().count();
+    i32::try_from(units + 1).unwrap_or(i32::MAX)
+}
+
+/// `regexp_instr(str, regexp[, idx])`: the 1-based position of the start
+/// of the whole match in the first match (the group index `idx`, default 0,
+/// is only validated); 0 when the pattern did not match.
+fn instr(x: &Inputs<'_>, with_idx: bool) -> Result<ArrayRef, KrishivError> {
+    const FUNCTION: &str = "`regexp_instr`";
+    let strings = x.strings(0)?;
+    let patterns = x.str(1)?;
+    let idxs = with_idx.then(|| x.int(2)).transpose()?;
+    let mut cache = Cache::default();
+    let mut out = Vec::with_capacity(x.rows());
+    for row in 0..x.rows() {
+        let (Some(source), Some(pattern)) = (
+            strings.is_valid(row).then(|| strings.value(row)),
+            operand(&patterns, row),
+        ) else {
+            out.push(None);
+            continue;
+        };
+        let Some(idx) = idx_at(&idxs, row).or(if with_idx { None } else { Some(0) }) else {
+            out.push(None);
+            continue;
+        };
+        let compiled = cache.compiled(pattern, FUNCTION)?;
+        let re = compiled.for_input(source);
+        let found = re
+            .captures_from_pos(source, 0)
+            .map_err(|e| compiled.backtrack(e))?;
+        // The index is validated only once the pattern matched (as in
+        // Spark): a non-matching input never raises.
+        let at = match found.as_ref() {
+            Some(caps) => {
+                compiled.group(idx)?;
+                caps.get(0).map(|m| utf16_position(source, m.start()))
+            }
+            None => None,
+        };
+        out.push(Some(at.unwrap_or(0)));
+    }
+    Ok(Arc::new(Int32Array::from(out)) as ArrayRef)
+}
+
+/// `regexp_substr(str, regexp)`: the first match, or NULL when the pattern
+/// did not match (an empty match is NULL too, as in Spark).
+fn substr(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
+    const FUNCTION: &str = "`regexp_substr`";
+    let strings = x.strings(0)?;
+    let patterns = x.str(1)?;
+    let mut cache = Cache::default();
+    let mut out: Vec<Option<String>> = Vec::with_capacity(x.rows());
+    for row in 0..x.rows() {
+        let (Some(source), Some(pattern)) = (
+            strings.is_valid(row).then(|| strings.value(row)),
+            operand(&patterns, row),
+        ) else {
+            out.push(None);
+            continue;
+        };
+        let compiled = cache.compiled(pattern, FUNCTION)?;
+        let found = find_at(compiled, source, 0)?;
+        out.push(match found {
+            Some(((start, end), _)) if start != end => Some(source[start..end].to_owned()),
+            _ => None,
+        });
+    }
+    Ok(Arc::new(StringArray::from(out)) as ArrayRef)
+}
+
+/// Spark `split` around the matches of `compiled` in `s` (Java
+/// `Pattern.split` semantics, with Spark's `limit == 0` mapped to `-1`):
+/// at most `limit` pieces when `limit > 0` (the last holds the rest),
+/// otherwise as many as there are, keeping trailing empty pieces.
+fn split_pattern(compiled: &Compiled, s: &str, limit: i32) -> Result<Vec<String>, KrishivError> {
+    let spans = find_all(compiled, s)?;
+    let limited = limit > 0;
+    let cap = usize::try_from(limit).unwrap_or(usize::MAX).max(1);
+    let mut parts = Vec::new();
+    let mut index = 0;
+    for (start, end) in spans {
+        if !limited || parts.len() < cap - 1 {
+            if index == 0 && start == 0 && start == end {
+                // A leading empty match splits nothing (as in Java).
+                continue;
+            }
+            parts.push(s[index..start].to_owned());
+            index = end;
+        } else if parts.len() == cap - 1 {
+            parts.push(s[index..].to_owned());
+            index = s.len();
+        }
+    }
+    if index == 0 {
+        // No match found (a skipped leading empty does not count).
+        return Ok(vec![s.to_owned()]);
+    }
+    if !limited || parts.len() < cap {
+        parts.push(s[index..].to_owned());
+    }
+    Ok(parts)
+}
+
+/// Spark 4.2 `split` of a non-empty `s` by the empty pattern: one piece per
+/// character; with `0 < limit < chars` the last holds the rest.
+fn split_empty(s: &str, limit: i32) -> Vec<String> {
+    let chars: Vec<&str> = {
+        let mut out = Vec::new();
+        let mut rest = s;
+        while let Some(c) = rest.chars().next() {
+            let (head, tail) = rest.split_at(c.len_utf8());
+            out.push(head);
+            rest = tail;
+        }
+        out
+    };
+    let count = match usize::try_from(limit) {
+        Ok(n) if n > 0 && n < chars.len() => n,
+        _ => chars.len(),
+    };
+    // `s` is non-empty, so `count >= 1`.
+    let mut parts: Vec<String> = chars[..count.saturating_sub(1)]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    parts.push(chars[count.saturating_sub(1)..].concat());
+    parts
+}
+
+/// The pieces of Spark `split(s, pattern, limit)`: the empty-pattern form
+/// for a non-empty `s` and an empty Java `pattern`, else [`split_pattern`].
+fn split_pieces(
+    s: &str,
+    pattern: &str,
+    compiled: &Compiled,
+    limit: i32,
+) -> Result<Vec<String>, KrishivError> {
+    if !s.is_empty() && pattern.is_empty() {
+        return Ok(split_empty(s, limit));
+    }
+    split_pattern(compiled, s, limit)
+}
+
+/// Spark `split(str, pattern[, limit])` over a column: one row per input,
+/// NULL in for NULL out. `limit` holds one entry per row (`None` is NULL).
+/// The pattern compiles once per call.
+///
+/// The list holds non-nullable `Utf8` items under the field `item`, as
+/// Spark's `array<string>` reads here.
+pub fn split_regex(
+    input: &StringArray,
+    pattern: &str,
+    limit: &[Option<i32>],
+) -> Result<ListArray, KrishivError> {
+    const FUNCTION: &str = "`split`";
+    if limit.len() != input.len() {
+        return Err(internal(format!(
+            "split_regex: {} limits for {} rows",
+            limit.len(),
+            input.len()
+        )));
+    }
+    let compiled = Compiled::new(pattern, FUNCTION)?;
+    let values = GenericStringBuilder::<i32>::new();
+    let item = Field::new("item", DataType::Utf8, false);
+    let mut builder = ListBuilder::new(values).with_field(Arc::new(item));
+    let mut total = 0_usize;
+    for (row, lim) in limit.iter().enumerate() {
+        let (Some(s), Some(lim)) = (input.is_valid(row).then(|| input.value(row)), *lim) else {
+            builder.append(false);
+            continue;
+        };
+        let pieces = split_pieces(s, pattern, &compiled, lim)?;
+        // The pieces cover at most the input; each list element adds offsets.
+        total = total.saturating_add(s.len());
+        if total.saturating_add(pieces.len()) > i32::MAX as usize {
+            return Err(UnableToAcquireMemory {
+                requested_bytes: total.to_string(),
+                received_bytes: "0".to_owned(),
+            }
+            .into());
+        }
+        for p in &pieces {
+            builder.values().append_value(p);
+        }
+        builder.append(true);
+    }
+    Ok(builder.finish())
+}
+
+/// `regexp_extract_all(str, regexp[, idx])` over one row: group `idx`
+/// (default 1) of every match, `""` for groups that took no part (as in
+/// Spark). The index is validated once the pattern matched at least once.
+pub fn extract_all_pieces(
+    pattern: &str,
+    source: &str,
+    idx: Option<i32>,
+    function: &'static str,
+) -> Result<Vec<String>, KrishivError> {
+    let compiled = Compiled::new(pattern, function)?;
+    extract_all(&compiled, source, idx.unwrap_or(1))
+}
+
+/// Group `idx` of every match of `compiled` in `source`.
+fn extract_all(compiled: &Compiled, source: &str, idx: i32) -> Result<Vec<String>, KrishivError> {
+    let re = compiled.for_input(source);
+    let mut out = Vec::new();
+    let mut from = Some(0);
+    let mut group = None;
+    while let Some(at) = from {
+        let Some(caps) = re
+            .captures_from_pos(source, at)
+            .map_err(|e| compiled.backtrack(e))?
+        else {
+            break;
+        };
+        let Some(whole) = caps.get(0) else { break };
+        let checked = match group {
+            Some(g) => g,
+            None => {
+                let g = compiled.group(idx)?;
+                group = Some(g);
+                g
+            }
+        };
+        out.push(
+            caps.get(checked)
+                .map_or_else(String::new, |m| m.as_str().to_owned()),
+        );
+        from = if whole.end() == whole.start() {
+            source[whole.end()..]
+                .chars()
+                .next()
+                .map(|c| whole.end() + c.len_utf8())
+        } else {
+            Some(whole.end())
+        };
+    }
+    Ok(out)
 }
 
 /// One piece of a replacement, resolved against a pattern.
@@ -217,15 +715,16 @@ fn byte_offset(text: &str, units: usize) -> Option<usize> {
 
 /// The memo of the compiled pattern and replacement of the last row.
 #[derive(Default)]
-struct Cache {
+struct ReplaceCache {
     pattern: Option<(String, Compiled)>,
     replacement: Option<(String, Vec<Part>)>,
 }
 
-impl Cache {
+impl ReplaceCache {
     fn compiled(&mut self, pattern: &str) -> Result<&Compiled, KrishivError> {
+        const FUNCTION: &str = "`regexp_replace`";
         if self.pattern.as_ref().is_none_or(|(p, _)| p != pattern) {
-            self.pattern = Some((pattern.to_owned(), Compiled::new(pattern)?));
+            self.pattern = Some((pattern.to_owned(), Compiled::new(pattern, FUNCTION)?));
             self.replacement = None;
         }
         self.pattern
@@ -241,7 +740,7 @@ fn regexp_replace(x: &Inputs<'_>, with_position: bool) -> Result<ArrayRef, Krish
     let patterns = x.str(1)?;
     let replacements = x.str(2)?;
     let positions = with_position.then(|| x.int(3)).transpose()?;
-    let mut cache = Cache::default();
+    let mut cache = ReplaceCache::default();
     let mut out = Vec::with_capacity(x.rows());
     for row in 0..x.rows() {
         let source = strings.is_valid(row).then(|| strings.value(row));
@@ -274,17 +773,10 @@ fn regexp_replace(x: &Inputs<'_>, with_position: bool) -> Result<ArrayRef, Krish
     Ok(Arc::new(StringArray::from(out)) as ArrayRef)
 }
 
-fn operand(s: &Str, row: usize) -> Option<&str> {
-    match s {
-        Str::Array(a) => a.is_valid(row).then(|| a.value(row)),
-        Str::Scalar(v) => v.as_deref(),
-    }
-}
-
 /// One row: every match of `pattern` at or after the 1-based `position`
 /// replaced, the text before it kept.
 fn replace_row(
-    cache: &mut Cache,
+    cache: &mut ReplaceCache,
     source: &str,
     pattern: &str,
     rep: &str,
@@ -305,17 +797,7 @@ fn replace_row(
     };
     let (head, tail) = source.split_at(start);
     let re = compiled.for_input(tail);
-    let at = |e: fancy_regex::Error| match e {
-        fancy_regex::Error::RuntimeError(RuntimeError::BacktrackLimitExceeded) => {
-            KrishivRegexpBacktrackLimitExceeded {
-                pattern: format!("'{}'", compiled.source),
-                function_name: "`regexp_replace`".to_owned(),
-                limit: BACKTRACK_LIMIT.to_string(),
-            }
-            .into()
-        }
-        e => internal(format!("{}: {e}", compiled.source)),
-    };
+    let at = |e: fancy_regex::Error| compiled.backtrack(e);
     let mut out = String::with_capacity(source.len());
     out.push_str(head);
     let (mut last, mut from) = (0, 0);

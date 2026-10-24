@@ -29,12 +29,6 @@ use serde_json::Value;
 /// `KRISHIV_UNSUPPORTED_FEATURE` until then.
 const PENDING: [&str; 3] = ["rows_sliding", "range_offset", "rows_current_to_end"];
 
-/// Known gaps outside window functions, with the error they give until
-/// fixed: constant arguments fold from literals and casts only, so
-/// `ntile(1 + 1)` is not foldable yet (the analyzer's general constant
-/// folding of operators is separate P2b work).
-const GAPS: [(&str, &str); 1] = [("ntile_folded", "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT")];
-
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/spark-4.2.0/window-goldens.json");
@@ -231,15 +225,6 @@ fn check(s: &Session, tables: &[&str], case: &Value) -> String {
         conf.unset(k).unwrap();
     }
     let id = case["id"].as_str().unwrap();
-    if let Some((_, class)) = GAPS.iter().find(|(g, _)| *g == id) {
-        match result {
-            Err(e) if e.error_class().name() == *class => {}
-            other => {
-                let _ = writeln!(out, "{id}: known gap changed (update GAPS): {other:?}");
-            }
-        }
-        return out;
-    }
     if PENDING.contains(&id) {
         match result {
             Err(e) if e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE" => {}
