@@ -640,14 +640,20 @@ impl SpillUnread for Held {
                     mine = true;
                     if !s.buckets.iter().any(|b| matches!(b, Bucket::Busy)) {
                         let mut work: Vec<Unwritten> = Vec::new();
+                        let batches = Arc::clone(&s.batches);
                         for (i, b) in s.buckets.iter_mut().enumerate() {
                             match mem::replace(b, Bucket::Busy) {
+                                // No rows: nothing to write or read.
+                                Bucket::Unread
+                                    if batches.iter().all(|x| x.bucket(i).is_empty()) =>
+                                {
+                                    *b = Bucket::Done;
+                                }
                                 Bucket::Unread => work.push((i, None)),
                                 Bucket::Merging(m) => work.push((i, Some(m))),
                                 other => *b = other,
                             }
                         }
-                        let batches = Arc::clone(&s.batches);
                         break (work, batches, mem::take(&mut s.buffers));
                     }
                 }

@@ -787,12 +787,17 @@ fn check_grouped(rows: u64, out: &[Batch]) {
 
 /// A sort by `k, i` bucketed by `k` over `spill` (with fan-in 2).
 fn bucketed_sort(pad: usize, scope: Option<SpillScope>) -> Arc<Sort> {
+    bucketed_sort_with(pad, scope, Some(2))
+}
+
+/// [`bucketed_sort`] with fan-in `fan_in` (none: the default).
+fn bucketed_sort_with(pad: usize, scope: Option<SpillScope>, fan_in: Option<usize>) -> Arc<Sort> {
     let schema = table(1, pad)[0].schema();
-    let sort = Sort::new(schema, &[SortKey::asc(0), SortKey::asc(1)], scope)
-        .unwrap()
-        .with_max_fan_in(2)
-        .with_hash_buckets(&[0])
-        .unwrap();
+    let mut sort = Sort::new(schema, &[SortKey::asc(0), SortKey::asc(1)], scope).unwrap();
+    if let Some(fan_in) = fan_in {
+        sort = sort.with_max_fan_in(fan_in);
+    }
+    let sort = sort.with_hash_buckets(&[0]).unwrap();
     assert!(sort.bucketed());
     Arc::new(sort)
 }
@@ -860,18 +865,23 @@ async fn hash_buckets_keep_each_key_together_and_in_order() {
 #[tokio::test(start_paused = true)]
 async fn bucket_readers_fit_the_memory_of_one() {
     let rows = 30_000;
-    // (downstream buffer, its memory spillable): none, the output streams
-    // out of the pool.
-    for downstream in [None, Some(false)] {
+    // The downstream buffer's memory spillable (none: no buffer, the
+    // output streams out of the pool), the fan-in (none: the default) and
+    // the limit (with one reader, the default fan-in needs more than 2 MiB).
+    for (downstream, fan_in, limit) in [
+        (None, Some(2), 2 << 20),
+        (Some(false), Some(2), 2 << 20),
+        (Some(false), None, 3 << 20),
+    ] {
         let root = root();
         let config = ExecConfig {
             batch_size: 512,
             morsel_rows: 2048,
             ..ExecConfig::default()
         };
-        let q = query(&root, config, Some(2 << 20));
+        let q = query(&root, config, Some(limit));
         let (manager, scope) = spill();
-        let sort = bucketed_sort(30, Some(scope));
+        let sort = bucketed_sort_with(30, Some(scope), fan_in);
         let p = plan_unordered(table(rows, 30), &sort);
         let p: Arc<dyn ExecNode> = match downstream {
             None => p,
@@ -883,7 +893,7 @@ async fn bucket_readers_fit_the_memory_of_one() {
         };
         let out = run(&deterministic(4), p, &q)
             .await
-            .unwrap_or_else(|e| panic!("{downstream:?}: {e}"));
+            .unwrap_or_else(|e| panic!("{downstream:?} {fan_in:?}: {e}"));
         check_grouped(rows, &out);
         let m = sort.metrics();
         assert!(m.runs_spilled > 0, "{m:?}");

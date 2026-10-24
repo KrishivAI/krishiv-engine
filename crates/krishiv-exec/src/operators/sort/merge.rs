@@ -382,7 +382,7 @@ impl Merger {
             // Without the memory for the keyed rows, the loser tree (which
             // needs none) merges them.
             if scratch
-                .try_grow(rows.saturating_mul(KEYED_ROW_BYTES))
+                .try_grow(rows.saturating_mul(KEYED_ROW_BYTES + ORDER_ROW_BYTES))
                 .is_ok()
             {
                 return Self::sorted(schema, encoder, &memory, scratch);

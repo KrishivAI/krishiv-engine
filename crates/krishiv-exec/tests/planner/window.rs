@@ -55,7 +55,13 @@ fn a_partitioned_window_reads_the_sort_buckets() {
     let sql = "SELECT b, row_number() OVER (PARTITION BY b % 3 ORDER BY b DESC) AS r FROM t";
     let plan = env.plan(sql).unwrap();
     let root = krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
-    let (out, query) = super::run_in(&plan, &root);
+    // Four compute threads, whatever the machine: 16 buckets.
+    let executor = krishiv_exec::ExecutorConfig {
+        compute_threads: 4,
+        io_threads: 1,
+        blocking_threads: 2,
+    };
+    let (out, query) = super::run_on(&plan, &root, &executor);
     let mut rows: Vec<String> = Vec::new();
     for b in &out.unwrap() {
         for r in 0..b.num_rows() {
@@ -79,8 +85,5 @@ fn a_partitioned_window_reads_the_sort_buckets() {
         .values()
         .find(|e| e.name == "Sort")
         .and_then(|e| e.extra("buckets").cloned());
-    assert!(
-        matches!(buckets, Some(krishiv_exec::Metric::Max(n)) if n > 1),
-        "{buckets:?}"
-    );
+    assert_eq!(buckets, Some(krishiv_exec::Metric::Max(16)));
 }
