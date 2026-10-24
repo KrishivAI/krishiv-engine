@@ -1133,6 +1133,7 @@ impl DataFrame {
             format: "parquet".to_owned(),
             mode: "errorifexists".to_owned(),
             options: BTreeMap::new(),
+            partition_by: Vec::new(),
         }
     }
 
@@ -1341,6 +1342,7 @@ pub struct DataFrameWriter {
     format: String,
     mode: String,
     options: BTreeMap<String, OptionValue>,
+    partition_by: Vec<String>,
 }
 
 impl DataFrameWriter {
@@ -1387,6 +1389,41 @@ impl DataFrameWriter {
         self
     }
 
+    /// Several write options at once (PySpark's `options(**options)`).
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let w = s.table("t").write().options([("compression", "zstd")]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn options(
+        mut self,
+        options: impl IntoIterator<Item = (impl AsRef<str>, impl AsRef<str>)>,
+    ) -> Self {
+        for (key, value) in options {
+            self.options.insert(
+                key.as_ref().to_owned(),
+                OptionValue::from_user(key.as_ref(), value.as_ref()),
+            );
+        }
+        self
+    }
+
+    /// Partition the output by `cols` (PySpark's `partitionBy`). The engine
+    /// writes no partitioned layout yet: any column fails the write with
+    /// `KRISHIV_UNSUPPORTED_FEATURE`, rather than silently ignoring it.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let w = s.table("t").write().partition_by(["a"]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn partition_by(mut self, cols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.partition_by
+            .extend(cols.into_iter().map(|c| c.as_ref().to_owned()));
+        self
+    }
+
     /// Writes the rows to the directory `path` in the format. Dropping
     /// the future before the write commits cancels it and deletes its
     /// files.
@@ -1405,8 +1442,15 @@ impl DataFrameWriter {
     /// # Errors
     /// Analysis and planning errors; `INVALID_SAVE_MODE`;
     /// `PATH_ALREADY_EXISTS` (`errorifexists` on an existing path, or an
-    /// append to a file); the format's option errors; write failures.
+    /// append to a file); the format's option errors; write failures;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` when partitioning was requested.
     pub async fn save(self, path: &str) -> Result<(), KrishivError> {
+        if !self.partition_by.is_empty() {
+            return Err(KrishivUnsupportedFeature {
+                feature: "writing partitioned output".to_owned(),
+            }
+            .into());
+        }
         let target = WriteTarget {
             format: self.format,
             mode: self.mode,
@@ -1441,6 +1485,45 @@ impl DataFrameWriter {
     /// As [`Self::save`].
     pub async fn parquet(self, path: &str) -> Result<(), KrishivError> {
         self.format("parquet").save(path).await
+    }
+
+    /// Writes the rows as CSV files under `path` (PySpark's `write.csv`).
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let dir = tempfile::tempdir().unwrap();
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// let out = dir.path().join("t");
+    /// futures::executor::block_on(s.table("t").write().csv(out.to_str().unwrap()))?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As [`Self::save`].
+    pub async fn csv(self, path: &str) -> Result<(), KrishivError> {
+        self.format("csv").save(path).await
+    }
+
+    /// Writes the rows as JSON files under `path` (PySpark's `write.json`).
+    /// The engine has no JSON writer yet: the write fails with
+    /// `KRISHIV_UNSUPPORTED_FEATURE`.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let dir = tempfile::tempdir().unwrap();
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// let out = dir.path().join("t");
+    /// let e = futures::executor::block_on(s.table("t").write().json(out.to_str().unwrap())).unwrap_err();
+    /// assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As [`Self::save`].
+    pub async fn json(self, path: &str) -> Result<(), KrishivError> {
+        self.format("json").save(path).await
     }
 }
 

@@ -274,6 +274,32 @@ impl PyDataFrame {
         block_on(py, async move { df.count().await })
     }
 
+    /// Writes the rows to `path` in `format` with `mode` (PySpark's
+    /// `DataFrameWriter.save`): `options` pairs and the `partition_by`
+    /// columns are those the facade collected. Runs with the GIL released;
+    /// a partitioned write fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+    #[pyo3(signature = (format, mode, path, options=None, partition_by=None))]
+    fn write(
+        &self,
+        py: Python<'_>,
+        format: &str,
+        mode: &str,
+        path: &str,
+        options: Option<Vec<(String, String)>>,
+        partition_by: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let mut writer = self.inner.write().format(format).mode(mode);
+        for (key, value) in options.unwrap_or_default() {
+            writer = writer.option(&key, &value);
+        }
+        let partition_by = partition_by.unwrap_or_default();
+        if !partition_by.is_empty() {
+            writer = writer.partition_by(partition_by.iter().map(String::as_str));
+        }
+        let path = path.to_owned();
+        block_on(py, async move { writer.save(&path).await })
+    }
+
     /// The text (or, with `json`, the JSON document) of explain `mode`:
     /// Spark's `simple`, `extended`, `codegen`, `cost`, `formatted`, or
     /// Krishiv's `analyze` (runs the query) and `verbose`. JSON exists for

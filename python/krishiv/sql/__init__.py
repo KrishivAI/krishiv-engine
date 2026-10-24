@@ -6,7 +6,7 @@ from krishiv.sql.column import Column
 from krishiv.sql.conf import RuntimeConfig
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.group import GroupedData
-from krishiv.sql.readwriter import DataFrameReader
+from krishiv.sql.readwriter import DataFrameReader, DataFrameWriter
 from krishiv.sql.row import Row
 from krishiv.sql.session import Catalog, SparkSession
 
@@ -15,6 +15,7 @@ __all__ = [
     "Column",
     "DataFrame",
     "DataFrameReader",
+    "DataFrameWriter",
     "GroupedData",
     "Row",
     "RuntimeConfig",
