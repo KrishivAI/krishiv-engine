@@ -1317,7 +1317,10 @@ async fn exact_and_string_frames_from_disk() {
 }
 
 /// A spill whose write fails loses the rows it took: every later call
-/// fails with that error instead of returning a short result.
+/// fails with that error instead of returning a short result. The write
+/// fails with an I/O error (the scope's directory is gone), not a
+/// cancellation, so the stored error's class differs from the placeholder
+/// the spill holds while the blocking write runs.
 #[tokio::test]
 async fn a_failed_spill_fails_every_later_call() {
     let rows: Vec<Row> = (0..400)
@@ -1331,8 +1334,9 @@ async fn a_failed_spill_fails_every_later_call() {
         op.execute(&batch(&rows), &mut local).unwrap(),
         OperatorOutput::NeedMoreInput(_)
     ));
-    scope.cancel().unwrap();
+    std::fs::remove_dir_all(scope.dir()).unwrap();
     let e = op.spill(&mut local, 1, &ctx).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillIoError, "{e}");
     let class = e.error_class();
     let again = op.execute(&batch(&rows[..1]), &mut local).unwrap_err();
     assert_eq!(again.error_class(), class, "{again}");
@@ -1387,7 +1391,10 @@ async fn a_dropped_spill_leaves_the_window_cancelled() {
     assert_eq!(out, 10);
 }
 
-/// A failed read in the flush phase fails it and every later step.
+/// A failed read in the flush phase fails it and every later step. The
+/// read fails with an I/O error (the spill files are gone), not a
+/// cancellation, so the stored error's class differs from the placeholder
+/// the flush holds while the blocking read runs.
 #[tokio::test]
 async fn a_failed_read_back_fails_the_flush_phase() {
     let rows: Vec<Row> = (0..400)
@@ -1401,8 +1408,9 @@ async fn a_failed_read_back_fails_the_flush_phase() {
     assert!(op.spill(&mut local, 1, &ctx).await.unwrap() > 0);
     assert!(op.finish(&mut local).unwrap().is_none());
     op.end_input(&mut local, &ctx).await.unwrap();
-    scope.cancel().unwrap();
+    std::fs::remove_dir_all(scope.dir()).unwrap();
     let e = op.flush(&mut local, &ctx).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillIoError, "{e}");
     let again = op.flush(&mut local, &ctx).await.unwrap_err();
     assert_eq!(again.error_class(), e.error_class());
 }

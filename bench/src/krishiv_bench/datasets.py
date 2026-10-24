@@ -1,4 +1,4 @@
-"""Dataset generators (P0-T18). CLI: `uv run krishiv-datasets <tpch|tpcds|clickbench|nexmark|zipf|manifest>`.
+"""Dataset generators (P0-T18). CLI: `uv run krishiv-datasets <tpch|tpcds|clickbench|nexmark|zipf|h2o-*|manifest>`.
 
 All output goes to $KRISHIV_DATA/<dataset>/sf<N>/ as Parquet, plus a sha256 manifest in
 $KRISHIV_DATA/manifests/. Nothing here is ever written inside the repo.
@@ -239,6 +239,29 @@ def gen_nexmark(
     return out_dir
 
 
+# ---------------------------------------------------------------- db-benchmark (groupby / join)
+def gen_h2o(task: str, a: argparse.Namespace) -> Path:
+    """``$KRISHIV_DATA/h2o/<version>/<label>/`` (see ``h2o_data``); an existing directory is never overwritten."""
+    from . import h2o, h2o_data
+
+    rows = h2o.SIZES[a.size]
+    params = (
+        h2o_data.G1Params(rows, a.k, a.na, a.sorted, a.seed)
+        if task == "groupby"
+        else h2o_data.J1Params(rows, a.na, a.sorted, a.seed)
+    )
+    root = data_root() / "h2o" / a.h2o_version
+    print(f"[h2o-{task}] {params.label} -> {root / params.label}")
+    try:
+        d = h2o_data.generate(task, params, root, on_chunk=lambda t: print(f"[h2o-{task}] writing {t}", flush=True))
+    except (ValueError, FileExistsError) as e:
+        sys.exit(str(e))
+    man = h2o_data.read_manifest(d)
+    assert man is not None
+    print(f"[h2o-{task}] content sha256 {man['content_sha256']}")
+    return d
+
+
 # ---------------------------------------------------------------- CLI
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="krishiv-datasets")
@@ -259,6 +282,22 @@ def main(argv=None) -> None:
     p.add_argument("--keys", type=int, default=1_000_000)
     p.add_argument("--alpha", type=float, default=1.1)
     p.add_argument("--seed", type=int, default=0)
+    from .h2o import DEFAULT_KEYS, SIZES
+    from .h2o_data import GENERATOR_VERSION, UPSTREAM_SEED
+
+    for task in ("groupby", "join"):
+        p = sub.add_parser(f"h2o-{task}", help=f"db-benchmark {task} data (G1/J1) at 1e7/1e8/1e9 rows, deterministic")
+        p.add_argument("--size", required=True, choices=list(SIZES))
+        p.add_argument("--na", type=int, default=0, help="percent NAs (published variants: 0 and 5)")
+        p.add_argument("--sorted", action="store_true")
+        p.add_argument("--seed", type=int, default=UPSTREAM_SEED)
+        p.add_argument("--h2o-version", default=GENERATOR_VERSION, help="output version directory (never overwritten)")
+        if task == "groupby":
+            p.add_argument("--k", type=int, default=DEFAULT_KEYS, help="number of id1/id2 groups")
+    p = sub.add_parser(
+        "h2o-verify", help="recompute a generated h2o dataset's content digests against its MANIFEST.json"
+    )
+    p.add_argument("directory", type=Path)
     p = sub.add_parser("memcap", help="memcap suite data (seeded star schema) under $KRISHIV_DATA/memcap/v1/<rows>")
     p.add_argument("--rows", nargs="+", default=["10m"], metavar="N", help="whole millions, e.g. 10m 50m 150m")
     p = sub.add_parser("manifest", help="(re)write sha256 manifest for a dataset dir")
@@ -267,7 +306,16 @@ def main(argv=None) -> None:
     a = ap.parse_args(argv)
 
     t0 = time.time()
-    if a.cmd in ("tpch", "tpch-dbgen", "tpcds"):
+    if a.cmd in ("h2o-groupby", "h2o-join"):
+        print(gen_h2o(a.cmd.removeprefix("h2o-"), a))
+    elif a.cmd == "h2o-verify":
+        from . import h2o_data
+
+        problems = h2o_data.verify(a.directory)
+        if problems:
+            sys.exit("\n".join(problems))
+        print(f"{a.directory}: verified")
+    elif a.cmd in ("tpch", "tpch-dbgen", "tpcds"):
         d = {"tpch": gen_tpch, "tpch-dbgen": gen_tpch_dbgen, "tpcds": gen_tpcds}[a.cmd](a.sf, a.force)
         if not a.no_manifest:
             print("manifest:", write_manifest(d, f"{d.parent.name}-{d.name}"))

@@ -153,6 +153,34 @@ both sides run once and their rows must match (type-aware, as `abba`); a mismatc
 bootstrap 95% CI, the spread of each side ((max - min) / median), the geomean and the load. The JSON records per side the runner path,
 `--conf` list, `--a-sha`/`--b-sha` and the runner's `--build-info` (stored as `null` for runners that predate it).
 
+## Groupby and join suites (`h2o-groupby`, `h2o-join`)
+The 10 groupby and 5 join questions of the open-source `db-benchmark` project (MPL-2.0, <https://github.com/duckdblabs/db-benchmark>),
+written here as portable SQL in `queries/h2o-groupby/` and `queries/h2o-join/` (our own text; only the question definitions and the
+checksum idea come from upstream). The data generator is a Python reimplementation of the upstream R `groupby-datagen.R` /
+`join-datagen.R` distributions (schemas, key cardinalities, 90 % common keys for the joins, value-level NAs, sorted variant); it is
+deterministic (fixed seed 108, per-chunk RNG streams) but not byte-identical to the R output.
+```bash
+# 0.5 GB = 1e7 rows, 5 GB = 1e8, 50 GB = 1e9; --na 5 and --sorted give the NA and sorted variants; --k sets the groupby K
+uv run krishiv-datasets h2o-groupby --size 5gb          # -> $KRISHIV_DATA/h2o/v1/G1_1e8_1e2_0_0/x.parquet
+uv run krishiv-datasets h2o-join --size 5gb             # -> $KRISHIV_DATA/h2o/v1/J1_1e8_NA_0_0/{x,small,medium,big}.parquet
+uv run krishiv-datasets h2o-verify "$KRISHIV_DATA/h2o/v1/G1_1e8_1e2_0_0"   # recompute the checksums against MANIFEST.json
+uv run krishiv-bench run --engine duckdb --suite h2o-groupby --size 5gb       # also: krishiv, polars, datafusion
+uv run krishiv-bench reproduce --suite h2o-join --size 5gb --methods ours --engines krishiv,duckdb,polars
+uv run krishiv-bench ab --suite h2o-groupby --size 0.5gb --a-runner $A --b-runner $B
+uv run krishiv-bench report --suite h2o-groupby --size 5gb
+```
+* Datasets are immutable: `--h2o-version` names the output directory and an existing dataset is never overwritten. `MANIFEST.json` records the
+  parameters, library versions, a per-column content digest (independent of Parquet encoding), the Parquet file hashes and one dataset digest, which
+  result files copy. A different NumPy version can change the stream, so the digest is the identity to compare. Join generation keeps the key
+  arrays in memory (about 3 GB at 1e8 rows, about 35 GB at 1e9); groupby is chunked.
+* Answer checksums first. Each question has a checksum query (the answer's row count and the sums of its checked columns, the benchmark's `chk`).
+  Every engine runs it once before any timing and the row must equal DuckDB's (sums within the usual 1e-6 relative tolerance); a mismatch marks the
+  question failed, it is never timed, and `run` exits non-zero. Timed runs materialise the answer inside the engine and count rows, so large
+  answers are never converted to Python objects.
+* `run` defaults to 3 timed + 1 warm-up runs; the result JSON (`<ts>_<engine>_<dataset>_sf<GB>.json`) holds the checksums, reference checksums,
+  timings and the dataset digest. `reproduce` and `ab` use the same checksum comparison before their interleaved timing (`abba` supports the TPC suites
+  and ClickBench only).
+
 ## Reference engines, two methods (`reproduce`, P2-T156)
 ```bash
 uv run krishiv-bench reproduce --suite tpch --sf 10 --reps 3        # tpch | tpcds | clickbench; --engines, --methods ours,theirs
