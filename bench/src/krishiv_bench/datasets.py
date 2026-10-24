@@ -262,6 +262,24 @@ def gen_h2o(task: str, a: argparse.Namespace) -> Path:
     return d
 
 
+# ---------------------------------------------------------------- operator microbenchmarks
+def gen_micro(a: argparse.Namespace) -> Path:
+    """``$KRISHIV_DATA/micro/<version>/<size>/`` (see ``micro_data``); an existing directory is never overwritten."""
+    from . import micro_data
+
+    sizes = micro_data.SIZES[a.size]
+    root = data_root() / "micro" / a.micro_version
+    print(f"[micro] {sizes.name} ({sizes.rows} rows) -> {root / sizes.name}")
+    try:
+        d = micro_data.generate(sizes, root, a.seed, on_table=lambda t: print(f"[micro] writing {t}", flush=True))
+    except (ValueError, FileExistsError) as e:
+        sys.exit(str(e))
+    man = micro_data.read_manifest(d)
+    assert man is not None
+    print(f"[micro] content sha256 {man['content_sha256']}")
+    return d
+
+
 # ---------------------------------------------------------------- CLI
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="krishiv-datasets")
@@ -308,6 +326,17 @@ def main(argv=None) -> None:
     p.add_argument("--threads", type=int, default=1, help="DuckDB threads for the Parquet conversion (1: byte-stable)")
     p.add_argument("--no-oracle", action="store_true", help="skip the DuckDB answers")
     p = sub.add_parser("dsb-verify", help="recompute a generated DSB dataset's checksums against its MANIFEST.json")
+    from .micro_data import GENERATOR_VERSION as MICRO_VERSION
+    from .micro_data import SEED as MICRO_SEED
+    from .micro_data import SIZES as MICRO_SIZES
+
+    p = sub.add_parser("micro", help="operator microbenchmark data (seeded, versioned) under $KRISHIV_DATA/micro/")
+    p.add_argument("--size", required=True, choices=list(MICRO_SIZES), help="quick (CI), default, or full (1e8 rows)")
+    p.add_argument("--seed", type=int, default=MICRO_SEED)
+    p.add_argument("--micro-version", default=MICRO_VERSION, help="output version directory (never overwritten)")
+    p = sub.add_parser(
+        "micro-verify", help="recompute a generated micro dataset's content digests against MANIFEST.json"
+    )
     p.add_argument("directory", type=Path)
     p = sub.add_parser("memcap", help="memcap suite data (seeded star schema) under $KRISHIV_DATA/memcap/v1/<rows>")
     p.add_argument("--rows", nargs="+", default=["10m"], metavar="N", help="whole millions, e.g. 10m 50m 150m")
@@ -341,7 +370,9 @@ def main(argv=None) -> None:
         if problems:
             sys.exit("\n".join(problems))
         print(f"{a.directory}: verified")
-    elif a.cmd == "h2o-verify":
+    elif a.cmd == "micro":
+        print(gen_micro(a))
+    elif a.cmd in ("h2o-verify", "micro-verify"):
         from . import h2o_data
 
         problems = h2o_data.verify(a.directory)
