@@ -18,7 +18,7 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::Sort;
 use super::keys::{KeyEncoder, SortKey};
-use super::merge::{Merger, SortedBatch, interleave_batches};
+use super::merge::{Bucketing, Merger, SortedBatch, interleave_batches};
 use crate::context::{ExecConfig, OperatorId, QueryContext, QueryId, TaskContext};
 use crate::executor::{Executor, TokioExecutor, WorkloadClass};
 use crate::operator::{Sink, Source};
@@ -544,24 +544,37 @@ fn bucket_counts_follow_the_drivers() {
     assert_eq!(bucket_bits(usize::MAX), 12);
 }
 
-/// A merge of many slices sorts their rows instead of running the loser
-/// tree, in the same stable order (ties by run, then within a run); without
-/// memory for the sort it runs the tree.
+/// A merge of many slices of a bucketed sort sorts their rows instead of
+/// running the loser tree, in the same stable order (ties by run, then
+/// within a run); without memory for the sort it runs the tree. Without
+/// hash buckets (one bucket) it always runs the tree: sorting all rows
+/// again costs more than merging whole sorted batches.
 #[test]
 fn a_wide_bucket_merge_sorts_in_the_merge_order() {
     let (schema, batch) = floats();
     let keys = KeyEncoder::new(&schema, &[SortKey::asc(0).nulls_first(false)]).unwrap();
     let n = batch.num_rows();
     // 100 runs: rotations of the rows, so ties come from many runs.
-    let runs: Vec<_> = (0..100)
+    let rotations: Vec<Batch> = (0..100)
         .map(|i| {
             let rows: Vec<(usize, usize)> = (0..n).map(|r| (0, (r + i) % n)).collect();
-            let b = interleave_batches(&schema, std::slice::from_ref(&batch), &rows).unwrap();
-            Arc::new(SortedBatch::new(b, &keys, None).unwrap())
+            interleave_batches(&schema, std::slice::from_ref(&batch), &rows).unwrap()
         })
         .collect();
+    let bucketing = Bucketing::new(Arc::clone(&keys), 1);
+    let runs = |buckets: Option<&Bucketing>| -> Vec<Arc<SortedBatch>> {
+        rotations
+            .iter()
+            .map(|b| Arc::new(SortedBatch::new(b.clone(), &keys, buckets).unwrap()))
+            .collect()
+    };
     let root = TreePool::new(&MemoryConfig::default());
     let handle = ConsumerHandle::register(root.child("q", None), "sort", None);
+    let tight = TreePool::new(&MemoryConfig {
+        limit: Some(1024),
+        ..MemoryConfig::default()
+    });
+    let small = ConsumerHandle::register(tight.child("q", None), "sort", None);
     let drain = |mut m: Merger| {
         let mut out = Vec::new();
         while let Some(b) = m.next(37).unwrap() {
@@ -569,23 +582,47 @@ fn a_wide_bucket_merge_sorts_in_the_merge_order() {
         }
         out
     };
-    let tree = Merger::new(
-        Arc::clone(&schema),
-        Arc::clone(&keys),
-        runs.clone(),
-        &[],
-        &handle,
+    let bucketed = runs(Some(&bucketing));
+    let mut total = 0;
+    for b in 0..bucketing.buckets() {
+        let slices = bucketed
+            .iter()
+            .map(|s| (Arc::clone(s), s.bucket(b)))
+            .collect();
+        let tree = Merger::slices(Arc::clone(&schema), Arc::clone(&keys), slices, &[], &handle);
+        let want = drain(tree.unwrap());
+        total += want.len();
+        let sorted = Merger::bucket(
+            Arc::clone(&schema),
+            Arc::clone(&keys),
+            &bucketed,
+            b,
+            &handle,
+        )
+        .unwrap();
+        assert_eq!(sorted.sorts_rows(), !want.is_empty(), "bucket {b}");
+        assert_eq!(drain(sorted), want, "bucket {b}");
+        // A pool too small for the keyed rows: the tree, same order.
+        let fallback =
+            Merger::bucket(Arc::clone(&schema), Arc::clone(&keys), &bucketed, b, &small).unwrap();
+        assert!(!fallback.sorts_rows());
+        assert_eq!(drain(fallback), want, "bucket {b}");
+    }
+    assert_eq!(total, 100 * n);
+    // One bucket: the tree of `Merger::new`, never a sort of the rows.
+    let plain = runs(None);
+    let want = drain(
+        Merger::new(
+            Arc::clone(&schema),
+            Arc::clone(&keys),
+            plain.clone(),
+            &[],
+            &handle,
+        )
+        .unwrap(),
     );
-    let sorted = Merger::bucket(Arc::clone(&schema), Arc::clone(&keys), &runs, 0, &handle);
-    let want = drain(tree.unwrap());
     assert_eq!(want.len(), 100 * n);
-    assert_eq!(drain(sorted.unwrap()), want);
-    // A pool too small for the keyed rows: the tree, same order.
-    let tight = TreePool::new(&MemoryConfig {
-        limit: Some(1024),
-        ..MemoryConfig::default()
-    });
-    let small = ConsumerHandle::register(tight.child("q", None), "sort", None);
-    let fallback = Merger::bucket(schema, keys, &runs, 0, &small).unwrap();
-    assert_eq!(drain(fallback), want);
+    let merger = Merger::bucket(schema, keys, &plain, 0, &handle).unwrap();
+    assert!(!merger.sorts_rows(), "an unbucketed merge runs the tree");
+    assert_eq!(drain(merger), want);
 }
