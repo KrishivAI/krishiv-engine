@@ -51,6 +51,19 @@ cd python
 uv run ruff check && uv run ruff format --check && uv run ty check
 ```
 
+Type stubs (`krishiv/py.typed`, `krishiv/_native.pyi`) ship in the wheel. After
+`maturin develop`, check them with mypy (pinned version via `uvx`):
+
+```sh
+cd python
+uvx mypy@2.4.0 --strict examples/basic.py examples/dataframe_ops.py
+uv pip install "mypy==2.4.0"  # once, for the stubtest below
+python -m mypy.stubtest krishiv._native --concise --ignore-disjoint-bases
+```
+
+The same two checks run as `tests/test_stubs.py` (skipped when mypy is not
+installed); `tests/test_repr.py` covers the notebook rendering.
+
 ## Free-threaded build (cp314t)
 
 abi3 does not support free-threaded CPython, so that wheel is a separate,

@@ -703,3 +703,68 @@ fn session_and_clock_functions() {
         Lookup::KnownUnsupported
     ));
 }
+
+/// The regular-expression functions: arities, inputs and result types.
+#[test]
+fn regex_signatures() {
+    let s = ty(DataType::String);
+    let exact = InputType::Exact;
+    let strings = || Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]);
+    // `regexp` and `regexp_like` take two strings and may be NULL.
+    for name in ["regexp", "regexp_like"] {
+        let d = def(name);
+        assert!(d.arity.accepts(2) && !d.arity.accepts(1) && !d.arity.accepts(3));
+        assert_eq!(d.inputs, strings());
+        assert_eq!(
+            result(name, &[s.clone(), s.clone()], &[]).unwrap(),
+            ty(DataType::Boolean)
+        );
+        assert_eq!(
+            result(
+                name,
+                &[ArgType::new(DataType::String, true), s.clone()],
+                &[]
+            )
+            .unwrap(),
+            ArgType::new(DataType::Boolean, true)
+        );
+    }
+    // The two- and three-argument input shapes.
+    let indexed = || {
+        Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::Integer),
+        ])
+    };
+    assert_eq!(def("regexp_substr").inputs, strings());
+    assert_eq!(def("regexp_count").inputs, strings());
+    assert_eq!(def("regexp_extract").inputs, indexed());
+    assert_eq!(def("regexp_instr").inputs, indexed());
+    for (name, ty) in [
+        ("regexp_extract", DataType::String),
+        ("regexp_count", DataType::Integer),
+        ("regexp_instr", DataType::Integer),
+    ] {
+        let d = def(name);
+        assert!(d.arity.accepts(2), "{name}");
+        assert_eq!(
+            result(name, &[s.clone(), s.clone()], &[]).unwrap(),
+            ArgType::new(ty, false)
+        );
+    }
+    // `regexp_substr` is nullable whatever its arguments.
+    assert_eq!(
+        result("regexp_substr", &[s.clone(), s.clone()], &[]).unwrap(),
+        ArgType::new(DataType::String, true)
+    );
+    assert!(def("regexp_extract").arity.accepts(3));
+    assert!(!def("regexp_extract").arity.accepts(4));
+    assert!(!def("regexp_substr").arity.accepts(3));
+    assert!(!def("regexp_count").arity.accepts(3));
+    // A NULL string is a NULL result.
+    let r = result("regexp_like", &[null_ty(), s.clone()], &[]).unwrap();
+    assert_eq!(r, ArgType::new(DataType::Boolean, true));
+    let r = result("regexp_count", &[s, null_ty()], &[]).unwrap();
+    assert_eq!(r, ArgType::new(DataType::Integer, true));
+}
