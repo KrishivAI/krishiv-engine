@@ -1,0 +1,7 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a, sum(c) FROM t GROUP BY GROUPING SETS ((a), (a))"
+---
+Aggregate [a#5, spark_grouping_id#3, _gen_grouping_pos#6], [a#5, sum(c#2) AS sum(c)#4]
++- Expand [[c#2, a#0, 0L, 0], [c#2, a#0, 0L, 1]], [c#2, a#5, spark_grouping_id#3, _gen_grouping_pos#6]
+   +- Scan spark_catalog.default.t [a#0, c#2]

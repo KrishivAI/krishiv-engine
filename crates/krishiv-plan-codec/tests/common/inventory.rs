@@ -307,6 +307,34 @@ fn join(join_type: JoinType) -> HashJoinPlan {
     }
 }
 
+/// `ROLLUP (a, b)` over a two-column input: the key columns are kept or
+/// nulled and the last column is the grouping id.
+fn expand_rollup() -> PhysNode {
+    let kept = |index, name: &str| ProjectItemPlan::Column {
+        index,
+        name: Some(name.to_owned()),
+    };
+    let nulled = |index, name: &str| ProjectItemPlan::NullOf {
+        index,
+        name: name.to_owned(),
+    };
+    let id = |n: i64| ProjectItemPlan::Expr {
+        name: "grouping_id".to_owned(),
+        expr: lit(Literal::Long(n)),
+    };
+    PhysNode::Expand {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        projections: vec![
+            vec![kept(0, "a"), kept(1, "b"), id(0)],
+            vec![kept(0, "a"), nulled(1, "b"), id(1)],
+            vec![nulled(0, "a"), nulled(1, "b"), id(3)],
+        ],
+        nullable: vec![true, true, false],
+        subqueries: Vec::new(),
+    }
+}
+
 /// One node of every variant, each as the root of its own plan.
 pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
     let keys = vec![SortKey::asc(0), SortKey::desc(1)];
@@ -380,6 +408,43 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 input: boxed(scan()),
                 layout: vec![AttrId(1)],
                 count: lit(Literal::Long(2)),
+                subqueries: vec![subquery()],
+            },
+        ),
+        ("expand_rollup", expand_rollup()),
+        (
+            "expand_single",
+            PhysNode::Expand {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                projections: vec![vec![ProjectItemPlan::Column {
+                    index: 0,
+                    name: None,
+                }]],
+                nullable: vec![false],
+                subqueries: Vec::new(),
+            },
+        ),
+        (
+            "expand_subquery",
+            PhysNode::Expand {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                projections: vec![
+                    vec![ProjectItemPlan::Expr {
+                        name: "shifted".to_owned(),
+                        expr: call(
+                            Builtin::Add,
+                            vec![col(1, "a", DataType::Integer), lit(Literal::Integer(1))],
+                            DataType::Integer,
+                        ),
+                    }],
+                    vec![ProjectItemPlan::NullOf {
+                        index: 0,
+                        name: "shifted".to_owned(),
+                    }],
+                ],
+                nullable: vec![true],
                 subqueries: vec![subquery()],
             },
         ),

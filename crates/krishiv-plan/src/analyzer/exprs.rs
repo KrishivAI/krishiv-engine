@@ -21,6 +21,7 @@ use krishiv_common::error::{
 use krishiv_types::DataType;
 use twox_hash::XxHash3_128;
 
+use super::analytics::GroupingFn;
 use super::bind::{addr, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
@@ -51,6 +52,10 @@ pub(super) struct Cx<'s> {
     /// Over an aggregate: its input, where aggregate-function arguments
     /// resolve.
     pub(super) agg_scope: Option<&'s [Attr]>,
+    /// Whether `grouping(..)` and `grouping_id(..)` may appear: in the
+    /// select list, `HAVING` and `ORDER BY` of an aggregate over grouping
+    /// sets (see `analytics`).
+    pub(super) grouping: bool,
     /// A name `scope` holds several times is looked up further rather
     /// than ambiguous (Spark's `ORDER BY` over a select list).
     pub(super) lenient: bool,
@@ -336,7 +341,7 @@ fn arg_of(b: &Bound) -> Arg<'_> {
 }
 
 /// Spark's documentation root, as its errors cite it.
-const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
+pub(super) const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
 
 fn column(c: &BoundColumn) -> ArgType {
     arg_type(c.data_type.clone(), c.nullable)
@@ -821,6 +826,9 @@ impl Resolver<'_> {
                     && filter.win.is_some()
                 {
                     return Err(super::windows::window_in_filter(filter, e.origin));
+                }
+                if let Some(which) = GroupingFn::from_name(&f.name) {
+                    return self.grouping_call(which, e, &kids[..n], cx);
                 }
                 if let Some(op) = builtin_op(&f.name, n) {
                     return self.operator_call(op, e.origin, &kids[..n]);

@@ -67,7 +67,7 @@
 //! | `PlanNode::Project` | U, R | Q2, Q4, Q6-Q9, Q11, Q14-Q17, Q19-Q22 | `select` |
 //! | `PlanNode::WithColumns` | U | - | `withColumn` |
 //! | `PlanNode::Filter` | U, R | Q1-Q12, Q14-Q22 | `filter`, `where` |
-//! | `PlanNode::Aggregate` | U, R | Q1, Q3-Q5, Q7-Q13, Q15, Q16, Q18, Q21, Q22 | `groupBy.agg` |
+//! | `PlanNode::Aggregate` | U, R | Q1, Q3-Q5, Q7-Q13, Q15, Q16, Q18, Q21, Q22 | `groupBy.agg`, `rollup.agg`, `cube.agg` |
 //! | `PlanNode::Join` | U, R | Q2, Q3, Q5, Q7-Q21 | `join` |
 //! | `PlanNode::Sort` | U, R | Q1-Q5, Q7-Q13, Q15, Q16, Q18, Q20-Q22 | `orderBy`, `sort` |
 //! | `PlanNode::Limit` | U, R | Q2, Q3, Q10, Q18, Q21 | `limit` |
@@ -82,6 +82,7 @@
 //! | `PlanNode::Distinct` | U | - | - |
 //! | `PlanNode::SetOp` | U | - | - |
 //! | `PlanNode::ReplicateRows` | R | - | - |
+//! | `PlanNode::Expand` | R | - | - |
 //! | `PlanNode::Window` | R | - | - |
 //! | `ExprNode::Column` | U | all | `col`, `df["a"]` |
 //! | `ExprNode::Literal` | U, R | all | `lit` |

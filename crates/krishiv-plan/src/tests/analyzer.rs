@@ -26,8 +26,8 @@ use crate::analyzer::{
 };
 use crate::walk::{Node, visit_distinct};
 use crate::{
-    ColumnRef, Cte, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan,
-    MAX_DEPTH, Origin, Plan, PlanId, PlanNode, ReadSource, SourceId, SqlArgs, Star, TableVersion,
+    ColumnRef, Cte, Expr, ExprNode, JoinCondition, JoinKind, Literal, LogicalPlan, MAX_DEPTH,
+    Origin, Plan, PlanId, PlanNode, ReadSource, SourceId, SqlArgs, Star, TableVersion,
 };
 
 fn goldens() -> Value {
@@ -1468,13 +1468,8 @@ fn unsupported_inputs_fail_explicitly() {
         paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
         options: std::collections::BTreeMap::new(),
     }));
-    let rollup = LogicalPlan::new(PlanNode::Aggregate {
-        input: Arc::new(LogicalPlan::table(["t"])),
-        grouping: Grouping::Rollup(vec![Arc::new(c("a"))]),
-        aggregates: vec![Arc::new(c("a"))],
-    });
     let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("factorial", vec![c("b")])]);
-    for plan in [files, rollup, sha] {
+    for plan in [files, sha] {
         assert_eq!(class(&run(plan, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
     }
     // An untyped NULL is the void type; an interval is not supported yet.
