@@ -11,7 +11,7 @@ Batch execution engine: operators, pipelines, morsel scheduling within a node.
 driver (yields, batch-boundary checks, NeedMemory, spill servicing, stall detector) · `runner.rs` QueryRunner /
 Scheduler (coordinator, first error wins) · `channel.rs` bounded result stream · `executor.rs` Executor seam +
 TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.rs` cursor + finalize countdown ·
-`testing.rs` test operators (also used by benches) · `output_spill.rs` spill hook of finished breaker output · `loom_tests.rs`.
+`testing.rs` test operators (also used by benches) · `output_spill.rs` spill hook of finished breaker output · `loom_model.rs`.
 `operators/` (P2-T051) stateless operators: `scan.rs` MemoryScan + `ScanPushdown` (pushdowns decided once as an
 immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) ·
 `filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
@@ -35,7 +35,10 @@ Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFi
 `Sort` below it; `planner/window.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one
 partition, evaluates complete partitions), `eval.rs` boundaries, ranking functions, frame aggregates (through the
 aggregate `Accumulator`, one row at a time in Spark's order; decimal `sum`/`avg` exact in `i256`, checked when
-evaluated), `tests.rs` (property test against a naive reference).
+evaluated), `spill.rs` (buffered rows spill under pressure; after a spill rows wait for the flush phase, which reads
+them back in order; a partition that does not fit is copied to its own file; failed/cancelled steps leave the state
+failed, never a short result), `stream.rs` (a partition evaluated from disk: lead and trailing readers, bounded
+memory), `tests.rs` (property test against a naive reference; spilled vs in-memory equality).
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
@@ -81,5 +84,5 @@ Paths are relative to this crate.
 
 ## Tests
 `cargo nextest run -p krishiv-exec --no-tests=pass` · `cargo clippy -p krishiv-exec --all-targets -- -D warnings` ·
-loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release` (use a separate target dir) ·
+loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release loom_model::` (use a separate target dir) ·
 benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators`

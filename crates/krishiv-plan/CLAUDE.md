@@ -50,7 +50,17 @@ Paths are relative to this crate.
   `PlanNode::Window`s (Spark's `ExtractWindowExpressions`); a `HAVING` over an aggregate with windows filters
   below them. Window goldens: `tests/scripts/gen_window_goldens.py` → `tests/fixtures/spark-4.2.0/window-goldens.json`.
 - Analyzer goldens come from a real Spark run: `tests/scripts/gen_analyzer_goldens.py` →
-  `tests/fixtures/spark-4.2.0/analyzer-goldens.json`.
+  `tests/fixtures/spark-4.2.0/analyzer-goldens.json`; the constant-folding and ORDER BY-over-aggregate cases are a
+  separate fixture (`--section folding --views`, safe on the shared oracle) `analyzer-folding-goldens.json`.
+- Constant arguments (`round`'s scale, `date_part`'s field, `LIMIT`): `analyzer/fold.rs` folds what Spark's
+  `foldable` allows through the kernels the executor runs (`fold_ops.rs`, on `krishiv_kernels::Baseline`: one loop per
+  kernel instead of nine, which keeps the binary small) and raises what folding raises, at the
+  argument. A function is folded only if it is deterministic and in the argument-pure families
+  (`krishiv_functions::scalar::is_argument_pure`: string, math, arithmetic; datetime/session/hash read session
+  state). `first`/`last` match a boolean `Literal` and do not fold (`CallTypes::is_literal`).
+- Over an aggregate, `ORDER BY`/`HAVING` expressions are matched to grouping and output expressions by
+  `semantic_key` (Spark's `semanticEquals`: commutative operands sorted, `a > b` as `b < a`); a memo keyed by
+  address must never see an expression that is dropped (`group_substitute` keys probes with a fresh memo).
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 

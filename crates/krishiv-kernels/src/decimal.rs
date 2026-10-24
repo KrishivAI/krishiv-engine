@@ -43,7 +43,7 @@ use arrow_array::{Array, ArrayRef, Decimal128Array, Int64Array, PrimitiveArray};
 use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
 
 use crate::chunk::{self, LaneOp, Resolved, Side};
-use crate::dispatch::KernelCtx;
+use crate::dispatch::Dispatch;
 use crate::error::{KernelError, with_capacity};
 use crate::integer::{UnaryOp, at};
 use crate::ops::{ArithOp, BinaryOp, IntNative, Operand};
@@ -821,7 +821,7 @@ pub fn decimal_binary<Op, O>(
     l: Operand<'_, Decimal128Type>,
     r: Operand<'_, Decimal128Type>,
     plan: &DecimalPlan,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<Decimal128Array, KernelError>
 where
     Op: BinaryOp,
@@ -845,7 +845,7 @@ fn binary_any<Op, O>(
     r: DecimalOperand<'_>,
     plan: &DecimalPlan,
     carrier: DecimalCarrier,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<ArrayRef, KernelError>
 where
     Op: BinaryOp,
@@ -874,7 +874,7 @@ where
 /// The exact `+ - *` lanes of one input native `N` and result native `R`.
 fn fast_lanes<N, Op, O, R>(
     plan: &DecimalPlan,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
     sl: Side<'_, N>,
     sr: Side<'_, N>,
     nulls: Option<NullBuffer>,
@@ -923,7 +923,7 @@ where
 /// The error of a raised row of `plan`.
 fn plan_error<N: DecimalNative>(
     plan: &DecimalPlan,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
     l: Side<'_, N>,
     r: Side<'_, N>,
     row: usize,
@@ -975,7 +975,7 @@ pub fn decimal_arith<O: DecimalOverflow>(
     l: Operand<'_, Decimal128Type>,
     r: Operand<'_, Decimal128Type>,
     plan: &DecimalPlan,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<Decimal128Array, KernelError> {
     let out = decimal_arith_any::<O>(l.into(), r.into(), plan, DecimalCarrier::Decimal128, ctx)?;
     as_decimal128(&out)
@@ -1024,7 +1024,7 @@ pub fn decimal_arith_any<O: DecimalOverflow>(
     r: DecimalOperand<'_>,
     plan: &DecimalPlan,
     carrier: DecimalCarrier,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<ArrayRef, KernelError> {
     if plan.is_fast() {
         return match plan.op {
@@ -1062,7 +1062,7 @@ pub fn decimal_integral_divide<O: DecimalOverflow>(
     r: Operand<'_, Decimal128Type>,
     left: DecimalType,
     right: DecimalType,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<Int64Array, KernelError> {
     decimal_integral_divide_any::<O>(l.into(), r.into(), left, right, ctx)
 }
@@ -1076,7 +1076,7 @@ pub fn decimal_integral_divide_any<O: DecimalOverflow>(
     r: DecimalOperand<'_>,
     left: DecimalType,
     right: DecimalType,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<Int64Array, KernelError> {
     check_type(left)?;
     check_type(right)?;
@@ -1312,7 +1312,7 @@ mod tests {
             .with_precision_and_scale(5, 0)
             .unwrap();
         let p = plan(ArithOp::Add, (5, 0), (5, 0), (6, 0));
-        let ctx = KernelCtx::new();
+        let ctx = crate::KernelCtx::new();
         let e = decimal_binary::<crate::Mul, AnsiError>(
             Operand::Array(&a),
             Operand::Array(&a),
