@@ -1,5 +1,5 @@
 {
-  "cases": 9964,
+  "cases": 10012,
   "entries": [
     {
       "id": "abs#23a3b7c1c876/ansi_off",
@@ -5730,6 +5730,46 @@
       "reason": "SELECT nanvl(INTERVAL '1 02:03:04' DAY TO SECOND, 123) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
+      "id": "negative#25a8db9031cd/ansi_off",
+      "reason": "SELECT negative(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "negative#25a8db9031cd/ansi_on",
+      "reason": "SELECT negative(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "negative#987900a6d6ac/ansi_off",
+      "reason": "SELECT negative(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "negative#987900a6d6ac/ansi_on",
+      "reason": "SELECT negative(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "negative#afdcd0b2b9ee/ansi_off",
+      "reason": "SELECT negative(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "negative#afdcd0b2b9ee/ansi_on",
+      "reason": "SELECT negative(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "negative#c4238766e626/ansi_off",
+      "reason": "SELECT negative(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "negative#c4238766e626/ansi_on",
+      "reason": "SELECT negative(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "negative#e4f95c990089/ansi_off",
+      "reason": "SELECT negative(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "negative#e4f95c990089/ansi_on",
+      "reason": "SELECT negative(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
       "id": "ntile#07ff6bea2932/ansi_off",
       "reason": "SELECT a, b, ntile(array(1, 2)) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -10922,6 +10962,11 @@
       "pass": 82
     },
     {
+      "cases": 48,
+      "function": "negative",
+      "pass": 38
+    },
+    {
       "cases": 2,
       "function": "now",
       "pass": 2
@@ -11197,5 +11242,5 @@
       "pass": 40
     }
   ],
-  "pass": 7326
+  "pass": 7364
 }

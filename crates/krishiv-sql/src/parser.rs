@@ -230,6 +230,35 @@ pub(crate) fn parse_multipart_identifier(
     parse_with::<MultipartIdentifierRule>(src, opts)
 }
 
+/// Parses one named expression (`namedExpression`), as Spark's
+/// `CatalystSqlParser.parseExpression` does for `F.expr`,
+/// `df.selectExpr("...")` (once per argument string) and
+/// `df.filter("...")`: one expression with an optional alias, then the end
+/// of the input. The expression grammar is that of [`parse_query`]
+/// (spans, the [`MAX_DEPTH`] recursion limit and error classes); a
+/// statement or trailing tokens are a `PARSE_SYNTAX_ERROR`, as in Spark.
+pub(crate) fn parse_named_expression(
+    src: &str,
+    opts: ParserOptions,
+) -> Result<SelectItem, ParseError> {
+    parse_with::<NamedExpressionRule>(src, opts)
+}
+
+/// [`Parser::single_named_expression`].
+struct NamedExpressionRule;
+
+impl TopRule for NamedExpressionRule {
+    type Out = SelectItem;
+    /// One named expression and the end of the input.
+    fn parse(p: &mut Parser<'_>) -> PR<SelectItem> {
+        p.single_named_expression()
+    }
+
+    fn validate(out: &Self::Out, src: &str, opts: ParserOptions) -> Result<(), ParseError> {
+        validate::expression(&out.expr, src, opts)
+    }
+}
+
 /// [`Parser::single_multipart_identifier`].
 struct MultipartIdentifierRule;
 
@@ -1007,25 +1036,44 @@ impl<'s> Parser<'s> {
         })
     }
 
+    /// Whether the trailing input is one token to Spark, so ANTLR
+    /// reports it as "extra input": the last token when nothing follows
+    /// it. An unterminated quote with text after it is several tokens to
+    /// Spark, so no single extraneous token.
+    fn trailing_is_single_token(&self) -> bool {
+        self.tok(0)
+            .filter(|_| self.pos + 1 == self.toks.len())
+            .is_some_and(|t| {
+                t.kind != TokenKind::Unterminated || t.span.text(self.src).chars().count() == 1
+            })
+    }
+
     /// `singleMultipartIdentifier`: a dotted name and the end of the input.
     fn single_multipart_identifier(&mut self) -> PR<ObjectName> {
         let name = self.table_name()?;
         if self.pos < self.toks.len() {
             // ANTLR drops one extraneous token before the end, as "extra
-            // input"; an unterminated quote with text after it is several
-            // tokens to Spark.
-            let one_token = self
-                .tok(0)
-                .filter(|_| self.pos + 1 == self.toks.len())
-                .is_some_and(|t| {
-                    t.kind != TokenKind::Unterminated || t.span.text(self.src).chars().count() == 1
-                });
-            if one_token {
+            // input".
+            if self.trailing_is_single_token() {
                 self.extra = Some(self.pos);
             }
             return self.fail();
         }
         Ok(name)
+    }
+
+    /// One `namedExpression` and the end of the input: one expression with
+    /// an optional alias, as in Spark's `parseExpression` (one extraneous
+    /// token reads as "extra input", as ANTLR drops it).
+    fn single_named_expression(&mut self) -> PR<SelectItem> {
+        let item = self.select_item()?;
+        if self.pos < self.toks.len() {
+            if self.trailing_is_single_token() {
+                self.extra = Some(self.pos);
+            }
+            return self.fail();
+        }
+        Ok(item)
     }
 
     fn ident_list(&mut self) -> PR<Vec<Ident>> {
@@ -1089,13 +1137,7 @@ impl<'s> Parser<'s> {
             semi = true;
         }
         if self.pos < self.toks.len() {
-            // An unterminated quote with text after it is several tokens
-            // to Spark, so no single extraneous token.
-            let last = self.tok(0).filter(|_| self.pos + 1 == self.toks.len());
-            let one_token = last.is_some_and(|t| {
-                t.kind != TokenKind::Unterminated || t.span.text(self.src).chars().count() == 1
-            });
-            if semi || one_token {
+            if semi || self.trailing_is_single_token() {
                 self.extra = Some(self.pos);
             }
             return self.fail();

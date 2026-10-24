@@ -96,8 +96,28 @@ impl PyDataFrame {
         self.derive(self.inner.select(columns(cols)))
     }
 
+    /// `SELECT` of SQL expression strings (PySpark's `selectExpr`): each
+    /// string holds one expression with an optional alias, parsed with
+    /// the session's parser options. Parse errors fail here; resolution
+    /// errors fail at the first action.
+    fn select_expr(&self, py: Python<'_>, exprs: Vec<String>) -> PyResult<Self> {
+        let inner = self.inner.select_expr(exprs).map_err(|e| to_py(py, &e))?;
+        Ok(self.derive(inner))
+    }
+
     fn filter(&self, condition: &PyColumn) -> Self {
         self.derive(self.inner.filter(condition.inner.clone()))
+    }
+
+    /// Rows where the SQL expression `condition` is true (PySpark's
+    /// `filter(str)` and `where(str)`), parsed with the session's parser
+    /// options.
+    fn filter_expr(&self, py: Python<'_>, condition: &str) -> PyResult<Self> {
+        let inner = self
+            .inner
+            .filter_expr(condition)
+            .map_err(|e| to_py(py, &e))?;
+        Ok(self.derive(inner))
     }
 
     fn with_column(&self, name: &str, value: &PyColumn) -> Self {
