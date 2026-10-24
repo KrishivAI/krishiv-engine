@@ -1124,3 +1124,24 @@ fn unresolved_column_proposals_rank_like_spark() -> R {
     }
     Ok(())
 }
+
+/// `QUALIFY` needs a window function in the select list and rejects an
+/// aggregate in its predicate (the goldens' two error statements, named).
+#[test]
+fn qualify_errors() -> R {
+    let s = Session::new()?;
+    join_tables(&s)?;
+    for (sql, class) in [
+        (
+            "SELECT a FROM l QUALIFY a = 1",
+            "QUALIFY_REQUIRES_WINDOW_FUNCTION",
+        ),
+        (
+            "SELECT a, RANK() OVER (ORDER BY b) AS rank FROM l QUALIFY COUNT(1) > 1",
+            "QUALIFY_AGGREGATE_NOT_ALLOWED",
+        ),
+    ] {
+        assert_eq!(error_of(&s, sql)?.error_class().name(), class, "{sql}");
+    }
+    Ok(())
+}
