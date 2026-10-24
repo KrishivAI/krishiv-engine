@@ -166,7 +166,8 @@ fn last_day_of_every_kind_of_month() {
         assert_eq!(last(from), date(to), "{from}");
     }
     assert!(last_day(&dates(&[None])).is_null(0));
-    // Spark adds in `int`: the end of the range wraps like Java's.
+    // Assumed, unverified against a Spark run: the end of the range is read
+    // to wrap like Java's `int` addition (no golden or matrix cell reaches it).
     let max = last_day(&dates(&[Some(i32::MAX)])).value(0);
     assert_eq!(max, i32::MAX.wrapping_sub(11).wrapping_add(31));
 }
@@ -178,6 +179,9 @@ fn next_day_names_and_edges() {
         |d: i32, name: &str, ansi: bool| next_day(&dates(&[Some(d)]), &strs(&[Some(name)]), ansi);
     // Spark's example: the Monday after Thursday 2015-07-23.
     assert_eq!(run(thu, "Mon", true).unwrap().value(0), date("2015-07-27"));
+    // The two-letter and full names, any case: assumed, unverified against
+    // a Spark run (the goldens cover only `Mon`); the test pins the
+    // assumption, not Spark behavior.
     for (names, offset) in [
         (["MO", "mon", "Monday"], 4),
         (["TU", "TUE", "tuesday"], 5),
@@ -212,6 +216,7 @@ fn next_day_names_and_edges() {
     );
     assert!(e.to_string().contains("Illegal input for day of week: xx"));
     assert!(run(thu, "xx", false).unwrap().is_null(0));
+    // No trimming: assumed, unverified against a Spark run.
     for bad in ["", " MON", "MON ", "MONDA", "1"] {
         assert!(run(thu, bad, false).unwrap().is_null(0), "{bad:?}");
     }
@@ -234,7 +239,8 @@ fn next_day_names_and_edges() {
     )
     .unwrap_err();
     assert_eq!(e.row(), Some(1));
-    // `int` arithmetic wraps at the top of the range, as Spark's does.
+    // Assumed, unverified against a Spark run: `int` arithmetic is read to
+    // wrap at the top of the range, as Spark's does.
     assert!(run(i32::MAX, "SU", true).unwrap().value(0) < 0);
     let e = next_day(&dates(&[Some(1)]), &strs(&[Some("MO"), Some("TU")]), true).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
@@ -243,7 +249,7 @@ fn next_day_names_and_edges() {
 #[test]
 fn trunc_date_levels() {
     let trunc = |d: &str, f: &str| {
-        let out = trunc_date(&dates(&[Some(date(d))]), &strs(&[Some(f)])).unwrap();
+        let out = trunc_date(&dates(&[Some(date(d))]), &strs(&[Some(f)]), true).unwrap();
         (!out.is_null(0)).then(|| out.value(0))
     };
     // 2019-08-04 is a Sunday: its week starts on Monday 07-29.
@@ -288,13 +294,23 @@ fn trunc_date_levels() {
     }
     // The first year of the smallest dates starts before the smallest date.
     let min = dates(&[Some(i32::MIN)]);
-    let e = trunc_date(&min, &strs(&[Some("year")])).unwrap_err();
+    let e = trunc_date(&min, &strs(&[Some("year")]), true).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::DatetimeOverflow);
-    assert!(trunc_date(&min, &strs(&[Some("day")])).unwrap().is_null(0));
+    assert!(
+        trunc_date(&min, &strs(&[Some("day")]), true)
+            .unwrap()
+            .is_null(0)
+    );
+    // With ANSI off the overflow is NULL.
+    assert!(
+        trunc_date(&min, &strs(&[Some("year")]), false)
+            .unwrap()
+            .is_null(0)
+    );
     // NULLs on either side, and a bad length.
-    let out = trunc_date(&dates(&[None, Some(1)]), &strs(&[Some("year"), None])).unwrap();
+    let out = trunc_date(&dates(&[None, Some(1)]), &strs(&[Some("year"), None]), true).unwrap();
     assert!(out.is_null(0) && out.is_null(1));
-    let e = trunc_date(&dates(&[Some(1)]), &strs(&[])).unwrap_err();
+    let e = trunc_date(&dates(&[Some(1)]), &strs(&[]), true).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
 }
 
@@ -322,7 +338,7 @@ fn trunc_units_parse_with_spark_aliases() {
 }
 
 fn truncated(f: &str, t: i64, zone: &dyn TimeZoneRules) -> Option<i64> {
-    let out = trunc_timestamp(&strs(&[Some(f)]), &stamps(&[Some(t)]), zone).unwrap();
+    let out = trunc_timestamp(&strs(&[Some(f)]), &stamps(&[Some(t)]), zone, true).unwrap();
     (!out.is_null(0)).then(|| out.value(0))
 }
 
@@ -360,10 +376,16 @@ fn trunc_timestamp_in_utc() {
         want("0001-01-01 00:00:00")
     );
     // A NULL format or timestamp is NULL.
-    let out = trunc_timestamp(&strs(&[None, Some("DD")]), &stamps(&[Some(0), None]), &UTC).unwrap();
+    let out = trunc_timestamp(
+        &strs(&[None, Some("DD")]),
+        &stamps(&[Some(0), None]),
+        &UTC,
+        true,
+    )
+    .unwrap();
     assert!(out.is_null(0) && out.is_null(1));
     // Lengths must agree.
-    let e = trunc_timestamp(&strs(&[Some("DD")]), &stamps(&[]), &UTC).unwrap_err();
+    let e = trunc_timestamp(&strs(&[Some("DD")]), &stamps(&[]), &UTC, true).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
 }
 
@@ -434,12 +456,31 @@ fn trunc_timestamp_in_a_zone_with_dst() {
         Some(day("2024-03-09 23:00:00"))
     );
     // Out of range: the cut would pass the smallest timestamp.
-    let e =
-        trunc_timestamp(&strs(&[Some("YEAR")]), &stamps(&[Some(i64::MIN + 1)]), &UTC).unwrap_err();
+    let e = trunc_timestamp(
+        &strs(&[Some("YEAR")]),
+        &stamps(&[Some(i64::MIN + 1)]),
+        &UTC,
+        true,
+    )
+    .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::DatetimeOverflow);
-    let e =
-        trunc_timestamp(&strs(&[Some("SECOND")]), &stamps(&[Some(i64::MIN)]), &UTC).unwrap_err();
+    let e = trunc_timestamp(
+        &strs(&[Some("SECOND")]),
+        &stamps(&[Some(i64::MIN)]),
+        &UTC,
+        true,
+    )
+    .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::DatetimeOverflow);
+    // With ANSI off the overflow is NULL.
+    let out = trunc_timestamp(
+        &strs(&[Some("YEAR")]),
+        &stamps(&[Some(i64::MIN + 1)]),
+        &UTC,
+        false,
+    )
+    .unwrap();
+    assert!(out.is_null(0));
 }
 
 fn between(end: &str, start: &str, round: bool, zone: &dyn TimeZoneRules) -> f64 {
@@ -448,6 +489,7 @@ fn between(end: &str, start: &str, round: bool, zone: &dyn TimeZoneRules) -> f64
         &stamps(&[Some(ts(start))]),
         &BooleanArray::from(vec![round]),
         zone,
+        true,
     )
     .unwrap();
     out.value(0)
@@ -540,6 +582,7 @@ fn months_between_reads_wall_clocks_in_the_zone() {
             &stamps(&[Some(start)]),
             &BooleanArray::from(vec![false]),
             zone,
+            true,
         )
         .unwrap()
         .value(0)
@@ -573,25 +616,29 @@ fn months_between_nulls_and_edges() {
     let end = stamps(&[None, Some(0), Some(0), Some(0)]);
     let start = stamps(&[Some(0), None, Some(0), Some(i64::MAX)]);
     let round = BooleanArray::from(vec![Some(true), Some(true), None, Some(true)]);
-    let e = months_between(&end, &start, &round, &FixedOffset(3600)).unwrap_err();
+    let e = months_between(&end, &start, &round, &FixedOffset(3600), true).unwrap_err();
     // The first three rows are NULL; the last overflows the local time.
     assert_eq!(
         (e.row(), e.error_class()),
         (Some(3), ErrorClass::DatetimeOverflow)
     );
+    // With ANSI off the overflow is NULL too.
+    let out = months_between(&end, &start, &round, &FixedOffset(3600), false).unwrap();
+    assert_eq!(out.null_count(), 4);
     let out = months_between(
         &end.slice(0, 3),
         &start.slice(0, 3),
         &round.slice(0, 3),
         &UTC,
+        true,
     )
     .unwrap();
     assert_eq!(out.null_count(), 3);
-    let e = months_between(&end, &start.slice(0, 2), &round, &UTC).unwrap_err();
+    let e = months_between(&end, &start.slice(0, 2), &round, &UTC, true).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     let none = BooleanArray::from(Vec::<bool>::new());
     assert_eq!(
-        months_between(&stamps(&[]), &stamps(&[]), &none, &UTC)
+        months_between(&stamps(&[]), &stamps(&[]), &none, &UTC, true)
             .unwrap()
             .len(),
         0
@@ -710,11 +757,14 @@ fn convert(
     f: impl Fn(
         &TimestampMicrosecondArray,
         &Zones<'_>,
+        bool,
     ) -> Result<TimestampMicrosecondArray, krishiv_kernels::KernelError>,
     t: i64,
     zone: &dyn TimeZoneRules,
 ) -> i64 {
-    f(&stamps(&[Some(t)]), &Zones::One(zone)).unwrap().value(0)
+    f(&stamps(&[Some(t)]), &Zones::One(zone), true)
+        .unwrap()
+        .value(0)
 }
 
 #[test]
@@ -751,13 +801,18 @@ fn utc_to_zone_and_back() {
     // NULL values and NULL zones are NULL; the zone of each row is its own.
     let zones = [Some(seoul), None, Some(FixedOffset(-3600))];
     let t = stamps(&[Some(0), Some(0), None]);
-    let out = from_utc_timestamp(&t, &Zones::PerRow(&zones)).unwrap();
+    let out = from_utc_timestamp(&t, &Zones::PerRow(&zones), true).unwrap();
     assert_eq!(out.iter().collect::<Vec<_>>(), [Some(9 * HOUR), None, None]);
     // The result must stay in range.
-    let e = from_utc_timestamp(&stamps(&[Some(i64::MAX)]), &Zones::One(&seoul)).unwrap_err();
+    let e = from_utc_timestamp(&stamps(&[Some(i64::MAX)]), &Zones::One(&seoul), true).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::DatetimeOverflow);
-    let e = to_utc_timestamp(&stamps(&[Some(i64::MIN)]), &Zones::One(&seoul)).unwrap_err();
+    let e = to_utc_timestamp(&stamps(&[Some(i64::MIN)]), &Zones::One(&seoul), true).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::DatetimeOverflow);
+    // With ANSI off the overflow is NULL.
+    let out = from_utc_timestamp(&stamps(&[Some(i64::MAX)]), &Zones::One(&seoul), false).unwrap();
+    assert!(out.is_null(0));
+    let out = to_utc_timestamp(&stamps(&[Some(i64::MIN)]), &Zones::One(&seoul), false).unwrap();
+    assert!(out.is_null(0));
 }
 
 #[test]
@@ -771,6 +826,7 @@ fn convert_timezone_between_zones() {
         &Zones::One(&moscow),
         &Zones::One(&la),
         &wall("2022-01-01 00:00:00"),
+        true,
     )
     .unwrap();
     assert_eq!(out.value(0), ts("2021-12-31 13:00:00"));
@@ -779,6 +835,7 @@ fn convert_timezone_between_zones() {
         &Zones::One(&Pacific),
         &Zones::One(&UTC),
         &wall("2024-03-10 02:30:00"),
+        true,
     )
     .unwrap();
     assert_eq!(out.value(0), ts("2024-03-10 10:30:00"));
@@ -786,6 +843,7 @@ fn convert_timezone_between_zones() {
         &Zones::One(&UTC),
         &Zones::One(&Pacific),
         &wall("2024-11-03 08:30:00"),
+        true,
     )
     .unwrap();
     assert_eq!(out.value(0), ts("2024-11-03 01:30:00"));
@@ -794,6 +852,7 @@ fn convert_timezone_between_zones() {
         &Zones::One(&Pacific),
         &Zones::One(&Pacific),
         &wall("2024-07-04 12:00:00"),
+        true,
     )
     .unwrap();
     assert_eq!(out.value(0), ts("2024-07-04 12:00:00"));
@@ -801,23 +860,33 @@ fn convert_timezone_between_zones() {
     let pairs = [Some(moscow), None, Some(moscow)];
     let targets = [Some(la), Some(la), None];
     let t = stamps(&[Some(0), Some(0), Some(0)]);
-    let out = convert_timezone(&Zones::PerRow(&pairs), &Zones::PerRow(&targets), &t).unwrap();
+    let out = convert_timezone(&Zones::PerRow(&pairs), &Zones::PerRow(&targets), &t, true).unwrap();
     assert_eq!(out.null_count(), 2);
     let e = convert_timezone(
         &Zones::One(&la),
         &Zones::One(&moscow),
         &stamps(&[Some(i64::MAX)]),
+        true,
     )
     .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::DatetimeOverflow);
+    // With ANSI off the overflow is NULL.
+    let out = convert_timezone(
+        &Zones::One(&la),
+        &Zones::One(&moscow),
+        &stamps(&[Some(i64::MAX)]),
+        false,
+    )
+    .unwrap();
+    assert!(out.is_null(0));
     // A zone column must cover the rows.
     let short = [Some(moscow)];
     let two = stamps(&[Some(0), Some(0)]);
-    let e = from_utc_timestamp(&two, &Zones::PerRow(&short)).unwrap_err();
+    let e = from_utc_timestamp(&two, &Zones::PerRow(&short), true).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
-    let e = convert_timezone(&Zones::One(&moscow), &Zones::PerRow(&short), &two).unwrap_err();
+    let e = convert_timezone(&Zones::One(&moscow), &Zones::PerRow(&short), &two, true).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
-    let e = convert_timezone(&Zones::PerRow(&short), &Zones::One(&moscow), &two).unwrap_err();
+    let e = convert_timezone(&Zones::PerRow(&short), &Zones::One(&moscow), &two, true).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
 }
 
@@ -827,7 +896,7 @@ fn the_zone_functions_agree_with_the_extract_kernels() {
     // fields in the zone.
     let seoul = FixedOffset(9 * 3600);
     let t = ts("2024-02-29 20:15:00");
-    let shifted = from_utc_timestamp(&stamps(&[Some(t)]), &Zones::One(&seoul)).unwrap();
+    let shifted = from_utc_timestamp(&stamps(&[Some(t)]), &Zones::One(&seoul), true).unwrap();
     let local = extract_timestamp(DatePart::Hour, &stamps(&[Some(t)]), Some(&seoul)).unwrap();
     let wall = extract_timestamp(DatePart::Hour, &shifted, None).unwrap();
     assert_eq!(local.as_primitive::<Int32Type>().value(0), 5);
@@ -848,7 +917,7 @@ proptest! {
         prop_assert!(last >= d);
         prop_assert_eq!(field(DatePart::Month, last), field(DatePart::Month, d));
         prop_assert_ne!(field(DatePart::Month, last + 1), field(DatePart::Month, d));
-        let trunc = |f: &str| trunc_date(&dates(&[Some(d)]), &strs(&[Some(f)])).unwrap().value(0);
+        let trunc = |f: &str| trunc_date(&dates(&[Some(d)]), &strs(&[Some(f)]), true).unwrap().value(0);
         let (week, month, quarter, year) = (trunc("week"), trunc("month"), trunc("quarter"), trunc("year"));
         prop_assert!(week <= d && d < week + 7);
         prop_assert_eq!(field(DatePart::DayOfWeekIso, week), 1);
@@ -888,7 +957,7 @@ proptest! {
     fn months_between_is_antisymmetric(a in -500_000_i64..2_900_000, b in -500_000_i64..2_900_000) {
         let day = 86_400_000_000_i64;
         let (x, y) = (a * day, b * day);
-        let run = |e: i64, s: i64| months_between(&stamps(&[Some(e)]), &stamps(&[Some(s)]), &BooleanArray::from(vec![false]), &UTC).unwrap().value(0);
+        let run = |e: i64, s: i64| months_between(&stamps(&[Some(e)]), &stamps(&[Some(s)]), &BooleanArray::from(vec![false]), &UTC, true).unwrap().value(0);
         prop_assert_eq!(run(x, x), 0.0);
         prop_assert!((run(x, y) + run(y, x)).abs() < 1e-9);
         let field = |part, d: i64| {

@@ -14,9 +14,11 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Decimal128Type, Int32Type, TimestampMicrosecondType};
-use arrow_array::{Array, ArrayRef, BooleanArray, Date32Array, TimestampMicrosecondArray};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Date32Array, StringArray, TimestampMicrosecondArray,
+};
 use arrow_schema::{DataType, TimeUnit};
-use krishiv_common::error::{InvalidTimezone, KrishivError};
+use krishiv_common::error::{InvalidTimezone, KrishivError, UnableToAcquireMemory};
 use krishiv_kernels::OverflowMode;
 use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, cast};
 use krishiv_kernels::datetime::{
@@ -115,26 +117,105 @@ fn instants(
 }
 
 /// Whether `text` could be a zone id that is not an offset `FixedOffset`
-/// reads: a region id (`Asia/Seoul`, `CET`) or an offset spelled another way.
-/// Text that cannot name any zone in Java's `ZoneId.of` is `INVALID_TIMEZONE`.
+/// reads: a plausible region id (`Asia/Seoul`), a short id (`CET`), or an
+/// offset spelled another way (`+0530`, seconds). Anything else (`xx`,
+/// `foo`, `utc`, `abc`, `true`, `etc/utc`) is text no zone id can have, and
+/// is `INVALID_TIMEZONE`: Spark's own `INVALID_TIMEZONE` text requires
+/// region ids to have the form `area/city` (recorded in
+/// `tests/fixtures/spark-4.2.0/function-matrix`).
 fn is_zone_id(text: &str) -> bool {
     let rest = ["UTC", "GMT", "UT"]
         .iter()
         .find_map(|p| text.strip_prefix(p))
         .unwrap_or(text);
-    let offset_like = rest.starts_with(['+', '-'])
-        && rest.chars().skip(1).all(|c| c.is_ascii_digit() || c == ':');
-    let region = text.chars().count() >= 2
-        && text.chars().enumerate().all(|(i, c)| {
-            c.is_ascii_alphabetic()
-                || (i > 0 && (c.is_ascii_digit() || matches!(c, '/' | '~' | '.' | '_' | '+' | '-')))
-        });
-    offset_like || region
+    if let Some(signed) = rest.strip_prefix(['+', '-']) {
+        return offset_parts(signed).is_some();
+    }
+    is_region_id(text) || SHORT_ZONE_IDS.contains(&text)
 }
 
-/// The zone the text names. Only offsets resolve (`UTC`, `+08:00`): a region
-/// id needs the time-zone database, which the engine does not have, and is
-/// `KRISHIV_UNSUPPORTED_FEATURE`; text no zone can have is `INVALID_TIMEZONE`.
+/// Short zone ids without an `area/city` form that Java's `ZoneId.of`
+/// accepts: its `SHORT_IDS` aliases plus the single-component TZDB regions
+/// (`CET`, `EET`, `WET`, `MET`).
+const SHORT_ZONE_IDS: &[&str] = &[
+    "ACT", "AET", "AGT", "ART", "AST", "BET", "BST", "CAT", "CNT", "CST", "CTT", "EAT", "ECT",
+    "IET", "IST", "JST", "MIT", "NET", "NST", "PLT", "PNT", "PRT", "PST", "SST", "VST", "EST",
+    "MST", "HST", "CET", "EET", "WET", "MET",
+];
+
+/// Whether `text` looks like a region id Java's `ZoneId.of` accepts: an
+/// `area/city` form of non-empty parts in zone-name characters whose area
+/// starts with an uppercase letter (every TZDB area does, so `etc/utc` is
+/// not one).
+fn is_region_id(text: &str) -> bool {
+    if !text.contains('/') {
+        return false;
+    }
+    let mut parts = text.split('/');
+    if !parts
+        .next()
+        .is_some_and(|first| first.starts_with(|c: char| c.is_ascii_uppercase()))
+    {
+        return false;
+    }
+    text.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+' | '.'))
+        && text.split('/').all(|part| !part.is_empty())
+}
+
+/// The `(hours, minutes, seconds)` of a sign-stripped offset `text` where it
+/// parses as an in-range offset (`+HHMM`, `+HHMMSS`, `+H[:MM[:SS]]`), `None`
+/// otherwise. Malformed offsets (`+ab`) and out-of-range ones (`+19:00`,
+/// which Spark's `INVALID_TIMEZONE` text limits to +-18:00) are not zones at
+/// all; in-range ones `FixedOffset::parse` does not read need a fuller
+/// offset parser.
+fn offset_parts(text: &str) -> Option<(u32, u32, u32)> {
+    let (hours, minutes, seconds) = if text.contains(':') {
+        let mut fields = text.split(':');
+        let (h, m, s) = (fields.next()?, fields.next(), fields.next());
+        if fields.next().is_some() {
+            return None;
+        }
+        if !(1..=2).contains(&h.len())
+            || !h.bytes().all(|b| b.is_ascii_digit())
+            || m.is_some_and(|m| {
+                !(1..=2).contains(&m.len()) || !m.bytes().all(|b| b.is_ascii_digit())
+            })
+            || s.is_some_and(|s| {
+                !(1..=2).contains(&s.len()) || !s.bytes().all(|b| b.is_ascii_digit())
+            })
+        {
+            return None;
+        }
+        (
+            h.parse().ok()?,
+            m.map(str::parse).transpose().ok()??,
+            s.map(str::parse).transpose().ok()??,
+        )
+    } else {
+        let digits = text.as_bytes();
+        if !digits.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        match digits.len() {
+            4 => (text[..2].parse().ok()?, text[2..].parse().ok()?, 0),
+            6 => (
+                text[..2].parse().ok()?,
+                text[2..4].parse().ok()?,
+                text[4..].parse().ok()?,
+            ),
+            _ => return None,
+        }
+    };
+    (minutes < 60 && seconds < 60 && (hours < 18 || (hours == 18 && minutes == 0 && seconds == 0)))
+        .then_some((hours, minutes, seconds))
+}
+
+/// The zone the text names. Only offsets `FixedOffset::parse` reads
+/// resolve: a plausible region id (`Asia/Seoul`, a short id such as `CET`)
+/// or an offset spelled another way (`+0530`, seconds) needs the time-zone
+/// database or a fuller offset parser, and is `KRISHIV_UNSUPPORTED_FEATURE`;
+/// text no zone id can have (`xx`, `abc`, `etc/utc`) is `INVALID_TIMEZONE`.
 fn resolve_zone(text: &str) -> Result<FixedOffset, KrishivError> {
     if text == text.trim()
         && let Some(zone) = FixedOffset::parse(text)
@@ -173,34 +254,47 @@ fn zone_arg(args: &[BindArg], i: usize) -> Result<ZoneArg, KrishivError> {
     resolve_zone(text.value(0)).map(|z| ZoneArg::Literal(Some(z)))
 }
 
-/// The zone of each of `x.rows()` rows from argument `i`; a NULL is `None`.
-fn zones_of(
-    x: &Inputs<'_>,
-    i: usize,
-    arg: &ZoneArg,
-) -> Result<Vec<Option<FixedOffset>>, KrishivError> {
-    match arg {
-        ZoneArg::Literal(zone) => Ok(vec![*zone; x.rows()]),
-        ZoneArg::Column => {
-            let names = x.strings(i)?;
-            let mut last: Option<(&str, FixedOffset)> = None;
-            let mut out = Vec::with_capacity(names.len());
-            for name in names.iter() {
-                out.push(match name {
-                    None => None,
-                    Some(n) => match last {
-                        Some((seen, zone)) if seen == n => Some(zone),
-                        _ => {
-                            let zone = resolve_zone(n)?;
-                            last = Some((n, zone));
-                            Some(zone)
-                        }
-                    },
-                });
-            }
-            Ok(out)
-        }
+/// Memory-tracked scratch, reporting allocation failure as
+/// `UNABLE_TO_ACQUIRE_MEMORY` instead of aborting.
+fn reserve<T>(len: usize) -> Result<Vec<T>, KrishivError> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(len)
+        .map_err(|_| UnableToAcquireMemory {
+            requested_bytes: len.saturating_mul(size_of::<T>()).to_string(),
+            received_bytes: "0".to_owned(),
+        })?;
+    Ok(out)
+}
+
+/// The zone of each row of a zone column; a NULL is `None`. Runs of equal
+/// names resolve once.
+fn column_zones(names: &StringArray) -> Result<Vec<Option<FixedOffset>>, KrishivError> {
+    let mut out = reserve(names.len())?;
+    let mut last: Option<(&str, FixedOffset)> = None;
+    for name in names.iter() {
+        out.push(match name {
+            None => None,
+            Some(n) => match last {
+                Some((seen, zone)) if seen == n => Some(zone),
+                _ => {
+                    let zone = resolve_zone(n)?;
+                    last = Some((n, zone));
+                    Some(zone)
+                }
+            },
+        });
     }
+    Ok(out)
+}
+
+/// A `timestamp` (an instant) column of `rows` NULLs, for a NULL literal zone.
+fn null_instants(rows: usize) -> TimestampMicrosecondArray {
+    TimestampMicrosecondArray::new_null(rows).with_timezone("UTC")
+}
+
+/// A `timestamp_ntz` column of `rows` NULLs, for a NULL literal zone.
+fn null_wall_clocks(rows: usize) -> TimestampMicrosecondArray {
+    TimestampMicrosecondArray::new_null(rows)
 }
 
 /// Argument `i` as a wall clock (`timestamp_ntz`): a `timestamp` (`instant`)
@@ -305,8 +399,12 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 if !weekday {
                     return Ok(field);
                 }
+                // `weekday` is the ISO day of the week less one (1 to 7).
                 let days = field.as_primitive::<Int32Type>();
-                Ok(Arc::new(days.unary::<_, Int32Type>(|d| d.wrapping_sub(1))) as ArrayRef)
+                Ok(Arc::new(days.unary::<_, Int32Type>(|d| {
+                    debug_assert!((1..=7).contains(&d), "extract DAYOFWEEK_ISO is 1 to 7");
+                    d.wrapping_sub(1)
+                })) as ArrayRef)
             })
         }
         ("hour" | "minute" | "second", [t]) if is_timestamp(t) => {
@@ -321,10 +419,17 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 if part != DatePart::Second {
                     return Ok(field);
                 }
-                // `second` is the whole seconds of `extract`'s `decimal(8, 6)`.
+                // `second` is the whole seconds of `extract`'s `decimal(8, 6)`
+                // (the time field is below one minute, so 0 to 59 whole
+                // seconds: the conversion is infallible).
                 let micros = field.as_primitive::<Decimal128Type>();
-                let whole = micros
-                    .unary::<_, Int32Type>(|m| i32::try_from(m / 1_000_000).unwrap_or_default());
+                let whole = micros.unary::<_, Int32Type>(|m| {
+                    debug_assert!(
+                        (0..60_000_000).contains(&m),
+                        "extract SECOND is below one minute"
+                    );
+                    i32::try_from(m / 1_000_000).unwrap_or_default()
+                });
                 Ok(Arc::new(whole) as ArrayRef)
             })
         }
@@ -355,15 +460,17 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             })
         }
         ("trunc", [DataType::Date32, s]) if is_string(s) => {
-            Binding::new(DataType::Date32, |x: &Inputs<'_>| {
-                Ok(Arc::new(trunc_date(&x.dates(0)?, &x.strings(1)?)?) as ArrayRef)
+            let ansi = opts.ansi;
+            Binding::new(DataType::Date32, move |x: &Inputs<'_>| {
+                Ok(Arc::new(trunc_date(&x.dates(0)?, &x.strings(1)?, ansi)?) as ArrayRef)
             })
         }
         ("date_trunc", [s, t]) if is_string(s) && is_timestamp(t) => {
             let ntz = *t == ntz_type();
+            let ansi = opts.ansi;
             Binding::new(timestamp(), move |x: &Inputs<'_>| {
                 let utc = instants(x, 1, ntz, &o)?;
-                let out = trunc_timestamp(&x.strings(0)?, &utc, o.time_zone.as_ref())?;
+                let out = trunc_timestamp(&x.strings(0)?, &utc, o.time_zone.as_ref(), ansi)?;
                 Ok(Arc::new(out.with_timezone("UTC")) as ArrayRef)
             })
         }
@@ -372,17 +479,22 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         {
             let explicit = types.len() == 3;
             let (end_ntz, start_ntz) = (*a == ntz_type(), *b == ntz_type());
+            let ansi = opts.ansi;
             Binding::new(DataType::Float64, move |x: &Inputs<'_>| {
                 let round_off = if explicit {
                     x.booleans(2)?
                 } else {
-                    BooleanArray::from(vec![true; x.rows()])
+                    // The default `roundOff` is true for every row.
+                    let mut values = reserve::<bool>(x.rows())?;
+                    values.resize(x.rows(), true);
+                    BooleanArray::new(values.into(), None)
                 };
                 let out = months_between(
                     &instants(x, 0, end_ntz, &o)?,
                     &instants(x, 1, start_ntz, &o)?,
                     &round_off,
                     o.time_zone.as_ref(),
+                    ansi,
                 )?;
                 Ok(Arc::new(out) as ArrayRef)
             })
@@ -393,16 +505,34 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Err(e) => return Some((listed, Err(e))),
             };
             let (ntz, from) = (*t == ntz_type(), listed == "from_utc_timestamp");
+            let ansi = opts.ansi;
             Binding::new(timestamp(), move |x: &Inputs<'_>| {
                 let utc = instants(x, 0, ntz, &o)?;
-                let zones = zones_of(x, 1, &zone)?;
-                let zones = Zones::PerRow(&zones);
-                let out = if from {
-                    from_utc_timestamp(&utc, &zones)?
-                } else {
-                    to_utc_timestamp(&utc, &zones)?
+                // A literal zone reads every row with one lookup; a column
+                // resolves each row (runs of equal names once).
+                let out = match &zone {
+                    ZoneArg::Literal(None) => null_instants(x.rows()),
+                    ZoneArg::Literal(Some(one)) => {
+                        let zones = Zones::One(one);
+                        (if from {
+                            from_utc_timestamp(&utc, &zones, ansi)
+                        } else {
+                            to_utc_timestamp(&utc, &zones, ansi)
+                        })?
+                        .with_timezone("UTC")
+                    }
+                    ZoneArg::Column => {
+                        let names = column_zones(&x.strings(1)?)?;
+                        let zones = Zones::PerRow(&names);
+                        (if from {
+                            from_utc_timestamp(&utc, &zones, ansi)
+                        } else {
+                            to_utc_timestamp(&utc, &zones, ansi)
+                        })?
+                        .with_timezone("UTC")
+                    }
                 };
-                Ok(Arc::new(out.with_timezone("UTC")) as ArrayRef)
+                Ok(Arc::new(out) as ArrayRef)
             })
         }
         ("convert_timezone", [.., t]) if is_timestamp(t) && matches!(types.len(), 2 | 3) => {
@@ -421,18 +551,42 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 None
             };
             let instant = *t != ntz_type();
+            let ansi = opts.ansi;
             Binding::new(ntz_type(), move |x: &Inputs<'_>| {
                 let clocks = wall_clocks(x, target_index + 1, instant, &o)?;
-                let to = zones_of(x, target_index, &target)?;
-                let from = match &source {
-                    Some(arg) => zones_of(x, 0, arg)?,
-                    None => Vec::new(),
+                // Literals read every row with one lookup; a NULL literal
+                // zone is NULL for every row.
+                let target_vec;
+                let target_zones = match &target {
+                    ZoneArg::Literal(Some(one)) => Zones::One(one),
+                    ZoneArg::Literal(None) => {
+                        return Ok(Arc::new(null_wall_clocks(x.rows())) as ArrayRef);
+                    }
+                    ZoneArg::Column => {
+                        target_vec = column_zones(&x.strings(target_index)?)?;
+                        Zones::PerRow(&target_vec)
+                    }
                 };
-                let to = Zones::PerRow(&to);
-                let out = if source.is_some() {
-                    convert_timezone(&Zones::PerRow(&from), &to, &clocks)?
+                let out = if let Some(arg) = &source {
+                    let source_vec;
+                    let source_zones = match arg {
+                        ZoneArg::Literal(Some(one)) => Zones::One(one),
+                        ZoneArg::Literal(None) => {
+                            return Ok(Arc::new(null_wall_clocks(x.rows())) as ArrayRef);
+                        }
+                        ZoneArg::Column => {
+                            source_vec = column_zones(&x.strings(0)?)?;
+                            Zones::PerRow(&source_vec)
+                        }
+                    };
+                    convert_timezone(&source_zones, &target_zones, &clocks, ansi)?
                 } else {
-                    convert_timezone(&Zones::One(o.time_zone.as_ref()), &to, &clocks)?
+                    convert_timezone(
+                        &Zones::One(o.time_zone.as_ref()),
+                        &target_zones,
+                        &clocks,
+                        ansi,
+                    )?
                 };
                 Ok(Arc::new(out) as ArrayRef)
             })

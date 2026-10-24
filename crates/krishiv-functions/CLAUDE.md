@@ -44,9 +44,12 @@ Paths are relative to this crate.
 
 - `scalar/datetime`: the field accessors (`year` ... `second`, `dayofweek`, `weekday`, `weekofyear`, `quarter`), `monthname`/`dayname`,
   `unix_date`, `add_months`, `last_day`, `next_day`, `trunc`, `date_trunc`, `months_between`, `make_date`, `from_utc_timestamp`/
-  `to_utc_timestamp` and `convert_timezone`. Only offset zones resolve (`UTC`, `+08:00`; `FixedOffset::parse`): any other zone id
-  (a region such as `Asia/Seoul`, a short id such as `CET`) is `KRISHIV_UNSUPPORTED_FEATURE` until the time-zone database, and text no
-  zone can have is `INVALID_TIMEZONE`. A literal zone is resolved when the call is bound, a column per row. A `timestamp_ntz`
+  `to_utc_timestamp` and `convert_timezone`. Only offsets `FixedOffset::parse` reads resolve (`UTC`, `+08:00`): a plausible
+  region id (`Asia/Seoul`), a short id (`CET`) or an offset spelled another way (`+0530`, seconds) is
+  `KRISHIV_UNSUPPORTED_FEATURE` until the time-zone database or a fuller offset parser, and anything else (`xx`, `abc`,
+  `etc/utc`) is `INVALID_TIMEZONE`. A literal zone reads every row with one lookup (`Zones::One`; a NULL literal zone is
+  NULL for every row), a column resolves per row. Out-of-range results raise `DATETIME_OVERFLOW` with ANSI on and are NULL
+  with it off (as `next_day`'s bad name and `make_date`'s bad field already do). A `timestamp_ntz`
   argument of `date_trunc`, `months_between`, `from_utc_timestamp` and `to_utc_timestamp` (and a `timestamp` of `convert_timezone`)
   is read in the session zone, as the implicit cast does. Not registered: `make_timestamp`, `try_make_timestamp` and the `_ltz`/
   `_ntz` forms (their types need `TIME`, and `make_timestamp` follows `spark.sql.timestampType`), `timestampadd`/`timestampdiff` and

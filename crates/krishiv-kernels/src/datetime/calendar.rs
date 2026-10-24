@@ -6,8 +6,16 @@
 //!
 //! Dates and timestamps are proleptic Gregorian, as in Spark 3+, so a date
 //! before 1582-10-15 reads like any other: there is no Julian cutover. Each
-//! function states where Spark's own `int` arithmetic wraps; those results
-//! are reproduced, not guarded.
+//! function states where Spark's own `int` arithmetic is assumed to wrap;
+//! the wrapping results are assumed, unverified against a Spark run (no
+//! golden or matrix cell reaches the range ends; check against
+//! `org.apache.spark.sql.catalyst.util.DateTimeUtils` and `java.time`).
+//!
+//! Likewise the DST gap/overlap rules below (`truncate_instant`,
+//! `months_between_instants`, the zone conversions) follow `java.time` as
+//! assumed: all replay runs in UTC and region zones skip as unsupported, so
+//! the synthetic-zone tests prove internal consistency only, not Spark
+//! behavior.
 
 use arrow_array::types::{Date32Type, Float64Type, TimestampMicrosecondType};
 use arrow_array::{
@@ -65,8 +73,9 @@ pub fn unix_date(a: &Date32Array) -> Int32Array {
     as_days(a)
 }
 
-/// The last day of the month of day number `days`. Spark adds in `int`: at
-/// the top of the date range the sum wraps.
+/// The last day of the month of day number `days`. Spark is assumed to add
+/// in `int` here: at the top of the date range the sum wraps (assumed,
+/// unverified against a Spark run; see the module docs).
 fn last_day_of_month(days: i32) -> i32 {
     let (year, month, day) = civil_from_days(i64::from(days));
     let length = month_length(year, month);
@@ -82,7 +91,11 @@ pub fn last_day(a: &Date32Array) -> Date32Array {
 
 /// Spark's day number of a weekday name for `next_day`: day numbers count
 /// from the epoch, a Thursday, so Thursday is 0 and Sunday 3. `None` for a
-/// name Spark does not take (`SU`, `SUN`, `SUNDAY`, and so on, any case).
+/// name Spark does not take (`SUNDAY`, and so on, any case). The two-letter
+/// forms (`SU`, `MO`, ...) and the lack of trimming are assumed, unverified
+/// against a Spark run (the goldens cover only `Mon` and `xx`; check
+/// `DateTimeUtils.getDayOfWeekFromString`): the tests pin the assumption,
+/// not Spark behavior.
 fn day_of_week_from_name(name: &str) -> Option<i32> {
     Some(match name.to_uppercase().as_str() {
         "SU" | "SUN" | "SUNDAY" => 3,
@@ -98,8 +111,8 @@ fn day_of_week_from_name(name: &str) -> Option<i32> {
 
 /// `next_day(start, name)`: the first date after `start` that is the named
 /// weekday. A name Spark does not take is `ILLEGAL_DAY_OF_WEEK` with ANSI on
-/// and NULL with it off. Spark adds in `int`: the last days of the range
-/// wrap.
+/// and NULL with it off. Spark is assumed to add in `int` here: the last
+/// days of the range wrap (assumed, unverified; see the module docs).
 ///
 /// # Errors
 /// `ILLEGAL_DAY_OF_WEEK` as above; `INTERNAL_ERROR` for inputs of different
@@ -231,21 +244,30 @@ fn units<'a>(formats: &'a StringArray) -> impl Iterator<Item = Option<Option<Tru
 /// those four (`DAY` and finer levels are not dates' levels).
 ///
 /// # Errors
-/// `DATETIME_OVERFLOW` where the first day leaves the `DATE` range (the
-/// first year of the smallest dates); `INTERNAL_ERROR` for inputs of
-/// different lengths; `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be
-/// allocated.
-pub fn trunc_date(dates: &Date32Array, formats: &StringArray) -> Result<Date32Array, KernelError> {
+/// `DATETIME_OVERFLOW` with ANSI on where the first day leaves the `DATE`
+/// range (the first year of the smallest dates); NULL with ANSI off;
+/// `INTERNAL_ERROR` for inputs of different lengths;
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be allocated.
+pub fn trunc_date(
+    dates: &Date32Array,
+    formats: &StringArray,
+    ansi: bool,
+) -> Result<Date32Array, KernelError> {
     check_lengths(&[dates.len(), formats.len()])?;
     let mut values = with_capacity::<i32>(dates.len())?;
     let mut valid = with_capacity::<bool>(dates.len())?;
     for (i, unit) in units(formats).enumerate() {
         let day = match (dates.is_valid(i), unit) {
             (true, Some(Some(unit))) if unit >= TruncUnit::Week => {
-                let first = truncate_days(i64::from(dates.value(i)), unit)
+                match truncate_days(i64::from(dates.value(i)), unit)
                     .and_then(|d| i32::try_from(d).ok())
-                    .ok_or_else(|| KernelError::datetime_overflow(i, "trunc"))?;
-                Some(first)
+                {
+                    Some(first) => Some(first),
+                    None if ansi => {
+                        return Err(KernelError::datetime_overflow(i, "trunc"));
+                    }
+                    None => None,
+                }
             }
             _ => None,
         };
@@ -259,9 +281,10 @@ pub fn trunc_date(dates: &Date32Array, formats: &StringArray) -> Result<Date32Ar
 }
 
 /// The instant `unit` truncates `t` to in `zone`. Levels of a minute and
-/// above truncate the local date-time: an hour or a day keeps the offset of
-/// `t` where it is valid (the same side of a DST overlap, as
+/// above truncate the local date-time: an hour or a day is assumed to keep
+/// the offset of `t` where it is valid (the same side of a DST overlap, as
 /// `ZonedDateTime.truncatedTo`); the date levels start the local day.
+/// Assumed, unverified against a Spark run (see the module docs).
 fn truncate_instant(t: i64, unit: TruncUnit, zone: &dyn TimeZoneRules) -> Option<i64> {
     let floor = |value: i64, step: i64| value.checked_sub(value.rem_euclid(step));
     match unit {
@@ -291,13 +314,15 @@ fn truncate_instant(t: i64, unit: TruncUnit, zone: &dyn TimeZoneRules) -> Option
 /// format.
 ///
 /// # Errors
-/// `DATETIME_OVERFLOW` where the truncated instant leaves the timestamp
-/// range; `INTERNAL_ERROR` for inputs of different lengths;
-/// `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be allocated.
+/// `DATETIME_OVERFLOW` with ANSI on where the truncated instant leaves the
+/// timestamp range; NULL with ANSI off; `INTERNAL_ERROR` for inputs of
+/// different lengths; `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be
+/// allocated.
 pub fn trunc_timestamp(
     formats: &StringArray,
     timestamps: &TimestampMicrosecondArray,
     zone: &dyn TimeZoneRules,
+    ansi: bool,
 ) -> Result<TimestampMicrosecondArray, KernelError> {
     check_lengths(&[timestamps.len(), formats.len()])?;
     let mut values = with_capacity::<i64>(timestamps.len())?;
@@ -308,8 +333,17 @@ pub fn trunc_timestamp(
             valid.push(false);
             continue;
         };
-        let t = truncate_instant(timestamps.value(i), unit, zone)
-            .ok_or_else(|| KernelError::datetime_overflow(i, "date_trunc"))?;
+        let t = match truncate_instant(timestamps.value(i), unit, zone) {
+            Some(t) => t,
+            None if ansi => {
+                return Err(KernelError::datetime_overflow(i, "date_trunc"));
+            }
+            None => {
+                values.push(0);
+                valid.push(false);
+                continue;
+            }
+        };
         values.push(t);
         valid.push(true);
     }
@@ -346,7 +380,9 @@ fn months_between_instants(
     if d1 == d2 || both_last_days {
         return Some(months as f64);
     }
-    // The time into the day counts from the instant the day starts.
+    // The time into the day counts from the instant the day starts (in UTC
+    // the matrix pins this down; across a DST change it is assumed,
+    // unverified against a Spark run).
     let time1 = t1.checked_sub(local_to_utc(days1.checked_mul(MICROS_PER_DAY)?, zone)?)?;
     let time2 = t2.checked_sub(local_to_utc(days2.checked_mul(MICROS_PER_DAY)?, zone)?)?;
     let seconds = i64::from(d1)
@@ -367,14 +403,15 @@ fn months_between_instants(
 /// argument is NULL.
 ///
 /// # Errors
-/// `DATETIME_OVERFLOW` for an instant whose local time is out of range;
-/// `INTERNAL_ERROR` for inputs of different lengths;
-/// `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be allocated.
+/// `DATETIME_OVERFLOW` with ANSI on for an instant whose local time is out
+/// of range; NULL with ANSI off; `INTERNAL_ERROR` for inputs of different
+/// lengths; `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be allocated.
 pub fn months_between(
     end: &TimestampMicrosecondArray,
     start: &TimestampMicrosecondArray,
     round_off: &BooleanArray,
     zone: &dyn TimeZoneRules,
+    ansi: bool,
 ) -> Result<Float64Array, KernelError> {
     check_lengths(&[end.len(), start.len(), round_off.len()])?;
     let mut values = with_capacity::<f64>(end.len())?;
@@ -386,8 +423,17 @@ pub fn months_between(
             continue;
         }
         let months =
-            months_between_instants(end.value(i), start.value(i), round_off.value(i), zone)
-                .ok_or_else(|| KernelError::datetime_overflow(i, "months_between"))?;
+            match months_between_instants(end.value(i), start.value(i), round_off.value(i), zone) {
+                Some(months) => months,
+                None if ansi => {
+                    return Err(KernelError::datetime_overflow(i, "months_between"));
+                }
+                None => {
+                    values.push(0.0);
+                    valid.push(false);
+                    continue;
+                }
+            };
         values.push(months);
         valid.push(true);
     }
@@ -530,11 +576,13 @@ impl Zones<'_> {
 }
 
 /// Applies `f` to the valid rows of `timestamps`; a row whose zone is NULL
-/// is NULL. `f` gets the value and the row's zone, `None` for an overflow.
+/// is NULL. `f` gets the value and the row's zone, `None` for an overflow
+/// (which raises with ANSI on and is NULL with it off).
 fn zoned(
     timestamps: &TimestampMicrosecondArray,
     zones: &Zones<'_>,
     operation: &str,
+    ansi: bool,
     f: impl Fn(i64, &dyn TimeZoneRules) -> Option<i64>,
 ) -> Result<TimestampMicrosecondArray, KernelError> {
     zones.check(timestamps.len())?;
@@ -546,8 +594,17 @@ fn zoned(
             valid.push(false);
             continue;
         };
-        let t = f(timestamps.value(i), tz)
-            .ok_or_else(|| KernelError::datetime_overflow(i, operation))?;
+        let t = match f(timestamps.value(i), tz) {
+            Some(t) => t,
+            None if ansi => {
+                return Err(KernelError::datetime_overflow(i, operation));
+            }
+            None => {
+                values.push(0);
+                valid.push(false);
+                continue;
+            }
+        };
         values.push(t);
         valid.push(true);
     }
@@ -562,27 +619,30 @@ fn zoned(
 /// result).
 ///
 /// # Errors
-/// `DATETIME_OVERFLOW` where the result leaves the timestamp range;
-/// `INTERNAL_ERROR` for a zone column of another length;
-/// `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be allocated.
+/// `DATETIME_OVERFLOW` with ANSI on where the result leaves the timestamp
+/// range; NULL with ANSI off; `INTERNAL_ERROR` for a zone column of another
+/// length; `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be allocated.
 pub fn from_utc_timestamp(
     timestamps: &TimestampMicrosecondArray,
     zones: &Zones<'_>,
+    ansi: bool,
 ) -> Result<TimestampMicrosecondArray, KernelError> {
-    zoned(timestamps, zones, "from_utc_timestamp", utc_to_local)
+    zoned(timestamps, zones, "from_utc_timestamp", ansi, utc_to_local)
 }
 
 /// `to_utc_timestamp(timestamp, zone)`: the instant whose wall clock in the
 /// zone of its row is the UTC wall clock of `timestamp` (a skipped wall time
-/// moves forward, an ambiguous one takes the earlier offset).
+/// moves forward, an ambiguous one takes the earlier offset; assumed,
+/// unverified against a Spark run).
 ///
 /// # Errors
 /// As [`from_utc_timestamp`].
 pub fn to_utc_timestamp(
     timestamps: &TimestampMicrosecondArray,
     zones: &Zones<'_>,
+    ansi: bool,
 ) -> Result<TimestampMicrosecondArray, KernelError> {
-    zoned(timestamps, zones, "to_utc_timestamp", local_to_utc)
+    zoned(timestamps, zones, "to_utc_timestamp", ansi, local_to_utc)
 }
 
 /// `convert_timezone(source, target, ts)` over a `TIMESTAMP_NTZ`: the wall
@@ -590,13 +650,14 @@ pub fn to_utc_timestamp(
 /// A NULL zone gives NULL.
 ///
 /// # Errors
-/// `DATETIME_OVERFLOW` where the result leaves the timestamp range;
-/// `INTERNAL_ERROR` for a zone column of another length;
-/// `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be allocated.
+/// `DATETIME_OVERFLOW` with ANSI on where the result leaves the timestamp
+/// range; NULL with ANSI off; `INTERNAL_ERROR` for a zone column of another
+/// length; `UNABLE_TO_ACQUIRE_MEMORY` if the output cannot be allocated.
 pub fn convert_timezone(
     sources: &Zones<'_>,
     targets: &Zones<'_>,
     wall_clocks: &TimestampMicrosecondArray,
+    ansi: bool,
 ) -> Result<TimestampMicrosecondArray, KernelError> {
     sources.check(wall_clocks.len())?;
     targets.check(wall_clocks.len())?;
@@ -610,9 +671,19 @@ pub fn convert_timezone(
             valid.push(false);
             continue;
         };
-        let t = local_to_utc(wall_clocks.value(i), source)
+        let t = match local_to_utc(wall_clocks.value(i), source)
             .and_then(|instant| utc_to_local(instant, target))
-            .ok_or_else(|| KernelError::datetime_overflow(i, "convert_timezone"))?;
+        {
+            Some(t) => t,
+            None if ansi => {
+                return Err(KernelError::datetime_overflow(i, "convert_timezone"));
+            }
+            None => {
+                values.push(0);
+                valid.push(false);
+                continue;
+            }
+        };
         values.push(t);
         valid.push(true);
     }

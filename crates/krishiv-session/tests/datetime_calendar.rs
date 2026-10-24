@@ -8,7 +8,10 @@
 //! A matrix cell must give Spark's rows (as `CAST(x AS STRING)` renders
 //! them) or Spark's error class and parameters. A cell the engine cannot
 //! run yet (intervals, `TIME`, region time zones, nested values) is
-//! counted with the reason, never silently passed.
+//! counted with the reason, and the exact skip set is pinned by
+//! `expected_not_run` (with the two parameter normalizations counted too),
+//! so a regression that turns a result into `unsupported` fails instead of
+//! passing silently.
 #![cfg(test)]
 
 use std::collections::BTreeMap;
@@ -129,6 +132,12 @@ struct Tally {
     passed: usize,
     failures: String,
     not_run: BTreeMap<String, usize>,
+    /// Cells compared after dropping the registry's missing `ansiConfig`
+    /// parameter from Spark's `CAST_INVALID_INPUT`.
+    normalized_cast_invalid_input: usize,
+    /// Cells compared after filling Spark's default `roundOff` into the
+    /// `months_between` call shown in its `sqlExpr`.
+    normalized_months_between: usize,
 }
 
 fn check(tally: &mut Tally, s: &Session, case: &Value, mode: &str) {
@@ -201,6 +210,7 @@ fn check(tally: &mut Tally, s: &Session, case: &Value, mode: &str) {
             // The registry's `CAST_INVALID_INPUT` has no `ansiConfig`.
             if class == "CAST_INVALID_INPUT" {
                 params.remove("ansiConfig");
+                tally.normalized_cast_invalid_input += 1;
             }
             // Spark shows `months_between`'s default `roundOff` in the call.
             if let Some(shown) = params.get_mut("sqlExpr")
@@ -212,6 +222,7 @@ fn check(tally: &mut Tally, s: &Session, case: &Value, mode: &str) {
                     == Some(plain)
             {
                 *shown = plain.clone();
+                tally.normalized_months_between += 1;
             }
             if e.error_class().name() != class {
                 Err(format!(
@@ -266,10 +277,60 @@ fn matrix_cells_match_spark() {
     for (why, n) in &tally.not_run {
         let _ = writeln!(report, "{n:5} not run: {why}");
     }
+    let _ = writeln!(
+        report,
+        "normalized: {} CAST_INVALID_INPUT, {} months_between",
+        tally.normalized_cast_invalid_input, tally.normalized_months_between
+    );
     println!("{report}");
     let shown: Vec<&str> = tally.failures.lines().take(25).collect();
     assert!(shown.is_empty(), "{}\n{report}", shown.join("\n"));
     assert!(tally.passed > 1_000, "{report}");
+    // The skip set is pinned: a regression that turns a result into
+    // `unsupported` (or any new skip) changes these counts and fails here
+    // instead of passing silently.
+    assert_eq!(tally.not_run, expected_not_run(), "{report}");
+    assert_eq!(tally.normalized_cast_invalid_input, 96, "{report}");
+    assert_eq!(tally.normalized_months_between, 40, "{report}");
+}
+
+/// The exact cells the engine does not run: region time zones (no tz
+/// database), `TIME` and `INTERVAL` literals, nested values, invalid UTF-8
+/// bytes, the rewritten `convert_timezone` analysis errors, session-conf
+/// overrides and cases with no recorded rows.
+fn expected_not_run() -> BTreeMap<String, usize> {
+    BTreeMap::from([
+        (
+            "analysis errors of the rewritten convert_timezone".to_owned(),
+            20,
+        ),
+        ("cast of invalid UTF-8 bytes to a string".to_owned(), 23),
+        ("no recorded rows".to_owned(), 62),
+        ("session conf override".to_owned(), 4),
+        ("unsupported: CAST from STRING to BOOLEAN".to_owned(), 4),
+        ("unsupported: INTERVAL literals".to_owned(), 144),
+        ("unsupported: TIME literals".to_owned(), 6),
+        ("unsupported: function DATE".to_owned(), 4),
+        ("unsupported: function array".to_owned(), 74),
+        ("unsupported: function map".to_owned(), 74),
+        ("unsupported: function named_struct".to_owned(), 74),
+        (
+            "unsupported: the function convert_timezone (it has no binding for these arguments: a region time zone)"
+                .to_owned(),
+            68,
+        ),
+        (
+            "unsupported: the function from_utc_timestamp (it has no binding for these arguments: a region time zone)"
+                .to_owned(),
+            24,
+        ),
+        (
+            "unsupported: the function to_utc_timestamp (it has no binding for these arguments: a region time zone)"
+                .to_owned(),
+            24,
+        ),
+        ("unsupported: the time data type (\"TIME\")".to_owned(), 6),
+    ])
 }
 
 // ---------------------------------------------------------------------------

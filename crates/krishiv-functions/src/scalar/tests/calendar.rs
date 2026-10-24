@@ -611,6 +611,80 @@ fn months_between_overflow_is_raised_by_the_binding() {
     let f = bind_with("months_between", &[&end, &start], &plus_one());
     let e = f.invoke(&[col(&end), col(&start)], 1).unwrap_err();
     assert_eq!(class(&e), ErrorClass::DatetimeOverflow);
+    // With ANSI off the overflow is NULL.
+    let f = bind_with("months_between", &[&end, &start], &plus_one_legacy());
+    assert_eq!(
+        f.invoke(&[col(&end), col(&start)], 1).unwrap().null_count(),
+        1
+    );
+}
+
+fn plus_one_legacy() -> BindOptions {
+    BindOptions::new()
+        .with_ansi(false)
+        .with_time_zone(Arc::new(FixedOffset(3600)))
+}
+
+#[test]
+fn datetime_overflow_is_null_without_ansi() {
+    // `trunc` past the range.
+    let min_date = dates(&[Some(i32::MIN)]);
+    let year = strs(&[Some("year")]);
+    let f = bind("trunc", &[&min_date, &year]);
+    let e = f.invoke(&[col(&min_date), col(&year)], 1).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::DatetimeOverflow);
+    let f = bind_with("trunc", &[&min_date, &year], &legacy());
+    assert!(
+        f.invoke(&[col(&min_date), col(&year)], 1)
+            .unwrap()
+            .is_null(0)
+    );
+    // `date_trunc` past the range.
+    let min_stamp = ltz(&[Some(i64::MIN + 1)]);
+    let f = bind("date_trunc", &[&year, &min_stamp]);
+    let e = f.invoke(&[col(&year), col(&min_stamp)], 1).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::DatetimeOverflow);
+    let f = bind_with("date_trunc", &[&year, &min_stamp], &legacy());
+    assert!(
+        f.invoke(&[col(&year), col(&min_stamp)], 1)
+            .unwrap()
+            .is_null(0)
+    );
+    // The zone conversions past the range.
+    let max_stamp = ltz(&[Some(i64::MAX)]);
+    let hour = strs(&[Some("+01:00")]);
+    let f = bind("from_utc_timestamp", &[&max_stamp, &hour]);
+    let e = f.invoke(&[col(&max_stamp), col(&hour)], 1).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::DatetimeOverflow);
+    let f = bind_with("from_utc_timestamp", &[&max_stamp, &hour], &legacy());
+    assert!(
+        f.invoke(&[col(&max_stamp), col(&hour)], 1)
+            .unwrap()
+            .is_null(0)
+    );
+    let min_stamp = ltz(&[Some(i64::MIN)]);
+    let f = bind("to_utc_timestamp", &[&min_stamp, &hour]);
+    let e = f.invoke(&[col(&min_stamp), col(&hour)], 1).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::DatetimeOverflow);
+    let f = bind_with("to_utc_timestamp", &[&min_stamp, &hour], &legacy());
+    assert!(
+        f.invoke(&[col(&min_stamp), col(&hour)], 1)
+            .unwrap()
+            .is_null(0)
+    );
+    let wall = ntz(&[Some(i64::MAX)]);
+    let utc = strs(&[Some("UTC")]);
+    let f = bind("convert_timezone", &[&utc, &hour, &wall]);
+    let e = f
+        .invoke(&[col(&utc), col(&hour), col(&wall)], 1)
+        .unwrap_err();
+    assert_eq!(class(&e), ErrorClass::DatetimeOverflow);
+    let f = bind_with("convert_timezone", &[&utc, &hour, &wall], &legacy());
+    assert!(
+        f.invoke(&[col(&utc), col(&hour), col(&wall)], 1)
+            .unwrap()
+            .is_null(0)
+    );
 }
 
 #[test]
@@ -626,6 +700,7 @@ fn zone_text_is_resolved_or_refused() {
     };
     for ok in [
         "UTC",
+        "Etc/UTC",
         "Z",
         "GMT",
         "+08:00",
@@ -637,26 +712,35 @@ fn zone_text_is_resolved_or_refused() {
         assert!(bind_zone(ok).is_ok(), "{ok}");
     }
     // Region ids, short ids and offsets spelled another way need the tz
-    // database (or a fuller offset parser): unsupported, never a wrong answer.
+    // database or a fuller offset parser: unsupported, never a wrong answer.
+    // (`+19:00` is out of range, so it is below with the invalid zones.)
     for region in [
         "Asia/Seoul",
         "America/Los_Angeles",
         "CET",
         "PST",
-        "abc",
-        "true",
+        "EST",
         "+0530",
         "UTC+05:30:15",
-        "+19:00",
         "Etc/GMT+5",
     ] {
         let e = bind_zone(region).unwrap_err();
         assert_eq!(class(&e), ErrorClass::KrishivUnsupportedFeature, "{region}");
     }
-    // Text no zone can have: INVALID_TIMEZONE with the text as given.
+    // Text no zone id can have: INVALID_TIMEZONE with the text as given.
+    // (`abc` and `true` are recorded in the function matrix as
+    // INVALID_TIMEZONE; `xx`, `foo`, `utc` and `etc/utc` fail Java's
+    // `ZoneId.of` the same way, as does the out-of-range `+19:00`.)
     for bad in [
         "",
         "1",
+        "xx",
+        "foo",
+        "utc",
+        "abc",
+        "true",
+        "etc/utc",
+        "+19:00",
         " UTC",
         "UTC ",
         "2024-02-29 12:34:56.123456",
