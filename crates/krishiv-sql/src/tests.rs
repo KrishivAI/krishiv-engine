@@ -955,6 +955,72 @@ fn multipart_identifiers_parse_like_spark() {
     assert_eq!(e.error.error_class(), ErrorClass::ParseEmptyStatement);
 }
 
+/// Typed datetime literals lower to an unresolved node (the type keyword
+/// and the raw string), with no time zone involved: the analyzer resolves
+/// them with the session zone.
+#[test]
+fn typed_datetime_literals_lower_unresolved() {
+    use crate::ast::{ExprKind, SetExprKind};
+    use krishiv_plan::SourceId;
+
+    // Each kind keeps its keyword and raw string, with the literal's span,
+    // and lowers without a time zone.
+    for (sql, keyword) in [
+        ("SELECT DATE '2016-03-12'", "DATE"),
+        ("SELECT TIMESTAMP '2024-01-01 10:00:00'", "TIMESTAMP"),
+        (
+            "SELECT TIMESTAMP_NTZ '2024-01-01 10:00:00'",
+            "TIMESTAMP_NTZ",
+        ),
+        (
+            "SELECT TIMESTAMP_LTZ '2024-01-01 10:00:00'",
+            "TIMESTAMP_LTZ",
+        ),
+    ] {
+        let q = crate::parse_query(sql, &ParserOptions::default()).unwrap();
+        let SetExprKind::Select(s) = q.body.kind else {
+            panic!("{sql} is not a select");
+        };
+        let ExprKind::Literal(crate::ast::Literal::Typed { type_name, value }) =
+            s.projection[0].expr.kind.clone()
+        else {
+            panic!("{sql} is not a typed literal");
+        };
+        assert_eq!(type_name.value.to_ascii_uppercase(), keyword, "{sql}");
+        assert!(!value.is_empty(), "{sql}");
+        assert_eq!(s.projection[0].expr.span.range(), 7..sql.len(), "{sql}");
+        // Lowering succeeds with the default options (no zone) and keeps
+        // the raw text: the plan holds a `TypedLiteral`, never micros.
+        let plan = crate::parse_and_lower(sql, &ParserOptions::default(), SourceId(0)).unwrap();
+        let text = plan.root().to_string();
+        assert!(text.contains(&format!("{keyword} '")), "{sql}: {text}");
+    }
+    // The wall-clock text is preserved exactly, including an explicit zone.
+    let q = parser::parse_query_unchecked(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'",
+        ParserOptions::default(),
+    )
+    .unwrap();
+    let SetExprKind::Select(s) = q.body.kind else {
+        panic!("not a select");
+    };
+    let ExprKind::Literal(crate::ast::Literal::Typed { value, .. }) =
+        s.projection[0].expr.kind.clone()
+    else {
+        panic!("not a typed literal");
+    };
+    assert_eq!(value, "2024-01-01 10:00:00+05:30");
+    let plan = crate::parse_and_lower(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00'",
+        &ParserOptions::default(),
+        SourceId(0),
+    )
+    .unwrap();
+    let text = plan.root().to_string();
+    assert!(text.contains("TIMESTAMP '2024-01-01 10:00:00'"), "{text}");
+    assert!(!text.contains("1704103200000000"), "{text}");
+}
+
 /// `parse_named_expression`: one named expression (`F.expr`,
 /// `selectExpr` once per argument string, `filter`/`where` strings).
 #[test]

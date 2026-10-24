@@ -67,6 +67,17 @@ pub fn timestamp_text(s: &str) -> TimestampText {
     }
 }
 
+/// Whether `s` names an explicit zone (an offset or region id after the
+/// seconds), as the cast kernel's parse sees it. Session-independent
+/// timestamp strings evaluate the same in every session zone.
+#[must_use]
+pub fn timestamp_has_zone(s: &str) -> bool {
+    matches!(
+        parse(s.as_bytes()),
+        Parsed::At(_, Zone::Offset(_) | Zone::Region)
+    )
+}
+
 /// Parses one string.
 pub(crate) fn parse(s: &[u8]) -> Parsed {
     let s = trim_all(s);

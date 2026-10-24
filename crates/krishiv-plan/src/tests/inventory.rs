@@ -52,6 +52,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
     out.insert(match &expr.node {
         ExprNode::Column(_) => "ExprNode::Column",
         ExprNode::Literal(_) => "ExprNode::Literal",
+        ExprNode::TypedLiteral { .. } => "ExprNode::TypedLiteral",
         ExprNode::Star(_) => "ExprNode::Star",
         ExprNode::Function(_) => "ExprNode::Function",
         ExprNode::Cast { .. } => "ExprNode::Cast",
