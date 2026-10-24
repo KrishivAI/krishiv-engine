@@ -299,8 +299,8 @@ def test_spark_sql_sort_rows(spark: SparkSession) -> None:
 
 
 def test_empty_dataset(spark: SparkSession) -> None:
-    df1 = spark.createDataFrame(data=[], schema=["id", "amount"])
-    df2 = spark.createDataFrame(data=[], schema=["id", "amount"])
+    df1 = spark.createDataFrame(data=[], schema="id INT, amount DOUBLE")
+    df2 = spark.createDataFrame(data=[], schema="id INT, amount DOUBLE")
     assertDataFrameEqual(df1, df2, checkRowOrder=False)
     assertDataFrameEqual(df1, df2, checkRowOrder=True)
 
@@ -593,11 +593,17 @@ def test_collection_type_simple_strings() -> None:
 
 
 def test_create_dataframe_rejects_bad_shapes(spark: SparkSession) -> None:
-    with pytest.raises(errors.PySparkValueError, match="expected 2"):
-        spark.createDataFrame([(1, 2, 3)], ["a", "b"])
-    with pytest.raises(errors.PySparkValueError, match="expected 2"):
+    # More names than row values fail; fewer keep the inferred `_n` names (Spark 4.2).
+    assert spark.createDataFrame([(1, 2, 3)], ["a", "b"]).columns == ["a", "b", "_3"]
+    with pytest.raises(
+        errors.PySparkValueError, match=r"\[AXIS_LENGTH_MISMATCH\] .* axis has 2 elements, new values have 1"
+    ):
         spark.createDataFrame([(1,)], ["a", "b"])
-    with pytest.raises(errors.PySparkValueError, match="can not infer schema"):
+    with pytest.raises(
+        errors.PySparkValueError, match=r"\[AXIS_LENGTH_MISMATCH\] .* axis has 2 elements, new values have 1"
+    ):
+        spark.createDataFrame([(1, 2), (3,)], ["a", "b"])
+    with pytest.raises(errors.PySparkValueError, match="CANNOT_INFER_EMPTY_SCHEMA"):
         spark.createDataFrame([], None)
     with pytest.raises(errors.PySparkTypeError):
         spark.createDataFrame([(1,)], schema=123)
@@ -605,11 +611,9 @@ def test_create_dataframe_rejects_bad_shapes(spark: SparkSession) -> None:
         spark.createDataFrame([(1,)], schema=[1])
     with pytest.raises(errors.PySparkTypeError):
         spark.createDataFrame([1], schema=["a"])
-    with pytest.raises(errors.PySparkNotImplementedError):
-        spark.createDataFrame([(1,)], schema="a int")
-    with pytest.raises(errors.PySparkNotImplementedError):
+    with pytest.raises(errors.PySparkTypeError, match="NOT_EXPECTED_TYPE"):
         spark.createDataFrame({"a": 1})
-    with pytest.raises(errors.PySparkNotImplementedError):
+    with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
         spark.createDataFrame(
             [(1,)],
             T.StructType([T.StructField("a", T.ArrayType(T.IntegerType()), True)]),

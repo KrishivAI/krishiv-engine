@@ -860,6 +860,9 @@ fn join_type(t: i32) -> Result<JoinType> {
         LeftSemi => JoinType::LeftSemi,
         LeftAnti => JoinType::LeftAnti,
         NullAwareAnti => JoinType::NullAwareAnti,
+        RightSemi => JoinType::RightSemi,
+        RightAnti => JoinType::RightAnti,
+        RightOuter => JoinType::RightOuter,
     })
 }
 
