@@ -4163,11 +4163,11 @@
     },
     {
       "id": "hash#16de041f73d5/ansi_off",
-      "reason": "SELECT hash('Spark', CAST(array() AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT hash('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#16de041f73d5/ansi_on",
-      "reason": "SELECT hash('Spark', CAST(array() AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT hash('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#17ae377c1c3e/ansi_off",
@@ -4288,14 +4288,6 @@
     {
       "id": "hash#51a176d3611e/ansi_on",
       "reason": "SELECT hash('Spark', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
-    },
-    {
-      "id": "hash#52e23c98a0c0/ansi_off",
-      "reason": "SELECT hash('Spark', CAST(NULL AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
-      "id": "hash#52e23c98a0c0/ansi_on",
-      "reason": "SELECT hash('Spark', CAST(NULL AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
     },
     {
       "id": "hash#5556de897838/ansi_off",
@@ -4515,11 +4507,11 @@
     },
     {
       "id": "hash#be26072f51ea/ansi_off",
-      "reason": "SELECT hash('Spark', CAST(array(NULL) AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT hash('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#be26072f51ea/ansi_on",
-      "reason": "SELECT hash('Spark', CAST(array(NULL) AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT hash('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#cca3887f32a9/ansi_off",
@@ -4866,14 +4858,6 @@
       "reason": "SELECT ifnull(true, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "ifnull#225c9e5d747a/ansi_off",
-      "reason": "SELECT ifnull(NULL, CAST(NULL AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
-      "id": "ifnull#225c9e5d747a/ansi_on",
-      "reason": "SELECT ifnull(NULL, CAST(NULL AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
       "id": "ifnull#24f22a74561c/ansi_off",
       "reason": "SELECT ifnull(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -4963,11 +4947,11 @@
     },
     {
       "id": "ifnull#86e8390fb86e/ansi_off",
-      "reason": "SELECT ifnull(NULL, CAST(array() AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT ifnull(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "ifnull#86e8390fb86e/ansi_on",
-      "reason": "SELECT ifnull(NULL, CAST(array() AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT ifnull(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "ifnull#968ad8ccd489/ansi_off",
@@ -5003,11 +4987,11 @@
     },
     {
       "id": "ifnull#b2af6cfe400b/ansi_off",
-      "reason": "SELECT ifnull(NULL, CAST(array(NULL) AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT ifnull(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "ifnull#b2af6cfe400b/ansi_on",
-      "reason": "SELECT ifnull(NULL, CAST(array(NULL) AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT ifnull(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "ifnull#bfe8bb89a454/ansi_off",
@@ -7139,11 +7123,11 @@
     },
     {
       "id": "nvl#0460fbe2242f/ansi_off",
-      "reason": "SELECT nvl(NULL, CAST(array() AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT nvl(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "nvl#0460fbe2242f/ansi_on",
-      "reason": "SELECT nvl(NULL, CAST(array() AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT nvl(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "nvl#07bf6900cb48/ansi_off",
@@ -7210,14 +7194,6 @@
       "reason": "SELECT nvl(CAST(1 AS SMALLINT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "nvl#41a41efe1197/ansi_off",
-      "reason": "SELECT nvl(NULL, CAST(NULL AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
-      "id": "nvl#41a41efe1197/ansi_on",
-      "reason": "SELECT nvl(NULL, CAST(NULL AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
       "id": "nvl#57346bea4d30/ansi_off",
       "reason": "SELECT nvl(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -7251,11 +7227,11 @@
     },
     {
       "id": "nvl#880ab25c6d7a/ansi_off",
-      "reason": "SELECT nvl(NULL, CAST(array(NULL) AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT nvl(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "nvl#880ab25c6d7a/ansi_on",
-      "reason": "SELECT nvl(NULL, CAST(array(NULL) AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT nvl(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "nvl#90bda17a241c/ansi_off",
@@ -12066,14 +12042,6 @@
       "reason": "SELECT xxhash64('Spark', array(123), CAST(2147483647 AS INT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
-      "id": "xxhash64#694a9f8ede1b/ansi_off",
-      "reason": "SELECT xxhash64('Spark', CAST(NULL AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
-      "id": "xxhash64#694a9f8ede1b/ansi_on",
-      "reason": "SELECT xxhash64('Spark', CAST(NULL AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
       "id": "xxhash64#69b363904109/ansi_off",
       "reason": "SELECT xxhash64('1', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
@@ -12147,11 +12115,11 @@
     },
     {
       "id": "xxhash64#88be02abdc0a/ansi_off",
-      "reason": "SELECT xxhash64('Spark', CAST(array() AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT xxhash64('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#88be02abdc0a/ansi_on",
-      "reason": "SELECT xxhash64('Spark', CAST(array() AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT xxhash64('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#89b3d078d407/ansi_off",
@@ -12235,11 +12203,11 @@
     },
     {
       "id": "xxhash64#c9a780cf156a/ansi_off",
-      "reason": "SELECT xxhash64('Spark', CAST(array(NULL) AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT xxhash64('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#c9a780cf156a/ansi_on",
-      "reason": "SELECT xxhash64('Spark', CAST(array(NULL) AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT xxhash64('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#d38029db62a8/ansi_off",
@@ -12880,7 +12848,7 @@
     {
       "cases": 150,
       "function": "hash",
-      "pass": 32
+      "pass": 34
     },
     {
       "cases": 62,
@@ -12900,7 +12868,7 @@
     {
       "cases": 90,
       "function": "ifnull",
-      "pass": 32
+      "pass": 34
     },
     {
       "cases": 54,
@@ -13050,7 +13018,7 @@
     {
       "cases": 90,
       "function": "nvl",
-      "pass": 32
+      "pass": 34
     },
     {
       "cases": 136,
@@ -13335,7 +13303,7 @@
     {
       "cases": 150,
       "function": "xxhash64",
-      "pass": 32
+      "pass": 34
     },
     {
       "cases": 54,
@@ -13358,5 +13326,5 @@
       "pass": 40
     }
   ],
-  "pass": 9370
+  "pass": 9378
 }

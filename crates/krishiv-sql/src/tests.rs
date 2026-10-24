@@ -423,8 +423,15 @@ fn data_types_resolve_through_the_ddl_parser() {
         Err(ErrorClass::DecimalPrecisionExceedsMaxPrecision)
     );
     assert_eq!(
-        class("ARRAY<INT>"),
+        class("ARRAY<CHAR(3)>"),
         Err(ErrorClass::KrishivUnsupportedFeature)
+    );
+    // Nested types resolve with their nullability and comments.
+    let t = r"STRUCT<a: INT NOT NULL COMMENT 'it\'s a\\b', b: ARRAY<MAP<STRING, INT>>>";
+    assert_eq!(cast(t).to_data_type(), krishiv_types::parse_data_type(t));
+    assert_eq!(
+        cast(t).to_data_type().map(|t| t.sql()),
+        Ok(r"STRUCT<a: INT NOT NULL COMMENT 'it\'s a\b', b: ARRAY<MAP<STRING, INT>>>".to_owned())
     );
 }
 

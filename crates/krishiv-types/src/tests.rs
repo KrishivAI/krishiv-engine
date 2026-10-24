@@ -4,8 +4,11 @@ use std::sync::Arc;
 use arrow_schema::{DataType as ArrowType, Field, TimeUnit};
 use krishiv_common::error::ErrorClass;
 
-use crate::arrow::{SPARK_TYPE_METADATA_KEY, normalize_ingest_type};
-use crate::{DataType, DecimalStorage, DecimalType, parse_data_type};
+use crate::arrow::{SPARK_METADATA_KEY, SPARK_TYPE_METADATA_KEY, normalize_ingest_type};
+use crate::{
+    ArrayType, DataType, DecimalStorage, DecimalType, MapType, Metadata, StructField, StructType,
+    parse_data_type,
+};
 
 fn dec(p: u32, s: u32) -> DataType {
     match DecimalType::try_new(p, s) {
@@ -160,7 +163,7 @@ fn arrow_storage_alternatives() {
         ArrowType::Decimal32(5, 2),
         ArrowType::Decimal64(5, 2),
         ArrowType::Decimal256(10, 2),
-        ArrowType::List(Arc::new(Field::new("item", ArrowType::Int32, true))),
+        ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Int32, true)), 2),
     ] {
         let e = DataType::from_arrow(&a).map_err(|e| e.error_class());
         assert_eq!(e, Err(ErrorClass::KrishivUnsupportedFeature), "{a}");
@@ -332,7 +335,7 @@ fn parser_error_classes() {
     );
     assert_eq!(class("decimal(5,6)"), Err(ErrorClass::LegacyErrorTemp1228));
     assert_eq!(
-        class("array<int>"),
+        class("array<char(3)>"),
         Err(ErrorClass::KrishivUnsupportedFeature)
     );
     let e = parse_data_type("timestamp(3)").err();
@@ -366,4 +369,211 @@ fn void_is_spark_null_type() {
     assert_eq!(t.type_name(), "void");
     assert_eq!(crate::parse_data_type("VOID"), Ok(DataType::Null));
     assert_eq!(DataType::from_arrow(&ArrowType::Null), Ok(DataType::Null));
+}
+
+fn ty(s: &str) -> DataType {
+    parse_data_type(s).unwrap_or_else(|e| panic!("{s}: {e}"))
+}
+
+/// Nested types up to depth 4, with every nullability flag, metadata and
+/// children that need an Arrow type tag.
+fn nested_types() -> Vec<DataType> {
+    let mut out: Vec<DataType> = [
+        "array<int>",
+        "array<array<array<array<int>>>>",
+        "map<string,array<double>>",
+        "map<map<int,int>,int>",
+        "struct<>",
+        "struct<a:int not null,b:string comment 'c',`x y`:binary>",
+        "array<struct<a:int,b:map<string,array<decimal(0,0)>>>>",
+        "map<string,struct<a:array<map<int,struct<b:timestamp_ntz not null>>>>>",
+        "struct<a:struct<b:struct<c:struct<d:decimal(38,38)>>>>",
+    ]
+    .into_iter()
+    .map(ty)
+    .collect();
+    out.push(ArrayType::new(DataType::Long, false).into());
+    out.push(MapType::new(DataType::String, DataType::Date, false).into());
+    out
+}
+
+#[test]
+fn nested_types_round_trip_through_arrow_json_and_ddl() {
+    for t in nested_types() {
+        assert_eq!(DataType::from_arrow(&t.to_arrow()).as_ref(), Ok(&t), "{t}");
+        let field = t.to_arrow_field("c", false);
+        assert!(field.metadata().is_empty(), "{t}");
+        assert_eq!(DataType::from_arrow_field(&field).as_ref(), Ok(&t), "{t}");
+        assert_eq!(DataType::from_json(&t.json()).as_ref(), Ok(&t), "{t}");
+        // `sql` keeps nullability, quoting and comments; DDL defaults only
+        // the array and map flags.
+        let defaults = !matches!(&t, DataType::Array(a) if !a.contains_null())
+            && !matches!(&t, DataType::Map(m) if !m.value_contains_null());
+        if defaults {
+            assert_eq!(parse_data_type(&t.sql()).as_ref(), Ok(&t), "{t}");
+        }
+    }
+    assert_eq!(ty("array<array<array<array<int>>>>").nesting_depth(), 4);
+    assert_eq!(DataType::Integer.nesting_depth(), 0);
+}
+
+#[test]
+fn nested_arrow_layout_follows_spark_arrow_utils() {
+    let list = |f: Field| ArrowType::List(Arc::new(f));
+    assert_eq!(
+        ty("array<int>").to_arrow(),
+        list(Field::new("element", ArrowType::Int32, true))
+    );
+    let ArrowType::Map(entries, sorted) = ty("map<string,int>").to_arrow() else {
+        panic!("not a map");
+    };
+    assert!(!sorted && !entries.is_nullable());
+    assert_eq!(entries.name(), "entries");
+    let ArrowType::Struct(kv) = entries.data_type() else {
+        panic!("map entries are not a struct");
+    };
+    assert_eq!((kv[0].name().as_str(), kv[0].is_nullable()), ("key", false));
+    assert_eq!(
+        (kv[1].name().as_str(), kv[1].is_nullable()),
+        ("value", true)
+    );
+    // A child that needs a tag carries it, as a column would.
+    let ArrowType::List(child) = ty("array<decimal(0,0)>").to_arrow() else {
+        panic!("not a list");
+    };
+    assert_eq!(
+        child
+            .metadata()
+            .get(SPARK_TYPE_METADATA_KEY)
+            .map(String::as_str),
+        Some("decimal(0,0)")
+    );
+    // Other layouts read too: `LargeList`, any child names.
+    let large = ArrowType::LargeList(Arc::new(Field::new("item", ArrowType::Utf8, false)));
+    assert_eq!(
+        DataType::from_arrow(&large),
+        Ok(ArrayType::new(DataType::String, false).into())
+    );
+    let commented = ty("struct<a:int comment 'c'>").to_arrow();
+    let ArrowType::Struct(fields) = &commented else {
+        panic!("not a struct");
+    };
+    assert_eq!(
+        fields[0]
+            .metadata()
+            .get(SPARK_METADATA_KEY)
+            .map(String::as_str),
+        Some(r#"{"comment":"c"}"#)
+    );
+}
+
+#[test]
+fn nesting_deeper_than_the_limit_is_refused_everywhere() {
+    let deep = |n: usize| format!("{}int{}", "array<".repeat(n), ">".repeat(n));
+    let max = DataType::MAX_NESTING_DEPTH;
+    let ok = ty(&deep(max));
+    assert_eq!(ok.nesting_depth(), max);
+    let class =
+        |r: Result<DataType, krishiv_common::error::KrishivError>| r.map_err(|e| e.error_class());
+    assert_eq!(
+        class(parse_data_type(&deep(max + 1))),
+        Err(ErrorClass::FailedToParseTooComplex)
+    );
+    assert_eq!(class(DataType::from_arrow(&ok.to_arrow())), Ok(ok.clone()));
+    let too_deep: DataType = ArrayType::new(ok.clone(), true).into();
+    assert_eq!(
+        class(DataType::from_arrow(&too_deep.to_arrow())),
+        Err(ErrorClass::FailedToParseTooComplex)
+    );
+    assert_eq!(class(DataType::from_json(&ok.json())), Ok(ok));
+    assert_eq!(
+        class(DataType::from_json(&too_deep.json())),
+        Err(ErrorClass::FailedToParseTooComplex)
+    );
+    // Far deeper input fails cleanly, without exhausting the stack.
+    assert!(parse_data_type(&deep(100_000)).is_err());
+    assert!(DataType::from_json(&"[".repeat(100_000)).is_err());
+}
+
+#[test]
+fn json_that_is_no_type_is_invalid_json_data_type() {
+    for json in [
+        "",
+        "{}",
+        r#""int""#,
+        r#""bigint""#,
+        r#"{"type":"array","elementType":"integer"}"#,
+        r#"{"type":"array","elementType":"integer","containsNull":true,"x":1}"#,
+        r#"{"type":"map","keyType":"integer","valueType":"integer","valueContainsNull":1}"#,
+        r#"{"type":"struct","fields":[{"name":"a","type":"integer"}]}"#,
+        r#"{"type":"struct","fields":[{"name":"a","type":"integer","nullable":true,"metadata":[]}]}"#,
+        r#""decimal(1.5,0)""#,
+    ] {
+        let class = DataType::from_json(json).map_err(|e| e.error_class());
+        assert_eq!(class, Err(ErrorClass::InvalidJsonDataType), "{json}");
+    }
+    let json = |s: &str| DataType::from_json(s).map_err(|e| e.error_class());
+    assert_eq!(
+        json(r#""decimal""#),
+        Ok(DataType::Decimal(DecimalType::USER_DEFAULT))
+    );
+    assert_eq!(json(r#""decimal( 10 , 2 )""#), Ok(dec(10, 2)));
+    assert_eq!(
+        json(r#""decimal(10,-1)""#),
+        Err(ErrorClass::NegativeScaleDisallowed)
+    );
+    assert_eq!(
+        json(r#""char(3)""#),
+        Err(ErrorClass::KrishivUnsupportedFeature)
+    );
+    // Metadata is optional, as in Spark.
+    assert_eq!(
+        json(r#"{"type":"struct","fields":[{"name":"a","type":"long","nullable":false}]}"#),
+        Ok(StructType::new([StructField::new("a", DataType::Long, false)]).into())
+    );
+}
+
+#[test]
+fn spark_type_equalities() {
+    let a = ty("struct<a:array<int>,b:map<string,int>>");
+    let nullability: DataType = StructType::new([
+        StructField::new("a", ArrayType::new(DataType::Integer, false).into(), false),
+        StructField::new(
+            "b",
+            MapType::new(DataType::String, DataType::Integer, false).into(),
+            true,
+        )
+        .with_metadata(Metadata::with_comment("c")),
+    ])
+    .into();
+    assert_ne!(a, nullability);
+    assert!(a.equals_ignore_nullability(&nullability));
+    let upper = ty("struct<A:array<int>,b:map<string,int>>");
+    assert!(!a.equals_ignore_nullability(&upper));
+    assert!(a.equals_ignore_case_and_nullability(&upper));
+    let renamed = ty("struct<x:array<int>,y:map<string,int>>");
+    assert!(!a.equals_ignore_case_and_nullability(&renamed));
+    assert!(a.equals_structurally(&renamed, false));
+    assert!(!a.equals_structurally(&nullability, false));
+    assert!(a.equals_structurally(&nullability, true));
+    assert!(!a.equals_structurally(&ty("struct<a:array<bigint>,b:map<string,int>>"), true));
+    // Union: the first side's names and metadata, either side's nulls.
+    let merged = nullability.union_like_merge(&renamed);
+    assert_eq!(
+        merged.json(),
+        r#"{"type":"struct","fields":[{"name":"a","type":{"type":"array","elementType":"integer","containsNull":true},"nullable":true,"metadata":{}},{"name":"b","type":{"type":"map","keyType":"string","valueType":"integer","valueContainsNull":true},"nullable":true,"metadata":{"comment":"c"}}]}"#
+    );
+}
+
+#[test]
+fn struct_strings_quote_names_and_escape_comments_as_spark() {
+    let t = ty(r"struct<`a b`:int comment 'it\'s', `select`:string not null, _x1:int>");
+    assert_eq!(t.simple_string(), "struct<a b:int,select:string,_x1:int>");
+    assert_eq!(
+        t.sql(),
+        r"STRUCT<`a b`: INT COMMENT 'it\'s', select: STRING NOT NULL, _x1: INT>"
+    );
+    assert_eq!(parse_data_type(&t.sql()).as_ref(), Ok(&t));
+    // The empty struct parses as `<>` and as `< >`.
+    assert_eq!(ty("struct<>"), ty("struct< >"));
 }

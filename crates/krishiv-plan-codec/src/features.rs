@@ -36,11 +36,14 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::Arc;
 
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::AggregateFunction;
 use krishiv_exec::physical::{Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
 use krishiv_exec::window::WindowFunction;
+use krishiv_plan::{Expr, ExprNode, Literal, ResolvedExpr};
+use krishiv_types::DataType;
 
 /// The `min_reader_version` of a plan that uses no feature (the epoch-1
 /// baseline): the format of version 2.
@@ -117,6 +120,7 @@ registry! {
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
+    (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
 }
@@ -154,6 +158,8 @@ pub enum Construct<'a> {
     Window(&'a WindowFunction),
     /// An aggregate function (of an aggregate or a window).
     Aggregate(AggregateFunction),
+    /// A Spark type in an expression or a column.
+    Type(&'a DataType),
 }
 
 /// The feature `construct` needs, or `None` for the epoch-1 baseline.
@@ -210,6 +216,8 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | WindowFunction::Ntile(_)
             | WindowFunction::Aggregate(_) => Some(Feature::Window),
         },
+        // A type Krishiv does not know cannot be encoded at all.
+        Construct::Type(t) => t.is_nested().then_some(Feature::NestedTypes),
         Construct::Aggregate(a) => match a {
             AggregateFunction::Count
             | AggregateFunction::Sum
@@ -257,6 +265,66 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Union { .. }
         | PhysNode::WriteFiles { .. } => {}
     }
+    for t in types_of(node) {
+        f(Construct::Type(t));
+    }
+}
+
+/// The Spark types `node` holds: those of its scan columns and of every
+/// expression in it (columns, casts, functions, aliases, typed NULLs).
+fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
+    fn items(items: &[ProjectItemPlan]) -> impl Iterator<Item = &Arc<Expr>> {
+        items.iter().filter_map(|i| match i {
+            ProjectItemPlan::Expr { expr, .. } => Some(expr),
+            ProjectItemPlan::Column { .. } | ProjectItemPlan::NullOf { .. } => None,
+        })
+    }
+    let mut roots: Vec<&'a Arc<Expr>> = Vec::new();
+    let mut out: Vec<&'a DataType> = Vec::new();
+    match node {
+        PhysNode::Scan(scan) => {
+            out.extend(scan.scan.output.iter().map(|c| &c.data_type));
+            roots.extend(scan.filter.iter().map(|f| &f.predicate));
+        }
+        PhysNode::Filter { predicate, .. } => roots.push(predicate),
+        PhysNode::Project { items: i, .. } => roots.extend(items(i)),
+        PhysNode::Expand { projections, .. } => {
+            roots.extend(projections.iter().flat_map(|p| items(p)));
+        }
+        PhysNode::ReplicateRows { count, .. } => roots.push(count),
+        PhysNode::HashJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::OneRow
+        | PhysNode::Limit { .. }
+        | PhysNode::Sort { .. }
+        | PhysNode::TopN { .. }
+        | PhysNode::Window { .. }
+        | PhysNode::WindowGroupLimit { .. }
+        | PhysNode::Aggregate { .. }
+        | PhysNode::Union { .. }
+        | PhysNode::WriteFiles { .. }
+        | PhysNode::Exchange(_) => {}
+    }
+    // Expressions share subtrees: each is visited once.
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = roots;
+    while let Some(e) = stack.pop() {
+        if !seen.insert(Arc::as_ptr(e)) {
+            continue;
+        }
+        match &e.node {
+            ExprNode::Cast { to, .. } => out.push(to),
+            ExprNode::Literal(Literal::Null(Some(t))) => out.push(t),
+            ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+                out.push(&c.data_type);
+            }
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => out.push(&f.data_type),
+            ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => out.push(&output.data_type),
+            _ => {}
+        }
+        e.for_each_child(&mut |c| stack.push(c));
+    }
+    out
 }
 
 /// The features `plan` uses: a pure function of its content. Subquery plans

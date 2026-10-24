@@ -586,11 +586,17 @@ message DataType {
     KIND_DATE = 12;
     KIND_TIMESTAMP = 13;
     KIND_TIMESTAMP_NTZ = 14;
+    // feature: nested_types
+    KIND_NESTED = 15;
   }
   Kind kind = 1;
   // `KIND_DECIMAL` only.
   uint32 precision = 2;
   uint32 scale = 3;
+  // feature: nested_types
+  // `KIND_NESTED` only: an array, map or struct type as Spark's JSON form
+  // (`DataType.json`), which keeps nullability and field metadata.
+  string json = 4;
 }
 
 enum YearMonthField {

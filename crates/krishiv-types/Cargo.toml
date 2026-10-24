@@ -16,11 +16,11 @@ arrow-array.workspace = true
 arrow-schema.workspace = true
 arrow-select.workspace = true
 krishiv-common = { path = "../krishiv-common" }
+serde_json = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 criterion.workspace = true
 proptest = { workspace = true, features = ["std"] }
-serde_json = { workspace = true, features = ["std"] }
 
 [[bench]]
 name = "batch_filter"

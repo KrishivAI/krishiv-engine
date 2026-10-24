@@ -121,6 +121,20 @@ impl Resolver<'_> {
         let mut types = Vec::with_capacity(width);
         for c in 0..width {
             let mut acc = first.out[c].col.data_type.clone();
+            // A union whose inputs agree but for field names and nullability
+            // needs no cast: it keeps the first input's names and metadata,
+            // with nulls from any input (`Union.output`, `unionLikeMerge`).
+            if operator == "UNION"
+                && kids
+                    .iter()
+                    .all(|k| k.out[c].col.data_type.equals_structurally(&acc, true))
+            {
+                for k in &kids[1..] {
+                    acc = acc.union_like_merge(&k.out[c].col.data_type);
+                }
+                types.push(acc);
+                continue;
+            }
             for (i, k) in kids.iter().enumerate().skip(1) {
                 let here = &k.out[c].col.data_type;
                 let ansi = self.ctx.conf.ansi;

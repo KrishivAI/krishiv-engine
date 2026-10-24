@@ -723,6 +723,21 @@ fn option(key: &str, value: &OptionValue) -> Result<pb::OptionValue> {
 
 fn spark_type(t: &DataType) -> Result<pb::DataType> {
     use pb::data_type::Kind;
+    if t.is_nested() {
+        // Spark's JSON form keeps nullability and metadata; its depth is
+        // what a reader accepts.
+        if t.nesting_depth() > DataType::MAX_NESTING_DEPTH {
+            return Err(CodecError::Unsupported(format!(
+                "a type nested more than {} levels deep",
+                DataType::MAX_NESTING_DEPTH
+            )));
+        }
+        return Ok(pb::DataType {
+            kind: Kind::Nested as i32,
+            json: t.json(),
+            ..pb::DataType::default()
+        });
+    }
     let (kind, precision, scale) = match t {
         DataType::Null => (Kind::Null, 0, 0),
         DataType::Boolean => (Kind::Boolean, 0, 0),
@@ -752,6 +767,7 @@ fn spark_type(t: &DataType) -> Result<pb::DataType> {
         kind: kind as i32,
         precision,
         scale,
+        json: String::new(),
     })
 }
 

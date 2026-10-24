@@ -257,3 +257,99 @@ fn features_of_refuses_what_it_cannot_interpret() {
         CodecError::Corrupt("feature ids that are not sorted or repeat".to_owned())
     );
 }
+
+#[test]
+fn nested_types_need_their_feature() {
+    let m = message("nested_types");
+    assert_eq!(m.features, ["nested_types"]);
+    let bytes = m.encode_to_vec();
+    // A reader without the feature refuses the plan before reading a node,
+    // naming it; one with it reads the plan back.
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::NestedTypes),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["nested_types".to_owned()]
+        }
+    );
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "nested_types")
+        .unwrap();
+    assert_eq!(decode(&bytes).unwrap(), plan);
+    assert_eq!(Feature::NestedTypes.kind(), FeatureKind::Semantic);
+    // The header cannot hide it.
+    let mut hidden = m;
+    hidden.features.clear();
+    hidden.min_reader_version = 2;
+    corrupt(
+        &hidden,
+        "the feature header does not match the plan's constructs",
+    );
+}
+
+#[test]
+fn a_malformed_nested_type_is_corrupt() {
+    let m = message("nested_types");
+    let nested = pb::data_type::Kind::Nested as i32;
+    let with_type = |edit: &dyn Fn(&mut pb::DataType)| {
+        let mut m = m.clone();
+        let mut done = false;
+        for e in &mut m.exprs {
+            if let Some(pb::expr::Kind::Cast(c)) = &mut e.kind
+                && let Some(t) = c.to.as_mut().filter(|t| t.kind == nested)
+            {
+                edit(t);
+                done = true;
+            }
+        }
+        assert!(done, "no nested cast in the case");
+        m
+    };
+    for json in ["", "not json", r#""integer""#, &"[".repeat(10_000)] {
+        corrupt(
+            &with_type(&|t| t.json = json.to_owned()),
+            "an invalid nested type",
+        );
+    }
+    let deep = format!(
+        "{}\"integer\"{}",
+        r#"{"type":"array","elementType":"#.repeat(40),
+        r#","containsNull":true}"#.repeat(40)
+    );
+    corrupt(
+        &with_type(&|t| t.json = deep.clone()),
+        "an invalid nested type",
+    );
+    corrupt(
+        &with_type(&|t| {
+            t.kind = pb::data_type::Kind::Integer as i32;
+        }),
+        "a JSON form on a type that is not nested",
+    );
+}
+
+#[test]
+fn a_type_too_deep_for_readers_does_not_encode() {
+    use krishiv_types::{ArrayType, DataType};
+    let mut t = DataType::Integer;
+    for _ in 0..=DataType::MAX_NESTING_DEPTH {
+        t = ArrayType::new(t, true).into();
+    }
+    let plan = plan_of(PhysNode::Project {
+        input: Box::new(PhysNode::OneRow),
+        layout: Vec::new(),
+        items: vec![krishiv_exec::physical::ProjectItemPlan::Expr {
+            name: "x".to_owned(),
+            expr: inventory::lit(krishiv_plan::Literal::Null(Some(t))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    });
+    assert!(matches!(encode(&plan), Err(CodecError::Unsupported(_))));
+}

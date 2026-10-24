@@ -967,21 +967,6 @@
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
-      "query": "select cast(a as array<string>) from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
-      "file": "typeCoercion/native/stringCastAndExpressions",
-      "query": "select cast(a as map<string, string>) from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"MAP\")"
-    },
-    {
-      "file": "typeCoercion/native/stringCastAndExpressions",
-      "query": "select cast(a as struct<s:string>) from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"STRUCT\")"
-    },
-    {
-      "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select from_json(a, 'a INT') from t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_json"
     },

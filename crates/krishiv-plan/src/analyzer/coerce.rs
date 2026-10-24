@@ -15,6 +15,16 @@
 //!   `double`, and becomes the boolean, date, timestamp or binary it is
 //!   compared with. A date meets a timestamp as that timestamp.
 //! - An untyped `NULL` takes the type of what it meets.
+//! - Arrays, maps and structs meet element by element
+//!   (`TypeCoercionHelper.findTypeForComplex`): in a conditional or set
+//!   operation by the same rules recursively, in a comparison by the
+//!   tightest common type only (no decimal widening, no string promotion).
+//!   An element, value or field becomes nullable when either side's is or
+//!   when its cast may yield NULL (`Cast.forceNullable`); map keys must not
+//!   need such a cast; struct fields meet by position, with names equal
+//!   ignoring case, keep the first side's name and lose their metadata.
+//!   (Field names are always compared case-insensitively here, as under
+//!   Spark's default `spark.sql.caseSensitive = false`.)
 //!
 //! With `spark.sql.ansi.enabled` off Spark promotes strings differently
 //! (string to `double` in arithmetic, to the other side's type in
@@ -22,7 +32,7 @@
 //! `KRISHIV_UNSUPPORTED_FEATURE`. Arithmetic on dates and timestamps
 //! (`date_add`, intervals) is not implemented either.
 
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{ArrayType, DataType, DecimalType, MapType, StructField, StructType};
 
 use super::catalog::{CallTypes, InputType, Inputs, Operator};
 use crate::{Builtin, CastMode};
@@ -147,12 +157,106 @@ fn wider_decimal(a: DecimalType, b: DecimalType) -> DecimalType {
 /// promotion, as comparisons and `IN` use it); integral literals size as
 /// their digits against a decimal when `literal`.
 fn common(a: &Arg<'_>, b: &Arg<'_>, literal: bool) -> Option<Option<DataType>> {
-    common_in(a, b, literal, true)
+    common_in(a, b, literal, true, Nested::Tightest)
+}
+
+/// How the elements of two nested types meet.
+#[derive(Clone, Copy)]
+enum Nested {
+    /// As the nested types do (`findWiderTypeForTwo`, conditionals and set
+    /// operations).
+    Wider,
+    /// By the tightest common type (`findTightestCommonType`, comparisons).
+    Tightest,
+}
+
+/// The type two arrays, two maps or two structs meet at
+/// (`findTypeForComplex`), if any.
+fn complex(x: &DataType, y: &DataType, ansi: bool, how: Nested) -> Option<DataType> {
+    use DataType as T;
+    let meet = |p: &DataType, q: &DataType| -> Option<DataType> {
+        let met = match how {
+            Nested::Wider => common_all(&[elem(p), elem(q)], ansi)?,
+            Nested::Tightest => tightest(p, q, ansi)?,
+        };
+        Some(met.unwrap_or(T::Null))
+    };
+    // Whether a value of `from` may become NULL when cast to `to`.
+    let forced = |from: &DataType, to: &DataType| *from != T::Null && force_nullable(from, to);
+    match (x, y) {
+        (T::Array(a), T::Array(b)) => {
+            let (ea, eb) = (a.element_type(), b.element_type());
+            let e = meet(ea, eb)?;
+            let contains_null =
+                a.contains_null() || b.contains_null() || forced(ea, &e) || forced(eb, &e);
+            Some(ArrayType::new(e, contains_null).into())
+        }
+        (T::Map(a), T::Map(b)) => {
+            let k = meet(a.key_type(), b.key_type())?;
+            if forced(a.key_type(), &k) || forced(b.key_type(), &k) {
+                return None;
+            }
+            let (va, vb) = (a.value_type(), b.value_type());
+            let v = meet(va, vb)?;
+            let value_null = a.value_contains_null()
+                || b.value_contains_null()
+                || forced(va, &v)
+                || forced(vb, &v);
+            Some(MapType::new(k, v, value_null).into())
+        }
+        (T::Struct(a), T::Struct(b)) if a.fields().len() == b.fields().len() => {
+            let mut fields = Vec::with_capacity(a.fields().len());
+            for (f, g) in a.fields().iter().zip(b.fields()) {
+                if !f.name().eq_ignore_ascii_case(g.name()) {
+                    return None;
+                }
+                let t = meet(f.data_type(), g.data_type())?;
+                let nullable = f.nullable()
+                    || g.nullable()
+                    || forced(f.data_type(), &t)
+                    || forced(g.data_type(), &t);
+                fields.push(StructField::new(f.name(), t, nullable));
+            }
+            Some(StructType::new(fields).into())
+        }
+        _ => None,
+    }
+}
+
+/// An element of a nested type as an argument: `void` is an untyped NULL.
+fn elem(t: &DataType) -> Arg<'_> {
+    Arg {
+        ty: (*t != DataType::Null).then_some(t),
+        nullable: true,
+        literal: None,
+    }
+}
+
+/// `findTightestCommonType` of two element types: equal types, NULL with
+/// anything, numbers without decimals, an integral type with a decimal that
+/// holds it, dates with timestamps, and nested types element by element.
+fn tightest(x: &DataType, y: &DataType, ansi: bool) -> Option<Option<DataType>> {
+    use DataType as T;
+    match (x, y) {
+        _ if x == y => Some(Some(x.clone())),
+        (T::Null, t) | (t, T::Null) => Some(Some(t.clone())),
+        (T::Decimal(d), i) | (i, T::Decimal(d)) => integral_digits(i)
+            .filter(|digits| d.precision() - d.scale() >= *digits)
+            .map(|_| Some(T::Decimal(*d))),
+        (T::String | T::Binary | T::Boolean, _) | (_, T::String | T::Binary | T::Boolean) => None,
+        _ => common_in(&elem(x), &elem(y), false, ansi, Nested::Tightest),
+    }
 }
 
 /// [`common`] under `spark.sql.ansi.enabled = ansi`: without ANSI a `float`
 /// meeting an integral type stays `float`.
-fn common_in(a: &Arg<'_>, b: &Arg<'_>, literal: bool, ansi: bool) -> Option<Option<DataType>> {
+fn common_in(
+    a: &Arg<'_>,
+    b: &Arg<'_>,
+    literal: bool,
+    ansi: bool,
+    nested: Nested,
+) -> Option<Option<DataType>> {
     use DataType as T;
     let (x, y) = match (a.ty, b.ty) {
         (None, None) => return Some(None),
@@ -161,6 +265,9 @@ fn common_in(a: &Arg<'_>, b: &Arg<'_>, literal: bool, ansi: bool) -> Option<Opti
     };
     if x == y {
         return Some(Some(x.clone()));
+    }
+    if x.is_nested() || y.is_nested() {
+        return complex(x, y, ansi, nested).map(Some);
     }
     let t = match (x, y) {
         (T::Decimal(_), _) | (_, T::Decimal(_))
@@ -215,7 +322,7 @@ fn common_all(args: &[Arg<'_>], ansi: bool) -> Option<Option<DataType>> {
             nullable: false,
             literal: None,
         };
-        acc = common_in(&cur, a, false, ansi)?;
+        acc = common_in(&cur, a, false, ansi, Nested::Wider)?;
     }
     Some(acc)
 }
@@ -651,8 +758,12 @@ pub(super) fn inputs(
                         (Some(DataType::Boolean), Some(n)) | (Some(n), Some(DataType::Boolean))
                             if is_numeric(n)
                     );
-                if !legacy_boolean {
-                    common_in(a, b, true, call.ansi())
+                // Nested types that differ only in field names (or
+                // nullability) compare as they are, as in Spark.
+                let structural =
+                    matches!((a.ty, b.ty), (Some(x), Some(y)) if x.equals_structurally(y, true));
+                if !legacy_boolean && !structural {
+                    common_in(a, b, true, call.ansi(), Nested::Tightest)
                         .ok_or_else(|| Mismatch::DiffTypes(a.ty.cloned(), b.ty.cloned()))?;
                 }
             }
@@ -828,6 +939,23 @@ pub(super) fn can_cast(
     if *to == T::Null {
         return Err(BadCast::Without);
     }
+    if from.is_nested() || to.is_nested() {
+        // `TRY_CAST` of a nested type follows the legacy rules (Spark 4.2:
+        // `TRY_CAST(array(true) AS array<timestamp>)` resolves), and Spark
+        // suggests `try_cast` when only ANSI refuses the cast.
+        let mode = if mode == CastMode::Try {
+            CastMode::Legacy
+        } else {
+            mode
+        };
+        return if nested_cast(from, to, mode) {
+            Ok(())
+        } else if mode == CastMode::Ansi && nested_cast(from, to, CastMode::Legacy) {
+            Err(BadCast::Func("`try_cast`"))
+        } else {
+            Err(BadCast::Without)
+        };
+    }
     if *from == T::String || *to == T::String {
         return Ok(());
     }
@@ -852,6 +980,50 @@ pub(super) fn can_cast(
         (T::Date, t) if is_numeric(t) && !legacy => Err(BadCast::Func("`UNIX_DATE`")),
         (T::Date, _) | (T::Boolean, T::Timestamp) | (T::Timestamp, T::Boolean) => conf(),
         _ => Ok(()),
+    }
+}
+
+/// Spark's `Cast.canCast` / `canAnsiCast` for a cast involving a nested
+/// type: to `STRING` always; between arrays, maps or structs (of as many
+/// fields) element by element, where a target that may not hold NULL needs
+/// a source that has none. Without ANSI a cast that may make a NULL counts
+/// as one too, and a map key cast must never make one (checked against
+/// Spark 4.2: `CAST(map('1', 1) AS map<int,int>)` resolves only with ANSI).
+fn nested_cast(from: &DataType, to: &DataType, mode: CastMode) -> bool {
+    use DataType as T;
+    // `resolvableNullability`.
+    let fits = |from_null: bool, to_null: bool| !from_null || to_null;
+    let ok = |f: &DataType, t: &DataType| can_cast(Some(f), t, mode).is_ok();
+    let legacy = mode == CastMode::Legacy;
+    let force_nullable = |f: &DataType, t: &DataType| legacy && force_nullable(f, t);
+    match (from, to) {
+        (_, T::String) => true,
+        (T::Array(a), T::Array(b)) => {
+            let (f, t) = (a.element_type(), b.element_type());
+            ok(f, t) && fits(a.contains_null() || force_nullable(f, t), b.contains_null())
+        }
+        (T::Map(a), T::Map(b)) => {
+            let (fk, tk) = (a.key_type(), b.key_type());
+            let (fv, tv) = (a.value_type(), b.value_type());
+            ok(fk, tk)
+                && !force_nullable(fk, tk)
+                && ok(fv, tv)
+                && fits(
+                    a.value_contains_null() || force_nullable(fv, tv),
+                    b.value_contains_null(),
+                )
+        }
+        (T::Struct(a), T::Struct(b)) => {
+            a.fields().len() == b.fields().len()
+                && a.fields().iter().zip(b.fields()).all(|(f, t)| {
+                    ok(f.data_type(), t.data_type())
+                        && fits(
+                            f.nullable() || force_nullable(f.data_type(), t.data_type()),
+                            t.nullable(),
+                        )
+                })
+        }
+        _ => false,
     }
 }
 
@@ -1159,5 +1331,301 @@ mod tests {
         assert_eq!(implicit(Some(&T::String), &strict), None);
         assert_eq!(implicit(Some(&T::Integer), &strict), None);
         assert_eq!(strict.sql(), r#""BOOLEAN""#);
+    }
+
+    /// Nested types meet as Spark 4.2 typed `coalesce` (and `UNION ALL`) of
+    /// `array(..)`, `map(..)` and `named_struct(..)` values on the oracle,
+    /// with `spark.sql.ansi.enabled` on and off (types as Spark's JSON).
+    #[test]
+    fn nested_types_meet_element_by_element() {
+        let t = |json: &str| T::from_json(json).unwrap_or_else(|e| panic!("{json}: {e}"));
+        let arr = |e: &str, n: bool| {
+            format!(r#"{{"type":"array","elementType":{e},"containsNull":{n}}}"#)
+        };
+        let map = |k: &str, v: &str, n: bool| {
+            format!(r#"{{"type":"map","keyType":{k},"valueType":{v},"valueContainsNull":{n}}}"#)
+        };
+        let st = |fields: &[(&str, &str, bool, &str)]| {
+            let fields: Vec<String> = fields
+                .iter()
+                .map(|(name, ty, n, meta)| {
+                    format!(r#"{{"name":"{name}","type":{ty},"nullable":{n},"metadata":{meta}}}"#)
+                })
+                .collect();
+            format!(r#"{{"type":"struct","fields":[{}]}}"#, fields.join(","))
+        };
+        let wider = |a: &str, b: &str, ansi: bool| {
+            let (a, b) = (t(a), t(b));
+            wider_type(&arg(Some(&a)), &arg(Some(&b)), ansi).map(|r| r.map(|t| t.json()))
+        };
+        let int = r#""integer""#;
+        let long = r#""long""#;
+        let string = r#""string""#;
+        let cases: &[(String, String, bool, Option<String>)] = &[
+            (
+                arr(int, false),
+                arr(long, false),
+                true,
+                Some(arr(long, false)),
+            ),
+            (arr(int, false), arr(int, true), true, Some(arr(int, true))),
+            // A string element cast to bigint may fail, so may be NULL.
+            (
+                arr(int, false),
+                arr(string, false),
+                true,
+                Some(arr(long, true)),
+            ),
+            (
+                arr(int, false),
+                arr(string, false),
+                false,
+                Some(arr(string, false)),
+            ),
+            (
+                arr(int, false),
+                arr(r#""decimal(2,1)""#, false),
+                true,
+                Some(arr(r#""decimal(11,1)""#, false)),
+            ),
+            (
+                arr(int, false),
+                arr(r#""float""#, false),
+                true,
+                Some(arr(r#""double""#, false)),
+            ),
+            (
+                arr(int, false),
+                arr(r#""float""#, false),
+                false,
+                Some(arr(r#""float""#, false)),
+            ),
+            (arr(int, false), arr(r#""date""#, false), true, None),
+            (
+                arr(r#""date""#, false),
+                arr(r#""timestamp""#, false),
+                true,
+                Some(arr(r#""timestamp""#, false)),
+            ),
+            (
+                arr(r#""void""#, true),
+                arr(int, false),
+                true,
+                Some(arr(int, true)),
+            ),
+            (arr(int, false), int.to_owned(), true, None),
+            (
+                arr(&arr(int, false), false),
+                arr(&arr(long, false), false),
+                true,
+                Some(arr(&arr(long, false), false)),
+            ),
+            (
+                map(int, string, false),
+                map(long, string, false),
+                true,
+                Some(map(long, string, false)),
+            ),
+            (
+                map(int, string, false),
+                map(int, int, false),
+                true,
+                Some(map(int, long, true)),
+            ),
+            (
+                map(int, string, false),
+                map(int, int, false),
+                false,
+                Some(map(int, string, false)),
+            ),
+            // A key that may become NULL is no key.
+            (map(string, int, false), map(int, int, false), true, None),
+            (
+                st(&[("a", int, false, "{}")]),
+                st(&[("a", long, false, "{}")]),
+                true,
+                Some(st(&[("a", long, false, "{}")])),
+            ),
+            (
+                st(&[("a", int, false, "{}")]),
+                st(&[("A", long, false, "{}")]),
+                true,
+                Some(st(&[("a", long, false, "{}")])),
+            ),
+            (
+                st(&[("A", int, false, "{}")]),
+                st(&[("a", long, false, "{}")]),
+                true,
+                Some(st(&[("A", long, false, "{}")])),
+            ),
+            (
+                st(&[("a", int, false, "{}")]),
+                st(&[("a", int, true, "{}")]),
+                true,
+                Some(st(&[("a", int, true, "{}")])),
+            ),
+            (
+                st(&[("a", int, false, "{}")]),
+                st(&[("b", long, false, "{}")]),
+                true,
+                None,
+            ),
+            (
+                st(&[("a", int, false, "{}"), ("b", int, false, "{}")]),
+                st(&[("a", int, false, "{}")]),
+                true,
+                None,
+            ),
+            // Metadata survives only when the types are equal.
+            (
+                st(&[("a", int, true, r#"{"comment":"x"}"#)]),
+                st(&[("a", int, true, r#"{"comment":"y"}"#)]),
+                true,
+                Some(st(&[("a", int, true, "{}")])),
+            ),
+            (
+                st(&[("a", int, true, r#"{"comment":"x"}"#)]),
+                st(&[("a", int, true, r#"{"comment":"x"}"#)]),
+                true,
+                Some(st(&[("a", int, true, r#"{"comment":"x"}"#)])),
+            ),
+            (
+                st(&[("a", int, true, r#"{"comment":"x"}"#)]),
+                st(&[("a", long, true, "{}")]),
+                true,
+                Some(st(&[("a", long, true, "{}")])),
+            ),
+        ];
+        for (a, b, ansi, want) in cases {
+            let want = want.as_ref().map(|w| Some(t(w).json()));
+            assert_eq!(wider(a, b, *ansi), want, "{a} | {b} (ansi {ansi})");
+        }
+        // Comparisons meet by the tightest common type only.
+        let compare = |a: &str, b: &str| {
+            let (a, b) = (t(a), t(b));
+            common(&arg(Some(&a)), &arg(Some(&b)), false).map(|r| r.map(|t| t.json()))
+        };
+        assert_eq!(
+            compare(&arr(int, false), &arr(long, false)),
+            Some(Some(arr(long, false)))
+        );
+        assert_eq!(compare(&arr(int, false), &arr(string, false)), None);
+        assert_eq!(
+            compare(&arr(int, false), &arr(r#""decimal(2,1)""#, false)),
+            None
+        );
+        assert_eq!(
+            compare(&arr(int, false), &arr(r#""decimal(20,0)""#, false)),
+            Some(Some(arr(r#""decimal(20,0)""#, false)))
+        );
+    }
+
+    /// Casts with nested types as Spark 4.2 resolves them on the oracle
+    /// (`SELECT CAST(...)`, ANSI on and off).
+    #[test]
+    fn nested_casts_follow_spark() {
+        let t = |s: &str| krishiv_types::parse_data_type(s).unwrap();
+        let not_null_a =
+            |ty: T| -> T { StructType::new([StructField::new("a", ty, false)]).into() };
+        type Outcome = Result<(), BadCast>;
+        let cases: Vec<(T, T, Outcome, Outcome)> = vec![
+            // (from, to, ANSI, legacy)
+            (t("array<string>"), t("array<int>"), Ok(()), Ok(())),
+            (
+                T::String,
+                t("array<int>"),
+                Err(BadCast::Without),
+                Err(BadCast::Without),
+            ),
+            (t("array<int>"), T::String, Ok(()), Ok(())),
+            (
+                t("map<string,int>"),
+                t("map<int,int>"),
+                Ok(()),
+                Err(BadCast::Without),
+            ),
+            (t("map<int,string>"), t("map<bigint,int>"), Ok(()), Ok(())),
+            (t("struct<a:int>"), t("struct<b:bigint>"), Ok(()), Ok(())),
+            (
+                t("struct<a:int>"),
+                t("struct<a:int,b:int>"),
+                Err(BadCast::Without),
+                Err(BadCast::Without),
+            ),
+            (
+                t("struct<a:int>"),
+                not_null_a(T::Integer),
+                Err(BadCast::Without),
+                Err(BadCast::Without),
+            ),
+            (
+                not_null_a(T::Integer),
+                not_null_a(T::Integer),
+                Ok(()),
+                Ok(()),
+            ),
+            (
+                not_null_a(T::String),
+                not_null_a(T::Integer),
+                Ok(()),
+                Err(BadCast::Without),
+            ),
+            (
+                t("array<int>"),
+                t("array<date>"),
+                Err(BadCast::Without),
+                Err(BadCast::Without),
+            ),
+            (
+                t("array<boolean>"),
+                t("array<timestamp>"),
+                Err(BadCast::Func("`try_cast`")),
+                Ok(()),
+            ),
+            (
+                t("array<int>"),
+                t("array<binary>"),
+                Err(BadCast::Func("`try_cast`")),
+                Ok(()),
+            ),
+            (
+                t("array<date>"),
+                t("array<int>"),
+                Err(BadCast::Func("`try_cast`")),
+                Ok(()),
+            ),
+            (
+                t("array<int>"),
+                T::Integer,
+                Err(BadCast::Without),
+                Err(BadCast::Without),
+            ),
+            (
+                t("array<int>"),
+                t("map<int,int>"),
+                Err(BadCast::Without),
+                Err(BadCast::Without),
+            ),
+        ];
+        for (from, to, ansi, legacy) in cases {
+            assert_eq!(
+                can_cast(Some(&from), &to, CastMode::Ansi),
+                ansi,
+                "{from} -> {to} (ANSI)"
+            );
+            assert_eq!(
+                can_cast(Some(&from), &to, CastMode::Legacy),
+                legacy,
+                "{from} -> {to}"
+            );
+        }
+        assert_eq!(
+            can_cast(
+                Some(&t("array<boolean>")),
+                &t("array<timestamp>"),
+                CastMode::Try
+            ),
+            Ok(())
+        );
     }
 }
