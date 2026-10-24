@@ -1010,14 +1010,22 @@ fn possessive_quantifiers() {
     assert_eq!(try_bool("regexp_like", "aaa", "a*?a"), Ok(Some(true)));
 }
 
-/// POSIX `\p{..}` names, `\Q..\E` quoting and scoped flags with no
-/// translation pin yet. Expected values follow `java.util.regex`
-/// (`\p{Lu}` is Unicode uppercase, `\p{IsAlphabetic}` is the `Alphabetic`
-/// property, an unterminated `\Q` quotes to the end, scoped flags expand
-/// like the global ones); unlike the `oracle_*` tests above these were not
-/// re-run against Spark 4.2.0 in this session.
+/// Provisional pins for Java-only translations with no Spark 4.2.0 ground
+/// truth yet. Expected values follow `java.util.regex` as implemented in
+/// `java.rs` (`\p{Lu}` is Unicode uppercase, `\p{IsAlphabetic}` is the
+/// `Alphabetic` property, an unterminated `\Q` quotes to the end, scoped
+/// flags expand like the global ones); unlike the `oracle_*` tests above
+/// these were not re-run against Spark 4.2.0 in this session, so this is a
+/// regression pin, not a golden oracle. Already covered elsewhere and kept
+/// here only as translation pins: `\p{Alpha}` (`translator_matches_goldens`,
+/// `oracle_pattern_escapes`), `\Q..\E` (`oracle_pattern_escapes`), `(?x: a b)`
+/// (`oracle_comments_flag`), the `(?U)` message shape (`oracle_invalid_patterns`,
+/// `rejected_constructs`). Still without a Spark run: `\p{Lu}`,
+/// `\p{IsAlphabetic}`/`\p{javaUpperCase}`/`\P{..}`, unterminated `\Q`,
+/// `\Q` in a class, `(?s:)`/`(?m:)`/`(?x:)` scoped text, the `(?m)^b`
+/// expansion, unterminated `(?m:` and scoped `(?U:)`.
 #[test]
-fn java_posix_quoting_and_scoped_flags() {
+fn provisional_java_posix_quoting_and_scoped_flags() {
     // `\p{Alpha}` is a POSIX class (ASCII only, as in Java); `\p{Lu}` and
     // `\p{IsAlphabetic}` pass through to the engine's Unicode properties.
     assert_eq!(translate(r"\p{Alpha}", false).unwrap().text, "[a-zA-Z]");
@@ -1029,11 +1037,15 @@ fn java_posix_quoting_and_scoped_flags() {
     assert_eq!(one("aB1", r"\p{Lu}", "X"), some("aX1"));
     assert_eq!(one("aB1", r"\P{Lu}", "X"), some("XBX"));
     assert_eq!(one("a1é", r"\p{IsAlphabetic}+", "X"), some("X1X"));
+    assert_eq!(one("a1é", r"\P{IsAlphabetic}+", "X"), some("aXé"));
     assert_eq!(one("aB", r"\p{javaUpperCase}", "X"), some("aX"));
     // `\Q..\E` quotes; without `\E` it quotes to the end, as in Java.
     assert_eq!(translate(r"\Qa.b", false).unwrap().text, r"a\.b");
     assert_eq!(one("a.b", r"\Qa.b", "X"), some("X"));
     assert_eq!(one("a.b", r"a\Q.\Eb", "X"), some("X"));
+    // `\Q..\E` quotes inside a class too, up to `\E`.
+    assert_eq!(translate(r"[a\Q.\Eb]", false).unwrap().text, r"[a\.b]");
+    assert_eq!(one("a.b", r"[a\Q.\Eb]+", "X"), some("X"));
     // Scoped flags translate like the global ones.
     assert_eq!(translate("(?s:a.b)", false).unwrap().text, r"(?:a[\s\S]b)");
     assert_eq!(one("a\nb", "(?s:a.b)", "X"), some("X"));
@@ -1043,6 +1055,9 @@ fn java_posix_quoting_and_scoped_flags() {
     );
     assert_eq!(one("a\nb", "(?m:^b)", "X"), some("a\nX"));
     assert_eq!(translate("(?x:a b)", false).unwrap().text, "(?:ab)");
+    // A `#` comment inside a scoped `(?x:...)` runs to the line terminator.
+    assert_eq!(translate("(?x:a #c\nb)", false).unwrap().text, "(?:ab)");
+    assert_eq!(one("ab", "(?x:a #c\nb)", "X"), some("X"));
     // An invalid pattern names the function and the parameter, as Spark does.
     let e = try_text("regexp_like", "abc", "(?U)a").unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InvalidParameterValuePattern);
@@ -1050,6 +1065,20 @@ fn java_posix_quoting_and_scoped_flags() {
         e.message(),
         "The value of parameter(s) `regexp` in `regexp_like` is invalid: '(?U)a'."
     );
+    // Unsupported scoped flags and unterminated scoped groups are invalid too.
+    for re in ["(?U:a)", "(?m:a", "(?s:a", "(?x:a"] {
+        let e = try_text("regexp_like", "abc", re).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::InvalidParameterValuePattern,
+            "{re}"
+        );
+        assert_eq!(
+            e.message(),
+            format!("The value of parameter(s) `regexp` in `regexp_like` is invalid: '{re}'."),
+            "{re}"
+        );
+    }
 }
 
 /// Patterns that are too large or repeat too much are invalid.

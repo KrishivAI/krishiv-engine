@@ -456,10 +456,13 @@ fn regexp_functions_in_sql() {
         one("SELECT regexp_substr('1a 2b 14m', '\\\\d+(a|b|m)')").as_deref(),
         Some("1a")
     );
-    // The `RLIKE` operator runs the same Java translation as `regexp_like`:
-    // `\Q..\E` is meaningless to the engine directly, `(?i)` folds ASCII
-    // only (the Kelvin sign is no `k`), and a possessive quantifier never
-    // gives its repetitions back.
+    // The `RLIKE` operator runs the same Java translation as `regexp_like`
+    // (`Builtin::RLike` routes to the `regexp_like` kernel): `\Q..\E` is
+    // meaningless to the engine directly (`oracle_pattern_escapes` pins
+    // `\Qa\E`), `(?i)` folds ASCII only (the Kelvin sign is no `k`,
+    // as `oracle_ascii_case_folding` pins), and a possessive quantifier
+    // never gives its repetitions back (`possessive_quantifiers` pins the
+    // kernel behavior; this only proves the operator routes to it).
     for (input, re, want) in [
         ("a.b", "\\\\Q.\\\\E", "true"),
         ("aaa", "a*+a", "false"),
@@ -473,6 +476,8 @@ fn regexp_functions_in_sql() {
             "{input:?} RLIKE {re:?}"
         );
     }
+    // An invalid `RLIKE` pattern raises the same `PATTERN` error as
+    // `regexp_like` with the `regexp_like` function name in the message.
     for (sql, class) in [
         (
             "SELECT regexp_extract('1a 2b 14m', '\\\\d+')",
@@ -482,7 +487,22 @@ fn regexp_functions_in_sql() {
             "SELECT regexp_instr('abc', ') ?')",
             "INVALID_PARAMETER_VALUE.PATTERN",
         ),
+        (
+            "SELECT CAST('a' RLIKE '(' AS STRING)",
+            "INVALID_PARAMETER_VALUE.PATTERN",
+        ),
     ] {
         assert_eq!(fails(&s, sql).error_class().name(), class, "{sql}");
     }
+    let e = fails(&s, "SELECT CAST('a' RLIKE '(?U)a' AS STRING)");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_PARAMETER_VALUE.PATTERN",
+        "{}",
+        e.message()
+    );
+    assert_eq!(
+        e.message(),
+        "The value of parameter(s) `regexp` in `regexp_like` is invalid: '(?U)a'.",
+    );
 }
