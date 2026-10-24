@@ -659,6 +659,54 @@ fn pivot_counts_star() {
     // `count(*)` references no column, so `earnings` stays a grouping
     // column, as in Spark.
     assert_eq!(names(&r), ["year", "earnings", "dotNET"]);
+    // The rewrite counts matching rows: `count(if(course <=> 'dotNET',
+    // 1, NULL))`, not `count(1)`.
+    let analyzed = r.unwrap();
+    let mut found = false;
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(analyzed.plan.root()), |node| {
+        if let crate::walk::Node::Expr(e) = node
+            && let ExprNode::Resolved(crate::ResolvedExpr::Function(f)) = &e.node
+            && f.id.name().eq_ignore_ascii_case("count")
+            && let [arg] = &f.args[..]
+            // `if` binds to the `when` operator with three arguments.
+            && let ExprNode::Resolved(crate::ResolvedExpr::Function(g)) = &arg.node
+            && g.id.name().eq_ignore_ascii_case("when")
+            && g.args.len() == 3
+            && matches!(&g.args[1].node, ExprNode::Literal(Literal::Integer(1)))
+        {
+            found = true;
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    assert!(found, "count(if(pivot <=> value, 1, NULL))");
+}
+
+#[test]
+fn pivot_on_several_columns_checks_value_types() {
+    use crate::TypedLiteralKind;
+    // A `DATE` value for the `INT` pivot column: Spark's cast check fails,
+    // so this is `PIVOT_VALUE_DATA_TYPE_MISMATCH`, not the unsupported
+    // multi-column path.
+    let date = Expr::new(ExprNode::TypedLiteral {
+        kind: TypedLiteralKind::Date,
+        value: "2012-01-15".to_owned(),
+    });
+    let r = run(pivot(
+        &["course", "year"],
+        vec![(vec![s("dotNET"), date], None)],
+        vec![sum_earnings()],
+    ));
+    let summary = summary(&r);
+    assert_eq!(
+        summary.as_array().map(|a| a[0].clone()),
+        Some(serde_json::json!("PIVOT_VALUE_DATA_TYPE_MISMATCH")),
+    );
+    assert_eq!(
+        summary
+            .as_array()
+            .and_then(|a| a[1].get("pivotType").cloned()),
+        Some(serde_json::json!("struct<course:string,year:int>")),
+    );
 }
 
 #[test]

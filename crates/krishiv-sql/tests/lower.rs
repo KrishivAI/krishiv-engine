@@ -116,7 +116,8 @@ fn constructs_lower_or_are_named_as_unsupported() {
 /// `PIVOT` and `UNPIVOT` lower over the relation they follow (per
 /// relation and at the `FROM`-clause level); the alias becomes a
 /// `SubqueryAlias`. A `FROM` clause with both is rejected, as Spark's
-/// parser rejects it.
+/// parser rejects it, as is one relation carrying both (Spark's
+/// `NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT`).
 #[test]
 fn pivot_and_unpivot_lower_over_the_relation_they_follow() {
     insta::assert_snapshot!(report(&[

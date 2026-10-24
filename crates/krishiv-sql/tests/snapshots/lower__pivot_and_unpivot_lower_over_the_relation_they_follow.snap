@@ -15,6 +15,6 @@ SELECT * FROM t UNPIVOT EXCLUDE NULLS ((v1, v2) FOR n IN ((a, b) AS ab, (c, d)))
 SELECT * FROM t JOIN u ON t.a = u.a PIVOT (count(*) FOR a IN ('x')) p JOIN v ON true
   => Project [*] | +- Join Inner, true |    :- SubqueryAlias p |    :  +- Pivot [a], [['x']], [count(*)] |    :     +- Join Inner, (t.a == u.a) |    :        :- Read t |    :        +- Read u |    +- Read v | 
 SELECT * FROM t PIVOT (sum(a) FOR b IN (1)) UNPIVOT (x FOR y IN (z))
-  => Project [*] | +- Unpivot [x FOR y IN ([z])] |    +- Pivot [b], [[1]], [sum(a)] |       +- Read t | 
+  => [NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT] Not allowed in the FROM clause: UNPIVOT together with PIVOT. SQLSTATE: 42601 @ 14..68
 SELECT * FROM t, u PIVOT (sum(a) FOR b IN (1)) UNPIVOT (x FOR y IN (z))
-  => Project [*] | +- Join Inner |    :- Read t |    +- Unpivot [x FOR y IN ([z])] |       +- Pivot [b], [[1]], [sum(a)] |          +- Read u |
+  => [NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT] Not allowed in the FROM clause: UNPIVOT together with PIVOT. SQLSTATE: 42601 @ 17..71

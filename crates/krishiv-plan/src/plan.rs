@@ -285,8 +285,8 @@ pub enum PlanNode {
     /// grouping every input column the pivot columns and the aggregates do
     /// not reference, with one aggregate per (value, aggregate) pair of the
     /// form `agg(if(pivot_col <=> value, expr, NULL))` (Spark's
-    /// `PivotTransformer`, always its non-`PivotFirst` path, which gives the
-    /// same results).
+    /// `PivotTransformer`, always its non-`PivotFirst` path, chosen to match
+    /// its results).
     Pivot {
         /// Input.
         input: Arc<LogicalPlan>,

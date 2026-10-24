@@ -403,6 +403,56 @@ fn pivot_matches_spark() {
 }
 
 #[test]
+fn pivot_count_star_counts_matching_rows() {
+    // `count(*)` becomes `count(if(...))`: for 2012, dotNET matches two of
+    // three rows and Java one; for 2013, one each. An incorrect rewrite to
+    // `count(1)` would count every row in the group instead.
+    let s = session().unwrap();
+    let (schema, batches) = block_on(async {
+        let df = s
+            .sql(
+                "SELECT * FROM (SELECT year, course FROM courseSales) \
+                 PIVOT (count(*) FOR course IN ('dotNET', 'Java')) ORDER BY year",
+            )
+            .await
+            .unwrap();
+        let schema = df.schema().await.unwrap();
+        let batches = df.collect().await.unwrap();
+        Ok::<_, Box<dyn std::error::Error>>((schema, batches))
+    })
+    .unwrap();
+    let (schema, mut rows) = render(&schema, &batches);
+    rows.sort();
+    assert_eq!(schema, "struct<year:int,dotNET:bigint,Java:bigint>");
+    assert_eq!(rows, vec!["2012\t2\t1", "2013\t1\t1"]);
+}
+
+#[test]
+fn pivot_first_returns_the_first_matching_row() {
+    // `first` flips to ignoring nulls for the nulls the `if` introduces:
+    // for 2012 the Java row follows a dotNET row, so without the flip the
+    // Java column would be NULL.
+    let s = session().unwrap();
+    let (schema, batches) = block_on(async {
+        let df = s
+            .sql(
+                "SELECT * FROM (SELECT year, course, earnings FROM courseSales) \
+                 PIVOT (first(earnings) FOR course IN ('dotNET', 'Java')) ORDER BY year",
+            )
+            .await
+            .unwrap();
+        let schema = df.schema().await.unwrap();
+        let batches = df.collect().await.unwrap();
+        Ok::<_, Box<dyn std::error::Error>>((schema, batches))
+    })
+    .unwrap();
+    let (schema, mut rows) = render(&schema, &batches);
+    rows.sort();
+    assert_eq!(schema, "struct<year:int,dotNET:int,Java:int>");
+    assert_eq!(rows, vec!["2012\t10000\t20000", "2013\t48000\t30000"]);
+}
+
+#[test]
 fn unpivot_matches_spark() {
     let (bad, skipped) = run("unpivot.sql.out").unwrap();
     assert!(

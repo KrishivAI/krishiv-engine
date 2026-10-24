@@ -802,6 +802,22 @@ impl Lowerer {
         if r.lateral {
             return Err(unsupported("LATERAL subqueries", r.span));
         }
+        // Spark rejects a relation carrying both clauses
+        // (`NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT`, also raised for the
+        // pipe-operator chain in the goldens): a `PIVOT ... UNPIVOT ...`
+        // chain on one relation lowers to no plan.
+        if r.extensions
+            .iter()
+            .any(|e| matches!(e, RelationExt::Pivot(_)))
+            && r.extensions
+                .iter()
+                .any(|e| matches!(e, RelationExt::Unpivot(_)))
+        {
+            return Err(err(
+                krishiv_common::error::NotAllowedInFromUnpivotWithPivot {},
+                r.span,
+            ));
+        }
         let mut plan = self.factor(&r.primary)?;
         for ext in &r.extensions {
             match ext {

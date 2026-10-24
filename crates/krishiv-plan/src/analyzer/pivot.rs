@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `ResolvePivot`: an unresolved PIVOT node becomes an aggregate
 //! of filtered aggregates, as Spark's `PivotTransformer` does (always its
-//! non-`PivotFirst` path, which gives the same results).
+//! non-`PivotFirst` path, chosen to match its results).
 //!
 //! For every pivot value and every aggregate the rule builds
 //! `agg(if(pivot_col <=> value, expr, NULL))` over the unresolved aggregate
@@ -204,7 +204,11 @@ impl Resolver<'_> {
 
     /// Several pivot columns: Spark validates the values against the struct
     /// pivot type, which the engine cannot value; well-typed struct values
-    /// fail as unsupported, never wrong.
+    /// fail as unsupported, never wrong. Values whose arity or per-part
+    /// type fails Spark's check fail with `PIVOT_VALUE_DATA_TYPE_MISMATCH`
+    /// first, as Spark does (a `STRING` part casts to anything, so a
+    /// well-typed string-only mismatch still reaches the unsupported path;
+    /// both are errors, never a wrong result).
     fn multi_pivot(
         &self,
         p: &LogicalPlan,
@@ -231,10 +235,22 @@ impl Resolver<'_> {
                 .collect::<Vec<_>>()
                 .join(",")
         );
+        let mode = if self.ctx.conf.ansi {
+            CastMode::Ansi
+        } else {
+            CastMode::Legacy
+        };
         for ((v, parts), trimmed) in values.iter().zip(bound).zip(trimmed) {
             if parts.len() != pivots.len() {
                 let (value, value_type) = value_render(v, parts, trimmed, self);
                 return Err(pivot_type_mismatch(value, value_type, pivot_type, p.origin));
+            }
+            for (pivot, t) in pivots.iter().zip(trimmed.iter()) {
+                let to = pivot.ty.data_type.clone().unwrap_or(DataType::Null);
+                if can_cast(t.ty.data_type.as_ref(), &to, mode).is_err() {
+                    let (value, value_type) = value_render(v, parts, trimmed, self);
+                    return Err(pivot_type_mismatch(value, value_type, pivot_type, p.origin));
+                }
             }
         }
         Err(unsupported("multi-column PIVOT", p.origin))
@@ -243,9 +259,10 @@ impl Resolver<'_> {
     /// Filters one unresolved aggregate: every aggregate call's children
     /// wrapped in `if(pivot_col <=> value, child, NULL)`, as Spark's
     /// `transformDown` wraps them. `first` / `last` (and their `_value`
-    /// forms) also flip to ignoring nulls, for the nulls the `if`
-    /// introduces; `count(*)` becomes `count(if(pivot_col <=> value, 1,
-    /// NULL))`, counting matching rows. The tree stays fully unresolved so
+    /// aliases, which the registry also declares as aggregates) also flip
+    /// to ignoring nulls, for the nulls the `if` introduces; `count(*)`
+    /// becomes `count(if(pivot_col <=> value, 1, NULL))`, counting matching
+    /// rows. The tree stays fully unresolved so
     /// the re-bind types everything (the binder keeps resolved parents as
     /// they are).
     fn filter_aggregate(&self, e: &Arc<Expr>, cond: &Cond) -> Arc<Expr> {
