@@ -700,6 +700,7 @@ pub(crate) fn scan_filter(
     Ok(PushedFilter {
         predicate: Arc::new(Compiled(compiled)),
         expr: crate::planner::pushdown::translate(predicate, &scan.output),
+        rows: crate::planner::pushdown::row_level(predicate, &scan.output, env.ansi),
     })
 }
 

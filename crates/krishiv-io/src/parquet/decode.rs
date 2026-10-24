@@ -130,6 +130,9 @@ pub(crate) struct ParquetDecoder {
     /// Runtime filters (file level) and the generation each had when the
     /// remaining units were last pruned with it.
     dynamic: Vec<(ScanFilter, u64)>,
+    /// Whether the row filter may evaluate the runtime filters
+    /// ([`crate::RowLevel::runtime_filters`]).
+    dynamic_rows: bool,
     projection: Vec<ColumnPath>,
     output: SchemaRef,
     row_index: bool,
@@ -264,7 +267,10 @@ impl ParquetDecoder {
             (RowFilterPolicy::Auto, Some("off")) => RowFilterPolicy::Off,
             (p, _) => p,
         };
-        let kept = req.predicate.as_ref().and_then(|p| {
+        // Rows are dropped only by what the request allows at row level
+        // (`RowLevel`); pruning below uses the whole predicate.
+        let row_predicate = req.row_level.predicate(req.predicate.as_ref());
+        let kept = row_predicate.and_then(|p| {
             let p = p.to_nnf();
             let (mut rows, mut kept) = (0f64, 0f64);
             for u in &planned {
@@ -278,7 +284,7 @@ impl ParquetDecoder {
         });
         let mut late = LateMaterialization::new(
             policy,
-            req.predicate.as_ref(),
+            row_predicate,
             widen.then_some(widen_column as super::row_filter::Widen),
             !row_index && guard.is_empty(),
             kept,
@@ -286,6 +292,7 @@ impl ParquetDecoder {
         let dynamic: Vec<PushdownExpr> = req
             .dynamic
             .iter()
+            .filter(|_| req.row_level.runtime_filters())
             .filter_map(crate::ScanFilter::predicate)
             .collect();
         let mut late_leaves = Vec::new();
@@ -326,6 +333,7 @@ impl ParquetDecoder {
                 .iter()
                 .map(|d| (d.clone(), d.generation()))
                 .collect(),
+            dynamic_rows: req.row_level.runtime_filters(),
             projection: req.projection.clone(),
             output,
             row_index,
@@ -512,10 +520,12 @@ impl ParquetDecoder {
         Ok(())
     }
 
-    /// The current runtime filters as file-level predicates.
+    /// The current runtime filters as file-level predicates, for the row
+    /// filter (none when the request does not allow them at row level).
     fn dynamic_predicates(&self) -> Vec<PushdownExpr> {
         self.dynamic
             .iter()
+            .filter(|_| self.dynamic_rows)
             .filter_map(|(f, _)| f.predicate())
             .collect()
     }
