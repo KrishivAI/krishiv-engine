@@ -80,6 +80,12 @@ pub(crate) fn decimal(unscaled: i128, scale: u32) -> String {
         if scale == 0 {
             return "0".to_owned();
         }
+        // Java's adjusted exponent for zero is `-scale` (`ulength` is 1),
+        // so scales above six use scientific notation (`0E-7`).
+        let adjusted = -scale_i64;
+        if adjusted < -6 {
+            return format!("0E{adjusted}");
+        }
         let scale_usize = usize::try_from(scale).unwrap_or(0);
         let mut out = String::with_capacity(2 + scale_usize);
         out.push_str("0.");
@@ -113,8 +119,10 @@ pub(crate) fn decimal(unscaled: i128, scale: u32) -> String {
         }
     } else {
         let (first, rest) = digits.split_at(1);
+        // Java inserts a point only when more than one digit remains
+        // (`1E-7`, not `1.0E-7`; `1.230E-26` keeps its trailing zero).
         let mant = if rest.is_empty() {
-            format!("{first}.0")
+            first.to_owned()
         } else {
             format!("{first}.{rest}")
         };
@@ -392,6 +400,11 @@ mod tests {
             (535, 2, "5.35"),
             (0, 0, "0"),
             (0, 3, "0.000"),
+            (0, 6, "0.000000"),
+            (0, 7, "0E-7"),
+            (0, 8, "0E-8"),
+            (1, 7, "1E-7"),
+            (-1, 7, "-1E-7"),
             (5, 0, "5"),
         ];
         for (unscaled, scale, want) in cases {
