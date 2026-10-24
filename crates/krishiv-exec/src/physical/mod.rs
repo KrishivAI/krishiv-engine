@@ -46,8 +46,10 @@ mod instantiate;
 use std::fmt;
 use std::sync::Arc;
 
+use arrow_array::Array;
 use arrow_schema::{DataType, SchemaRef};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
+use krishiv_kernels::hash::routing;
 use krishiv_plan::{AttrId, Expr, Scan};
 
 use data::plan_data;
@@ -96,14 +98,16 @@ pub struct ExchangeId(pub u64);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Partitioning {
     /// By the routing hash `h` of the key columns: a row goes to the
-    /// partition its top bits name (design P2-T171 §5.1, T157 Appendix
-    /// C). `h` is seedless, so equal keys meet in one partition in every
-    /// process; partition counts are powers of two, so a partition nests
-    /// in a key group and a radix partition of a breaker is a union of
-    /// partitions.
+    /// partition that owns its key group (design P2-T171 §5.1 and §7.2,
+    /// T157 Appendix C). `h` is seedless, so equal keys meet in one
+    /// partition in every process; a partition owns a contiguous range of
+    /// key groups, so for `2^k` partitions it is the top `k` bits of `h`,
+    /// and a radix partition of a breaker is a union of partitions.
     Hash {
         /// The key columns, in hash order.
         keys: Vec<usize>,
+        /// The routing function.
+        scheme: HashScheme,
     },
     /// Every row in one partition (a gather). Partitions are read in
     /// partition order, so a range-partitioned sorted input stays sorted.
@@ -121,6 +125,46 @@ pub enum Partitioning {
         /// The sort keys.
         keys: Vec<SortKey>,
     },
+}
+
+/// The function a [`Partitioning::Hash`] exchange routes rows by. It is
+/// part of the plan, so every worker that runs a fragment of a query routes
+/// a key to the same partition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HashScheme {
+    /// No function named: a plan written before the routing hash was
+    /// fixed. Its exchanges are only ever lowered on one worker, where no
+    /// row is routed; such a plan cannot be split across workers.
+    Unpinned,
+    /// Key-group ranges of the routing hash `H_kg` version 1
+    /// (`krishiv_kernels::hash::routing`): XXH64, seed 0, of the normalized
+    /// key bytes, folded over several key columns. Every exchange the
+    /// planner places uses it.
+    KeyGroupV1,
+}
+
+impl HashScheme {
+    /// The partition of `n` that each row of `keys` (the key columns, in
+    /// hash order) goes to, written to `out` (cleared first).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for [`Unpinned`](Self::Unpinned), which names no
+    /// function to route by; `KRISHIV_UNSUPPORTED_FEATURE` for a key type
+    /// the routing hash does not cover.
+    pub fn partitions(self, keys: &[&dyn Array], n: u32, out: &mut Vec<u32>) -> Result<()> {
+        match self {
+            Self::Unpinned => Err(crate::error::internal(
+                "an exchange without a routing function cannot route rows".to_owned(),
+            )),
+            Self::KeyGroupV1 => {
+                let mut h = Vec::new();
+                routing::hash_columns(keys, &mut h)?;
+                out.clear();
+                out.extend(h.iter().map(|&h| routing::partition_of(h, n)));
+                Ok(())
+            }
+        }
+    }
 }
 
 /// An exchange: `input`'s rows placed into partitions by `partitioning`.
@@ -455,8 +499,14 @@ pub struct NestedLoopPlan {
 plan_data!(tuple ScanId(id));
 plan_data!(tuple SubqueryId(id));
 plan_data!(tuple ExchangeId(id));
+plan_data!(
+    enum HashScheme {
+        Unpinned,
+        KeyGroupV1,
+    }
+);
 plan_data!(enum Partitioning {
-    Hash { keys },
+    Hash { keys, scheme },
     Single,
     Broadcast,
     RoundRobin,

@@ -39,7 +39,7 @@ use std::fmt;
 
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::AggregateFunction;
-use krishiv_exec::physical::{Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
+use krishiv_exec::physical::{HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
 use krishiv_exec::window::WindowFunction;
 
 /// The `min_reader_version` of a plan that uses no feature (the epoch-1
@@ -116,6 +116,7 @@ macro_rules! registry {
 registry! {
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
+    (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -194,8 +195,11 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             }
         },
         Construct::Partitioning(p) => match p {
-            Partitioning::Hash { .. }
-            | Partitioning::Single
+            Partitioning::Hash { scheme, .. } => match scheme {
+                HashScheme::Unpinned => None,
+                HashScheme::KeyGroupV1 => Some(Feature::KeyGroupHash),
+            },
+            Partitioning::Single
             | Partitioning::Broadcast
             | Partitioning::RoundRobin
             | Partitioning::Range { .. } => None,

@@ -12,10 +12,13 @@
 //!
 //! The function is named and versioned ([`RowHash`]); a serialized filter
 //! carries the version, and a filter built under another version is never
-//! applied. When the join stores the same `h` for its own table (P2-T175),
-//! its build passes those hashes to
-//! [`KeyFilterBuilder::add_hashed`](super::KeyFilterBuilder::add_hashed)
+//! applied. It is the one-column case of the routing hash `H_kg`
+//! (`krishiv_kernels::hash::routing`, P2-T175), whose XXH64 this module
+//! uses, so a join that stores `h` for its own table can pass those hashes
+//! to [`KeyFilterBuilder::add_hashed`](super::KeyFilterBuilder::add_hashed)
 //! instead of the builder hashing again.
+
+pub use krishiv_kernels::hash::routing::xxh64_fixed;
 
 use super::key::{Norm, NormalizedKeys, for_each_bytes};
 
@@ -44,64 +47,6 @@ impl RowHash {
     pub fn from_id(id: u8) -> Option<Self> {
         (id == 1).then_some(Self::Xxh64Seed0)
     }
-}
-
-const P1: u64 = 0x9E37_79B1_85EB_CA87;
-const P2: u64 = 0xC2B2_AE3D_27D4_EB4F;
-const P3: u64 = 0x1656_67B1_9E37_79F9;
-const P4: u64 = 0x85EB_CA77_C2B2_AE63;
-const P5: u64 = 0x27D4_EB2F_1656_67C5;
-
-#[inline]
-fn avalanche(mut h: u64) -> u64 {
-    h ^= h >> 33;
-    h = h.wrapping_mul(P2);
-    h ^= h >> 29;
-    h = h.wrapping_mul(P3);
-    h ^ (h >> 32)
-}
-
-#[inline]
-fn lane8(h: u64, k: u64) -> u64 {
-    let k1 = k.wrapping_mul(P2).rotate_left(31).wrapping_mul(P1);
-    (h ^ k1).rotate_left(27).wrapping_mul(P1).wrapping_add(P4)
-}
-
-/// XXH64 (seed 0) of the `N` little-endian bytes of `v` (`N` is 1, 2, 4,
-/// 8 or 16): the general algorithm's short-input path, unrolled for one
-/// width.
-#[inline]
-#[must_use]
-pub fn xxh64_fixed<const N: usize>(v: u128) -> u64 {
-    // seed + P5 + len.
-    let mut h = P5.wrapping_add(N as u64);
-    let mut rest = v;
-    let mut left = N;
-    while left >= 8 {
-        #[expect(clippy::cast_possible_truncation, reason = "the low eight bytes")]
-        let k = rest as u64;
-        h = lane8(h, k);
-        rest >>= 64;
-        left -= 8;
-    }
-    if left >= 4 {
-        #[expect(clippy::cast_possible_truncation, reason = "the low four bytes")]
-        let k = u64::from(rest as u32);
-        h = (h ^ k.wrapping_mul(P1))
-            .rotate_left(23)
-            .wrapping_mul(P2)
-            .wrapping_add(P3);
-        rest >>= 32;
-        left -= 4;
-    }
-    while left > 0 {
-        #[expect(clippy::cast_possible_truncation, reason = "one byte")]
-        let b = u64::from(rest as u8);
-        h = (h ^ b.wrapping_mul(P5)).rotate_left(11).wrapping_mul(P1);
-        rest >>= 8;
-        left -= 1;
-    }
-    avalanche(h)
 }
 
 /// The hash of an integer key stored in `width` bytes (the key type's).
@@ -192,7 +137,8 @@ mod tests {
     use crate::runtime_filter::bloom::xxh64;
 
     proptest! {
-        /// The unrolled widths agree with the general XXH64 bit for bit.
+        /// The unrolled widths (the routing hash's) agree with an
+        /// independent XXH64 (`twox-hash`) bit for bit.
         #[test]
         fn fixed_widths_match_xxh64(v in any::<u128>()) {
             let b = v.to_le_bytes();

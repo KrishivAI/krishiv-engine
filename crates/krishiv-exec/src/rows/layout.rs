@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! [`RowLayout`]: where each key column lives in a row, how a batch of key
 //! columns becomes rows ([`EncodedKeys`]), and how two rows compare.
+//!
+//! A key row starts with its stored hash `h`, the routing hash `H_kg`
+//! (`krishiv_kernels::hash::routing`, P2-T175), computed column by column
+//! while the values are written: XXH64 of each value's normalized
+//! little-endian bytes, folded over several columns. It is seedless, so
+//! every operator instance and worker computes the same `h` for a key, and
+//! it equals what an exchange routes by
+//! ([`hash_columns`](krishiv_kernels::hash::routing::hash_columns)).
 
-use std::hash::BuildHasher;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
@@ -12,6 +19,7 @@ use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 use krishiv_common::error::KrishivUnsupportedFeature;
+use krishiv_kernels::hash::routing as kg;
 
 use crate::error::{Result, internal};
 
@@ -22,11 +30,6 @@ pub(super) const INLINE_MAX: usize = 12;
 /// Where the key region starts (after the hash).
 const KEYS_START: usize = 8;
 
-/// The value written for, and hashed as, a NULL.
-const NULL_HASH: u64 = 0xA5A5_5A5A_C3C3_3C3C;
-/// Odd constants for the hash mix (from the fractional digits of pi and e).
-const MIX: u64 = 0x243F_6A88_85A3_08D3;
-const FINISH: u64 = 0xB7E1_5162_8AED_2A6B;
 /// Odd constant of [`finalize`] (the fractional digits of sqrt(2)).
 const FIN: u64 = 0x6A09_E667_F3BC_C909;
 
@@ -380,13 +383,14 @@ impl RowLayout {
         Ok(make_array(data))
     }
 
-    /// Encodes and hashes the key `columns` of one batch (one per key type,
-    /// in order) with `seed`.
+    /// Encodes the key `columns` of one batch (one per key type, in order)
+    /// and, for a key layout, computes their routing hash `h` (see the
+    /// module docs).
     ///
     /// # Errors
     /// `INTERNAL_ERROR` if a column does not have its key type, or a value
     /// is longer than 4 GiB.
-    pub fn encode(&self, columns: &[ArrayRef], seed: u64) -> Result<EncodedKeys> {
+    pub fn encode(&self, columns: &[ArrayRef]) -> Result<EncodedKeys> {
         if columns.len() != self.columns.len() {
             return Err(internal(format!(
                 "{} key columns for a {}-key layout",
@@ -395,6 +399,8 @@ impl RowLayout {
             )));
         }
         let n = columns.first().map_or(0, Array::len);
+        // One column: `h` is its hash; several: folded from `FOLD_INIT`.
+        let several = self.columns.len() > 1;
         let mut keys = EncodedKeys {
             stride: self.stride,
             len: n,
@@ -402,13 +408,13 @@ impl RowLayout {
             heap: Vec::new(),
             // A payload layout's rows are never hashed.
             hashes: if self.hashed {
-                vec![fold(seed, MIX); n]
+                vec![if several { kg::FOLD_INIT } else { 0 }; n]
             } else {
                 Vec::new()
             },
             hashed: self.hashed,
+            several,
         };
-        let strings = foldhash::fast::FixedState::with_seed(seed);
         for (column, array) in self.columns.iter().zip(columns) {
             if array.len() != n {
                 return Err(internal("key columns of different lengths".to_owned()));
@@ -420,7 +426,7 @@ impl RowLayout {
                 return Err(internal("NULL in a key declared non-nullable".to_owned()));
             }
             match column.kind {
-                Kind::View => keys.write_views(column.offset, array, nulls.as_ref(), &strings)?,
+                Kind::View => keys.write_views(column.offset, array, nulls.as_ref())?,
                 kind => {
                     // Raw buffer bytes are copied for fixed widths, so the
                     // exact type matters: an `Int64` buffer under an `f64`
@@ -437,10 +443,9 @@ impl RowLayout {
                 }
             }
         }
-        for (i, h) in keys.hashes.iter_mut().enumerate() {
-            *h = fold(*h, FINISH);
-            if self.hashed {
-                keys.rows[i * self.stride..i * self.stride + 8].copy_from_slice(&h.to_le_bytes());
+        for (row, h) in keys.rows.chunks_exact_mut(self.stride).zip(&keys.hashes) {
+            if let Some(dst) = row.get_mut(..KEYS_START) {
+                dst.copy_from_slice(&h.to_le_bytes());
             }
         }
         Ok(keys)
@@ -550,6 +555,8 @@ pub struct EncodedKeys {
     /// Empty when the layout is not hashed.
     hashes: Vec<u64>,
     hashed: bool,
+    /// Several key columns: column hashes are folded into `h`.
+    several: bool,
 }
 
 impl EncodedKeys {
@@ -566,6 +573,12 @@ impl EncodedKeys {
     /// The hash of each row.
     pub fn hashes(&self) -> &[u64] {
         &self.hashes
+    }
+
+    /// The hash of each row, writable: tests forge `h` collisions.
+    #[cfg(test)]
+    pub(super) fn hashes_mut(&mut self) -> &mut [u64] {
+        &mut self.hashes
     }
 
     /// Row `i`'s bytes (empty if out of range).
@@ -659,13 +672,21 @@ impl EncodedKeys {
         &mut self.rows[i * s..(i + 1) * s]
     }
 
+    /// Adds column hash `hc` to row `i`'s `h`.
+    #[inline]
+    fn add_hash(&mut self, i: usize, hc: u64) {
+        if let Some(h) = self.hashes.get_mut(i) {
+            *h = combine(self.several, *h, hc);
+        }
+    }
+
     /// Sets bit `mask` of byte `at` in each row whose value is NULL.
     fn write_nulls(&mut self, at: usize, mask: u8, nulls: Option<&NullBuffer>) {
         let Some(nulls) = nulls else { return };
         for i in nulls.iter().enumerate().filter(|(_, v)| !v).map(|(i, _)| i) {
             self.row_mut(i)[at] |= mask;
             if self.hashed {
-                self.hashes[i] = mix(self.hashes[i], NULL_HASH);
+                self.add_hash(i, kg::NULL_HASH);
             }
         }
     }
@@ -687,7 +708,7 @@ impl EncodedKeys {
                     let v = u8::from(a.value(i));
                     self.row_mut(i)[offset] = v;
                     if self.hashed {
-                        self.hashes[i] = mix(self.hashes[i], u64::from(v));
+                        self.add_hash(i, kg::xxh64_fixed::<1>(u128::from(v)));
                     }
                 }
             }
@@ -699,7 +720,7 @@ impl EncodedKeys {
                     let bits = normalize32(a.value(i)).to_bits();
                     self.row_mut(i)[offset..offset + 4].copy_from_slice(&bits.to_le_bytes());
                     if self.hashed {
-                        self.hashes[i] = mix(self.hashes[i], u64::from(bits));
+                        self.add_hash(i, kg::xxh64_fixed::<4>(u128::from(bits)));
                     }
                 }
             }
@@ -711,7 +732,7 @@ impl EncodedKeys {
                     let bits = normalize64(a.value(i)).to_bits();
                     self.row_mut(i)[offset..offset + 8].copy_from_slice(&bits.to_le_bytes());
                     if self.hashed {
-                        self.hashes[i] = mix(self.hashes[i], bits);
+                        self.add_hash(i, kg::xxh64_fixed::<8>(u128::from(bits)));
                     }
                 }
             }
@@ -725,12 +746,20 @@ impl EncodedKeys {
                             .get(data.offset() * w..(data.offset() + self.len) * w)
                     })
                     .ok_or_else(|| internal("fixed-width key buffer too short".to_owned()))?;
-                match w {
-                    1 => self.put_fixed::<1>(offset, bytes, nulls),
-                    2 => self.put_fixed::<2>(offset, bytes, nulls),
-                    4 => self.put_fixed::<4>(offset, bytes, nulls),
-                    8 => self.put_fixed::<8>(offset, bytes, nulls),
-                    16 => self.put_fixed::<16>(offset, bytes, nulls),
+                // A narrow decimal carrier hashes as its 16-byte value, as
+                // every other carrier of the type does.
+                let decimal = matches!(
+                    array.data_type(),
+                    DataType::Decimal32(..) | DataType::Decimal64(..)
+                );
+                match (w, decimal) {
+                    (1, _) => self.put_fixed::<1, false>(offset, bytes, nulls),
+                    (2, _) => self.put_fixed::<2, false>(offset, bytes, nulls),
+                    (4, false) => self.put_fixed::<4, false>(offset, bytes, nulls),
+                    (4, true) => self.put_fixed::<4, true>(offset, bytes, nulls),
+                    (8, false) => self.put_fixed::<8, false>(offset, bytes, nulls),
+                    (8, true) => self.put_fixed::<8, true>(offset, bytes, nulls),
+                    (16, _) => self.put_fixed::<16, false>(offset, bytes, nulls),
                     _ => return Err(internal(format!("no {w}-byte key encoding"))),
                 }
             }
@@ -739,9 +768,10 @@ impl EncodedKeys {
         Ok(())
     }
 
-    /// Copies `W`-byte values into the rows and mixes them into the hashes
-    /// (one loop per width, no per-row bounds arithmetic).
-    fn put_fixed<const W: usize>(
+    /// Copies `W`-byte values into the rows and adds their hashes (one loop
+    /// per width, no per-row bounds arithmetic). `DECIMAL`: the values are
+    /// a narrow decimal carrier, hashed sign-extended to 16 bytes.
+    fn put_fixed<const W: usize, const DECIMAL: bool>(
         &mut self,
         offset: usize,
         bytes: &[u8],
@@ -759,6 +789,7 @@ impl EncodedKeys {
             }
             return;
         }
+        let several = self.several;
         for (i, ((row, h), v)) in rows.zip(self.hashes.iter_mut()).zip(values).enumerate() {
             if nulls.is_some_and(|n| n.is_null(i)) {
                 continue;
@@ -766,13 +797,7 @@ impl EncodedKeys {
             if let Some(dst) = row.get_mut(offset..offset + W) {
                 dst.copy_from_slice(v);
             }
-            let mut acc = *h;
-            for chunk in v.chunks(8) {
-                let mut word = [0u8; 8];
-                word[..chunk.len()].copy_from_slice(chunk);
-                acc = mix(acc, u64::from_le_bytes(word));
-            }
-            *h = acc;
+            *h = combine(several, *h, fixed_hash::<W, DECIMAL>(v));
         }
     }
 
@@ -781,32 +806,31 @@ impl EncodedKeys {
         offset: usize,
         array: &ArrayRef,
         nulls: Option<&NullBuffer>,
-        strings: &foldhash::fast::FixedState,
     ) -> Result<()> {
         match array.data_type() {
             DataType::Utf8 => {
                 let a = array.as_string::<i32>();
-                self.put_views(offset, nulls, strings, |i| a.value(i).as_bytes())
+                self.put_views(offset, nulls, |i| a.value(i).as_bytes())
             }
             DataType::LargeUtf8 => {
                 let a = array.as_string::<i64>();
-                self.put_views(offset, nulls, strings, |i| a.value(i).as_bytes())
+                self.put_views(offset, nulls, |i| a.value(i).as_bytes())
             }
             DataType::Utf8View => {
                 let a = array.as_string_view();
-                self.put_arrow_views(offset, nulls, strings, a.views(), |i| a.value(i).as_bytes())
+                self.put_arrow_views(offset, nulls, a.views(), |i| a.value(i).as_bytes())
             }
             DataType::Binary => {
                 let a = array.as_binary::<i32>();
-                self.put_views(offset, nulls, strings, |i| a.value(i))
+                self.put_views(offset, nulls, |i| a.value(i))
             }
             DataType::LargeBinary => {
                 let a = array.as_binary::<i64>();
-                self.put_views(offset, nulls, strings, |i| a.value(i))
+                self.put_views(offset, nulls, |i| a.value(i))
             }
             DataType::BinaryView => {
                 let a = array.as_binary_view();
-                self.put_arrow_views(offset, nulls, strings, a.views(), |i| a.value(i))
+                self.put_arrow_views(offset, nulls, a.views(), |i| a.value(i))
             }
             t => Err(internal(format!("string key expected, got {t}"))),
         }
@@ -822,7 +846,6 @@ impl EncodedKeys {
         &mut self,
         offset: usize,
         nulls: Option<&NullBuffer>,
-        strings: &foldhash::fast::FixedState,
         views: &[u128],
         value: impl Fn(usize) -> &'a [u8],
     ) -> Result<()> {
@@ -835,7 +858,7 @@ impl EncodedKeys {
         {
             let len = usize::try_from(v & u128::from(u32::MAX)).unwrap_or(usize::MAX);
             if len > INLINE_MAX {
-                self.put_view(i, offset, strings, value(i))?;
+                self.put_view(i, offset, value(i))?;
                 continue;
             }
             // Clear the padding with a mask (no per-row `memset`).
@@ -845,11 +868,12 @@ impl EncodedKeys {
             } else {
                 v & ((1u128 << keep) - 1)
             };
+            let bytes = v.to_le_bytes();
             if self.hashed {
-                self.hashes[i] = mix(self.hashes[i], inline_hash(v));
+                self.add_hash(i, kg::xxh64(&bytes[4..4 + len]));
             }
             self.rows[i * stride + offset..i * stride + offset + VIEW_BYTES]
-                .copy_from_slice(&v.to_le_bytes());
+                .copy_from_slice(&bytes);
         }
         Ok(())
     }
@@ -858,25 +882,21 @@ impl EncodedKeys {
         &mut self,
         offset: usize,
         nulls: Option<&NullBuffer>,
-        strings: &foldhash::fast::FixedState,
         value: impl Fn(usize) -> &'a [u8],
     ) -> Result<()> {
         for i in (0..self.len).filter(|&i| nulls.is_none_or(|v| v.is_valid(i))) {
-            self.put_view(i, offset, strings, value(i))?;
+            self.put_view(i, offset, value(i))?;
         }
         Ok(())
     }
 
     /// Writes value `bytes` as row `i`'s view at `offset`, hashing it.
-    fn put_view(
-        &mut self,
-        i: usize,
-        offset: usize,
-        strings: &foldhash::fast::FixedState,
-        bytes: &[u8],
-    ) -> Result<()> {
+    fn put_view(&mut self, i: usize, offset: usize, bytes: &[u8]) -> Result<()> {
         let len = u32::try_from(bytes.len())
             .map_err(|_| internal("a key value longer than 4 GiB".to_owned()))?;
+        if self.hashed {
+            self.add_hash(i, kg::xxh64(bytes));
+        }
         let at = self.heap.len();
         let stride = self.stride;
         let row = &mut self.rows[i * stride..(i + 1) * stride];
@@ -884,21 +904,35 @@ impl EncodedKeys {
         view[..4].copy_from_slice(&len.to_le_bytes());
         if bytes.len() <= INLINE_MAX {
             view[4..4 + bytes.len()].copy_from_slice(bytes);
-            if self.hashed {
-                let mut v = [0; VIEW_BYTES];
-                v.copy_from_slice(view);
-                self.hashes[i] = mix(self.hashes[i], inline_hash(u128::from_le_bytes(v)));
-            }
         } else {
-            if self.hashed {
-                self.hashes[i] = mix(self.hashes[i], strings.hash_one(bytes));
-            }
             view[4..8].copy_from_slice(&bytes[..4]);
             view[8..].copy_from_slice(&(at as u64).to_le_bytes());
             self.heap.extend_from_slice(bytes);
         }
         Ok(())
     }
+}
+
+/// `h` after adding a column's hash `hc`: the column's hash itself for a
+/// one-column key, else the routing hash's fold step.
+#[inline]
+fn combine(several: bool, h: u64, hc: u64) -> u64 {
+    if several { kg::fold_column(h, hc) } else { hc }
+}
+
+/// The column hash of a `W`-byte little-endian value; a narrow decimal
+/// carrier (`DECIMAL`) is sign-extended to 16 bytes first.
+#[inline]
+fn fixed_hash<const W: usize, const DECIMAL: bool>(v: &[u8; W]) -> u64 {
+    let mut b = [0u8; 16];
+    b[..W].copy_from_slice(v);
+    if DECIMAL {
+        if v.last().is_some_and(|&top| top & 0x80 != 0) {
+            b[W..].fill(0xFF);
+        }
+        return kg::xxh64_fixed::<16>(u128::from_le_bytes(b));
+    }
+    kg::xxh64_fixed::<W>(u128::from_le_bytes(b))
 }
 
 /// An array of string or binary `data_type` holding `values`.
@@ -968,26 +1002,6 @@ fn heap_bytes<'a>(row: &[u8], heap: &'a [u8], at: usize, len: usize) -> Option<&
     heap.get(start..start.checked_add(len)?)
 }
 
-/// The hash of an inline view (a value of at most 12 bytes, zero-padded):
-/// its two words folded, so a short key hashes without a byte loop. Every
-/// writer hashes short values this way and long ones with foldhash at the
-/// layout's seed, so equal values hash equally whatever their array type.
-///
-/// The seed is not folded in here: `h` is seedless (P2-T157 Appendix C;
-/// every caller of [`RowLayout::encode`] passes a constant), so a seed would
-/// not change which values collide, and folding it cost 1.5-3.5% on the
-/// short-key encode benchmarks. Collision resistance is the table-local
-/// `g` ([`finalize`]) and the flooding defence's concern, not `h`'s.
-#[inline]
-fn inline_hash(view: u128) -> u64 {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "the view's two words are intended"
-    )]
-    let (lo, hi) = (view as u64, (view >> 64) as u64);
-    fold(fold(lo ^ MIX, FINISH) ^ hi, MIX)
-}
-
 fn round8(n: usize) -> usize {
     n.div_ceil(8) * 8
 }
@@ -1002,11 +1016,6 @@ fn fold(a: u64, b: u64) -> u64 {
     )]
     let low = p as u64;
     low ^ ((p >> 64) as u64)
-}
-
-#[inline]
-fn mix(h: u64, v: u64) -> u64 {
-    fold(h ^ v, MIX)
 }
 
 /// Spark's key normalization: every NaN is one NaN, `-0.0` is `0.0`.
@@ -1049,7 +1058,6 @@ mod tests {
         assert_ne!(dirty, clean);
         let layout = RowLayout::new(&[DataType::BinaryView], &[true]).unwrap();
         let offset = layout.columns[0].offset;
-        let strings = foldhash::fast::FixedState::with_seed(3);
         let put = |views: &[u128]| {
             let n = views.len();
             let mut keys = EncodedKeys {
@@ -1059,11 +1067,17 @@ mod tests {
                 heap: Vec::new(),
                 hashes: vec![0; n],
                 hashed: true,
+                several: false,
             };
-            keys.put_arrow_views(offset, None, &strings, views, |i| values[i])
+            keys.put_arrow_views(offset, None, views, |i| values[i])
                 .unwrap();
             (keys.rows, keys.hashes)
         };
         assert_eq!(put(&dirty), put(&clean));
+        // The hash of an inline view is XXH64 of the value alone.
+        let hashes = put(&clean).1;
+        for (h, v) in hashes.iter().zip(values) {
+            assert_eq!(*h, kg::xxh64(v));
+        }
     }
 }

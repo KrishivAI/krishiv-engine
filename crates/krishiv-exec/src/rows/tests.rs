@@ -41,7 +41,7 @@ fn grouped(columns: &[ArrayRef], index: &mut dyn RowIndex, batch: usize) -> Vec<
     for start in (0..n).step_by(batch.max(1)) {
         let len = batch.min(n - start);
         let slice: Vec<ArrayRef> = columns.iter().map(|c| c.slice(start, len)).collect();
-        let keys = layout.encode(&slice, 11).unwrap_or_else(|e| panic!("{e}"));
+        let keys = layout.encode(&slice).unwrap_or_else(|e| panic!("{e}"));
         index
             .find_or_insert(&layout, &keys, &mut pages, &mut ids)
             .unwrap_or_else(|e| panic!("{e}"));
@@ -118,6 +118,102 @@ fn nulls_nan_and_signed_zero_group_like_spark() {
     check(&[f32s]);
 }
 
+proptest! {
+    /// The stored hash `h` the layout computes while it writes rows is the
+    /// routing hash `H_kg` of the key columns (P2-T175), for every key
+    /// type, NULLs, `-0.0`/NaN, short and long strings, one or several
+    /// columns, nullable or join (`=`) layouts.
+    #[test]
+    fn stored_hash_is_the_routing_hash(
+        rows in prop::collection::vec(
+            (
+                prop::option::of(any::<i64>()),
+                prop::option::of(prop::sample::select(vec![0.0, -0.0, f64::NAN, -f64::NAN, 1.5, -2.0])),
+                prop::option::of("[a-c]{0,20}"),
+                prop::option::of(-1_000_000i64..1_000_000),
+                prop::option::of(any::<bool>()),
+            ),
+            1..40,
+        )
+    ) {
+        let i64s: ArrayRef = Arc::new(Int64Array::from(rows.iter().map(|r| r.0).collect::<Vec<_>>()));
+        let i32s: ArrayRef = Arc::new(Int32Array::from(
+            rows.iter().map(|r| r.0.map(|v| i32::try_from(v >> 32).unwrap_or(0))).collect::<Vec<_>>(),
+        ));
+        let i16s: ArrayRef = Arc::new(Int16Array::from(
+            rows.iter().map(|r| r.0.map(|v| i16::try_from(v >> 48).unwrap_or(0))).collect::<Vec<_>>(),
+        ));
+        let f64s: ArrayRef = Arc::new(Float64Array::from(rows.iter().map(|r| r.1).collect::<Vec<_>>()));
+        #[expect(clippy::cast_possible_truncation, reason = "test values")]
+        let f32s: ArrayRef = Arc::new(Float32Array::from(
+            rows.iter().map(|r| r.1.map(|v| v as f32)).collect::<Vec<_>>(),
+        ));
+        let text: Vec<Option<String>> = rows.iter().map(|r| r.2.clone()).collect();
+        let [view, utf8, large] = strings(&text);
+        let bins: ArrayRef = Arc::new(BinaryArray::from(
+            text.iter().map(|v| v.as_deref().map(str::as_bytes)).collect::<Vec<_>>(),
+        ));
+        let dec128: ArrayRef = Arc::new(
+            Decimal128Array::from(rows.iter().map(|r| r.3.map(i128::from)).collect::<Vec<_>>())
+                .with_precision_and_scale(18, 2)
+                .unwrap_or_else(|e| panic!("{e}")),
+        );
+        let dec64: ArrayRef = Arc::new(
+            arrow_array::Decimal64Array::from(rows.iter().map(|r| r.3).collect::<Vec<_>>())
+                .with_precision_and_scale(18, 2)
+                .unwrap_or_else(|e| panic!("{e}")),
+        );
+        let dec32: ArrayRef = Arc::new(
+            arrow_array::Decimal32Array::from(
+                rows.iter().map(|r| r.3.map(|v| i32::try_from(v).unwrap_or(0))).collect::<Vec<_>>(),
+            )
+            .with_precision_and_scale(9, 2)
+            .unwrap_or_else(|e| panic!("{e}")),
+        );
+        let bools: ArrayRef = Arc::new(BooleanArray::from(rows.iter().map(|r| r.4).collect::<Vec<_>>()));
+        let all = [
+            i64s, i32s, i16s, f64s, f32s, view, utf8, large, bins, dec128, dec64, dec32, bools,
+        ];
+        let routed = |cols: &[ArrayRef]| {
+            let refs: Vec<&dyn Array> = cols.iter().map(AsRef::as_ref).collect();
+            let mut h = Vec::new();
+            krishiv_kernels::hash::routing::hash_columns(&refs, &mut h)
+                .unwrap_or_else(|e| panic!("{e}"));
+            h
+        };
+        let stored = |cols: &[ArrayRef]| {
+            let types: Vec<DataType> = cols.iter().map(|c| c.data_type().clone()).collect();
+            let layout = RowLayout::new(&types, &vec![true; cols.len()])
+                .unwrap_or_else(|e| panic!("{e}"));
+            layout.encode(cols).unwrap_or_else(|e| panic!("{e}")).hashes().to_vec()
+        };
+        for (i, a) in all.iter().enumerate() {
+            let one = [Arc::clone(a)];
+            prop_assert_eq!(stored(&one), routed(&one), "column {}", i);
+            let next = Arc::clone(&all[(i + 5) % all.len()]);
+            let two = [Arc::clone(a), next];
+            prop_assert_eq!(stored(&two), routed(&two), "columns {} and next", i);
+        }
+        prop_assert_eq!(stored(&all), routed(&all));
+        // A join layout over NULL-free rows stores the same `h`.
+        let valid: Vec<usize> = (0..rows.len())
+            .filter(|&r| all.iter().all(|c| c.is_valid(r)))
+            .collect();
+        let idx = arrow_array::UInt32Array::from(
+            valid.iter().map(|&r| u32::try_from(r).unwrap_or(0)).collect::<Vec<_>>(),
+        );
+        let dense: Vec<ArrayRef> = all
+            .iter()
+            .map(|c| arrow_select::take::take(c.as_ref(), &idx, None).unwrap_or_else(|e| panic!("{e}")))
+            .collect();
+        let types: Vec<DataType> = dense.iter().map(|c| c.data_type().clone()).collect();
+        let join = RowLayout::for_join(&types, &vec![false; types.len()])
+            .unwrap_or_else(|e| panic!("{e}"));
+        let h = join.encode(&dense).unwrap_or_else(|e| panic!("{e}")).hashes().to_vec();
+        prop_assert_eq!(h, routed(&dense));
+    }
+}
+
 #[test]
 fn string_carriers_hash_alike() {
     let v = vec![
@@ -130,7 +226,7 @@ fn string_carriers_hash_alike() {
         let layout =
             RowLayout::new(&[a.data_type().clone()], &[true]).unwrap_or_else(|e| panic!("{e}"));
         layout
-            .encode(&[a], 3)
+            .encode(&[a])
             .unwrap_or_else(|e| panic!("{e}"))
             .hashes()
             .to_vec()
@@ -159,7 +255,7 @@ fn arrow_views_encode_like_plain_strings() {
     let [view, utf8, _] = strings(&v);
     let layout = RowLayout::new(&[DataType::Utf8View], &[true]).unwrap_or_else(|e| panic!("{e}"));
     let plain = RowLayout::new(&[DataType::Utf8], &[true]).unwrap_or_else(|e| panic!("{e}"));
-    let enc = |l: &RowLayout, a: ArrayRef| l.encode(&[a], 3).unwrap_or_else(|e| panic!("{e}"));
+    let enc = |l: &RowLayout, a: ArrayRef| l.encode(&[a]).unwrap_or_else(|e| panic!("{e}"));
     let (a, b) = (
         enc(&layout, Arc::clone(&view)),
         enc(&plain, utf8.slice(0, v.len())),
@@ -218,7 +314,7 @@ fn rows_move_with_their_long_values() {
     let types = [DataType::Utf8View, DataType::Int64];
     let layout = RowLayout::new(&types, &[true, true]).unwrap_or_else(|e| panic!("{e}"));
     let keys = layout
-        .encode(&[view, ints], 0)
+        .encode(&[view, ints])
         .unwrap_or_else(|e| panic!("{e}"));
     let want = layout
         .decode_rows(
@@ -293,12 +389,8 @@ fn every_fixed_type_and_misses() {
     let layout = RowLayout::new(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
     let present: ArrayRef = Arc::new(Int64Array::from_iter_values(0..5000));
     let absent: ArrayRef = Arc::new(Int64Array::from_iter_values(10_000..10_100));
-    let keys = layout
-        .encode(&[present], 1)
-        .unwrap_or_else(|e| panic!("{e}"));
-    let probe = layout
-        .encode(&[absent], 1)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let keys = layout.encode(&[present]).unwrap_or_else(|e| panic!("{e}"));
+    let probe = layout.encode(&[absent]).unwrap_or_else(|e| panic!("{e}"));
     let indexes: [Box<dyn RowIndex>; 2] = [
         Box::new(SaltedTable::new(5)),
         Box::new(HashbrownTable::new()),
@@ -332,20 +424,17 @@ fn layout_rejects_what_it_cannot_store() {
     assert!(RowLayout::new(&[DataType::Int32], &[]).is_err());
     let layout = RowLayout::new(&[DataType::Int32], &[false]).unwrap_or_else(|e| panic!("{e}"));
     let with_null: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
-    assert!(layout.encode(&[Arc::clone(&with_null)], 0).is_err());
-    assert!(layout.encode(&[], 0).is_err());
+    assert!(layout.encode(&[Arc::clone(&with_null)]).is_err());
+    assert!(layout.encode(&[]).is_err());
     let wrong: ArrayRef = Arc::new(Float64Array::from(vec![1.0]));
     let layout = RowLayout::new(&[DataType::Int32, DataType::Utf8], &[true, true])
         .unwrap_or_else(|e| panic!("{e}"));
-    assert!(layout.encode(&[Arc::clone(&with_null), wrong], 0).is_err());
+    assert!(layout.encode(&[Arc::clone(&with_null), wrong]).is_err());
     let empty = layout
-        .encode(
-            &[
-                with_null.slice(0, 0),
-                Arc::new(StringArray::from(Vec::<&str>::new())),
-            ],
-            0,
-        )
+        .encode(&[
+            with_null.slice(0, 0),
+            Arc::new(StringArray::from(Vec::<&str>::new())),
+        ])
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(empty.is_empty() && empty.row(3).is_empty());
     let pages = RowPages::new(&layout);
@@ -390,7 +479,7 @@ fn fixed_keys_need_their_exact_type() {
     // Same width, other type: no silent reinterpretation of the bytes.
     let layout = RowLayout::new(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
     let floats: ArrayRef = Arc::new(Float64Array::from(vec![-0.0, 0.0]));
-    assert!(layout.encode(&[floats], 0).is_err());
+    assert!(layout.encode(&[floats]).is_err());
     let dec = DataType::Decimal128(38, 2);
     let layout = RowLayout::new(&[dec], &[false]).unwrap_or_else(|e| panic!("{e}"));
     let other_scale: ArrayRef = Arc::new(
@@ -398,7 +487,7 @@ fn fixed_keys_need_their_exact_type() {
             .with_precision_and_scale(38, 3)
             .unwrap_or_else(|e| panic!("{e}")),
     );
-    assert!(layout.encode(&[other_scale], 0).is_err());
+    assert!(layout.encode(&[other_scale]).is_err());
 }
 
 #[test]
@@ -407,7 +496,7 @@ fn push_refuses_rows_of_another_layout_without_writing() {
         .unwrap_or_else(|e| panic!("{e}"));
     let narrow = RowLayout::new(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
     let a: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
-    let keys = narrow.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let keys = narrow.encode(&[a]).unwrap_or_else(|e| panic!("{e}"));
     let mut pages = RowPages::new(&wide);
     assert!(pages.push(&keys, 0).is_err(), "row of another stride");
     let mut pages = RowPages::new(&narrow);
@@ -421,7 +510,7 @@ fn push_refuses_rows_of_another_layout_without_writing() {
 fn a_new_page_reserves_a_few_rows_and_a_page_heap_stays_bounded() {
     let layout = RowLayout::new(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
     let a: ArrayRef = Arc::new(Int64Array::from(vec![1]));
-    let keys = layout.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let keys = layout.encode(&[a]).unwrap_or_else(|e| panic!("{e}"));
     let mut pages = RowPages::new(&layout);
     assert_eq!(pages.push(&keys, 0).ok(), Some(0));
     assert!(
@@ -433,7 +522,7 @@ fn a_new_page_reserves_a_few_rows_and_a_page_heap_stays_bounded() {
     let layout = RowLayout::new(&[DataType::Utf8], &[false]).unwrap_or_else(|e| panic!("{e}"));
     let big = "x".repeat(10 << 20);
     let a: ArrayRef = Arc::new(StringArray::from(vec![big.as_str(), big.as_str()]));
-    let keys = layout.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let keys = layout.encode(&[a]).unwrap_or_else(|e| panic!("{e}"));
     let mut pages = RowPages::new(&layout);
     let (first, second) = (pages.push(&keys, 0), pages.push(&keys, 1));
     assert!(first.is_ok() && second.is_ok());
@@ -442,14 +531,14 @@ fn a_new_page_reserves_a_few_rows_and_a_page_heap_stays_bounded() {
 
     let huge = "y".repeat(17 << 20);
     let a: ArrayRef = Arc::new(StringArray::from(vec![huge.as_str()]));
-    let keys = layout.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let keys = layout.encode(&[a]).unwrap_or_else(|e| panic!("{e}"));
     let id = pages
         .push(&keys, 0)
         .unwrap_or_else(|e| panic!("oversized key must be accepted: {e}"));
     assert_eq!(pages.row(id).1.len(), 17 << 20);
     // The oversized row's page takes no further rows.
     let small: ArrayRef = Arc::new(StringArray::from(vec!["z".repeat(20)]));
-    let small_keys = layout.encode(&[small], 0).unwrap_or_else(|e| panic!("{e}"));
+    let small_keys = layout.encode(&[small]).unwrap_or_else(|e| panic!("{e}"));
     let next = pages.push(&small_keys, 0).unwrap_or_else(|e| panic!("{e}"));
     assert_ne!(next >> pages.shift_for_test(), id >> pages.shift_for_test());
     assert_eq!(pages.row(id).1.len(), 17 << 20);
@@ -462,7 +551,7 @@ fn a_wide_row_page_starts_within_the_page_byte_budget() {
     let cols: Vec<ArrayRef> = (0..1000)
         .map(|_| Arc::new(Int64Array::from(vec![1])) as ArrayRef)
         .collect();
-    let keys = layout.encode(&cols, 0).unwrap_or_else(|e| panic!("{e}"));
+    let keys = layout.encode(&cols).unwrap_or_else(|e| panic!("{e}"));
     let mut pages = RowPages::new(&layout);
     assert_eq!(pages.push(&keys, 0).ok(), Some(0));
     assert!(layout.stride() > 8000);
@@ -512,7 +601,7 @@ fn join_index(
     choice: IndexChoice,
     touch: bool,
 ) -> (Vec<u32>, Vec<u32>, bool) {
-    let b = layout.encode(build, 0).unwrap_or_else(|e| panic!("{e}"));
+    let b = layout.encode(build).unwrap_or_else(|e| panic!("{e}"));
     let src = Gathered {
         rows: b.gather(layout, idx).unwrap_or_else(|e| panic!("{e}")),
         hashes: idx.iter().map(|&i| b.hashes()[i]).collect(),
@@ -523,7 +612,7 @@ fn join_index(
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(index.memory_size() > 0);
     assert!(index.memory_size() <= choice.bytes(idx.len()));
-    let p = layout.encode(probe, 0).unwrap_or_else(|e| panic!("{e}"));
+    let p = layout.encode(probe).unwrap_or_else(|e| panic!("{e}"));
     let which: Vec<u32> = (0..u32::try_from(p.len()).unwrap_or(0)).collect();
     let mut heads = Vec::new();
     index.find_with(layout, &p, &which, &src, &mut heads, touch);
@@ -631,7 +720,7 @@ fn a_large_build_takes_the_salted_directory() {
     assert!(!flat);
     assert_eq!(heads, [5, NO_MATCH, 7]);
     // `find` touches a directory this large first: the same answer.
-    let b = layout.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let b = layout.encode(&[a]).unwrap_or_else(|e| panic!("{e}"));
     let src = Gathered {
         rows: b.gather(&layout, &all).unwrap_or_else(|e| panic!("{e}")),
         hashes: b.hashes().to_vec(),
@@ -641,7 +730,7 @@ fn a_large_build_takes_the_salted_directory() {
     let index = JoinIndex::build(&layout, &src, n, 1, IndexChoice::Adaptive, &mut next)
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(index.memory_size() >= TOUCH_MIN_BYTES);
-    let p = layout.encode(&[probe], 0).unwrap_or_else(|e| panic!("{e}"));
+    let p = layout.encode(&[probe]).unwrap_or_else(|e| panic!("{e}"));
     let mut found = Vec::new();
     index.find(&layout, &p, &[0, 1, 2], &src, &mut found);
     assert_eq!(found, [5, NO_MATCH, 7]);
@@ -784,7 +873,7 @@ fn decode_restores_fixed_width_keys() {
     let mut nullable = vec![true; types.len()];
     let layout = RowLayout::new(&types, &nullable).unwrap();
     assert!(layout.is_fixed_width());
-    let keys = layout.encode(&columns, 0).unwrap();
+    let keys = layout.encode(&columns).unwrap();
     // Rows in another order than encoded: decode follows the given rows.
     let order = [3, 0, 2, 1];
     let rows: Vec<&[u8]> = order.iter().map(|&i| keys.row(i)).collect();
@@ -822,7 +911,7 @@ fn decode_restores_fixed_width_keys() {
     nullable[3] = false;
     let int64 = vec![Arc::new(Int64Array::from(vec![4, 5])) as ArrayRef];
     let one = RowLayout::new(&[DataType::Int64], &[false]).unwrap();
-    let k = one.encode(&int64, 3).unwrap();
+    let k = one.encode(&int64).unwrap();
     let back = one.decode(&[k.row(1), k.row(0)]).unwrap();
     let want: ArrayRef = Arc::new(Int64Array::from(vec![5, 4]));
     assert_eq!(back[0].to_data(), want.to_data());
@@ -863,7 +952,7 @@ fn payload_rows_round_trip_exactly() {
         let cols = vec![Arc::clone(&ints), Arc::clone(&floats), strs];
         let types: Vec<DataType> = cols.iter().map(|c| c.data_type().clone()).collect();
         let layout = RowLayout::for_payload(&types).unwrap_or_else(|e| panic!("{e}"));
-        let enc = layout.encode(&cols, 0).unwrap_or_else(|e| panic!("{e}"));
+        let enc = layout.encode(&cols).unwrap_or_else(|e| panic!("{e}"));
         let g = enc
             .gather(&layout, &[2, 0, 1])
             .unwrap_or_else(|e| panic!("{e}"));
@@ -893,7 +982,7 @@ fn payload_rows_round_trip_exactly() {
     // Payload rows have no hash word: equality compares their values, and
     // the rows are not hashed.
     let two: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 1]));
-    let e = one.encode(&[two], 0).unwrap_or_else(|e| panic!("{e}"));
+    let e = one.encode(&[two]).unwrap_or_else(|e| panic!("{e}"));
     assert!(e.hashes().is_empty());
     assert!(!one.eq(e.row(0), &[], e.row(1), &[]));
     assert!(one.eq(e.row(0), &[], e.row(2), &[]));
@@ -916,7 +1005,7 @@ fn estimate_sized_indexes_grow_to_the_same_answer() {
     let layout =
         RowLayout::for_join(&[DataType::Int64], &[false]).unwrap_or_else(|e| panic!("{e}"));
     let b = layout
-        .encode(&[Arc::clone(&a)], 0)
+        .encode(&[Arc::clone(&a)])
         .unwrap_or_else(|e| panic!("{e}"));
     let all: Vec<usize> = (0..n).collect();
     let src = Gathered {
@@ -924,7 +1013,7 @@ fn estimate_sized_indexes_grow_to_the_same_answer() {
         hashes: b.hashes().to_vec(),
         stride: layout.stride(),
     };
-    let probe = layout.encode(&[a], 0).unwrap_or_else(|e| panic!("{e}"));
+    let probe = layout.encode(&[a]).unwrap_or_else(|e| panic!("{e}"));
     let which: Vec<u32> = (0..u32::try_from(n).unwrap_or(0)).collect();
     let run = |keys: usize, choice: IndexChoice| {
         let mut next = vec![NO_MATCH; n];
