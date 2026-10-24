@@ -137,3 +137,33 @@ impl Rng {
         items[usize::try_from(self.range(0, i64::try_from(items.len()).unwrap() - 1)).unwrap()]
     }
 }
+
+/// Default row counts with every column's distinct count known, all values
+/// distinct: the estimates `optimize` made before a literal equality on a
+/// column without a distinct count took the default selectivity. Rule tests
+/// that need a selective filter on a table without statistics plan under
+/// them.
+#[derive(Debug)]
+pub(crate) struct AllDistinct;
+
+impl krishiv_optimizer::Statistics for AllDistinct {
+    fn table(&self, scan: &krishiv_plan::Scan) -> Option<krishiv_optimizer::TableStats> {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a constant"
+        )]
+        let rows = krishiv_optimizer::DEFAULT_ROWS as u64;
+        let columns = scan.output.iter().map(|c| {
+            let stats = krishiv_optimizer::ColumnStats {
+                distinct: Some(rows),
+                ..krishiv_optimizer::ColumnStats::default()
+            };
+            (c.name.clone(), stats)
+        });
+        Some(krishiv_optimizer::TableStats {
+            rows,
+            columns: columns.collect(),
+        })
+    }
+}

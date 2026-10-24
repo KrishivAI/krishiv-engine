@@ -266,7 +266,12 @@ impl Cursor {
     /// The rows the join type emits once every match is known.
     fn tail(&self, shared: &Shared) -> Result<Option<Batch>> {
         let want = match shared.join_type {
-            JoinType::Inner => return Ok(None),
+            // No probe row waits for the end: inner joins emit pairs as
+            // they match, and the joins that build their preserved side
+            // return build rows, never unmatched probe rows.
+            JoinType::Inner | JoinType::RightSemi | JoinType::RightAnti | JoinType::RightOuter => {
+                return Ok(None);
+            }
             JoinType::LeftSemi => MATCHED,
             JoinType::LeftOuter | JoinType::LeftAnti | JoinType::NullAwareAnti => UNMATCHED,
         };

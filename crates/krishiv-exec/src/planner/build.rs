@@ -665,6 +665,26 @@ impl<'a> Planner<'a> {
         krishiv_optimizer::estimated_rows(plan, &stats)
     }
 
+    /// Whether every table `plan` reads reports statistics, so its estimate
+    /// does not rest on default row counts. A `WITH` reference counts as
+    /// default-sized, as the estimator treats it.
+    pub(crate) fn has_statistics(&self, plan: &Arc<LogicalPlan>) -> bool {
+        use krishiv_optimizer::Statistics as _;
+        let stats = super::ProviderStatistics(Arc::clone(&self.cx.tables));
+        let mut stack = vec![plan];
+        while let Some(p) = stack.pop() {
+            match &p.node {
+                PlanNode::Scan(scan) if stats.table(scan).is_none() => return false,
+                // The estimator reads a reference to a `WITH` definition
+                // as a default-sized relation, not through its definition.
+                PlanNode::CteRef(_) => return false,
+                _ => {}
+            }
+            p.for_each_child(&mut |c| stack.push(c));
+        }
+        true
+    }
+
     fn scan(
         &mut self,
         plan: &Arc<LogicalPlan>,

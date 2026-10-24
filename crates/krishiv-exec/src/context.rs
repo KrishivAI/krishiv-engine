@@ -42,7 +42,8 @@ pub struct ExecConfig {
     /// batch; provisional 10 ms, recorded with the batch size).
     pub stall_threshold: Duration,
     /// Fail the query with `INTERNAL_ERROR` on a stall instead of only
-    /// counting it (tests and CI).
+    /// counting it (tests and CI). A slice then leaves out the time its
+    /// thread waited on a run queue, so machine load cannot make a stall.
     pub fail_on_stall: bool,
     /// Seeds morsel order (deterministic test mode); `None` claims morsels
     /// in order.
