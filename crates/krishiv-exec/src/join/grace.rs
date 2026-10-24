@@ -232,7 +232,7 @@ pub(crate) async fn spill_parts(
 /// scratch is twice the slice plus the writer's buffer, so it stays small
 /// whatever the chunk size. The size is the rows' frame bytes, not the
 /// batch's memory, which counts view buffers it shares with other batches.
-fn write_sliced(w: &mut SpillWriter, batch: &Batch) -> Result<()> {
+pub(crate) fn write_sliced(w: &mut SpillWriter, batch: &Batch) -> Result<()> {
     let (rows, bytes) = (batch.num_rows(), SpillWriter::frame_bytes(batch));
     let per = (rows * WRITE_SLICE / bytes.max(1)).clamp(1, rows.max(1));
     for start in (0..rows).step_by(per) {
